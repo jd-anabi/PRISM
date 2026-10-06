@@ -135,12 +135,30 @@ redesign); (7) **vocabulary: the field's terms explained once, plain words for t
 (Records, simulation set, memory limit, training, narrowing round, Model and options); (8) **every check there is gets
 a screen**, the card test and the two investigation tools included — the card test is tool code today, so that is one
 more small engine change; (9) **the design plugins' methods are applied by hand and nothing of theirs is written into
-the repository**; impeccable's program is never run. **Under way when this was last updated:** the chosen look is
-being rebuilt as a small sample in PySide6 (a scratch script), to prove the toolkit carries it before the design is
-written. **Still open:** steps inside the rail or as a track across the page; Home for a first-time visitor in
-detail; what tells the owner a run has ended; keeping the computer awake and a launcher with no console window; the
-details of a plan; and the separate design for saving the fit as it goes. **Next:** show the owner the toolkit sample,
-present the design section by section for approval, write it under `docs/superpowers/specs/`, then the plan.
+the repository**; impeccable's program is never run. **THE TOOLKIT CARRIES THE LOOK, AND THE OWNER HAS APPROVED THE
+DESIGN IN SIX SECTIONS (same evening).** The chosen look was rebuilt as a sample in PySide6 (2,156 lines, kept as
+`docs/superpowers/specs/2026-10-05-window-redesign-assets/toolkit-sample.py.txt`, with its pictures `toolkit-*.png`):
+every device came across; the named losses are small (lettering inside figures a little softer, thin rules whole
+pixels at 125 % and 150 %, greyer hatching in dark); not pictured, so owed as walkthrough rows: the system frame of a
+question, pointer-over states, the focus ring under a real keyboard. **The complete record of what the owner decided
+and approved is `…-window-redesign-assets/decisions-as-approved.md` (ids U1–U20, engine changes E1–E7): read it
+before anything else of the redesign.** Beyond the nine decisions above it holds the six approved sections: the six
+steps sit INSIDE the rail and the run's state at its foot; before any start from zero with a saved simulation set on
+disk the window asks and names every difference; a stop can be withdrawn until it takes effect; the end of a run is
+said until acknowledged and the taskbar flashes; Windows is kept awake during a run; the launcher has no console
+window; beyond 5 points on the unusable-recordings comparison the window raises "needs you" and does not stop the fit
+itself; appearance settings become three; text size follows Windows; everything is reachable from the keyboard;
+applied against pending; the double-duty buttons split; the training budget STAYS remembered while the rotation tick
+and the typed-units choice no longer are, the driven-recordings table now is, and the recording length and drive
+amplitude open blank; six checks decide pass or fail and the headline is always "n of 6"; an observation can be named;
+Records shows settings in full, figures and complete logs for every kind and offers Rename for every kind; the window
+keeps a run history; **seven small engine changes (E1 loss per epoch, E2 every differing setting named, E3 the card
+test as an engine step, E4 an observation's name, E5 a plan reader, E6 two refusals and the input-use check's errors
+given field keys, E7 a name taken during the run cannot cost the result)**; a stated list left to the audit; nine
+build stages, 70 to 100 tasks. **Under way when this was last updated:** eleven drafters are writing the parts of the
+written design into the chat's scratch folder against that record; it is then assembled, reviewed and written to
+`docs/superpowers/specs/2026-10-05-window-redesign-design.md` for the owner's review. **Still owed to the owner:** the
+written design to review; then the separate design for saving the fit as it goes; then the plan.
 **Engine changes so far: none built; those the design will need are the three small ones of the scope and the card
 test as an engine step. Gates: none run — documents only; the fast gate has not run since `771a460`.** To look at the window without touching the owner's
 settings: `core.gui.settings.use_ini_file(<scratch .ini>)` and `PRISM_ARTIFACTS=<scratch dir>` before `build_app`, then

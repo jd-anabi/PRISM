@@ -1,0 +1,2453 @@
+"""PRISM look specimen: the look "from the scientific page", rebuilt in PySide6. A throw-away sample.
+
+    python specimen.py --shots     write the pictures into ./shots (nothing appears on screen): the two pages in
+                                   light and dark, the question as it opens and after Tab, the markers, the time
+                                   axis at other moments, the focus ring on each kind of control, the smallest
+                                   window. With QT_SCALE_FACTOR set (1.25, 1.5): the two light pages at the
+                                   largest size this screen allows at that scaling.
+    python specimen.py --report    print what the toolkit actually resolved and did (fonts, the question and its
+                                   keys, the ring, the number field, the axis, sizes)
+    python specimen.py --show      for a person: open the window on screen
+                                   (F1 setting up, F2 the run, F3 light/dark, "Stop training..." asks)
+
+Everything that decides the look is in THE TABLE below: named colours (light, dark), type, sizes and the spaces
+between blocks. One application style sheet is generated from it, one palette is built from it, one small style
+(Fusion with a tick, a dot and the focus frame's place painted from the table) reads it, and every painted piece
+(markers, the chain of steps, the time axis, the table's rules and delegate, the focus ring, the matplotlib
+settings) reads the same names at paint time. No image file is written or read; no SVG support is needed.
+"""
+import os
+import sys
+import threading
+
+os.environ["QT_QPA_PLATFORM"] = "windows"       # "offscreen" substitutes fonts: its pictures are not what a person sees
+SHOW = "--show" in sys.argv
+if not SHOW:                                    # every unattended run ends itself
+    _watchdog = threading.Timer(120.0, lambda: os._exit(3))
+    _watchdog.daemon = True
+    _watchdog.start()
+
+import datetime as dt
+import math
+from string import Template
+
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+from cycler import cycler
+from matplotlib import font_manager
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
+
+import shiboken6
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt
+from PySide6.QtGui import (QColor, QFocusEvent, QFont, QFontDatabase, QFontInfo, QFontMetricsF, QIcon, QIconEngine, QImage,
+                           QKeyEvent, QKeySequence, QPainter, QPainterPath, QPalette, QPen, QPixmap, QShortcut,
+                           QStandardItem, QStandardItemModel, QTextLayout, QTextOption)
+from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractSpinBox, QApplication, QBoxLayout, QButtonGroup,
+                               QCheckBox, QComboBox, QDialog, QFocusFrame, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
+                               QLabel, QLayout, QLineEdit, QProxyStyle, QPushButton, QRadioButton, QScrollArea,
+                               QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget)
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+FONT_DIR = "C:/Users/J/PycharmProjects/PRISM/core/gui/assets/fonts"     # read only: the two bundled Inter files
+
+# ══════════════════════════════════════ THE TABLE ══════════════════════════════════════
+#   name              light      dark
+COLOURS = {
+    "paper":         ("#FFFFFF", "#1C1C1C"),   # the page: every working surface
+    "margin":        ("#F2F2F2", "#141414"),   # the navigation column, quiet fills
+    "field":         ("#FFFFFF", "#141414"),   # inside a field
+    "raised":        ("#FFFFFF", "#262626"),   # inside a dialog
+    "ink":           ("#1A1A1A", "#EDEDED"),   # text, "done"
+    "ink_2":         ("#4D4D4D", "#B8B8B8"),   # secondary text, tick labels
+    "ink_3":         ("#636363", "#9C9C9C"),   # hints, "to come"
+    "rule":          ("#1A1A1A", "#C8C8C8"),   # the three rules of a table, an axis
+    "rule_light":    ("#D4D4D4", "#3A3A3A"),   # a quiet separator
+    "field_line":    ("#6B6B6B", "#8A8A8A"),   # the outline of a control
+    "accent":        ("#0072B2", "#56B4E9"),   # what is now, what is selected, the main action
+    "on_accent":     ("#FFFFFF", "#0D0D0D"),
+    "accent_tint":   ("#E2EEF6", "#1A3447"),
+    "accent_hover":  ("#00639B", "#7CC5EE"),
+    "accent_press":  ("#005382", "#3FA3DC"),
+    "ok":            ("#007A5A", "#2FBF94"),
+    "warn":          ("#E69F00", "#E69F00"),
+    "warn_edge":     ("#1A1A1A", "#E69F00"),
+    "warn_mark":     ("#1A1A1A", "#1A1A1A"),   # the stroke inside the amber triangle, both themes
+    "err":           ("#C24E00", "#F0813A"),
+    "on_err":        ("#FFFFFF", "#0D0D0D"),
+    "focus":         ("#1A1A1A", "#FFFFFF"),
+    "hover_fill":    ("#F2F2F2", "#262626"),
+    "press_fill":    ("#DEDEDE", "#343434"),
+    "disabled_fill": ("#F2F2F2", "#232323"),
+    "disabled_line": ("#C4C4C4", "#4A4A4A"),
+    "disabled_ink":  ("#636363", "#9C9C9C"),
+    "hatch":         ("#4D4D4D", "#B8B8B8"),
+    "elapsed":       ("#1A1A1A", "#C8C8C8"),
+    "series_2":      ("#0072B2", "#56B4E9"),   # the second line of a figure
+}
+#   name      (pixel size, line height, weight)      five sizes and nothing between
+TYPE = {
+    "small":  (12, 16, 400),
+    "body":   (14, 20, 400),
+    "strong": (14, 20, 600),
+    "head":   (16, 22, 600),
+    "brand":  (18, 24, 600),
+    "title":  (24, 30, 600),
+    "book":   (16, 22, 400),      # Cambria: the line under a heading, a caption, a message, a dialog's question
+}
+LETTERING = "Inter"
+BOOK = "Cambria"
+BRAND_SPACING = 104               # per cent: a style sheet has no letter-spacing
+SIZE = {
+    # the window, and when a page changes its arrangement
+    "window": (1300, 820), "window_min": (900, 600),
+    "small_below": 700,           # a window lower than this gets the small layout
+    "two_columns_from": 940,      # a page narrower than this sets its two columns one above the other
+    "rail": 220, "page_pad": (22, 20, 20, 14), "page_pad_small": (16, 16, 14, 14),     # left, top, right, bottom
+    "scroll_bar": 8, "scroll_gap": 2,
+    # controls
+    "field_h": 32, "button_h": 34, "radius": 3, "indicator": 18, "number_w": 120,
+    "field_pad": 8, "button_pad": 16, "primary_pad": 20, "combo_pad": (10, 8), "icon_gap": 4, "line_h": 20,
+    "check_gap": 10, "radio_gap": 8, "tip_pad": (4, 8), "scroll_handle": (28, 2, 2),     # least length, inset, corner
+    # markers, rules, the ring
+    "marker": 16, "rule": 2, "hair": 1, "bar": 4, "focus_ring": 2, "focus_gap": 2, "row_ring_inset": 2,
+    "hatch_step": 5, "hatch_key": (24, 10),
+    # the navigation column
+    "nav_h": 36, "nav_h_small": 32, "nav_pad": 20, "step_h": 46, "step_h_one": 32,
+    "brand": (20, 19, 20, 15), "brand_small": (20, 13, 20, 11),             # round the 24 px line of the name
+    "run_line": (20, 12, 14, 14), "run_line_gap": 9, "run_marker_drop": 2,
+    # forms and tables
+    "row_gap": 12, "col_gap": 32, "label_w": (200, 165),
+    "table_row": 30, "table_pad": 5, "table_col_gap": 16, "table_lead": 10, "table_fit_most": 180, "state_gap": 6,
+    "table_stretch_least": 40, "table_section_least": 20,
+}
+GAP = {                           # the spaces between the blocks of a page, top to bottom
+    "head_lead": 2, "head_buttons": 12, "head_to_body": 22, "head_to_body_small": 14,
+    "section_rule": 6, "form_to_fold": 20, "fold": (10, 4, 11), "fold_indent": 22, "fold_icon": (18, 14),
+    "setup_columns": (470, 536), "columns_stacked": 20, "field_message": 6, "marker_text": 8, "marker_drop": 2,
+    "message": (10, 4, 0, 4), "message_marker": 10, "message_marker_drop": 3,
+    "gate_rows": 5, "gate_action": 9, "gate_above": 12, "action": 12, "action_why": 4,
+    "status": (12, 10), "stages": (36, 6), "stage_parts": 7, "now": (8, 4), "axis_key": 8, "status_to_body": 12,
+    "run_columns": (668, 354, 16), "health_columns": (118, 56), "figure_inset": 28, "caption_inset": 8, "figure_caption": 6, "trace_caption": 4,
+    "block": 14, "side_block": 10, "head_table": 6, "switch": 16,
+    "rail_rest": 5, "rail_group": 12,
+}
+STEP = {                          # one step of the chain, as painted
+    "marker": (22, 7), "marker_one": (22, 8), "line_x": 30, "line_from": 26, "line_in": 4,
+    "text_x": 50, "name_y": 5, "name_y_one": 6, "words_y": 25, "number_gap": 7, "pad_right": 10,
+}
+AXIS = {                          # the time axis, as painted
+    "h": 42, "track_y": 4, "track_h": 14, "mark_w": 4, "mark_halo": 1, "mark_h": 22,
+    "tick_y": 18, "tick_h": 5, "label_y": 25, "label_h": 16, "label_gap": 8,
+}
+DIALOG = {"w": 448, "pad": (20, 16, 20, 18), "gap": 16, "marker": 24, "marker_gap": 14, "marker_drop": 1}
+FIGURE = {                        # figures: margins round the axes in pixels; the rest follows the widget's size
+    "loss":  {"h": 282, "min_w": 420, "left": 60, "top": 12, "right": 80, "bottom": 42, "x_name_drop": 38, "tick_pad": 5},
+    "trace": {"h": 100, "min_w": 240, "left": 40, "top": 18, "right": 12, "bottom": 34, "x_name_drop": 31, "tick_pad": 4,
+              "y_name_above": True},
+    "tick": 5, "axis_w": 1, "line_w": 2, "y_name_gap": 10, "y_name_sink": 2, "y_name_lift": 8, "line_label_gap": 8,
+    "best_mark": 9, "note_x": 12,
+}
+# ═══════════════════════════════════════════════════════════════════════════════════════
+
+
+class Theme:
+    """The one switch. TH["ink"] is the hex string, TH.q("ink") the QColor, for the theme in force."""
+    dark = False
+
+    def __getitem__(self, name):
+        return COLOURS[name][1 if self.dark else 0]
+
+    def q(self, name):
+        return QColor(self[name])
+
+    def all(self):
+        return {k: self[k] for k in COLOURS}
+
+
+TH = Theme()
+STYLE = None                      # the application's style, kept alive here
+FOLLOWER = None                   # the one object that decides where the focus ring is
+# an experiment for the report only: --hinting=none draws letters unfitted to the pixel grid, as a browser does
+HINTING = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--hinting=")), "default")
+_FONTS = {}
+
+
+def _hint(f):
+    if HINTING != "default":
+        f.setHintingPreference({"none": QFont.PreferNoHinting, "vertical": QFont.PreferVerticalHinting,
+                                "full": QFont.PreferFullHinting}[HINTING])
+    return f
+
+
+def inter(kind="body", weight=None, px=None):
+    """The program's face, with figures of equal width switched on (an OpenType feature, set in code).
+    Built once for each size and weight; a caller gets its own copy."""
+    key = (kind, weight, px)
+    if key not in _FONTS:
+        size, _, w = TYPE[kind]
+        f = QFont(LETTERING)
+        f.setPixelSize(px or size)
+        f.setWeight(QFont.Weight(weight or w))
+        try:                                        # the stub says a str is accepted; in 6.9.3 only a Tag is
+            f.setFeature(QFont.Tag.fromString("tnum"), 1)
+        except Exception:                           # noqa: BLE001 - an older Qt: proportional figures
+            pass
+        _FONTS[key] = _hint(f)
+    return QFont(_FONTS[key])
+
+
+def book(bold=False):
+    """The book face. Built in code: a style sheet can name a family but cannot switch a feature off."""
+    key = ("book", bold)
+    if key not in _FONTS:
+        f = QFont(BOOK)
+        f.setPixelSize(TYPE["book"][0])
+        f.setBold(bold)
+        _FONTS[key] = _hint(f)
+    return QFont(_FONTS[key])
+
+
+def ring_room():
+    """What the focus ring needs outside a control: the ring and the gap inside it."""
+    return SIZE["focus_ring"] + SIZE["focus_gap"]
+
+
+# ── palette: what a style sheet does badly (placeholder and link colours, the selection, the disabled
+#    group, the colours custom-painted and un-styled parts fall back to) ──
+def build_palette():
+    p = QPalette()
+    pairs = {
+        QPalette.Window: "paper", QPalette.WindowText: "ink", QPalette.Base: "field", QPalette.AlternateBase: "margin",
+        QPalette.Text: "ink", QPalette.Button: "paper", QPalette.ButtonText: "ink", QPalette.BrightText: "on_accent",
+        QPalette.ToolTipBase: "raised", QPalette.ToolTipText: "ink", QPalette.PlaceholderText: "ink_3",
+        QPalette.Highlight: "accent", QPalette.HighlightedText: "on_accent", QPalette.Link: "accent",
+        QPalette.LinkVisited: "accent", QPalette.Mid: "rule_light", QPalette.Midlight: "margin",
+        QPalette.Light: "paper", QPalette.Dark: "field_line", QPalette.Shadow: "ink",
+    }
+    if hasattr(QPalette, "Accent"):
+        pairs[QPalette.Accent] = "accent"
+    for role, name in pairs.items():
+        for group in (QPalette.Active, QPalette.Inactive):
+            p.setColor(group, role, TH.q(name))
+        p.setColor(QPalette.Disabled, role, TH.q(name))
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText, QPalette.PlaceholderText):
+        p.setColor(QPalette.Disabled, role, TH.q("disabled_ink"))
+    for role in (QPalette.Base, QPalette.Button):
+        p.setColor(QPalette.Disabled, role, TH.q("disabled_fill"))
+    p.setColor(QPalette.Disabled, QPalette.Highlight, TH.q("disabled_line"))
+    return p
+
+
+def set_class(widget, **props):
+    """Name a widget's class (or any other property a rule of the style sheet tests) and make the sheet look
+    again. A sheet matches its rules when a widget is first polished; a property set after that changes nothing
+    by itself, so every class is set through here."""
+    for name, value in props.items():
+        widget.setProperty(name, value)
+    if widget.testAttribute(Qt.WA_WState_Polished):
+        style = widget.style()
+        style.unpolish(widget)
+        style.polish(widget)
+        widget.update()
+    return widget
+
+
+# ── the one style sheet. Named classes only; colours, borders and padding. Faces and features are set in code,
+#    the tick, the dot and the chevron are painted (a sheet could only name image files), and the accent comes
+#    from a class alone, never from ":default" (which follows the keyboard focus from button to button). ──
+_QSS = Template("""
+QToolTip { background: $raised; color: $ink; border: 1px solid $field_line; padding: ${tip_v}px ${tip_h}px; }
+QDialog[cls="ask"] { background: $raised; }
+
+QLabel[cls="title"]  { font-size: ${t_title}px; font-weight: 600; }
+QLabel[cls="head"]   { font-size: ${t_head}px; font-weight: 600; }
+QLabel[cls="now"]    { font-size: ${t_head}px; }
+QLabel[cls="strong"] { font-weight: 600; }
+QLabel[cls="small"]  { font-size: ${t_small}px; color: $ink_2; }
+QLabel[cls="quiet"]  { color: $ink_2; }
+QLabel[cls="book2"]  { color: $ink_2; }
+
+QPushButton { min-height: ${btn_in}px; padding: 0px ${btn_pad}px; border: 1px solid $field_line; border-radius: ${radius}px;
+              background: $paper; color: $ink; outline: none; }
+QPushButton:hover    { background: $hover_fill; }
+QPushButton:pressed  { background: $press_fill; }
+QPushButton:disabled { background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink; }
+QPushButton[cls="primary"] { font-weight: 600; padding: 0px ${primary_pad}px;
+                             background: $accent; border-color: $accent; color: $on_accent; }
+QPushButton[cls="primary"]:hover    { background: $accent_hover; border-color: $accent_hover; }
+QPushButton[cls="primary"]:pressed  { background: $accent_press; border-color: $accent_press; }
+QPushButton[cls="primary"]:disabled { background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink; }
+QPushButton[cls="danger"] { border-color: $err; font-weight: 600; }
+QPushButton[cls="danger"]:disabled { border-color: $disabled_line; }
+QDialog[cls="ask"] QPushButton[cls="danger"]         { background: $raised; }
+QDialog[cls="ask"] QPushButton[cls="danger"]:hover   { background: $hover_fill; }
+QDialog[cls="ask"] QPushButton[cls="danger"]:pressed { background: $press_fill; }
+QPushButton[cls="nav"]  { min-height: ${nav_h}px; padding: 0px ${nav_pad}px; border: none; border-radius: 0px;
+                          background: transparent; text-align: left; }
+QPushButton[cls="nav"][small="true"]   { min-height: ${nav_small}px; }
+QPushButton[cls="nav"][current="true"] { font-weight: 600; }
+QPushButton[cls="fold"] { min-height: ${line_h}px; padding: 0px; border: none; background: transparent;
+                          text-align: left; font-weight: 600; }
+QPushButton[cls="link"] { min-height: ${line_h}px; padding: 0px; border: none; background: transparent;
+                          color: $accent; text-decoration: underline; }
+
+QLineEdit, QComboBox {
+    min-height: ${fld_in}px; padding: 0px ${fld_pad}px; border: 1px solid $field_line; border-radius: ${radius}px;
+    background: $field; color: $ink; selection-background-color: $accent; selection-color: $on_accent; }
+QLineEdit:disabled, QComboBox:disabled {
+    background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink; }
+QLineEdit[state="error"] { min-height: ${fld_in_err}px; padding: 0px ${fld_pad_err}px; border: 2px solid $err; }
+QComboBox { padding: 0px ${combo_r}px 0px ${combo_l}px; }
+QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: ${marker}px; border: none; }
+QComboBox QAbstractItemView { border: 1px solid $field_line; background: $field; color: $ink;
+                              selection-background-color: $accent_tint; selection-color: $ink; outline: 0; }
+
+QCheckBox, QRadioButton { spacing: ${check_gap}px; color: $ink; outline: none; }
+QRadioButton { spacing: ${radio_gap}px; }
+QCheckBox:disabled, QRadioButton:disabled { color: $disabled_ink; }
+
+QTableView { border: none; background: $paper; color: $ink; outline: 0; }
+QHeaderView { background: $paper; border: none; }
+
+QScrollBar:vertical { background: $margin; width: ${bar}px; margin: 0px; }
+QScrollBar::handle:vertical { background: $ink_3; border-radius: ${handle_r}px; margin: ${handle_in}px;
+                              min-height: ${handle}px; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0px; width: 0px; border: none; background: none; }
+QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+""")
+
+
+def build_qss():
+    return _QSS.substitute(
+        TH.all(),
+        t_title=TYPE["title"][0], t_head=TYPE["head"][0], t_small=TYPE["small"][0],
+        btn_in=SIZE["button_h"] - 2, btn_pad=SIZE["button_pad"], primary_pad=SIZE["primary_pad"],
+        fld_in=SIZE["field_h"] - 2, fld_in_err=SIZE["field_h"] - 4, fld_pad=SIZE["field_pad"], fld_pad_err=SIZE["field_pad"] - 1,
+        combo_l=SIZE["combo_pad"][0], combo_r=SIZE["combo_pad"][1], marker=SIZE["marker"],
+        radius=SIZE["radius"], nav_h=SIZE["nav_h"], nav_small=SIZE["nav_h_small"], nav_pad=SIZE["nav_pad"], line_h=SIZE["line_h"],
+        check_gap=SIZE["check_gap"], radio_gap=SIZE["radio_gap"], tip_v=SIZE["tip_pad"][0], tip_h=SIZE["tip_pad"][1],
+        bar=SIZE["scroll_bar"], handle=SIZE["scroll_handle"][0], handle_in=SIZE["scroll_handle"][1],
+        handle_r=SIZE["scroll_handle"][2])
+
+
+def journal_rc():
+    """The journal look as matplotlib settings, from the table: left and bottom axes only, ticks outward, the
+    program's lettering at its small size. Any figure built after this gets it with no per-figure work."""
+    F = FIGURE
+    return {
+        "font.family": LETTERING, "font.size": TYPE["small"][0] * PT, "axes.unicode_minus": True,
+        "figure.facecolor": TH["paper"], "figure.edgecolor": TH["paper"],
+        "savefig.facecolor": TH["paper"], "savefig.edgecolor": TH["paper"],
+        "axes.facecolor": "none", "axes.edgecolor": TH["rule"], "axes.linewidth": F["axis_w"] * PT,
+        "axes.spines.top": False, "axes.spines.right": False,
+        "axes.labelcolor": TH["ink"], "axes.labelsize": TYPE["small"][0] * PT, "axes.titlecolor": TH["ink"],
+        "text.color": TH["ink"],
+        "xtick.direction": "out", "ytick.direction": "out",
+        "xtick.major.size": F["tick"] * PT, "ytick.major.size": F["tick"] * PT,
+        "xtick.major.width": F["axis_w"] * PT, "ytick.major.width": F["axis_w"] * PT,
+        "xtick.color": TH["rule"], "ytick.color": TH["rule"],
+        "xtick.labelcolor": TH["ink_2"], "ytick.labelcolor": TH["ink_2"],
+        "xtick.labelsize": TYPE["small"][0] * PT, "ytick.labelsize": TYPE["small"][0] * PT,
+        "lines.linewidth": F["line_w"] * PT, "lines.solid_joinstyle": "round", "lines.dash_joinstyle": "round",
+        "axes.prop_cycle": cycler(color=[TH["ink"], TH["series_2"]]),
+        "legend.frameon": False,
+    }
+
+
+def apply_theme(dark):
+    """Palette, style sheet, the title bars Windows draws, the figure settings, then every piece that keeps
+    colours of its own."""
+    app = QApplication.instance()
+    TH.dark = bool(dark)
+    app.styleHints().setColorScheme(Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)   # native frames follow
+    app.setPalette(build_palette())
+    app.setStyleSheet(build_qss())
+    set_class_fonts()
+    matplotlib.rcParams.update(journal_rc())
+    for top in app.topLevelWidgets():
+        for w in top.findChildren(QWidget):
+            if hasattr(w, "retheme"):
+                w.retheme()
+        top.update()
+    if FOLLOWER is not None:
+        FOLLOWER.refresh()                           # a change of style hides the toolkit's focus frame
+
+
+# ══════════════════════════════════════ painted pieces ══════════════════════════════════════
+def paint_marker(p, kind, box, disabled=False):
+    """All the markers and the few glyphs, drawn in a 16-unit box by ONE function. One shape per state."""
+    q = (lambda n: TH.q("disabled_ink")) if disabled else TH.q
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.translate(box.topLeft())
+    p.scale(box.width() / 16.0, box.height() / 16.0)
+
+    def pen(name, w=2.0, cap=Qt.RoundCap):
+        pn = QPen(q(name), w)
+        pn.setCapStyle(cap)
+        pn.setJoinStyle(Qt.RoundJoin)
+        return pn
+
+    def line(*pts):
+        path = QPainterPath(QPointF(*pts[0]))
+        for pt in pts[1:]:
+            path.lineTo(QPointF(*pt))
+        return path
+
+    def stroke(path, name, w=2.0, cap=Qt.RoundCap):
+        p.setPen(pen(name, w, cap)); p.setBrush(Qt.NoBrush); p.drawPath(path)
+
+    def disc(cx, cy, r, fill=None, edge=None, w=2.0):
+        p.setPen(pen(edge, w) if edge else Qt.NoPen)
+        p.setBrush(q(fill) if fill else Qt.NoBrush)
+        p.drawEllipse(QPointF(cx, cy), r, r)
+
+    if kind == "done":                          # an ink disc with a tick
+        disc(8, 8, 8, "ink")
+        stroke(line((4.5, 8.4), (6.9, 10.8), (11.6, 5.6)), "paper")
+    elif kind == "now":                         # a blue dot
+        disc(8, 8, 6, "accent")
+    elif kind == "later":                       # an open, broken circle
+        pn = pen("ink_3", 2.0, Qt.FlatCap)
+        pn.setDashPattern([1.04, 1.0])          # in pen widths
+        p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawEllipse(QPointF(8, 8), 6.5, 6.5)
+    elif kind == "half":                        # unfinished: a half disc
+        disc(8, 8, 7, "paper", "ink")
+        half = QPainterPath(QPointF(8, 1.5))
+        half.arcTo(QRectF(1.5, 1.5, 13, 13), 90, 180)
+        half.closeSubpath()
+        p.setPen(Qt.NoPen); p.setBrush(q("ink")); p.drawPath(half)
+    elif kind == "none":                        # nothing running: a dash
+        stroke(line((4, 8), (12, 8)), "ink_3")
+    elif kind == "fine":                        # a ring with a tick
+        disc(8, 8, 7, None, "ok")
+        stroke(line((4.9, 8.3), (7.1, 10.5), (11.1, 5.9)), "ok")
+    elif kind == "info":                        # a ring with an i
+        disc(8, 8, 7, None, "ink_2")
+        disc(8, 4.9, 1.1, "ink_2")
+        stroke(line((8, 7.5), (8, 11.7)), "ink_2")
+    elif kind == "warn":                        # a triangle; its edge, not its amber, gives the shape on white
+        tri = line((8, 1.6), (15, 14.3), (1, 14.3))
+        tri.closeSubpath()
+        p.setPen(pen("warn_edge", 1.5)); p.setBrush(q("warn")); p.drawPath(tri)
+        stroke(line((8, 6.2), (8, 10.0)), "warn_mark")
+        disc(8, 12.1, 1.0, "warn_mark")
+    elif kind == "err":                         # a square with a cross
+        p.setPen(Qt.NoPen); p.setBrush(q("err")); p.drawRoundedRect(QRectF(0, 0, 16, 16), 2, 2)
+        stroke(line((5, 5), (11, 11)), "on_err")
+        stroke(line((11, 5), (5, 11)), "on_err")
+    elif kind == "lock":                        # blocked: a padlock
+        p.setPen(Qt.NoPen); p.setBrush(q("ink_2")); p.drawRoundedRect(QRectF(3, 7, 10, 8), 1.5, 1.5)
+        bow = QPainterPath(QPointF(5, 7.5))
+        bow.lineTo(5, 5)
+        bow.arcTo(QRectF(5, 2, 6, 6), 180, -180)
+        bow.lineTo(11, 7.5)
+        stroke(bow, "ink_2", 2.0, Qt.FlatCap)
+    # glyphs for controls
+    elif kind == "chev_right":
+        stroke(line((6, 3.5), (10.5, 8), (6, 12.5)), "ink")
+    elif kind == "chev_down":
+        stroke(line((3.5, 6), (8, 10.5), (12.5, 6)), "ink")
+    elif kind == "help":
+        disc(8, 8, 7, None, "ink")
+        hook = QPainterPath(QPointF(6, 6.3))
+        hook.cubicTo(6.0, 4.2, 9.6, 3.9, 9.9, 6.2)
+        hook.cubicTo(10.0, 7.6, 8.0, 7.7, 8.0, 9.5)
+        stroke(hook, "ink")
+        disc(8, 12, 1.0, "ink")
+    elif kind == "stop":                        # the small vermilion square on an action that loses work
+        p.setPen(Qt.NoPen); p.setBrush(q("err")); p.drawRect(QRectF(3, 3, 10, 10))
+    p.restore()
+
+
+def paint_indicator(p, r, radio, on, enabled):
+    """The tick box and the radio dot, in an 18-unit box, from the table. Drawn by the style (see PrismStyle)."""
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing, True)
+    k = r.width() / 18.0
+    line = TH.q("field_line" if enabled else "disabled_line")
+    ground = TH.q("field" if enabled else "disabled_fill")
+    mark = TH.q("on_accent" if enabled else "disabled_ink")
+    filled = on and enabled
+    p.setPen(Qt.NoPen if filled else QPen(line, 1.0))
+    p.setBrush(TH.q("accent") if filled else ground)
+    body = r if filled else r.adjusted(0.5, 0.5, -0.5, -0.5)
+    if radio:
+        p.drawEllipse(body)
+        if on:
+            p.setPen(Qt.NoPen); p.setBrush(mark); p.drawEllipse(r.center(), 4 * k, 4 * k)
+    else:
+        corner = (3.0 if filled else 2.5) * k
+        p.drawRoundedRect(body, corner, corner)
+        if on:
+            tick = QPainterPath(r.topLeft() + QPointF(4.975 * k, 9.35 * k))
+            tick.lineTo(r.topLeft() + QPointF(7.6 * k, 11.975 * k))
+            tick.lineTo(r.topLeft() + QPointF(13.025 * k, 6.025 * k))
+            p.setPen(QPen(mark, 1.75 * k, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)); p.setBrush(Qt.NoBrush)
+            p.drawPath(tick)
+    p.restore()
+
+
+class PrismStyle(QProxyStyle):
+    """Fusion, with the few things a style sheet cannot do taken from the table: the tick box and the radio
+    dot are painted (no image files), the toolkit's own dotted focus mark is left out (the ring is the one
+    sign of focus), and the focus frame is told how far outside its control it sits and to lie above it."""
+    INDICATORS = (QStyle.PM_IndicatorWidth, QStyle.PM_IndicatorHeight,
+                  QStyle.PM_ExclusiveIndicatorWidth, QStyle.PM_ExclusiveIndicatorHeight)
+
+    def __init__(self):
+        super().__init__("Fusion")
+
+    def pixelMetric(self, metric, option=None, widget=None):
+        if metric in self.INDICATORS:
+            return SIZE["indicator"]
+        if metric in (QStyle.PM_FocusFrameHMargin, QStyle.PM_FocusFrameVMargin):
+            return 0 if getattr(widget, "inset", False) else ring_room()
+        return super().pixelMetric(metric, option, widget)
+
+    def styleHint(self, hint, option=None, widget=None, data=None):
+        if hint == QStyle.SH_FocusFrame_AboveWidget:
+            return 1                                 # the frame is a child of the window (or of a scroll area's
+        return super().styleHint(hint, option, widget, data)   # viewport) and follows every ancestor of its control
+
+    def drawPrimitive(self, element, option, p, widget=None):
+        if element in (QStyle.PE_IndicatorCheckBox, QStyle.PE_IndicatorRadioButton):
+            paint_indicator(p, QRectF(option.rect), element == QStyle.PE_IndicatorRadioButton,
+                            bool(option.state & QStyle.State_On), bool(option.state & QStyle.State_Enabled))
+            return
+        if element == QStyle.PE_FrameFocusRect:
+            return
+        super().drawPrimitive(element, option, p, widget)
+
+
+class PaintedIcon(QIconEngine):
+    """An icon that is the marker function: sharp at any display scaling, recoloured by the theme, no files."""
+
+    def __init__(self, kind):
+        super().__init__()
+        self.kind = kind
+
+    def paint(self, painter, rect, mode, state):
+        side = min(rect.width(), rect.height())       # a wider icon keeps the glyph at its left: room before the words
+        box = QRectF(rect.left(), rect.top() + (rect.height() - side) / 2, side, side)
+        paint_marker(painter, self.kind, box, disabled=(mode == QIcon.Disabled))
+
+    def pixmap(self, size, mode, state):
+        pm = QPixmap(size)
+        pm.fill(Qt.transparent)
+        painter = QPainter(pm)
+        self.paint(painter, QRect(QPoint(0, 0), size), mode, state)
+        painter.end()
+        return pm
+
+    def clone(self):
+        return PaintedIcon(self.kind)
+
+
+class Marker(QWidget):
+    def __init__(self, kind, size=None):
+        super().__init__()
+        self.kind = kind
+        s = size or SIZE["marker"]
+        self.setFixedSize(s, s)
+
+    def set_kind(self, kind):
+        self.kind = kind
+        self.update()
+
+    def paintEvent(self, _):
+        painter = QPainter(self)
+        paint_marker(painter, self.kind, QRectF(self.rect()))
+
+
+def fill_px(p, r, colour, from_bottom=False, from_right=False):
+    """Fill a thin rectangle on whole device pixels. Its thickness is a whole number of pixels worked out ONCE,
+    rounded down as a browser rounds a border (never under one pixel), and it is laid from the edge named. So a
+    rule has one weight wherever it falls, it stays inside the room its widget keeps for it, and a child widget
+    beside it never covers part of it. Left to the painter, a 1 px line at 150 % is 1 or 2 pixels by position."""
+    t = p.deviceTransform()
+    inv, _ = t.inverted()
+    a, b = t.map(r.topLeft()), t.map(r.bottomRight())
+    edge = lambda v: math.floor(v + 0.5)
+    whole = lambda v: max(1, math.floor(v + 1e-6))
+    x0, x1, y0, y1 = edge(a.x()), edge(b.x()), edge(a.y()), edge(b.y())
+    if r.height() <= r.width():                       # a horizontal rule: its thickness is what must not vary
+        h = whole(b.y() - a.y())
+        y0, y1 = (y1 - h, y1) if from_bottom else (y0, y0 + h)
+    else:
+        w = whole(b.x() - a.x())
+        x0, x1 = (x1 - w, x1) if from_right else (x0, x0 + w)
+    p.fillRect(QRectF(inv.map(QPointF(x0, y0)), inv.map(QPointF(x1, y1))), colour)
+
+
+class Ruled(QWidget):
+    """A block with a ruled line along its top edge, its bottom edge or both; what it holds goes in .box.
+    The block paints its own rules, from its own edges and on whole pixels, so a rule is the same weight at
+    every display scaling and every position (a rule that is a widget 1 or 2 px high is not)."""
+
+    def __init__(self, top=0, bottom=0, colour="rule", gap_top=0, gap_bottom=0):
+        super().__init__()
+        self._top, self._bottom, self._colour = top, bottom, colour
+        self.box = QVBoxLayout(self)
+        self.box.setContentsMargins(0, top + gap_top, 0, bottom + gap_bottom)
+        self.box.setSpacing(0)
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        w, h, colour = self.width(), self.height(), TH.q(self._colour)
+        if self._top:
+            fill_px(p, QRectF(0, 0, w, self._top), colour)
+        if self._bottom:
+            fill_px(p, QRectF(0, h - self._bottom, w, self._bottom), colour, from_bottom=True)
+
+
+def paint_hatch(p, rect, colour="hatch"):
+    """Diagonal 1 px strokes every 5 px across the stroke: the range in which a run should end."""
+    if rect.width() <= 0:
+        return
+    p.save()
+    p.setClipRect(rect)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.setPen(QPen(TH.q(colour), 1.0))
+    step, h = SIZE["hatch_step"] * math.sqrt(2.0), rect.height()
+    x = rect.left() - h - (rect.left() % step)        # the strokes stay where they are as the rectangle moves
+    while x < rect.right() + h:
+        p.drawLine(QPointF(x, rect.bottom()), QPointF(x + h, rect.top()))
+        x += step
+    p.restore()
+
+
+class HatchKey(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(*SIZE["hatch_key"])
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        r = QRectF(self.rect())
+        p.fillRect(r, TH.q("paper"))
+        paint_hatch(p, r)
+        p.setPen(QPen(TH.q("rule"), 1)); p.setBrush(Qt.NoBrush)
+        p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5))
+
+
+# ── the time axis: a pure layout function, then a widget that only paints what it returns ──
+def axis_layout(start, now, end_from, end_by, width, text_width=None):
+    """Where everything on the time axis goes, as plain numbers: no painter and no widget, so it can be tested
+    without a screen. The axis runs from the start to the end of the expected range. Ticks: every 30 seconds
+    under 5 minutes, every 15 minutes under 2 hours, every 6 hours on the clock under 2 days, and beyond that at
+    each midnight with the name of the day between. A run that has passed its range gets an axis a day longer
+    (as many days as it needs) and is reported late. The "now" mark never leaves the axis."""
+    measure = text_width or (lambda s: 7.0 * len(s))
+    rnd = lambda v: int(math.floor(v + 0.5))
+    day = dt.timedelta(days=1)
+    late = now > end_by
+    axis_end = end_by + day * max(1, math.ceil((now - end_by) / day)) if late else end_by
+    span = (axis_end - start).total_seconds()
+    at = lambda t: (t - start).total_seconds() / span * width
+    half = AXIS["mark_w"] / 2 + AXIS["mark_halo"]
+    x_done = min(max(rnd(at(now)), 0), width)
+    out = {"late": late, "inside": end_from <= now <= end_by, "axis_end": axis_end, "x_done": x_done,
+           "x_now": min(max(x_done, half), width - half), "x_from": rnd(at(end_from)), "x_by": rnd(at(end_by))}
+    step, clock = next((s, c) for limit, s, c in ((300, 30, "%H:%M:%S"), (7200, 900, "%H:%M"),
+                                                  (172800, 21600, "%H:%M"), (math.inf, 86400, None)) if span < limit)
+    midnight = dt.datetime.combine(start.date(), dt.time())
+    k = math.floor((start - midnight).total_seconds() / step) + 1          # the first tick after the start
+    times = []
+    while midnight + dt.timedelta(seconds=k * step) < axis_end:
+        times.append(midnight + dt.timedelta(seconds=k * step))
+        k += 1
+    out["step"], out["ticks"] = step, [rnd(at(t)) for t in times]
+    labels, right = [], -1e9
+
+    def put(text, x):                                  # a label is left out sooner than printed over its neighbour
+        nonlocal right
+        w = measure(text)
+        x = min(max(x(w), 0.0), width - w)
+        if x >= right + AXIS["label_gap"] or not labels:
+            labels.append((x, text))
+            right = x + w
+
+    if clock:                                          # the clock under each tick; the day's name at a midnight
+        for t in times:
+            put(t.strftime(("%a " if t.time() == dt.time() else "") + clock), lambda w, t=t: at(t) - w / 2)
+    else:                                              # the day's name between two midnights
+        edges = [start] + times + [axis_end]
+        for i, (a, b) in enumerate(zip(edges, edges[1:])):
+            if i == 0 and a.time() != dt.time():       # the part-day the run began in: its name at the origin
+                put(a.strftime("%a"), lambda w: 0.0)
+            else:
+                put(a.strftime("%a"), lambda w, a=a, b=b: (at(a) + at(b)) / 2 - w / 2)
+    out["labels"] = labels
+    return out
+
+
+class TimeAxis(QWidget):
+    """The one progress indication: the run drawn on a labelled time axis. Only the "now" mark moves."""
+
+    def __init__(self, start, now, end_from, end_by):
+        super().__init__()
+        self.times = (start, now, end_from, end_by)
+        self.setFixedHeight(AXIS["h"])
+
+    def layout_now(self):
+        return axis_layout(*self.times, self.width(), QFontMetricsF(inter("small")).horizontalAdvance)
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        L, A, w = self.layout_now(), AXIS, self.width()
+        top, h, hair = A["track_y"], A["track_h"], SIZE["hair"]
+        rule, paper = TH.q("rule"), TH.q("paper")
+        p.fillRect(QRectF(0, top, w, h), paper)
+        if not L["late"]:                                                  # the range still ahead, hatched
+            paint_hatch(p, QRectF(L["x_from"], top + hair, w - hair - L["x_from"], h - 2 * hair))
+            fill_px(p, QRectF(L["x_from"], top, hair, h), rule)
+        p.fillRect(QRectF(0, top, L["x_done"], h), TH.q("elapsed"))         # elapsed, in ink
+        if L["late"] or L["inside"]:                                       # the range shows through the bar
+            upto = min(L["x_done"], L["x_by"])
+            paint_hatch(p, QRectF(L["x_from"], top + hair, upto - L["x_from"], h - 2 * hair), "paper")
+            fill_px(p, QRectF(L["x_from"], top, hair, h), paper)
+            if L["late"]:
+                fill_px(p, QRectF(L["x_by"] - hair, top, hair, h), paper)
+        fill_px(p, QRectF(0, top, w, hair), rule)
+        fill_px(p, QRectF(0, top + h - hair, w, hair), rule, from_bottom=True)
+        fill_px(p, QRectF(0, top, hair, h), rule)
+        fill_px(p, QRectF(w - hair, top, hair, h), rule, from_right=True)
+        x, mw, halo = L["x_now"], A["mark_w"], A["mark_halo"]               # the "now" mark
+        p.fillRect(QRectF(x - mw / 2 - halo, 0, mw + 2 * halo, A["mark_h"]), paper)
+        p.fillRect(QRectF(x - mw / 2, 0, mw, A["mark_h"]), TH.q("accent"))
+        for tx in L["ticks"]:
+            fill_px(p, QRectF(tx, A["tick_y"], hair, A["tick_h"]), rule)
+        p.setFont(inter("small"))
+        p.setPen(TH.q("ink_2"))
+        for lx, text in L["labels"]:
+            p.drawText(QRectF(lx, A["label_y"], w, A["label_h"]), Qt.AlignLeft | Qt.AlignVCenter, text)
+
+
+class Progress(QWidget):
+    """The axis and the one line of words under it. The words follow the same layout: the expected range,
+    then "by" once the run is inside it, then the attention marker when the run is late."""
+
+    def __init__(self, start, now, end_from, end_by):
+        super().__init__()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
+        self.axis = TimeAxis(start, now, end_from, end_by)
+        v.addWidget(self.axis)
+        ends = QHBoxLayout()
+        ends.setSpacing(GAP["axis_key"])
+        self.started = label("")
+        ends.addWidget(self.started)
+        ends.addStretch(1)
+        clock = "%a %H:%M" if end_by - start >= dt.timedelta(minutes=5) else "%a %H:%M:%S"
+        late, inside = now > end_by, end_from <= now <= end_by
+        ends.addWidget(Marker("warn") if late else HatchKey(), 0, Qt.AlignVCenter)
+        self.words = label(f"Later than expected: it was due by {end_by.strftime(clock)}" if late
+                           else f"Expected to end by {end_by.strftime(clock)}" if inside
+                           else f"Expected to end between {end_from.strftime(clock)} and {end_by.strftime(clock)}")
+        ends.addWidget(self.words)
+        self.started.setText("Started " + start.strftime(clock))
+        v.addLayout(ends)
+        hours = lambda t: round((t - start).total_seconds() / 3600)
+        self.axis.setAccessibleName(f"{hours(now)} hours of an expected {hours(end_from)} to {hours(end_by)} have passed"
+                                    + (", later than expected" if late else ""))
+
+
+class StepRow(QAbstractButton):
+    """One step of the chain in the navigation column: marker, number, name, state words, and the line on."""
+
+    def __init__(self, n, name, words, marker, current=False, waiting=False, line="solid", line_in=None):
+        super().__init__()
+        self.n, self.name, self.words, self.marker = n, name, words, marker
+        self.current, self.waiting, self.line, self.line_in = current, waiting, line, line_in
+        self.one_line = False
+        self.setFixedHeight(SIZE["step_h"])
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setProperty("ring", "inset")
+        self.setProperty("ring_left", SIZE["bar"] if current else 0)       # the ring leaves the accent bar alone
+        self._name()
+
+    def _name(self):
+        self.setAccessibleName(f"Step {self.n}, {self.name}. {self.words}")
+
+    def set_words(self, words):
+        self.words = words
+        self._name()
+        self.update()
+
+    def set_one_line(self, on):
+        """In the small layout a step keeps its state words only when it is the one in hand or the first blocked."""
+        self.one_line = on
+        self.setFixedHeight(SIZE["step_h_one" if on else "step_h"])
+        self.update()
+
+    def _link(self, p, style, y0, y1):
+        if style is None:
+            return
+        pn = QPen(TH.q("rule" if style == "solid" else "ink_3"), float(SIZE["rule"]))
+        pn.setCapStyle(Qt.FlatCap)
+        if style == "dotted":
+            pn.setDashPattern([1.0, 1.0])
+        p.setPen(pn)
+        p.drawLine(QPointF(STEP["line_x"], y0), QPointF(STEP["line_x"], y1))
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        w, h, S, m = self.width(), self.height(), STEP, SIZE["marker"]
+        if self.current:
+            p.fillRect(self.rect(), TH.q("accent_tint"))
+            p.fillRect(QRect(0, 0, SIZE["bar"], h), TH.q("accent"))
+        self._link(p, self.line_in, 0, S["line_in"])              # the end of the line from the step above
+        self._link(p, self.line, S["line_from"], h)               # the line to the step below
+        mx, my = S["marker_one" if self.one_line else "marker"]
+        paint_marker(p, self.marker, QRectF(mx, my, m, m))
+        f = inter("strong" if self.current else "body")
+        p.setFont(f)
+        num, y, line_h = str(self.n), S["name_y_one" if self.one_line else "name_y"], TYPE["body"][1]
+        p.setPen(TH.q("ink_2"))
+        p.drawText(QRectF(S["text_x"], y, w - S["text_x"], line_h), Qt.AlignLeft | Qt.AlignVCenter, num)
+        x = S["text_x"] + QFontMetricsF(f).horizontalAdvance(num) + S["number_gap"]
+        p.setPen(TH.q("ink_2" if self.waiting else "ink"))
+        p.drawText(QRectF(x, y, w - x - S["pad_right"], line_h), Qt.AlignLeft | Qt.AlignVCenter, self.name)
+        if not self.one_line:
+            p.setFont(inter("small"))
+            p.setPen(TH.q("ink" if self.current else "ink_2"))
+            p.drawText(QRectF(S["text_x"], S["words_y"], w - S["text_x"] - S["pad_right"], TYPE["small"][1]),
+                       Qt.AlignLeft | Qt.AlignVCenter, self.words)
+
+
+# ── keyboard focus: one ring, carried by the toolkit's own focus frame ──
+class FocusRing(QFocusFrame):
+    """The one ring: 2 px, 2 px clear of its control. The toolkit's focus frame keeps it on the control through
+    every move, resize, scroll and re-layout of any ancestor, and inside a scroll area it is a child of the
+    viewport, so it scrolls with its control and is cut where the control is. A control that fills its row
+    (a part of the program, a step, a scrolling page) has the ring just inside its own edge instead."""
+    inset = False                                    # read by PrismStyle: no margin round an inset ring
+
+    def paintEvent(self, _):
+        target = self.widget()
+        if target is None:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        ring = SIZE["focus_ring"]
+        pen = QPen(TH.q("focus"), ring)
+        pen.setJoinStyle(Qt.MiterJoin)
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
+        r = QRectF(self.rect())
+        if self.inset:
+            left = int(target.property("ring_left") or 0)
+            p.drawRect(r.adjusted(left + ring / 2, ring / 2, -ring / 2, -ring / 2))
+        else:
+            corner = SIZE["radius"] + SIZE["focus_gap"] + ring / 2
+            p.drawRoundedRect(r.adjusted(ring / 2, ring / 2, -ring / 2, -ring / 2), corner, corner)
+
+
+class FocusFollower(QObject):
+    """Decides when the ring shows, from the reason the focus arrived: always after Tab, Shift+Tab, an arrow
+    key within a group or a shortcut; after a mouse click only in a field one types in. A window coming back
+    to the front keeps what it had. A widget with set_focus_shown() draws its own sign (a table rings its
+    current row). One filter on the application; it looks at focus events only."""
+    KEYS = (Qt.TabFocusReason, Qt.BacktabFocusReason, Qt.ShortcutFocusReason)
+    TYPED_IN = (QLineEdit, QAbstractSpinBox)
+
+    def __init__(self, app):
+        super().__init__(app)
+        self._ring, self._target, self._keyboard = None, None, False
+        app.installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        kind = ev.type()
+        if kind == QEvent.FocusIn and obj.isWidgetType():
+            if obj.window().windowType() in (Qt.Popup, Qt.ToolTip):      # an opened list or menu marks its own row
+                return False
+            reason = ev.reason()
+            if reason in self.KEYS:
+                self._keyboard = True
+            elif reason == Qt.MouseFocusReason:
+                self._keyboard = False
+            self.show_on(obj if (self._keyboard or isinstance(obj, self.TYPED_IN)) else None)
+        elif kind in (QEvent.FocusOut, QEvent.Hide) and obj is self._target:
+            self.show_on(None)                       # also when its page or its dialog goes: before it can be deleted
+        return False
+
+    def target(self):
+        if self._target is not None and not shiboken6.isValid(self._target):
+            self._target = None
+        return self._target
+
+    def show_on(self, widget):
+        old, self._target = self.target(), widget
+        if old is not None and old is not widget and hasattr(old, "set_focus_shown"):
+            old.set_focus_shown(False)
+        ring = self._ring if (self._ring is not None and shiboken6.isValid(self._ring)) else None
+        own = widget is not None and hasattr(widget, "set_focus_shown")
+        if own:
+            widget.set_focus_shown(True)
+        if widget is None or own:
+            if ring is not None:
+                ring.setWidget(None)
+            return
+        if ring is None:                             # the frame moves itself into whichever window holds its control;
+            ring = self._ring = FocusRing(widget.window())     # if that window was deleted, so was the frame: a new one
+        ring.setWidget(None)
+        ring.inset = widget.property("ring") == "inset"
+        ring.setWidget(widget)
+        ring.update()
+
+    def refresh(self):
+        if self.target() is not None:
+            self.show_on(self._target)
+
+
+# ── tables: three rules; two-line cells, a marker with its word and the selected row's bar are ONE delegate ──
+def _wrapped(text, font, width, line_h):
+    layout = QTextLayout(text, font)
+    opt = QTextOption()
+    opt.setWrapMode(QTextOption.WordWrap)
+    layout.setTextOption(opt)
+    layout.beginLayout()
+    n = 0
+    while True:
+        ln = layout.createLine()
+        if not ln.isValid():
+            break
+        ln.setLineWidth(width)
+        ln.setPosition(QPointF(0, n * line_h + (line_h - ln.height()) / 2))
+        n += 1
+    layout.endLayout()
+    return layout, n
+
+
+class RuleDelegate(QStyledItemDelegate):
+    """A cell is described by a small dict in Qt.UserRole:
+         {"t": text, "quiet": bool, "elide": "middle" | "end", "wrap": bool}
+         {"value": bold figure, "suffix": plain text after it, "sub": a small second line}   (right-aligned)
+         {"state": (marker, word)}"""
+
+    def _pads(self, index):
+        last = index.column() == index.model().columnCount() - 1
+        return (SIZE["table_lead"] if index.column() == 0 else 0), (0 if last else SIZE["table_col_gap"])
+
+    def sizeHint(self, option, index):
+        spec = index.data(Qt.UserRole) or {}
+        view = self.parent()
+        left, right = self._pads(index)
+        width = view.column_px(index.column()) - left - right
+        line_h = TYPE["body"][1]
+        lines_h = line_h
+        if spec.get("wrap"):
+            lines_h = line_h * _wrapped(spec["t"], inter("body"), width, line_h)[1]
+        elif spec.get("sub"):
+            lines_h = line_h + TYPE["small"][1]
+        return QSize(view.column_px(index.column()), lines_h + 2 * SIZE["table_pad"])
+
+    def paint(self, p, option, index):
+        spec = index.data(Qt.UserRole) or {}
+        r = QRectF(option.rect)
+        selected = bool(option.state & QStyle.State_Selected)
+        hair, line_h, m = SIZE["hair"], TYPE["body"][1], SIZE["marker"]
+        p.save()
+        if selected:                                       # the tint, a line above and below, and the bar
+            accent = TH.q("accent")
+            p.fillRect(r, TH.q("accent_tint"))
+            fill_px(p, QRectF(r.left(), r.top(), r.width(), hair), accent)
+            fill_px(p, QRectF(r.left(), r.bottom() - hair, r.width(), hair), accent, from_bottom=True)
+            if index.column() == 0:
+                fill_px(p, QRectF(r.left(), r.top(), SIZE["bar"], r.height()), accent)
+        left, right = self._pads(index)
+        box = r.adjusted(left, SIZE["table_pad"], -right, -SIZE["table_pad"])
+        line = QRectF(box.left(), box.top(), box.width(), line_h)
+        if "state" in spec:
+            kind, word = spec["state"]
+            paint_marker(p, kind, QRectF(box.left(), box.top() + (line_h - m) / 2, m, m))
+            p.setFont(inter("body")); p.setPen(TH.q("ink"))
+            p.drawText(line.adjusted(m + SIZE["state_gap"], 0, 0, 0), Qt.AlignLeft | Qt.AlignVCenter, word)
+        elif "value" in spec:
+            plain, bold = inter("body"), inter("strong")
+            suffix = spec.get("suffix", "")
+            sw = QFontMetricsF(plain).horizontalAdvance(suffix)
+            p.setPen(TH.q("ink"))
+            p.setFont(plain); p.drawText(line, Qt.AlignRight | Qt.AlignVCenter, suffix)
+            p.setFont(bold); p.drawText(line.adjusted(0, 0, -sw, 0), Qt.AlignRight | Qt.AlignVCenter, spec["value"])
+            if spec.get("sub"):
+                p.setFont(inter("small")); p.setPen(TH.q("ink_2"))
+                p.drawText(QRectF(box.left(), box.top() + line_h, box.width(), TYPE["small"][1]),
+                           Qt.AlignRight | Qt.AlignVCenter, spec["sub"])
+        else:
+            f = inter("strong" if (selected and index.column() == 0) else "body")
+            p.setFont(f); p.setPen(TH.q("ink_2" if spec.get("quiet") else "ink"))
+            text = spec.get("t", "")
+            if spec.get("wrap"):
+                layout, _ = _wrapped(text, f, box.width(), line_h)
+                layout.draw(p, box.topLeft())
+            else:
+                mode = Qt.ElideMiddle if spec.get("elide") == "middle" else Qt.ElideRight
+                p.drawText(line, Qt.AlignLeft | Qt.AlignVCenter, QFontMetricsF(f).elidedText(text, mode, box.width()))
+        p.restore()
+
+
+class RuleHeader(QHeaderView):
+    """The header of a ruled table. It paints its own words, in the small semibold face, and the 1 px rule under
+    them in one stroke across all columns: neither goes through the style sheet or the model."""
+
+    def __init__(self, parent, aligns):
+        super().__init__(Qt.Horizontal, parent)
+        self._aligns = aligns
+        self.setFixedHeight(TYPE["small"][1] + 2 * SIZE["table_pad"] + SIZE["hair"])
+        self.setHighlightSections(False)
+        self.setSectionsClickable(False)
+        self.setMinimumSectionSize(SIZE["table_section_least"])
+
+    def paintSection(self, p, rect, i):
+        if not rect.isValid():
+            return
+        left = SIZE["table_lead"] if i == 0 else 0
+        right = 0 if i == self.count() - 1 else SIZE["table_col_gap"]
+        pad = SIZE["table_pad"]
+        p.save()
+        p.setFont(inter("small", 600))
+        p.setPen(TH.q("ink"))
+        p.drawText(QRectF(rect).adjusted(left, pad, -right, -(pad + SIZE["hair"])), self._aligns[i] | Qt.AlignVCenter,
+                   str(self.model().headerData(i, Qt.Horizontal)))
+        p.restore()
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        hair = SIZE["hair"]
+        fill_px(QPainter(self.viewport()), QRectF(0, self.height() - hair, self.width(), hair), TH.q("rule"), from_bottom=True)
+
+
+class RuleView(QTableView):
+    """The rows of a ruled table. columns: (title, width | "fit" | None to stretch, alignment); rows: lists of
+    cell dicts (see RuleDelegate). With the keyboard focus it rings its current row, not the whole table."""
+
+    def __init__(self, columns, rows, selectable=True, selected=None):
+        super().__init__()
+        self._focus_shown = False
+        self._widths = [self._fit(c, columns, rows) if w == "fit" else w for c, (_, w, _) in enumerate(columns)]
+        m = QStandardItemModel(len(rows), len(columns), self)
+        for c, (title, _, _) in enumerate(columns):
+            m.setHeaderData(c, Qt.Horizontal, title)
+        for r, row in enumerate(rows):
+            for c, spec in enumerate(row):
+                words = spec.get("t") or (spec.get("value", "") + spec.get("suffix", "")) or spec["state"][1]
+                item = QStandardItem(words)
+                item.setData(spec, Qt.UserRole)
+                item.setEditable(False)
+                m.setItem(r, c, item)
+        self.setHorizontalHeader(RuleHeader(self, [a for _, _, a in columns]))
+        self.setModel(m)
+        self.setItemDelegate(RuleDelegate(self))
+        self.setFrameShape(QFrame.NoFrame)
+        self.setShowGrid(False)
+        self.verticalHeader().hide()
+        self.verticalHeader().setMinimumSectionSize(SIZE["table_row"])
+        self.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        hh = self.horizontalHeader()
+        for c, width in enumerate(self._widths):
+            hh.setSectionResizeMode(c, QHeaderView.Stretch if width is None else QHeaderView.Fixed)
+            if width is not None:
+                hh.resizeSection(c, width)
+        self.setMinimumWidth(sum(w for w in self._widths if w is not None) + SIZE["table_stretch_least"])
+        self.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SingleSelection if selectable else QAbstractItemView.NoSelection)
+        self.setFocusPolicy(Qt.StrongFocus if selectable else Qt.NoFocus)
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setWordWrap(False)
+        if selected is not None:
+            self.selectRow(selected)
+
+    @staticmethod
+    def _fit(c, columns, rows):
+        """A column as wide as its widest cell, measured in the toolkit's own letter widths (the first column
+        in semibold, which is how its selected row is set), plus the space between columns."""
+        body = QFontMetricsF(inter("strong" if c == 0 else "body"))
+        need = QFontMetricsF(inter("small", 600)).horizontalAdvance(columns[c][0])
+        for row in rows:
+            spec = row[c]
+            need = max(need, SIZE["marker"] + SIZE["state_gap"] + body.horizontalAdvance(spec["state"][1])
+                       if "state" in spec else body.horizontalAdvance(spec.get("t", "")))
+        lead = SIZE["table_lead"] if c == 0 else 0
+        gap = 0 if c == len(columns) - 1 else SIZE["table_col_gap"]
+        return min(SIZE["table_fit_most"], math.ceil(need)) + lead + gap
+
+    def column_px(self, c):
+        """A column's width as it WILL be: the stretching one is not yet resized when the rows are measured."""
+        if self._widths[c] is not None:
+            return self._widths[c]
+        return max(SIZE["table_stretch_least"], self.width() - sum(w for w in self._widths if w is not None))
+
+    def set_focus_shown(self, on):
+        self._focus_shown = on
+        self.viewport().update()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        m, d = self.model(), self.itemDelegate()
+        total = self.horizontalHeader().height()
+        for r in range(m.rowCount()):                       # resizeRowsToContents() made every row 1 px too tall
+            h = max(d.sizeHint(None, m.index(r, c)).height() for c in range(m.columnCount()))
+            self.setRowHeight(r, h)
+            total += h
+        if self.height() != total:
+            self.setFixedHeight(total)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        index = self.currentIndex()
+        if self._focus_shown and index.isValid():           # the ring round the current row, clear of its bar
+            p = QPainter(self.viewport())
+            p.setRenderHint(QPainter.Antialiasing, True)
+            ring, inset = SIZE["focus_ring"], SIZE["row_ring_inset"] + SIZE["focus_ring"] / 2
+            r = QRectF(0, self.rowViewportPosition(index.row()), self.viewport().width(), self.rowHeight(index.row()))
+            p.setPen(QPen(TH.q("focus"), ring)); p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(r.adjusted(SIZE["bar"] + inset, inset, -inset, -inset), SIZE["radius"], SIZE["radius"])
+
+
+class RuleTable(Ruled):
+    """A table with its three rules: 2 px above, 1 px under the header, 2 px below; no lines between rows."""
+
+    def __init__(self, columns, rows, selectable=True, selected=None):
+        super().__init__(top=SIZE["rule"], bottom=SIZE["rule"])
+        self.view = RuleView(columns, rows, selectable, selected)
+        self.box.addWidget(self.view)
+
+
+# ── figures: matplotlib, Agg. The look is in journal_rc(); a figure gives margins, data and its names ──
+PT = 0.72                                   # points per pixel at 100 dots per inch
+TRAIN = [0.93, -1.205, -2.815, -4.005, -4.875, -5.545, -6.105, -6.57, -6.91, -7.16, -7.38, -7.605, -7.81, -7.95,
+         -8.05, -8.16, -8.295, -8.42, -8.49, -8.535, -8.61, -8.71, -8.795, -8.83, -8.85, -8.905, -8.99, -9.045,
+         -9.06, -9.065, -9.115, -9.185, -9.22, -9.215, -9.215, -9.26, -9.32, -9.34, -9.32, -9.325, -9.365, -9.415,
+         -9.42, -9.395, -9.4, -9.445, -9.48, -9.475, -9.445, -9.455, -9.495, -9.525, -9.51, -9.485, -9.495, -9.535,
+         -9.555, -9.53, -9.51, -9.525, -9.565, -9.575]
+VALID = [0.52, -1.355, -2.775, -3.74, -4.545, -5.285, -5.765, -6.035, -6.355, -6.69, -6.835, -6.945, -7.2, -7.425,
+         -7.48, -7.56, -7.755, -7.825, -7.765, -7.82, -7.965, -7.975, -7.95, -8.09, -8.23, -8.205, -8.19, -8.305,
+         -8.335, -8.225, -8.23, -8.35, -8.355, -8.305, -8.405, -8.525, -8.475, -8.415, -8.495, -8.52, -8.4, -8.385,
+         -8.505, -8.525, -8.46, -8.53, -8.645, -8.585, -8.495, -8.55, -8.58, -8.475, -8.45, -8.575, -8.61, -8.535,
+         -8.58, -8.685, -8.62, -8.51, -8.555, -8.605]
+_rng = np.random.default_rng(11)
+TRACE_T = np.linspace(0.0, 200.0, 230)
+TRACE_X = 30.0 * np.sin(2 * np.pi * TRACE_T / 57.0 + 0.2) + np.convolve(_rng.normal(0, 7.0, 236), np.ones(4) / 4, "valid")[:230]
+
+
+def journal_axes(fig, spec):
+    """One pair of axes, placed by its four margins in pixels: it grows and shrinks with the figure."""
+    w, h = fig.get_size_inches() * 100.0
+    ax = fig.add_axes([spec["left"] / w, spec["bottom"] / h, 1 - (spec["left"] + spec["right"]) / w,
+                       1 - (spec["top"] + spec["bottom"]) / h])
+    ax.tick_params(pad=spec["tick_pad"] * PT)
+    return ax
+
+
+def name_axes(ax, x_name, y_name, spec):
+    """The names of the axes as on a journal page: x centred under its axis; y upright at the head of its axis,
+    beside it when the margin has room for it and above it, from the figure's left edge, when it has not."""
+    F = FIGURE
+    ax.annotate(x_name, (0.5, 0), xycoords="axes fraction", xytext=(0, -spec["x_name_drop"] * PT),
+                textcoords="offset points", ha="center", va="baseline")
+    if spec.get("y_name_above"):
+        ax.annotate(y_name, (0, 1), xycoords=("figure fraction", "axes fraction"), xytext=(0, F["y_name_lift"] * PT),
+                    textcoords="offset points", ha="left", va="baseline")
+    else:
+        ax.annotate(y_name, (0, 1), xycoords="axes fraction", xytext=(-F["y_name_gap"] * PT, -F["y_name_sink"] * PT),
+                    textcoords="offset points", ha="right", va="baseline")
+
+
+def label_line(ax, x, y, text, dx=None, dy=0.0, ha="left", va="center"):
+    """A line is named where it ends (or a point where it is), in semibold; a figure has no legend box."""
+    dx = FIGURE["line_label_gap"] if dx is None else dx
+    return ax.annotate(text, (x, y), xytext=(dx * PT, dy * PT), textcoords="offset points", ha=ha, va=va,
+                       fontweight=600, annotation_clip=False)
+
+
+def draw_loss(fig, recent=False):
+    spec = FIGURE["loss"]
+    ax = journal_axes(fig, spec)
+    last = len(TRAIN)
+    ep = np.arange(1, last + 1)
+    best = int(np.argmin(VALID)) + 1
+    if recent:                                             # epoch 10 onward, on a scale fitted to it
+        lo, hi = min(TRAIN[9:]), max(VALID[9:])
+        ax.set_ylim(lo - 0.25, hi + 0.25)
+        ax.set_yticks([-7, -8, -9])
+        ax.set_xlim(10, last)
+        ax.set_xticks([10, 20, 30, 40, 50, last])
+        ax.annotate("epochs 1 to 9 are left out", (0, 1), xycoords="axes fraction", color=TH["ink_2"],
+                    xytext=(FIGURE["note_x"] * PT, -FIGURE["y_name_sink"] * PT), textcoords="offset points",
+                    ha="left", va="baseline")
+    else:
+        ax.set_ylim(-10.5, 1.5)
+        ax.set_yticks([0, -2, -4, -6, -8, -10])
+        ax.set_xlim(1, last)
+        ax.set_xticks([1, 10, 20, 30, 40, 50, last])
+    ax.plot(ep, TRAIN, color=TH["series_2"], dashes=(3, 2))
+    ax.plot(ep, VALID, color=TH["ink"])
+    y_best = VALID[best - 1]
+    ax.plot([best, best], [y_best, ax.get_ylim()[0]], color=TH["ink_2"], lw=FIGURE["axis_w"] * PT, dashes=(2, 3), zorder=2)
+    ax.plot([best], [y_best], marker="o", ms=FIGURE["best_mark"] * PT, mfc=TH["paper"], mec=TH["ink"],
+            mew=FIGURE["line_w"] * PT, zorder=5, clip_on=False)
+    if recent:                                             # under the mark: here the line itself runs above it
+        label_line(ax, best, y_best, f"best so far: epoch {best}", dx=-8, dy=-10, ha="right", va="top")
+    else:
+        label_line(ax, best, y_best, f"best so far: epoch {best}", dx=6, dy=11, ha="right", va="bottom")
+    label_line(ax, last, VALID[-1], "validation")
+    label_line(ax, last, TRAIN[-1], "training")
+    newest = ax.get_xticklabels()[-1]                      # the epoch the run is at
+    newest.set_color(TH["ink"]); newest.set_fontweight(600)
+    name_axes(ax, "Epoch", "Loss", spec)
+
+
+def draw_trace(fig):
+    spec = FIGURE["trace"]
+    ax = journal_axes(fig, spec)
+    ax.set_xlim(0, 200); ax.set_ylim(-53.33, 53.33)
+    ax.set_xticks([0, 50, 100, 150, 200]); ax.set_yticks([-40, 0, 40])
+    ax.axhline(0, color=TH["ink_3"], lw=FIGURE["axis_w"] * PT, dashes=(1, 4))
+    ax.plot(TRACE_T, TRACE_X, color=TH["ink"], lw=FIGURE["axis_w"] * PT)
+    name_axes(ax, "Time (ms)", "Displacement (nm)", spec)
+
+
+class Plot(QWidget):
+    """A matplotlib figure rendered by Agg at the width its layout gives it and at the scaling of the screen it
+    is on. It is rendered when it is painted and kept until its size, its screen's scaling, the theme or its
+    options change."""
+
+    def __init__(self, spec, draw, name):
+        super().__init__()
+        self._draw, self._kw, self._key, self._pm = draw, {}, None, None
+        self.setFixedHeight(spec["h"])
+        self.setMinimumWidth(spec["min_w"])
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setAccessibleName(name)
+
+    def set_options(self, **kw):
+        self._kw = kw
+        self.update()
+
+    def retheme(self):
+        self._key = None
+        self.update()
+
+    def event(self, ev):
+        if ev.type() == QEvent.DevicePixelRatioChange:     # moved to a screen with another scaling
+            self.update()
+        return super().event(ev)
+
+    def paintEvent(self, _):
+        dpr = self.devicePixelRatioF()
+        key = (self.width(), self.height(), dpr, TH.dark, tuple(sorted(self._kw.items())))
+        if key != self._key:
+            fig = Figure(figsize=(self.width() / 100, self.height() / 100), dpi=100 * dpr)
+            canvas = FigureCanvasAgg(fig)
+            self._draw(fig, **self._kw)
+            canvas.draw()
+            buf = canvas.buffer_rgba()
+            img = QImage(buf, buf.shape[1], buf.shape[0], buf.shape[1] * 4, QImage.Format_RGBA8888).copy()
+            img.setDevicePixelRatio(dpr)
+            self._pm, self._key = QPixmap.fromImage(img), key
+        QPainter(self).drawPixmap(0, 0, self._pm)
+
+
+# ══════════════════════════════════════ small builders ══════════════════════════════════════
+def b(text):
+    return f"<span style='font-weight:600'>{text}</span>"
+
+
+def label(text, cls=None, line=None):
+    w = QLabel(text)
+    if cls:
+        set_class(w, cls=cls)
+    w.setFixedHeight(line or SIZE["line_h"])
+    return w
+
+
+class Gap(QWidget):
+    """A space between two blocks that the small layout may change."""
+
+    def __init__(self, h):
+        super().__init__()
+        self.setFixedHeight(h)
+
+
+class Rich(QLabel):
+    """A label that may name colours of the table as {ink_2}; refilled when the theme changes."""
+
+    def __init__(self, template, cls=None, lines=None, wrap=False, height=None, indent=0):
+        """lines: a TYPE name; the text is then set at that line height, in Cambria when it is "book"."""
+        super().__init__()
+        self._line = TYPE[lines][1] if lines else None
+        self.setTextFormat(Qt.RichText)
+        self.setWordWrap(wrap)
+        if cls:
+            set_class(self, cls=cls)
+        if lines == "book":
+            self.setFont(book())
+        lift = 0
+        if lines:
+            natural = QFontMetricsF(book() if lines == "book" else inter(lines)).lineSpacing()
+            lift = math.ceil((self._line - natural) / 2)   # rich text puts ALL the extra above a line; a page halves it
+        self.setContentsMargins(indent, -lift, 0, lift)
+        if height:
+            self.setFixedHeight(height)
+        self.set_template(template)
+
+    def set_template(self, template):
+        self._template = f"<p style='line-height:{self._line}px'>{template}</p>" if self._line else template
+        self.retheme()
+
+    def retheme(self):
+        self.setText(self._template.format(**TH.all()))
+
+
+def button(text, cls=None, icon=None):
+    w = QPushButton(text)
+    if cls:
+        set_class(w, cls=cls)
+    if icon:                                    # a style sheet cannot set the gap between an icon and its words
+        w.setIcon(QIcon(PaintedIcon(icon)))
+        w.setIconSize(QSize(SIZE["marker"] + SIZE["icon_gap"], SIZE["marker"]))
+    return w
+
+
+def link(text):
+    """A link is a button with no frame: it takes the keyboard focus and the ring like every other control."""
+    w = set_class(QPushButton(text), cls="link")
+    w.setCursor(Qt.PointingHandCursor)
+    w.setFixedHeight(SIZE["line_h"])
+    w.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+    return w
+
+
+def heading_row(title, right=None):
+    h = QHBoxLayout()
+    h.setContentsMargins(0, 0, 0, 0)
+    h.addWidget(label(title, "head", TYPE["head"][1]))
+    h.addStretch(1)
+    if right is not None:
+        h.addWidget(right, 0, Qt.AlignBottom)
+    return h
+
+
+def section_head(title, right=None):
+    """A section heading: 16 px semibold with one 2 px ink rule under it."""
+    w = Ruled(bottom=SIZE["rule"], gap_bottom=GAP["section_rule"])
+    w.box.addLayout(heading_row(title, right))
+    return w
+
+
+def set_in(item):
+    """A part of a page that does not scroll, set in from the page's edge by the room the scrolling part keeps
+    for the focus ring, so that the two line up."""
+    h = QHBoxLayout()
+    h.setContentsMargins(ring_room(), 0, ring_room(), 0)
+    h.addLayout(item) if isinstance(item, QLayout) else h.addWidget(item)
+    return h
+
+
+class Choice(QComboBox):
+    """A stock drop-down. Its chevron is painted here from the table: a style sheet can only name an image file
+    for it, and with a border of the sheet's own the style is no longer asked to draw one."""
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        m = SIZE["marker"]
+        box = QRectF(self.width() - 1 - SIZE["combo_pad"][1] - m, (self.height() - m) / 2, m, m)
+        paint_marker(QPainter(self), "chev_down", box, disabled=not self.isEnabled())
+
+
+class IntField(QLineEdit):
+    """A whole-number field of the kind PRISM has: a line edit, not a spin box (no stepping on the wheel or the
+    arrow keys). Right-aligned; four digits or more carry the separator, also while they are typed."""
+
+    def __init__(self, value=0):
+        super().__init__(f"{value:,}")
+        self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.textEdited.connect(self._regroup)
+
+    def _regroup(self, text):
+        before = sum(ch.isdigit() for ch in text[:self.cursorPosition()])      # digits left of the caret
+        digits = "".join(ch for ch in text if ch.isdigit())
+        shown = f"{int(digits):,}" if digits else ""
+        self.setText(shown)
+        pos = 0
+        while pos < len(shown) and before > 0:
+            before -= shown[pos].isdigit()
+            pos += 1
+        self.setCursorPosition(pos)
+
+    def value_or_none(self):
+        digits = self.text().replace(",", "").strip()
+        return int(digits) if digits.isdigit() else None
+
+
+class PageHead(QWidget):
+    """A page's heading: its title, one sentence under it in the book face, its actions at the right."""
+
+    def __init__(self, title, lead, buttons):
+        super().__init__()
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0); h.setSpacing(GAP["head_buttons"])
+        t = QVBoxLayout()
+        t.setSpacing(GAP["head_lead"])
+        t.addWidget(label(title, "title", TYPE["title"][1]))
+        self.lead = Rich(lead, cls="book2", lines="book", wrap=True)
+        t.addWidget(self.lead)
+        t.addStretch(1)
+        h.addLayout(t, 1)
+        for btn in buttons:
+            h.addWidget(btn, 0, Qt.AlignTop)
+
+
+class MessageRow(QWidget):
+    """A marker and ONE label in the book face whose first words are bold. An error has a 2 px left edge."""
+
+    def __init__(self, kind, lead, sentence):
+        super().__init__()
+        self.kind = kind
+        h = QHBoxLayout(self)
+        h.setContentsMargins(*GAP["message"]); h.setSpacing(GAP["message_marker"])
+        mv = QVBoxLayout()
+        mv.setContentsMargins(0, GAP["message_marker_drop"], 0, 0)
+        mv.addWidget(Marker(kind)); mv.addStretch(1)
+        h.addLayout(mv)
+        h.addWidget(Rich(f"<b>{lead}</b> {sentence}", lines="book", wrap=True), 1)
+
+    def paintEvent(self, _):
+        if self.kind == "err":
+            fill_px(QPainter(self), QRectF(0, 0, SIZE["rule"], self.height()), TH.q("err"))
+
+
+class Scroller(QScrollArea):
+    """The middle of a page. It scrolls when the window is too small for it, and tells what it holds how wide
+    the page is so that two columns can become one. It keeps the ring's room round what it holds, so a ring at
+    the edge is whole; it is a stop for the Tab key only while there is something to scroll."""
+
+    def __init__(self, body):
+        super().__init__()
+        self.body = body
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setProperty("ring", "inset")
+        holder = QWidget()
+        self._v = QVBoxLayout(holder)
+        self._v.setSpacing(0)
+        self._v.addWidget(body)
+        self._v.addStretch(1)
+        self._margins(False)
+        self.setWidget(holder)
+        self.verticalScrollBar().rangeChanged.connect(lambda lo, hi: self._margins(hi > lo))
+
+    def _margins(self, scrolls):
+        room = ring_room()
+        self._v.setContentsMargins(room, 0, room + (SIZE["scroll_gap"] if scrolls else 0), room)
+        self.setFocusPolicy(Qt.TabFocus if scrolls else Qt.NoFocus)
+
+    def resizeEvent(self, e):
+        self.body.fit(self.width() - 2 * ring_room() - SIZE["scroll_bar"] - SIZE["scroll_gap"])
+        super().resizeEvent(e)
+
+
+class Columns(QWidget):
+    """Two blocks side by side while the page is wide enough for both, one above the other when it is not."""
+
+    def __init__(self, left, right, stretch, gap, gap_stacked):
+        super().__init__()
+        self._parts, self._gaps = (left, right), (gap, gap_stacked)
+        self.box = QBoxLayout(QBoxLayout.LeftToRight, self)
+        self.box.setContentsMargins(0, 0, 0, 0); self.box.setSpacing(gap)
+        self.box.addWidget(left, stretch[0])
+        self.box.addWidget(right, stretch[1])
+
+    def fit(self, width):
+        need = sum(w.minimumSizeHint().width() for w in self._parts) + self._gaps[0]
+        wide = width >= max(SIZE["two_columns_from"], need)
+        want = QBoxLayout.LeftToRight if wide else QBoxLayout.TopToBottom
+        if self.box.direction() != want:
+            self.box.setDirection(want)
+            self.box.setSpacing(self._gaps[0 if wide else 1])
+
+
+class Stages(QWidget):
+    """The stages of a run, each a marker, a name and a state: one row, or two rows of two when a row is too long."""
+
+    def __init__(self, stages):
+        super().__init__()
+        self.items = []
+        for kind, name, words in stages:
+            one = QWidget()
+            h = QHBoxLayout(one)
+            h.setContentsMargins(0, 0, 0, 0); h.setSpacing(GAP["stage_parts"])
+            h.addWidget(Marker(kind))
+            h.addWidget(label(name, "strong"))
+            h.addWidget(label(words, None if kind == "now" else "quiet"))
+            self.items.append(one)
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(GAP["stages"][0]); self.grid.setVerticalSpacing(GAP["stages"][1])
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)      # its width is the page's, not its own
+        self._cols = 0
+        self._lay(len(self.items))
+
+    def _lay(self, cols):
+        if cols == self._cols:
+            return
+        for w in self.items:
+            self.grid.removeWidget(w)
+        for i, w in enumerate(self.items):
+            self.grid.addWidget(w, i // cols, i % cols, Qt.AlignLeft)
+        for c in range(len(self.items) + 1):
+            self.grid.setColumnStretch(c, 1 if c == cols else 0)
+        self._cols = cols
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        need = sum(w.sizeHint().width() for w in self.items) + (len(self.items) - 1) * GAP["stages"][0]
+        self._lay(len(self.items) if need <= self.width() else 2)
+
+
+# ══════════════════════════════════════ the navigation column ══════════════════════════════════════
+STEPS = [("Model and options", "Done", "done"), ("Prior", "Done", "done"), ("Training", "Now: setting up", "now"),
+         ("Calibration check", "Needs a trained network", "later"), ("Inference", "Needs a trained network", "later"),
+         ("Narrowing round", "Needs a trained network", "later")]
+
+
+class Rail(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setFixedWidth(SIZE["rail"])
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
+        self.brand = QLabel("PRISM")
+        f = inter("brand")
+        f.setLetterSpacing(QFont.PercentageSpacing, BRAND_SPACING)
+        self.brand.setFont(f)
+        v.addWidget(self.brand)
+
+        self.parts = []
+        self.group = QWidget()                                      # the part in hand, on the page's own ground
+        gv = QVBoxLayout(self.group)
+        gv.setContentsMargins(0, SIZE["hair"], 0, SIZE["hair"]); gv.setSpacing(0)
+        gv.addWidget(self._part("Parameter inference", current=True))
+        self.steps = []
+        for i, (name, words, marker) in enumerate(STEPS):
+            later = i >= 2
+            row = StepRow(i + 1, name, words, marker, current=(i == 2), waiting=(i > 2),
+                          line=None if i == len(STEPS) - 1 else ("dotted" if later else "solid"),
+                          line_in=None if i == 0 else ("dotted" if i - 1 >= 2 else "solid"))
+            self.steps.append(row)
+            gv.addWidget(row)
+        v.addWidget(self.group)
+        v.addSpacing(GAP["rail_rest"])
+        for name in ("Effective temperature", "Live simulation", "Reduction map"):
+            v.addWidget(self._part(name))
+        v.addSpacing(GAP["rail_group"])
+        for name in ("Records", "Settings"):
+            v.addWidget(self._part(name))
+        v.addStretch(1)
+
+        foot = Ruled(top=SIZE["hair"], colour="rule_light")         # the run line: is anything running?
+        fh = QHBoxLayout()
+        fh.setContentsMargins(*SIZE["run_line"]); fh.setSpacing(SIZE["run_line_gap"])
+        mv = QVBoxLayout()
+        mv.setContentsMargins(0, SIZE["run_marker_drop"], 0, 0)
+        self.run_marker = Marker("none")
+        mv.addWidget(self.run_marker); mv.addStretch(1)
+        fh.addLayout(mv)
+        tv = QVBoxLayout()
+        tv.setSpacing(0)
+        self.run_title = label("Nothing is running", "strong")
+        self.run_words = Rich("Only one thing runs at a time.", cls="small", lines="small", wrap=True)
+        tv.addWidget(self.run_title); tv.addWidget(self.run_words)
+        fh.addLayout(tv, 1)
+        foot.box.addLayout(fh)
+        v.addWidget(foot)
+        self.set_small(False)
+
+    def _part(self, name, current=False):
+        w = set_class(QPushButton(name), cls="nav", current="true" if current else "false", small="false")
+        w.setProperty("ring", "inset")
+        self.parts.append(w)
+        return w
+
+    def set_small(self, small):
+        """In a low window: a shorter name line and rows, and state words only on the step in hand and on the
+        first step that is blocked."""
+        left, top, right, bottom = SIZE["brand_small" if small else "brand"]
+        self.brand.setContentsMargins(left, top, right, bottom)
+        self.brand.setFixedHeight(top + TYPE["brand"][1] + bottom)
+        for part in self.parts:                                     # the sheet gives the row its height; a height set
+            set_class(part, small="true" if small else "false")     # in code alone is undone at the next polish
+            part.setFixedHeight(SIZE["nav_h_small" if small else "nav_h"])
+        first_blocked = next((i for i, s in enumerate(self.steps) if s.waiting), -1)
+        for i, step in enumerate(self.steps):
+            step.set_one_line(small and not (step.current or i == first_blocked))
+
+    def set_running(self, running):
+        self.steps[2].set_words("Now: running" if running else "Now: setting up")
+        self.run_marker.set_kind("now" if running else "none")
+        self.run_title.setText("Training is running" if running else "Nothing is running")
+        self.run_words.set_template("Fitting, epoch 62 of about 130. Settings are locked." if running
+                                    else "Only one thing runs at a time.")
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        w, g, hair = self.width(), self.group.geometry(), SIZE["hair"]
+        quiet = TH.q("rule_light")
+        p.fillRect(self.rect(), TH.q("margin"))
+        fill_px(p, QRectF(w - hair, 0, hair, self.height()), quiet, from_right=True)
+        p.fillRect(QRect(0, g.top(), w, g.height()), TH.q("paper"))          # the part in hand joins the page
+        fill_px(p, QRectF(0, g.top(), w, hair), quiet)
+        fill_px(p, QRectF(0, g.top() + g.height() - hair, w, hair), quiet, from_bottom=True)
+
+
+# ══════════════════════════════════════ pages ══════════════════════════════════════
+class Page(QWidget):
+    """A page of the program: a heading that stays, a middle that scrolls when the window is small."""
+
+    def __init__(self):
+        super().__init__()
+        self.v = QVBoxLayout(self)
+        self.v.setSpacing(0)
+        self._pad(False)
+
+    def _pad(self, small):
+        left, top, right, bottom = SIZE["page_pad_small" if small else "page_pad"]
+        self.v.setContentsMargins(left - ring_room(), top, right - ring_room(), bottom)
+
+
+class Gate(QWidget):
+    """What must hold before a start, with the one main action; it stays at the foot of the page. In the small
+    layout it lists only what stops the start or needs attention, and a link shows the rest."""
+    ROWS = (("err", "Error.", "A network named retrain already exists. Choose another name."),
+            ("fine", "Fine.", "Continues the saved simulations. All 20,480,000 were made with these settings, "
+                              "so training goes straight to fitting."),
+            ("fine", "Fine.", "With the limit at 6 GiB the largest batch is expected to hold about 10.4 GiB; "
+                              "12.5 GiB is free."),
+            ("info", "Information.", "Fitting should take five to six days: about 130 epochs at about 63 minutes each."),
+            ("warn", "Attention.", "Fitting cannot be resumed. Stopping it loses the whole fit; the simulations are kept."))
+
+    def __init__(self):
+        super().__init__()
+        self._small, self._all = False, False
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
+        right = QWidget()
+        rh = QHBoxLayout(right)
+        rh.setContentsMargins(0, 0, 0, 0)
+        self.asof = label("Free memory and the saved simulations were read at 12:04", "small", TYPE["small"][1])
+        self.more = link("")
+        self.more.clicked.connect(self._toggle)
+        rh.addWidget(self.asof); rh.addWidget(self.more)
+        v.addWidget(section_head("Before you start", right))
+        v.addSpacing(GAP["gate_rows"])
+        self.rows = [MessageRow(*row) for row in self.ROWS]
+        for row in self.rows:
+            v.addWidget(row)
+        v.addSpacing(GAP["gate_action"])
+        act = QHBoxLayout()
+        act.setSpacing(GAP["action"])
+        act.addStretch(1)
+        act.addWidget(label("Cannot start yet: the name is taken.", line=SIZE["button_h"]))
+        act.addSpacing(GAP["action_why"])
+        self.check = button("Check again")
+        act.addWidget(self.check)
+        self.start = button("Start training", "primary")
+        self.start.setEnabled(False)
+        act.addWidget(self.start)
+        v.addLayout(act)
+        self._apply()
+
+    def _toggle(self):
+        self._all = not self._all
+        self._apply()
+
+    def set_small(self, small):
+        self._small = small
+        self._apply()
+
+    def _apply(self):
+        few = self._small and not self._all
+        for row in self.rows:
+            row.setVisible(not few or row.kind in ("err", "warn"))
+        self.asof.setVisible(not self._small)
+        self.more.setVisible(self._small)
+        self.more.setText("Show fewer" if self._all else "Show all %d" % len(self.rows))
+
+
+class SetupPage(Page):
+    def __init__(self):
+        super().__init__()
+        self.help = button("Help", icon="help")
+        self.head = PageHead("Train a network",
+                             "Simulates the recordings the network learns from, then fits the network to them.", [self.help])
+        self.v.addLayout(set_in(self.head))
+        self.gap = Gap(GAP["head_to_body"])
+        self.v.addWidget(self.gap)
+        self.cols = Columns(self._main_settings(), self._this_training(),
+                            GAP["setup_columns"], SIZE["col_gap"], GAP["columns_stacked"])
+        self.scroll = Scroller(self.cols)
+        self.v.addWidget(self.scroll, 1)
+        self.v.addSpacing(GAP["gate_above"])                         # between a form that scrolls and the gate
+        self.gate = Gate()
+        self.v.addLayout(set_in(self.gate))
+
+    def set_small(self, small):
+        """The small layout: the sentence under the heading goes, and the gate lists less."""
+        self._pad(small)
+        self.head.lead.setVisible(not small)
+        self.gap.setFixedHeight(GAP["head_to_body_small" if small else "head_to_body"])
+        self.gate.set_small(small)
+
+    def _number(self, value, enabled=True):
+        w = IntField(value)
+        w.setEnabled(enabled)
+        w.setFixedSize(SIZE["number_w"], SIZE["field_h"])
+        return w
+
+    def _main_settings(self):
+        col = QWidget()
+        v = QVBoxLayout(col)
+        v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
+        v.addWidget(section_head("Main settings"))
+        g = QGridLayout()
+        g.setContentsMargins(0, SIZE["row_gap"], 0, 0)
+        g.setHorizontalSpacing(SIZE["row_gap"]); g.setVerticalSpacing(SIZE["row_gap"])
+        g.setColumnMinimumWidth(0, SIZE["label_w"][0]); g.setColumnStretch(2, 1)
+        rows = [("Batches", 10_000, True, None, None), ("Simulations per batch", 2_048, False, "Set automatically", "quiet"),
+                ("Network width", 256, True, None, None), ("Network depth", 10, True, None, None),
+                ("Graphics card memory limit", 6, True, "GiB", None)]
+        for r, (name, value, enabled, after, cls) in enumerate(rows):
+            g.addWidget(label(name), r, 0)
+            field = self._number(value, enabled)
+            g.addWidget(field, r, 1)
+            if after:
+                g.addWidget(label(after, cls), r, 2)
+            if r == 0:
+                self.batches = field
+        v.addLayout(g)
+        v.addSpacing(GAP["form_to_fold"])
+        above, between, below = GAP["fold"]                         # the folded line: seven settings, their values shown
+        block = Ruled(top=SIZE["hair"], bottom=SIZE["hair"], colour="rule_light", gap_top=above, gap_bottom=below)
+        self.fold = button("Rarely changed (7 settings)", "fold", "chev_right")
+        self.fold.setIconSize(QSize(*GAP["fold_icon"]))
+        self.fold.setFixedHeight(SIZE["line_h"])
+        block.box.addWidget(self.fold, 0, Qt.AlignLeft)             # as wide as its words: so is its ring
+        block.box.addSpacing(between)
+        block.box.addWidget(Rich("Learning rate 0.001, patience 20 epochs, no epoch limit, three rotation settings at their "
+                                 "defaults, simulations saved every 50 batches", cls="small", lines="small", wrap=True,
+                                 indent=GAP["fold_indent"]))
+        v.addWidget(block)
+        v.addStretch(1)
+        return col
+
+    def _this_training(self):
+        col = QWidget()
+        v = QVBoxLayout(col)
+        v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
+        v.addWidget(section_head("This training"))
+        g = QGridLayout()
+        g.setContentsMargins(0, SIZE["row_gap"], 0, 0)
+        g.setHorizontalSpacing(SIZE["row_gap"]); g.setVerticalSpacing(SIZE["row_gap"])
+        g.setColumnMinimumWidth(0, SIZE["label_w"][1]); g.setColumnStretch(1, 1)
+        field_h = SIZE["field_h"]
+
+        g.addWidget(label("Name of the network", line=field_h), 0, 0, Qt.AlignTop)
+        self.name = set_class(QLineEdit("retrain"), state="error")
+        self.name.setFixedHeight(field_h)
+        nv = QVBoxLayout()
+        nv.setSpacing(GAP["field_message"])
+        nv.addWidget(self.name)
+        why = QHBoxLayout()
+        why.setSpacing(GAP["marker_text"])
+        mv = QVBoxLayout()
+        mv.setContentsMargins(0, GAP["marker_drop"], 0, 0)
+        mv.addWidget(Marker("err")); mv.addStretch(1)
+        why.addLayout(mv)
+        why.addWidget(Rich("A network named retrain already exists. Choose another name.", lines="body", wrap=True), 1)
+        nv.addLayout(why)
+        g.addLayout(nv, 0, 1)
+
+        g.addWidget(label("Note", line=field_h), 1, 0)
+        note = QLineEdit()
+        note.setPlaceholderText("Optional: a line to remember this training by")
+        note.setFixedHeight(field_h)
+        g.addWidget(note, 1, 1)
+
+        g.addWidget(label("Prior in use", line=field_h), 2, 0)
+        g.addWidget(Rich(b("retrain_prior") + ", 13 parameters <span style='color:{ink_2}'>(chosen in step 2)</span>",
+                         height=field_h), 2, 1)
+
+        g.addWidget(label("Continue or start new", line=field_h), 3, 0)
+        self.choice = Choice()
+        self.choice.addItems(["Continue the existing simulations", "Start a new set of simulations"])
+        self.choice.setFixedHeight(field_h)
+        g.addWidget(self.choice, 3, 1)
+
+        self.keep = QCheckBox("Keep the simulations when training ends")
+        self.keep.setChecked(True)
+        self.keep.setFixedHeight(field_h)
+        g.addWidget(self.keep, 4, 1, Qt.AlignLeft)                  # as wide as its box and words: so is its ring
+        v.addLayout(g)
+        v.addStretch(1)
+        return col
+
+
+class RunBody(QWidget):
+    """The run page under its status. Wide: the figure and the records beside the health, the messages and one
+    recording. Narrow: one column in reading order (figure, health, messages, recording, records). Only the
+    records move, between the left column and the foot; nothing changes its parent."""
+
+    def __init__(self, figure, records, side):
+        super().__init__()
+        self._parts, self._wide = (figure, records, side), True
+        left, right, gap = GAP["run_columns"]
+        self.outer = QBoxLayout(QBoxLayout.LeftToRight, self)
+        self.outer.setContentsMargins(0, 0, 0, 0); self.outer.setSpacing(gap)
+        self.left = QVBoxLayout()
+        self.left.setSpacing(GAP["block"])
+        self.left.addWidget(figure); self.left.addWidget(records); self.left.addStretch(1)
+        self.outer.addLayout(self.left, left)
+        self.outer.addWidget(side, right)
+
+    def fit(self, width):
+        figure, records, side = self._parts
+        gap = GAP["run_columns"][2]
+        need = max(figure.minimumSizeHint().width(), records.minimumSizeHint().width()) + gap + side.minimumSizeHint().width()
+        wide = width >= max(SIZE["two_columns_from"], need)
+        if wide == self._wide:
+            return
+        self._wide = wide
+        if wide:
+            self.outer.removeWidget(records); self.left.insertWidget(1, records)
+        else:
+            self.left.removeWidget(records); self.outer.addWidget(records)
+        self.outer.setDirection(QBoxLayout.LeftToRight if wide else QBoxLayout.TopToBottom)
+        self.outer.setSpacing(gap if wide else GAP["block"])
+
+
+class RunPage(Page):
+    def __init__(self, ask_stop):
+        super().__init__()
+        self.full = button("Show the full text")
+        self.stop = button("Stop training\u2026", "danger", "stop")
+        self.stop.clicked.connect(ask_stop)
+        self.head = PageHead("Training in progress",
+                             "The network is being fitted. You can move around the program while it runs.",
+                             [self.full, self.stop])
+        top = QVBoxLayout()
+        top.setSpacing(0)
+        top.addWidget(self.head)
+        top.addSpacing(GAP["status"][0])
+        status = Ruled(top=SIZE["rule"], gap_top=GAP["status"][1])
+        self.stages = Stages((("done", "Rotation", "Done"), ("done", "Simulation", "Done, 20,480,000 simulations"),
+                              ("now", "Fitting", "Now, about 63 minutes per epoch"), ("later", "Saving", "To come")))
+        status.box.addWidget(self.stages)
+        status.box.addSpacing(GAP["now"][0])
+        status.box.addWidget(Rich(b("Now:") + " Sunday 12:10, running 65 hours, epoch 62 of about 130", cls="now",
+                                  height=TYPE["head"][1]))
+        status.box.addSpacing(GAP["now"][1])
+        self.progress = Progress(dt.datetime(2026, 10, 1, 19, 2), dt.datetime(2026, 10, 4, 12, 10),
+                                 dt.datetime(2026, 10, 6, 19, 0), dt.datetime(2026, 10, 7, 19, 0))
+        status.box.addWidget(self.progress)
+        top.addWidget(status)
+        top.addSpacing(GAP["status_to_body"])
+        self.v.addLayout(set_in(top))
+        self.body = RunBody(self._figure(), self._records(), self._side())
+        self.scroll = Scroller(self.body)
+        self.v.addWidget(self.scroll, 1)
+
+    def set_small(self, small):
+        self._pad(small)
+        self.head.lead.setVisible(not small)
+
+    def _figure(self):
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
+        figure = QWidget()                                          # the figure, with its switch in the empty corner
+        g = QGridLayout(figure)
+        g.setContentsMargins(0, 0, 0, 0)
+        self.loss = Plot(FIGURE["loss"], draw_loss, "Loss by epoch, training and validation")
+        g.addWidget(self.loss, 0, 0)
+        switch = QWidget()
+        sh = QHBoxLayout(switch)
+        sh.setContentsMargins(0, 0, 0, 0); sh.setSpacing(GAP["switch"])
+        self.recent, self.all_epochs = QRadioButton("Recent"), QRadioButton("All epochs")
+        group = QButtonGroup(self)
+        for rb in (self.recent, self.all_epochs):
+            group.addButton(rb); sh.addWidget(rb)
+        self.all_epochs.setChecked(True)
+        self.recent.toggled.connect(lambda on: self.loss.set_options(recent=on))
+        g.addWidget(switch, 0, 0, Qt.AlignTop | Qt.AlignRight)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, GAP["figure_inset"], 0)
+        row.addWidget(figure)
+        v.addLayout(row)
+        v.addSpacing(GAP["figure_caption"])
+        cap = QHBoxLayout()
+        cap.setContentsMargins(0, 0, GAP["caption_inset"], 0)
+        cap.addWidget(Rich("<b style='color:{ink}'>Loss by epoch.</b> Loss is the negative log-probability; lower is better. "
+                           "Fitting ends when validation has not improved for 20 epochs.",
+                           cls="book2", lines="book", wrap=True))
+        v.addLayout(cap)
+        v.addStretch(1)
+        return box
+
+    def _records(self):
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
+        self.link = link("All records")
+        v.addLayout(heading_row("Records", self.link))
+        v.addSpacing(GAP["head_table"])
+        L, state = Qt.AlignLeft, lambda k, w: {"state": (k, w)}
+        self.records = RuleTable(
+            [("Name", "fit", L), ("Kind", "fit", L), ("Made", "fit", L), ("Note", None, L), ("State", "fit", L)],
+            [[{"t": "retrain_prior", "elide": "middle"}, {"t": "Prior"}, {"t": "1 Oct 22:29"},
+              {"t": "tier-1 box, 13 parameters"}, state("done", "Done")],
+             [{"t": "(unnamed)", "quiet": True}, {"t": "Simulation set"}, {"t": "1 Oct 15:55"},
+              {"t": "20,480,000 simulations, 10.3 GiB"}, state("done", "Done")],
+             [{"t": "retrain_band", "elide": "middle"}, {"t": "Check"}, {"t": "1 Oct 22:29"},
+              {"t": "band holds at every length"}, state("done", "Done")],
+             [{"t": "retrain_mask", "elide": "middle"}, {"t": "Check"}, {"t": "1 Oct 22:30"},
+              {"t": "37.9 % unusable"}, state("done", "Done")],
+             [{"t": "sweep-s", "elide": "middle"}, {"t": "Effective temperature"}, {"t": "24 Sep 11:02"},
+              {"t": "cancelled at point 5 of 8"}, state("half", "Unfinished")]],
+            selected=2)
+        v.addWidget(self.records)
+        v.addStretch(1)
+        return box
+
+    def _side(self):
+        col = QWidget()
+        v = QVBoxLayout(col)
+        v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
+        v.addLayout(heading_row("Training health"))
+        v.addSpacing(GAP["head_table"])
+        fine = {"state": ("fine", "Fine")}
+        self.health = RuleTable(
+            [("Measure", None, Qt.AlignLeft), ("Now", GAP["health_columns"][0], Qt.AlignRight),
+             ("State", GAP["health_columns"][1], Qt.AlignLeft)],
+            [[{"t": "Failed simulations", "wrap": True}, {"value": "0.15 %"}, fine],
+             [{"t": "Unusable driven recordings", "wrap": True}, {"value": "40.1 %", "sub": "expected 37.9 %"}, fine],
+             [{"t": "Graphics card memory", "wrap": True}, {"value": "10.4", "suffix": " of 16 GiB"}, fine]],
+            selectable=False)
+        v.addWidget(self.health)
+        v.addSpacing(GAP["side_block"])
+        v.addLayout(heading_row("Messages"))
+        v.addSpacing(GAP["head_table"])
+        for kind, lead, sentence in (
+                ("warn", "Attention, Sun 12:10.", "No output for 12 minutes. This is normal during an epoch."),
+                ("info", "Information, Thu 19:02.", "The full text of this training is kept in a file."),
+                ("err", "Error, 1 Oct.", "The graphics card ran out of memory at batch 237. The simulations up to "
+                                         "batch 236 are saved."),
+                ("fine", "Fine, 28 Sep.", "Calibration check passed: 13 of 13 parameters.")):
+            v.addWidget(MessageRow(kind, lead, sentence))
+        v.addSpacing(GAP["side_block"])
+        self.trace = Plot(FIGURE["trace"], draw_trace, "Hair bundle displacement against time")
+        v.addWidget(self.trace)
+        v.addSpacing(GAP["trace_caption"])
+        v.addWidget(Rich("<b style='color:{ink}'>Bundle displacement.</b> One simulated recording.",
+                         cls="book2", lines="book", wrap=True))
+        v.addStretch(1)
+        return col
+
+
+# ══════════════════════════════════════ a question: a real dialog ══════════════════════════════════════
+class Ask(QDialog):
+    """The one way the program asks or tells: the toolkit's own dialog window in the system's frame, a marker,
+    one sentence in the book face, and stock buttons. The safe answer is the default and STAYS the default:
+    Enter, Escape and the frame's close button all mean it, wherever the keyboard focus is (the answer that
+    loses work never takes the default when the focus reaches it; it is pressed with the mouse or the space
+    bar). The accent comes from the button's class, so it does not move with the focus either."""
+
+    def __init__(self, parent, title, sentence, safe, risky=None, marker="warn"):
+        super().__init__(parent)
+        set_class(self, cls="ask")
+        self.setWindowTitle(title)
+        self.setWindowModality(Qt.WindowModal)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+        left, top, right, bottom = DIALOG["pad"]
+        v = QVBoxLayout(self)
+        v.setContentsMargins(left, top, right, bottom); v.setSpacing(DIALOG["gap"])
+        v.setSizeConstraint(QLayout.SetFixedSize)
+        body = QHBoxLayout()
+        body.setSpacing(DIALOG["marker_gap"])
+        mv = QVBoxLayout()
+        mv.setContentsMargins(0, DIALOG["marker_drop"], 0, 0)
+        mv.addWidget(Marker(marker, DIALOG["marker"])); mv.addStretch(1)
+        body.addLayout(mv)
+        self.sentence = Rich(sentence, lines="book", wrap=True)
+        self.sentence.setFixedWidth(DIALOG["w"] - left - right - DIALOG["marker"] - DIALOG["marker_gap"])
+        body.addWidget(self.sentence)
+        v.addLayout(body)
+        answers = QHBoxLayout()                                     # the two answers at opposite ends
+        answers.setSpacing(GAP["action"])
+        self.safe = button(safe, "primary")
+        self.safe.setDefault(True)
+        self.safe.clicked.connect(self.reject)
+        self.risky = None
+        if risky:
+            self.risky = button(risky, "danger", "stop")
+            self.risky.setAutoDefault(False)
+            self.risky.clicked.connect(self.accept)
+            answers.addWidget(self.risky)
+        answers.addStretch(1)
+        answers.addWidget(self.safe)
+        v.addLayout(answers)
+        self.safe.setFocus(Qt.TabFocusReason)
+
+
+def ask(parent, title, sentence, safe, risky=None, marker="warn"):
+    """Build the question; the caller connects accepted (the risky answer) and calls open(). Never exec()."""
+    return Ask(parent, title, sentence, safe, risky, marker)
+
+
+def ask_stop(parent):
+    return ask(parent, "Stop training?", "The simulations are kept. The fit so far, 62 epochs and 65 hours, "
+                                         "will be lost and cannot be resumed.",
+               safe="Keep training", risky="Stop and lose the fit")
+
+
+# ══════════════════════════════════════ the window ══════════════════════════════════════
+class Window(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("PRISM")
+        self.setMinimumSize(*SIZE["window_min"])
+        self.resize(*SIZE["window"])
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0); h.setSpacing(0)
+        self.rail = Rail()
+        self.stack = QStackedWidget()
+        self.setup = SetupPage()
+        self.run = RunPage(self.ask_stop)
+        self.stack.addWidget(self.setup); self.stack.addWidget(self.run)
+        h.addWidget(self.rail); h.addWidget(self.stack, 1)
+        self._small = False
+
+    def is_small(self):
+        return self._small
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        small = self.height() < SIZE["small_below"]
+        if small != self._small:
+            self._small = small
+            self.rail.set_small(small)
+            self.setup.set_small(small)
+            self.run.set_small(small)
+
+    def set_page(self, name):
+        self.stack.setCurrentWidget(self.run if name == "run" else self.setup)
+        self.rail.set_running(name == "run")
+
+    def ask_stop(self):
+        ask_stop(self).open()                                       # modal to this window; never exec(); deleted on close
+
+
+class KeySheet(QWidget):
+    """Every marker with its word, at 16, 24 and 32 px: one function draws them all."""
+    KEY = [("done", "Done"), ("now", "Now"), ("later", "To come"), ("lock", "Blocked"), ("half", "Unfinished"),
+           ("none", "Nothing running"), ("info", "Information"), ("warn", "Attention"), ("err", "Error"), ("fine", "Fine")]
+
+    def __init__(self):
+        super().__init__()
+        g = QGridLayout(self)
+        g.setContentsMargins(20, 16, 20, 16); g.setHorizontalSpacing(14); g.setVerticalSpacing(8)
+        for r, (kind, word) in enumerate(self.KEY):
+            for c, size in enumerate((16, 24, 32)):
+                g.addWidget(Marker(kind, size), r, c, Qt.AlignCenter)
+            g.addWidget(QLabel(word), r, 3)
+            g.addWidget(QLabel("1,111,111.11\n20,480,000.00" if r == 0 else ""), r, 4, Qt.AlignRight)
+
+
+def axis_cases():
+    """The time axis at moments the run page does not show: (words, start, now, range from, range to)."""
+    D = dt.timedelta
+    fit = dt.datetime(2026, 10, 1, 19, 2)
+    f0, f1 = dt.datetime(2026, 10, 6, 19, 0), dt.datetime(2026, 10, 7, 19, 0)
+    sim = dt.datetime(2026, 9, 30, 16, 0)
+    return [
+        ("The very start: the blue tick stays whole", fit, fit, f0, f1),
+        ("Early in fitting: 5 % of the way", fit, fit + D(hours=7, minutes=12), f0, f1),
+        ("Late in fitting: now is inside the expected range, and the range shows through the bar",
+         fit, dt.datetime(2026, 10, 7, 1, 45), f0, f1),
+        ("The last minute of the range: the blue tick stays whole", fit, f1, f0, f1),
+        ("Later than expected: the axis grows by a day and says so", fit, fit + D(hours=153), f0, f1),
+        ("A 27-hour simulation: the same axis, ticked every six hours", sim, sim + D(hours=11, minutes=11),
+         sim + D(hours=26), sim + D(hours=28)),
+        ("A 40-minute run: ticked every 15 minutes", sim, sim + D(minutes=13), sim + D(minutes=34), sim + D(minutes=40)),
+        ("A 4-minute run: ticked every 30 seconds", sim, sim + D(seconds=95), sim + D(seconds=200), sim + D(seconds=240)),
+    ]
+
+
+class AxisSheet(QWidget):
+    def __init__(self, width):
+        super().__init__()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 14, 20, 16); v.setSpacing(0)
+        for words, start, now, e0, e1 in axis_cases():
+            v.addWidget(label(words, "small", TYPE["small"][1]))
+            v.addWidget(Progress(start, now, e0, e1))
+            v.addSpacing(GAP["block"])
+        self.setFixedWidth(width + 40)
+
+
+# ══════════════════════════════════════ running it ══════════════════════════════════════
+def make_app():
+    global STYLE, FOLLOWER
+    app = QApplication(sys.argv[:1])
+    STYLE = PrismStyle()
+    app.setStyle(STYLE)
+    for name in ("Inter-Regular.ttf", "Inter-SemiBold.ttf"):
+        QFontDatabase.addApplicationFont(os.path.join(FONT_DIR, name))
+        font_manager.fontManager.addfont(os.path.join(FONT_DIR, name))
+    app.setFont(inter("body"))                                       # equal-width figures everywhere it is inherited
+    FOLLOWER = FocusFollower(app)
+    return app
+
+
+def set_class_fonts():
+    """Setting an application style sheet puts the SYSTEM's font (Segoe UI) back on lists and tables, their
+    headers, message boxes, menus, tool tips and status bars, whatever the application font is. So each is
+    told again after every setStyleSheet (that is, after every change of theme)."""
+    for cls in ("QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu", "QMenuBar", "QTipLabel", "QStatusBar"):
+        QApplication.setFont(inter("body"), cls)
+
+
+def pump(app, n=6):
+    for _ in range(n):
+        app.sendPostedEvents()
+        app.processEvents()
+
+
+def hidden(widget):
+    """Show a top-level widget without anything reaching the owner's screen."""
+    widget.setAttribute(Qt.WA_DontShowOnScreen, True)
+    widget.show()
+    return widget
+
+
+def press_tab(app, old, new):
+    """What the Tab key does to two controls, without a keyboard: the focus leaves one and arrives at the other."""
+    QApplication.sendEvent(old, QFocusEvent(QEvent.FocusOut, Qt.TabFocusReason))
+    QApplication.sendEvent(new, QFocusEvent(QEvent.FocusIn, Qt.TabFocusReason))
+    pump(app)
+
+
+def where(widget, top):
+    return QRect(widget.mapTo(top, QPoint(0, 0)), widget.size())
+
+
+def focus_sheet(app, win, path):
+    """The ring on each kind of control, cut from the window and set side by side on one sheet."""
+    S, R = win.setup, win.run
+    shots = [("setup", "A number field", S.batches), ("setup", "A field in error", S.name), ("setup", "A drop-down", S.choice),
+             ("setup", "A tick box", S.keep), ("setup", "A folded line", S.fold), ("setup", "A button", S.gate.check),
+             ("setup", "A button with an icon", S.help), ("run", "An action that loses work", R.stop),
+             ("run", "A radio button", R.recent), ("run", "A link", R.link),
+             ("setup", "A part of the program", win.rail.parts[4]), ("setup", "A step", win.rail.steps[3]),
+             ("setup", "The step in hand", win.rail.steps[2]), ("run", "A table: its current row", R.records.view)]
+    crops = []
+    for page, words, w in shots:
+        win.set_page(page)
+        pump(app)
+        FOLLOWER.show_on(w)
+        pump(app)
+        crops.append((words, win.grab(where(w, win).adjusted(-10, -8, 10, 8).intersected(win.rect()))))
+    FOLLOWER.show_on(None)
+    dpr = crops[0][1].devicePixelRatio()
+    pad, cap_h, sheet_w = 16, 18, 960
+    places, x, y, row_h = [], pad, pad, 0
+    for _, pm in crops:
+        w, h = pm.width() / dpr, pm.height() / dpr
+        if x + w + pad > sheet_w and x > pad:
+            x, y, row_h = pad, y + row_h + pad, 0
+        places.append((x, y))
+        x, row_h = x + w + pad, max(row_h, h + cap_h)
+    sheet = QPixmap(int(sheet_w * dpr), int((y + row_h + pad) * dpr))
+    sheet.setDevicePixelRatio(dpr)
+    sheet.fill(TH.q("paper"))
+    p = QPainter(sheet)
+    p.setFont(inter("small")); p.setPen(TH.q("ink_2"))
+    for (words, pm), (x, y) in zip(crops, places):
+        p.drawText(QRectF(x, y, 400, cap_h - 2), Qt.AlignLeft | Qt.AlignVCenter, words)
+        p.drawPixmap(QPointF(x, y + cap_h), pm)
+    p.end()
+    sheet.save(path)
+
+
+def take_shots(app):
+    out = os.path.join(HERE, "shots")
+    os.makedirs(out, exist_ok=True)
+    scale = float(os.environ.get("QT_SCALE_FACTOR") or 1.0)
+    tag = "" if abs(scale - 1.0) < 1e-6 else "-%d" % round(scale * 100)
+    if HINTING != "default":
+        tag += "-hinting-" + HINTING                                 # the experiment: the two light pages only
+    apply_theme(False)
+    win = hidden(Window())
+    pump(app)
+    written = []
+
+    def save(widget, name):
+        pm = widget.grab()
+        pm.save(os.path.join(out, name))
+        written.append("%s  %dx%d px, scaling %.2f" % (name, pm.width(), pm.height(), pm.devicePixelRatio()))
+
+    def pages(theme, suffix):
+        for page in ("setup", "run"):
+            win.set_page(page)
+            pump(app)
+            FOLLOWER.show_on(win.setup.batches if page == "setup" else None)      # keyboard focus on Batches
+            pump(app)
+            save(win, f"{page}-{theme}{suffix}.png")
+        FOLLOWER.show_on(None)
+
+    if abs(scale - 1.0) > 1e-6:                                      # the window as a person could have it on THIS screen
+        screen = app.primaryScreen().availableGeometry()
+        title_bar = win.windowHandle().frameMargins().top()          # known without the window being on screen
+        size = (min(SIZE["window"][0], screen.width()), min(SIZE["window"][1], screen.height() - title_bar))
+        win.resize(*size)
+        pump(app)
+        written.append("at scaling %.2f the screen leaves %dx%d and the title bar takes %d; the window is taken at %dx%d "
+                       "(small layout: %s)" % (scale, screen.width(), screen.height(), title_bar, win.width(), win.height(),
+                                               win.is_small()))
+    if tag:
+        pages("light", tag)
+        print("\n".join(written))
+        return
+
+    for dark in (False, True):
+        theme = "dark" if dark else "light"
+        apply_theme(dark)                                            # a live switch on the same window
+        pages(theme, "")
+        win.run.recent.setChecked(True)                              # the switch on the loss curve works
+        pump(app)
+        save(win, f"run-{theme}-recent.png")
+        win.run.all_epochs.setChecked(True)
+
+        box = hidden(ask_stop(win))                                  # shown, never exec'd: the ring arrives by itself
+        pump(app)
+        save(box, f"dialog-{theme}.png")
+        frame = box.windowHandle().frameMargins()
+        state = lambda: "Keep: default %s, weight %d; Stop: default %s, auto-default %s, weight %d; ring on %r" % (
+            box.safe.isDefault(), box.safe.font().weight(), box.risky.isDefault(), box.risky.autoDefault(),
+            box.risky.font().weight(), FOLLOWER.target().text() if FOLLOWER.target() is not None else None)
+        written.append("  as it opens: %s; %dx%d, the system's title bar %d px, frameless %s" % (
+            state(), box.width(), box.height(), frame.top(), bool(box.windowFlags() & Qt.FramelessWindowHint)))
+        press_tab(app, box.safe, box.risky)                          # the Tab key: focus on the answer that loses work
+        save(box, f"dialog-{theme}-tab.png")
+        written.append("  after Tab: %s" % state())
+        FOLLOWER.show_on(None)
+        box.close()
+
+        key = hidden(KeySheet())
+        pump(app)
+        save(key, f"markers-{theme}.png")
+        key.close()
+        axes = hidden(AxisSheet(600))
+        pump(app)
+        save(axes, f"axis-{theme}.png")
+        axes.close()
+        focus_sheet(app, win, os.path.join(out, f"focus-{theme}.png"))
+        written.append(f"focus-{theme}.png")
+
+    apply_theme(False)                                               # the smallest window, and a scrolled form
+    win.resize(*SIZE["window_min"])
+    pump(app)
+    for page in ("setup", "run"):
+        win.set_page(page)
+        pump(app)
+        FOLLOWER.show_on(win.setup.batches if page == "setup" else None)
+        pump(app)
+        save(win, f"small-{page}-light.png")
+    win.set_page("setup")
+    bar = win.setup.scroll.verticalScrollBar()
+    bar.setValue(bar.maximum())
+    FOLLOWER.show_on(win.setup.keep)
+    pump(app)
+    save(win, "small-setup-light-scrolled.png")
+    bar.setValue(bar.maximum() - 24)                                 # the ring goes with its control, and is cut with it
+    pump(app)
+    save(win, "small-setup-light-scrolled-2.png")
+    FOLLOWER.show_on(None)
+    print("\n".join(written))
+
+
+def report(app):
+    apply_theme(False)
+    lines = ["PySide6 Qt %s, style %s over %s, platform %s" % (
+                 __import__("PySide6").QtCore.qVersion(), type(STYLE).__name__, STYLE.baseStyle().objectName(), app.platformName()),
+             "screen: %s logical px, scaling %.2f" % (app.primaryScreen().size().toTuple(), app.primaryScreen().devicePixelRatio()),
+             "SVG support loaded: %s; image files named in the style sheet: %d" % (
+                 "PySide6.QtSvg" in sys.modules, build_qss().count("url("))]
+    for kind in ("small", "body", "strong", "head", "title"):
+        f = inter(kind)
+        info, fm = QFontInfo(f), QFontMetricsF(f)
+        lines.append("Inter %-6s asked %dpx w%d -> %s %dpx w%d exact=%s; '1111'=%.1f '0000'=%.1f; line %.1f" % (
+            kind, f.pixelSize(), f.weight(), info.family(), info.pixelSize(), info.weight(), info.exactMatch(),
+            fm.horizontalAdvance("1111"), fm.horizontalAdvance("0000"), fm.lineSpacing()))
+    cb = book(); info = QFontInfo(cb)
+    lines.append("Cambria asked 16px -> %s %dpx exact=%s; line %.2f" % (
+        info.family(), info.pixelSize(), info.exactMatch(), QFontMetricsF(cb).lineSpacing()))
+    win = hidden(Window())
+    pump(app)
+    S, R = win.setup, win.run
+    for name, w in (("title label", S.findChild(QLabel)), ("Batches field", S.batches)):
+        f = w.font()
+        lines.append("%s: %s %s %dpx w%d, equal-width figures set: %s" % (
+            name, type(w).__name__, QFontInfo(f).family(), QFontInfo(f).pixelSize(), f.weight(),
+            f.isFeatureSet(QFont.Tag.fromString("tnum"))))
+    lines.append("window %s, rail %d, page %s; setup columns %s; scroll bar shown: %s" % (
+        win.size().toTuple(), win.rail.width(), win.stack.size().toTuple(),
+        [w.width() for w in S.cols._parts], S.scroll.verticalScrollBar().maximum() > 0))
+    win.set_page("run"); pump(app)
+    rec, fm = R.records.view, QFontMetricsF(inter("body"))
+    lines.append("run columns: figure %d, loss plot %d, side %d, trace plot %d; scroll bar shown: %s" % (
+        R.body._parts[0].width(), R.loss.width(), R.body._parts[2].width(), R.trace.width(),
+        R.scroll.verticalScrollBar().maximum() > 0))
+    lines.append("records columns %s of %d px; the Note column has %d px for text; its notes need %s" % (
+        [rec.columnWidth(c) for c in range(5)], rec.width(), rec.columnWidth(3) - SIZE["table_col_gap"],
+        [math.ceil(fm.horizontalAdvance(rec.model().item(r, 3).text())) for r in range(5)]))
+
+    # a class set after the first polish
+    probe = QPushButton("Probe", win)
+    probe.show(); pump(app)
+    before = probe.font().weight()
+    set_class(probe, cls="primary"); pump(app)
+    lines.append("set_class on a button already shown: weight %d -> %d" % (before, probe.font().weight()))
+    probe.deleteLater()
+
+    # the ring: when it shows, and whether it stays on its control
+    win.set_page("setup"); pump(app)
+    check = S.gate.check
+
+    def arrive(widget, reason):
+        QApplication.sendEvent(widget, QFocusEvent(QEvent.FocusIn, reason)); pump(app)
+        t = FOLLOWER.target()
+        shown = t is not None and FOLLOWER._ring is not None and FOLLOWER._ring.isVisible()
+        QApplication.sendEvent(widget, QFocusEvent(QEvent.FocusOut, reason)); pump(app)
+        return "ring" if shown else "no ring"
+    lines.append("focus by mouse on a button: %s; by mouse on a number field: %s; by Tab on a button: %s; then by mouse on a button: %s" % (
+        arrive(check, Qt.MouseFocusReason), arrive(S.batches, Qt.MouseFocusReason), arrive(check, Qt.TabFocusReason),
+        arrive(check, Qt.MouseFocusReason)))
+    FOLLOWER.show_on(check); pump(app)
+    apply_theme(True); pump(app)
+    kept = FOLLOWER._ring.isVisible() and FOLLOWER._ring.widget() is check
+    apply_theme(False); pump(app)
+    lines.append("ring still on its control after a change of theme: %s" % kept)
+    ring = FOLLOWER._ring
+    place = lambda: "button y %d, ring y %d (ring is %d px outside)" % (
+        where(check, win).y(), where(ring, win).y(), where(check, win).y() - where(ring, win).y())
+    a = place()
+    win.resize(SIZE["window"][0], SIZE["window"][1] - 100); pump(app)
+    lines.append("ring on 'Check again': %s; after the window is made 100 px lower: %s" % (a, place()))
+    win.resize(*SIZE["window_min"]); pump(app)
+    win.set_page("run"); pump(app)
+    rows, stacked = 4 // max(1, R.stages._cols), R.body.outer.direction() == QBoxLayout.TopToBottom
+    win.set_page("setup"); pump(app)
+    lines.append("asked for %s, got %s; small layout %s; rail needs %d of %d px; columns one above the other: setup %s, run %s; "
+                 "stage rows: %d" % (SIZE["window_min"], win.size().toTuple(), win.is_small(), win.rail.minimumSizeHint().height(),
+                                     win.height(), S.cols.box.direction() == QBoxLayout.TopToBottom, stacked, rows))
+    bar = S.scroll.verticalScrollBar()
+    FOLLOWER.show_on(S.keep); pump(app)
+    ring = FOLLOWER._ring
+    bar.setValue(bar.maximum()); pump(app)
+    y0 = (where(S.keep, win).y(), where(ring, win).y())
+    bar.setValue(max(0, bar.maximum() - 60)); pump(app)
+    y1 = (where(S.keep, win).y(), where(ring, win).y())
+    lines.append("in the scrolled form (range %d): tick box y / ring y %s; after a 60 px scroll %s; the ring's parent is the viewport: %s" % (
+        bar.maximum(), y0, y1, ring.parentWidget() is S.scroll.viewport()))
+    FOLLOWER.show_on(None)
+    win.resize(*SIZE["window"]); pump(app)
+
+    # the question
+    box = hidden(ask_stop(win))
+    pump(app)
+    say = lambda: "Keep default %s w%d | Stop default %s auto-default %s w%d | ring on %r" % (
+        box.safe.isDefault(), box.safe.font().weight(), box.risky.isDefault(), box.risky.autoDefault(),
+        box.risky.font().weight(), FOLLOWER.target().text() if FOLLOWER.target() is not None else None)
+    lines.append("question as it opens: %s; %s, modal %s, title bar %s (%d px, the system's), close button %s, frameless %s" % (
+        say(), box.size().toTuple(), box.isModal(), bool(box.windowFlags() & Qt.WindowTitleHint),
+        box.windowHandle().frameMargins().top(), bool(box.windowFlags() & Qt.WindowCloseButtonHint),
+        bool(box.windowFlags() & Qt.FramelessWindowHint)))
+    press_tab(app, box.safe, box.risky)
+    lines.append("question after Tab: %s" % say())
+    FOLLOWER.show_on(None)
+    box.close()
+    pump(app)
+
+    def answer(key, on_risky):
+        """Open the question, put the focus where asked, press a key, and say what the question took it to mean."""
+        got = []
+        box = hidden(ask_stop(win))
+        pump(app)
+        box.finished.connect(got.append)
+        if on_risky:
+            press_tab(app, box.safe, box.risky)
+        target = box.risky if on_risky else box.safe
+        for kind in (QEvent.KeyPress, QEvent.KeyRelease):
+            QApplication.sendEvent(target, QKeyEvent(kind, key, Qt.NoModifier))
+        pump(app)
+        FOLLOWER.show_on(None)
+        if not got:
+            box.close()
+        pump(app)
+        return {0: "keeps training", 1: "stops"}.get(got[0], "?") if got else "does nothing"
+    lines.append("question, focus on Keep training: Enter %s, Escape %s, space %s; focus on Stop and lose the fit: "
+                 "Enter %s, Escape %s, space %s" % (
+                     answer(Qt.Key_Return, False), answer(Qt.Key_Escape, False), answer(Qt.Key_Space, False),
+                     answer(Qt.Key_Return, True), answer(Qt.Key_Escape, True), answer(Qt.Key_Space, True)))
+
+    # the number field
+    field = S.batches
+    field.selectAll()
+    shown = []
+    for ch in "20480000":
+        field.insert(ch)
+        shown.append(field.text())
+    field.setCursorPosition(2); field.insert("7")
+    lines.append("number field, typing 20480000: %s; then a 7 after the second digit: %r, caret at %d, value %r" % (
+        " ".join(shown), field.text(), field.cursorPosition(), field.value_or_none()))
+
+    # the axis, without a screen
+    for words, start, now, e0, e1 in [("the run page", dt.datetime(2026, 10, 1, 19, 2), dt.datetime(2026, 10, 4, 12, 10),
+                                       dt.datetime(2026, 10, 6, 19, 0), dt.datetime(2026, 10, 7, 19, 0))] + axis_cases():
+        L = axis_layout(start, now, e0, e1, 1038)
+        lines.append("axis, %s: tick every %ds, %d ticks, now x %s, range x %d to %d, inside %s, late %s, labels %s" % (
+            words.split(":")[0], L["step"], len(L["ticks"]), L["x_now"], L["x_from"], L["x_by"], L["inside"], L["late"],
+            " ".join(t for _, t in L["labels"])))
+    print("\n".join(lines))
+
+
+def main():
+    app = make_app()
+    if SHOW:
+        apply_theme(False)
+        win = Window()
+        QShortcut(QKeySequence("F1"), win, lambda: win.set_page("setup"))
+        QShortcut(QKeySequence("F2"), win, lambda: win.set_page("run"))
+        QShortcut(QKeySequence("F3"), win, lambda: apply_theme(not TH.dark))
+        win.show()
+        code = app.exec()
+        sys.stdout.flush()
+        os._exit(code)
+    if "--report" in sys.argv:
+        report(app)
+    else:
+        take_shots(app)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
+
+
+if __name__ == "__main__":
+    main()

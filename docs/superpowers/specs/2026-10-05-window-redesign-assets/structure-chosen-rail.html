@@ -1,0 +1,1210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PRISM mock-up — Parts on a rail, Home as a status page</title>
+<style>
+/* ───────────────────────── HARNESS — copy as is, do not restyle ─────────────────────────
+   The grey page and the bar at the top are NOT part of the design: they only let a person flip
+   between screens and between light and dark. The design lives inside .window, which stands for
+   PRISM's real window at its default size, 1300 x 820 px.
+
+   UNITS: write every length inside .window in rem, where 1rem = 10 px of the real window
+   (14 px text = 1.4rem, a 36 px button = 3.6rem). The whole window then shrinks to fit a narrow
+   pane and is exact at full size. Never use px, vw or vh inside .window.
+
+   NO SCRIPT IS NEEDED TO USE THE PAGE: screens and theme switch with the radio buttons below
+   (CSS only). The small script at the bottom only reads ?screen=2&theme=dark&bare=1 for taking
+   pictures. No external file of any kind: no web fonts, no CDN, no images from the network. */
+html { font-size: min(10px, calc(100vw / 134)); }
+body { margin: 0; background: #cfd2d6; }
+.harness { font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", sans-serif; color: #1b1f24;
+           padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+.harness b { font-weight: 600; margin-right: 6px; }
+.harness label { cursor: pointer; padding: 2px 8px; border: 1px solid #9aa0a8; border-radius: 4px; background: #fff; }
+input.h { position: absolute; opacity: 0; pointer-events: none; }
+#s1:checked ~ .harness label[for=s1], #s2:checked ~ .harness label[for=s2],
+#s3:checked ~ .harness label[for=s3], #s4:checked ~ .harness label[for=s4],
+#s5:checked ~ .harness label[for=s5], #s6:checked ~ .harness label[for=s6],
+#tl:checked ~ .harness label[for=tl], #td:checked ~ .harness label[for=td] { background: #1b1f24; color: #fff; border-color: #1b1f24; }
+.window { width: 130rem; height: 82rem; margin: 0.6rem auto 2rem; position: relative; overflow: hidden;
+          box-shadow: 0 0.2rem 1.6rem rgba(0,0,0,.28); }
+.screen { display: none; position: absolute; inset: 0; }
+#s1:checked ~ .window .screen:nth-of-type(1), #s2:checked ~ .window .screen:nth-of-type(2),
+#s3:checked ~ .window .screen:nth-of-type(3), #s4:checked ~ .window .screen:nth-of-type(4),
+#s5:checked ~ .window .screen:nth-of-type(5), #s6:checked ~ .window .screen:nth-of-type(6) { display: block; }
+.note { font: 13px/1.5 "Segoe UI Variable Text", "Segoe UI", sans-serif; color: #1b1f24; max-width: 1100px;
+        margin: 0 auto 28px; padding: 0 14px; }
+body.bare { background: transparent; } body.bare .harness, body.bare .note { display: none; }
+body.bare .window { margin: 0; box-shadow: none; } html.bare { font-size: 10px; }
+
+/* The harness above knows six screens; this page has eleven, so the same two rules are repeated
+   here for screens 7 to 11. Nothing of the harness is restyled. */
+#s7:checked ~ .harness label[for=s7], #s8:checked ~ .harness label[for=s8], #s9:checked ~ .harness label[for=s9],
+#s10:checked ~ .harness label[for=s10], #s11:checked ~ .harness label[for=s11] { background: #1b1f24; color: #fff; border-color: #1b1f24; }
+#s7:checked ~ .window .screen:nth-of-type(7), #s8:checked ~ .window .screen:nth-of-type(8), #s9:checked ~ .window .screen:nth-of-type(9),
+#s10:checked ~ .window .screen:nth-of-type(10), #s11:checked ~ .window .screen:nth-of-type(11) { display: block; }
+
+/* ───────────────────────── THE DESIGN ─────────────────────────
+   A quiet wireframe: neutral greys, one accent for the primary action and the current place.
+   A state is always an icon and a word; colour never carries it alone. */
+.window {
+  --bg: #f3f3f3; --surface: #ffffff; --text: #1a1a1a; --text-2: #5a5a5a; --line: #d0d0d0; --accent: #0f6cbd;
+  --rail: #e8e8e8; --fill: #ebebeb; --line-strong: #8a8a8a; --accent-ink: #ffffff; --accent-soft: #dcebf8; --sheet: #d5d7da;
+  background: var(--bg); color: var(--text);
+  font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; font-size: 1.4rem; line-height: 1.4;
+}
+#td:checked ~ .window {
+  --bg: #202020; --surface: #2b2b2b; --text: #f2f2f2; --text-2: #b4b4b4; --line: #454545; --accent: #60abef;
+  --rail: #181818; --fill: #353535; --line-strong: #7c7c7c; --accent-ink: #0b1a28; --accent-soft: #1f3850; --sheet: #101010;
+}
+.window *, .window *::before, .window *::after { box-sizing: border-box; }
+.window p, .window h1, .window h2, .window h3, .window dl, .window dd, .window ul, .window ol { margin: 0; padding: 0; }
+.window ul { list-style: none; }
+.window h1 { font-size: 2.4rem; font-weight: 600; line-height: 1.25; }   /* the page's heading: the largest type, alone at that size */
+.window h2 { font-size: 1.6rem; font-weight: 600; line-height: 1.3; }
+.window h2.big { font-size: 1.9rem; }
+.window h3 { font-size: 1.4rem; font-weight: 600; margin: 1.2rem 0 0.5rem; }
+.window .sub { color: var(--text-2); font-size: 1.3rem; }
+.window .ess { font-size: 1.4rem; }                                       /* a fact a person must not miss: never small, never grey */
+.window b { font-weight: 600; }
+.window .num { font-variant-numeric: tabular-nums; }
+
+/* icons: simple line drawings in the text colour; the state icons differ in outline, not only in a mark */
+.window svg.i { width: 1.6rem; height: 1.6rem; flex: none; fill: none; stroke: currentColor;
+                stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+
+/* the frame every screen shares: rail, page, status strip */
+.shell { position: absolute; inset: 0; display: grid; grid-template-columns: 22rem 1fr; grid-template-rows: 1fr 3.8rem; }
+.rail { grid-row: 1; grid-column: 1; background: var(--rail); border-right: 1px solid var(--line);
+        display: flex; flex-direction: column; padding-bottom: 1rem; }
+.brand { height: 5.8rem; padding: 0 2.2rem; display: flex; align-items: center; font-size: 1.9rem; font-weight: 600; letter-spacing: 0.03em; }
+.ri { position: relative; display: flex; align-items: center; gap: 1.1rem; height: 3.6rem; margin: 0.1rem 0.8rem;
+      padding: 0 1.4rem; border-radius: 0.5rem; color: var(--text); cursor: pointer; white-space: nowrap; }
+.ri > svg.i { width: 1.8rem; height: 1.8rem; color: var(--text-2); }
+.ri.cur { background: var(--accent-soft); font-weight: 600; }
+.ri.cur::before { content: ""; position: absolute; left: 0; top: 0.8rem; bottom: 0.8rem; width: 0.3rem; border-radius: 0.2rem; background: var(--accent); }
+.ri.cur > svg.i { color: var(--accent); }
+.ri.two { height: 5.6rem; }                                               /* a run is live in this part: said in words */
+.ri .rt { display: flex; flex-direction: column; }
+.ri .rs { display: flex; align-items: center; gap: 0.5rem; font-size: 1.3rem; font-weight: 400; }
+.ri .rs svg.i { width: 1.2rem; height: 1.2rem; color: var(--accent); }
+.rail hr { width: auto; align-self: stretch; border: 0; border-top: 1px solid var(--line); margin: 0.9rem 2.2rem; }
+.rail .grow { flex: 1; }
+
+.main { grid-row: 1; grid-column: 2; padding: 2rem 3.2rem 0; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.main > * { flex: none; }
+.head { display: flex; align-items: baseline; gap: 1.6rem; margin-bottom: 1.5rem; }
+
+/* the strip: one fixed place, one height, an icon and a sentence in every state */
+.strip { grid-row: 2; grid-column: 1 / -1; height: 3.8rem; background: var(--surface); border-top: 1px solid var(--line-strong);
+         display: flex; align-items: center; gap: 1.4rem; padding: 0 1.4rem 0 2.2rem; font-size: 1.4rem; color: var(--text); }
+.strip .seg { display: flex; align-items: center; gap: 0.7rem; white-space: nowrap; }
+.strip .sep { width: 1px; height: 1.8rem; background: var(--line-strong); }
+.strip .acc svg.i { color: var(--accent); }
+.strip .end { margin-left: auto; }
+
+/* controls */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.8rem; height: 3.4rem; padding: 0 1.6rem;
+       border: 1px solid var(--line-strong); border-radius: 0.5rem; background: var(--surface); color: var(--text);
+       font: inherit; font-size: 1.4rem; font-weight: 400; white-space: nowrap; cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.small { height: 2.8rem; padding: 0 1.2rem; font-size: 1.3rem; }
+.btn.off { background: var(--fill); border-color: var(--line); color: var(--text-2); cursor: default; }
+/* a flat button: what a link is in this program, so it takes the keyboard like any button */
+.btn.flat { height: 2.4rem; padding: 0 0.4rem; margin: 0 -0.4rem; border: 0; border-radius: 0.3rem; background: none;
+            color: var(--accent); text-decoration: underline; text-underline-offset: 0.2em; justify-self: start; }
+.in { display: flex; align-items: center; justify-content: space-between; width: 100%; height: 3.2rem; padding: 0 1rem;
+      border: 1px solid var(--line-strong); border-radius: 0.4rem; background: var(--surface); color: var(--text);
+      font: inherit; font-size: 1.4rem; }
+.in.dim { background: var(--fill); border-color: var(--line); color: var(--text-2); }
+.chk { display: inline-flex; align-items: center; justify-content: center; width: 1.8rem; height: 1.8rem; flex: none;
+       border: 1px solid var(--accent); border-radius: 0.3rem; background: var(--accent); color: var(--accent-ink); }
+.chk svg.i { width: 1.3rem; height: 1.3rem; stroke-width: 2; }
+/* keyboard focus: the same 2 px outline on everything that can hold it */
+.focus, .btn:focus-visible, .in:focus-visible { outline: 0.2rem solid var(--accent); outline-offset: 0.2rem; }
+.ri.focus, .step.focus { outline-offset: -0.5rem; }
+.tbl tr.focus td { box-shadow: inset 0 0.2rem 0 var(--accent), inset 0 -0.2rem 0 var(--accent); }
+.tbl tr.focus td:first-child { box-shadow: inset 0.2rem 0.2rem 0 var(--accent), inset 0 -0.2rem 0 var(--accent); }
+.tbl tr.focus td:last-child { box-shadow: inset -0.2rem 0.2rem 0 var(--accent), inset 0 -0.2rem 0 var(--accent); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 0.8rem; padding: 1.7rem 2rem; }
+.panel + .panel { margin-top: 1.6rem; }
+.cols > .panel { margin-top: 0; }
+.phead { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.1rem; }
+.phead .end { margin-left: auto; }
+.rule { border: 0; border-top: 1px solid var(--line); margin: 1.4rem 0; }
+
+/* a state: icon and word together */
+.st { display: inline-flex; align-items: center; gap: 0.6rem; font-size: 1.3rem; }
+.st.q { color: var(--text-2); }
+.st.acc svg.i { color: var(--accent); }
+
+.bar { height: 1rem; border-radius: 0.5rem; background: var(--fill); border: 1px solid var(--line-strong); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); }
+
+/* the six steps of Parameter inference: one tab bar, painted by the program.
+   Each step: its number and name, its state as an icon and a word, and the record it stands on. */
+.steps { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid var(--line-strong); border-radius: 0.6rem;
+         background: var(--surface); overflow: hidden; margin-bottom: 1.8rem; }
+.step { border-top: 0.4rem solid transparent; border-left: 1px solid var(--line); padding: 0.4rem 1rem 0.7rem; min-width: 0; cursor: pointer; }
+.step:first-child { border-left: 0; }
+.step.cur { border-top-color: var(--accent); background: var(--accent-soft); }
+.step .nm { display: flex; gap: 0.7rem; font-size: 1.4rem; white-space: nowrap; }
+.step .nm span, .step .n { color: var(--text-2); }
+.step.cur .nm { font-weight: 600; }
+.step.cur .nm span, .step.cur .n { color: var(--text); }
+.step .st { margin-top: 0.2rem; white-space: nowrap; }
+.step .st svg.i { width: 1.5rem; height: 1.5rem; }
+.step.cur .st svg.i { color: var(--accent); }
+.step .rec { font-size: 1.3rem; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 1.82rem; }
+.step.cur .rec { color: var(--text); }
+/* below about 1,100 px of window: one line a step, the state as its icon only */
+.steps.one { display: flex; margin-bottom: 1.2rem; }
+.steps.one .step { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.5rem 0.6rem 0.8rem;
+                   font-size: 1.3rem; white-space: nowrap; }
+.steps.one .step.cur { font-weight: 600; }
+.steps.one .step svg.i { width: 1.5rem; height: 1.5rem; }
+.steps.one .step.cur svg.i { color: var(--accent); }
+
+/* tables and lists */
+.tbl { width: 100%; border-collapse: collapse; font-size: 1.3rem; }
+.tbl th { text-align: left; font-weight: 600; padding: 0.6rem 1rem; background: var(--fill); border-bottom: 1px solid var(--line-strong); white-space: nowrap; }
+.tbl td { padding: 0.5rem 1rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+.tbl.tight td { padding-top: 0.22rem; padding-bottom: 0.22rem; vertical-align: middle; }
+.tbl.tight th { padding-top: 0.45rem; padding-bottom: 0.45rem; }
+.tbl .r { text-align: right; font-variant-numeric: tabular-nums; }
+.tbl .nw { white-space: nowrap; }
+.tbl tr.sum td { border-top: 1px solid var(--line-strong); border-bottom: 0; padding-top: 0.6rem; }
+.tbl tr.sel td { background: var(--accent-soft); font-weight: 600; }
+.tbl tr.last td { border-bottom: 0; }
+.tbl .st { display: flex; font-size: inherit; white-space: nowrap; }
+
+.cols { display: grid; gap: 2.4rem; min-height: 0; }
+.facts3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 2.4rem; }
+.facts3 .v { display: block; font-size: 1.6rem; font-weight: 600; margin-top: 0.1rem; }
+.kv { display: grid; gap: 0.45rem 1.4rem; font-size: 1.3rem; }
+.kv dt { color: var(--text-2); }
+
+/* Home */
+.next { display: grid; grid-template-columns: 1fr auto; gap: 2.4rem; align-items: center; }
+.next p.lead { margin-top: 0.6rem; max-width: 76rem; }
+.cap { font-weight: 600; margin-bottom: 0.8rem; }
+.panel .steps { margin-bottom: 0.2rem; }
+.parts li { display: grid; grid-template-columns: 2.8rem 17.5rem 1fr; align-items: center; min-height: 4.1rem;
+            border-top: 1px solid var(--line); font-size: 1.3rem; }
+.parts li > svg.i { width: 1.8rem; height: 1.8rem; color: var(--text-2); }
+.parts li .btn.flat { font-size: 1.4rem; }
+.runs li { padding: 0.55rem 0 0.65rem; border-top: 1px solid var(--line); font-size: 1.3rem; }
+.runs li .btn.flat { font-size: 1.4rem; }
+.runs li p { color: var(--text-2); }
+.choice { display: grid; grid-template-columns: 24rem 1fr; gap: 2rem; align-items: center; padding: 1rem 0; border-top: 1px solid var(--line); }
+.choice .btn { justify-self: stretch; }
+
+/* before a run starts */
+.form { display: grid; grid-template-columns: 15.5rem 1fr; gap: 0.8rem 1.6rem; align-items: center; }
+.form .row { display: flex; align-items: center; gap: 0.8rem; }
+.form .hint { grid-column: 1 / -1; margin-top: -0.2rem; font-size: 1.3rem; }
+.before li { display: grid; grid-template-columns: 2.4rem 1fr; gap: 0 0.6rem; padding: 0.8rem 0; font-size: 1.3rem; }
+.before li svg.i { margin-top: 0.25rem; }
+.before li b { display: block; font-size: 1.4rem; }
+.before li + li { border-top: 1px solid var(--line); }
+
+/* a run in progress */
+.stage { display: grid; grid-template-columns: 12rem 1fr; gap: 0.3rem 1rem; font-size: 1.3rem; }
+.keep li { display: grid; grid-template-columns: 2.4rem 1fr; gap: 0 0.6rem; padding: 0.55rem 0; font-size: 1.3rem; }
+.keep li svg.i { margin-top: 0.25rem; }
+.keep li b { display: block; font-size: 1.4rem; }
+
+/* the checks */
+.checks li { display: grid; grid-template-columns: 2.4rem 1fr; gap: 0 0.6rem; padding: 0.85rem 1rem 0.95rem; border-top: 1px solid var(--line); font-size: 1.3rem; cursor: pointer; }
+.checks li svg.i { margin-top: 0.25rem; }
+.checks li b { display: block; font-size: 1.4rem; }
+.checks li.sel { background: var(--accent-soft); box-shadow: inset 0.3rem 0 0 var(--accent); }
+.checks li .btn { margin-top: 0.7rem; justify-self: start; }
+
+/* records */
+.tools { display: flex; align-items: center; gap: 1.2rem; margin-bottom: 1.4rem; }
+.tree { font-size: 1.3rem; }
+.tree li { padding: 0.2rem 0; display: flex; gap: 0.7rem; align-items: center; }
+.tree li.c { margin-left: 1.1rem; padding-left: 1.5rem; border-left: 1px solid var(--line-strong); color: var(--text-2); }
+
+/* sheets: not screens of the program, but states and sizes laid out side by side */
+.sheet { position: absolute; inset: 0; background: var(--sheet); color: var(--text); }
+.sheet .lab { font-size: 1.4rem; }
+.sheet .lab b { margin-right: 0.6rem; }
+.states { padding: 1.8rem 0 0; }
+.states .lab { padding: 0 2.4rem; margin: 1.15rem 0 0.45rem; }
+.states .strip { border-bottom: 1px solid var(--line-strong); }
+.specs { display: grid; grid-template-columns: 1fr 1.15fr 1.25fr; gap: 1.6rem; padding: 0 2.4rem; margin-top: 0.2rem; }
+.specs .lab { padding: 0; margin: 0.4rem 0 0.5rem; }
+.specs .panel { padding: 1.3rem 1.6rem 1.3rem; height: 14.2rem; }
+.moments { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.4rem 1.8rem; margin-top: 1.6rem; }
+.moments .lab { margin-bottom: 0.5rem; }
+.moments .panel { height: 27.4rem; }
+/* the window at its smallest, drawn at its true size inside the usual frame */
+.mini { position: absolute; left: 2rem; top: 2rem; width: 90rem; height: 60rem; background: var(--bg);
+        border: 1px solid var(--line-strong); overflow: hidden; }
+.mini .main { padding: 1.4rem 2rem 0; }
+.mini .head { margin-bottom: 1.1rem; align-items: center; }
+.main > .scroll { position: relative; flex: 1 1 0; min-height: 0; overflow: hidden; padding-right: 1.8rem; }
+.scroll::after { content: ""; position: absolute; right: 0.2rem; top: 0; bottom: 0.4rem; width: 0.9rem; border-radius: 0.5rem;
+                 background: var(--fill); border: 1px solid var(--line); }
+.scroll::before { content: ""; position: absolute; right: 0.4rem; top: 0.2rem; width: 0.5rem; height: 46%; border-radius: 0.3rem;
+                  background: var(--line-strong); z-index: 1; }
+.pin { border-top: 1px solid var(--line-strong); padding: 0.9rem 0 1.1rem; }
+.pin .row { display: flex; align-items: center; gap: 1rem; }
+.pin .row .end { margin-left: auto; }
+.side { position: absolute; left: 95rem; top: 2rem; width: 32.6rem; }
+.side h2 { font-size: 1.9rem; margin-bottom: 0.7rem; }
+.side ol { margin: 1rem 0 0 2rem; }
+.side li { margin-bottom: 0.9rem; padding-left: 0.3rem; }
+.under { position: absolute; left: 2rem; top: 63.4rem; width: 90rem; }
+.under .lab { margin: 0 0 0.4rem; }
+.under .strip { border: 1px solid var(--line-strong); margin-bottom: 1rem; }
+</style>
+</head>
+<body>
+<input class="h" type="radio" name="s" id="s1" checked><input class="h" type="radio" name="s" id="s2">
+<input class="h" type="radio" name="s" id="s3"><input class="h" type="radio" name="s" id="s4">
+<input class="h" type="radio" name="s" id="s5"><input class="h" type="radio" name="s" id="s6">
+<input class="h" type="radio" name="s" id="s7"><input class="h" type="radio" name="s" id="s8">
+<input class="h" type="radio" name="s" id="s9"><input class="h" type="radio" name="s" id="s10">
+<input class="h" type="radio" name="s" id="s11">
+<input class="h" type="radio" name="t" id="tl" checked><input class="h" type="radio" name="t" id="td">
+
+<div class="harness">
+  <b>Parts on a rail, Home as a status page</b>
+  <label for="s1">1 · Home, on opening</label><label for="s2">2 · Before a long training starts</label>
+  <label for="s3">3 · The training in progress</label><label for="s4">4 · After training: the checks</label>
+  <label for="s5">5 · The records, while the training runs</label>
+  <label for="s6">6 · Home, the very first time</label><label for="s7">7 · Home, while the training runs</label>
+  <label for="s8">8 · Sheet: the strip's six states</label><label for="s9">9 · Sheet: the run's page at other moments</label>
+  <label for="s10">10 · Screen 2 at 900 × 600</label><label for="s11">11 · Screen 3 at 900 × 600</label>
+  <span style="flex:1"></span>
+  <label for="tl">Light</label><label for="td">Dark</label>
+</div>
+
+<div class="window">
+
+  <!-- ═════════════ screen 1: Home on opening, the owner mid-project. Every sentence is read from a record on disk. ═════════════ -->
+  <section class="screen">
+    <div class="shell">
+      <nav class="rail">
+        <div class="brand">PRISM</div>
+        <label class="ri cur focus" for="s1"><svg class="i"><use href="#i-home"/></svg>Home</label>
+        <hr>
+        <label class="ri" for="s2"><svg class="i"><use href="#i-infer"/></svg>Parameter inference</label>
+        <span class="ri"><svg class="i"><use href="#i-temp"/></svg>Effective temperature</span>
+        <span class="ri"><svg class="i"><use href="#i-live"/></svg>Live simulation</span>
+        <span class="ri"><svg class="i"><use href="#i-map"/></svg>Reduction map</span>
+        <hr>
+        <label class="ri" for="s5"><svg class="i"><use href="#i-records"/></svg>Records</label>
+        <span class="grow"></span>
+        <span class="ri"><svg class="i"><use href="#i-models"/></svg>Your own models</span>
+        <span class="ri"><svg class="i"><use href="#i-settings"/></svg>Settings</span>
+        <span class="ri"><svg class="i"><use href="#i-help"/></svg>Help</span>
+      </nav>
+
+      <main class="main">
+        <div class="head"><h1>Home</h1><p class="sub">What to do next, where your work stands, and what each part is for.</p></div>
+
+        <div class="panel">
+          <div class="next">
+            <div>
+              <h2 class="big">Next: train the network</h2>
+              <p class="lead">The record <b>Simulation set for retrain_prior</b> is complete (20,480,000 simulations, finished on Friday 2 October), and no posterior has been made from it yet. A fit takes about 5 to 6 days and cannot be continued once it is stopped.</p>
+            </div>
+            <label class="btn primary" for="s2">Set up training</label>
+          </div>
+          <hr class="rule">
+          <p class="cap">Parameter inference on Nadrowski with retrain_prior, as chosen last time</p>
+          <div class="steps">
+            <div class="step"><div class="nm"><span>1</span>Model and options</div><div class="st"><svg class="i"><use href="#i-check"/></svg>Chosen last time</div><div class="rec">Nadrowski</div></div>
+            <div class="step"><div class="nm"><span>2</span>Prior</div><div class="st"><svg class="i"><use href="#i-check"/></svg>Chosen last time</div><div class="rec">retrain_prior</div></div>
+            <label class="step" for="s2"><div class="nm"><span>3</span>Training</div><div class="st"><svg class="i"><use href="#i-ready"/></svg>Ready to start</div><div class="rec">Simulation set saved</div></label>
+            <div class="step"><div class="nm"><span>4</span>Checks</div><div class="st"><svg class="i"><use href="#i-todo"/></svg>2 of 5 passed</div><div class="rec">3 wait for step 3</div></div>
+            <div class="step"><div class="nm"><span>5</span>Inference</div><div class="st"><svg class="i"><use href="#i-wait"/></svg>Waiting for step 3</div><div class="rec"></div></div>
+            <div class="step"><div class="nm"><span>6</span>Narrowing round</div><div class="st"><svg class="i"><use href="#i-wait"/></svg>Waiting for step 5</div><div class="rec"></div></div>
+          </div>
+        </div>
+
+        <div class="cols" style="grid-template-columns: 1fr 33rem; margin-top:1.6rem">
+          <div class="panel" style="padding-bottom:0.6rem">
+            <div class="phead" style="margin-bottom:0.9rem"><h2>The parts of PRISM</h2></div>
+            <ul class="parts">
+              <li><svg class="i"><use href="#i-infer"/></svg><label class="btn flat" for="s2">Parameter inference</label><span>Infer a cell's model parameters from recordings, in six steps.</span></li>
+              <li><svg class="i"><use href="#i-temp"/></svg><span class="btn flat">Effective temperature</span><span>Measure it on one cell, or sweep two parameters; compare runs.</span></li>
+              <li><svg class="i"><use href="#i-live"/></svg><span class="btn flat">Live simulation</span><span>Watch a cell's bundle move as it is simulated; save a video.</span></li>
+              <li><svg class="i"><use href="#i-map"/></svg><span class="btn flat">Reduction map</span><span>The analytical map from the Nadrowski model to the Hopf normal form.</span></li>
+              <li><svg class="i"><use href="#i-records"/></svg><label class="btn flat" for="s5">Records</label><span>Every record PRISM has written, and what it was made from.</span></li>
+              <li><svg class="i"><use href="#i-models"/></svg><span class="btn flat">Your own models</span><span>Define a model of your own in the model builder.</span></li>
+            </ul>
+          </div>
+
+          <div class="panel" style="padding-bottom:0.6rem">
+            <div class="phead" style="margin-bottom:0.9rem"><h2>Latest records</h2><label class="btn flat end" for="s5" style="margin-right:0">All records</label></div>
+            <ul class="runs">
+              <li><label class="btn flat" for="s5">Simulation set for retrain_prior</label><p>Simulation set, Fri 2 Oct, 18:46</p></li>
+              <li><span class="btn flat">retrain_mask</span><p>Check, Thu 1 Oct, 15:30</p></li>
+              <li><span class="btn flat">retrain_band</span><p>Check, Thu 1 Oct, 15:29</p></li>
+              <li><span class="btn flat">retrain_prior</span><p>Prior, Thu 1 Oct, 15:29</p></li>
+            </ul>
+          </div>
+        </div>
+      </main>
+
+      <footer class="strip"><span class="seg"><svg class="i"><use href="#i-idle"/></svg>Nothing is running.</span></footer>
+    </div>
+  </section>
+
+  <!-- ═════════════ screen 2: setting up the long training ═════════════ -->
+  <section class="screen">
+    <div class="shell">
+      <nav class="rail">
+        <div class="brand">PRISM</div>
+        <label class="ri" for="s1"><svg class="i"><use href="#i-home"/></svg>Home</label>
+        <hr>
+        <label class="ri cur" for="s2"><svg class="i"><use href="#i-infer"/></svg>Parameter inference</label>
+        <span class="ri"><svg class="i"><use href="#i-temp"/></svg>Effective temperature</span>
+        <span class="ri"><svg class="i"><use href="#i-live"/></svg>Live simulation</span>
+        <span class="ri"><svg class="i"><use href="#i-map"/></svg>Reduction map</span>
+        <hr>
+        <label class="ri" for="s5"><svg class="i"><use href="#i-records"/></svg>Records</label>
+        <span class="grow"></span>
+        <span class="ri"><svg class="i"><use href="#i-models"/></svg>Your own models</span>
+        <span class="ri"><svg class="i"><use href="#i-settings"/></svg>Settings</span>
+        <span class="ri"><svg class="i"><use href="#i-help"/></svg>Help</span>
+      </nav>
+
+      <main class="main">
+        <div class="steps">
+          <div class="step"><div class="nm"><span>1</span>Model and options</div><div class="st"><svg class="i"><use href="#i-check"/></svg>Done</div><div class="rec">Nadrowski</div></div>
+          <div class="step"><div class="nm"><span>2</span>Prior</div><div class="st"><svg class="i"><use href="#i-check"/></svg>Done</div><div class="rec">retrain_prior</div></div>
+          <div class="step cur"><div class="nm"><span>3</span>Training</div><div class="st"><svg class="i"><use href="#i-ready"/></svg>Ready to start</div><div class="rec">Simulation set saved</div></div>
+          <label class="step" for="s4"><div class="nm"><span>4</span>Checks</div><div class="st"><svg class="i"><use href="#i-todo"/></svg>2 of 5 passed</div><div class="rec">3 wait for step 3</div></label>
+          <div class="step"><div class="nm"><span>5</span>Inference</div><div class="st"><svg class="i"><use href="#i-wait"/></svg>Waiting for step 3</div><div class="rec"></div></div>
+          <div class="step"><div class="nm"><span>6</span>Narrowing round</div><div class="st"><svg class="i"><use href="#i-wait"/></svg>Waiting for step 5</div><div class="rec"></div></div>
+        </div>
+
+        <div class="head" style="align-items:center">
+          <h1>Training</h1>
+          <p class="sub">Simulates the training set, then fits the network to it. The result is saved as a posterior.</p>
+          <span class="btn small" style="margin-left:auto">Use a saved posterior instead…</span>
+        </div>
+
+        <div class="cols" style="grid-template-columns: 47rem 1fr;">
+          <div>
+            <div class="panel">
+              <div class="phead"><h2>Main settings</h2></div>
+              <div class="form">
+                <span>Batches</span><span class="in num focus" style="width:13rem">10,000</span>
+                <span>Simulations per batch</span><div class="row"><span class="chk"><svg class="i"><use href="#i-check"/></svg></span>Automatic<span class="in num dim" style="width:9rem; margin-left:0.6rem">2,048</span></div>
+                <p class="hint sub">10,000 batches of 2,048 make 20,480,000 simulations.</p>
+                <span>Network</span><div class="row">width<span class="in num" style="width:8rem; margin-right:1rem">256</span>depth<span class="in num" style="width:8rem">10</span></div>
+                <p class="hint sub">Width and depth open at 128 and 8 each time PRISM starts.</p>
+                <span>Card memory limit</span><div class="row"><span class="in num" style="width:13rem">6</span>GiB</div>
+                <p class="hint">The simulations plan their batches to this figure; a batch can hold more. At 6 GiB the largest holds about 10.4 GiB, and 14.6 GiB is free now. With no limit the last run ran out of memory after 23 minutes. Not needed this time: nothing is simulated.</p>
+              </div>
+            </div>
+
+            <div class="panel" style="padding-top:1.4rem; padding-bottom:1.4rem">
+              <div class="phead" style="margin-bottom:0.8rem"><h2>Rarely changed settings</h2><span class="btn small end">Change</span></div>
+              <dl class="kv" style="grid-template-columns: 22rem 1fr;">
+                <dt>Learning rate</dt><dd class="num">0.001</dd>
+                <dt>The fit ends itself after</dt><dd>20 epochs without improvement</dd>
+                <dt>Epoch limit</dt><dd>none</dd>
+                <dt>The simulations are saved</dt><dd>every 50 batches</dd>
+                <dt>If the saved set cannot be continued</dt><dd>do not start</dd>
+                <dt>Rotation step</dt><dd>48 simulations per perturbation, a step of 0.1 (no unit), averaged over 8 parameter sets</dd>
+              </dl>
+            </div>
+          </div>
+
+          <div>
+            <div class="panel" style="padding-top:1.4rem; padding-bottom:0.8rem">
+              <div class="phead" style="margin-bottom:0.3rem"><h2>Before you start</h2></div>
+              <ul class="before">
+                <li><svg class="i"><use href="#i-check"/></svg><div><b>No simulations this time</b>The saved 20,480,000 are used: finished on Friday 2 October, made with these same settings.</div></li>
+                <li><svg class="i"><use href="#i-check"/></svg><div><b>The two checks that can run beforehand have passed</b>Frequency band: passed, Thursday 1 October.<br>Unusable driven recordings: passed, Friday 2 October.</div></li>
+                <li><svg class="i"><use href="#i-clock"/></svg><div><b>The fit takes about 5 to 6 days</b>About 130 epochs of about 63 minutes each. It should end around Monday 12 October.</div></li>
+                <li><svg class="i"><use href="#i-warn"/></svg><div><b>A stopped fit is lost, so keep PRISM open</b>A fit cannot be continued yet: if it stops for any reason it starts again at the first epoch. You can minimise PRISM. Closing it stops the run, and you are asked first. The simulations are kept.</div></li>
+              </ul>
+            </div>
+
+            <div class="panel" style="padding-top:1.5rem; padding-bottom:1.5rem">
+              <div class="form" style="grid-template-columns: 5rem 1fr;">
+                <span>Name</span><div class="row"><span class="in" style="width:22rem">retrain_posterior</span><span class="st" style="margin-left:0.6rem"><svg class="i"><use href="#i-check"/></svg>This name is free</span></div>
+                <span>Note</span><span class="in">Tier-1 box, width 256, depth 10, on the saved simulations</span>
+              </div>
+              <hr class="rule" style="margin:1.3rem 0 1.2rem">
+              <div style="display:grid; grid-template-columns: 1fr auto; gap: 2rem; align-items:center">
+                <p style="font-size:1.3rem">While it runs, settings are locked and no other run can start. You can still move around and read results.</p>
+                <label class="btn primary" for="s3">Start training</label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <footer class="strip"><span class="seg"><svg class="i"><use href="#i-idle"/></svg>Nothing is running.</span></footer>
+    </div>
+  </section>
+
+  <!-- ═════════════ screen 3: the training in progress, default view ═════════════ -->
+  <section class="screen">
+    <div class="shell">
+      <nav class="rail">
+        <div class="brand">PRISM</div>
+        <label class="ri" for="s7"><svg class="i"><use href="#i-home"/></svg>Home</label>
+        <hr>
+        <label class="ri cur two" for="s3"><svg class="i"><use href="#i-infer"/></svg><span class="rt">Parameter inference<span class="rs"><svg class="i"><use href="#i-run"/></svg>Training is running</span></span></label>
+        <span class="ri"><svg class="i"><use href="#i-temp"/></svg>Effective temperature</span>
+        <span class="ri"><svg class="i"><use href="#i-live"/></svg>Live simulation</span>
+        <span class="ri"><svg class="i"><use href="#i-map"/></svg>Reduction map</span>
+        <hr>
+        <label class="ri" for="s5"><svg class="i"><use href="#i-records"/></svg>Records</label>
+        <span class="grow"></span>
+        <span class="ri"><svg class="i"><use href="#i-models"/></svg>Your own models</span>
+        <span class="ri"><svg class="i"><use href="#i-settings"/></svg>Settings</span>
+        <span class="ri"><svg class="i"><use href="#i-help"/></svg>Help</span>
+      </nav>
+
+      <main class="main">
+        <div class="steps">
+          <div class="step"><div class="nm"><span>1</span>Model and options</div><div class="st"><svg class="i"><use href="#i-check"/></svg>Done</div><div class="rec">Nadrowski</div></div>
+          <div class="step"><div class="nm"><span>2</span>Prior</div><div class="st"><svg class="i"><use href="#i-check"/></svg>Done</div><div class="rec">retrain_prior</div></div>
+          <div class="step cur"><div class="nm"><span>3</span>Training</div><div class="st"><svg class="i"><use href="#i-run"/></svg>Running</div><div class="rec">retrain_posterior</div></div>
+          <div class="step"><div class="nm"><span>4</span>Checks</div><div class="st"><svg class="i"><use href="#i-todo"/></svg>2 of 5 passed</div><div class="rec">3 wait for step 3</div></div>
+          <div class="step"><div class="nm"><span>5</span>Inference</div><div class="st"><svg class="i"><use href="#i-wait"/></svg>Waiting for step 3</div><div class="rec"></div></div>
+          <div class="step"><div class="nm"><span>6</span>Narrowing round</div><div class="st"><svg class="i"><use href="#i-wait"/></svg>Waiting for step 5</div><div class="rec"></div></div>
+        </div>
+
+        <div class="head">
+          <h1>Training retrain_posterior</h1>
+          <p class="sub">Tier-1 box, width 256, depth 10, on the saved simulations</p>
+        </div>
+
+        <div class="cols" style="grid-template-columns: 1fr 34rem;">
+          <div>
+            <div class="panel">
+              <div class="stage">
+                <span>1 Simulations</span><span class="st"><svg class="i"><use href="#i-check"/></svg>Done: the saved 20,480,000 were used</span>
+                <b>2 Fit</b><span class="st acc"><svg class="i"><use href="#i-run"/></svg><b>Running</b></span>
+              </div>
+              <hr class="rule" style="margin:1.2rem 0 1.3rem">
+              <h2 class="big">61 epochs done; about 130 expected</h2>
+              <div class="bar" style="margin:1rem 0 0.9rem"><i style="width:47%"></i></div>
+              <p class="st" style="font-size:1.4rem"><svg class="i"><use href="#i-check"/></svg>Still improving: the best epoch so far is 61.</p>
+              <div class="facts3" style="margin-top:1.5rem">
+                <div><span class="st q">Running for</span><span class="v">2 days 17 hours</span><span class="sub">since Tue 6 October, 16:30</span></div>
+                <div><span class="st q">Should end around</span><span class="v">Monday 12 October</span><span class="sub">in about 3 days</span></div>
+                <div><span class="st q">Pace</span><span class="v">63 minutes an epoch</span><span class="sub">epoch 62 is running now</span></div>
+              </div>
+              <p class="sub" style="margin-top:1.3rem">The fit ends itself after 20 epochs without improvement, so the count of 130 and the end date are estimates.</p>
+            </div>
+
+            <div class="panel" style="padding-bottom:1rem">
+              <div class="phead" style="margin-bottom:0.9rem"><h2>Health of the run</h2></div>
+              <table class="tbl">
+                <tr><th>Health figure</th><th class="r">Value</th><th>How to read it</th><th>State</th></tr>
+                <tr><td class="nw">Last sign of activity</td><td class="r">08:33</td><td>Epoch 61 ended. The next is due about 09:36.</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Fine</span></td></tr>
+                <tr><td class="nw">Unusable driven recordings</td><td class="r">40.1&nbsp;%</td><td>Expected 37.9 %; within 3 points is fine. From the simulations, finished Fri 2 Oct.</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Fine</span></td></tr>
+                <tr class="last"><td class="nw">Failed simulations</td><td class="r">0.15&nbsp;%</td><td>30,847 of 20,480,000. From the simulations, finished Fri 2 Oct.</td><td><span class="st"><svg class="i"><use href="#i-idle"/></svg>No limit is set</span></td></tr>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <div class="panel">
+              <div class="phead" style="margin-bottom:0.5rem"><h2>If you stop now</h2></div>
+              <ul class="keep">
+                <li><svg class="i"><use href="#i-check"/></svg><div><b>Kept</b>The 20,480,000 simulations and the prior.</div></li>
+                <li><svg class="i"><use href="#i-warn"/></svg><div><b>Lost</b>The whole fit: 61 epochs, 2 days 17 hours. A fit cannot be continued yet.</div></li>
+              </ul>
+              <p style="font-size:1.3rem; margin:0.6rem 0 1.3rem">A stop takes effect when the current epoch ends, which can take up to an hour. You are asked first; once you confirm, it cannot be taken back. Closing PRISM asks the same question.</p>
+              <span class="btn"><svg class="i"><use href="#i-stopped"/></svg>Stop training…</span>
+            </div>
+            <div class="panel">
+              <div class="phead" style="margin-bottom:0.5rem"><h2>Full log</h2></div>
+              <p class="sub" style="margin-bottom:1.1rem">The console text is not shown unless you ask. Every line is written to a file as the run goes.</p>
+              <div style="display:flex; gap:1rem"><span class="btn"><svg class="i"><use href="#i-doc"/></svg>Show full log</span><span class="btn">Open its folder</span></div>
+            </div>
+            <p style="display:grid; grid-template-columns: 2.2rem 1fr; margin:1.4rem 0 0 0.2rem; font-size:1.3rem"><svg class="i" style="margin-top:0.2rem"><use href="#i-lock"/></svg><span>Settings are locked while this runs: 10,000 batches of 2,048, network width 256, depth 10.</span></p>
+            <span class="btn flat focus" style="margin:0.7rem 0 0 2.4rem; font-size:1.3rem">Show its settings</span>
+          </div>
+        </div>
+      </main>
+
+      <footer class="strip">
+        <span class="seg acc"><svg class="i"><use href="#i-run"/></svg><span><b>Training retrain_posterior</b> is running</span></span><span class="sep"></span>
+        <span class="seg"><svg class="i"><use href="#i-check"/></svg>Nothing needs you</span>
+      </footer>
+    </div>
+  </section>
+
+  <!-- ═════════════ screen 4: after training, the five checks ═════════════ -->
+  <section class="screen">
+    <div class="shell">
+      <nav class="rail">
+        <div class="brand">PRISM</div>
+        <label class="ri" for="s1"><svg class="i"><use href="#i-home"/></svg>Home</label>
+        <hr>
+        <label class="ri cur" for="s2"><svg class="i"><use href="#i-infer"/></svg>Parameter inference</label>
+        <span class="ri"><svg class="i"><use href="#i-temp"/></svg>Effective temperature</span>
+        <span class="ri"><svg class="i"><use href="#i-live"/></svg>Live simulation</span>
+        <span class="ri"><svg class="i"><use href="#i-map"/></svg>Reduction map</span>
+        <hr>
+        <label class="ri" for="s5"><svg class="i"><use href="#i-records"/></svg>Records</label>
+        <span class="grow"></span>
+        <span class="ri"><svg class="i"><use href="#i-models"/></svg>Your own models</span>
+        <span class="ri"><svg class="i"><use href="#i-settings"/></svg>Settings</span>
+        <span class="ri"><svg class="i"><use href="#i-help"/></svg>Help</span>
+      </nav>
+
+      <main class="main">
+        <div class="steps" style="margin-bottom:1.6rem">
+          <div class="step"><div class="nm"><span>1</span>Model and options</div><div class="st"><svg class="i"><use href="#i-check"/></svg>Done</div><div class="rec">Nadrowski</div></div>
+          <div class="step"><div class="nm"><span>2</span>Prior</div><div class="st"><svg class="i"><use href="#i-check"/></svg>Done</div><div class="rec">retrain_prior</div></div>
+          <div class="step"><div class="nm"><span>3</span>Training</div><div class="st"><svg class="i"><use href="#i-check"/></svg>Done</div><div class="rec">retrain_posterior</div></div>
+          <div class="step cur focus"><div class="nm"><span>4</span>Checks</div><div class="st"><svg class="i"><use href="#i-todo"/></svg>3 of 5 passed</div><div class="rec">2 not run yet</div></div>
+          <div class="step"><div class="nm"><span>5</span>Inference</div><div class="st"><svg class="i"><use href="#i-ready"/></svg>Ready to start</div><div class="rec"></div></div>
+          <div class="step"><div class="nm"><span>6</span>Narrowing round</div><div class="st"><svg class="i"><use href="#i-wait"/></svg>Waiting for step 5</div><div class="rec"></div></div>
+        </div>
+
+        <div class="head" style="margin-bottom:1.3rem">
+          <h1>Checks of retrain_posterior</h1>
+          <p class="sub">A posterior passes when all five checks have passed.</p>
+        </div>
+
+        <div class="panel" style="display:grid; grid-template-columns: 3.6rem 1fr; align-items:center; padding:1.3rem 2rem; margin-bottom:1.6rem">
+          <svg class="i" style="width:2.6rem; height:2.6rem"><use href="#i-todo"/></svg>
+          <div>
+            <h2 class="big">3 of 5 checks passed; 2 not run yet</h2>
+            <p style="margin-top:0.2rem">You can run inference now; two checks are still open.</p>
+          </div>
+        </div>
+
+        <div class="cols" style="grid-template-columns: 35rem 1fr;">
+          <div class="panel" style="padding:1.3rem 0 0.4rem; align-self:start">
+            <h2 style="padding:0 2rem 1rem">The five checks</h2>
+            <ul class="checks">
+              <li class="sel"><svg class="i"><use href="#i-check"/></svg><div><b>Calibration</b>Passed, Monday 12 October</div></li>
+              <li><svg class="i"><use href="#i-check"/></svg><div><b>Frequency band</b>Passed, Thursday 1 October</div></li>
+              <li><svg class="i"><use href="#i-check"/></svg><div><b>Unusable driven recordings</b>Passed, Friday 2 October</div></li>
+              <li><svg class="i"><use href="#i-todo"/></svg><div><b>Identifiability</b>Not run yet<br><span class="btn small">Run the identifiability check</span></div></li>
+              <li><svg class="i"><use href="#i-todo"/></svg><div><b>Use of each part of the input</b>Not run yet<br><span class="btn small">Run the input-use check</span></div></li>
+            </ul>
+          </div>
+
+          <div class="panel" style="padding:1.3rem 2rem 1.1rem; align-self:start">
+            <div class="phead" style="margin-bottom:0.5rem; align-items:baseline"><h2>Calibration: passed</h2><p class="sub end">Monday 12 October, 14:05</p></div>
+            <p style="font-size:1.3rem; margin-bottom:0.9rem">The posterior is honest about its uncertainty: all 13 parameters pass the rank test, and the joint coverage test passes. Made on 2,000 test datasets at 200 operating points (pairs of time scale and recording length). Parameters are named as in the bounds file master_tier1.txt.</p>
+            <table class="tbl tight">
+              <tr><th style="width:9.5rem">Parameter</th><th style="width:6rem">Unit</th><th class="r" style="width:7.5rem">p-value</th><th style="width:8.5rem">Result</th><th>Remark</th></tr>
+              <tr><td>k</td><td>none</td><td class="r">0.412</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td></td></tr>
+              <tr><td>lam</td><td>none</td><td class="r">0.287</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td></td></tr>
+              <tr><td>f_max</td><td>none</td><td class="r">0.631</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td></td></tr>
+              <tr><td>tau</td><td>none</td><td class="r">0.094</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td></td></tr>
+              <tr><td>tau_c</td><td>none</td><td class="r">0.518</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td></td></tr>
+              <tr><td>s</td><td>none</td><td class="r">0.223</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td></td></tr>
+              <tr><td>delta_E</td><td>none</td><td class="r">0.776</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td></td></tr>
+              <tr><td>beta</td><td>none</td><td class="r">0.061</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td></td></tr>
+              <tr><td>n</td><td>none</td><td class="r">0.349</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td></td></tr>
+              <tr><td>temp</td><td>none</td><td class="r">0.479</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td>Motor temperature relative to the bath</td></tr>
+              <tr><td>x_scale</td><td>nm</td><td class="r">0.154</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td>Length scale</td></tr>
+              <tr><td>t_scale</td><td>ms</td><td class="r">0.032</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td>Time scale; judged on the operating points</td></tr>
+              <tr><td>T</td><td>K</td><td class="r">0.705</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td>Temperature</td></tr>
+              <tr class="sum"><td colspan="2"><b>All together</b></td><td class="r">0.386</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Pass</span></td><td>Joint coverage test; passes at 0.05</td></tr>
+            </table>
+            <p class="sub" style="margin-top:0.7rem">Rank test: a parameter passes at p = 0.0038 or more (0.05 divided by 13).</p>
+          </div>
+        </div>
+      </main>
+
+      <footer class="strip"><span class="seg"><svg class="i"><use href="#i-idle"/></svg>Nothing is running.</span></footer>
+    </div>
+  </section>
+
+  <!-- ═════════════ screen 5: the records, seen while the training runs ═════════════ -->
+  <section class="screen">
+    <div class="shell">
+      <nav class="rail">
+        <div class="brand">PRISM</div>
+        <label class="ri" for="s7"><svg class="i"><use href="#i-home"/></svg>Home</label>
+        <hr>
+        <label class="ri two" for="s3"><svg class="i"><use href="#i-infer"/></svg><span class="rt">Parameter inference<span class="rs"><svg class="i"><use href="#i-run"/></svg>Training is running</span></span></label>
+        <span class="ri"><svg class="i"><use href="#i-temp"/></svg>Effective temperature</span>
+        <span class="ri"><svg class="i"><use href="#i-live"/></svg>Live simulation</span>
+        <span class="ri"><svg class="i"><use href="#i-map"/></svg>Reduction map</span>
+        <hr>
+        <label class="ri cur" for="s5"><svg class="i"><use href="#i-records"/></svg>Records</label>
+        <span class="grow"></span>
+        <span class="ri"><svg class="i"><use href="#i-models"/></svg>Your own models</span>
+        <span class="ri"><svg class="i"><use href="#i-settings"/></svg>Settings</span>
+        <span class="ri"><svg class="i"><use href="#i-help"/></svg>Help</span>
+      </nav>
+
+      <main class="main">
+        <div class="head"><h1>Records</h1><p class="sub">Everything PRISM writes is kept here, with its settings and what it was made from.</p></div>
+
+        <div class="tools">
+          <span>Kind</span>
+          <span class="in" style="width:22rem">All kinds<svg class="i"><use href="#i-down"/></svg></span>
+          <span class="btn small off" style="margin-left:auto">Remove unfinished records…</span>
+        </div>
+
+        <div class="cols" style="grid-template-columns: 1fr 44rem;">
+          <div class="panel" style="padding:0; overflow:hidden; align-self:start">
+            <table class="tbl">
+              <tr><th>Name</th><th>Kind</th><th>Made</th><th>Note</th></tr>
+              <tr class="sel focus"><td>Simulation set for retrain_prior</td><td class="nw">Simulation set</td><td class="nw">Fri 2 Oct, 18:46</td><td>Tier-1 box, card memory limit 6 GiB</td></tr>
+              <tr><td>retrain_mask</td><td>Check</td><td class="nw">Thu 1 Oct, 15:30</td><td>Unusable driven recordings, 37.9 % expected</td></tr>
+              <tr><td>retrain_band</td><td>Check</td><td class="nw">Thu 1 Oct, 15:29</td><td>Frequency band</td></tr>
+              <tr class="last"><td>retrain_prior</td><td>Prior</td><td class="nw">Thu 1 Oct, 15:29</td><td>Tier-1 box, 13 parameters</td></tr>
+            </table>
+            <p class="sub" style="padding:1rem 1rem 1.1rem; border-top:1px solid var(--line-strong)">4 records. A posterior is added when the running training finishes.</p>
+          </div>
+
+          <div class="panel" style="padding:1.5rem 2rem 1.5rem">
+            <h2>Simulation set for retrain_prior</h2>
+            <div style="display:flex; flex-direction:column; gap:0.3rem; margin:0.7rem 0 1.1rem">
+              <span class="st"><svg class="i"><use href="#i-check"/></svg>Complete: 10,000 of 10,000 batches</span>
+              <span class="st acc"><svg class="i"><use href="#i-run"/></svg>In use by the training that is running</span>
+            </div>
+            <dl class="kv" style="grid-template-columns: 16.5rem 1fr;">
+              <dt>Made</dt><dd>Thu 1 Oct, 15:55 to Fri 2 Oct, 18:46</dd>
+              <dt>Size</dt><dd>20,480,000 simulations, 10.3 GiB</dd>
+              <dt>Failed simulations</dt><dd class="num">0.15 %</dd>
+              <dt>Unusable driven recordings</dt><dd class="num">40.1 %</dd>
+            </dl>
+            <h3>Note</h3>
+            <div style="display:grid; grid-template-columns: 1fr auto; gap:1rem"><span class="in dim">Tier-1 box, card memory limit 6 GiB</span><span class="btn off">Save note</span></div>
+            <h3>Made from</h3>
+            <ul class="tree">
+              <li><svg class="i"><use href="#i-records"/></svg><span>Prior <span class="btn flat" style="display:inline; margin:0">retrain_prior</span></span></li>
+              <li class="c">Bounds file master_tier1.txt, 13 parameters</li>
+              <li class="c">Model Nadrowski</li>
+            </ul>
+            <h3>Used by</h3>
+            <ul class="tree"><li><svg class="i" style="color:var(--accent)"><use href="#i-run"/></svg><span>Training retrain_posterior, running now</span></li></ul>
+            <hr class="rule" style="margin:1.2rem 0">
+            <div style="display:flex; align-items:center; gap:1rem">
+              <span class="btn small">Show its settings</span><span class="btn small">Save report…</span><span class="btn small off">Delete…</span>
+            </div>
+            <p style="font-size:1.3rem; margin-top:0.9rem">While a run is live a note cannot be saved, and no record can be deleted or removed.</p>
+          </div>
+        </div>
+      </main>
+
+      <footer class="strip">
+        <span class="seg acc"><svg class="i"><use href="#i-run"/></svg><b>Training retrain_posterior</b></span><span class="sep"></span>
+        <span class="seg">The fit: 61 epochs done, about 3 days left</span><span class="sep"></span>
+        <span class="seg"><svg class="i"><use href="#i-check"/></svg>Nothing needs you</span>
+        <label class="btn small end" for="s3">Go to the run</label>
+      </footer>
+    </div>
+  </section>
+
+  <!-- ═════════════ screen 6: Home the very first time, nothing on disk ═════════════ -->
+  <section class="screen">
+    <div class="shell">
+      <nav class="rail">
+        <div class="brand">PRISM</div>
+        <label class="ri cur" for="s6"><svg class="i"><use href="#i-home"/></svg>Home</label>
+        <hr>
+        <span class="ri"><svg class="i"><use href="#i-infer"/></svg>Parameter inference</span>
+        <span class="ri"><svg class="i"><use href="#i-temp"/></svg>Effective temperature</span>
+        <span class="ri"><svg class="i"><use href="#i-live"/></svg>Live simulation</span>
+        <span class="ri"><svg class="i"><use href="#i-map"/></svg>Reduction map</span>
+        <hr>
+        <span class="ri"><svg class="i"><use href="#i-records"/></svg>Records</span>
+        <span class="grow"></span>
+        <span class="ri"><svg class="i"><use href="#i-models"/></svg>Your own models</span>
+        <span class="ri"><svg class="i"><use href="#i-settings"/></svg>Settings</span>
+        <span class="ri"><svg class="i"><use href="#i-help"/></svg>Help</span>
+      </nav>
+
+      <main class="main">
+        <div class="head"><h1>Home</h1><p class="sub">What to do next, where your work stands, and what each part is for.</p></div>
+
+        <div class="panel" style="padding-bottom:0.7rem">
+          <h2 class="big">Start here</h2>
+          <p class="lead" style="margin:0.6rem 0 1.2rem; max-width:80rem">PRISM simulates models of the hair bundle, the motion sensor of the inner ear's hair cells, and infers a cell's model parameters from recordings. Nothing has been made yet. There are two ways to begin.</p>
+          <div class="choice"><span class="btn primary">Watch a live simulation</span><p>Needs nothing first. See a cell's bundle move as it is simulated.</p></div>
+          <div class="choice"><span class="btn">Begin parameter inference</span><p>Starts with choosing a model. Six steps, each needing the one before; the training step takes days.</p></div>
+        </div>
+
+        <div class="cols" style="grid-template-columns: 1fr 33rem; margin-top:1.6rem">
+          <div class="panel" style="padding-bottom:0.6rem">
+            <div class="phead" style="margin-bottom:0.9rem"><h2>The parts of PRISM</h2></div>
+            <ul class="parts">
+              <li><svg class="i"><use href="#i-infer"/></svg><span class="btn flat">Parameter inference</span><span>Infer a cell's model parameters from recordings, in six steps.</span></li>
+              <li><svg class="i"><use href="#i-temp"/></svg><span class="btn flat">Effective temperature</span><span>Measure it on one cell, or sweep two parameters; compare runs.</span></li>
+              <li><svg class="i"><use href="#i-live"/></svg><span class="btn flat">Live simulation</span><span>Watch a cell's bundle move as it is simulated; save a video.</span></li>
+              <li><svg class="i"><use href="#i-map"/></svg><span class="btn flat">Reduction map</span><span>The analytical map from the Nadrowski model to the Hopf normal form.</span></li>
+              <li><svg class="i"><use href="#i-records"/></svg><span class="btn flat">Records</span><span>Every record PRISM has written, and what it was made from.</span></li>
+              <li><svg class="i"><use href="#i-models"/></svg><span class="btn flat">Your own models</span><span>Define a model of your own in the model builder.</span></li>
+            </ul>
+          </div>
+
+          <div class="panel" style="align-self:start">
+            <div class="phead" style="margin-bottom:0.7rem"><h2>Latest records</h2></div>
+            <p class="st"><svg class="i"><use href="#i-idle"/></svg>No records yet.</p>
+            <p class="sub" style="margin-top:0.6rem">Whatever PRISM writes is listed here, newest first: priors, simulation sets, posteriors, checks and results.</p>
+          </div>
+        </div>
+      </main>
+
+      <footer class="strip"><span class="seg"><svg class="i"><use href="#i-idle"/></svg>Nothing is running.</span></footer>
+    </div>
+  </section>
+
+  <!-- ═════════════ screen 7: Home while the training runs: what the owner sees for six days ═════════════ -->
+  <section class="screen">
+    <div class="shell">
+      <nav class="rail">
+        <div class="brand">PRISM</div>
+        <label class="ri cur" for="s7"><svg class="i"><use href="#i-home"/></svg>Home</label>
+        <hr>
+        <label class="ri two" for="s3"><svg class="i"><use href="#i-infer"/></svg><span class="rt">Parameter inference<span class="rs"><svg class="i"><use href="#i-run"/></svg>Training is running</span></span></label>
+        <span class="ri"><svg class="i"><use href="#i-temp"/></svg>Effective temperature</span>
+        <span class="ri"><svg class="i"><use href="#i-live"/></svg>Live simulation</span>
+        <span class="ri"><svg class="i"><use href="#i-map"/></svg>Reduction map</span>
+        <hr>
+        <label class="ri" for="s5"><svg class="i"><use href="#i-records"/></svg>Records</label>
+        <span class="grow"></span>
+        <span class="ri"><svg class="i"><use href="#i-models"/></svg>Your own models</span>
+        <span class="ri"><svg class="i"><use href="#i-settings"/></svg>Settings</span>
+        <span class="ri"><svg class="i"><use href="#i-help"/></svg>Help</span>
+      </nav>
+
+      <main class="main">
+        <div class="head"><h1>Home</h1><p class="sub">What to do next, where your work stands, and what each part is for.</p></div>
+
+        <div class="panel">
+          <h2 class="big">Next: nothing until the training ends</h2>
+          <p class="lead" style="margin-top:0.6rem; max-width:84rem">Training retrain_posterior is running, and no other run can start until it ends. You can still move around, read results and look at records. Keep PRISM open; you can minimise it.</p>
+          <hr class="rule">
+          <p class="cap">Parameter inference on Nadrowski with retrain_prior</p>
+          <div class="steps">
+            <div class="step"><div class="nm"><span>1</span>Model and options</div><div class="st"><svg class="i"><use href="#i-check"/></svg>Done</div><div class="rec">Nadrowski</div></div>
+            <div class="step"><div class="nm"><span>2</span>Prior</div><div class="st"><svg class="i"><use href="#i-check"/></svg>Done</div><div class="rec">retrain_prior</div></div>
+            <label class="step" for="s3"><div class="nm"><span>3</span>Training</div><div class="st acc"><svg class="i"><use href="#i-run"/></svg>Running</div><div class="rec">retrain_posterior</div></label>
+            <div class="step"><div class="nm"><span>4</span>Checks</div><div class="st"><svg class="i"><use href="#i-todo"/></svg>2 of 5 passed</div><div class="rec">3 wait for step 3</div></div>
+            <div class="step"><div class="nm"><span>5</span>Inference</div><div class="st"><svg class="i"><use href="#i-wait"/></svg>Waiting for step 3</div><div class="rec"></div></div>
+            <div class="step"><div class="nm"><span>6</span>Narrowing round</div><div class="st"><svg class="i"><use href="#i-wait"/></svg>Waiting for step 5</div><div class="rec"></div></div>
+          </div>
+        </div>
+
+        <div class="cols" style="grid-template-columns: 1fr 33rem; margin-top:1.6rem">
+          <div class="panel" style="padding-bottom:0.6rem">
+            <div class="phead" style="margin-bottom:0.9rem"><h2>The parts of PRISM</h2></div>
+            <ul class="parts">
+              <li><svg class="i"><use href="#i-infer"/></svg><label class="btn flat" for="s3">Parameter inference</label><span>Infer a cell's model parameters from recordings, in six steps.</span></li>
+              <li><svg class="i"><use href="#i-temp"/></svg><span class="btn flat">Effective temperature</span><span>Measure it on one cell, or sweep two parameters; compare runs.</span></li>
+              <li><svg class="i"><use href="#i-live"/></svg><span class="btn flat">Live simulation</span><span>Watch a cell's bundle move as it is simulated; save a video.</span></li>
+              <li><svg class="i"><use href="#i-map"/></svg><span class="btn flat">Reduction map</span><span>The analytical map from the Nadrowski model to the Hopf normal form.</span></li>
+              <li><svg class="i"><use href="#i-records"/></svg><label class="btn flat" for="s5">Records</label><span>Every record PRISM has written, and what it was made from.</span></li>
+              <li><svg class="i"><use href="#i-models"/></svg><span class="btn flat">Your own models</span><span>Define a model of your own in the model builder.</span></li>
+            </ul>
+          </div>
+
+          <div class="panel" style="padding-bottom:0.6rem">
+            <div class="phead" style="margin-bottom:0.9rem"><h2>Latest records</h2><label class="btn flat end" for="s5" style="margin-right:0">All records</label></div>
+            <ul class="runs">
+              <li><label class="btn flat" for="s5">Simulation set for retrain_prior</label><p>Simulation set, Fri 2 Oct, 18:46</p></li>
+              <li><span class="btn flat">retrain_mask</span><p>Check, Thu 1 Oct, 15:30</p></li>
+              <li><span class="btn flat">retrain_band</span><p>Check, Thu 1 Oct, 15:29</p></li>
+              <li><span class="btn flat">retrain_prior</span><p>Prior, Thu 1 Oct, 15:29</p></li>
+            </ul>
+          </div>
+        </div>
+      </main>
+
+      <footer class="strip">
+        <span class="seg acc"><svg class="i"><use href="#i-run"/></svg><b>Training retrain_posterior</b></span><span class="sep"></span>
+        <span class="seg">The fit: 61 epochs done, about 3 days left</span><span class="sep"></span>
+        <span class="seg"><svg class="i"><use href="#i-check"/></svg>Nothing needs you</span>
+        <label class="btn small end" for="s3">Go to the run</label>
+      </footer>
+    </div>
+  </section>
+
+  <!-- ═════════════ screen 8: a sheet, not a screen. The strip's six states, and what a page shows meanwhile. ═════════════ -->
+  <section class="screen">
+    <div class="sheet states">
+      <h1 style="padding:0 2.4rem">The strip along the bottom: its six states</h1>
+      <p class="lab" style="margin-top:0.3rem">This is a sheet, not a screen of the program. The strip keeps its place and height on every screen and is always an icon and a sentence.</p>
+
+      <p class="lab"><b>1 Nothing running.</b>Shown when no run is live and the last one has been looked at.</p>
+      <div class="strip"><span class="seg"><svg class="i"><use href="#i-idle"/></svg>Nothing is running.</span></div>
+
+      <p class="lab"><b>2 Running.</b>On the run's own page the strip shows only the run's name and whether it needs you (screen 3).</p>
+      <div class="strip">
+        <span class="seg acc"><svg class="i"><use href="#i-run"/></svg><b>Training retrain_posterior</b></span><span class="sep"></span>
+        <span class="seg">The fit: 61 epochs done, about 3 days left</span><span class="sep"></span>
+        <span class="seg"><svg class="i"><use href="#i-check"/></svg>Nothing needs you</span>
+        <span class="btn small end">Go to the run</span>
+      </div>
+
+      <p class="lab"><b>3 Needs you.</b>On the run's page the health figure that failed moves to the top of its table, with what to do about it.</p>
+      <div class="strip">
+        <span class="seg"><svg class="i"><use href="#i-warn"/></svg><b>Training retrain_posterior needs you</b></span><span class="sep"></span>
+        <span class="seg">No sign of activity for 2 hours 10 minutes; an epoch takes about 63 minutes</span>
+        <span class="btn small end">See why</span>
+      </div>
+
+      <p class="lab"><b>4 Stopping.</b>After a stop is confirmed. The run's page says the same, and its stop button is off.</p>
+      <div class="strip">
+        <span class="seg"><svg class="i"><use href="#i-stopped"/></svg><b>Training retrain_posterior is stopping</b></span><span class="sep"></span>
+        <span class="seg">It stops when epoch 62 ends, about 09:36. This cannot be taken back. The simulations are kept.</span>
+        <span class="btn small end">Go to the run</span>
+      </div>
+
+      <p class="lab"><b>5 Finished.</b>Stays until the run's page has been opened.</p>
+      <div class="strip">
+        <span class="seg"><svg class="i"><use href="#i-check"/></svg><span><b>Training retrain_posterior finished</b> on Monday 12 October at 05:51</span></span>
+        <span class="btn small end">See the result</span>
+      </div>
+
+      <p class="lab"><b>6 Failed.</b>Stays until the run's page has been opened, also after PRISM has been closed and opened again.</p>
+      <div class="strip">
+        <span class="seg"><svg class="i"><use href="#i-fail"/></svg><span><b>Training retrain_posterior failed</b> on Thursday 8 October at 03:12</span></span><span class="sep"></span>
+        <span class="seg">The simulations are kept</span>
+        <span class="btn small end">See what happened</span>
+      </div>
+
+      <p class="lab" style="margin-top:2.2rem"><b>Three more states of a page,</b>drawn as pieces and not as whole screens:</p>
+      <div class="specs">
+        <div>
+          <p class="lab">Any other page while a run is live</p>
+          <div class="panel">
+            <span class="btn off">Build the prior</span>
+            <p style="margin-top:0.9rem">A training is running. This can start when it ends, about Monday 12 October.</p>
+          </div>
+        </div>
+        <div>
+          <p class="lab">A step that is waiting, opened anyway</p>
+          <div class="panel">
+            <p style="display:grid; grid-template-columns: 2.4rem 1fr"><svg class="i" style="margin-top:0.3rem"><use href="#i-wait"/></svg><span>Waiting for a posterior: train one in step 3, or use a saved one. The page shows what it will ask for, with its controls off.</span></p>
+            <span class="btn small" style="margin:0.9rem 0 0 2.4rem">Open step 3, Training</span>
+          </div>
+        </div>
+        <div>
+          <p class="lab">"Before you start" when simulations will run</p>
+          <div class="panel">
+            <ul class="before">
+              <li style="padding-top:0"><svg class="i"><use href="#i-check"/></svg><div><b>The largest batch fits in the card's memory</b>With the limit at 6 GiB it holds about 10.4 GiB. 14.6 GiB is free now.</div></li>
+              <li><svg class="i"><use href="#i-warn"/></svg><div><b>Or: no memory limit is set</b>The last run without one ran out of memory after 23 minutes.</div></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ screen 9: a sheet. The run's own page (screen 3) at its other moments. ═════════════ -->
+  <section class="screen">
+    <div class="sheet" style="padding:1.8rem 2.4rem 0">
+      <h1>The run's page at other moments</h1>
+      <p class="lab" style="margin-top:0.3rem">A sheet, not a screen. Screen 3 shows the fit going well; these are the pieces of the same page that change.</p>
+
+      <div class="moments">
+        <div>
+          <p class="lab"><b>During the simulations</b></p>
+          <div class="panel">
+            <div class="stage">
+              <b>1 Simulations</b><span class="st acc"><svg class="i"><use href="#i-run"/></svg><b>Running</b></span>
+              <span>2 Fit</span><span class="st"><svg class="i"><use href="#i-wait"/></svg>Waiting for the simulations</span>
+            </div>
+            <hr class="rule" style="margin:1rem 0 1.1rem">
+            <h2 class="big">4,350 of 10,000 batches simulated</h2>
+            <div class="bar" style="margin:0.9rem 0 0.9rem"><i style="width:43.5%"></i></div>
+            <p>Saved every 50 batches, last at batch 4,350. A stop now loses nothing.</p>
+            <p class="sub" style="margin-top:0.5rem">About 9.7 seconds a batch. About 15 hours of simulating left, then the fit.</p>
+          </div>
+        </div>
+        <div>
+          <p class="lab"><b>The fit, in its first hour</b></p>
+          <div class="panel">
+            <h2 class="big">Epoch 1 is running</h2>
+            <div class="bar" style="margin:0.9rem 0 0.9rem"><i style="width:0"></i></div>
+            <p>Its result is due about 17:33. Until then there is nothing to report, and that is normal.</p>
+            <p class="sub" style="margin-top:0.5rem">The first sign of activity comes when the first epoch ends.</p>
+          </div>
+        </div>
+        <div>
+          <p class="lab"><b>The fit, past the expected count and no longer improving</b></p>
+          <div class="panel">
+            <h2 class="big">135 epochs done; past the expected 130</h2>
+            <div class="bar" style="margin:0.9rem 0 0.9rem"><i style="width:97%"></i></div>
+            <p style="display:grid; grid-template-columns: 2.4rem 1fr"><svg class="i" style="margin-top:0.2rem"><use href="#i-idle"/></svg><span>No improvement for 4 epochs; the fit ends itself after 20.</span></p>
+            <p class="sub" style="margin-top:0.5rem">The bar stays just short of full until the fit ends. The best epoch so far is 131.</p>
+          </div>
+        </div>
+        <div>
+          <p class="lab"><b>When it needs you:</b>the figure that failed goes to the top</p>
+          <div class="panel" style="padding:0; overflow:hidden">
+            <table class="tbl">
+              <tr><th>Health figure</th><th class="r">Value</th><th>State</th></tr>
+              <tr><td><b>Last sign of activity</b><br>Nothing for 2 hours 10 minutes; an epoch takes about 63 minutes. Look at the full log. If the fit has hung, stop it and start again: the simulations are kept.</td><td class="r nw">07:26</td><td><span class="st"><svg class="i"><use href="#i-warn"/></svg>Needs you</span></td></tr>
+              <tr class="last"><td>Unusable driven recordings</td><td class="r nw">40.1 %</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Fine</span></td></tr>
+            </table>
+          </div>
+        </div>
+        <div>
+          <p class="lab"><b>The question before a stop,</b>and when PRISM is closed</p>
+          <div class="panel">
+            <h2>Stop training retrain_posterior?</h2>
+            <ul class="keep" style="margin-top:0.4rem">
+              <li><svg class="i"><use href="#i-check"/></svg><div><b>Kept</b>The 20,480,000 simulations and the prior.</div></li>
+              <li><svg class="i"><use href="#i-warn"/></svg><div><b>Lost</b>The whole fit: 61 epochs, 2 days 17 hours. A fit cannot be continued yet.</div></li>
+            </ul>
+            <p style="font-size:1.3rem; margin:0.4rem 0 1.1rem">It stops when the current epoch ends, which can take up to an hour, and it cannot be taken back.</p>
+            <div style="display:flex; gap:1rem; justify-content:flex-end"><span class="btn focus">Keep running</span><span class="btn">Stop training</span></div>
+          </div>
+        </div>
+        <div>
+          <p class="lab"><b>After the stop is confirmed</b></p>
+          <div class="panel">
+            <h2 class="big">Stopping when epoch 62 ends, about 09:36</h2>
+            <p style="margin-top:0.8rem">This cannot be taken back. The fit is lost; the 20,480,000 simulations and the prior are kept.</p>
+            <div style="display:flex; align-items:center; gap:1.2rem; margin-top:1.2rem"><span class="btn off"><svg class="i"><use href="#i-stopped"/></svg>Stop training…</span><span style="font-size:1.3rem">Already stopping.</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ screen 10: screen 2 at the smallest window, 900 x 600, with the four rules for that size ═════════════ -->
+  <section class="screen">
+    <div class="sheet">
+      <div class="mini">
+        <div class="shell">
+          <nav class="rail">
+            <div class="brand">PRISM</div>
+            <span class="ri"><svg class="i"><use href="#i-home"/></svg>Home</span>
+            <hr>
+            <span class="ri cur"><svg class="i"><use href="#i-infer"/></svg>Parameter inference</span>
+            <span class="ri"><svg class="i"><use href="#i-temp"/></svg>Effective temperature</span>
+            <span class="ri"><svg class="i"><use href="#i-live"/></svg>Live simulation</span>
+            <span class="ri"><svg class="i"><use href="#i-map"/></svg>Reduction map</span>
+            <hr>
+            <span class="ri"><svg class="i"><use href="#i-records"/></svg>Records</span>
+            <span class="grow"></span>
+            <span class="ri"><svg class="i"><use href="#i-models"/></svg>Your own models</span>
+            <span class="ri"><svg class="i"><use href="#i-settings"/></svg>Settings</span>
+            <span class="ri"><svg class="i"><use href="#i-help"/></svg>Help</span>
+          </nav>
+
+          <main class="main">
+            <div class="steps one">
+              <div class="step"><span class="n">1</span>Model<svg class="i"><use href="#i-check"/></svg></div>
+              <div class="step"><span class="n">2</span>Prior<svg class="i"><use href="#i-check"/></svg></div>
+              <div class="step cur"><span class="n">3</span>Training<svg class="i"><use href="#i-ready"/></svg></div>
+              <div class="step"><span class="n">4</span>Checks<svg class="i"><use href="#i-todo"/></svg></div>
+              <div class="step"><span class="n">5</span>Inference<svg class="i"><use href="#i-wait"/></svg></div>
+              <div class="step"><span class="n">6</span>Narrowing<svg class="i"><use href="#i-wait"/></svg></div>
+            </div>
+            <div class="head"><h1>Training: ready to start</h1><span class="btn small" style="margin-left:auto">Use a saved posterior instead…</span></div>
+
+            <div class="scroll">
+              <div class="panel" style="padding:1.2rem 2rem 1.2rem">
+                <div class="phead" style="margin-bottom:0.7rem"><h2>Main settings</h2></div>
+                <div class="form">
+                  <span>Batches</span><span class="in num focus" style="width:13rem">10,000</span>
+                  <span>Simulations per batch</span><div class="row"><span class="chk"><svg class="i"><use href="#i-check"/></svg></span>Automatic<span class="in num dim" style="width:9rem; margin-left:0.6rem">2,048</span></div>
+                  <p class="hint sub">10,000 batches of 2,048 make 20,480,000 simulations.</p>
+                  <span>Network</span><div class="row">width<span class="in num" style="width:8rem; margin-right:1rem">256</span>depth<span class="in num" style="width:8rem">10</span></div>
+                  <p class="hint sub">Width and depth open at 128 and 8 each time PRISM starts.</p>
+                  <span>Card memory limit</span><div class="row"><span class="in num" style="width:13rem">6</span>GiB</div>
+                  <p class="hint">The simulations plan their batches to this figure; a batch can hold more. At 6 GiB the largest holds about 10.4 GiB, and 14.6 GiB is free now. With no limit the last run ran out of memory after 23 minutes. Not needed this time: nothing is simulated.</p>
+                </div>
+              </div>
+              <div class="panel" style="padding-top:1.3rem">
+                <div class="phead" style="margin-bottom:0.3rem"><h2>Before you start</h2></div>
+                <ul class="before">
+                  <li><svg class="i"><use href="#i-check"/></svg><div><b>No simulations this time</b>The saved 20,480,000 are used: finished on Friday 2 October, made with these same settings.</div></li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="pin">
+              <p style="font-size:1.3rem; margin-bottom:0.7rem">The fit takes about 5 to 6 days. A stopped fit is lost, so keep PRISM open.</p>
+              <div class="row"><span>Name</span><span class="in" style="width:20rem">retrain_posterior</span><span class="st"><svg class="i"><use href="#i-check"/></svg>This name is free</span><span class="btn primary end">Start training</span></div>
+            </div>
+          </main>
+
+          <footer class="strip"><span class="seg"><svg class="i"><use href="#i-idle"/></svg>Nothing is running.</span></footer>
+        </div>
+      </div>
+
+      <div class="side">
+        <h2>The smallest window, 900 by 600</h2>
+        <p>Screen 2 drawn at that size. A person with Windows text at 150 % on a laptop has about this much room. Four rules, the same on every screen:</p>
+        <ol>
+          <li>The rail keeps its names and its width. The page's side padding drops from 32 to 20 px.</li>
+          <li>Below about 1,100 px of window each step is one line: its number, a short name and its state icon. The state's words move into the heading, here "Training: ready to start".</li>
+          <li>Two columns become one that scrolls. The row with the main action is pinned under it, with the two facts that matter most, so it is always in view.</li>
+          <li>The strip gives up the run's name first, then the time left. Whether the run needs you, and "Go to the run", never go.</li>
+        </ol>
+      </div>
+
+      <div class="under">
+        <p class="lab"><b>Rule 4, on any page but the run's own:</b>all is fine, and the run needs you.</p>
+        <div class="strip">
+          <span class="seg acc"><svg class="i"><use href="#i-run"/></svg><b>Training is running</b></span><span class="sep"></span>
+          <span class="seg">about 3 days left</span><span class="sep"></span>
+          <span class="seg"><svg class="i"><use href="#i-check"/></svg>Nothing needs you</span>
+          <span class="btn small end">Go to the run</span>
+        </div>
+        <div class="strip">
+          <span class="seg"><svg class="i"><use href="#i-warn"/></svg><b>Training needs you</b></span><span class="sep"></span>
+          <span class="seg">No sign of activity for 2 hours 10 minutes; an epoch takes about 63 minutes</span>
+          <span class="btn small end">See why</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ screen 11: screen 3 at the smallest window, with the keys ═════════════ -->
+  <section class="screen">
+    <div class="sheet">
+      <div class="mini">
+        <div class="shell">
+          <nav class="rail">
+            <div class="brand">PRISM</div>
+            <span class="ri"><svg class="i"><use href="#i-home"/></svg>Home</span>
+            <hr>
+            <span class="ri cur two"><svg class="i"><use href="#i-infer"/></svg><span class="rt">Parameter inference<span class="rs"><svg class="i"><use href="#i-run"/></svg>Training is running</span></span></span>
+            <span class="ri"><svg class="i"><use href="#i-temp"/></svg>Effective temperature</span>
+            <span class="ri"><svg class="i"><use href="#i-live"/></svg>Live simulation</span>
+            <span class="ri"><svg class="i"><use href="#i-map"/></svg>Reduction map</span>
+            <hr>
+            <span class="ri"><svg class="i"><use href="#i-records"/></svg>Records</span>
+            <span class="grow"></span>
+            <span class="ri"><svg class="i"><use href="#i-models"/></svg>Your own models</span>
+            <span class="ri"><svg class="i"><use href="#i-settings"/></svg>Settings</span>
+            <span class="ri"><svg class="i"><use href="#i-help"/></svg>Help</span>
+          </nav>
+
+          <main class="main">
+            <div class="steps one">
+              <div class="step"><span class="n">1</span>Model<svg class="i"><use href="#i-check"/></svg></div>
+              <div class="step"><span class="n">2</span>Prior<svg class="i"><use href="#i-check"/></svg></div>
+              <div class="step cur"><span class="n">3</span>Training<svg class="i"><use href="#i-run"/></svg></div>
+              <div class="step"><span class="n">4</span>Checks<svg class="i"><use href="#i-todo"/></svg></div>
+              <div class="step"><span class="n">5</span>Inference<svg class="i"><use href="#i-wait"/></svg></div>
+              <div class="step"><span class="n">6</span>Narrowing<svg class="i"><use href="#i-wait"/></svg></div>
+            </div>
+            <div class="head"><h1>Training retrain_posterior: running</h1></div>
+
+            <div class="scroll">
+              <div class="panel" style="padding:1.4rem 2rem 1.5rem">
+                <div class="stage">
+                  <span>1 Simulations</span><span class="st"><svg class="i"><use href="#i-check"/></svg>Done: the saved 20,480,000 were used</span>
+                  <b>2 Fit</b><span class="st acc"><svg class="i"><use href="#i-run"/></svg><b>Running</b></span>
+                </div>
+                <hr class="rule" style="margin:1rem 0 1.1rem">
+                <h2 class="big">61 epochs done; about 130 expected</h2>
+                <div class="bar" style="margin:0.9rem 0 0.8rem"><i style="width:47%"></i></div>
+                <p class="st" style="font-size:1.4rem"><svg class="i"><use href="#i-check"/></svg>Still improving: the best epoch so far is 61.</p>
+                <div class="facts3" style="margin-top:1.2rem; gap:0 1.6rem">
+                  <div><span class="st q">Running for</span><span class="v">2 days 17 hours</span><span class="sub">since Tue 6 October, 16:30</span></div>
+                  <div><span class="st q">Should end around</span><span class="v">Monday 12 October</span><span class="sub">in about 3 days</span></div>
+                  <div><span class="st q">Pace</span><span class="v">63 minutes an epoch</span><span class="sub">epoch 62 is running now</span></div>
+                </div>
+              </div>
+              <div class="panel" style="padding-bottom:1rem">
+                <div class="phead" style="margin-bottom:0.9rem"><h2>Health of the run</h2></div>
+                <table class="tbl">
+                  <tr><th>Health figure</th><th class="r">Value</th><th>How to read it</th><th>State</th></tr>
+                  <tr><td class="nw">Last sign of activity</td><td class="r">08:33</td><td>Epoch 61 ended. The next is due about 09:36.</td><td><span class="st"><svg class="i"><use href="#i-check"/></svg>Fine</span></td></tr>
+                </table>
+              </div>
+            </div>
+
+            <div class="pin">
+              <div class="row"><p style="font-size:1.3rem">If you stop now the whole fit is lost: 61 epochs, 2 days 17 hours. The simulations are kept. You are asked first.</p><span class="btn end" style="flex:none"><svg class="i"><use href="#i-stopped"/></svg>Stop training…</span></div>
+            </div>
+          </main>
+
+          <footer class="strip">
+            <span class="seg acc"><svg class="i"><use href="#i-run"/></svg><span><b>Training retrain_posterior</b> is running</span></span><span class="sep"></span>
+            <span class="seg"><svg class="i"><use href="#i-check"/></svg>Nothing needs you</span>
+          </footer>
+        </div>
+      </div>
+
+      <div class="side">
+        <h2>Getting around by keyboard</h2>
+        <p>Screen 3 at 900 by 600. The keys are the same at every size, and Help lists them:</p>
+        <ol>
+          <li>F6 moves between the rail, the page and the strip.</li>
+          <li>The rail is one list and the six steps are one tab bar: Tab reaches each once, the arrow keys move within it, Enter opens.</li>
+          <li>Ctrl+1 to Ctrl+6 open Home and the parts down to Records. Alt+1 to Alt+6 open the six steps. Ctrl+R goes to the run.</li>
+          <li>The same 2 px outline marks where the keyboard is: on a rail entry (screen 1), a field (2), a flat button (3), a step (4) and a table row (5).</li>
+          <li>On arrival the keyboard is on the first setting, never on a button that starts or stops a run, and Enter in a field starts nothing.</li>
+        </ol>
+      </div>
+
+      <div class="under">
+        <p class="lab">Nothing is left out at this size: the rest of the health figures, "If you stop now", the full log and the settings follow in the same scrolling column.</p>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="note">
+  <p>Every part of PRISM sits on a rail at the left that never goes away, a strip along the bottom says in one sentence whether a run is
+  live and whether it needs you, and Home is a status page: what to do next, where the six inference steps stand, what each part is for
+  and the latest records. You change part with one click on the rail, move through Parameter inference on its track of six steps (each
+  can be opened at any time and says what it is waiting for), and reach a live run from anywhere with "Go to the run" on the strip.
+  Its one honest weakness is that Home, the step track and Records state the same facts in three places, so each sentence has to be read
+  from one record, and the one that says how a run ended does not exist yet: PRISM would have to start writing a short line when a run
+  starts and again when it ends. Two small things here were not asked for and would be new, that short line about each run and a
+  Records list that can show all kinds at once; screens 8 and 9 are sheets of states and not screens of the program, 10 and 11 are the
+  smallest window, and the look is plain on purpose because it is being decided separately.</p>
+</div>
+
+<!-- the icons, drawn once and reused -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-home" viewBox="0 0 16 16"><path d="M2.5 7.3 8 2.4l5.5 4.9v6.2h-3.6V9.6H6.1v3.9H2.5z"/></symbol>
+  <symbol id="i-infer" viewBox="0 0 16 16"><path d="M1.5 13.4h13M1.8 11.2C5.6 11.2 5.2 3 8 3s2.4 8.2 6.2 8.2"/></symbol>
+  <symbol id="i-temp" viewBox="0 0 16 16"><path d="M8 1.8a1.6 1.6 0 0 1 1.6 1.6v5.3a3 3 0 1 1-3.2 0V3.4A1.6 1.6 0 0 1 8 1.8z"/><path d="M8 6.2v5"/></symbol>
+  <symbol id="i-live" viewBox="0 0 16 16"><path d="M1.5 8h2.3l1.6-4.6 2.6 9.2 2-6.2 1 1.6h3.5"/></symbol>
+  <symbol id="i-map" viewBox="0 0 16 16"><path d="M2 3.6 6 2.2l4 1.4 4-1.4v10.2l-4 1.4-4-1.4-4 1.4zM6 2.2v10.2M10 3.6v10.2"/></symbol>
+  <symbol id="i-records" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="3.4" rx="0.6"/><path d="M3 5.9v6.6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5.9M6.3 8.7h3.4"/></symbol>
+  <symbol id="i-models" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1.6"/><path d="M8 5.4v5.2M5.4 8h5.2"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 16 16"><path d="M2 5h6.8M12.6 5H14M2 11h1.4M7.2 11H14"/><circle cx="10.7" cy="5" r="1.8"/><circle cx="5.3" cy="11" r="1.8"/></symbol>
+  <symbol id="i-help" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M6.2 6.4a1.9 1.9 0 1 1 2.7 1.7c-.6.3-.9.7-.9 1.4M8 11.6v.1"/></symbol>
+  <!-- states: each has its own outline, so they stay apart at small sizes -->
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.5 6.4 11.8 13 4.6"/></symbol>
+  <symbol id="i-run" viewBox="0 0 16 16"><path d="M4.6 2.8v10.4L13 8z" fill="currentColor"/></symbol>
+  <symbol id="i-stopped" viewBox="0 0 16 16"><rect x="3.6" y="3.6" width="8.8" height="8.8" rx="0.8" fill="currentColor"/></symbol>
+  <symbol id="i-idle" viewBox="0 0 16 16"><path d="M3.5 8h9"/></symbol>
+  <symbol id="i-ready" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="2.4" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-todo" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" stroke-dasharray="2.1 2.1"/></symbol>
+  <symbol id="i-wait" viewBox="0 0 16 16"><circle cx="3.2" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="12.8" cy="8" r="1.2" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2.2 14.3 13.2H1.7z"/><path d="M8 6.6v3.2M8 11.5v.1"/></symbol>
+  <symbol id="i-fail" viewBox="0 0 16 16"><path d="M3.6 3.6l8.8 8.8M12.4 3.6l-8.8 8.8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.6V8l2.3 1.6"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7"/></symbol>
+  <symbol id="i-down" viewBox="0 0 16 16"><path d="M3.5 6 8 10.5 12.5 6"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 16 16"><path d="M4 1.8h5.4l3.1 3.1v9.3H4z"/><path d="M6 8h4.5M6 10.6h4.5"/></symbol>
+</svg>
+
+<script>
+/* For pictures only: ?screen=2&theme=dark&bare=1 */
+(function () {
+  var q = new URLSearchParams(location.search);
+  var s = document.getElementById('s' + (q.get('screen') || ''));
+  if (s) s.checked = true;
+  if (q.get('theme') === 'dark') document.getElementById('td').checked = true;
+  if (q.get('bare')) { document.body.classList.add('bare'); document.documentElement.classList.add('bare'); }
+})();
+</script>
+</body>
+</html>

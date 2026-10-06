@@ -1,0 +1,1119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PRISM mock-up: Figure and table (from the scientific page)</title>
+<style>
+/* ───────────────────────── HARNESS — copy as is, do not restyle ─────────────────────────
+   The grey page and the bar at the top are NOT part of the design: they only let a person flip
+   between screens and between light and dark. The design lives inside .window, which stands for
+   PRISM's real window at its default size, 1300 x 820 px.
+
+   UNITS: write every length inside .window in rem, where 1rem = 10 px of the real window
+   (14 px text = 1.4rem, a 36 px button = 3.6rem). The whole window then shrinks to fit a narrow
+   pane and is exact at full size. Never use px, vw or vh inside .window.
+
+   NO SCRIPT IS NEEDED TO USE THE PAGE: screens and theme switch with the radio buttons below
+   (CSS only). The small script at the bottom only reads ?screen=2&theme=dark&bare=1 for taking
+   pictures. No external file of any kind: no web fonts, no CDN, no images from the network. */
+html { font-size: min(10px, calc(100vw / 134)); }
+body { margin: 0; background: #cfd2d6; }
+.harness { font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", sans-serif; color: #1b1f24;
+           padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+.harness b { font-weight: 600; margin-right: 6px; }
+.harness label { cursor: pointer; padding: 2px 8px; border: 1px solid #9aa0a8; border-radius: 4px; background: #fff; }
+input.h { position: absolute; opacity: 0; pointer-events: none; }
+#s1:checked ~ .harness label[for=s1], #s2:checked ~ .harness label[for=s2],
+#s3:checked ~ .harness label[for=s3], #s4:checked ~ .harness label[for=s4],
+#s5:checked ~ .harness label[for=s5], #s6:checked ~ .harness label[for=s6],
+#tl:checked ~ .harness label[for=tl], #td:checked ~ .harness label[for=td] { background: #1b1f24; color: #fff; border-color: #1b1f24; }
+.window { width: 130rem; height: 82rem; margin: 0.6rem auto 2rem; position: relative; overflow: hidden;
+          box-shadow: 0 0.2rem 1.6rem rgba(0,0,0,.28); }
+.screen { display: none; position: absolute; inset: 0; }
+#s1:checked ~ .window .screen:nth-of-type(1), #s2:checked ~ .window .screen:nth-of-type(2),
+#s3:checked ~ .window .screen:nth-of-type(3), #s4:checked ~ .window .screen:nth-of-type(4),
+#s5:checked ~ .window .screen:nth-of-type(5), #s6:checked ~ .window .screen:nth-of-type(6) { display: block; }
+.note { font: 13px/1.5 "Segoe UI Variable Text", "Segoe UI", sans-serif; color: #1b1f24; max-width: 1100px;
+        margin: 0 auto 28px; padding: 0 14px; }
+body.bare { background: transparent; } body.bare .harness, body.bare .note { display: none; }
+body.bare .window { margin: 0; box-shadow: none; } html.bare { font-size: 10px; }
+/* a seventh screen: the same two rules the harness has for the first six */
+#s7:checked ~ .harness label[for=s7] { background: #1b1f24; color: #fff; border-color: #1b1f24; }
+#s7:checked ~ .window .screen:nth-of-type(7) { display: block; }
+
+/* ───────────────────────── THE DESIGN — "Figure and table" ─────────────────────────
+   PRISM set like a figure and its table of results: ink on a clear page, no panels, no tinted rows.
+
+   BUILD NOTES (every one is a whole-pixel value or a thing set in code, nothing a style sheet cannot do)
+   Rules     a table has three: 2 px ink above, 1 px ink under the header, 2 px ink below; no lines
+             between rows. A section heading has one 2 px ink rule under it.
+   Type      12 / 14 / 16 / 18 / 24 px and nothing between. Inter (bundled) is the face of the program.
+             Cambria, always 16 px, is used in FOUR PLACES ONLY, each one widget class: the line under a
+             page heading, a figure caption, the sentence of a message row, the sentence of a dialog.
+             Everything in the navigation column, a table, a field row, a button or an axis is Inter.
+             If Cambria proves weak on dark in the real toolkit, set those four classes to Inter 14 px;
+             nothing else changes.
+   Messages  one row class: a marker and one label in Cambria whose first word (with its date, when it has
+             one) is bold, exactly as a caption's is. One face per label; the only rich text is that bold.
+             An error row has a 2 px vermilion left edge. No row has a tinted ground.
+   Markers   ten, painted by one function at 16 px (see screen 5). None borrows the shape of a control.
+             They are painted with smoothing, so the triangle may keep a 1.5 px ink edge; that edge, not the
+             amber inside it, is what gives the triangle its shape on a white page (17.4 to 1).
+   Focus     one ring for every control: 2 px ink, 2 px gap, drawn by a focus frame (not by the style
+             sheet, which draws it only on some controls).
+   Numbers   figures of equal width are switched on for the application font in code; four digits or
+             more always carry the separator, also while typing. Axes drawn by the plotting library
+             may keep proportional figures; nothing lines up in columns there.
+   Tables    at least 16 px between columns; a name too long is cut in the middle, a note at the end,
+             and the whole text is on the record's own page. Two-line cells, the marker with its word
+             and the selected row's bar are one item delegate.
+   Progress  the time axis, the chain of steps and the stage row are painted widgets; the hatch is a
+             pattern brush. Only the 6 px "now" tick moves. The value is also given as words.
+   Dialog    a real modal dialog in the system's own frame (the frame, its shadow and its stacking are
+             Windows', not this design's). Enter and Escape both mean the safe choice.
+   Small     at heights under 700 px the list of steps scrolls above a pinned run line, a step shows its
+             state words only when it is the step in hand or the first blocked one, the line under the
+             page heading is dropped, the stage row wraps to two rows of two, and "Before you start"
+             lists only what stops the start or needs attention (screens 6 and 7). */
+@font-face { font-family: "Inter"; font-weight: 400;
+  src: url("file:///C:/Users/J/PycharmProjects/PRISM/core/gui/assets/fonts/Inter-Regular.ttf") format("truetype"); }
+@font-face { font-family: "Inter"; font-weight: 600;
+  src: url("file:///C:/Users/J/PycharmProjects/PRISM/core/gui/assets/fonts/Inter-SemiBold.ttf") format("truetype"); }
+
+.window {
+  /* grounds: printing ink and its tints are neutral, so are these */
+  --paper: #FFFFFF;        /* the page: every working surface */
+  --margin: #F2F2F2;       /* the second layer: the navigation column, quiet fills */
+  --field: #FFFFFF;        /* inside a field */
+  --raised: #FFFFFF;       /* inside a dialog */
+  --titlebar: #F2F2F2;     /* the system's title bar (drawn here only to show the dialog honestly) */
+  --frame: #5E5E5E;        /* the system's window edge */
+  --desk: #C6C6C6;         /* what is behind the window on screens 6 and 7 */
+  /* ink */
+  --ink: #1A1A1A;          /* text, axes, table rules, "done" */
+  --ink-2: #4D4D4D;        /* secondary text, tick labels */
+  --ink-3: #636363;        /* hints, "to come", disabled text */
+  --rule: #1A1A1A;         /* the three rules of a table, an axis */
+  --rule-light: #D4D4D4;   /* a quiet separator (never the only sign of anything) */
+  --field-line: #6B6B6B;   /* the outline of a control */
+  /* the one accent: what is now, what is selected, the main action */
+  --accent: #0072B2; --on-accent: #FFFFFF; --accent-tint: #E2EEF6;
+  --accent-hover: #00639B; --accent-press: #005382;
+  /* states: the colour-blind-safe set scientists use in figures, deepened where a thin stroke needs it */
+  --ok: #007A5A; --warn: #E69F00; --warn-edge: #1A1A1A; --err: #C24E00; --on-err: #FFFFFF;
+  --focus: #1A1A1A;
+  --hover-fill: #F2F2F2; --press-fill: #DEDEDE;
+  --disabled-fill: #F2F2F2; --disabled-line: #C4C4C4; --disabled-ink: #636363;
+  --hatch: #4D4D4D; --elapsed: #1A1A1A;
+  --series-2: #0072B2;
+  --sys-shadow: rgba(0,0,0,.22);
+
+  --lettering: "Inter", "Segoe UI Variable Text", "Segoe UI", Arial, sans-serif;
+  --text: "Cambria", Georgia, serif;
+
+  background: var(--paper); color: var(--ink);
+  font-family: var(--lettering); font-size: 1.4rem; line-height: 2rem;
+  font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1;
+}
+#td:checked ~ .window {
+  --paper: #1C1C1C; --margin: #141414; --field: #141414; --raised: #262626; --titlebar: #141414;
+  --frame: #8F8F8F; --desk: #0A0A0A;
+  --ink: #EDEDED; --ink-2: #B8B8B8; --ink-3: #9C9C9C;
+  --rule: #C8C8C8; --rule-light: #3A3A3A; --field-line: #8A8A8A;
+  --accent: #56B4E9; --on-accent: #0D0D0D; --accent-tint: #1A3447;
+  --accent-hover: #7CC5EE; --accent-press: #3FA3DC;
+  --ok: #2FBF94; --warn: #E69F00; --warn-edge: #E69F00; --err: #F0813A; --on-err: #0D0D0D;
+  --focus: #FFFFFF;
+  --hover-fill: #262626; --press-fill: #343434;
+  --disabled-fill: #232323; --disabled-line: #4A4A4A; --disabled-ink: #9C9C9C;
+  --hatch: #B8B8B8; --elapsed: #C8C8C8;
+  --series-2: #56B4E9;
+  --sys-shadow: rgba(0,0,0,.6);
+}
+.window *, .window *::before, .window *::after { box-sizing: border-box; }
+.window p, .window h1, .window h2, .window ul, .window ol, .window figure { margin: 0; padding: 0; }
+.window ul, .window ol { list-style: none; }
+.window svg { display: block; }
+.mk { width: 1.6rem; height: 1.6rem; flex: none; }
+/* the book face: one size, four places */
+.t { font-family: var(--text); font-size: 1.6rem; line-height: 2.2rem; font-feature-settings: normal; font-variant-numeric: normal; }
+
+/* ── the shell ── */
+.app { position: absolute; inset: 0; display: flex; background: var(--paper); color: var(--ink); }
+.nav { width: 22rem; flex: none; display: flex; flex-direction: column; background: var(--margin);
+       border-right: .1rem solid var(--rule-light); }
+.brand { flex: none; font-size: 1.8rem; line-height: 2.4rem; font-weight: 600; letter-spacing: .04em; padding: 2rem 2rem 1.4rem; }
+.nav-list { flex: 1; min-height: 0; overflow: hidden; }
+.part { display: block; height: 3.6rem; line-height: 3.6rem; padding: 0 2rem; }
+.grp-cur { background: var(--paper); margin-right: -.1rem;
+           border-top: .1rem solid var(--rule-light); border-bottom: .1rem solid var(--rule-light); }
+.grp-cur > .part { font-weight: 600; }
+.chain { padding: 0 0 .8rem; }
+.step { position: relative; padding: .5rem 1rem .5rem 5rem; min-height: 4.6rem; }
+.step .mk { position: absolute; left: 2.2rem; top: .7rem; }
+.step::after { content: ""; position: absolute; left: 2.9rem; top: 2.6rem; bottom: -.4rem; border-left: .2rem solid var(--rule); }
+.step.later::after { border-left: .2rem dotted var(--ink-3); }
+.step:last-child::after { display: none; }
+.step .nm { display: block; }
+.step .nm i { font-style: normal; color: var(--ink-2); margin-right: .7rem; }
+.step .ss { display: block; font-size: 1.2rem; line-height: 1.6rem; color: var(--ink-2); }
+.step.cur { background: var(--accent-tint); box-shadow: inset .4rem 0 0 var(--accent); }
+.step.cur .nm { font-weight: 600; }
+.step.cur .ss { color: var(--ink); }
+.step.wait .nm { color: var(--ink-2); }
+.parts-rest { padding-top: .5rem; }
+.parts-rest .gap { height: 1.2rem; }
+.runline { flex: none; display: flex; gap: .9rem; align-items: flex-start; padding: 1.2rem 1.4rem 1.4rem 2rem;
+           border-top: .1rem solid var(--rule-light); font-size: 1.2rem; line-height: 1.6rem; color: var(--ink-2); }
+.runline b { display: block; font-weight: 600; font-size: 1.4rem; line-height: 2rem; color: var(--ink); }
+.runline .mk { margin-top: .2rem; }
+
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 2rem 2rem 1.4rem 2.2rem; }
+.head { flex: none; display: flex; justify-content: space-between; align-items: flex-start; gap: 1.6rem; }
+h1 { font-size: 2.4rem; line-height: 3rem; font-weight: 600; }
+p.lead { margin-top: .2rem; color: var(--ink-2); }
+.acts { display: flex; gap: 1.2rem; }
+.bt { font-size: 1.6rem; line-height: 2.2rem; font-weight: 600; padding-bottom: .6rem; border-bottom: .2rem solid var(--rule); }
+.bt2 { display: flex; justify-content: space-between; align-items: baseline; font-size: 1.6rem; line-height: 2.2rem; font-weight: 600; margin-bottom: .6rem; }
+.lnk { font-size: 1.4rem; font-weight: 400; color: var(--accent); text-decoration: underline; text-underline-offset: .2rem; }
+.blk { margin-top: 1.4rem; }
+
+/* ── controls ── */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: .8rem; height: 3.4rem; padding: 0 1.6rem;
+       border-radius: .3rem; border: .1rem solid var(--field-line); background: var(--paper); color: var(--ink);
+       font: 400 1.4rem/1 var(--lettering); white-space: nowrap; cursor: default; flex: none; }
+.btn svg { width: 1.6rem; height: 1.6rem; }
+.btn.hover { background: var(--hover-fill); }
+.btn.press { background: var(--press-fill); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; padding: 0 2rem; }
+.btn.primary.hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.primary.press { background: var(--accent-press); border-color: var(--accent-press); }
+.btn.danger { border-color: var(--err); font-weight: 600; }
+.btn.danger i { width: 1rem; height: 1rem; background: var(--err); }
+.btn.dis, .btn.primary.dis, .btn.danger.dis { background: var(--disabled-fill); border-color: var(--disabled-line); color: var(--disabled-ink); }
+.btn.danger.dis i { background: var(--disabled-ink); }
+.focus { outline: .2rem solid var(--focus); outline-offset: .2rem; }
+.fld { display: flex; align-items: center; height: 3.2rem; padding: 0 1rem; min-width: 0; border: .1rem solid var(--field-line);
+       border-radius: .3rem; background: var(--field); color: var(--ink); white-space: nowrap; }
+.fld.num { width: 12rem; justify-content: flex-end; }
+.fld.sel { justify-content: space-between; padding-right: .8rem; }
+.fld.sel svg { width: 1.6rem; height: 1.6rem; flex: none; }
+.fld.dis { background: var(--disabled-fill); border-color: var(--disabled-line); color: var(--disabled-ink); }
+.fld.bad { border: .2rem solid var(--err); padding: 0 .9rem; }
+.fld .hint { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; }
+.chk { display: inline-flex; align-items: center; gap: 1rem; }
+.chk .box { width: 1.8rem; height: 1.8rem; flex: none; border-radius: .3rem; background: var(--accent); display: grid; place-items: center; }
+.chk .box svg { width: 1.4rem; height: 1.4rem; }
+.chk.dis { color: var(--disabled-ink); }
+.chk.dis .box { background: var(--disabled-fill); border: .1rem solid var(--disabled-line); }
+
+/* ── a message row: a marker and ONE label in the book face, its first word (and its date, when it has one) bold,
+      as in a figure caption. No tinted ground; an error row has a 2 px vermilion left edge. ── */
+.msgs li { display: flex; gap: 1rem; align-items: flex-start; padding: .4rem 0 .4rem 1rem; }
+.msgs li .mk { margin-top: .3rem; }
+.msgs li p b { font-weight: 700; }
+.msgs li.err { box-shadow: inset .2rem 0 0 var(--err); }
+
+/* ── screen 1: the settings, set as a table of quantities ── */
+.cols { flex: none; display: flex; gap: 3.2rem; margin-top: 2.2rem; }
+.col-a { width: 47rem; flex: none; }
+.col-b { flex: 1; min-width: 0; }
+.row { display: grid; grid-template-columns: 20rem 12rem 1fr; column-gap: 1.2rem; align-items: center; min-height: 3.2rem; margin-top: 1.2rem; }
+.row2 { display: grid; grid-template-columns: 16.5rem 1fr; column-gap: 1.2rem; align-items: center; min-height: 3.2rem; margin-top: 1.2rem; }
+.rem { color: var(--ink-2); }
+.row2 b { font-weight: 600; }
+.fmsg { display: flex; gap: .8rem; align-items: flex-start; }
+.fmsg .mk { margin-top: .2rem; }
+.row2.under { margin-top: .6rem; min-height: 0; }
+.fold { margin-top: 2rem; padding: 1rem 0 1.1rem; border-top: .1rem solid var(--rule-light); border-bottom: .1rem solid var(--rule-light); }
+.fold-h { display: flex; align-items: center; gap: .8rem; font-weight: 600; }
+.fold-h svg { width: 1.4rem; height: 1.4rem; }
+p.fold-v { margin: .4rem 0 0 2.2rem; font-size: 1.2rem; line-height: 1.6rem; color: var(--ink-2); }
+.lockline { flex: none; display: flex; align-items: center; gap: .9rem; margin-top: 1.4rem; font-weight: 600; }
+.lockline .lnk { margin-left: .8rem; }
+/* the gate: what must hold before a start, with the one main action; pinned to the foot of the page */
+.gate { flex: none; margin-top: auto; }
+.gate .bt { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: .5rem; }
+.gate .asof { font-size: 1.2rem; line-height: 1.6rem; font-weight: 400; color: var(--ink-2); }
+.gate-act { display: flex; justify-content: flex-end; align-items: center; gap: 1.2rem; margin-top: .9rem; }
+.gate-act .why { margin-right: .4rem; }
+
+/* ── screen 2: the run ── */
+.status { flex: none; margin-top: 1.2rem; padding-top: 1rem; border-top: .2rem solid var(--rule); }
+.stages { display: flex; flex-wrap: wrap; gap: .6rem 3.6rem; }
+.stages li { display: flex; align-items: center; gap: .7rem; white-space: nowrap; color: var(--ink-2); }
+.stages li b { font-weight: 600; color: var(--ink); }
+.stages li.now span { color: var(--ink); }
+p.nowline { margin-top: .8rem; font-size: 1.6rem; line-height: 2.2rem; }
+p.nowline b { font-weight: 600; }
+p.nowline.s { font-size: 1.4rem; line-height: 2rem; margin-top: .2rem; display: flex; align-items: center; gap: .7rem; }
+/* the ONE progress indication: the run drawn on a time axis. Its words stay put; only the tick moves. */
+.axis { position: relative; height: 4.2rem; margin-top: .4rem; }
+.ax-track { position: absolute; left: 0; right: 0; top: .4rem; height: 1.4rem; border: .1rem solid var(--rule); background: var(--paper); overflow: hidden; }
+.ax-track i { position: absolute; top: 0; bottom: 0; }
+.ax-hatch { border-left: .1rem solid var(--rule); background: repeating-linear-gradient(135deg, var(--hatch) 0 .1rem, transparent .1rem .5rem); }
+.ax-done { left: 0; background: var(--elapsed); }
+.ax-over { border-left: .1rem solid var(--paper); background: repeating-linear-gradient(135deg, var(--paper) 0 .1rem, transparent .1rem .5rem); }
+.ax-over.end { border-right: .1rem solid var(--paper); }
+.ax-now { position: absolute; top: 0; width: .6rem; height: 2.2rem; margin-left: -.3rem; background: var(--paper); }
+.ax-now::after { content: ""; position: absolute; left: .1rem; right: .1rem; top: 0; bottom: 0; background: var(--accent); }
+.ax-tick { position: absolute; top: 1.8rem; width: .1rem; height: .5rem; background: var(--rule); }
+.ax-day { position: absolute; top: 2.5rem; transform: translateX(-50%); font-size: 1.2rem; line-height: 1.6rem; color: var(--ink-2); white-space: nowrap; }
+.ax-day.first { transform: none; }
+.ax-ends { display: flex; justify-content: space-between; gap: 1.6rem; white-space: nowrap; }
+.ax-key { display: inline-flex; align-items: center; gap: .8rem; }
+.ax-key i { width: 2.4rem; height: 1rem; flex: none; border: .1rem solid var(--rule); background: repeating-linear-gradient(135deg, var(--hatch) 0 .1rem, transparent .1rem .5rem); }
+.cols2 { flex: none; display: flex; gap: 1.6rem; margin-top: 1.2rem; }
+.col-l { width: 66.8rem; flex: none; }
+.col-r { flex: 1; min-width: 0; }
+.col-r .blk { margin-top: 1rem; }
+/* tables: three rules */
+.tb { width: 100%; border-collapse: collapse; border-top: .2rem solid var(--rule); border-bottom: .2rem solid var(--rule); }
+.tb.fixed { table-layout: fixed; }
+.tb th { text-align: left; font-size: 1.2rem; line-height: 1.6rem; font-weight: 600; padding: .5rem 1.6rem .5rem 0; border-bottom: .1rem solid var(--rule); white-space: nowrap; }
+.tb td { padding: .5rem 1.6rem .5rem 0; vertical-align: top; white-space: nowrap; }
+.tb th:first-child, .tb td:first-child { padding-left: 1rem; }
+.tb th:last-child, .tb td:last-child { padding-right: 0; }
+.tb .r { text-align: right; }
+.tb td.el { overflow: hidden; text-overflow: ellipsis; }
+.tb td.wrap { white-space: normal; }
+.tb td b { font-weight: 600; }
+.tb .st { display: flex; gap: .6rem; align-items: center; height: 2rem; }
+.tb small { display: block; font-size: 1.2rem; line-height: 1.6rem; color: var(--ink-2); }
+.tb .quiet { color: var(--ink-2); }
+.tb tr.sel td { background: var(--accent-tint); box-shadow: inset 0 .1rem 0 var(--accent), inset 0 -.1rem 0 var(--accent); }
+.tb tr.sel td:first-child { box-shadow: inset .4rem 0 0 var(--accent), inset 0 .1rem 0 var(--accent), inset 0 -.1rem 0 var(--accent); font-weight: 600; }
+/* figures */
+.fig svg { width: 100%; height: auto; overflow: visible; }
+.fig.w64 svg { width: 64rem; }
+.fig text { font-family: var(--lettering); fill: var(--ink-2); font-variant-numeric: tabular-nums; }
+.fig .ax { fill: none; stroke: var(--rule); stroke-width: 1; shape-rendering: crispEdges; }
+.fig .axname { fill: var(--ink); }
+.fig .lbl { fill: var(--ink); font-weight: 600; }
+.fig .lead2 { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 2 3; }
+.fig .zero { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 1 4; }
+.fig .best { fill: var(--paper); stroke: var(--ink); stroke-width: 2; }
+p.cap { margin-top: .6rem; color: var(--ink-2); }
+p.cap b { color: var(--ink); }
+
+/* ── the question asked before a training is stopped: a real dialog in the system's frame ── */
+.dlg { position: absolute; left: 44rem; top: 23.4rem; width: 45rem; background: var(--raised); border: .1rem solid var(--frame);
+       border-radius: .8rem; overflow: hidden; box-shadow: 0 .8rem 2.4rem var(--sys-shadow); }
+.dlg-bar { display: flex; align-items: center; justify-content: space-between; height: 3.2rem; padding-left: 1.2rem;
+           background: var(--titlebar); border-bottom: .1rem solid var(--rule-light);
+           font: 400 1.2rem/1 "Segoe UI Variable Text", "Segoe UI", sans-serif; color: var(--ink); }
+.dlg-bar svg { width: 4.6rem; height: 3.2rem; }
+.dlg-body { display: flex; gap: 1.4rem; padding: 1.6rem 2rem 0; }
+.dlg-body .mk { width: 2.4rem; height: 2.4rem; margin-top: .1rem; }
+.dlg-btns { display: flex; justify-content: space-between; padding: 1.6rem 2rem 1.8rem; }
+.dlg .btn { background: var(--raised); }
+.dlg .btn.primary { background: var(--accent); }
+#dlgx:checked ~ .dlg { display: none; }
+
+/* ── screen 5: the key ── */
+.sheet { position: absolute; inset: 0; background: var(--paper); padding: 2rem 2.4rem; display: flex; flex-direction: column; }
+.sheet-cols { display: flex; gap: 3rem; margin-top: 1.6rem; }
+.sheet-l { width: 62rem; flex: none; }
+.sheet-r { flex: 1; min-width: 0; }
+.tb.key td { vertical-align: middle; padding-top: .3rem; padding-bottom: .3rem; }
+.tb.key td.w { font-weight: 600; }
+.tb.states td { vertical-align: middle; padding-top: .5rem; padding-bottom: .5rem; }
+.axs { margin-top: 1.2rem; }
+.axs:first-of-type { margin-top: 0; }
+p.axs-cap { font-size: 1.2rem; line-height: 1.6rem; font-weight: 600; color: var(--ink-2); }
+.fsamples { display: flex; flex-wrap: wrap; align-items: center; gap: 1.6rem 2.4rem; padding: .6rem .4rem; }
+.fsamples .navitem { padding: .4rem 1rem; }
+.fsamples .tbrow { display: flex; gap: 1.6rem; padding: .5rem 1rem; }
+
+/* ── screens 6 and 7: the smallest window ── */
+.desk { position: absolute; inset: 0; background: var(--desk); }
+p.desk-cap { position: absolute; left: 20rem; top: 4.4rem; width: 90rem; }
+.frame { position: absolute; left: 20rem; top: 11rem; width: 90rem; height: 60rem; overflow: hidden; outline: .1rem solid var(--frame); }
+.app.min .brand { padding: 1.4rem 2rem 1rem; }
+.app.min .part { height: 3.2rem; line-height: 3.2rem; }
+.app.min .step.one { min-height: 3.2rem; }
+.app.min .step.one .mk { top: .8rem; }
+.app.min .main { padding: 1.6rem 1.4rem 1.4rem 1.6rem; }
+.app.min .stages { display: grid; grid-template-columns: max-content max-content; gap: .6rem 3.6rem; }
+.app.min .cols { display: block; margin-top: 0; }
+.app.min .col-a { width: auto; }
+.scroll { flex: 1; min-height: 0; position: relative; overflow: hidden; margin-top: 1.4rem; padding-right: 1rem; }
+.sbar { position: absolute; right: 0; top: 0; bottom: 0; width: .8rem; background: var(--margin); }
+.sbar i { position: absolute; left: .2rem; right: .2rem; top: .2rem; background: var(--ink-3); border-radius: .3rem; }
+.app.min .gate { margin-top: 1.2rem; }
+</style>
+</head>
+<body>
+<input class="h" type="radio" name="s" id="s1" checked><input class="h" type="radio" name="s" id="s2">
+<input class="h" type="radio" name="s" id="s3"><input class="h" type="radio" name="s" id="s4">
+<input class="h" type="radio" name="s" id="s5"><input class="h" type="radio" name="s" id="s6">
+<input class="h" type="radio" name="s" id="s7">
+<input class="h" type="radio" name="t" id="tl" checked><input class="h" type="radio" name="t" id="td">
+
+<div class="harness">
+  <b>Figure and table (from the scientific page)</b>
+  <label for="s1">1. Setting up a training</label><label for="s2">2. A run and its records</label>
+  <label for="s3">3. The run page on an ordinary day</label><label for="s4">4. The form while a training runs</label>
+  <label for="s5">5. Key</label><label for="s6">6. Smallest window, setting up</label><label for="s7">7. Smallest window, a run</label>
+  <span style="flex:1"></span>
+  <label for="tl">Light</label><label for="td">Dark</label>
+</div>
+
+<div class="window">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <!-- the markers: one shape per state, as in the key of a figure; none is the shape of a control -->
+    <symbol id="m-done" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" fill="var(--ink)"/><path d="M4.5 8.4l2.4 2.4 4.7-5.2" fill="none" stroke="var(--paper)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="m-now" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="var(--accent)"/></symbol>
+    <symbol id="m-later" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="var(--ink-3)" stroke-width="2" stroke-dasharray="2.08 2"/></symbol>
+    <symbol id="m-half" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="var(--paper)" stroke="var(--ink)" stroke-width="2"/><path d="M8 1.5a6.5 6.5 0 0 0 0 13z" fill="var(--ink)"/></symbol>
+    <symbol id="m-none" viewBox="0 0 16 16"><path d="M4 8h8" stroke="var(--ink-3)" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="m-fine" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="var(--ok)" stroke-width="2"/><path d="M4.9 8.3l2.2 2.2 4-4.6" fill="none" stroke="var(--ok)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="m-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="var(--ink-2)" stroke-width="2"/><circle cx="8" cy="4.9" r="1.1" fill="var(--ink-2)"/><path d="M8 7.5v4.2" stroke="var(--ink-2)" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="m-warn" viewBox="0 0 16 16"><path d="M8 1.6 15 14.3H1z" fill="var(--warn)" stroke="var(--warn-edge)" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6.2v3.8" stroke="#1A1A1A" stroke-width="2" stroke-linecap="round"/><circle cx="8" cy="12.1" r="1" fill="#1A1A1A"/></symbol>
+    <symbol id="m-err" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="var(--err)"/><path d="M5 5l6 6M11 5l-6 6" stroke="var(--on-err)" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="m-lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="8" rx="1.5" fill="var(--ink-2)"/><path d="M5 7.5V5a3 3 0 0 1 6 0v2.5" fill="none" stroke="var(--ink-2)" stroke-width="2"/></symbol>
+    <symbol id="i-down" viewBox="0 0 16 16"><path d="M3.5 6l4.5 4.5L12.5 6" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-down-dis" viewBox="0 0 16 16"><path d="M3.5 6l4.5 4.5L12.5 6" fill="none" stroke="var(--disabled-ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-right" viewBox="0 0 16 16"><path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 16 16"><path d="M3.4 8.4l3 3 6.2-6.8" fill="none" stroke="var(--on-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-check-dis" viewBox="0 0 16 16"><path d="M3.4 8.4l3 3 6.2-6.8" fill="none" stroke="var(--disabled-ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-help" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="var(--ink)" stroke-width="2"/><path d="M6 6.3a2 2 0 1 1 3.1 1.7c-.7.45-1.1.8-1.1 1.5" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round"/><circle cx="8" cy="12" r="1" fill="var(--ink)"/></symbol>
+    <symbol id="i-x" viewBox="0 0 46 32"><path d="M18.5 11.5l9 9M27.5 11.5l-9 9" stroke="var(--ink)" stroke-width="1"/></symbol>
+    <!-- the data of the two figures, written once -->
+    <defs>
+      <polyline id="c-train" fill="none" vector-effect="non-scaling-stroke" points="60.0,23.4 68.6,66.1 77.2,98.3 85.8,122.1 94.4,139.5 103.0,152.9 111.6,164.1 120.2,173.4 128.9,180.2 137.5,185.2 146.1,189.6 154.7,194.1 163.3,198.2 171.9,201.0 180.5,203.0 189.1,205.2 197.7,207.9 206.3,210.4 214.9,211.8 223.5,212.7 232.1,214.2 240.7,216.2 249.3,217.9 258.0,218.6 266.6,219.0 275.2,220.1 283.8,221.8 292.4,222.9 301.0,223.2 309.6,223.3 318.2,224.3 326.8,225.7 335.4,226.4 344.0,226.3 352.6,226.3 361.2,227.2 369.8,228.4 378.4,228.8 387.0,228.4 395.7,228.5 404.3,229.3 412.9,230.3 421.5,230.4 430.1,229.9 438.7,230.0 447.3,230.9 455.9,231.6 464.5,231.5 473.1,230.9 481.7,231.1 490.3,231.9 498.9,232.5 507.5,232.2 516.1,231.7 524.8,231.9 533.4,232.7 542.0,233.1 550.6,232.6 559.2,232.2 567.8,232.5 576.4,233.3 585.0,233.5"/>
+      <polyline id="c-val" fill="none" vector-effect="non-scaling-stroke" points="60.0,31.6 68.6,69.1 77.2,97.5 85.8,116.8 94.4,132.9 103.0,147.7 111.6,157.3 120.2,162.7 128.9,169.1 137.5,175.8 146.1,178.7 154.7,180.9 163.3,186.0 171.9,190.5 180.5,191.6 189.1,193.2 197.7,197.1 206.3,198.5 214.9,197.3 223.5,198.4 232.1,201.3 240.7,201.5 249.3,201.0 258.0,203.8 266.6,206.6 275.2,206.1 283.8,205.8 292.4,208.1 301.0,208.7 309.6,206.5 318.2,206.6 326.8,209.0 335.4,209.1 344.0,208.1 352.6,210.1 361.2,212.5 369.8,211.5 378.4,210.3 387.0,211.9 395.7,212.4 404.3,210.0 412.9,209.7 421.5,212.1 430.1,212.5 438.7,211.2 447.3,212.6 455.9,214.9 464.5,213.7 473.1,211.9 481.7,213.0 490.3,213.6 498.9,211.5 507.5,211.0 516.1,213.5 524.8,214.2 533.4,212.7 542.0,213.6 550.6,215.7 559.2,214.4 567.8,212.2 576.4,213.1 585.0,214.1"/>
+      <polyline id="c-trace" fill="none" vector-effect="non-scaling-stroke" points="34.0,47.1 35.3,45.4 36.5,40.5 37.9,38.0 39.2,36.2 40.4,38.6 41.7,37.0 43.1,36.2 44.4,35.7 45.6,32.0 46.9,33.2 48.2,32.5 49.5,34.9 50.8,36.2 52.1,38.6 53.3,42.2 54.7,43.0 56.0,43.6 57.3,43.4 58.5,48.5 59.9,51.4 61.2,53.0 62.4,56.7 63.7,57.4 65.0,55.8 66.3,54.4 67.6,56.2 68.9,58.1 70.2,62.8 71.5,63.0 72.8,61.1 74.1,59.9 75.3,61.3 76.6,60.9 78.0,63.0 79.2,62.9 80.5,60.2 81.8,58.6 83.2,54.9 84.4,57.2 85.7,54.0 87.0,51.0 88.3,49.0 89.6,46.2 90.9,39.5 92.1,38.6 93.4,36.9 94.8,37.9 96.1,35.1 97.3,32.3 98.6,27.5 100.0,28.6 101.2,33.4 102.5,33.9 103.8,31.1 105.0,34.1 106.4,32.7 107.7,34.7 109.0,37.1 110.2,39.4 111.6,42.1 112.9,45.9 114.1,49.5 115.4,50.7 116.8,56.4 118.0,59.1 119.3,57.2 120.6,62.0 121.8,61.4 123.2,60.2 124.5,65.3 125.8,66.5 127.0,63.9 128.4,62.4 129.7,63.2 130.9,61.7 132.2,63.0 133.5,58.2 134.9,55.7 136.1,50.8 137.4,46.8 138.7,43.0 140.0,46.7 141.3,44.1 142.6,43.3 143.8,40.0 145.2,37.5 146.5,35.0 147.7,33.6 149.0,31.5 150.3,35.2 151.7,34.9 152.9,37.7 154.2,37.1 155.5,37.4 156.8,36.4 158.1,36.2 159.4,34.5 160.6,33.3 161.9,38.8 163.3,40.5 164.6,44.0 165.8,46.7 167.1,49.1 168.5,53.6 169.7,54.3 171.0,58.5 172.3,60.3 173.6,56.9 174.9,65.7 176.2,64.8 177.5,65.7 178.7,66.7 180.1,65.8 181.4,66.0 182.6,68.3 183.9,70.7 185.3,69.5 186.5,69.3 187.8,66.4 189.1,65.2 190.4,61.8 191.7,58.7 193.0,56.1 194.3,53.2 195.5,49.5 196.9,46.0 198.2,42.8 199.4,43.5 200.7,39.9 202.1,41.8 203.4,41.5 204.6,38.3 205.9,34.1 207.2,30.4 208.5,31.7 209.8,32.0 211.1,31.0 212.3,28.7 213.7,26.9 215.0,28.7 216.3,33.2 217.5,35.7 218.8,38.6 220.2,43.5 221.4,48.9 222.7,52.3 224.0,52.1 225.3,55.4 226.6,56.6 227.9,59.6 229.1,59.4 230.5,59.4 231.8,61.1 233.1,61.1 234.3,61.8 235.6,66.5 237.0,67.1 238.2,65.7 239.5,64.1 240.8,63.5 242.2,63.0 243.4,61.9 244.7,61.1 246.0,60.5 247.2,60.3 248.6,59.1 249.9,57.8 251.1,56.6 252.4,56.3 253.8,55.1 255.0,52.9 256.3,46.5 257.6,47.6 259.0,43.9 260.2,37.4 261.5,34.0 262.8,34.3 264.0,33.2 265.4,32.3 266.7,33.9 267.9,32.3 269.2,28.9 270.6,31.5 271.9,34.0 273.1,35.6 274.4,40.5 275.7,43.1 277.0,47.9 278.3,51.3 279.6,56.4 280.8,62.2 282.2,59.5 283.5,61.5 284.8,62.0 286.0,62.0 287.4,64.7 288.7,62.1 289.9,63.9 291.2,63.9 292.5,63.1 293.8,61.6 295.1,59.1 296.4,57.2 297.7,55.9 299.0,54.5 300.3,54.0 301.6,50.2 302.8,46.9 304.1,45.6 305.5,44.0 306.7,41.5 308.0,39.7 309.3,37.0 310.7,36.7 311.9,35.4 313.2,36.0 314.5,35.6 315.8,33.9 317.1,38.1 318.4,35.2 319.6,33.1 320.9,35.0 322.3,40.2 323.6,44.0 324.8,44.4 326.1,46.7 327.5,49.5 328.7,51.4 330.0,54.9"/>
+    </defs>
+  </svg>
+
+  <!-- ═════════════════════════ SCREEN 1 — Setting up a training ═════════════════════════ -->
+  <section class="screen"><div class="app">
+    <div class="nav">
+      <div class="brand">PRISM</div>
+      <div class="nav-list">
+        <div class="grp-cur">
+          <span class="part">Parameter inference</span>
+          <ol class="chain">
+            <li class="step"><svg class="mk"><use href="#m-done"/></svg><span class="nm"><i>1</i>Model and options</span><span class="ss">Done</span></li>
+            <li class="step"><svg class="mk"><use href="#m-done"/></svg><span class="nm"><i>2</i>Prior</span><span class="ss">Done</span></li>
+            <li class="step cur later"><svg class="mk"><use href="#m-now"/></svg><span class="nm"><i>3</i>Training</span><span class="ss">Now: setting up</span></li>
+            <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>4</i>Calibration check</span><span class="ss">Needs a trained network</span></li>
+            <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>5</i>Inference</span><span class="ss">Needs a trained network</span></li>
+            <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>6</i>Narrowing round</span><span class="ss">Needs a trained network</span></li>
+          </ol>
+        </div>
+        <div class="parts-rest">
+          <span class="part">Effective temperature</span>
+          <span class="part">Live simulation</span>
+          <span class="part">Reduction map</span>
+          <div class="gap"></div>
+          <span class="part">Records</span>
+          <span class="part">Settings</span>
+        </div>
+      </div>
+      <div class="runline"><svg class="mk"><use href="#m-none"/></svg><span><b>Nothing is running</b>Only one thing runs at a time.</span></div>
+    </div>
+
+    <div class="main">
+      <div class="head">
+        <div>
+          <h1>Train a network</h1>
+          <p class="lead t">Simulates the recordings the network learns from, then fits the network to them.</p>
+        </div>
+        <span class="btn"><svg><use href="#i-help"/></svg>Help</span>
+      </div>
+
+      <div class="cols">
+        <div class="col-a">
+          <div class="bt">Main settings</div>
+          <div class="row"><span>Batches</span><span class="fld num focus">10,000</span><span></span></div>
+          <div class="row"><span>Simulations per batch</span><span class="fld num dis">2,048</span><span class="rem">Set automatically</span></div>
+          <div class="row"><span>Network width</span><span class="fld num">256</span><span></span></div>
+          <div class="row"><span>Network depth</span><span class="fld num">10</span><span></span></div>
+          <div class="row"><span>Graphics card memory limit</span><span class="fld num">6</span><span>GiB</span></div>
+          <div class="fold">
+            <div class="fold-h"><svg><use href="#i-right"/></svg>Rarely changed (7 settings)</div>
+            <p class="fold-v">Learning rate 0.001, patience 20 epochs, no epoch limit, three rotation settings at their defaults, simulations saved every 50 batches</p>
+          </div>
+        </div>
+
+        <div class="col-b">
+          <div class="bt">This training</div>
+          <div class="row2"><span>Name of the network</span><span class="fld bad">retrain</span></div>
+          <div class="row2 under"><span></span><span class="fmsg"><svg class="mk"><use href="#m-err"/></svg><span>A network named retrain already exists. Choose another name.</span></span></div>
+          <div class="row2"><span>Note</span><span class="fld"><span class="hint">Optional: a line to remember this training by</span></span></div>
+          <div class="row2"><span>Prior in use</span><span><b>retrain_prior</b>, 13 parameters <span class="rem">(chosen in step 2)</span></span></div>
+          <div class="row2"><span>Continue or start new</span><span class="fld sel">Continue the existing simulations<svg><use href="#i-down"/></svg></span></div>
+          <div class="row2"><span></span><span class="chk"><span class="box"><svg><use href="#i-check"/></svg></span>Keep the simulations when training ends</span></div>
+        </div>
+      </div>
+
+      <!-- the gate: every fact that must hold, the failed one first, and the main action in its fixed place -->
+      <div class="gate">
+        <div class="bt"><span>Before you start</span><span class="asof">Free memory and the saved simulations were read at 12:04</span></div>
+        <ul class="msgs">
+          <li class="err"><svg class="mk"><use href="#m-err"/></svg><p class="t"><b>Error.</b> A network named retrain already exists. Choose another name.</p></li>
+          <li><svg class="mk"><use href="#m-fine"/></svg><p class="t"><b>Fine.</b> Continues the saved simulations. All 20,480,000 were made with these settings, so training goes straight to fitting.</p></li>
+          <li><svg class="mk"><use href="#m-fine"/></svg><p class="t"><b>Fine.</b> With the limit at 6 GiB the largest batch is expected to hold about 10.4 GiB; 12.5 GiB is free.</p></li>
+          <li><svg class="mk"><use href="#m-info"/></svg><p class="t"><b>Information.</b> Fitting should take five to six days: about 130 epochs at about 63 minutes each.</p></li>
+          <li><svg class="mk"><use href="#m-warn"/></svg><p class="t"><b>Attention.</b> Fitting cannot be resumed. Stopping it loses the whole fit; the simulations are kept.</p></li>
+        </ul>
+        <div class="gate-act">
+          <span class="why">Cannot start yet: the name is taken.</span>
+          <span class="btn">Check again</span>
+          <span class="btn primary dis">Start training</span>
+        </div>
+      </div>
+    </div>
+  </div></section>
+
+  <!-- ═════════════════════════ SCREEN 2 — A run and its records ═════════════════════════ -->
+  <section class="screen"><div class="app">
+    <div class="nav">
+      <div class="brand">PRISM</div>
+      <div class="nav-list">
+        <div class="grp-cur">
+          <span class="part">Parameter inference</span>
+          <ol class="chain">
+            <li class="step"><svg class="mk"><use href="#m-done"/></svg><span class="nm"><i>1</i>Model and options</span><span class="ss">Done</span></li>
+            <li class="step"><svg class="mk"><use href="#m-done"/></svg><span class="nm"><i>2</i>Prior</span><span class="ss">Done</span></li>
+            <li class="step cur later"><svg class="mk"><use href="#m-now"/></svg><span class="nm"><i>3</i>Training</span><span class="ss">Now: running</span></li>
+            <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>4</i>Calibration check</span><span class="ss">Needs a trained network</span></li>
+            <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>5</i>Inference</span><span class="ss">Needs a trained network</span></li>
+            <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>6</i>Narrowing round</span><span class="ss">Needs a trained network</span></li>
+          </ol>
+        </div>
+        <div class="parts-rest">
+          <span class="part">Effective temperature</span>
+          <span class="part">Live simulation</span>
+          <span class="part">Reduction map</span>
+          <div class="gap"></div>
+          <span class="part">Records</span>
+          <span class="part">Settings</span>
+        </div>
+      </div>
+      <div class="runline"><svg class="mk"><use href="#m-now"/></svg><span><b>Training is running</b>Fitting, epoch 62 of about 130. Settings are locked.</span></div>
+    </div>
+
+    <div class="main">
+      <div class="head">
+        <div>
+          <h1>Training in progress</h1>
+          <p class="lead t">The network is being fitted. You can move around the program while it runs.</p>
+        </div>
+        <div class="acts">
+          <span class="btn">Show the full text</span>
+          <span class="btn danger"><i></i>Stop training…</span>
+        </div>
+      </div>
+
+      <div class="status">
+        <ul class="stages">
+          <li><svg class="mk"><use href="#m-done"/></svg><b>Rotation</b><span>Done</span></li>
+          <li><svg class="mk"><use href="#m-done"/></svg><b>Simulation</b><span>Done, 20,480,000 simulations</span></li>
+          <li class="now"><svg class="mk"><use href="#m-now"/></svg><b>Fitting</b><span>Now, about 63 minutes per epoch</span></li>
+          <li><svg class="mk"><use href="#m-later"/></svg><b>Saving</b><span>To come</span></li>
+        </ul>
+        <p class="nowline"><b>Now:</b> Sunday 12:10, running 65 hours, epoch 62 of about 130</p>
+        <!-- Thursday 19:02 to Wednesday 19:02; the hatched end is the range in which it should finish -->
+        <div class="axis" role="img" aria-label="65 hours of an expected 120 to 144 have passed">
+          <div class="ax-track"><i class="ax-hatch" style="left:83.33%;right:0"></i><i class="ax-done" style="width:45.14%"></i></div>
+          <i class="ax-now" style="left:45.14%"></i>
+          <i class="ax-tick" style="left:3.45%"></i><i class="ax-tick" style="left:20.12%"></i><i class="ax-tick" style="left:36.78%"></i>
+          <i class="ax-tick" style="left:53.45%"></i><i class="ax-tick" style="left:70.12%"></i><i class="ax-tick" style="left:86.78%"></i>
+          <span class="ax-day first" style="left:0">Thu</span><span class="ax-day" style="left:11.78%">Fri</span>
+          <span class="ax-day" style="left:28.45%">Sat</span><span class="ax-day" style="left:45.12%">Sun</span>
+          <span class="ax-day" style="left:61.78%">Mon</span><span class="ax-day" style="left:78.45%">Tue</span>
+          <span class="ax-day" style="left:93.39%">Wed</span>
+        </div>
+        <div class="ax-ends"><span>Started Thu 19:02</span><span class="ax-key"><i></i>Expected to end between Tue 19:00 and Wed 19:00</span></div>
+      </div>
+
+      <div class="cols2">
+        <div class="col-l">
+          <figure class="fig w64">
+            <svg viewBox="0 0 640 282" font-size="12" role="img" aria-label="Loss by epoch, training and validation">
+              <path class="ax" d="M60 12V240H560"/>
+              <g class="ax"><path d="M55 40.5h5M55 78.5h5M55 116.5h5M55 154.5h5M55 192.5h5M55 230.5h5"/><path d="M60 240v5M133.8 240v5M215.7 240v5M297.7 240v5M379.7 240v5M461.6 240v5M560 240v5"/></g>
+              <g text-anchor="end"><text x="50" y="45">0</text><text x="50" y="83">−2</text><text x="50" y="121">−4</text><text x="50" y="159">−6</text><text x="50" y="197">−8</text><text x="50" y="235">−10</text></g>
+              <g text-anchor="middle"><text x="60" y="260">1</text><text x="133.8" y="260">10</text><text x="215.7" y="260">20</text><text x="297.7" y="260">30</text><text x="379.7" y="260">40</text><text x="461.6" y="260">50</text><text x="560" y="260" class="lbl">62</text></g>
+              <text class="axname" x="50" y="14" text-anchor="end">Loss</text>
+              <text class="axname" x="310" y="278" text-anchor="middle">Epoch</text>
+              <use href="#c-train" transform="translate(2.857 .6) scale(.952381 .95)" stroke="var(--series-2)" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round"/>
+              <use href="#c-val" transform="translate(2.857 .6) scale(.952381 .95)" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round"/>
+              <line class="lead2" x1="527.2" y1="211" x2="527.2" y2="240"/>
+              <circle class="best" cx="527.2" cy="205.5" r="4.5"/>
+              <text class="lbl" x="533" y="191" text-anchor="end">best so far: epoch 58</text>
+              <text class="lbl" x="568" y="208">validation</text>
+              <text class="lbl" x="568" y="227">training</text>
+            </svg>
+            <figcaption><p class="cap t"><b>Loss by epoch.</b> Loss is the negative log-probability; lower is better. Fitting ends when validation has not improved for 20 epochs.</p></figcaption>
+          </figure>
+
+          <div class="blk">
+            <div class="bt2"><span>Records</span><a class="lnk">All records</a></div>
+            <table class="tb fixed">
+              <colgroup><col style="width:11.8rem"><col style="width:15.8rem"><col style="width:10.6rem"><col><col style="width:9.3rem"></colgroup>
+              <thead><tr><th>Name</th><th>Kind</th><th>Made</th><th>Note</th><th>State</th></tr></thead>
+              <tbody>
+                <tr><td>retrain_prior</td><td>Prior</td><td>1 Oct 22:29</td><td class="el">tier-1 box, 13 parameters</td><td><span class="st"><svg class="mk"><use href="#m-done"/></svg>Done</span></td></tr>
+                <tr><td class="quiet">(unnamed)</td><td>Simulation set</td><td>1 Oct 15:55</td><td class="el">20,480,000 simulations, 10.3 GiB</td><td><span class="st"><svg class="mk"><use href="#m-done"/></svg>Done</span></td></tr>
+                <tr class="sel"><td>retrain_band</td><td>Check</td><td>1 Oct 22:29</td><td class="el">band holds at every length</td><td><span class="st"><svg class="mk"><use href="#m-done"/></svg>Done</span></td></tr>
+                <tr><td>retrain_mask</td><td>Check</td><td>1 Oct 22:30</td><td class="el">37.9 % unusable</td><td><span class="st"><svg class="mk"><use href="#m-done"/></svg>Done</span></td></tr>
+                <tr><td>sweep-s</td><td>Effective temperature</td><td>24 Sep 11:02</td><td class="el">cancelled at point 5 of 8</td><td><span class="st"><svg class="mk"><use href="#m-half"/></svg>Unfinished</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="col-r">
+          <div class="bt2">Training health</div>
+          <table class="tb">
+            <thead><tr><th>Measure</th><th class="r" style="width:11.8rem">Now</th><th style="width:5.6rem">State</th></tr></thead>
+            <tbody>
+              <tr><td>Failed simulations</td><td class="r"><b>0.15 %</b></td><td><span class="st"><svg class="mk"><use href="#m-fine"/></svg>Fine</span></td></tr>
+              <tr><td class="wrap">Unusable driven recordings</td><td class="r"><b>40.1 %</b><small>expected 37.9 %</small></td><td><span class="st"><svg class="mk"><use href="#m-fine"/></svg>Fine</span></td></tr>
+              <tr><td class="wrap">Graphics card memory</td><td class="r"><b>10.4</b> of 16 GiB</td><td><span class="st"><svg class="mk"><use href="#m-fine"/></svg>Fine</span></td></tr>
+            </tbody>
+          </table>
+
+          <div class="blk">
+            <div class="bt2">Messages</div>
+            <ul class="msgs">
+              <li><svg class="mk"><use href="#m-warn"/></svg><p class="t"><b>Attention, Sun 12:10.</b> No output for 12 minutes. This is normal during an epoch.</p></li>
+              <li><svg class="mk"><use href="#m-info"/></svg><p class="t"><b>Information, Thu 19:02.</b> The full text of this training is kept in a file.</p></li>
+              <li class="err"><svg class="mk"><use href="#m-err"/></svg><p class="t"><b>Error, 1 Oct.</b> The graphics card ran out of memory at batch 237. The simulations up to batch 236 are saved.</p></li>
+              <li><svg class="mk"><use href="#m-fine"/></svg><p class="t"><b>Fine, 28 Sep.</b> Calibration check passed: 13 of 13 parameters.</p></li>
+            </ul>
+          </div>
+
+          <figure class="fig blk">
+            <svg viewBox="0 0 354 98" font-size="12" role="img" aria-label="Hair bundle displacement against time">
+              <text class="axname" x="0" y="10">Displacement (nm)</text>
+              <path class="ax" d="M40 18V66H344"/>
+              <g class="ax"><path d="M35 24h5M35 42h5M35 60h5"/><path d="M40 66v5M116 66v5M192 66v5M268 66v5M344 66v5"/></g>
+              <line class="zero" x1="40" y1="42" x2="344" y2="42"/>
+              <g text-anchor="end"><text x="31" y="28">40</text><text x="31" y="46">0</text><text x="31" y="64">−40</text></g>
+              <g text-anchor="middle"><text x="40" y="84">0</text><text x="116" y="84">50</text><text x="192" y="84">100</text><text x="268" y="84">150</text><text x="342" y="84">200</text></g>
+              <text class="axname" x="192" y="97" text-anchor="middle">Time (ms)</text>
+              <use href="#c-trace" transform="translate(5.081 1.4) scale(1.02703 .83)" stroke="var(--ink)" stroke-width="1" stroke-linejoin="round"/>
+            </svg>
+            <figcaption><p class="cap t"><b>Bundle displacement.</b> One simulated recording.</p></figcaption>
+          </figure>
+        </div>
+      </div>
+    </div>
+
+    <!-- the open dialog. In the page (not in the pictures) "Keep training" closes it, to show what is beneath. -->
+    <input class="h" type="checkbox" id="dlgx">
+    <div class="dlg" role="dialog" aria-label="Stop training?">
+      <div class="dlg-bar"><span>Stop training?</span><svg><use href="#i-x"/></svg></div>
+      <div class="dlg-body">
+        <svg class="mk"><use href="#m-warn"/></svg>
+        <p class="t">The simulations are kept. The fit so far, 62 epochs and 65 hours, will be lost and cannot be resumed.</p>
+      </div>
+      <div class="dlg-btns">
+        <span class="btn danger"><i></i>Stop and lose the fit</span>
+        <label class="btn primary focus" for="dlgx">Keep training</label>
+      </div>
+    </div>
+  </div></section>
+
+  <!-- ═════════════════════════ SCREEN 3 — the run page on an ordinary day: four things ═════════════════════════ -->
+  <section class="screen"><div class="app">
+    <div class="nav">
+      <div class="brand">PRISM</div>
+      <div class="nav-list">
+        <div class="grp-cur">
+          <span class="part">Parameter inference</span>
+          <ol class="chain">
+            <li class="step"><svg class="mk"><use href="#m-done"/></svg><span class="nm"><i>1</i>Model and options</span><span class="ss">Done</span></li>
+            <li class="step"><svg class="mk"><use href="#m-done"/></svg><span class="nm"><i>2</i>Prior</span><span class="ss">Done</span></li>
+            <li class="step cur later"><svg class="mk"><use href="#m-now"/></svg><span class="nm"><i>3</i>Training</span><span class="ss">Now: running</span></li>
+            <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>4</i>Calibration check</span><span class="ss">Needs a trained network</span></li>
+            <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>5</i>Inference</span><span class="ss">Needs a trained network</span></li>
+            <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>6</i>Narrowing round</span><span class="ss">Needs a trained network</span></li>
+          </ol>
+        </div>
+        <div class="parts-rest">
+          <span class="part">Effective temperature</span>
+          <span class="part">Live simulation</span>
+          <span class="part">Reduction map</span>
+          <div class="gap"></div>
+          <span class="part">Records</span>
+          <span class="part">Settings</span>
+        </div>
+      </div>
+      <div class="runline"><svg class="mk"><use href="#m-now"/></svg><span><b>Training is running</b>Fitting, epoch 62 of about 130. Settings are locked.</span></div>
+    </div>
+
+    <div class="main">
+      <div class="head">
+        <div>
+          <h1>Training in progress</h1>
+          <p class="lead t">The network is being fitted. You can move around the program while it runs.</p>
+        </div>
+        <div class="acts">
+          <span class="btn">Show the full text</span>
+          <span class="btn danger"><i></i>Stop training…</span>
+        </div>
+      </div>
+
+      <div class="status">
+        <ul class="stages">
+          <li><svg class="mk"><use href="#m-done"/></svg><b>Rotation</b><span>Done</span></li>
+          <li><svg class="mk"><use href="#m-done"/></svg><b>Simulation</b><span>Done, 20,480,000 simulations</span></li>
+          <li class="now"><svg class="mk"><use href="#m-now"/></svg><b>Fitting</b><span>Now, about 63 minutes per epoch</span></li>
+          <li><svg class="mk"><use href="#m-later"/></svg><b>Saving</b><span>To come</span></li>
+        </ul>
+        <p class="nowline"><b>Now:</b> Sunday 12:10, running 65 hours, epoch 62 of about 130</p>
+        <div class="axis" role="img" aria-label="65 hours of an expected 120 to 144 have passed">
+          <div class="ax-track"><i class="ax-hatch" style="left:83.33%;right:0"></i><i class="ax-done" style="width:45.14%"></i></div>
+          <i class="ax-now" style="left:45.14%"></i>
+          <i class="ax-tick" style="left:3.45%"></i><i class="ax-tick" style="left:20.12%"></i><i class="ax-tick" style="left:36.78%"></i>
+          <i class="ax-tick" style="left:53.45%"></i><i class="ax-tick" style="left:70.12%"></i><i class="ax-tick" style="left:86.78%"></i>
+          <span class="ax-day first" style="left:0">Thu</span><span class="ax-day" style="left:11.78%">Fri</span>
+          <span class="ax-day" style="left:28.45%">Sat</span><span class="ax-day" style="left:45.12%">Sun</span>
+          <span class="ax-day" style="left:61.78%">Mon</span><span class="ax-day" style="left:78.45%">Tue</span>
+          <span class="ax-day" style="left:93.39%">Wed</span>
+        </div>
+        <div class="ax-ends"><span>Started Thu 19:02</span><span class="ax-key"><i></i>Expected to end between Tue 19:00 and Wed 19:00</span></div>
+      </div>
+
+      <div class="cols2" style="margin-top:2.4rem">
+        <div class="col-l">
+          <figure class="fig w64">
+            <svg viewBox="0 0 640 354" font-size="12" role="img"aria-label="Loss by epoch, training and validation">
+              <path class="ax" d="M60 12V312H560"/>
+              <g class="ax"><path d="M55 49.5h5M55 99.5h5M55 149.5h5M55 199.5h5M55 249.5h5M55 299.5h5"/><path d="M60 312v5M133.8 312v5M215.7 312v5M297.7 312v5M379.7 312v5M461.6 312v5M560 312v5"/></g>
+              <g text-anchor="end"><text x="50" y="54">0</text><text x="50" y="104">−2</text><text x="50" y="154">−4</text><text x="50" y="204">−6</text><text x="50" y="254">−8</text><text x="50" y="304">−10</text></g>
+              <g text-anchor="middle"><text x="60" y="332">1</text><text x="133.8" y="332">10</text><text x="215.7" y="332">20</text><text x="297.7" y="332">30</text><text x="379.7" y="332">40</text><text x="461.6" y="332">50</text><text x="560" y="332" class="lbl">62</text></g>
+              <text class="axname" x="50" y="14" text-anchor="end">Loss</text>
+              <text class="axname" x="310" y="350" text-anchor="middle">Epoch</text>
+              <use href="#c-train" transform="translate(2.857 -3) scale(.952381 1.25)" stroke="var(--series-2)" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round"/>
+              <use href="#c-val" transform="translate(2.857 -3) scale(.952381 1.25)" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round"/>
+              <line class="lead2" x1="527.2" y1="272" x2="527.2" y2="312"/>
+              <circle class="best" cx="527.2" cy="266.6" r="4.5"/>
+              <text class="lbl" x="533" y="250" text-anchor="end">best so far: epoch 58</text>
+              <text class="lbl" x="568" y="269">validation</text>
+              <text class="lbl" x="568" y="293">training</text>
+            </svg>
+            <figcaption><p class="cap t"><b>Loss by epoch.</b> Loss is the negative log-probability; lower is better. Fitting ends when validation has not improved for 20 epochs.</p></figcaption>
+          </figure>
+        </div>
+
+        <div class="col-r">
+          <div class="bt2">Training health</div>
+          <table class="tb">
+            <thead><tr><th>Measure</th><th class="r" style="width:11.8rem">Now</th><th style="width:5.6rem">State</th></tr></thead>
+            <tbody>
+              <tr><td>Failed simulations</td><td class="r"><b>0.15 %</b></td><td><span class="st"><svg class="mk"><use href="#m-fine"/></svg>Fine</span></td></tr>
+              <tr><td class="wrap">Unusable driven recordings</td><td class="r"><b>40.1 %</b><small>expected 37.9 %</small></td><td><span class="st"><svg class="mk"><use href="#m-fine"/></svg>Fine</span></td></tr>
+              <tr><td class="wrap">Graphics card memory</td><td class="r"><b>10.4</b> of 16 GiB</td><td><span class="st"><svg class="mk"><use href="#m-fine"/></svg>Fine</span></td></tr>
+            </tbody>
+          </table>
+
+          <div class="blk" style="margin-top:2.4rem">
+            <div class="bt2">Messages</div>
+            <ul class="msgs">
+              <li><svg class="mk"><use href="#m-fine"/></svg><p class="t"><b>Fine.</b> Nothing needs attention.</p></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></section>
+
+  <!-- ═════════════════════════ SCREEN 4 — the same form while a training runs: locked ═════════════════════════ -->
+  <section class="screen"><div class="app">
+    <div class="nav">
+      <div class="brand">PRISM</div>
+      <div class="nav-list">
+        <div class="grp-cur">
+          <span class="part">Parameter inference</span>
+          <ol class="chain">
+            <li class="step"><svg class="mk"><use href="#m-done"/></svg><span class="nm"><i>1</i>Model and options</span><span class="ss">Done</span></li>
+            <li class="step"><svg class="mk"><use href="#m-done"/></svg><span class="nm"><i>2</i>Prior</span><span class="ss">Done</span></li>
+            <li class="step cur later"><svg class="mk"><use href="#m-now"/></svg><span class="nm"><i>3</i>Training</span><span class="ss">Now: running</span></li>
+            <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>4</i>Calibration check</span><span class="ss">Needs a trained network</span></li>
+            <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>5</i>Inference</span><span class="ss">Needs a trained network</span></li>
+            <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>6</i>Narrowing round</span><span class="ss">Needs a trained network</span></li>
+          </ol>
+        </div>
+        <div class="parts-rest">
+          <span class="part">Effective temperature</span>
+          <span class="part">Live simulation</span>
+          <span class="part">Reduction map</span>
+          <div class="gap"></div>
+          <span class="part">Records</span>
+          <span class="part">Settings</span>
+        </div>
+      </div>
+      <div class="runline"><svg class="mk"><use href="#m-now"/></svg><span><b>Training is running</b>Fitting, epoch 62 of about 130. Settings are locked.</span></div>
+    </div>
+
+    <div class="main">
+      <div class="head">
+        <div>
+          <h1>Train a network</h1>
+          <p class="lead t">Simulates the recordings the network learns from, then fits the network to them.</p>
+        </div>
+        <span class="btn"><svg><use href="#i-help"/></svg>Help</span>
+      </div>
+      <div class="lockline"><svg class="mk"><use href="#m-lock"/></svg>Settings are locked while the training runs.<a class="lnk">Go to the training in progress</a></div>
+
+      <div class="cols" style="margin-top:1.6rem">
+        <div class="col-a">
+          <div class="bt">Main settings</div>
+          <div class="row"><span>Batches</span><span class="fld num dis">10,000</span><span></span></div>
+          <div class="row"><span>Simulations per batch</span><span class="fld num dis">2,048</span><span class="rem">Set automatically</span></div>
+          <div class="row"><span>Network width</span><span class="fld num dis">256</span><span></span></div>
+          <div class="row"><span>Network depth</span><span class="fld num dis">10</span><span></span></div>
+          <div class="row"><span>Graphics card memory limit</span><span class="fld num dis">6</span><span>GiB</span></div>
+          <div class="fold">
+            <div class="fold-h"><svg><use href="#i-right"/></svg>Rarely changed (7 settings)</div>
+            <p class="fold-v">Learning rate 0.001, patience 20 epochs, no epoch limit, three rotation settings at their defaults, simulations saved every 50 batches</p>
+          </div>
+        </div>
+
+        <div class="col-b">
+          <div class="bt">This training</div>
+          <div class="row2"><span>Name of the network</span><span class="fld dis">retrain_2</span></div>
+          <div class="row2"><span>Note</span><span class="fld dis">second training on the tier-1 box</span></div>
+          <div class="row2"><span>Prior in use</span><span><b>retrain_prior</b>, 13 parameters <span class="rem">(chosen in step 2)</span></span></div>
+          <div class="row2"><span>Continue or start new</span><span class="fld sel dis">Continue the existing simulations<svg><use href="#i-down-dis"/></svg></span></div>
+          <div class="row2"><span></span><span class="chk dis"><span class="box"><svg><use href="#i-check-dis"/></svg></span>Keep the simulations when training ends</span></div>
+        </div>
+      </div>
+
+      <div class="gate">
+        <div class="bt"><span>Before you start</span></div>
+        <ul class="msgs">
+          <li><svg class="mk"><use href="#m-lock"/></svg><p class="t"><b>Locked.</b> A training is running, and only one thing runs at a time. These are the settings it was started with.</p></li>
+        </ul>
+        <div class="gate-act">
+          <span class="why">Cannot start: a training is running.</span>
+          <span class="btn dis">Check again</span>
+          <span class="btn primary dis">Start training</span>
+        </div>
+      </div>
+    </div>
+  </div></section>
+
+  <!-- ═════════════════════════ SCREEN 5 — the key: markers, controls in each state, the axis at other moments ═════════════════════════ -->
+  <section class="screen"><div class="sheet">
+    <div>
+      <h1>Key</h1>
+      <p class="lead t">Every marker, every state of a control, and the time axis at the moments the two sample screens do not show.</p>
+    </div>
+    <div class="sheet-cols">
+      <div class="sheet-l">
+        <div class="bt2">Markers</div>
+        <table class="tb key">
+          <thead><tr><th style="width:17rem">Marker and its word</th><th>What it says</th></tr></thead>
+          <tbody>
+            <tr><td class="w"><span class="st"><svg class="mk"><use href="#m-done"/></svg>Done</span></td><td>A step, a stage or a record that is complete and saved.</td></tr>
+            <tr><td class="w"><span class="st"><svg class="mk"><use href="#m-now"/></svg>Now</span></td><td>The step in hand, or the stage that is running.</td></tr>
+            <tr><td class="w"><span class="st"><svg class="mk"><use href="#m-later"/></svg>To come</span></td><td>Not started. A step that cannot start says what it needs.</td></tr>
+            <tr><td class="w"><span class="st"><svg class="mk"><use href="#m-half"/></svg>Unfinished</span></td><td>Stopped before its end; what was written is kept.</td></tr>
+            <tr><td class="w"><span class="st"><svg class="mk"><use href="#m-none"/></svg>Nothing running</span></td><td>The line at the foot of the list of parts, when the program is idle.</td></tr>
+            <tr><td class="w"><span class="st"><svg class="mk"><use href="#m-fine"/></svg>Fine</span></td><td>A check passed, or a figure is within its limits.</td></tr>
+            <tr><td class="w"><span class="st"><svg class="mk"><use href="#m-info"/></svg>Information</span></td><td>Something to know; nothing to do.</td></tr>
+            <tr><td class="w"><span class="st"><svg class="mk"><use href="#m-warn"/></svg>Attention</span></td><td>Read this before going on; nothing has failed.</td></tr>
+            <tr><td class="w"><span class="st"><svg class="mk"><use href="#m-err"/></svg>Error</span></td><td>Something failed, or stops a start. The row says what to do.</td></tr>
+            <tr><td class="w"><span class="st"><svg class="mk"><use href="#m-lock"/></svg>Locked</span></td><td>Settings that cannot change while something runs.</td></tr>
+          </tbody>
+        </table>
+
+        <div class="blk">
+          <div class="bt2">Buttons in each state</div>
+          <table class="tb states fixed">
+            <thead><tr><th style="width:13rem">State</th><th style="width:19.6rem">Main action</th><th style="width:13.2rem">Other action</th><th>Action that loses work</th></tr></thead>
+            <tbody>
+              <tr><td>Ready</td><td><span class="btn primary">Start training</span></td><td><span class="btn">Check again</span></td><td><span class="btn danger"><i></i>Stop training…</span></td></tr>
+              <tr><td>Pointer over it</td><td><span class="btn primary hover">Start training</span></td><td><span class="btn hover">Check again</span></td><td><span class="btn danger hover"><i></i>Stop training…</span></td></tr>
+              <tr><td>Pressed</td><td><span class="btn primary press">Start training</span></td><td><span class="btn press">Check again</span></td><td><span class="btn danger press"><i></i>Stop training…</span></td></tr>
+              <tr><td>Keyboard focus</td><td><span class="btn primary focus">Start training</span></td><td><span class="btn focus">Check again</span></td><td><span class="btn danger focus"><i></i>Stop training…</span></td></tr>
+              <tr><td>Cannot be used</td><td><span class="btn primary dis">Start training</span></td><td><span class="btn dis">Check again</span></td><td><span class="btn danger dis"><i></i>Stop training…</span></td></tr>
+              <tr><td>Busy</td><td><span class="btn primary dis">Starting, please wait</span></td><td><span class="btn dis">Checking</span></td><td><span class="btn danger dis"><i></i>Stopping</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="sheet-r">
+        <div class="bt2">The time axis at other moments</div>
+        <div class="axs">
+          <p class="axs-cap">Early in fitting: 5 % of the way</p>
+          <p class="nowline s"><span><b>Now:</b> Friday 02:14, running 7 hours, epoch 7 of about 130</span></p>
+          <div class="axis">
+            <div class="ax-track"><i class="ax-hatch" style="left:83.33%;right:0"></i><i class="ax-done" style="width:5%"></i></div>
+            <i class="ax-now" style="left:5%"></i>
+            <i class="ax-tick" style="left:3.45%"></i><i class="ax-tick" style="left:20.12%"></i><i class="ax-tick" style="left:36.78%"></i>
+            <i class="ax-tick" style="left:53.45%"></i><i class="ax-tick" style="left:70.12%"></i><i class="ax-tick" style="left:86.78%"></i>
+            <span class="ax-day first" style="left:0">Thu</span><span class="ax-day" style="left:11.78%">Fri</span>
+            <span class="ax-day" style="left:28.45%">Sat</span><span class="ax-day" style="left:45.12%">Sun</span>
+            <span class="ax-day" style="left:61.78%">Mon</span><span class="ax-day" style="left:78.45%">Tue</span>
+            <span class="ax-day" style="left:93.39%">Wed</span>
+          </div>
+          <div class="ax-ends"><span>Started Thu 19:02</span><span class="ax-key"><i></i>Expected to end between Tue 19:00 and Wed 19:00</span></div>
+        </div>
+        <div class="axs">
+          <p class="axs-cap">Late in fitting: now is inside the expected range, and the range shows through the bar</p>
+          <p class="nowline s"><span><b>Now:</b> Wednesday 01:45, running 127 hours, epoch 121 of about 130</span></p>
+          <div class="axis">
+            <div class="ax-track"><i class="ax-hatch" style="left:83.33%;right:0"></i><i class="ax-done" style="width:88%"></i><i class="ax-over" style="left:83.33%;width:4.67%"></i></div>
+            <i class="ax-now" style="left:88%"></i>
+            <i class="ax-tick" style="left:3.45%"></i><i class="ax-tick" style="left:20.12%"></i><i class="ax-tick" style="left:36.78%"></i>
+            <i class="ax-tick" style="left:53.45%"></i><i class="ax-tick" style="left:70.12%"></i><i class="ax-tick" style="left:86.78%"></i>
+            <span class="ax-day first" style="left:0">Thu</span><span class="ax-day" style="left:11.78%">Fri</span>
+            <span class="ax-day" style="left:28.45%">Sat</span><span class="ax-day" style="left:45.12%">Sun</span>
+            <span class="ax-day" style="left:61.78%">Mon</span><span class="ax-day" style="left:78.45%">Tue</span>
+            <span class="ax-day" style="left:93.39%">Wed</span>
+          </div>
+          <div class="ax-ends"><span>Started Thu 19:02</span><span class="ax-key"><i></i>Expected to end by Wed 19:00</span></div>
+        </div>
+        <div class="axs">
+          <p class="axs-cap">Later than expected: the axis grows by a day and says so</p>
+          <p class="nowline s"><span><b>Now:</b> Thursday 04:02, running 153 hours, epoch 146</span></p>
+          <div class="axis">
+            <div class="ax-track"><i class="ax-done" style="width:91.07%"></i><i class="ax-over end" style="left:71.43%;width:14.28%"></i></div>
+            <i class="ax-now" style="left:91.07%"></i>
+            <i class="ax-tick" style="left:2.96%"></i><i class="ax-tick" style="left:17.24%"></i><i class="ax-tick" style="left:31.53%"></i>
+            <i class="ax-tick" style="left:45.81%"></i><i class="ax-tick" style="left:60.1%"></i><i class="ax-tick" style="left:74.39%"></i><i class="ax-tick" style="left:88.67%"></i>
+            <span class="ax-day first" style="left:0">Thu</span><span class="ax-day" style="left:10.1%">Fri</span>
+            <span class="ax-day" style="left:24.39%">Sat</span><span class="ax-day" style="left:38.67%">Sun</span>
+            <span class="ax-day" style="left:52.96%">Mon</span><span class="ax-day" style="left:67.24%">Tue</span>
+            <span class="ax-day" style="left:81.53%">Wed</span><span class="ax-day" style="left:94.33%">Thu</span>
+          </div>
+          <div class="ax-ends"><span>Started Thu 19:02</span><span class="ax-key"><svg class="mk"><use href="#m-warn"/></svg>Later than expected: it was due by Wed 19:00</span></div>
+        </div>
+        <div class="axs">
+          <p class="axs-cap">A 27-hour simulation: the same axis, ticked every six hours</p>
+          <p class="nowline s"><span><b>Now:</b> Thursday 03:11, running 11 hours, batch 4,150 of 10,000</span></p>
+          <div class="axis">
+            <div class="ax-track"><i class="ax-hatch" style="left:92.86%;right:0"></i><i class="ax-done" style="width:39.9%"></i></div>
+            <i class="ax-now" style="left:39.9%"></i>
+            <i class="ax-tick" style="left:7.14%"></i><i class="ax-tick" style="left:28.57%"></i><i class="ax-tick" style="left:50%"></i>
+            <i class="ax-tick" style="left:71.43%"></i><i class="ax-tick" style="left:92.86%"></i>
+            <span class="ax-day" style="left:7.14%">18:00</span><span class="ax-day" style="left:28.57%">Thu 00:00</span>
+            <span class="ax-day" style="left:50%">06:00</span><span class="ax-day" style="left:71.43%">12:00</span>
+            <span class="ax-day" style="left:92.86%">18:00</span>
+          </div>
+          <div class="ax-ends"><span>Started Wed 16:00</span><span class="ax-key"><i></i>Expected to end between Thu 18:00 and Thu 20:00</span></div>
+        </div>
+        <p class="cap t" style="margin-top:1rem"><b>Ticks.</b> Under 5 minutes the axis is ticked every 30 seconds; under 2 hours, every 15 minutes; under 2 days, every 6 hours on the clock; beyond that, at each midnight, with the name of the day between. Only the blue tick moves; the words stay where they are.</p>
+
+        <div class="blk">
+          <div class="bt2">Keyboard focus, the same ring on every control</div>
+          <div class="fsamples">
+            <span class="fld num focus">10,000</span>
+            <span class="fld sel focus" style="width:17rem">Continue<svg><use href="#i-down"/></svg></span>
+            <span class="chk focus"><span class="box"><svg><use href="#i-check"/></svg></span>Keep</span>
+            <a class="lnk focus">All records</a>
+            <span class="navitem focus"><i style="font-style:normal;color:var(--ink-2);margin-right:.7rem">4</i>Calibration check</span>
+            <span class="tbrow focus"><span>retrain_band</span><span>Check</span><span>1 Oct 22:29</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></section>
+
+  <!-- ═════════════════════════ SCREEN 6 — the smallest window, setting up ═════════════════════════ -->
+  <section class="screen"><div class="desk">
+    <p class="desk-cap">The window at its smallest, 900 × 600 pixels, drawn at its real size. The form scrolls; the line that says what is running and the main button stay where they are.</p>
+    <div class="frame"><div class="app min">
+      <div class="nav">
+        <div class="brand">PRISM</div>
+        <div class="nav-list">
+          <div class="grp-cur">
+            <span class="part">Parameter inference</span>
+            <ol class="chain">
+              <li class="step one"><svg class="mk"><use href="#m-done"/></svg><span class="nm"><i>1</i>Model and options</span></li>
+              <li class="step one"><svg class="mk"><use href="#m-done"/></svg><span class="nm"><i>2</i>Prior</span></li>
+              <li class="step cur later"><svg class="mk"><use href="#m-now"/></svg><span class="nm"><i>3</i>Training</span><span class="ss">Now: setting up</span></li>
+              <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>4</i>Calibration check</span><span class="ss">Needs a trained network</span></li>
+              <li class="step wait later one"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>5</i>Inference</span></li>
+              <li class="step wait later one"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>6</i>Narrowing round</span></li>
+            </ol>
+          </div>
+          <div class="parts-rest">
+            <span class="part">Effective temperature</span>
+            <span class="part">Live simulation</span>
+            <span class="part">Reduction map</span>
+            <div class="gap"></div>
+            <span class="part">Records</span>
+            <span class="part">Settings</span>
+          </div>
+        </div>
+        <div class="runline"><svg class="mk"><use href="#m-none"/></svg><span><b>Nothing is running</b>Only one thing runs at a time.</span></div>
+      </div>
+
+      <div class="main">
+        <div class="head">
+          <h1>Train a network</h1>
+          <span class="btn"><svg><use href="#i-help"/></svg>Help</span>
+        </div>
+        <div class="scroll">
+          <div class="cols">
+            <div class="col-a">
+              <div class="bt">Main settings</div>
+              <div class="row"><span>Batches</span><span class="fld num focus">10,000</span><span></span></div>
+              <div class="row"><span>Simulations per batch</span><span class="fld num dis">2,048</span><span class="rem">Set automatically</span></div>
+              <div class="row"><span>Network width</span><span class="fld num">256</span><span></span></div>
+              <div class="row"><span>Network depth</span><span class="fld num">10</span><span></span></div>
+              <div class="row"><span>Graphics card memory limit</span><span class="fld num">6</span><span>GiB</span></div>
+              <div class="fold">
+                <div class="fold-h"><svg><use href="#i-right"/></svg>Rarely changed (7 settings)</div>
+                <p class="fold-v">Learning rate 0.001, patience 20 epochs, no epoch limit, three rotation settings at their defaults, simulations saved every 50 batches</p>
+              </div>
+            </div>
+            <div class="col-b" style="margin-top:2rem">
+              <div class="bt">This training</div>
+              <div class="row2"><span>Name of the network</span><span class="fld bad">retrain</span></div>
+            </div>
+          </div>
+          <i class="sbar"><i style="height:62%"></i></i>
+        </div>
+        <div class="gate">
+          <div class="bt"><span>Before you start</span><a class="lnk">Show all 5</a></div>
+          <ul class="msgs">
+            <li class="err"><svg class="mk"><use href="#m-err"/></svg><p class="t"><b>Error.</b> A network named retrain already exists. Choose another name.</p></li>
+            <li><svg class="mk"><use href="#m-warn"/></svg><p class="t"><b>Attention.</b> Fitting cannot be resumed. Stopping it loses the whole fit; the simulations are kept.</p></li>
+          </ul>
+          <div class="gate-act">
+            <span class="why">Cannot start yet: the name is taken.</span>
+            <span class="btn">Check again</span>
+            <span class="btn primary dis">Start training</span>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div></section>
+
+  <!-- ═════════════════════════ SCREEN 7 — the smallest window, a run ═════════════════════════ -->
+  <section class="screen"><div class="desk">
+    <p class="desk-cap">The window at its smallest, 900 × 600 pixels, drawn at its real size. The stage row wraps to two rows of two; the time axis keeps its three lines of words; what is below the figure is reached by scrolling.</p>
+    <div class="frame"><div class="app min">
+      <div class="nav">
+        <div class="brand">PRISM</div>
+        <div class="nav-list">
+          <div class="grp-cur">
+            <span class="part">Parameter inference</span>
+            <ol class="chain">
+              <li class="step one"><svg class="mk"><use href="#m-done"/></svg><span class="nm"><i>1</i>Model and options</span></li>
+              <li class="step one"><svg class="mk"><use href="#m-done"/></svg><span class="nm"><i>2</i>Prior</span></li>
+              <li class="step cur later"><svg class="mk"><use href="#m-now"/></svg><span class="nm"><i>3</i>Training</span><span class="ss">Now: running</span></li>
+              <li class="step wait later"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>4</i>Calibration check</span><span class="ss">Needs a trained network</span></li>
+              <li class="step wait later one"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>5</i>Inference</span></li>
+              <li class="step wait later one"><svg class="mk"><use href="#m-later"/></svg><span class="nm"><i>6</i>Narrowing round</span></li>
+            </ol>
+          </div>
+          <div class="parts-rest">
+            <span class="part">Effective temperature</span>
+            <span class="part">Live simulation</span>
+            <span class="part">Reduction map</span>
+            <div class="gap"></div>
+            <span class="part">Records</span>
+            <span class="part">Settings</span>
+          </div>
+        </div>
+        <div class="runline"><svg class="mk"><use href="#m-now"/></svg><span><b>Training is running</b>Fitting, epoch 62 of about 130. Settings are locked.</span></div>
+      </div>
+
+      <div class="main">
+        <div class="head">
+          <h1>Training in progress</h1>
+          <div class="acts">
+            <span class="btn">Show the full text</span>
+            <span class="btn danger"><i></i>Stop training…</span>
+          </div>
+        </div>
+        <div class="status">
+          <ul class="stages">
+            <li><svg class="mk"><use href="#m-done"/></svg><b>Rotation</b><span>Done</span></li>
+            <li><svg class="mk"><use href="#m-done"/></svg><b>Simulation</b><span>Done, 20,480,000 simulations</span></li>
+            <li class="now"><svg class="mk"><use href="#m-now"/></svg><b>Fitting</b><span>Now, about 63 minutes per epoch</span></li>
+            <li><svg class="mk"><use href="#m-later"/></svg><b>Saving</b><span>To come</span></li>
+          </ul>
+          <p class="nowline"><b>Now:</b> Sunday 12:10, running 65 hours, epoch 62 of about 130</p>
+          <div class="axis" role="img" aria-label="65 hours of an expected 120 to 144 have passed">
+            <div class="ax-track"><i class="ax-hatch" style="left:83.33%;right:0"></i><i class="ax-done" style="width:45.14%"></i></div>
+            <i class="ax-now" style="left:45.14%"></i>
+            <i class="ax-tick" style="left:3.45%"></i><i class="ax-tick" style="left:20.12%"></i><i class="ax-tick" style="left:36.78%"></i>
+            <i class="ax-tick" style="left:53.45%"></i><i class="ax-tick" style="left:70.12%"></i><i class="ax-tick" style="left:86.78%"></i>
+            <span class="ax-day first" style="left:0">Thu</span><span class="ax-day" style="left:11.78%">Fri</span>
+            <span class="ax-day" style="left:28.45%">Sat</span><span class="ax-day" style="left:45.12%">Sun</span>
+            <span class="ax-day" style="left:61.78%">Mon</span><span class="ax-day" style="left:78.45%">Tue</span>
+            <span class="ax-day" style="left:93.39%">Wed</span>
+          </div>
+          <div class="ax-ends"><span>Started Thu 19:02</span><span class="ax-key"><i></i>Expected to end between Tue 19:00 and Wed 19:00</span></div>
+        </div>
+        <div class="scroll">
+          <figure class="fig w64">
+            <svg viewBox="0 0 640 196" font-size="12" role="img"aria-label="Loss by epoch, training and validation">
+              <path class="ax" d="M60 12V156H560"/>
+              <g class="ax"><path d="M55 30h5M55 54h5M55 78h5M55 102h5M55 126h5M55 150h5"/><path d="M60 156v5M133.8 156v5M215.7 156v5M297.7 156v5M379.7 156v5M461.6 156v5M560 156v5"/></g>
+              <g text-anchor="end"><text x="50" y="34">0</text><text x="50" y="58">−2</text><text x="50" y="82">−4</text><text x="50" y="106">−6</text><text x="50" y="130">−8</text><text x="50" y="154">−10</text></g>
+              <g text-anchor="middle"><text x="60" y="176">1</text><text x="133.8" y="176">10</text><text x="215.7" y="176">20</text><text x="297.7" y="176">30</text><text x="379.7" y="176">40</text><text x="461.6" y="176">50</text><text x="560" y="176" class="lbl">62</text></g>
+              <text class="axname" x="50" y="14" text-anchor="end">Loss</text>
+              <text class="axname" x="310" y="193" text-anchor="middle">Epoch</text>
+              <use href="#c-train" transform="translate(2.857 4.8) scale(.952381 .6)" stroke="var(--series-2)" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round"/>
+              <use href="#c-val" transform="translate(2.857 4.8) scale(.952381 .6)" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round"/>
+              <line class="lead2" x1="527.2" y1="139" x2="527.2" y2="156"/>
+              <circle class="best" cx="527.2" cy="134.2" r="4.5"/>
+              <text class="lbl" x="533" y="121" text-anchor="end">best so far: epoch 58</text>
+              <text class="lbl" x="568" y="136">validation</text>
+              <text class="lbl" x="568" y="152">training</text>
+            </svg>
+            <figcaption><p class="cap t"><b>Loss by epoch.</b> Loss is the negative log-probability; lower is better. Fitting ends when validation has not improved for 20 epochs.</p></figcaption>
+          </figure>
+          <div class="blk">
+            <div class="bt2">Training health</div>
+            <table class="tb">
+              <thead><tr><th>Measure</th><th class="r" style="width:11.8rem">Now</th><th style="width:5.6rem">State</th></tr></thead>
+              <tbody>
+                <tr><td>Failed simulations</td><td class="r"><b>0.15 %</b></td><td><span class="st"><svg class="mk"><use href="#m-fine"/></svg>Fine</span></td></tr>
+                <tr><td class="wrap">Unusable driven recordings</td><td class="r"><b>40.1 %</b><small>expected 37.9 %</small></td><td><span class="st"><svg class="mk"><use href="#m-fine"/></svg>Fine</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <i class="sbar"><i style="height:46%"></i></i>
+        </div>
+      </div>
+    </div></div>
+  </div></section>
+</div>
+
+<div class="note">
+  <p><b>Figure and table.</b> This look sets PRISM the way a careful paper sets its results: black ink on a clear page with
+  no boxes or tinted panels, every list of settings or records set as a ruled table, one small marker shape for each
+  state, and progress drawn as a bar on a labelled time axis whose hatched end is the honest range for when the work
+  should finish.
+  It comes from the scientific page itself: the table with three rules, the figure labelled directly with its caption
+  beneath, and the colour-blind-safe colours scientists already use in figures, set in the lettering PRISM already
+  carries (Inter), with a book face (Cambria, which comes with Windows) kept for four places only: the line under a page
+  heading, a figure caption, a message and the question in a dialog.
+  Working in it is quiet and exact: a state is always a shape and a word, never a colour alone; the main button always
+  sits at the bottom right, beside the list of facts that must hold before a start; and one line of words above the time
+  axis always says where things stand (screens 3 to 7 show the run page on an ordinary day, the form locked during a
+  training, the key to every marker, and both screens at the smallest window).
+  Its one honest risk is that it has almost no colour or panels to lean on: it stays clear only if every later screen is
+  set with the same care over spacing, rules and wording, and the book face, so far seen only in a browser and not in
+  the program itself, is the part most likely to need changing (it can be swapped for Inter without touching anything
+  else).</p>
+</div>
+
+<script>
+/* For pictures only: ?screen=2&theme=dark&bare=1 */
+(function () {
+  var q = new URLSearchParams(location.search);
+  var s = document.getElementById('s' + (q.get('screen') || ''));
+  if (s) s.checked = true;
+  if (q.get('theme') === 'dark') document.getElementById('td').checked = true;
+  if (q.get('bare')) { document.body.classList.add('bare'); document.documentElement.classList.add('bare'); }
+})();
+</script>
+</body>
+</html>
