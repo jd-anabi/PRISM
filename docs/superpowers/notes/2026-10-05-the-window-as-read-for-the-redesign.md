@@ -44,13 +44,63 @@ added 24 faults of their own, which only one reader has seen.
   every setting that differs from an earlier simulation set). Saving the fit as it goes (3) is to be
   brought separately as its own design, to accept or leave.
 
-Not yet asked or decided: the way of getting around, the look, what a long run looks like on screen,
-which command-line checks get screens and in what form, whether a run's settings should be easier to
-get right (remembering science settings stays forbidden until the owner says otherwise), and whether
-the design plugins' own files (a product file, a design-system file, a hidden folder at the
-repository root) are committed or kept out. Until that last one is answered the plugins' methods are
-applied by hand and their programs are not run; nothing of theirs has been written into the
-repository.
+Decided later the same day, each from pictures or from a question with its options laid out:
+
+- **Getting around:** the parts of the program on a rail down the left edge that never goes away;
+  Home as a status page (what to do next, where the inference steps stand, what each part is for);
+  the six inference steps as a chain with a state and a reason each; a strip that follows any live
+  run from every screen. Grafted on: for a first-time visitor with nothing on disk, the opening that
+  asks "what do you want to do?" in plain words; and in Records the "made from / used by" view of a
+  record, with the next action offered on the record's own page. (Three structures were drawn as
+  wireframes, each critiqued and revised: this one, a task-first guided path, and a records-first
+  workbench.)
+- **The look:** "from the scientific page" — dark ink on a clear page with no boxes round groups,
+  every list a table with three rules, one marker shape per state always with its word, one accent
+  blue for the current place, the selection and the main action, the colour-blind-safe colours of
+  scientific figures for states, progress on a labelled time axis whose hatched end is the range in
+  which the run should finish, charts drawn like a journal figure; lettering in the bundled Inter,
+  whole sentences the program says in a book face (Cambria). Grafted on: real system dialogs and
+  stock control shapes, and a "recent / all epochs" switch on the loss curve. (Three looks were
+  drawn on one sample screen, each critiqued with measured contrast and revised: this one, one drawn
+  from the hair bundle's own imagery, and the Windows standard played straight.) The look is to be
+  proven as a small sample in PySide6 before the design is written.
+- **A long run's settings: named run plans.** A plan is a small file per kind of run, kept beside
+  the bounds and cell files (for example "retrain": 10,000 batches, network 256 by 10). Every launch
+  still opens at the built-in values; picking a plan fills the form, and "before you start" names
+  the plan and everything that departs from it or from the usual. The two measured definitions behind
+  the old incident (the chi band and drive) cannot be in a plan. Science settings are still never
+  restored by the window on its own.
+- **The card memory limit lives in Settings, per computer, and is remembered.** This reverses the
+  standing rule for that one setting ("the VRAM ceiling is never remembered"); the old fear is
+  answered by showing the limit in every "before you start" and storing it in each run's record. A
+  plan does not carry it.
+- **Closing the window during a run asks, and keeps running by default.** The question names the
+  run, how long it has been going and exactly what stopping would lose; the preselected answer is
+  "Keep running" and the window stays open; the other answer stops the run, shows that it is
+  stopping, waits until it really has, then closes. "Quit anyway" goes.
+- **When a long run fails partway:** the run's page says what failed, what was saved and what was
+  lost, keeps the full error in the run's file and offers "Continue from batch N"; before giving up
+  the window tries again by itself a few times with a pause, and says plainly when a failure is of
+  the kind only reopening the program can clear. An unattended restart in a fresh program is not in
+  this redesign.
+- **Vocabulary:** the field's own terms, each explained once where it first appears and in Help
+  (prior, posterior, calibration, effective temperature); plain words for the program's machinery
+  (Records, simulation set, memory limit, training, narrowing round with TSNPE given once, Model and
+  options); one name per thing everywhere.
+- **Checks: every check there is gets a screen** — the pre-run checks, the comparison when
+  simulation ends, the checks after the fit, and also the card test and the two investigation tools
+  — on one Checks pattern, each saying whether it decides pass or fail. The card test is tool code
+  today, so its screen needs it moved into the engine as a step: a small engine change, to be listed
+  with the others.
+- **The design plugins:** their methods are applied by hand and the design is recorded in the
+  project's own documents (the written design, and once built a page in the guide stating the look);
+  nothing of a plugin's is written into the repository and impeccable's program is never run.
+
+Still open when this was last updated: whether the inference steps sit inside the rail or as a track
+across the top of the page (both were drawn); what Home shows a first-time visitor in detail; what
+tells the owner a run has ended; keeping the computer awake during a run and a launcher with no
+console window (W004, W139); the details of a plan (what it may hold, whether the window can save
+one); and the separate design for saving the fit as it goes.
 
 ---
 

@@ -113,15 +113,36 @@ while the run uses another (W002, W003, W138); the rotation tick is remembered, 
 keeps Windows awake, and closing the launcher's console kills the run (W004, W139); a second window can delete a cache
 a run is writing (W137, W140). **The tests:** about 279 of the 322 window tests would pass if only the arrangement
 changed under the same names, labels and dialogs; a real redesign breaks many more (the inventory lists the names the
-tests reach for and each pin it collides with). **Under way when this was written:** a first round of pictures for the
-owner — three ways of getting around, as wireframes, and three looks on one sample screen — built as web pages in the
-chat's scratch folder (`%TEMP%\claude\…\scratchpad\prism-redesign\mockups`, which may not outlive the chat; nothing is
-published and nothing is in the repository). **Still to ask the owner:** which way of getting around and which look;
-what a long run should look like on screen; which command-line checks get screens; whether a run's settings should be
-easier to get right (science settings are still never remembered); what to do about failures in a days-long run; and
-whether the design plugins' own files are committed or kept out (until then their methods are applied by hand: impeccable's
-program has not been run and nothing of any plugin's is in the repository). **Engine changes so far: none. Gates: none
-run — documents only; the fast gate has not run since `771a460`.** To look at the window without touching the owner's
+tests reach for and each pin it collides with). **DECIDED BY THE OWNER LATER THAT EVENING, from pictures (three ways of
+getting around as wireframes, three looks on one sample screen, each built, critiqued by an independent reader and
+revised; all in the chat's scratch folder, nothing published, nothing in the repository) and from questions with their
+options laid out — the note's part 1 has each in full:** (1) getting around: **the parts on a rail that never goes
+away, Home as a status page, the six inference steps as a chain with a state and a reason each, a strip that follows a
+live run**, plus a plain "what do you want to do?" opening for a first-time visitor and a "made from / used by" view in
+Records with the next action on a record's page; (2) the look: **"from the scientific page"** — ink on a clear page,
+three-rule tables, a marker shape per state with its word, one accent blue, the colour-blind-safe figure colours,
+progress on a labelled time axis with a hatched range, journal-style charts, Inter for lettering and a book face for
+the program's sentences — plus real system dialogs, stock control shapes and a recent/all switch on the loss curve;
+(3) **a long run's settings come from NAMED RUN PLANS** (a small file per kind of run beside the bounds and cell
+files; every launch still opens at the built-in values; the window never restores a science setting on its own; the
+chi band and drive cannot be in a plan); (4) **the card memory limit moves to Settings, per computer, and IS
+remembered** — a reversal of the standing rule for that one setting, answered by showing it before every run and
+storing it in each run's record (`CLAUDE.md`'s rule is to be rewritten when it is built); (5) **closing the window
+during a run asks and keeps running by default**; the only other answer stops the run, waits until it has stopped,
+then closes; "Quit anyway" goes; (6) **after a failure** the run's page says what was saved and offers to continue,
+and the window retries by itself a few times in place first (no unattended restart in a fresh program in this
+redesign); (7) **vocabulary: the field's terms explained once, plain words for the machinery, one name per thing**
+(Records, simulation set, memory limit, training, narrowing round, Model and options); (8) **every check there is gets
+a screen**, the card test and the two investigation tools included — the card test is tool code today, so that is one
+more small engine change; (9) **the design plugins' methods are applied by hand and nothing of theirs is written into
+the repository**; impeccable's program is never run. **Under way when this was last updated:** the chosen look is
+being rebuilt as a small sample in PySide6 (a scratch script), to prove the toolkit carries it before the design is
+written. **Still open:** steps inside the rail or as a track across the page; Home for a first-time visitor in
+detail; what tells the owner a run has ended; keeping the computer awake and a launcher with no console window; the
+details of a plan; and the separate design for saving the fit as it goes. **Next:** show the owner the toolkit sample,
+present the design section by section for approval, write it under `docs/superpowers/specs/`, then the plan.
+**Engine changes so far: none built; those the design will need are the three small ones of the scope and the card
+test as an engine step. Gates: none run — documents only; the fast gate has not run since `771a460`.** To look at the window without touching the owner's
 settings: `core.gui.settings.use_ini_file(<scratch .ini>)` and `PRISM_ARTIFACTS=<scratch dir>` before `build_app`, then
 `window.grab()`; `QT_QPA_PLATFORM=windows` with `Qt.WA_DontShowOnScreen` gives the real text rendering (the offscreen
 platform substitutes fonts), and `os._exit` afterwards avoids the close event.
