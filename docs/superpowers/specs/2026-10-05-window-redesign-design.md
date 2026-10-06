@@ -1,7 +1,10 @@
 # PRISM — the redesign of the window: design
 
-**Status: written for the owner's review, 2026-10-06. Nothing is built.** The code is as at commit
-`39c37c1`; no file under `core/` or `tests/` has changed since `3ec5bf6`.
+**Status: APPROVED by the owner on 2026-10-06, in chat ("The design markdown file looks good").
+Nothing is built.** No line of part 2 or of appendix A was struck. One point of part 2 was put as a
+recommendation to decide at the review and was not answered: item 16, whether a figure's line
+colours number five or eight. It is the first thing to ask before the look's foundation is planned.
+The code is as at commit `39c37c1`; no file under `core/` or `tests/` has changed since `3ec5bf6`.
 
 This is the design of a complete redesign of PRISM's window: how it looks, how it is laid out, how
 work moves through it, and what it must do so that a training of days can be started, watched,

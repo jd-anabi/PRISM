@@ -1,7 +1,8 @@
 # PRISM — state
 
-**Last updated:** 2026-10-05 (evening: the redesign chat has started; its paragraph is the one that begins "THE REDESIGN
-CHAT HAS STARTED", below). **THE CONSOLE RETRAIN IS STOPPED AND THE ORDER OF WORK HAS CHANGED (owner,
+**Last updated:** 2026-10-06 (the window redesign's design is written and APPROVED by the owner; nothing is built; the
+plan and the build continue in a new chat from `docs/superpowers/prompts/2026-10-06-window-redesign-plan-and-build.md`;
+the paragraph is the one that begins "THE REDESIGN CHAT HAS STARTED", below). **THE CONSOLE RETRAIN IS STOPPED AND THE ORDER OF WORK HAS CHANGED (owner,
 2026-10-05).** The retrain started from PowerShell on 1 October reached a COMPLETE simulation cache (10,000 batches;
 gate 3 passed, 40.1 % against P = 37.9 %) and 62 epochs of the fit (61–63 minutes each; the capture's last count is 61,
 one behind) before the owner stopped it on
@@ -188,11 +189,23 @@ lengthened to eight. **Seven things are owed to a small experiment before they a
 Windows; the one-PRISM lock when its holder dies; what Windows does with a shutdown reason; whether a try in the same
 program can succeed after the card runs out of memory; PRISM with no console; a window-drawn figure against one the
 run is building; staging a failed save). **The audit's list has grown to nineteen items** (part 5 of the design).
-**Next, in order:** the owner reviews the written design; then the separate design for saving the fit as it goes;
-then the plan, written and approved one stage at a time (the design recommends it); then the build. **No file under
-`core/` or `tests/` has changed; engine changes built so far: none; gates run: none (documents only).**
-**Engine changes so far: none built; those the design will need are the three small ones of the scope and the card
-test as an engine step. Gates: none run — documents only; the fast gate has not run since `771a460`.** To look at the window without touching the owner's
+**THE OWNER HAS REVIEWED AND APPROVED THE WRITTEN DESIGN (2026-10-06, in chat: "The design markdown file looks
+good"), AND THE WORK CONTINUES IN A NEW CHAT, from `docs/superpowers/prompts/2026-10-06-window-redesign-plan-and-build.md`.**
+Nothing was struck, so the seventeen choices and the appendix stand as the design gives them (among them: no plan file
+is shipped by the redesign; "n of 3" for a posterior trained without the frequency response; the window's own tries
+only after an out-of-memory failure). **Still open, to put to the owner one at a time:** (a) the design's item 16, five
+figure colours or eight — it was put as a recommendation (eight) and not answered, and stage 1 needs it; (b) WHEN the
+separate design for saving the fit as it goes is made — the owner asked for it as its own design, to accept or leave,
+and has not said when; the design chat recommends before stage 3 is planned at the latest, since stage 3 builds what
+the window says a stop, a close or a failure costs, and stages 1 and 2 do not depend on it; (c) the replacement wording
+for `CLAUDE.md`'s rule on what is remembered and for its launch line (the design's parts 7.3.3 and 13.3.4), to be
+approved before `CLAUDE.md` is edited, which happens only when the code that changes those rules lands. **Next, in
+order:** those two questions; the plan for stage 1 (the look's foundation, with E12), approved before it is built;
+then stage by stage, each planned from the parts as they stand when the stage before it has landed; the card smoke
+gate once, at the end of stage 3, the owner told first. The piece's ledger is to be
+`.superpowers/sdd/2026-10-06-window-redesign/`. **No file under `core/` or `tests/` has changed since `3ec5bf6`;
+engine changes built so far: none of E1–E12; gates run: none (documents only) — the fast gate has not run since
+`771a460`. `main` is 36 commits ahead of `origin/main` (the owner pushes).** To look at the window without touching the owner's
 settings: `core.gui.settings.use_ini_file(<scratch .ini>)` and `PRISM_ARTIFACTS=<scratch dir>` before `build_app`, then
 `window.grab()`; `QT_QPA_PLATFORM=windows` with `Qt.WA_DontShowOnScreen` gives the real text rendering (the offscreen
 platform substitutes fonts), and `os._exit` afterwards avoids the close event.
