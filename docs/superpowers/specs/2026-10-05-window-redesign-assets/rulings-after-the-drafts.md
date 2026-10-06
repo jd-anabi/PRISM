@@ -135,3 +135,108 @@ reworded; E12 the plotting code's line colours.
     "shut down anyway" PRISM requests the stop and holds the shutdown for as long as Windows allows
     while the simulations done so far are saved; during a fit nothing can be saved and the reason
     says so.
+
+## C. The controller's second rulings (after the independent readers)
+
+These settle what the readers handed up. They are later than part B and win where they differ.
+Every one is the controller's; those marked "(unseen)" are choices the owner has not seen and stay
+marked so in the text and in the part's closing list.
+
+1. **"Continue with these" passes the remembered kind of observation** (B12) and every other option
+   at its built-in value or the plan's (B16); Home's sentence names the kind. Parts 3, 7 and 8 say
+   the same. (unseen)
+2. **Home's "Continue from batch N"** is offered for the newest training or narrowing round that
+   ended by a failure, or was not seen to end, whether or not its end was acknowledged, for as long
+   as its simulation set is unfinished and no later run of that kind has started. When the failure
+   was in the fit the button reads "Fit again on the saved simulations". For a run the user
+   stopped, Home's next step is the ordinary one (the Training page, whose "Before you start" says
+   it continues the saved set). Parts 3, 6 and 12 say the same.
+3. **A run that only loads a record** shows "Loading…" at the rail's foot while it runs and returns
+   to idle with nothing to acknowledge; it leaves no history file and no text file. Neither do a
+   Live simulation or a video export. (unseen: it narrows U17's "one small file per run")
+4. **A name and a note are never refilled**, also not after a restart: "Continue from batch N"
+   opens the page with both blank and the earlier name shown as a hint. Parts 3, 6, 7 and 13 say
+   the same.
+5. **The window's own three tries (U12) follow an out-of-memory failure of a training or a
+   narrowing round.** Any other failure is reported at once, with "Continue from batch N" where it
+   applies. (unseen: it narrows U12's "tries again by itself")
+6. **An engine warning the window has no sentence for** is shown on the run's page as an Attention
+   message that begins "From the engine:" and gives the engine's sentence as it stands; it is never
+   hidden behind a count alone. (unseen)
+7. **A failure's kind (the error's type name) appears only behind "Show the full error"**, in every
+   failure display: the run's page, a part that failed to build, the last-resort dialog.
+8. **Closing the window** asks about a live run first (U12); then, if a model of the user's own has
+   unsaved edits, asks "Throw away the unsaved changes?" (U17). The close is part 6's; the words
+   are part 10's.
+9. **A next-step button on a record's page** asks one question up front (what it will load and what
+   it will let go), then loads. A consent (a narrowed posterior; a different observation) is never
+   implied: it is asked inside the chain when it arises. "Narrow a posterior around it" on an
+   observation is greyed until a posterior is in use. Parts 5, 8 and 10 say the same.
+10. **The shared question dialog can carry a list** under its one sentence, one item to a line,
+    scrolling beyond eight. The from-zero question, the plan-fill question and Records' questions
+    use it; a list a decision requires (U10's "names every difference") is never behind a link.
+11. **B11 is amended.** The narrowing round's "Before you start" reads: "Simulates N simulations in
+    the round's own simulation set. A round never continues a training's simulations; if this same
+    round was run before with the same settings, its saved simulations are continued." The engine's
+    refusal of a set one setting away is shown as a question with the engine's sentence as it
+    stands. Drawing the region beforehand to preview it is not designed in.
+12. **Pre-run deciding checks and "Start training"**: a check not yet run never blocks and is led by
+    "Attention"; a check that does not apply is led by "Information"; a pre-run deciding check that
+    FAILED does not grey the button, but the start then asks one question first, with "Cancel"
+    preselected. (unseen)
+13. **The memory lines** appear only in the "Before you start" of runs that simulate on the card.
+14. **The repeated calibration's count field** is labelled "Fixed number of driven recordings".
+15. **A posterior trained without the frequency response**: the three checks that do not apply read
+    "Does not apply"; the headline reads "n of 3 deciding checks passed; 3 do not apply to this
+    posterior"; step 4 in the chain reads "Done" when every deciding check that applies has passed.
+    (unseen: it amends U16's "always n of 6" for this one case; put it first in the list)
+16. **The same case has the same words on the run's page and on the Checks list**: no audit yet,
+    "Waiting for the audit"; a total that covers part of the set, or none counted, "Not compared";
+    up to 3 points "Fine" and "Passed"; over 3 up to 5 "Look closer"; beyond 5 "Failed" with "needs
+    you". The run history's health entry holds the audit record's id beside its reading.
+17. **The smallest window is 900 by 600 at Windows' ordinary text size and grows with the text
+    size**, held to the screen. Part 3 follows part 4. (unseen)
+18. **Dates.** In tables, records and sentences: "3 Oct 2026, 14:02" (B22). On the run's page and
+    at the rail's foot a time within seven days carries its weekday ("Sun 4 Oct, 12:10"), as the
+    approved pictures did. Axis ticks stay short ("2 Oct", "2 Oct 00:00").
+19. **The line that says where a run stands** is set in the lettering face under the stage line, as
+    pictured. **A check's verdict sentence** is a message row: a marker and a sentence in the book
+    face.
+20. **E12.** One engine module holds the four line colours (blue, vermilion, green, orange); a test
+    holds them equal to the look's set; the ink comes from the figure settings. After the colours
+    have been used once a figure's further lines repeat them dashed, so curves stay distinguishable.
+    The exported video follows the light figure settings like any stored figure. (unseen)
+21. **The card test on the graphics card**: part 13 owns when. One run at the exit of stage 3,
+    covering E1, E3, E7 and E10; again at stage 9 only if code that moves tensors changed after it.
+    E9, E11 and E12 owe none by themselves; E9 needs a fast test with the saving of simulations on.
+22. **E7 is opt-in and only the window opts in**, so a command-line run is unchanged by it. **E10
+    applies to both front ends**: a failure while the last figure is drawn no longer fails the run;
+    the run ends with its record and a warning. That IS a change to what a command-line run does at
+    its last write, and it goes first in the list for the owner beside E1's and E6's text changes.
+    E7 is not carried to an inference made together with its observation. (unseen)
+23. **E11's scope** is every refusal sentence the engine raises, the three further refusal kinds
+    (units, an effective-temperature model, a model's equations) and the support sentences shown
+    beside a greyed start button included; "FDT" becomes "effective temperature". Reason strings
+    that are not refusals stay as they are.
+24. **The first-time opening's page is built in stage 2** (Home must open on something) and its
+    help is completed in stage 8. (unseen)
+25. **Walkthrough rows are owed for every rebuilt surface**, not only the shell, the look and the
+    run: also the Checks list, a record's page and its actions, the two modes of Inference, a small
+    narrowing round, Effective temperature, Live simulation, Your own models. The new group's
+    heading says which earlier rows it supersedes; earlier rows are never edited.
+26. **A test that builds the whole program must release the one-PRISM lock**; part 3 follows part
+    13.
+27. **Plans.** U8's "one action" is the button "Fill the forms from this plan" beside the list;
+    choosing in the list alone changes nothing (unseen: it differs from the letter of "picking").
+    Plan files are tracked in git like bounds and cell files and are committed before a long run,
+    so its records are not stamped as made from a changed tree. (unseen)
+28. **The timing check** reads Training's expected epochs as B9 resolves them; part 8 exposes the
+    resolved value.
+29. **The appearance and the keep-awake switch stay changeable during a run**; every other setting
+    is locked.
+30. **Part 13 owns the order in which tests are rewritten and the interim style rules** of stage 1;
+    part 4 adopts its order.
+31. **Housekeeping for every part**: delete "Seam:" lines that are now answered; check every
+    reference to another part's section number against that part's file as it now stands; the
+    idle sentence at the rail's foot is "Only one run at a time."; five keys are added to the
+    mock-up's (Ctrl+7, Ctrl+8, Ctrl+9, F1, Shift+F6).
