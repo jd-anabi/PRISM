@@ -155,10 +155,25 @@ Records shows settings in full, figures and complete logs for every kind and off
 keeps a run history; **seven small engine changes (E1 loss per epoch, E2 every differing setting named, E3 the card
 test as an engine step, E4 an observation's name, E5 a plan reader, E6 two refusals and the input-use check's errors
 given field keys, E7 a name taken during the run cannot cost the result)**; a stated list left to the audit; nine
-build stages, 70 to 100 tasks. **Under way when this was last updated:** eleven drafters are writing the parts of the
-written design into the chat's scratch folder against that record; it is then assembled, reviewed and written to
-`docs/superpowers/specs/2026-10-05-window-redesign-design.md` for the owner's review. **Still owed to the owner:** the
-written design to review; then the separate design for saving the fit as it goes; then the plan.
+build stages, 70 to 100 tasks. **SEVEN MORE DECISIONS (owner, 2026-10-06, after eleven drafters had written the parts
+of the design and listed what they had to choose): `…-window-redesign-assets/rulings-after-the-drafts.md`, which is
+LATER than `decisions-as-approved.md` and wins where they differ.** U21 four engine additions (E8 one path line in
+`core/config.py` naming the plans folder — the owner was told, as the rule on that file asks; E9 a simulation set
+keeps its name; E10 a guard round the engine's own drawing of the loss figure, so a failure there cannot remove a
+finished posterior; and the registry names the plan reader and the observation's name need); U22 **the engine's
+refusal sentences are reworded to the new vocabulary (E11), text only, in the last stage** — the command line's
+wording changes with them, its flags do not; U23 **the plotting code takes the look's colours (E12) and a record's
+figures are always drawn light**; U24 Home on reopening offers one button, "Continue with these", and loads nothing
+until it is pressed; U25 during a run saved effective-temperature runs can be browsed but NOT compared (amends the
+earlier "browsable and comparable"; nothing computes beside a live run); U26 **one PRISM at a time** (a second start
+brings the open window forward); U27 while a run is live PRISM registers a reason with Windows against a sign-out or
+shutdown. **The engine changes are therefore E1–E12.** The owner was also told that E1 and E6 change text the command
+line prints, with no flag or behaviour changed. **Under way when this was last updated:** each drafted part (about
+85,000 words in all, in the chat's scratch folder) is being revised against those rulings and checked by an
+independent reader against the decisions and the code; it is then assembled and written to
+`docs/superpowers/specs/2026-10-05-window-redesign-design.md` with the parts beside it, for the owner's review, the
+choices the owner has not seen listed at the top. **Still owed to the owner:** the written design to review; then the
+separate design for saving the fit as it goes; then the plan.
 **Engine changes so far: none built; those the design will need are the three small ones of the scope and the card
 test as an engine step. Gates: none run — documents only; the fast gate has not run since `771a460`.** To look at the window without touching the owner's
 settings: `core.gui.settings.use_ini_file(<scratch .ini>)` and `PRISM_ARTIFACTS=<scratch dir>` before `build_app`, then
