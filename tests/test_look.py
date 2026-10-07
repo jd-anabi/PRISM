@@ -418,14 +418,19 @@ def test_a_stored_mode_that_is_not_offered_reads_as_follow_windows(tmp_path):
     from PySide6.QtCore import QSettings
     from core.gui import settings
 
-    assert settings.get_appearance(QSettings(str(tmp_path / "none.ini"), QSettings.IniFormat)) == "system"
-    for n, stored in enumerate(("auto", "Light", "DARK", "", "sepia", 7)):
+    none = QSettings(str(tmp_path / "none.ini"), QSettings.IniFormat)
+    assert settings.get_appearance(none) == "system"
+    none.sync()
+    assert not (tmp_path / "none.ini").exists(), "reading a file that holds no mode wrote one into it"
+    for n, stored in enumerate(("auto", "Light", "DARK", "", "sepia", 7, " light ")):     # the last: nothing is stripped
         path = tmp_path / f"stored_{n}.ini"
         qs = QSettings(str(path), QSettings.IniFormat)
         qs.setValue("appearance/mode", stored)
-        assert settings.get_appearance(qs) == "system", stored      # as held: a number is still a number
         qs.sync()
         on_disk = path.read_bytes()
+        assert settings.get_appearance(qs) == "system", stored      # as held: a number is still a number
+        qs.sync()
+        assert path.read_bytes() == on_disk, f"reading through the object that stored {stored!r} rewrote its file"
         again = QSettings(str(path), QSettings.IniFormat)
         assert settings.get_appearance(again) == "system", stored
         again.sync()
