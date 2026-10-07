@@ -463,3 +463,276 @@ def test_export_animation_background_stays_white_under_dark_theme():
         frame0 = imageio.mimread(path)[0]
         corner = frame0[0, 0][:3]                                  # top-left = figure background margin
         assert min(int(c) for c in corner) > 230, corner          # near-white, not the dark theme bg
+
+# ── what a figure draws, its colours left out ────────────────────────────────────────────────────
+def _plain(value):
+    """Anything an artist hands back, as text and rounded numbers that compare equal run after run.
+    Ten significant digits, so the last bits of a float never decide a comparison."""
+    import numpy as np
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        v = float(value)
+        return repr(v) if (v != v or v in (float("inf"), float("-inf"))) else float(f"{v:.10g}")
+    if isinstance(value, np.ndarray):
+        flat = np.ma.filled(np.ma.asarray(value, dtype=float), np.nan)
+        return {"shape": list(flat.shape), "values": [_plain(v) for v in flat.ravel()]}
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    return str(value)
+
+def _drawn(fig) -> dict:
+    """What a figure draws, as plain data: every number, width, dash, marker, transparency, label,
+    drawing order and colour-map name of every artist on every axes, and NO colour. Read off the
+    artists, never off pixels, so the page and the lettering do not enter it."""
+    import numpy as np
+
+    def common(a):
+        solid = hasattr(a, "do_3d_projection")      # a 3-D artist's drawing order is set when it is drawn
+        return {"kind": type(a).__name__, "label": a.get_label(), "alpha": a.get_alpha(),
+                "order": None if solid else a.get_zorder(),
+                "effects": [type(e).__name__ for e in (a.get_path_effects() or [])]}
+
+    def line(ln):
+        data = ln.get_data_3d() if hasattr(ln, "get_data_3d") else ln.get_data(orig=False)
+        return dict(common(ln), data=[np.asarray(d, dtype=float) for d in data], style=ln.get_linestyle(),
+                    width=ln.get_linewidth(), marker=str(ln.get_marker()), marker_size=ln.get_markersize(),
+                    steps=ln.get_drawstyle())
+
+    def collection(c):
+        out = dict(common(c), widths=np.asarray(c.get_linewidths(), dtype=float), styles=c.get_linestyles())
+        if hasattr(c, "get_coordinates"):                       # a colour mesh: its corners
+            out["mesh"] = np.asarray(c.get_coordinates())
+        elif not hasattr(c, "do_3d_projection"):                # a 3-D artist's paths are its projection
+            out["offsets"] = np.asarray(c.get_offsets())
+            out["paths"] = [np.asarray(p.vertices) for p in c.get_paths()]
+        if hasattr(c, "get_sizes"):
+            out["sizes"] = np.asarray(c.get_sizes(), dtype=float)
+        if c.get_array() is not None:
+            out.update(values=np.asarray(c.get_array()), limits=c.get_clim(), colour_map=c.get_cmap().name)
+        return out
+
+    def patch(p):
+        where = p.get_bbox().bounds if hasattr(p, "get_bbox") else np.asarray(p.get_path().vertices)
+        return dict(common(p), where=where, width=p.get_linewidth(), style=p.get_linestyle(), hatch=p.get_hatch())
+
+    def text(t):
+        box = t.get_bbox_patch()
+        return dict(common(t), text=t.get_text(), at=t.get_position(), size=t.get_fontsize(),
+                    face=t.get_fontfamily(), align=[t.get_ha(), t.get_va()],
+                    box=None if box is None else [type(box.get_boxstyle()).__name__, box.get_alpha()])
+
+    def image(im):
+        return dict(common(im), values=np.asarray(im.get_array()), limits=im.get_clim(),
+                    colour_map=im.get_cmap().name, extent=im.get_extent())
+
+    def axes(ax):
+        legend = ax.get_legend()
+        out = {"title": ax.get_title(), "x": [ax.get_xlabel(), ax.get_xscale(), ax.get_xlim()],
+               "y": [ax.get_ylabel(), ax.get_yscale(), ax.get_ylim()],
+               "lines": [line(a) for a in ax.lines], "collections": [collection(a) for a in ax.collections],
+               "patches": [patch(a) for a in ax.patches], "texts": [text(a) for a in ax.texts],
+               "images": [image(a) for a in ax.images],
+               "tables": [{f"{r},{c}": cell.get_text().get_text() for (r, c), cell in sorted(t.get_celld().items())}
+                          for t in ax.tables],
+               "legend": None if legend is None else [t.get_text() for t in legend.get_texts()]}
+        if hasattr(ax, "get_zlim"):
+            out["z"] = [ax.get_zlabel(), ax.get_zlim()]
+        return out
+
+    return _plain({"size": fig.get_size_inches(), "heading": fig.get_suptitle(),
+                   "axes": [axes(ax) for ax in fig.axes]})
+
+def _digest(record) -> str:
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps(record, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+def test_the_record_of_a_figure_holds_everything_but_its_colours():
+    """The record the next test compares must see a changed number, width, dash, marker, transparency
+    or label, and must not see a changed colour; and two builds of one figure must give one record."""
+    import numpy as np
+    from matplotlib.figure import Figure
+
+    def build(colour="steelblue", width=1.0, dash="--", alpha=0.25, label="band", lift=0.0, marker="o"):
+        t = np.linspace(0.0, 1.0, 8)
+        ax = Figure().add_subplot()
+        ax.fill_between(t, t - 0.1, t + 0.1, alpha=alpha, color=colour, label=label)
+        ax.plot(t, t + lift, color=colour, linewidth=width, linestyle=dash)
+        ax.plot(t, 1.0 - t, marker=marker, linestyle="none", color=colour)
+        ax.scatter(t[:2], t[:2], c=colour, s=40)
+        ax.axvspan(0.2, 0.4, color=colour, alpha=0.1)
+        ax.text(0.5, 0.5, "note", color=colour)
+        return _digest(_drawn(ax.figure))
+
+    same = build()
+    assert build() == same, "two builds of one figure differ: the record is not repeatable"
+    assert build(colour="#0072B2") == same, "a colour reached the record"
+    for change in (dict(width=1.1), dict(dash="-."), dict(alpha=0.3), dict(label="Band"),
+                   dict(lift=1e-6), dict(marker=".")):
+        assert build(**change) != same, f"the record does not see {change}"
+
+# What each plotting function drew on the tree as it stood before any of them took its colours from
+# one shared module: one digest a figure, of `_drawn`. Tied to the pinned matplotlib: an upgrade of it
+# is recorded again, on a tree whose plotting files are untouched.
+_DRAWN_FIGURES: dict = {
+    "plot": "6408809307b6b286",
+    "plot_ppc": "141dd9a823a7b1ad",
+    "plot_posterior_vs_truth": "d56bddd460aafd8b",
+    "plot_best_fit_overlay": "29e93c12a16f8952",
+    "plot_overlay_band": "20d7569f8824084b",
+    "plot_psd_overlay": "e8acf81a0b10a512",
+    "plot_psd_overlay, nothing finite": "aa03dcb7e7961538",
+    "plot_cycle_average": "c549495d1076b0e3",
+    "plot_training_loss": "2695bad252b76e82",
+    "plot_eff_temp_ratio": "12c9e81bbcd22e5d",
+    "plot_spontaneous_trajectory": "b8f3c318519c9754",
+    "plot_psd": "0780c351b338e84c",
+    "plot_chi_components": "56ad3b53ada40e13",
+    "FDT ratio across repeats": "c76a4a21722c902a",
+    "Sweep surfaces": "efcb50c9d30b7a0e",
+    "Sweep slice": "911994075a7ab1a7",
+    "plot_fdt_3d_vs_param": "753e7a3f5c7b0dbd",
+    "plot_sweep_summary": "c020e21966f75c9b",
+    "plot_cross_validation_3d": "8a10155901ca25c3",
+    "Jacobian cosine matrix": "19a6def49ab0256a",
+    "Jacobian singular spectrum": "4eb4bc606a9a42d3",
+    "Probe drive own-peak ratio": "97633d5b965d5090"
+}
+
+# Words each figure shows only when the call behind them ran: the proof that the inputs below open
+# every branch that names a colour.
+_MUST_SHOW = {
+    "plot": ("LineCollection",),
+    "plot_ppc": ("Invalid (zero variance)",),
+    "plot_posterior_vs_truth": ("Posterior 95% band", "Posterior samples", "Posterior median", "Posterior mean"),
+    "plot_psd_overlay, nothing finite": ("no finite posterior-predictive PSD",),
+    "plot_training_loss": ("training loss", "early-stop window"),
+    "plot_eff_temp_ratio": ("approx",),
+    "plot_spontaneous_trajectory": ("burn-in ends",),
+    "plot_psd": ("probe band", "approx"),
+    "plot_chi_components": ("approx",),
+    "FDT ratio across repeats": ("spread across the repeats", "mean of the repeats"),
+    "plot_fdt_3d_vs_param": ("Omega_0 = 1",),
+    "plot_cross_validation_3d": ("Hopf manifold",),
+    "Probe drive own-peak ratio": ("free-running at or above", "captured at or below"),
+}
+
+def test_what_each_plotting_function_draws_is_unchanged(tmp_path, monkeypatch):
+    """Every plotting function of the engine that names a colour, called with fixed inputs under
+    matplotlib's own settings, draws what it drew when `_DRAWN_FIGURES` was written: the same numbers,
+    widths, dashes, markers, transparencies and labels. Colours are not compared, so a change of a
+    line's colour passes and a change of anything else with it fails."""
+    import json
+    from types import SimpleNamespace
+
+    import matplotlib
+    import numpy as np
+    import pandas as pd
+    from matplotlib import pyplot as plt
+
+    from core.artifacts import ArtifactStore
+    from core.diagnostics import identifiability, probes
+    from core.FDT import compare, cross_validation_plots, plots
+    from core.Helpers import visualizers
+    from core.Reduction import plots as reduction_plots
+    from tests._fixtures import build_fdt_record
+
+    drawn = {}
+
+    def keep(name, fig):
+        assert name not in drawn, name
+        drawn[name] = _drawn(fig)
+        plt.close(fig)
+
+    with _rcparams_guard():
+        matplotlib.rcdefaults()              # matplotlib's own settings, whatever an earlier test left
+        t = np.linspace(0.0, 1.0, 64)
+        wave = np.sin(6.0 * t)
+
+        # core/Helpers/visualizers.py
+        visualizers.plot(t, wave, hlines=([0.5], 0.0, 1.0), sink=lambda _title, fig: keep("plot", fig))
+        keep("plot_ppc", visualizers.plot_ppc({"z_scores": np.array([0.1, 1.5, 2.5, np.nan]),
+                                               "coverage_90": 0.9, "num_outside": 1, "num_invalid": 1}))
+        samples = np.stack([np.sin(6.0 * t + 0.1 * k) for k in range(12)])
+        keep("plot_posterior_vs_truth", visualizers.plot_posterior_vs_truth(
+            t, wave, x_mean=samples.mean(axis=0), x_median=np.median(samples, axis=0), x_samples=samples))
+        keep("plot_best_fit_overlay", visualizers.plot_best_fit_overlay(
+            t, wave, 1.02 * wave, param_labels=["a", "b"], param_values=[1.0, 2.0], criterion="closest"))
+        keep("plot_overlay_band", visualizers.plot_overlay_band(t, wave, wave - 0.2, wave, wave + 0.2, n_used=5))
+        freqs = np.linspace(0.0, 10.0, 16)
+        power, blank = 1.0 / (1.0 + freqs ** 2), np.full(16, np.nan)
+        keep("plot_psd_overlay", visualizers.plot_psd_overlay(freqs, power, 0.5 * power, 0.9 * power, 2.0 * power))
+        keep("plot_psd_overlay, nothing finite",
+             visualizers.plot_psd_overlay(freqs, power, blank, blank, blank, n_dropped=3))
+        phase = np.linspace(0.0, 2.0 * np.pi, 24)
+        cycle = 0.9 * np.sin(phase)
+        keep("plot_cycle_average", visualizers.plot_cycle_average(phase, np.sin(phase), cycle, cycle - 0.1, cycle + 0.1))
+        keep("plot_training_loss", visualizers.plot_training_loss(
+            {"training_loss": [1.0, 0.7, 0.5, 0.45, 0.44], "validation_loss": [1.1, 0.8, 0.6, 0.62, 0.63],
+             "stop_after_epochs": 2, "epochs_trained": 5, "best_validation_loss": 0.6}))
+
+        # core/FDT/plots.py: each saves through pyplot and then closes its figure, so the figure is
+        # taken at the save, and nothing is written
+        caught = []
+        monkeypatch.setattr(plots.plt, "savefig", lambda *a, **k: caught.append(plots.plt.gcf()))
+        om = np.array([0.5, 1.0, 2.0, 4.0])
+        plots.plot_eff_temp_ratio(om, np.array([0.5, 1.0, -2.0, 3.0]), save_path="unwritten.png", omega_natural=1.0)
+        keep("plot_eff_temp_ratio", caught.pop())
+        plots.plot_spontaneous_trajectory(t, wave, save_path="unwritten.png", burn_in=0.25)
+        keep("plot_spontaneous_trajectory", caught.pop())
+        welch = np.linspace(0.0, 2.0 * np.pi, 9)
+        plots.plot_psd(welch, 1.0 / (1.0 + (welch - np.pi) ** 2), save_path="unwritten.png",
+                       omega_natural=np.pi, plot_band=(8.0, 30.0))
+        keep("plot_psd", caught.pop())
+        plots.plot_chi_components(om, np.array([1.0 + 0.5j, 0.5 - 0.2j, -0.3 + 0.1j, 0.1 + 0.4j]),
+                                  save_path="unwritten.png", omega_natural=1.0)
+        keep("plot_chi_components", caught.pop())
+
+        # core/FDT/compare.py, through the comparison's own entry, on records written in seconds
+        store = ArtifactStore(tmp_path / "artifacts")
+        repeats = [build_fdt_record(store, name=f"rep{i}", omegas=(1.0, 2.0, 4.0), ratio=r, seed=i)
+                   for i, r in enumerate([(1.0, 3.0, 1.0), (1.2, 5.0, 1.1), (0.8, 4.0, 0.9)])]
+        compare.compare("repeats", repeats, fig_sink=keep, store=store)
+        sweeps = [build_fdt_record(store, name=name, study="sweep", omegas=(0.5, 1.0, 2.0), sweep_param="s",
+                                   points=points)
+                  for name, points in (("s_low", [(0.0, (1.0, 1.0, 1.0)), (0.5, (1.0, 3.0, 1.1))]),
+                                       ("s_high", [(0.25, (1.0, 2.0, 1.0)), (0.75, (1.0, 6.0, 1.2))]))]
+        compare.compare("sweeps", sweeps, fig_sink=keep, store=store)
+
+        # the three that return nothing and leave their figure open: it is pyplot's current one
+        cross_validation_plots.plot_fdt_3d_vs_param(
+            [{"failed": False, "omega_norm": om, "param_value": v, "T_eff_over_T": v + 1.0 / om}
+             for v in (0.0, 0.5, 1.0)], r"$S$", "Sweep", None)
+        keep("plot_fdt_3d_vs_param", plt.gcf())
+        table = pd.DataFrame({"failed": [False] * 4, "f_max": [1.0, 2.0, 3.0, 4.0], "mu_N": [-0.2, -0.1, 0.1, 0.2],
+                              "Omega0_N": [1.0, 1.5, 2.0, 2.5], "alpha_H_N": [0.3, 0.2, -0.1, -0.2],
+                              "beta_H_N": [0.1, 0.0, -0.1, -0.2],
+                              "regime": ["subcritical", "subcritical", "supercritical", "supercritical"]})
+        reduction_plots.plot_sweep_summary(table, save=False)
+        keep("plot_sweep_summary", plt.gcf())
+        reduction_plots.plot_cross_validation_3d(
+            table, [{"f_max": f, "omega_grid": om, "T_eff_over_T": f + om} for f in (1.0, 2.0, 3.0, 4.0)], save=False)
+        keep("plot_cross_validation_3d", plt.gcf())
+
+        # core/diagnostics: the two figure builders, called as their diagnostics call them
+        J = np.array([[1.0, 0.2, 0.0], [0.5, 1.0, 0.1], [0.1, 0.3, 1.0], [0.9, 0.1, 0.4], [0.2, 0.8, 0.6], [0.3, 0.5, 0.7]])
+        identifiability._summaries(SimpleNamespace(feat_labels=[f"feature {i}" for i in range(6)]), J, np.ones(6),
+                                   np.zeros(6, dtype=bool), ["alpha", "beta", "gamma"], ["central"] * 3,
+                                   [1.0] * 3, 0.05, keep)
+        probes._drive_figure(keep, [0.01, 0.1, 1.0], [0.9, None, 0.05], 0.70, 0.10)
+
+    assert len(drawn) == 22, sorted(drawn)
+    for name, words in _MUST_SHOW.items():
+        shown = json.dumps(drawn[name])
+        for word in words:
+            assert word in shown, f"{name}: the call that draws {word!r} was not reached"
+    assert [len(a["patches"]) for a in drawn["plot_sweep_summary"]["axes"]] == [2, 2, 2, 2], \
+        "the reduction map's two shaded ranges were not both drawn"
+    got = {name: _digest(record) for name, record in drawn.items()}
+    (tmp_path / "drawn.json").write_text(json.dumps(drawn, indent=1, sort_keys=True), encoding="utf-8")
+    assert got == _DRAWN_FIGURES, (
+        "what the plotting functions draw has changed (colours are not compared). Every record is in "
+        f"{tmp_path / 'drawn.json'}. The table as this run found it:\n{json.dumps(got, indent=4)}")
