@@ -1,5 +1,7 @@
 ## 13. Tests, the stages of the build, the pages and the walkthrough
 
+> **Read with section 8 of the design's main file** ("Deviations recorded while planning and building"): where a row there departs from this part, the row wins.
+
 How the design is built and proven (U19): the fate of each of today's tests, the fixtures and the new suites, the gate each task passes, the nine stages, what every reader page must say afterwards, and the rows the owner runs on a real screen. It changes nothing a screen shows. Code is cited as at `c45cc4a`; no file under `core/` or `tests/` has changed since.
 
 ### 13.1 The tests

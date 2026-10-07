@@ -1,5 +1,7 @@
 ## 11. The engine changes
 
+> **Read with section 8 of the design's main file** ("Deviations recorded while planning and building"): where a row there departs from this part, the row wins.
+
 The twelve changes E1 to E12 (U18, U21 to U23), each as it is to be built and audited; then the
 three things done in the window instead, the list left for the audit, and the registry. Line
 numbers are those of commit `c45cc4a` (no file under `core/` or `tests/` differs from `8c6ac2f`);

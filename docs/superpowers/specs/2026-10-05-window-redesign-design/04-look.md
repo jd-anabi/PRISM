@@ -1,5 +1,7 @@
 ## 4. The look: colours, type, sizes, and the pieces that carry them
 
+> **Read with section 8 of the design's main file** ("Deviations recorded while planning and building"): where a row there departs from this part, the row wins.
+
 This part states the visual system of U6 and U13 so that it can be built and tested. Its values are those of the PySide6 sample, `docs/superpowers/specs/2026-10-05-window-redesign-assets/toolkit-sample.py.txt` ("sample:N"), which rebuilt the chosen mock-up `look-chosen-scientific-page.html` ("mock-up:N"); where the two differ the sample is taken and the difference named. Only its values and devices are taken: its on-screen words predate U7, U9 and U10. Paths with no folder are under `core/gui/`. The code was read at `c45cc4a`.
 
 The look is ONE table of named colours, type and sizes. Four things read it and nothing else holds a colour or a size: one application style sheet, one palette, one small style over Fusion, and the painted pieces. One thing leaves `core/gui/`: matplotlib's process-wide settings, as today (mpl_theme.py:31-33). Under E12 the engine's plotting code imports nothing of the window: it holds its own copy of four of `SERIES`' colours, which a test holds equal (C20; 4.9). Nothing here reaches an engine argument.
