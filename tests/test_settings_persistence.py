@@ -966,22 +966,34 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
     step = build_part(ConfigPanel, screen=None)
     assert type(step) is ConfigPanel and step._screen is None
 
-    refreshed, installed = [], []
-    real_refresh = InferenceScreen.refresh_gates
+    # The constructor's own refreshes are counted where the constructor returns, apart from the
+    # builder: a count read through the builder would take a refresh the builder made on every
+    # call for the constructor's, and could not refuse it.
+    refreshed, installed, as_constructed = [], [], []
+    real_refresh, real_init = InferenceScreen.refresh_gates, InferenceScreen.__init__
     monkeypatch.setattr(InferenceScreen, "refresh_gates",
                         lambda self: (refreshed.append(self), real_refresh(self))[1])
+
+    def counting_init(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        as_constructed.append(len(refreshed))
+
+    monkeypatch.setattr(InferenceScreen, "__init__", counting_init)
     plain = build_inference()
-    by_the_constructor = len(refreshed)
-    assert type(plain) is InferenceScreen and by_the_constructor >= 1
+    assert type(plain) is InferenceScreen and len(as_constructed) == 1 and as_constructed[-1] >= 1
+    assert len(refreshed) == as_constructed[-1], "the builder refreshed the gates itself"
     session = SbiSession(cfg=object(), inf_prior=object())
     held = build_inference(session=session)
-    assert held.session is session and held is not plain
-    assert len(refreshed) == 2 * by_the_constructor, "the builder refreshed the gates itself"
+    assert held.session is session and held is not plain and len(as_constructed) == 2
+    assert len(refreshed) == as_constructed[-1], "the builder refreshed the gates itself"
     monkeypatch.setattr(InferenceScreen, "install_config",
                         lambda self, cfg: installed.append((self, cfg)))
     cfg = object()
     built = build_inference(cfg=cfg)
-    assert installed == [(built, cfg)]
+    assert installed == [(built, cfg)] and len(as_constructed) == 3
+    assert len(refreshed) == as_constructed[-1], "the builder refreshed the gates itself"
+    assert "refresh_gates" not in code_only(build_inference), \
+        "the builder leaves the gates to the test that builds with it"
 
     host, other = build_run_host(), build_run_host()
     assert isinstance(host, BasePanel) and type(host) is not BasePanel and host is not other
