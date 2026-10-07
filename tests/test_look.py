@@ -210,6 +210,8 @@ def test_a_length_grows_with_the_text_factor_and_halves_round_up():
     with text_size(1.25):
         assert design.text_scale() == 1.25
         assert [design.scaled(n) for n in (2, 10, 12, 14, 18, 22, 34, 900)] == [3, 13, 15, 18, 23, 28, 43, 1125]
+        # a quarter rounds down and three quarters up: neither a ceiling nor a floor would do
+        assert [design.scaled(n) for n in (1, 3, 5)] == [1, 4, 6]
     with text_size(2.0):
         assert [design.scaled(n) for n in (1, 2, 14, 34, 600)] == [2, 4, 28, 68, 1200]
         assert type(design.scaled(14)) is int
