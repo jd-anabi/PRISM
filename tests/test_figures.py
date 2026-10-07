@@ -484,10 +484,19 @@ def _plain(value):
     return str(value)
 
 def _drawn(fig) -> dict:
-    """What a figure draws, as plain data: every number, width, dash, marker, transparency, label,
-    drawing order and colour-map name of every artist on every axes, and NO colour. Read off the
-    artists, never off pixels, so the page and the lettering do not enter it."""
+    """What a figure draws, as plain data, as far as the entries below go: for every line, collection,
+    patch, text, image and table on every axes its numbers, widths, dashes, markers, transparency,
+    label, drawing order and colour-map name, the frame a text is placed in and whether a marker has an
+    edge; each axes' title, labels, scales, limits and legend words; and NO colour. Read off the
+    artists, never off pixels, so the page and the lettering do not enter it. It is not the whole
+    picture: beyond colours it leaves out the ticks and their labels, the grid, a legend's place,
+    columns and letter size, a table's letter size, the width of an outline effect, the linear range of
+    a symmetric log axis, a line's dash given as numbers, the edge width of a line's markers, a text's
+    rotation and weight, an image's smoothing, an axes switched off, where the axes sit on the page, a
+    3-D surface's corner points, and a 3-D artist's drawing order and projected paths, which are set
+    only when it is drawn."""
     import numpy as np
+    from matplotlib.collections import PathCollection
 
     def common(a):
         solid = hasattr(a, "do_3d_projection")      # a 3-D artist's drawing order is set when it is drawn
@@ -508,6 +517,8 @@ def _drawn(fig) -> dict:
         elif not hasattr(c, "do_3d_projection"):                # a 3-D artist's paths are its projection
             out["offsets"] = np.asarray(c.get_offsets())
             out["paths"] = [np.asarray(p.vertices) for p in c.get_paths()]
+            if isinstance(c, PathCollection):                   # markers: is an edge drawn round each?
+                out["edged"] = len(c.get_edgecolor()) > 0       # whether an edge colour is set, never which
         if hasattr(c, "get_sizes"):
             out["sizes"] = np.asarray(c.get_sizes(), dtype=float)
         if c.get_array() is not None:
@@ -519,9 +530,10 @@ def _drawn(fig) -> dict:
         return dict(common(p), where=where, width=p.get_linewidth(), style=p.get_linestyle(), hatch=p.get_hatch())
 
     def text(t):
-        box = t.get_bbox_patch()
+        box, frame = t.get_bbox_patch(), t.get_transform()      # `at` is two numbers in that frame
         return dict(common(t), text=t.get_text(), at=t.get_position(), size=t.get_fontsize(),
                     face=t.get_fontfamily(), align=[t.get_ha(), t.get_va()],
+                    within="axes" if frame is t.axes.transAxes else "data" if frame is t.axes.transData else "other",
                     box=None if box is None else [type(box.get_boxstyle()).__name__, box.get_alpha()])
 
     def image(im):
@@ -552,26 +564,30 @@ def _digest(record) -> str:
 
 def test_the_record_of_a_figure_holds_everything_but_its_colours():
     """The record the next test compares must see a changed number, width, dash, marker, transparency
-    or label, and must not see a changed colour; and two builds of one figure must give one record."""
+    or label, the frame a text is placed in and whether a marker has an edge, and must not see a
+    changed colour, the colour of a marker's edge included; and two builds of one figure must give one
+    record."""
     import numpy as np
     from matplotlib.figure import Figure
 
-    def build(colour="steelblue", width=1.0, dash="--", alpha=0.25, label="band", lift=0.0, marker="o"):
+    def build(colour="steelblue", width=1.0, dash="--", alpha=0.25, label="band", lift=0.0, marker="o",
+              frame="data", edge=None):
         t = np.linspace(0.0, 1.0, 8)
         ax = Figure().add_subplot()
         ax.fill_between(t, t - 0.1, t + 0.1, alpha=alpha, color=colour, label=label)
         ax.plot(t, t + lift, color=colour, linewidth=width, linestyle=dash)
         ax.plot(t, 1.0 - t, marker=marker, linestyle="none", color=colour)
-        ax.scatter(t[:2], t[:2], c=colour, s=40)
+        ax.scatter(t[:2], t[:2], c=colour, s=40, edgecolors=edge)
         ax.axvspan(0.2, 0.4, color=colour, alpha=0.1)
-        ax.text(0.5, 0.5, "note", color=colour)
+        ax.text(0.5, 0.5, "note", color=colour, transform=ax.transAxes if frame == "axes" else ax.transData)
         return _digest(_drawn(ax.figure))
 
     same = build()
     assert build() == same, "two builds of one figure differ: the record is not repeatable"
     assert build(colour="#0072B2") == same, "a colour reached the record"
+    assert build(edge="black") == same, "the colour of a marker's edge reached the record"
     for change in (dict(width=1.1), dict(dash="-."), dict(alpha=0.3), dict(label="Band"),
-                   dict(lift=1e-6), dict(marker=".")):
+                   dict(lift=1e-6), dict(marker="."), dict(frame="axes"), dict(edge="none")):
         assert build(**change) != same, f"the record does not see {change}"
 
 # What each plotting function drew on the tree as it stood before any of them took its colours from
@@ -579,12 +595,12 @@ def test_the_record_of_a_figure_holds_everything_but_its_colours():
 # is recorded again, on a tree whose plotting files are untouched.
 _DRAWN_FIGURES: dict = {
     "plot": "6408809307b6b286",
-    "plot_ppc": "141dd9a823a7b1ad",
+    "plot_ppc": "11f120327b1ec853",
     "plot_posterior_vs_truth": "d56bddd460aafd8b",
     "plot_best_fit_overlay": "29e93c12a16f8952",
     "plot_overlay_band": "20d7569f8824084b",
     "plot_psd_overlay": "e8acf81a0b10a512",
-    "plot_psd_overlay, nothing finite": "aa03dcb7e7961538",
+    "plot_psd_overlay, nothing finite": "0f3259c78c4187f6",
     "plot_cycle_average": "c549495d1076b0e3",
     "plot_training_loss": "2695bad252b76e82",
     "plot_eff_temp_ratio": "12c9e81bbcd22e5d",
@@ -597,7 +613,7 @@ _DRAWN_FIGURES: dict = {
     "plot_fdt_3d_vs_param": "753e7a3f5c7b0dbd",
     "plot_sweep_summary": "c020e21966f75c9b",
     "plot_cross_validation_3d": "8a10155901ca25c3",
-    "Jacobian cosine matrix": "19a6def49ab0256a",
+    "Jacobian cosine matrix": "a556abf4f111a624",
     "Jacobian singular spectrum": "4eb4bc606a9a42d3",
     "Probe drive own-peak ratio": "97633d5b965d5090"
 }
@@ -622,9 +638,10 @@ _MUST_SHOW = {
 
 def test_what_each_plotting_function_draws_is_unchanged(tmp_path, monkeypatch):
     """Every plotting function of the engine that names a colour, called with fixed inputs under
-    matplotlib's own settings, draws what it drew when `_DRAWN_FIGURES` was written: the same numbers,
-    widths, dashes, markers, transparencies and labels. Colours are not compared, so a change of a
-    line's colour passes and a change of anything else with it fails."""
+    matplotlib's own settings, draws what it drew when `_DRAWN_FIGURES` was written, as far as `_drawn`
+    records a figure: the same numbers, widths, dashes, markers, transparencies, labels, text frames
+    and marker edges. Colours are not compared, so a change of a line's colour alone passes, and a
+    change of anything else `_drawn` records fails; `_drawn` says what it leaves out."""
     import json
     from types import SimpleNamespace
 
@@ -675,20 +692,22 @@ def test_what_each_plotting_function_draws_is_unchanged(tmp_path, monkeypatch):
              "stop_after_epochs": 2, "epochs_trained": 5, "best_validation_loss": 0.6}))
 
         # core/FDT/plots.py: each saves through pyplot and then closes its figure, so the figure is
-        # taken at the save, and nothing is written
+        # taken at the save, and nothing is written; the path they are handed is in this test's own
+        # folder all the same, so a save by another way could not land in the working directory
         caught = []
         monkeypatch.setattr(plots.plt, "savefig", lambda *a, **k: caught.append(plots.plt.gcf()))
+        unwritten = tmp_path / "unwritten.png"
         om = np.array([0.5, 1.0, 2.0, 4.0])
-        plots.plot_eff_temp_ratio(om, np.array([0.5, 1.0, -2.0, 3.0]), save_path="unwritten.png", omega_natural=1.0)
+        plots.plot_eff_temp_ratio(om, np.array([0.5, 1.0, -2.0, 3.0]), save_path=unwritten, omega_natural=1.0)
         keep("plot_eff_temp_ratio", caught.pop())
-        plots.plot_spontaneous_trajectory(t, wave, save_path="unwritten.png", burn_in=0.25)
+        plots.plot_spontaneous_trajectory(t, wave, save_path=unwritten, burn_in=0.25)
         keep("plot_spontaneous_trajectory", caught.pop())
         welch = np.linspace(0.0, 2.0 * np.pi, 9)
-        plots.plot_psd(welch, 1.0 / (1.0 + (welch - np.pi) ** 2), save_path="unwritten.png",
+        plots.plot_psd(welch, 1.0 / (1.0 + (welch - np.pi) ** 2), save_path=unwritten,
                        omega_natural=np.pi, plot_band=(8.0, 30.0))
         keep("plot_psd", caught.pop())
         plots.plot_chi_components(om, np.array([1.0 + 0.5j, 0.5 - 0.2j, -0.3 + 0.1j, 0.1 + 0.4j]),
-                                  save_path="unwritten.png", omega_natural=1.0)
+                                  save_path=unwritten, omega_natural=1.0)
         keep("plot_chi_components", caught.pop())
 
         # core/FDT/compare.py, through the comparison's own entry, on records written in seconds
