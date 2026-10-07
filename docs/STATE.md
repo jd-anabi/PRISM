@@ -1,7 +1,9 @@
 # PRISM — state
 
 **Last updated:** 2026-10-07 (STAGE 1 OF THE WINDOW REDESIGN IS BEING BUILT: the owner approved its plan on 2026-10-07;
-Tasks 0, 1, 2, 3a and 3b are complete, all of them TESTS ONLY, so no file under `core/` has changed yet; the next
+Tasks 0, 1, 2, 3a, 3b, 4 and 11a are complete; the product has changed in ONE place so far, the window's five file
+choosers now go through one function (Task 4); Task 6, the look's table, is next and is built WITHOUT the text-size
+test, which stays owed by the owner; the next
 paragraph is the build's state, the one after it the plan's story, and the design's own story is the paragraph that
 begins "THE REDESIGN CHAT HAS STARTED").
 
@@ -20,20 +22,35 @@ three lines of the product were broken by hand and the three moved tests that pi
 in `tests/_fixtures.py`; the one test that builds the whole program now puts back everything `build_app` sets on the
 process, and from this gate on the two hundred tests collected after it run without its leftovers, with no failure);
 **Task 3b** (`5f3640c` and the fix `4f4be89`: four builders, 157 constructions moved onto them, a standing scan that
-refuses a window, a part or a step built by hand). Every task had its review (opus) and one one-process fast gate,
-started together; **the last gate, at `4f4be89`: 1197 passed, 1 skipped, 5 deselected, 203 warnings, 17 min 32 s
-(not a quiet-machine time)**; after every gate the tree was clean, the real `Artifacts/` listing identical (428
+refuses a window, a part or a step built by hand); **Task 4** (`8cee026`, the first task that changes the product: the
+new `core/gui/file_chooser.py`, one function `choose_file`, and the five callers moved onto it with the same parent,
+title, start and filter; nine tests, among them a standing scan that lets no other file under `core/` name the
+toolkit's file-dialog class); **Task 11a** (`24dd3d3` and the fix `6b1f7f9`, tests only: `tests/test_figures.py`
+records what 22 figures draw, everything but their colours, against a committed table of digests, reaching all 50
+places the engine's colour change will edit; the fix added the frame a text's position is in and whether a 2-D
+scatter's marker has an edge). Every task had its review (opus) and one one-process fast gate,
+started together; **the last gate, at `6b1f7f9`: 1208 passed, 1 skipped, 5 deselected, 203 warnings, 15 min 58 s
+(a reviewer read beside it)**; two gates in between ran 17 min 32 s and 18 min 3 s on a loaded machine, and the next
+was back at 15 min 55 s with more tests, so it was not the code; after every gate the tree was clean, the real `Artifacts/` listing identical (428
 entries), the real `PRISM.ini` unchanged. **Rulings the controller made on the owner's behalf (each in the ledger with
 what it costs if wrong):** in Task 2, two lines of the product that give a refusal box its OK button and default
 (`core/gui/widgets/refusal_box.py:40-41`) are held by no assertion any more, and that stands, because the record says
 what a person would see and the toolkit shows OK as the default by itself; in Task 3a the helper gained a fifteenth
 key, the appearance object itself, after the review found its deletion unproven (the plan's registry corrected at
-`51e9e77`); in Task 3b the builders' own test was fixed so that it fails for a builder that refreshes the gates.
+`51e9e77`); in Task 3b the builders' own test was fixed so that it fails for a builder that refreshes the gates; in
+Task 11a the record was widened by a text's frame (the review showed that `transform=ax.transAxes` could be lost on a
+line the colour change edits with the test passing) while the plotting files are still untouched; **and Task 6 is
+built before the text-size test** (the plan said it waits; the owner was asked at three gaps and had not answered, and
+every later task stands behind Task 6): what is built is the plan's own fallback, PRISM reads Windows' own text-size
+number once at start, held to 225 %, which is what the plan builds in every outcome of the test but one; if the test
+later shows that Windows gives its own text another factor and the owner prefers that one, one function and its tests
+are redone in a task of its own; nothing differs at 100 % (the design's and the plan's deviation 33).
 **Open with the owner: Task 5**, the text-size test (Windows' slider to 150 % and back, about ten minutes, at a pause
-between two tasks): asked on 2026-10-07 and not yet answered; nothing waits on it before Task 6. **Next, in order:**
-Task 4 (the one file-chooser function: the first task that changes the product), Task 11a (what each plotting function
-draws, recorded; tests only), then Task 6 once Task 5 is done or declined, then 7, 8, 9, 10, the pictures for the owner
-(10p), 11b, 12 (E12, the stage's one engine change), 13 to 18, 19. **Engine changes built so far: none of E1–E12.**
+between two tasks): asked on 2026-10-07, not answered and NOT declined; it is run at the first gap after the owner says
+"ready". **Next, in order:** Task 6 (the look's table: `core/gui/design.py`, born with `tests/test_look.py`), then 7,
+8, 9, 10, the pictures for the owner (10p), 11b, 12 (E12, the stage's one engine change), 13 to 18, 19. **Engine
+changes built so far: none of E1–E12.** Minor review findings not fixed are listed per task in the ledger for the
+stage's last review to sort.
 
 **THE WINDOW REDESIGN, PLAN AND BUILD (started 2026-10-06 from
 `docs/superpowers/prompts/2026-10-06-window-redesign-plan-and-build.md`; continue from that prompt, this paragraph and
@@ -51,7 +68,8 @@ separate design for saving the fit as it goes is made between stages 2 and 3**, 
 commas that group a whole number arrive **page by page** (built and tested in stage 1, off by default; today's forms
 keep plain digits until each is rebuilt); (4) console text is set in **Cascadia Mono** (then Consolas, then Courier
 New), asked from a picture; its licence would allow bundling the file, which was not asked and is not planned.
-**The design gained section 8, "Deviations recorded while planning and building"** (32 rows, the same rows under the
+**The design gained section 8, "Deviations recorded while planning and building"** (32 rows at planning, 33 since
+Task 5's ruling, the same rows under the
 same numbers as the plan's head, each with what it costs if it is wrong), and its parts 4, 11 and 13 open with a
 pointer to it. **What the reading found that the design did not know** (all carried by the plan): 13.2.1's order
 cannot be followed to the letter (lettering and the sheet remove what the two appearance ticks pass, so the ticks go
