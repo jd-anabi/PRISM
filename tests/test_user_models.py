@@ -1221,41 +1221,41 @@ def test_the_window_class_icon_becomes_ours_on_a_real_windows_display():
 
 
 def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
-    """`core.gui.app.build_app` had NO test at all -- the suite builds MainWindow directly and skips
-    the whole application-level setup (style, font, appearance, matplotlib theme, icon). So an
-    exception in any of that would have shipped with every panel test still green and the app simply
+    """``core.gui.app.build_app`` is the one place the application-level setup runs (style, font,
+    appearance, figure settings, icon, error hook); a test that builds the window itself runs none
+    of it. An exception in any of that would ship with every panel test green and the program
     refusing to start.
 
-    Asserting the icon specifically because it is the piece with a silent failure mode: a null QIcon
-    is not an error, the window just shows Qt's default mark. build_app also installs the process
-    default store, so this test points PRISM_ARTIFACTS at a temp root and wraps the call in
-    use_store -- without that shield, build_app would repoint the session's sandboxed default store
-    at the real Artifacts/ for every suite that runs after this one in the same pytest invocation.
-    """
-    from core import config as core_config
-    from core.gui import app as gui_app
-    qt_app()
-    saved_quiet = core_config.QUIET_SEGMENT_BAR
+    The icon is asserted because it fails in silence: a null QIcon is not an error, the window
+    just shows Qt's default mark. build_app also makes the folder PRISM_ARTIFACTS names and
+    installs it as the process's store, so the variable points at a temporary folder first.
+
+    The second half is what the process holds afterwards. The whole program sets its look on the
+    one application every later test shares, and replaces the error hook, the root log handler and
+    the default store. ``whole_program`` puts each back; the comparison at the end is the proof,
+    and it names every value that is not as it was found."""
+    from core import logging_root
+    from core.artifacts import default_store
+    from tests._fixtures import process_state, whole_program
+    ours = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
-    from core.artifacts import ArtifactStore, default_store, use_store
-    before = default_store()
-    try:
-        with use_store(ArtifactStore(tmp_path / "shield")):
-            app, window = gui_app.build_app([])
-            icon = app.windowIcon()
-            assert not icon.isNull(), "build_app left the application with no window icon"
-            assert {16, 32, 256} <= {s.width() for s in icon.availableSizes()}
-            assert window.windowTitle() == "PRISM", window.windowTitle()
-            assert default_store().root == tmp_path / "Artifacts"
-            assert (tmp_path / "Artifacts").is_dir()
-            from core import logging_root
-            assert logging_root.installed() is True, \
-                "build_app must install THE root-logger handler at start-up"
-            window.close()
-        assert default_store() is before, "build_app's store install leaked past the test"
-    finally:
-        core_config.QUIET_SEGMENT_BAR = saved_quiet
-        # build_app never removes it (the window owns the process); a test must, or every later test
-        # in this process gets a handler writing library records into its captured streams.
-        from core import logging_root
-        logging_root.remove()
+    found = process_state(ours)
+    with whole_program() as (app, window):
+        assert app is ours, "the whole program must use the one application of the process"
+        icon = app.windowIcon()
+        assert not icon.isNull(), "build_app left the application with no window icon"
+        assert {16, 32, 256} <= {s.width() for s in icon.availableSizes()}
+        assert window.windowTitle() == "PRISM", window.windowTitle()
+        assert default_store().root == tmp_path / "Artifacts"
+        assert (tmp_path / "Artifacts").is_dir()
+        assert logging_root.installed() is True, \
+            "build_app must install THE root-logger handler at start-up"
+        during = process_state(app)
+        window.close()
+    changed = {key for key in found if during[key] != found[key]}
+    assert {"sheet", "palette", "font", "figure settings", "error hook", "appearance",
+            "default store", "root log handler"} <= changed, \
+        f"the whole program changed only {sorted(changed)}: the comparison below would prove nothing"
+    after = process_state(app)
+    left = sorted(key for key in found if after[key] != found[key])
+    assert left == [], f"the whole program left these as it set them: {left}"

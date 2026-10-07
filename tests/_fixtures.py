@@ -749,6 +749,97 @@ def compare_preflight_refusals(store) -> list:
     ]
 
 
+def process_state(app) -> dict:
+    """What the whole program sets on the process, read as values that compare. The whole-program
+    test reads it before, during and after; whatever ``whole_program`` learns to put back gets a
+    key here in the same change, so that test fails on the key until it does."""
+    import sys
+    import matplotlib
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QPalette
+    from core import config, logging_root
+    from core.artifacts import default_store
+    from core.gui import theming
+    palette = app.palette()
+    style = app.style()
+    return {
+        # Told apart by inherits() and the name. A style's meta-object is never asked: taken from
+        # a style made in Python, that was part of what ended a process as it left.
+        "style": (style.inherits("QStyleSheetStyle"), style.objectName()),
+        "sheet": app.styleSheet(),
+        "palette": tuple(palette.color(group, role).name(QColor.HexArgb)
+                         for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled)
+                         for role in QPalette.ColorRole if role != QPalette.NColorRoles),
+        "palette set by hand": app.testAttribute(Qt.AA_SetPalette),
+        "font": app.font().toString(),
+        "window icon": app.windowIcon().cacheKey(),
+        "names": (app.organizationName(), app.applicationName()),
+        "colour scheme": app.styleHints().colorScheme(),
+        "appearance": theming.active_appearance(),
+        "error hook": sys.excepthook,
+        "figure settings": {key: repr(value) for key, value in matplotlib.rcParams.items()},
+        "quiet segment bar": config.QUIET_SEGMENT_BAR,
+        "root log handler": logging_root.installed(),
+        "default store": default_store(),
+    }
+
+
+@contextmanager
+def whole_program():
+    """The whole program, built by ``core.gui.app.build_app`` and handed over as ``(app, window)``;
+    on the way out, everything build_app set on the process is as it was found (``process_state``
+    lists it). The one application serves every later test, so a test that builds the whole
+    program does it through here. PRISM_ARTIFACTS must name a temporary folder first: build_app
+    makes the folder it names and installs it as the process's store."""
+    import sys
+    import matplotlib
+    from PySide6.QtCore import QCoreApplication, QEvent, Qt
+    from PySide6.QtGui import QFont, QPalette
+    from core import config, logging_root
+    from core.artifacts import default_store, set_default_store
+    from core.gui import app as gui_app
+    from core.gui import theming
+    if not os.environ.get("PRISM_ARTIFACTS"):
+        raise AssertionError("whole_program() needs PRISM_ARTIFACTS set to a temporary folder: "
+                             "build_app makes the folder it names and installs it as the process's "
+                             "store, and with the variable unset that is the real Artifacts")
+    app = qt_app()
+    found = {"style": app.style().objectName(),       # read now: under a sheet it reads empty
+             "sheet": app.styleSheet(), "palette": QPalette(app.palette()),
+             "font": QFont(app.font()), "icon": app.windowIcon(),
+             "names": (app.organizationName(), app.applicationName()),
+             "appearance": theming.active_appearance(), "hook": sys.excepthook,
+             "quiet": config.QUIET_SEGMENT_BAR, "handler": logging_root.installed(),
+             "store": default_store()}
+    with matplotlib.rc_context():                     # the figure settings, exactly as found
+        try:
+            yield gui_app.build_app([])
+        finally:
+            sys.excepthook = found["hook"]            # first: a slip below must not open a box
+            # Then the three that cannot fail, so that a slip in the toolkit's lines below cannot
+            # leave a temporary folder as the process's store or a handler on the root logger.
+            set_default_store(found["store"])
+            if not found["handler"]:
+                logging_root.remove()
+            config.QUIET_SEGMENT_BAR = found["quiet"]
+            made = theming.active_appearance()
+            theming._ACTIVE = found["appearance"]
+            if made is not None and made is not found["appearance"]:
+                # Gone before the colour scheme is touched: alive, it applies the look again on
+                # the next change of scheme. Its own deferred delete only, never every receiver's.
+                made.deleteLater()
+                QCoreApplication.sendPostedEvents(made, QEvent.DeferredDelete)
+            app.styleHints().setColorScheme(Qt.ColorScheme.Unknown)
+            app.setStyleSheet(found["sheet"])
+            if found["style"]:
+                app.setStyle(found["style"])
+            app.setPalette(found["palette"])
+            app.setFont(found["font"])
+            app.setWindowIcon(found["icon"])
+            app.setOrganizationName(found["names"][0])
+            app.setApplicationName(found["names"][1])
+
+
 def artifact_screen(store):
     """The Artifacts screen wired to ``store`` and refreshed once.
 
