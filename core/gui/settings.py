@@ -67,30 +67,15 @@ def get_bool(qs: QSettings, key: str, default: bool) -> bool:
 
 
 def get_appearance(qs: QSettings) -> str:
-    """The persisted appearance mode ('system' | 'light' | 'dark' | 'auto'); default 'system'."""
-    return get_str(qs, "appearance/mode", "system")
+    """The appearance mode to open with: 'light' or 'dark' when that is what is stored, 'system'
+    (Follow Windows) for a missing key and for any other stored word, a mode an older build
+    offered among them. Reading writes nothing; the stored word stays until the next choice."""
+    mode = get_str(qs, "appearance/mode", "system")
+    return mode if mode in ("light", "dark") else "system"
 
 
 def set_appearance(qs: QSettings, mode: str) -> None:
     set_str(qs, "appearance/mode", mode)
-
-
-def get_system_accent(qs: QSettings) -> bool:
-    """Follow the Windows accent colour (opt-in; the fixed Fluent blue is the default)."""
-    return get_bool(qs, "appearance/system_accent", False)
-
-
-def set_system_accent(qs: QSettings, enabled: bool) -> None:
-    set_bool(qs, "appearance/system_accent", enabled)
-
-
-def get_force_inter(qs: QSettings) -> bool:
-    """Force the bundled Inter font on all platforms (default: prefer the native Fluent face)."""
-    return get_bool(qs, "appearance/force_inter", False)
-
-
-def set_force_inter(qs: QSettings, enabled: bool) -> None:
-    set_bool(qs, "appearance/force_inter", enabled)
 
 
 def restore_field(qs: QSettings, key: str, field) -> None:

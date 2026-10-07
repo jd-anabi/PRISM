@@ -127,15 +127,10 @@ class MainWindow(QMainWindow):
         # button), so the back arrow still returns Home.
         current_mode = (appearance.mode() if appearance is not None
                         else settings.get_appearance(settings.settings()))
-        qs0 = settings.settings()
         self.settings_screen = SettingsScreen(self.set_appearance_mode, current_mode,
                                               on_open_builder=self._open_model_builder,
                                               on_edit_model=self._edit_user_model,
-                                              on_delete_model=self._delete_user_model,
-                                              on_system_accent=self._set_system_accent,
-                                              system_accent=settings.get_system_accent(qs0),
-                                              on_force_inter=self._set_force_inter,
-                                              force_inter=settings.get_force_inter(qs0))
+                                              on_delete_model=self._delete_user_model)
         idx_settings = self.nav.add_screen(self.settings_screen)
 
         # The model builder: reached only from the Settings "User-defined models" group (never a Home
@@ -196,7 +191,7 @@ class MainWindow(QMainWindow):
                 _centre_on_primary(self)
 
     def _build_settings_menu(self, current_mode):
-        """Attach the gear's appearance popover: exclusive Light/Dark/Auto/System + 'Full settings…'."""
+        """Attach the gear's appearance popover: the three exclusive choices + 'Full settings…'."""
         menu = QMenu(self)
         group = QActionGroup(self)
         group.setExclusive(True)
@@ -229,26 +224,6 @@ class MainWindow(QMainWindow):
         if act is not None and not act.isChecked():
             act.setChecked(True)
         self.settings_screen.set_mode(mode)
-
-    # ── appearance extras (Settings checkboxes) ───────────────────────────────
-    def _set_system_accent(self, enabled: bool):
-        """Persist + live-apply the follow-OS-accent toggle (no-op appearance under tests)."""
-        qs = settings.settings()
-        settings.set_system_accent(qs, enabled)
-        qs.sync()
-        if self.appearance is not None:
-            self.appearance.set_system_accent(enabled)
-
-    def _set_force_inter(self, enabled: bool):
-        """Persist + live-apply the Inter-everywhere toggle (custom-painted caches settle on restart)."""
-        qs = settings.settings()
-        settings.set_force_inter(qs, enabled)
-        qs.sync()
-        from PySide6.QtWidgets import QApplication
-        from . import fonts
-        app = QApplication.instance()
-        if app is not None:
-            fonts.load_app_font(app, prefer_inter=enabled)
 
     # ── user-defined models (Settings group + builder screen) ─────────────────
     def _open_model_builder(self):

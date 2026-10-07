@@ -391,3 +391,198 @@ def test_the_look_and_this_file_load_without_the_engine():
     r = subprocess.run([sys.executable, "-c", _FRESH, __file__, ",".join(LOOK_MODULES)],
                        cwd=str(REPO), capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# ── the appearance: three choices, and an apply that changes nothing does nothing ────────────────
+def test_there_are_three_appearance_modes_and_no_others(tmp_path):
+    """Follow Windows, Light, Dark, in that order and under those words; and each comes back from a
+    settings file as itself, so the list of modes and the settings reader cannot drift apart."""
+    from PySide6.QtCore import QSettings
+    from core.gui import settings, theming
+
+    assert theming.MODE_LABELS == (("system", "Follow Windows"), ("light", "Light"), ("dark", "Dark"))
+    assert theming.MODES == ("system", "light", "dark")
+    path = str(tmp_path / "modes.ini")
+    for mode in theming.MODES:
+        qs = QSettings(path, QSettings.IniFormat)
+        settings.set_appearance(qs, mode)
+        qs.sync()
+        assert settings.get_appearance(QSettings(path, QSettings.IniFormat)) == mode
+
+
+def test_a_stored_mode_that_is_not_offered_reads_as_follow_windows(tmp_path):
+    """A word an older build stored (the time-of-day mode among them), a word in another case, a
+    blank and a number all read as the first choice: through the settings object that stored them,
+    through a second one on the same file, and from a file written by hand. Reading rewrites
+    nothing: the old word stays in the file until the next choice is made."""
+    from PySide6.QtCore import QSettings
+    from core.gui import settings
+
+    assert settings.get_appearance(QSettings(str(tmp_path / "none.ini"), QSettings.IniFormat)) == "system"
+    for n, stored in enumerate(("auto", "Light", "DARK", "", "sepia", 7)):
+        path = tmp_path / f"stored_{n}.ini"
+        qs = QSettings(str(path), QSettings.IniFormat)
+        qs.setValue("appearance/mode", stored)
+        assert settings.get_appearance(qs) == "system", stored      # as held: a number is still a number
+        qs.sync()
+        on_disk = path.read_bytes()
+        again = QSettings(str(path), QSettings.IniFormat)
+        assert settings.get_appearance(again) == "system", stored
+        again.sync()
+        assert path.read_bytes() == on_disk, f"reading rewrote the file that held {stored!r}"
+    for n, line in enumerate(("light, dark", "7", "Dark")):         # the first comes back as a list
+        by_hand = tmp_path / f"by_hand_{n}.ini"
+        by_hand.write_text(f"[appearance]\nmode={line}\n", encoding="utf-8")
+        assert settings.get_appearance(QSettings(str(by_hand), QSettings.IniFormat)) == "system", line
+
+
+def test_the_two_retired_appearance_keys_stay_in_the_file_and_nothing_reads_them(tmp_path):
+    """The accent switch and the font switch are gone: no helper for either, no method on the
+    Appearance, and neither key named anywhere in the window's code. A file that still holds them
+    opens as if they were not there, and a new choice of mode leaves them where they are."""
+    from pathlib import Path
+    from PySide6.QtCore import QSettings
+    import core.gui
+    from core.gui import settings, theming
+
+    for gone in ("get_system_accent", "set_system_accent", "get_force_inter", "set_force_inter"):
+        assert not hasattr(settings, gone), f"settings.{gone} still serves a retired key"
+    for gone in ("system_accent_enabled", "set_system_accent"):
+        assert not hasattr(theming.Appearance, gone), f"Appearance.{gone} is still there"
+    keys = ("appearance/system_accent", "appearance/force_inter")
+    readers = sorted(p.name for p in Path(core.gui.__file__).resolve().parent.rglob("*.py")
+                     if any(key in p.read_text(encoding="utf-8") for key in keys))
+    assert readers == [], f"these files still name a retired key: {readers}"
+    old = tmp_path / "old.ini"
+    old.write_text("[appearance]\nmode=dark\nsystem_accent=1\nforce_inter=1\n", encoding="utf-8")
+    assert settings.get_appearance(QSettings(str(old), QSettings.IniFormat)) == "dark"
+    qs = QSettings(str(old), QSettings.IniFormat)
+    settings.set_appearance(qs, "light")
+    qs.sync()
+    text = old.read_text(encoding="utf-8")
+    assert "mode=light" in text and "system_accent=1" in text and "force_inter=1" in text, text
+
+
+def test_an_apply_goes_on_only_for_a_scheme_not_yet_applied():
+    """The one decision of an apply, as a pure function: the first apply always goes on, and after
+    it only a scheme that differs from the one applied."""
+    from core.gui.theming import should_apply
+
+    assert should_apply(None, (False,)) is True and should_apply(None, (True,)) is True
+    assert should_apply((False,), (False,)) is False and should_apply((True,), (True,)) is False
+    assert should_apply((False,), (True,)) is True and should_apply((True,), (False,)) is True
+
+
+@pytest.fixture
+def stand_in_app():
+    """An application stand-in that records what an Appearance sets on it, so these tests set
+    nothing on the real one. Its style hints answer colorScheme() as Windows does: the scheme last
+    asked for, or what Windows itself holds (``windows``) when that was Unknown. Off screen the real
+    hints always answer Unknown and never signal, so only a stand-in can play a computer that turns
+    dark. The module's active Appearance is put back afterwards."""
+    from PySide6.QtCore import QObject, Qt, Signal
+    from PySide6.QtWidgets import QApplication
+    from core.gui import theming
+
+    _real = QApplication.instance() or QApplication([])    # palettes and signals want one to exist
+
+    class Hints(QObject):                                   # what styleHints() hands out
+        colorSchemeChanged = Signal(Qt.ColorScheme)
+
+        def __init__(self):
+            super().__init__()
+            self.windows, self.asked = Qt.ColorScheme.Light, []
+
+        def setColorScheme(self, scheme):
+            self.asked.append(scheme)
+
+        def colorScheme(self):
+            last = self.asked[-1] if self.asked else Qt.ColorScheme.Unknown
+            return self.windows if last == Qt.ColorScheme.Unknown else last
+
+    class Application(QObject):
+        def __init__(self):
+            super().__init__()
+            self.hints, self.palettes, self.sheets = Hints(), [], []
+
+        def styleHints(self):
+            return self.hints
+
+        def setPalette(self, palette):
+            self.palettes.append(palette)
+
+        def setStyleSheet(self, sheet):
+            self.sheets.append(sheet)
+
+    active = theming._ACTIVE
+    try:
+        yield Application()
+    finally:
+        theming._ACTIVE = active
+
+
+def test_the_first_apply_goes_on_and_a_repeat_of_the_same_scheme_sets_nothing(stand_in_app):
+    """Windows is light and so is an Appearance's starting state, yet its first apply must set the
+    palette and the sheet: nothing was applied before it. After that, choosing the scheme already
+    shown sets neither and signals nothing, while the frames Windows draws are still told. What
+    was applied is each Appearance's own: a second one on the same application starts from
+    nothing applied, and applies even the scheme the first one left."""
+    from PySide6.QtCore import Qt
+    from core.gui import theming
+
+    app = stand_in_app
+    appearance = theming.Appearance(app)
+    signalled = []
+    appearance.theme_changed.connect(signalled.append)
+    appearance.set_mode("system")
+    assert (len(app.palettes), len(app.sheets), signalled) == (1, 1, [False]), "the first apply"
+    appearance.set_mode("light")
+    appearance.set_mode("light")
+    assert (len(app.palettes), len(app.sheets), signalled) == (1, 1, [False]), "a repeat set something"
+    assert app.hints.asked == [Qt.ColorScheme.Unknown, Qt.ColorScheme.Light, Qt.ColorScheme.Light]
+    appearance.set_mode("dark")
+    assert (len(app.palettes), len(app.sheets), signalled) == (2, 2, [False, True])
+    assert appearance.is_dark() is True and appearance.mode() == "dark"
+    another = theming.Appearance(app)
+    another.set_mode("dark")
+    assert (len(app.palettes), len(app.sheets)) == (3, 3), \
+        "a new Appearance did not apply: what was applied must be kept by each one, not shared"
+
+
+def test_follow_windows_follows_a_change_made_while_open_and_a_chosen_scheme_does_not(stand_in_app):
+    """While PRISM follows Windows, Windows turning dark turns PRISM dark, once; being told the same
+    again sets nothing. Once a scheme is chosen by name, what Windows does is ignored; and choosing
+    Follow Windows again takes up what Windows shows by then."""
+    from PySide6.QtCore import Qt
+    from core.gui import theming
+
+    app = stand_in_app
+    appearance = theming.Appearance(app)
+    signalled = []
+    appearance.theme_changed.connect(signalled.append)
+    appearance.set_mode("system")
+    app.hints.windows = Qt.ColorScheme.Dark
+    app.hints.colorSchemeChanged.emit(Qt.ColorScheme.Dark)
+    assert (len(app.sheets), signalled, appearance.is_dark()) == (2, [False, True], True)
+    app.hints.colorSchemeChanged.emit(Qt.ColorScheme.Dark)
+    assert (len(app.sheets), signalled) == (2, [False, True])
+    appearance.set_mode("dark")
+    app.hints.windows = Qt.ColorScheme.Light
+    app.hints.colorSchemeChanged.emit(Qt.ColorScheme.Light)
+    assert (len(app.sheets), signalled, appearance.is_dark()) == (2, [False, True], True)
+    appearance.set_mode("system")
+    assert (len(app.sheets), signalled, appearance.is_dark()) == (3, [False, True, False], False)
+
+
+def test_a_retired_mode_handed_to_the_appearance_is_follow_windows_and_no_clock_runs(stand_in_app):
+    """The time-of-day mode is gone from the Appearance too: its word is taken as the first choice,
+    and nothing re-applies the look on a timer."""
+    from PySide6.QtCore import Qt, QTimer
+    from core.gui import theming
+
+    app = stand_in_app
+    appearance = theming.Appearance(app)
+    appearance.set_mode("auto")
+    assert appearance.mode() == "system"
+    assert app.hints.asked == [Qt.ColorScheme.Unknown]
+    assert appearance.findChildren(QTimer) == []

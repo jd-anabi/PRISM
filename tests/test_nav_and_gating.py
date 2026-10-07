@@ -290,6 +290,45 @@ def test_main_window_always_opens_on_home():
     w = build_window()
     assert w.nav.stack.currentIndex() == 0, "the app must always open on the home screen"
 
+def test_the_window_offers_three_appearance_choices_and_no_ticks():
+    """Both places that offer the appearance, the gear's menu and the Settings screen, show Follow
+    Windows, Light and Dark and nothing else: no time-of-day mode, no accent tick, no font tick and
+    no note under it. A settings file an older build left opens on Follow Windows in both places
+    with nothing rewritten; the next choice rewrites the mode and leaves the two old keys alone."""
+    from PySide6.QtWidgets import QCheckBox, QLabel, QRadioButton
+    from core.gui import settings as st
+    from core.gui.screens.settings_screen import SettingsScreen
+
+    qt_app()
+    qs = st.settings()
+    qs.setValue("appearance/mode", "auto")
+    qs.setValue("appearance/system_accent", "1")
+    qs.setValue("appearance/force_inter", "1")
+    qs.sync()
+    window = build_window()
+    three = ["Follow Windows", "Light", "Dark"]
+    actions = window.nav.btn_settings.menu().actions()
+    offered = [a for a in actions if a.isCheckable()]
+    assert [a.text() for a in offered] == three
+    assert [a.text() for a in actions if not a.isCheckable() and not a.isSeparator()] == ["Full settings…"]
+    radios = window.settings_screen.findChildren(QRadioButton)
+    assert [r.text() for r in radios] == three
+    assert window.settings_screen.findChildren(QCheckBox) == []
+    assert not [w for w in window.settings_screen.findChildren(QLabel) if "Font changes" in w.text()]
+    for gone in ("on_system_accent", "system_accent", "on_force_inter", "force_inter"):
+        assert gone not in inspect.signature(SettingsScreen.__init__).parameters, gone
+    for gone in ("_set_system_accent", "_set_force_inter"):
+        assert not hasattr(window, gone), gone
+    assert [a.text() for a in offered if a.isChecked()] == ["Follow Windows"]
+    assert [r.text() for r in radios if r.isChecked()] == ["Follow Windows"]
+    assert st.settings().value("appearance/mode") == "auto", "opening the window rewrote the stored mode"
+    window.set_appearance_mode("dark")
+    assert [a.text() for a in offered if a.isChecked()] == ["Dark"]
+    assert [r.text() for r in radios if r.isChecked()] == ["Dark"]
+    after = st.settings()
+    assert after.value("appearance/mode") == "dark"
+    assert after.value("appearance/system_accent") == "1" and after.value("appearance/force_inter") == "1"
+
 def test_inference_tab_gates_follow_the_session():
     from core.gui.session import SbiSession
 

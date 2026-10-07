@@ -97,10 +97,9 @@ def build_app(argv=None):
     # MainWindow) so it stays out of the test path.
     app.setStyle("Fusion")
     qs = settings.settings()
-    fonts.load_app_font(app, prefer_inter=settings.get_force_inter(qs))  # base UI font before any widget
+    fonts.load_app_font(app)                                             # base UI font before any widget
     appearance = theming.Appearance(app)
-    appearance.set_system_accent(settings.get_system_accent(qs))         # OS accent (opt-in) ...
-    appearance.set_mode(settings.get_appearance(qs))                     # ... then restore + apply Fluent
+    appearance.set_mode(settings.get_appearance(qs))                     # the stored choice, applied once
     mpl_theme.install(appearance)   # matplotlib figures follow the theme (built after this point)
 
     window_ref = {}

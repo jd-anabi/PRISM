@@ -1,16 +1,15 @@
 """The Settings + Help screen (reached from the bottom-left gear's "Full settings…").
 
-Two parts: an Appearance chooser (Follow-system / Light / Dark / Auto) that calls back to MainWindow to
+Two parts: an Appearance chooser (Follow Windows / Light / Dark) that calls back to MainWindow to
 apply + persist the mode, and a per-section Help reference assembled from the user-facing panel module
 docstrings and their per-control ``HELP`` dicts -- filling the gap where the app had no section-level
 "what is this for" text. Reached only from the gear; the back arrow still returns Home.
 """
 import html
 import importlib
-import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+from PySide6.QtWidgets import (QButtonGroup, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QRadioButton, QScrollArea, QTextBrowser, QVBoxLayout, QWidget)
 
 from core import registry
@@ -40,7 +39,7 @@ def _first_paragraph(doc: str) -> str:
 
 
 class SettingsScreen(QWidget):
-    """Settings + Help: appearance mode, accent/Inter toggles, user-model management, per-section help.
+    """Settings + Help: appearance mode, user-model management, per-section help.
 
     Drives the appearance callbacks it is constructed with; persistence of the chosen values is the
     callbacks' job (app-level QSettings), not this widget's. The help viewer is assembled from each
@@ -48,22 +47,17 @@ class SettingsScreen(QWidget):
     """
 
     def __init__(self, on_mode, current_mode="system", parent=None, *,
-                 on_open_builder=None, on_edit_model=None, on_delete_model=None,
-                 on_system_accent=None, system_accent=False,
-                 on_force_inter=None, force_inter=False):
+                 on_open_builder=None, on_edit_model=None, on_delete_model=None):
         """``on_mode(mode)`` is called when the user picks an appearance; ``current_mode`` pre-selects.
 
-        The keyword callbacks wire the "User-defined models" group and the accent/font checkboxes to
-        MainWindow. All default to None/False so tests can construct the screen with the historical
-        two-argument signature -- the extra controls are then inert.
+        The keyword callbacks wire the "User-defined models" group to MainWindow. All default to None so
+        a test can construct the screen with two arguments; the group's buttons are then inert.
         """
         super().__init__(parent)
         self._on_mode = on_mode
         self._on_open_builder = on_open_builder
         self._on_edit_model = on_edit_model
         self._on_delete_model = on_delete_model
-        self._on_system_accent = on_system_accent
-        self._on_force_inter = on_force_inter
 
         heading = QLabel("Settings")
         heading.setProperty("type", "heading")     # Fluent type ramp (global QSS)
@@ -82,24 +76,6 @@ class SettingsScreen(QWidget):
         self._radios.get(current_mode, self._radios["system"]).setChecked(True)
         for mode, rb in self._radios.items():
             rb.toggled.connect(lambda checked, m=mode: checked and self._on_mode(m))
-
-        # Accent + font toggles: state set BEFORE connecting (same construction-never-fires rule).
-        self.accent_check = QCheckBox("Use the Windows accent colour")
-        self.accent_check.setChecked(bool(system_accent))
-        self.accent_check.toggled.connect(
-            lambda on: self._on_system_accent and self._on_system_accent(on))
-        if sys.platform != "win32":                    # the OS accent read is Windows-only
-            self.accent_check.setVisible(False)
-        av.addWidget(self.accent_check)
-
-        self.inter_check = QCheckBox("Use the Inter font everywhere")
-        self.inter_check.setChecked(bool(force_inter))
-        self.inter_check.toggled.connect(
-            lambda on: self._on_force_inter and self._on_force_inter(on))
-        av.addWidget(self.inter_check)
-        inter_note = QLabel("Font changes apply immediately; some views refresh fully after a restart.")
-        inter_note.setProperty("type", "caption")
-        av.addWidget(inter_note)
 
         models_box = QGroupBox("User-defined models")
         mv = QVBoxLayout(models_box)
