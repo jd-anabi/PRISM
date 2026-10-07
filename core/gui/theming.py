@@ -96,6 +96,9 @@ class Appearance(QObject):
             wanted = (self._dark,)
             if not should_apply(self._applied, wanted):
                 return                                           # nothing changed: set nothing, say nothing
+            # While the work is under way nothing is known to be applied, so an apply that fails
+            # part-way is never mistaken for one that was made.
+            self._applied = None
             self._app.setPalette(design.build_palette(self._dark))
             self._app.setStyleSheet(design.build_qss(self._dark))
             self._applied = wanted                               # only once both are set

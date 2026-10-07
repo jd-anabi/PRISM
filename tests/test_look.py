@@ -600,6 +600,39 @@ def test_a_retired_mode_handed_to_the_appearance_is_follow_windows_and_no_clock_
     assert appearance.findChildren(QTimer) == []
 
 
+def test_an_apply_that_fails_part_way_is_made_again_when_the_scheme_before_it_is_chosen(stand_in_app):
+    """An apply that raises after the palette is set leaves a look that is half one scheme and half
+    the other. The error comes out, nothing is signalled, and the Appearance can be used again; and
+    because nothing counts as applied while the work is under way, choosing the scheme shown before
+    the failure is not taken for a repeat: the palette and the sheet are set again."""
+    from PySide6.QtCore import Qt
+    from core.gui import theming
+
+    app = stand_in_app
+    appearance = theming.Appearance(app)
+    signalled = []
+    appearance.theme_changed.connect(signalled.append)
+    appearance.set_mode("light")
+    assert (len(app.palettes), len(app.sheets), signalled) == (1, 1, [False]), "the first apply"
+    recording, refused = app.setStyleSheet, []
+
+    def raise_once(sheet):
+        if not refused:
+            refused.append(sheet)
+            raise RuntimeError("the sheet could not be set")
+        recording(sheet)
+
+    app.setStyleSheet = raise_once
+    with pytest.raises(RuntimeError, match="the sheet could not be set"):
+        appearance.set_mode("dark")
+    assert (len(app.palettes), len(app.sheets), signalled) == (2, 1, [False]), "the palette went on, the sheet did not"
+    appearance.set_mode("light")
+    assert app.hints.asked == [Qt.ColorScheme.Light, Qt.ColorScheme.Dark, Qt.ColorScheme.Light], \
+        "the failed apply left the Appearance shut"
+    assert (len(app.palettes), len(app.sheets), signalled) == (3, 2, [False, False]), \
+        "the scheme shown before the failure was taken for a repeat, and the half-set look stayed"
+
+
 # ── lettering: Inter with digits of equal width, the book face, the fixed-width face ─────────────
 INTER_KINDS = ("small", "body", "strong", "head", "brand", "title")
 CLASSES_WITH_A_FONT = ("QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu", "QMenuBar", "QTipLabel",
