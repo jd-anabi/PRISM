@@ -1,5 +1,5 @@
 """User-defined model tests: parser/codegen, forcing kinds, registry, persistence, Simulate stream,
-and the OS-accent / Inter-font appearance settings.
+and the OS-accent override and the application's font.
 
 WHAT THESE LOCK DOWN
     * The sympy parse -> torch compile path reproduces a hand-written model (HopfModel) numerically,
@@ -1058,12 +1058,21 @@ def test_system_accent_returns_a_hex_or_none():
     assert accent is None or re.fullmatch(r"#[0-9A-F]{6}", accent), accent
 
 
-def test_load_app_font_prefers_inter_when_forced():
-    from core.gui import fonts
+def test_the_application_font_is_inter_with_digits_of_equal_width():
+    from PySide6.QtGui import QFont, QFontInfo, QFontMetricsF
+    from core.gui import design, fonts
     app = qt_app()
     saved = app.font()
     try:
-        assert fonts.load_app_font(app, prefer_inter=True) == "Inter"   # bundled Inter always registers
+        assert design.text_scale() == 1.0, "a text factor leaked into the suites"
+        assert fonts.load_app_font(app) == "Inter"          # the bundled files always register
+        font = app.font()
+        assert QFontInfo(font).family() == "Inter" and font.pixelSize() == design.scaled(design.TYPE["body"][0]) == 14
+        assert font.isFeatureSet(QFont.Tag.fromString("tnum")), "digits of equal width are switched on in code"
+        metrics = QFontMetricsF(font)
+        assert len({metrics.horizontalAdvance(digit) for digit in "0123456789"}) == 1
+        with pytest.raises(TypeError):
+            fonts.load_app_font(app, prefer_inter=True)
     finally:
         app.setFont(saved)
 
@@ -1219,6 +1228,32 @@ def test_the_window_class_icon_becomes_ours_on_a_real_windows_display():
     assert user32.GetClassLongPtrW(hwnd, -34) not in (0, None)          # GCLP_HICONSM
 
 
+@pytest.mark.display
+def test_on_a_real_windows_display_the_whole_program_sets_its_look_and_gives_it_back(tmp_path, monkeypatch):
+    """Needs QT_QPA_PLATFORM=windows. Off-screen it is skipped, and has to be: there a widget class with
+    no font of its own reads as the application font, so nothing can tell whether the class fonts hold.
+
+    On a real display Windows gives menus, lists, tool tips, message boxes and status bars a font of its
+    own, and a change of style or the first style sheet puts that font back. So while the whole program
+    is up each of those classes must be in the lettering face, and when it is gone Windows' own must be
+    back on a menu. The window is built hidden and is never shown."""
+    from PySide6.QtGui import QFontInfo, QGuiApplication
+    from PySide6.QtWidgets import QApplication
+    from tests._fixtures import whole_program
+    qt_app()
+    if QGuiApplication.platformName() != "windows":
+        pytest.skip(f"needs the windows platform, got {QGuiApplication.platformName()!r}")
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    classes = ("QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu", "QMenuBar", "QTipLabel", "QStatusBar")
+    found = QFontInfo(QApplication.font("QMenu")).family()
+    assert found != "Inter", "an earlier test left the lettering face on the menus"
+    with whole_program() as (app, window):
+        assert not window.isVisible()
+        assert {QFontInfo(QApplication.font(name)).family() for name in classes} == {"Inter"}
+        window.close()
+    assert QFontInfo(QApplication.font("QMenu")).family() == found, "Windows' own font is back on a menu"
+
+
 def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     """``core.gui.app.build_app`` is the one place the application-level setup runs (style, font,
     appearance, figure settings, icon, error hook); a test that builds the window itself runs none
@@ -1239,6 +1274,18 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     ours = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     found = process_state(ours)
+    from PySide6.QtGui import QFont, QFontInfo
+    from PySide6.QtWidgets import QApplication
+    from core.gui import design, fonts
+    before_factor, before_font = design.text_scale(), qt_app().font()
+    monkeypatch.setattr(design, "system_text_scale", lambda: 1.25)    # forced: not this computer's own setting
+    sheet_was_set, real = [], fonts.apply_class_fonts
+
+    def watched(app=None):
+        sheet_was_set.append(bool(QApplication.instance().styleSheet()))
+        return real(app)
+
+    monkeypatch.setattr(fonts, "apply_class_fonts", watched)
     with whole_program() as (app, window):
         assert app is ours, "the whole program must use the one application of the process"
         icon = app.windowIcon()
@@ -1249,12 +1296,26 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
         assert (tmp_path / "Artifacts").is_dir()
         assert logging_root.installed() is True, \
             "build_app must install THE root-logger handler at start-up"
+        assert design.text_scale() == 1.25, "build_app installs the text factor before anything is sized"
+        font = app.font()
+        assert (QFontInfo(font).family(), font.pixelSize()) == ("Inter", 18)        # 14 at the factor
+        assert font.isFeatureSet(QFont.Tag.fromString("tnum"))
+        assert sheet_was_set and all(sheet_was_set), "the per-class fonts are set after the first style sheet"
+        # Whatever a widget class is given, it is the application's own font, at the factor. Under the
+        # suites this line cannot tell whether a class was given a font at all: a class with none reads
+        # as the application font. That the call was made, after a style sheet, is the line above; that
+        # the fonts are in force while the window is up is read on a real display, by the test beside
+        # this one.
+        assert QApplication.font("QMenu") == font
         during = process_state(app)
         window.close()
     changed = {key for key in found if during[key] != found[key]}
     assert {"sheet", "palette", "font", "figure settings", "error hook", "appearance",
-            "appearance objects", "default store", "root log handler"} <= changed, \
+            "appearance objects", "default store", "root log handler", "text factor",
+            "class fonts"} <= changed, \
         f"the whole program changed only {sorted(changed)}: the comparison below would prove nothing"
     after = process_state(app)
     left = sorted(key for key in found if after[key] != found[key])
     assert left == [], f"the whole program left these as it set them: {left}"
+    assert design.text_scale() == before_factor
+    assert QApplication.font() == before_font and QApplication.font("QMenu") == before_font

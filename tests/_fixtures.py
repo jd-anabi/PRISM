@@ -815,9 +815,10 @@ def process_state(app) -> dict:
     import matplotlib
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QApplication
     from core import config, logging_root
     from core.artifacts import default_store
-    from core.gui import theming
+    from core.gui import design, theming
     palette = app.palette()
     style = app.style()
     return {
@@ -830,6 +831,9 @@ def process_state(app) -> dict:
                          for role in QPalette.ColorRole if role != QPalette.NColorRoles),
         "palette set by hand": app.testAttribute(Qt.AA_SetPalette),
         "font": app.font().toString(),
+        "text factor": design.text_scale(),
+        "class fonts": tuple(QApplication.font(name).toString() for name in (
+            "QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu", "QMenuBar", "QTipLabel", "QStatusBar")),
         "window icon": app.windowIcon().cacheKey(),
         "names": (app.organizationName(), app.applicationName()),
         "colour scheme": app.styleHints().colorScheme(),
@@ -860,7 +864,7 @@ def whole_program():
     from core import config, logging_root
     from core.artifacts import default_store, set_default_store
     from core.gui import app as gui_app
-    from core.gui import theming
+    from core.gui import design, theming
     if not os.environ.get("PRISM_ARTIFACTS"):
         raise AssertionError("whole_program() needs PRISM_ARTIFACTS set to a temporary folder: "
                              "build_app makes the folder it names and installs it as the process's "
@@ -872,18 +876,20 @@ def whole_program():
              "names": (app.organizationName(), app.applicationName()),
              "appearance": theming.active_appearance(), "hook": sys.excepthook,
              "quiet": config.QUIET_SEGMENT_BAR, "handler": logging_root.installed(),
-             "store": default_store()}
+             "store": default_store(), "factor": design.text_scale()}
     with matplotlib.rc_context():                     # the figure settings, exactly as found
         try:
             yield gui_app.build_app([])
         finally:
             sys.excepthook = found["hook"]            # first: a slip below must not open a box
-            # Then the three that cannot fail, so that a slip in the toolkit's lines below cannot
-            # leave a temporary folder as the process's store or a handler on the root logger.
+            # Then the four that cannot fail, so that a slip in the toolkit's lines below cannot
+            # leave a temporary folder as the process's store, a handler on the root logger or a
+            # text factor that sizes every later test's widgets.
             set_default_store(found["store"])
             if not found["handler"]:
                 logging_root.remove()
             config.QUIET_SEGMENT_BAR = found["quiet"]
+            design.set_text_scale(found["factor"])
             made = theming.active_appearance()
             theming._ACTIVE = found["appearance"]
             if made is not None and made is not found["appearance"]:
@@ -896,6 +902,8 @@ def whole_program():
             if found["style"]:
                 app.setStyle(found["style"])
             app.setPalette(found["palette"])
+            # An application font set with no class name also empties the per-class fonts the
+            # whole program set.
             app.setFont(found["font"])
             app.setWindowIcon(found["icon"])
             app.setOrganizationName(found["names"][0])

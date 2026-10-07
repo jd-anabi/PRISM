@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from core import config, logging_root, registry
 
-from . import app_icon, fonts, mpl_theme, settings, theming
+from . import app_icon, design, fonts, mpl_theme, settings, theming
 from .main_window import MainWindow
 
 
@@ -92,14 +92,16 @@ def build_app(argv=None):
     # On the APPLICATION, not on the window: every dialog, message box and popped-out figure window
     # inherits it, so there is no per-window wiring to forget. PRISM had no icon at all before this.
     app.setWindowIcon(app_icon.app_icon())
+    design.set_text_scale(design.system_text_scale())    # first: every size read after this line is a scaled one
     # Fusion repaints every control from the palette (the native Windows style doesn't), so a light/dark
     # colour-scheme switch recolours consistently on Win/Mac/Linux. Theming lives here (never in
     # MainWindow) so it stays out of the test path.
     app.setStyle("Fusion")
     qs = settings.settings()
-    fonts.load_app_font(app)                                             # base UI font before any widget
+    fonts.load_app_font(app)                             # the lettering face, before any widget
     appearance = theming.Appearance(app)
-    appearance.set_mode(settings.get_appearance(qs))                     # the stored choice, applied once
+    appearance.set_mode(settings.get_appearance(qs))     # the first apply: the palette and the first style sheet
+    fonts.apply_class_fonts(app)                         # after the style AND the first sheet: each one empties them
     mpl_theme.install(appearance)   # matplotlib figures follow the theme (built after this point)
 
     window_ref = {}

@@ -11,14 +11,18 @@ import contextlib
 import datetime
 import hashlib
 import json
+import os
 import subprocess
 import sys
+import textwrap
 import types
 from pathlib import Path
 
 import pytest
+from PySide6.QtGui import QFont, QFontDatabase, QFontInfo, QFontMetricsF, QGuiApplication
+from PySide6.QtWidgets import QApplication, QMenu, QStyleFactory
 
-from core.gui import design
+from core.gui import design, fonts
 
 REPO = Path(__file__).resolve().parents[1]
 # every module of the look that exists; a new one joins this tuple in the commit that adds it, and the
@@ -591,3 +595,181 @@ def test_a_retired_mode_handed_to_the_appearance_is_follow_windows_and_no_clock_
     assert appearance.mode() == "system"
     assert app.hints.asked == [Qt.ColorScheme.Unknown]
     assert appearance.findChildren(QTimer) == []
+
+
+# ── lettering: Inter with digits of equal width, the book face, the fixed-width face ─────────────
+INTER_KINDS = ("small", "body", "strong", "head", "brand", "title")
+CLASSES_WITH_A_FONT = ("QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu", "QMenuBar", "QTipLabel",
+                       "QStatusBar")
+FIXED_FACE_CALLERS = {"screens/artifact_screen.py"}       # the record's text; each later caller joins by name
+
+
+def _tabular():
+    return QFont.Tag.fromString("tnum")
+
+
+@contextlib.contextmanager
+def font_and_style_put_back(app):
+    """The application's font and style as found, put back when the block ends; the block is handed the
+    style's name, to make a fresh style of the same kind from. The font goes back first and the style
+    last: a font set with no class name empties the fonts of the widget classes, and on a real display
+    it is the change of style that gives each class the system's own font again."""
+    assert app.styleSheet() == "", "an earlier test left a style sheet on the application"
+    font, style = app.font(), app.style().name()
+    assert style.lower() in {key.lower() for key in QStyleFactory.keys()}, f"no style is made from {style!r}"
+    try:
+        yield style
+    finally:
+        app.setFont(font)
+        app.setStyle(QStyleFactory.create(style))
+
+
+def test_every_inter_font_has_digits_of_equal_width_and_so_does_a_copy():
+    QApplication.instance() or QApplication([])
+    assert design.LETTERING == "Inter" and design.text_scale() == 1.0
+    for kind in INTER_KINDS:
+        size, _line, weight = design.TYPE[kind]
+        font = fonts.inter(kind)
+        assert (font.family(), font.pixelSize(), font.weight()) == ("Inter", size, QFont.Weight(weight)), kind
+        assert QFontInfo(font).family() == "Inter", "the bundled files are registered on first use"
+        assert font.isFeatureSet(_tabular()) and font.featureValue(_tabular()) == 1, kind
+        copy = QFont(font)
+        copy.setPixelSize(size + 3)
+        assert copy.isFeatureSet(_tabular()), kind
+        assert len({QFontMetricsF(font).horizontalAdvance(digit) for digit in "0123456789"}) == 1, kind
+    assert fonts.inter("small", 600).weight() == QFont.Weight.DemiBold      # a table's header
+    assert fonts.inter("head", 400).weight() == QFont.Weight.Normal         # the line that says where a run stands
+
+
+def test_a_font_follows_the_text_factor_and_a_caller_gets_its_own_copy():
+    QApplication.instance() or QApplication([])
+    mine = fonts.inter("body")
+    mine.setPixelSize(99)
+    assert fonts.inter("body").pixelSize() == 14, "a caller's change must not reach the stored font"
+    with text_size(1.25):
+        assert [fonts.inter(kind).pixelSize() for kind in INTER_KINDS] == [15, 18, 18, 20, 23, 30]
+        assert (fonts.fixed().pixelSize(), fonts.book().pixelSize()) == (18, 20)
+    with text_size(2.0):
+        assert fonts.inter("body").pixelSize() == 28 and fonts.inter("title").pixelSize() == 48
+    assert fonts.inter("body").pixelSize() == 14 and fonts.book().pixelSize() == 16
+
+
+def test_the_book_face_falls_back_to_georgia_and_then_to_inter():
+    QApplication.instance() or QApplication([])
+    assert design.BOOK_FACES == ("Cambria", "Georgia")
+    assert fonts.book_family(["Tahoma", "Georgia", "Inter", "Cambria"]) == "Cambria"
+    assert fonts.book_family(["Tahoma", "Inter", "Cambria"]) == "Cambria"       # no Georgia
+    assert fonts.book_family(["Tahoma", "Georgia", "Inter"]) == "Georgia"       # no Cambria
+    assert fonts.book_family(["Tahoma", "Inter"]) == "Inter"                    # neither
+    assert fonts.book_family([]) == "Inter"
+    assert fonts.book_family(name for name in ("Georgia",)) == "Georgia"       # any iterable, read once
+    font = fonts.book()
+    assert font.pixelSize() == design.TYPE["book"][0] == 16, "the book's own size, whichever face is found"
+    assert fonts.book(bold=True).bold() and fonts.book(bold=True).pixelSize() == 16
+    if not set(design.BOOK_FACES) & set(QFontDatabase.families()):             # off-screen: no book face at all
+        assert (font.family(), font.weight(), font.isFeatureSet(_tabular())) == ("Inter", QFont.Weight.Normal, True)
+        assert fonts.book(bold=True).weight() == QFont.Weight.DemiBold
+
+
+def test_console_text_alone_is_set_in_the_fixed_width_face():
+    QApplication.instance() or QApplication([])
+    gui = REPO / "core" / "gui"
+    system_face, callers = [], set()
+    for path in sorted(gui.rglob("*.py")):
+        rel = path.relative_to(gui).as_posix()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Attribute) and node.attr == "FixedFont" and rel != "fonts.py":
+                system_face.append(f"{rel}:{node.lineno}")
+            named = (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "fixed"
+                     and isinstance(node.func.value, ast.Name) and node.func.value.id == "fonts")
+            imported = (isinstance(node, ast.ImportFrom) and (node.module or "").endswith("fonts")
+                        and any(alias.name == "fixed" for alias in node.names))
+            if named or imported:
+                callers.add(rel)
+    assert system_face == [], f"only fonts.py may ask for the system's fixed-width face: {system_face}"
+    assert callers == FIXED_FACE_CALLERS, callers
+    font, faces = fonts.fixed(), len(design.FIXED_FACES)
+    assert tuple(font.families()[:faces]) == design.FIXED_FACES
+    assert font.families()[faces:] == [QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()]
+    assert font.styleHint() == QFont.StyleHint.Monospace and font.fixedPitch()
+    assert font.pixelSize() == 14
+
+
+def test_the_class_fonts_are_inter_again_after_a_change_of_style():
+    app = QApplication.instance() or QApplication([])
+    found = app.font()
+    with font_and_style_put_back(app) as style:
+        fonts.apply_class_fonts(app)
+        for name in CLASSES_WITH_A_FONT:
+            font = QApplication.font(name)
+            assert (font.family(), font.pixelSize(), font.isFeatureSet(_tabular())) == ("Inter", 14, True), name
+        app.setStyle(QStyleFactory.create(style))               # what the first style sheet does too
+        assert QApplication.font("QMenu") == app.font(), "a change of style empties the per-class fonts"
+        assert not QApplication.font("QMenu").isFeatureSet(_tabular())
+        fonts.apply_class_fonts()                               # no argument: the running application
+        menu = QMenu()
+        menu.ensurePolished()                                   # a widget takes its class font when polished
+        assert (menu.font().family(), menu.font().pixelSize()) == ("Inter", 14)
+    assert QApplication.font("QMenu") == app.font() == found
+
+
+def test_inter_is_handed_to_matplotlib_once():
+    from matplotlib import font_manager
+
+    def entries():
+        return sum(entry.name == "Inter" for entry in font_manager.fontManager.ttflist)
+
+    assert fonts.register_with_matplotlib() is True
+    first = entries()
+    assert first >= 2, "the regular and the semibold file"
+    assert fonts.register_with_matplotlib() is True and entries() == first, "a second call adds nothing"
+    for weight, name in ((400, "Inter-Regular.ttf"), (600, "Inter-SemiBold.ttf")):
+        found = font_manager.findfont(font_manager.FontProperties(family="Inter", weight=weight),
+                                      fallback_to_default=False)
+        assert Path(found).name == name, (weight, found)
+
+
+def test_the_font_factories_can_be_called_before_the_application_exists():
+    code = textwrap.dedent('''
+        import sys
+        from core.gui import fonts
+        early = fonts.inter("body")              # no application yet: no file is registered, nor said to be
+        fonts.register_fonts()
+        fonts.apply_class_fonts()
+        assert (early.pixelSize(), fonts.book().pixelSize(), fonts.fixed().pixelSize()) == (14, 16, 14)
+        assert "matplotlib" not in sys.modules, "building a font must not load the figure library"
+        from PySide6.QtGui import QFontInfo
+        from PySide6.QtWidgets import QApplication
+        app = QApplication([])
+        assert QFontInfo(fonts.inter("body")).family() == "Inter"      # registered now, on first use
+        assert QFontInfo(early).family() == "Inter"
+    ''')
+    done = subprocess.run([sys.executable, "-c", code], cwd=REPO,
+                          env=dict(os.environ, QT_QPA_PLATFORM="offscreen"), capture_output=True, text=True,
+                          timeout=120)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+@pytest.mark.display
+def test_the_three_faces_resolve_on_a_real_windows_display():
+    """Off-screen there is no system font, so only a real display can say which faces a person sees.
+    Builds the application and no window."""
+    app = QApplication.instance() or QApplication([])
+    if QGuiApplication.platformName() != "windows":
+        pytest.skip(f"needs the windows platform, got {QGuiApplication.platformName()!r}")
+    for weight in (400, 600):
+        assert QFontInfo(fonts.inter("body", weight)).family() == "Inter", weight
+    assert len({QFontMetricsF(fonts.inter("body")).horizontalAdvance(digit) for digit in "0123456789"}) == 1
+    wanted = fonts.book_family(QFontDatabase.families())
+    assert QFontInfo(fonts.book()).family() == wanted
+    assert fonts.book().pixelSize() == 16 and fonts.book(bold=True).bold()
+    console = QFontInfo(fonts.fixed())
+    assert console.fixedPitch() and console.pixelSize() == 14
+    assert console.family() in (*design.FIXED_FACES,
+                                QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family())
+    with font_and_style_put_back(app) as style:
+        fonts.load_app_font(app)
+        app.setStyle(QStyleFactory.create(style))
+        assert QApplication.font("QMenu").family() != "Inter", "Windows' own font is back on a menu"
+        fonts.apply_class_fonts(app)
+        assert {QApplication.font(name).family() for name in CLASSES_WITH_A_FONT} == {"Inter"}

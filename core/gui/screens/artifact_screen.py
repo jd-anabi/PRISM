@@ -20,7 +20,6 @@ into a stage tab. All three were considered and declined on 2026-09-17 and are a
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QVBoxLayout,
                                QWidget)
@@ -29,7 +28,7 @@ from core.artifacts import render_lineage, render_manifest
 from core.artifacts.store import KIND_DIRS, NO_MANIFEST_REASON
 from core.refusals import NOTE_MAX_CHARS, Refusal, require_note
 
-from .. import settings
+from .. import fonts, settings
 from ..design import SPACE
 from ..file_chooser import choose_file
 from ..panels.base_panel import BasePanel
@@ -223,7 +222,7 @@ class ArtifactScreen(QWidget):
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
         self.detail.setLineWrapMode(QPlainTextEdit.NoWrap)
-        self.detail.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.detail.setFont(fonts.fixed())
 
         self.btn_save = QPushButton("Save…")
         self.btn_save.setToolTip("Write what is shown here to a text file")

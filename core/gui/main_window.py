@@ -14,7 +14,7 @@ from core import registry
 from core.config import VALID_MODELS
 from core.Helpers import model_store
 
-from . import settings, theming
+from . import design, settings, theming
 from .panels.base_panel import RUN_STATE, BasePanel
 from .panels.crossval_panel import CrossValPanel
 from .panels.fdt_panel import FdtPanel
@@ -31,8 +31,8 @@ from .widgets.artifact_picker import StorePicker
 
 
 # ── screen-geometry guards ────────────────────────────────────────────────────
-# All three degrade to the requested value if Qt cannot tell us about the screen (offscreen tests),
-# so they are safe to call unconditionally.
+# All of them are safe to call unconditionally: when Qt cannot tell us about the screen, the room is
+# as large as a widget can be, every frame counts as visible and nothing is moved.
 def _available(widget=None):
     """The usable desktop rect (excludes the taskbar), or None when there is no screen."""
     from PySide6.QtGui import QGuiApplication
@@ -41,12 +41,13 @@ def _available(widget=None):
     return screen.availableGeometry() if screen is not None else None
 
 
-def _fits_on_screen(w: int, h: int) -> tuple:
-    """Shrink a preferred size to what the screen can actually show, leaving a small margin."""
+def _room_on_screen() -> tuple[int, int]:
+    """What the screen can show of a window, (width, height), with a small margin left free. When Qt
+    knows no screen it is Qt's own largest widget size, so nothing is held back."""
     rect = _available()
     if rect is None:
-        return w, h
-    return min(w, rect.width() - 40), min(h, rect.height() - 60)
+        return 16_777_215, 16_777_215
+    return rect.width() - 40, rect.height() - 60
 
 
 def _on_a_visible_screen(widget) -> bool:
@@ -86,13 +87,16 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.appearance = appearance         # theming.Appearance or None (tests build without one)
         self.setWindowTitle("PRISM")
-        # 820px exceeded the usable height of a 1366x768 laptop and of 1920x1080 at 150% scaling, so
-        # the action buttons started below the fold. Open at the smaller of the preference and what
-        # the screen can actually show.
-        self.resize(*_fits_on_screen(1300, 820))
-        # A window can always be made this small; without it Qt lets the user (or a restored
-        # geometry) shrink the shell until the controls column is unusable.
-        self.setMinimumSize(900, 600)
+        # The opening size and the smallest size both come from the look's table, grow with Windows'
+        # text size and are then held to what the screen can show: the table's opening height is more
+        # than a 1366x768 laptop can show, and more than 1920x1080 at 150% scaling, where the action
+        # buttons used to start below the fold.
+        opening, smallest = design.window_sizes(_room_on_screen())
+        self.resize(*opening)
+        # Without a smallest size Qt lets the user (or a restored geometry) shrink the shell until
+        # the controls column is unusable. It is held to the screen too, so that it never asks for
+        # more than the screen can show.
+        self.setMinimumSize(*smallest)
 
         self.nav = NavShell()
         self.setCentralWidget(self.nav)
@@ -187,7 +191,7 @@ class MainWindow(QMainWindow):
             # is no longer attached -- geometry saved on an external display came back off-screen with
             # no way to reach it.
             if not self.restoreGeometry(geom) or not _on_a_visible_screen(self):
-                self.resize(*_fits_on_screen(1300, 820))
+                self.resize(*opening)
                 _centre_on_primary(self)
 
     def _build_settings_menu(self, current_mode):

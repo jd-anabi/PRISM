@@ -4699,6 +4699,32 @@ def test_main_window_stops_claiming_it_owns_the_only_settings_write():
     assert "_persist_layout" in src and "1500" in src
 
 
+def test_the_main_window_takes_its_opening_and_smallest_size_from_the_look(monkeypatch):
+    from PySide6.QtCore import QByteArray
+    from PySide6.QtGui import QGuiApplication
+    from core.gui import design, main_window, settings
+    from tests._fixtures import build_window
+    qt_app()
+    asked = []
+
+    def sizes(screen):
+        asked.append(tuple(screen))
+        return (1111, 777), (555, 444)
+
+    monkeypatch.setattr(design, "window_sizes", sizes)
+    window = build_window()
+    assert (window.width(), window.height()) == (1111, 777)
+    assert (window.minimumWidth(), window.minimumHeight()) == (555, 444)
+    screen = QGuiApplication.primaryScreen().availableGeometry()
+    assert set(asked) == {main_window._room_on_screen()} == {(screen.width() - 40, screen.height() - 60)}
+    # a saved geometry that cannot be restored: the window opens at the look's size again
+    remembered = settings.settings()
+    remembered.setValue("window/geometry", QByteArray(b"not a saved geometry"))
+    remembered.sync()
+    again = build_window()
+    assert (again.width(), again.height()) == (1111, 777)
+
+
 def test_the_comparison_list_appends_from_the_single_selection_picker():
     """StorePicker is single-selection, so the comparison controls hold a LIST the picker appends to
     and no multi-select widget is built. Adding the same record twice is not an error and is not a
