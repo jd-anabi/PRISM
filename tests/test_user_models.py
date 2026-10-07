@@ -642,11 +642,10 @@ def test_the_builder_shows_a_field_refusal_in_the_yellow_box():
     display scale, and a blank forcing parameter -- which reached model_store as a real 0.0 nobody
     typed.
     """
-    from PySide6.QtWidgets import QMessageBox
     from core.gui import fields as gui_fields
     from core.gui.screens.model_builder_screen import ModelBuilderScreen
     from core.refusals import Refusal
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import asked, forget_asked, qt_app
 
     qt_app()
     mb = ModelBuilderScreen()
@@ -660,14 +659,14 @@ def test_the_builder_shows_a_field_refusal_in_the_yellow_box():
     mb._param_fields["d0"].set_spec(0.01, 0.001, 0.1)
 
     def _refused(field):
-        SHOWN.clear()
+        forget_asked()
         mb._validate_clicked()
-        box = SHOWN[-1]
-        assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-        assert box.detailedText() == "", box.detailedText()
-        assert box.informativeText() == gui_fields.fix_sentence(field), box.informativeText()
-        assert box.text() in mb.status.text(), mb.status.text()
-        return box.text()
+        box = asked()
+        assert (box.kind, box.marker) == ("refusal", "warn")
+        assert box.detail == "", box.detail
+        assert box.beneath == gui_fields.fix_sentence(field), box.beneath
+        assert box.sentence in mb.status.text(), mb.status.text()
+        return box.sentence
 
     # (a) a blank minimum: refused as blank, never read as a bound of 0.0
     mb._param_fields["k"].lo.setText("")
@@ -717,10 +716,9 @@ def test_the_builder_refuses_at_validate_what_save_would_refuse():
     status line alone, naming no box. Each is now the same rule in the same words, raised as a
     Refusal keyed to the box, so both buttons reach the yellow box and nothing is saved.
     """
-    from PySide6.QtWidgets import QMessageBox
     from core.gui import fields as gui_fields
     from core.gui.screens.model_builder_screen import _FORCE_KINDS, ModelBuilderScreen
-    from tests._fixtures import SHOWN
+    from tests._fixtures import all_asked, asked, forget_asked
 
     qt_app()
     name = "UMTESTSAVEREF"
@@ -739,15 +737,15 @@ def test_the_builder_refuses_at_validate_what_save_would_refuse():
 
         def _refused(field, needle):
             for click in (mb._validate_clicked, mb._save):
-                SHOWN.clear()
+                forget_asked()
                 click()
-                assert len(SHOWN) == 1, \
-                    f"{click.__name__} showed {len(SHOWN)} boxes; the status line: {mb.status.text()}"
-                box = SHOWN[-1]
-                assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-                assert box.informativeText() == gui_fields.fix_sentence(field), box.informativeText()
-                assert needle in box.text(), box.text()
-                assert box.text() in mb.status.text(), mb.status.text()
+                assert len(all_asked()) == 1, \
+                    f"{click.__name__} showed {len(all_asked())} boxes; the status line: {mb.status.text()}"
+                box = asked()
+                assert (box.kind, box.marker) == ("refusal", "warn")
+                assert box.beneath == gui_fields.fix_sentence(field), box.beneath
+                assert needle in box.sentence, box.sentence
+                assert box.sentence in mb.status.text(), mb.status.text()
             assert not (config.MODELS_PATH / f"{name}.json").exists(), "a refused model was saved"
 
         # a drive frequency of 0 ...
@@ -774,10 +772,9 @@ def test_a_negative_drive_amplitude_is_refused_at_validate_at_save_and_at_load(t
     nothing is written, and a saved JSON carrying one is refused at load (the shipped SHM and SHM2
     carry no forcing). A zero amplitude is still a legitimate "no drive"."""
     import json
-    from PySide6.QtWidgets import QMessageBox
     from core.gui import fields as gui_fields
     from core.gui.screens.model_builder_screen import _FORCE_KINDS, ModelBuilderScreen
-    from tests._fixtures import SHOWN
+    from tests._fixtures import all_asked, forget_asked
 
     assert model_store.forcing_value_problem("x", "amp", 0.0) is None, "amp = 0 is 'no drive'"
     said = model_store.forcing_value_problem("x", "amp", -0.5)
@@ -800,13 +797,13 @@ def test_a_negative_drive_amplitude_is_refused_at_validate_at_save_and_at_load(t
         for pname, val in (("amp", "-0.5"), ("freq", "10.0"), ("phase", "0.0"), ("offset", "0.0")):
             row.forcing_fields()[pname].setText(val)
         for click in (mb._validate_clicked, mb._save):
-            SHOWN.clear()
+            forget_asked()
             click()
-            assert len(SHOWN) == 1, f"{click.__name__}: {mb.status.text()}"
-            box = SHOWN[0]
-            assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-            assert "forcing amp must be >= 0" in box.text(), box.text()
-            assert box.informativeText() == gui_fields.fix_sentence("forcing_value")
+            assert len(all_asked()) == 1, f"{click.__name__}: {mb.status.text()}"
+            box = all_asked()[0]
+            assert (box.kind, box.marker) == ("refusal", "warn")
+            assert "forcing amp must be >= 0" in box.sentence, box.sentence
+            assert box.beneath == gui_fields.fix_sentence("forcing_value")
         assert not (config.MODELS_PATH / f"{name}.json").exists(), "a refused model was saved"
     finally:
         _remove_user_model(name)

@@ -12,7 +12,7 @@ import pytest                                                          # noqa: E
 from core.artifacts import ArtifactStore                               # noqa: E402
 from core.artifacts.store import KIND_DIRS                             # noqa: E402
 from tests._fixtures import (_nad_cfg, _prior_artifact, artifact_screen,  # noqa: E402
-                             backdate_tree, build_browse_store, qt_app)
+                             backdate_tree, build_browse_store, choose, qt_app)
 
 KINDS = list(KIND_DIRS)
 
@@ -55,17 +55,6 @@ def _select_ref(table, ident):
         if s is not None and ident in (s.id, s.dir_name):
             return s
     raise AssertionError(f"no row for {ident!r} among {table.topLevelItemCount()} row(s)")
-
-
-def _answer(monkeypatch, button):
-    """Layer a chosen answer over tests/conftest.py::_no_modal_dialogs, the pattern
-    tests/test_nav_and_gating.py::test_the_fresh_cache_and_narrowed_posterior_dialogs_default_to_cancel
-    uses (a NAME, because the line it sits on moves). The session guard records every box and returns 0,
-    which every confirmation here reads as No; these dialogs use STANDARD buttons, so the answer is the
-    returned enum rather than a click on an added button."""
-    from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN
-    monkeypatch.setattr(QMessageBox, "exec", lambda self: SHOWN.append(self) or button)
 
 
 def test_the_browser_lists_the_seven_kinds_with_the_incomplete_directories_last(tmp_path):
@@ -445,7 +434,7 @@ def test_setting_a_note_trims_it_and_asks_nothing(store):
     """The rule is core's (require_note) and the box is the front end's. One trimmed line, written
     through set_note; a blank clears it; nothing is asked."""
     from PySide6.QtWidgets import QLabel
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import all_asked, artifact_screen, qt_app
     qt_app()
     cfg = _nad_cfg()
     p = _prior_artifact(store, cfg, name="annotated")
@@ -459,7 +448,7 @@ def test_setting_a_note_trims_it_and_asks_nothing(store):
     scr.note_edit.setText("   spontaneous, 4.5 s   ")
     scr._set_note()
     assert store.get("prior", p.id).note == "spontaneous, 4.5 s"
-    assert SHOWN == [], "setting a note must not ask anything"
+    assert all_asked() == [], "setting a note must not ask anything"
     assert "Set the note" in scr.status.text(), scr.status.text()
     # Re-select: _after_change re-lists the kind, and the screen deliberately remembers no selection
     # (a remembered id may name an artifact deleted since, the dangling state the re-list prevents).
@@ -473,8 +462,7 @@ def test_setting_a_note_trims_it_and_asks_nothing(store):
 def test_an_over_long_note_is_refused_with_its_fix_sentence(store):
     """Refused, never clamped. The box carries core's neutral sentence (both numbers) and the front
     end's own "where to fix it" from core/gui/fields.py, and the manifest is untouched."""
-    from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import artifact_screen, asked, qt_app
     qt_app()
     cfg = _nad_cfg()
     p = _prior_artifact(store, cfg, name="annotated")
@@ -486,10 +474,10 @@ def test_an_over_long_note_is_refused_with_its_fix_sentence(store):
     # fire, which is exactly the silent clamp the note rule forbids.
     assert len(scr.note_edit.text()) == 201, "the Note box must not clamp what was typed"
     scr._set_note()
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-    assert "200" in box.text() and "201" in box.text(), box.text()
-    assert box.informativeText() == (
+    box = asked()
+    assert (box.kind, box.marker) == ("refusal", "warn")
+    assert "200" in box.sentence and "201" in box.sentence, box.sentence
+    assert box.beneath == (
         "Edit it in the Note box on the Artifacts screen, or in the 'Note' or 'Comparison note' "
         "box on the FDT analysis or Sweep study cross-validation tab.")
     assert store.get("prior", p.id).note == ""
@@ -501,8 +489,7 @@ def test_delete_refuses_an_artifact_with_dependents_and_offers_no_yes(store):
     FIRST, and the yellow box names every dependent, including the training cache that holds the
     prior only by fingerprint and names it nowhere (ArtifactStore.dependents' second pass)."""
     from core.artifacts import store as st
-    from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import artifact_screen, asked, qt_app
     qt_app()
     cfg = _nad_cfg()
     p = _prior_artifact(store, cfg, name="ancestor")
@@ -517,15 +504,15 @@ def test_delete_refuses_an_artifact_with_dependents_and_offers_no_yes(store):
     _show_kind(scr, "prior")
     _select_ref(scr.table, p.id)
     scr._delete()
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-    assert len(box.buttons()) == 1, "a refusal offers no Yes"
-    assert "prior ancestor" in box.text() and p.id in box.text(), box.text()
-    assert f"inference child [{w.id}]" in box.text(), box.text()
-    assert f"simulation (unnamed) [{cache.id}]" in box.text(), box.text()
+    box = asked()
+    assert (box.kind, box.marker) == ("refusal", "warn")
+    assert box.answers == ("OK",), "a refusal offers no Yes"
+    assert "prior ancestor" in box.sentence and p.id in box.sentence, box.sentence
+    assert f"inference child [{w.id}]" in box.sentence, box.sentence
+    assert f"simulation (unnamed) [{cache.id}]" in box.sentence, box.sentence
     assert ("a training cache was generated against this prior and its rows are meaningless "
-            "without it") in box.text(), box.text()
-    assert box.informativeText() == "Select an artifact in the list on the Artifacts screen."
+            "without it") in box.sentence, box.sentence
+    assert box.beneath == "Select an artifact in the list on the Artifacts screen."
     assert store.get("prior", p.id).name == "ancestor", "nothing may be deleted"
     assert "2 dependent(s) and was not deleted" in scr.status.text(), scr.status.text()
 
@@ -541,8 +528,7 @@ def test_deleting_an_unfinished_cache_names_its_batches_and_defaults_to_no(store
     where the row counts come from rather than printing a confident, false "0 rows"."""
     import pytest
     from core.artifacts import StoreError, store as st
-    from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import artifact_screen, asked, qt_app
     qt_app()
     ident = {"format": "training-rows/2", "prior_fingerprint": None, "n_runs": 4, "truncation": None}
     cache = st.write_simulation_manifest(store.kind_dir("simulation") / "beef00112233", ident,
@@ -553,16 +539,15 @@ def test_deleting_an_unfinished_cache_names_its_batches_and_defaults_to_no(store
     assert s.complete and not s.finished, "complete is 'has a manifest', finished is 'it ended'"
     assert s.rows is None, "``save`` records no rows: a mid-run cache has none to name"
     scr._delete()                                     # exec() returns 0 -> not Yes
-    box = SHOWN[-1]
-    assert box.button(QMessageBox.No) is box.defaultButton(), "No must be the default"
-    assert "2 committed batch(es)" in box.informativeText(), box.informativeText()
-    assert "rows are recorded when the cache finishes" in box.informativeText(), \
-        box.informativeText()
-    assert "0 rows" not in box.informativeText(), box.informativeText()
+    box = asked()
+    assert box.default == "No", "No must be the default"
+    assert "2 committed batch(es)" in box.text, box.text
+    assert "rows are recorded when the cache finishes" in box.text, box.text
+    assert "0 rows" not in box.text, box.text
     assert store.get("simulation", cache.id).id == cache.id, "No must leave it on disk"
     assert "was not deleted" in scr.status.text(), scr.status.text()
     # Yes deletes it, and the change is announced
-    _answer(monkeypatch, QMessageBox.Yes)
+    choose(monkeypatch, other=True)
     _select_ref(scr.table, cache.id)
     changed = []
     scr.store_changed.connect(lambda: changed.append(True))
@@ -581,9 +566,8 @@ def test_deleting_an_unfinished_fdt_record_names_what_is_half_written(store, mon
     There is no resume for these runs, so the sentence says that too: unlike a cache, whose batches
     a later run continues from, this one starts again from the beginning.
     """
-    from PySide6.QtWidgets import QMessageBox
     from core.gui.screens.artifact_screen import _delete_prompt
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import artifact_screen, asked, qt_app
     qt_app()
 
     w = store.create("fdt", None, name="stopped")
@@ -607,9 +591,9 @@ def test_deleting_an_unfinished_fdt_record_names_what_is_half_written(store, mon
     assert "cannot be undone" in detail
 
     scr._delete()                                     # exec() returns 0 -> not Yes
-    box = SHOWN[-1]
-    assert box.button(QMessageBox.No) is box.defaultButton(), "No must be the default"
-    assert "UNFINISHED" in box.informativeText(), box.informativeText()
+    box = asked()
+    assert box.default == "No", "No must be the default"
+    assert "UNFINISHED" in box.text, box.text
     assert store.get("fdt", w.id).id == w.id, "No must leave it on disk"
 
     # a FINISHED record says nothing of the sort
@@ -707,8 +691,7 @@ def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch)
     itself, so patching the store would blind the store too -- the delete would
     SUCCEED, the prior would be destroyed and every assertion below would be asserting the opposite
     of what it says. The proxy lies to the screen only."""
-    from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import artifact_screen, asked, qt_app
     qt_app()
     cfg = _nad_cfg()
     p = _prior_artifact(store, cfg, name="ancestor")
@@ -739,16 +722,16 @@ def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch)
             return self._real.delete(*a, **k)
 
     monkeypatch.setattr(scr, "_resolved_store", lambda: _BlindToDependents(store))
-    _answer(monkeypatch, QMessageBox.Yes)
+    choose(monkeypatch, other=True)
     scr._delete()
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs", "the store's refusal takes the yellow box"
-    assert "refusing to delete" in box.text() and w.id in box.text(), box.text()
+    box = asked()
+    assert box.kind == "refusal", "the store's refusal takes the yellow box"
+    assert "refusing to delete" in box.sentence and w.id in box.sentence, box.sentence
     # delete()'s dependents refusal carries field="artifact", so show_refusal adds the same fix
     # sentence it adds to every other fielded refusal -- the race path needs no refusal of its own.
     # The normal path still builds one, for the wording only: the store's sentence ends "pass
     # force=True to orphan them", and no front end offers that.
-    assert box.informativeText() == "Select an artifact in the list on the Artifacts screen."
+    assert box.beneath == "Select an artifact in the list on the Artifacts screen."
     assert store.get("prior", p.id).name == "ancestor", "the artifact survives its own refusal"
 
 
@@ -758,8 +741,7 @@ def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, m
     narrowed from "a usable manifest of this kind" once the old rule was found deleting a real
     calibration whose manifest was valid under a different schema. A directory that will not delete
     is reported and the rest still go, and nothing to do says so without asking."""
-    from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import all_asked, artifact_screen, asked, forget_asked, qt_app
     qt_app()
     cfg = _nad_cfg()
     p = _prior_artifact(store, cfg, name="keeper")
@@ -770,21 +752,21 @@ def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, m
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
     scr._sweep(all_kinds=False)                          # No -> nothing goes
-    box = SHOWN[-1]
-    assert box.button(QMessageBox.No) is box.defaultButton()
-    assert leftover.name in box.informativeText(), box.informativeText()
-    assert "no manifest.json" in box.informativeText(), box.informativeText()
+    box = asked()
+    assert box.default == "No"
+    assert leftover.name in box.text, box.text
+    assert "no manifest.json" in box.text, box.text
     assert ("A directory that carries a manifest.json of any kind is never touched by this."
-            in box.informativeText()), box.informativeText()
+            in box.text), box.text
     assert leftover.is_dir() and "Nothing was removed." in scr.status.text()
-    _answer(monkeypatch, QMessageBox.Yes)                # Yes -> the leftover goes, the artifact stays
+    choose(monkeypatch, other=True)                      # Yes -> the leftover goes, the artifact stays
     scr._sweep(all_kinds=False)
     assert not leftover.exists()
     assert store.get("prior", p.id).name == "keeper"
     assert "Removed 1 of 1" in scr.status.text(), scr.status.text()
-    SHOWN.clear()                                        # nothing to do: no dialog at all
+    forget_asked()                                       # nothing to do: no dialog at all
     scr._sweep(all_kinds=False)
-    assert SHOWN == [] and "Nothing to remove" in scr.status.text(), scr.status.text()
+    assert all_asked() == [] and "Nothing to remove" in scr.status.text(), scr.status.text()
     # a directory that will not delete (a handle held open on Windows) is reported, never fatal
     stuck = store.kind_dir("prior") / "stuck__20260917T091000"
     stuck.mkdir()
@@ -805,8 +787,7 @@ def test_the_screens_sweep_offers_a_loose_file_and_never_a_records_payload(store
     reads the kind directory's files and never descends, so nothing a record owns can be offered
     here even in principle -- the same shape ``remove_incomplete`` has against ``delete``.
     """
-    from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import artifact_screen, asked, qt_app
     qt_app()
     cfg = _nad_cfg()
     p = _prior_artifact(store, cfg, name="keeper")
@@ -819,12 +800,12 @@ def test_the_screens_sweep_offers_a_loose_file_and_never_a_records_payload(store
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
     scr._sweep(all_kinds=False)                      # the session guard answers No
-    box = SHOWN[-1]
-    assert stray.name in box.informativeText(), box.informativeText()
-    assert "prior.pt" not in box.informativeText(), "a record's payload was offered"
+    box = asked()
+    assert stray.name in box.text, box.text
+    assert "prior.pt" not in box.text, "a record's payload was offered"
     assert stray.is_file() and "Nothing was removed." in scr.status.text(), scr.status.text()
 
-    _answer(monkeypatch, QMessageBox.Yes)
+    choose(monkeypatch, other=True)
     scr._sweep(all_kinds=False)
     assert not stray.exists(), "the file the operator confirmed is still there"
     assert payload.is_file(), "the sweep reached inside a valid record's own folder"
@@ -840,9 +821,8 @@ def test_the_screens_legacy_directory_is_offered_by_sweep_all_kinds_only(store, 
     would let a sweep of Priors remove something that has nothing to do with priors. "Sweep all
     kinds…" is the form that covers the whole root, and it is the only one that offers it.
     """
-    from PySide6.QtWidgets import QMessageBox
     from core.artifacts.store import LEGACY_DIRS
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import artifact_screen, asked, forget_asked, qt_app
     qt_app()
     legacy = store.root / LEGACY_DIRS[0]
     legacy.mkdir(parents=True, exist_ok=True)
@@ -851,7 +831,7 @@ def test_the_screens_legacy_directory_is_offered_by_sweep_all_kinds_only(store, 
 
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
-    _answer(monkeypatch, QMessageBox.Yes)
+    choose(monkeypatch, other=True)
     scr._sweep(all_kinds=False)
     assert legacy.is_dir(), "a per-kind sweep removed a directory that belongs to no kind"
     assert "Nothing to remove" in scr.status.text(), scr.status.text()
@@ -859,9 +839,9 @@ def test_the_screens_legacy_directory_is_offered_by_sweep_all_kinds_only(store, 
     # is there -- one is. The tool's per-kind sentence leaves the clause out for the same reason.
     assert "legacy" not in scr.status.text(), scr.status.text()
 
-    SHOWN.clear()
+    forget_asked()
     scr._sweep(all_kinds=True)
-    assert legacy.name in SHOWN[-1].informativeText(), SHOWN[-1].informativeText()
+    assert legacy.name in asked().text, asked().text
     assert not legacy.exists(), "the directory the operator confirmed is still there"
     assert "Removed 1 of 1 legacy director" in scr.status.text(), scr.status.text()
 
@@ -872,7 +852,7 @@ def test_the_screens_sweep_claims_nothing_it_could_not_read(store, monkeypatch):
     and still printed when the store root could not be read, beside the sentence saying so. Each
     clause is said only where its read succeeded; the live-run refusal says "leftovers" (the sweep
     removes files too); "Sweep all kinds…" says what it covers."""
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import all_asked, artifact_screen, forget_asked, qt_app
     qt_app()
 
     def _unreadable():
@@ -880,10 +860,10 @@ def test_the_screens_sweep_claims_nothing_it_could_not_read(store, monkeypatch):
 
     monkeypatch.setattr(store, "legacy_dirs", _unreadable)
     scr = artifact_screen(store)
-    SHOWN.clear()
+    forget_asked()
     scr._sweep(all_kinds=True)
     status = scr.status.text()
-    assert SHOWN == [] and status.startswith("⚠ Nothing to remove"), status
+    assert all_asked() == [] and status.startswith("⚠ Nothing to remove"), status
     head = status.split(". ")[0]                     # the "nothing to remove" sentence itself
     assert "legacy" not in head and "any kind's" not in head, status
     assert "every directory of every kind carries a manifest.json" in head, status
@@ -907,8 +887,7 @@ def test_a_loose_file_written_moments_ago_is_offered_and_then_refused_not_remove
     file written seconds ago is OFFERED, and ``remove_loose``'s own guard is what refuses it. What
     has to hold is what already holds for a directory: the confirmation says so before it is
     answered, the file survives, and the status line names it and says why."""
-    from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import artifact_screen, asked, qt_app
     qt_app()
     d = store.kind_dir("fdt")
     d.mkdir(parents=True, exist_ok=True)
@@ -916,9 +895,9 @@ def test_a_loose_file_written_moments_ago_is_offered_and_then_refused_not_remove
     fresh.write_bytes(b"a picture something may still be writing")   # NOT backdated: written just now
     scr = artifact_screen(store)
     _show_kind(scr, "fdt")
-    _answer(monkeypatch, QMessageBox.Yes)
+    choose(monkeypatch, other=True)
     scr._sweep(all_kinds=False)
-    informative = SHOWN[-1].informativeText()
+    informative = asked().text
     assert fresh.name in informative, informative
     assert "recently written directory or file is refused" in informative, informative
     said = scr.status.text()
@@ -938,25 +917,22 @@ def test_the_sweep_removes_exactly_what_the_confirmation_listed(store, monkeypat
     The second directory is created BY THE DIALOG ITSELF, which is exactly when the old rescan
     picked it up.
     """
-    from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import artifact_screen, asked, qt_app
     qt_app()
     shown_leftover = store.kind_dir("prior") / "shown__20260917T090000"
     shown_leftover.mkdir(parents=True, exist_ok=True)
     backdate_tree(shown_leftover)
     appeared = store.kind_dir("prior") / "appeared_during_the_dialog"
 
-    def _answer_and_create(self):
-        SHOWN.append(self)
+    def _appears():
         appeared.mkdir(parents=True, exist_ok=True)
         backdate_tree(appeared)          # even an OLD one must not go: it was never shown
-        return QMessageBox.Yes
 
-    monkeypatch.setattr(QMessageBox, "exec", _answer_and_create)
+    choose(monkeypatch, other=True, during=_appears)
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
     scr._sweep(all_kinds=False)
-    assert shown_leftover.name in SHOWN[-1].informativeText(), SHOWN[-1].informativeText()
+    assert shown_leftover.name in asked().text, asked().text
     assert not shown_leftover.exists(), "the directory the operator confirmed is still there"
     assert appeared.is_dir(), "a directory that appeared after the listing was removed"
     assert "Removed 1 of 1" in scr.status.text(), scr.status.text()
@@ -971,9 +947,8 @@ def test_a_directory_whose_manifest_will_not_parse_is_listed_but_never_swept(sto
 
     So: those rows stay in the LISTING with their reason, the confirmation never offers them, and
     the status line says they were left alone rather than silently dropping them."""
-    from PySide6.QtWidgets import QMessageBox
     from core.artifacts.store import MANIFEST
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import artifact_screen, asked, qt_app
     qt_app()
     d = store.kind_dir("prior")
     d.mkdir(parents=True, exist_ok=True)
@@ -989,9 +964,9 @@ def test_a_directory_whose_manifest_will_not_parse_is_listed_but_never_swept(sto
     assert {_select(scr, i).dir_name for i in range(scr.table.topLevelItemCount())} == \
         {torn.name, plain.name}, "both shapes are listed"
 
-    _answer(monkeypatch, QMessageBox.Yes)
+    choose(monkeypatch, other=True)
     scr._sweep(all_kinds=False)
-    informative = SHOWN[-1].informativeText()
+    informative = asked().text
     assert plain.name in informative and torn.name not in informative, informative
     assert not plain.exists(), "the manifest-less leftover should have gone"
     assert torn.is_dir(), "a directory with a manifest this build cannot read was removed"
@@ -1014,17 +989,16 @@ def test_a_directory_something_may_still_be_writing_is_reported_not_removed(stor
     is that the removal refuses it and the status line says why -- and that the confirmation says so
     BEFORE it is answered, because otherwise the one dialog an operator sees while a training runs
     offers to remove that training's directory with no warning at all."""
-    from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import artifact_screen, asked, qt_app
     qt_app()
     live = store.kind_dir("prior") / "inflight__20260917T090000"
     live.mkdir(parents=True, exist_ok=True)
     (live / "prior.pt").write_bytes(b"a run still writing this")   # NOT backdated: written just now
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
-    _answer(monkeypatch, QMessageBox.Yes)
+    choose(monkeypatch, other=True)
     scr._sweep(all_kinds=False)
-    assert "still being written" in SHOWN[-1].informativeText(), SHOWN[-1].informativeText()
+    assert "still being written" in asked().text, asked().text
     said = scr.status.text()
     assert live.is_dir() and (live / "prior.pt").is_file(), "a live run's directory was removed"
     assert "Removed 0 of 1" in said, said
@@ -1037,8 +1011,7 @@ def test_a_sweep_that_throws_is_reported_on_the_status_line_and_the_pickers_are_
     click AFTER earlier kinds' leftovers were already gone -- the application's last-resort red box,
     no status line, and ``store_changed`` never emitted, so the three pickers kept showing rows that
     had just been deleted. Every other entry point on this screen reports on the status line."""
-    from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import artifact_screen, asked, qt_app
     qt_app()
     leftover = store.kind_dir("prior") / "leftover__20260917T090000"
     leftover.mkdir(parents=True, exist_ok=True)
@@ -1052,13 +1025,13 @@ def test_a_sweep_that_throws_is_reported_on_the_status_line_and_the_pickers_are_
     changed = []
     scr.store_changed.connect(lambda: changed.append(1))
     _show_kind(scr, "prior")
-    _answer(monkeypatch, QMessageBox.Yes)
+    choose(monkeypatch, other=True)
     scr._sweep(all_kinds=True)                  # must not raise out of the click
     said = scr.status.text()
     assert "PermissionError" in said and "Access is denied" in said, said
     assert said.startswith("⚠ "), said
     assert changed, "the pickers were never told the store may have moved"
-    assert SHOWN[-1].windowTitle() == "Remove what no artifact accounts for", \
+    assert asked().title == "Remove what no artifact accounts for", \
         "the confirmation is the only box: a disk problem is not a refusal"
 
 
@@ -1069,7 +1042,7 @@ def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_no
     whole reason the browser is a plain screen and not a BasePanel, so nothing here is greyed out
     either."""
     from core.gui.panels.base_panel import BasePanel
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import all_asked, artifact_screen, qt_app
     qt_app()
     cfg = _nad_cfg()
     p = _prior_artifact(store, cfg, name="busy")
@@ -1085,7 +1058,7 @@ def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_no
             scr._set_status("")
             action()
             assert "A task is running" in scr.status.text(), scr.status.text()
-        assert SHOWN == [], "a refused action must not ask or explain in a box"
+        assert all_asked() == [], "a refused action must not ask or explain in a box"
         assert store.get("prior", p.id).note == "", "the note must not be written"
         assert leftover.is_dir(), "the sweep must not run"
         scr.refresh()                                   # reading is never blocked
@@ -1110,7 +1083,6 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
 
     The wiring (MainWindow._refresh_store_pickers and the store_changed connect) and the delete that
     emits store_changed are tested here together."""
-    from PySide6.QtWidgets import QMessageBox
     from core.gui.main_window import MainWindow
     from core.gui.widgets.artifact_picker import StorePicker
     from tests._fixtures import qt_app
@@ -1128,7 +1100,7 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
         scr = w.artifact_screen
         _show_kind(scr, "prior")
         _select_ref(scr.table, doomed.id)
-        _answer(monkeypatch, QMessageBox.Yes)
+        choose(monkeypatch, other=True)
         scr._delete()
         ids = [picker.combo.itemData(i) for i in range(picker.combo.count())]
         assert doomed.id not in ids, "the picker still offers the deleted prior"
@@ -1162,7 +1134,7 @@ def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatc
     from core.Helpers import model_store
     from core.gui.main_window import MainWindow
     from core.gui.panels.base_panel import BasePanel
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import all_asked, forget_asked, qt_app
     qt_app()
     statics = []
     for name in ("warning", "information"):
@@ -1174,7 +1146,7 @@ def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatc
 
     w = MainWindow()
     try:
-        SHOWN.clear()                       # this test is about the three sites, not construction
+        forget_asked()                      # this test is about the three sites, not construction
         monkeypatch.setattr(w.model_builder_screen, "load_existing", boom)
         w._edit_user_model("BROKEN")        # site 1 -- a definition that will not load
         monkeypatch.setattr(model_store, "delete_user_model", boom)
@@ -1183,18 +1155,19 @@ def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatc
             w._delete_user_model("BROKEN")  # site 2 -- refused while a run is live, nothing asked
         finally:
             BasePanel._running = False
-        _answer(monkeypatch, QMessageBox.Yes)
+        choose(monkeypatch, other=True)
         w._delete_user_model("BROKEN")      # the confirmation, then site 3 -- the delete fails
     finally:
         w.close()
     assert statics == [], f"the window still shows a box with a C++ static: {statics}"
-    assert [b.windowTitle() for b in SHOWN] == ["Cannot edit model", "A task is running",
-                                                "Delete model", "Delete failed"], \
-        [b.windowTitle() for b in SHOWN]
-    assert SHOWN[0].icon() == QMessageBox.Warning and "corrupt definition" in SHOWN[0].text()
-    assert SHOWN[1].icon() == QMessageBox.Information
-    assert "before deleting a model" in SHOWN[1].text(), SHOWN[1].text()
-    assert SHOWN[3].icon() == QMessageBox.Warning and "corrupt definition" in SHOWN[3].text()
+    told = all_asked()
+    assert [a.title for a in told] == ["Cannot edit model", "A task is running",
+                                       "Delete model", "Delete failed"], \
+        [a.title for a in told]
+    assert told[0].marker == "warn" and "corrupt definition" in told[0].sentence
+    assert told[1].marker == "info"
+    assert "before deleting a model" in told[1].sentence, told[1].sentence
+    assert told[3].marker == "warn" and "corrupt definition" in told[3].sentence
 
 
 def test_a_leftover_row_is_nothing_to_act_on_and_no_row_at_all_is_a_refusal(store):
@@ -1205,8 +1178,7 @@ def test_a_leftover_row_is_nothing_to_act_on_and_no_row_at_all_is_a_refusal(stor
     sweep -- no rule was broken, so no yellow box. Nothing selected IS a refusal, and it carries the
     field key whose fix sentence names the list (core/gui/fields.py's "artifact").
     """
-    from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import all_asked, artifact_screen, asked, forget_asked, qt_app
     qt_app()
     cfg = _nad_cfg()
     _prior_artifact(store, cfg, name="real")
@@ -1219,10 +1191,10 @@ def test_a_leftover_row_is_nothing_to_act_on_and_no_row_at_all_is_a_refusal(stor
     assert scr.table.current_summary() is None
     assert not scr.btn_delete.isEnabled() and not scr.note_edit.isEnabled()
     scr._delete()
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-    assert box.text() == "No artifact is selected."
-    assert box.informativeText() == "Select an artifact in the list on the Artifacts screen."
+    box = asked()
+    assert (box.kind, box.marker) == ("refusal", "warn")
+    assert box.sentence == "No artifact is selected."
+    assert box.beneath == "Select an artifact in the list on the Artifacts screen."
 
     # (b) a leftover selected: disabled, and a forced call explains rather than refuses
     s = _select_ref(scr.table, leftover.name)
@@ -1231,10 +1203,10 @@ def test_a_leftover_row_is_nothing_to_act_on_and_no_row_at_all_is_a_refusal(stor
                 or scr.btn_delete.isEnabled()), "an incomplete row is not an artifact"
     assert scr.note_edit.text() == "", "there is no manifest, so there is no note to show"
     for doing, action in (("delete", scr._delete), ("annotate", scr._set_note)):
-        SHOWN.clear()
+        forget_asked()
         scr._set_status("")
         action()
-        assert SHOWN == [], "nothing was refused, so nothing is explained in a box"
+        assert all_asked() == [], "nothing was refused, so nothing is explained in a box"
         said = scr.status.text()
         assert leftover.name in said and f"nothing to {doing}" in said, said
         assert "no manifest.json" in said and "a sweep removes" in said, said
@@ -1264,7 +1236,6 @@ def test_a_read_failure_after_a_change_beats_the_actions_own_sentence(store, mon
     refresh() could read the store. Which also makes the wrong order unrepresentable -- no caller
     can write the status line before the re-list any more, because none of them writes it at all.
     """
-    from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import artifact_screen, qt_app
     qt_app()
     cfg = _nad_cfg()
@@ -1291,7 +1262,7 @@ def test_a_read_failure_after_a_change_beats_the_actions_own_sentence(store, mon
 
     proxy = _ReadsFailOnceTheDeleteLands(store)
     monkeypatch.setattr(scr, "_resolved_store", lambda: proxy)
-    _answer(monkeypatch, QMessageBox.Yes)
+    choose(monkeypatch, other=True)
     scr._delete()
     assert proxy.deleted, "the delete itself must have happened; this is about what is SAID"
     said = scr.status.text()
@@ -1321,7 +1292,7 @@ def test_an_unreadable_root_reports_on_the_status_line_instead_of_crashing_a_cli
     dependent depends, and the one _incomplete does for the sweep -- whose sentence now carries a
     next step, the one operator-facing line on this screen that had none.
     """
-    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    from tests._fixtures import all_asked, artifact_screen, forget_asked, qt_app
     qt_app()
     cfg = _nad_cfg()
     p = _prior_artifact(store, cfg, name="ancestor")
@@ -1338,12 +1309,12 @@ def test_an_unreadable_root_reports_on_the_status_line_instead_of_crashing_a_cli
             raise PermissionError("Access is denied")
 
     monkeypatch.setattr(scr, "_resolved_store", lambda: _NoDependentScan(store))
-    SHOWN.clear()
+    forget_asked()
     scr._delete()
     said = scr.status.text()
     assert "Could not read what depends on prior ancestor" in said, said
     assert "PermissionError" in said and "nothing was deleted" in said, said
-    assert SHOWN == [], "a disk problem is not a refusal and asks nothing"
+    assert all_asked() == [], "a disk problem is not a refusal and asks nothing"
     assert store.get("prior", p.id).name == "ancestor"
 
     # (b) the dependents are known but the list() that explains WHY cannot be read. Unguarded this
@@ -1355,10 +1326,10 @@ def test_an_unreadable_root_reports_on_the_status_line_instead_of_crashing_a_cli
             return self._real.list(kind)
 
     monkeypatch.setattr(scr, "_resolved_store", lambda: _NoListForTheWhy(store))
-    SHOWN.clear()
+    forget_asked()
     scr._delete()
     assert "Could not read what depends on prior ancestor" in scr.status.text(), scr.status.text()
-    assert SHOWN == [] and store.get("prior", p.id).name == "ancestor"
+    assert all_asked() == [] and store.get("prior", p.id).name == "ancestor"
 
     # (c) the sweep's own read, and its next step
     class _NoListAtAll(_Proxy):
@@ -1366,10 +1337,10 @@ def test_an_unreadable_root_reports_on_the_status_line_instead_of_crashing_a_cli
             raise PermissionError("Access is denied")
 
     monkeypatch.setattr(scr, "_resolved_store", lambda: _NoListAtAll(store))
-    SHOWN.clear()
+    forget_asked()
     scr._sweep(all_kinds=False)
     said = scr.status.text()
-    assert SHOWN == [], "there is nothing to confirm when the candidates could not be read"
+    assert all_asked() == [], "there is nothing to confirm when the candidates could not be read"
     assert "The prior directory could not be read" in said and "PermissionError" in said, said
     assert "sweep again" in said, f"the one sentence with no next step: {said}"
     assert said.startswith("⚠ "), said
@@ -1381,7 +1352,6 @@ def test_sweeping_one_kind_leaves_another_kinds_leftover_alone(store, monkeypatc
     only the all-kinds button passes None. While the kind travelled as a
     falsy value, "all seven" was what a falsy kind meant downstream, so a one-kind sweep could
     widen to every directory in the store."""
-    from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import artifact_screen, qt_app
     qt_app()
     mine = store.kind_dir("prior") / "junk_prior"
@@ -1391,7 +1361,7 @@ def test_sweeping_one_kind_leaves_another_kinds_leftover_alone(store, monkeypatc
         backdate_tree(d)
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
-    _answer(monkeypatch, QMessageBox.Yes)
+    choose(monkeypatch, other=True)
     scr._sweep(all_kinds=False)
     assert not mine.exists(), "this kind's leftover should have gone"
     assert theirs.is_dir(), "a one-kind sweep reached into another kind"
@@ -1456,7 +1426,7 @@ def test_the_lineage_report_writes_exactly_what_render_lineage_returns(store, mo
     summary`, so the two front ends cannot drift: whichever wrote the file, a reviewer gets the same
     bytes. UTF-8 with LF endings, so 'the same bytes' is true on this platform too."""
     from core.artifacts import render_lineage
-    from tests._fixtures import CHOOSER_CALLS, SHOWN, answer_chooser, artifact_screen, qt_app
+    from tests._fixtures import CHOOSER_CALLS, all_asked, answer_chooser, artifact_screen, qt_app
     qt_app()
     cfg = _nad_cfg()
     ancestor = _prior_artifact(store, cfg, name="ancestor")
@@ -1472,7 +1442,7 @@ def test_the_lineage_report_writes_exactly_what_render_lineage_returns(store, mo
     assert out.read_bytes() == render_lineage(store, "inference", w.id).encode("utf-8")
     text = out.read_text(encoding="utf-8")
     assert "ancestor" in text and ancestor.id in text, "the chain must reach the parent"
-    assert SHOWN == [], "writing a report asks nothing"
+    assert all_asked() == [], "writing a report asks nothing"
     assert str(out) in scr.status.text(), scr.status.text()
     assert CHOOSER_CALLS == [("save", "Save lineage report", "inference-descendant-lineage.txt",
                               "Text file (*.txt)", str(out))]
@@ -1487,7 +1457,7 @@ def test_the_lineage_report_is_a_read_and_needs_a_complete_row(store, monkeypatc
     name the operator typed without an extension gets .txt rather than a file nothing opens."""
     from core.artifacts import render_lineage
     from core.gui.panels.base_panel import BasePanel
-    from tests._fixtures import CHOOSER_CALLS, SHOWN, answer_chooser, artifact_screen, qt_app
+    from tests._fixtures import CHOOSER_CALLS, answer_chooser, artifact_screen, asked, qt_app
     qt_app()
     cfg = _nad_cfg()
     p = _prior_artifact(store, cfg, name="ancestor")
@@ -1520,9 +1490,9 @@ def test_the_lineage_report_is_a_read_and_needs_a_complete_row(store, monkeypatc
     scr.table.clearSelection()
     scr.table.setCurrentItem(None)
     scr._lineage_report()
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs"
-    assert box.informativeText() == "Select an artifact in the list on the Artifacts screen."
+    box = asked()
+    assert box.kind == "refusal"
+    assert box.beneath == "Select an artifact in the list on the Artifacts screen."
     assert sorted(q.name for q in out_dir.iterdir()) == ["chain.txt"]
     assert CHOOSER_CALLS == [("save", "Save lineage report", "prior-ancestor-lineage.txt",
                               "Text file (*.txt)", str(bare))], \

@@ -1290,14 +1290,12 @@ def test_the_fresh_cache_and_narrowed_posterior_dialogs_default_to_cancel(monkey
     dialog exists to stop. Every other test replaces the _ask_* methods, so only this one sees the
     dialogs themselves."""
     from types import SimpleNamespace
-    from PySide6.QtWidgets import QMessageBox
     from core.gui.screens.inference_screen import InferenceScreen
+    from tests._fixtures import all_asked, asked, choose, forget_asked
 
     qt_app()
     inf = InferenceScreen()
     pp = inf.posterior_panel
-    seen = []
-    monkeypatch.setattr(QMessageBox, "exec", lambda self: seen.append(self) or 0)
 
     def ask_new_run():
         return pp._ask_new_run([{"name": "a", "batches": 3, "field": "n_runs", "mine": 2, "theirs": 3}], 2)
@@ -1306,27 +1304,20 @@ def test_the_fresh_cache_and_narrowed_posterior_dialogs_default_to_cancel(monkey
         return pp._ask_load_non_amortized(SimpleNamespace(
             body={"truncation": {"level": 0.99, "dims": [0], "x_obs_digest": "d" * 16}}, name="r", id="x"))
 
-    def _click(text):
-        return next(b for b in seen[-1].buttons() if b.text() == text)
-
     for ask, destructive in ((ask_new_run, "Start a new run anyway"), (ask_load, "Load it")):
         # nothing clicked: the default is Cancel
-        seen.clear()
-        monkeypatch.setattr(QMessageBox, "exec", lambda self: seen.append(self) or 0)
+        forget_asked()
+        choose(monkeypatch)
         assert ask() is False
-        assert seen and seen[-1].defaultButton() is not None
-        assert seen[-1].defaultButton().text() == "Cancel", seen[-1].defaultButton().text()
+        assert all_asked() and asked().default is not None
+        assert asked().default == "Cancel", asked().default
 
         # Enter: the default button is clicked, and the answer is NO
-        seen.clear()
-        monkeypatch.setattr(QMessageBox, "exec",
-                            lambda self: seen.append(self) or self.defaultButton().click() or 0)
+        choose(monkeypatch, default=True)
         assert ask() is False, f"clicking the default button on the '{destructive}' dialog answered yes"
 
         # the destructive button clicked: the answer is YES
-        seen.clear()
-        monkeypatch.setattr(QMessageBox, "exec",
-                            lambda self: seen.append(self) or _click(destructive).click() or 0)
+        choose(monkeypatch, words=destructive)
         assert ask() is True, f"clicking '{destructive}' did not answer yes"
 
 
@@ -1641,13 +1632,12 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
     name: a lie for a rename. A rename that fails for any other reason is a bug and stays red, with
     its traceback. Either way the loaded artifact keeps its old name."""
     import types
-    from PySide6.QtWidgets import QMessageBox
     from core.artifacts import StoreError
     from core.gui import fields as gui_fields
     from core.gui.panels.inference import posterior_tab as post_mod, prior_tab as prior_mod
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
-    from tests._fixtures import SHOWN, PaneCapture, qt_app
+    from tests._fixtures import PaneCapture, asked, forget_asked, qt_app
 
     qt_app()
     inf = InferenceScreen()
@@ -1669,25 +1659,25 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
         name_box.setText("p")
 
         monkeypatch.setattr(mod, "default_store", lambda: types.SimpleNamespace(rename=_taken))
-        SHOWN.clear()
+        forget_asked()
         save()
-        box = SHOWN[-1]
-        assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, kind
-        assert box.text() == f"a {kind} named 'p' already exists; rename or delete it first", kind
-        assert box.informativeText() == gui_fields.fix_sentence("name") == (
+        box = asked()
+        assert (box.kind, box.marker) == ("refusal", "warn"), kind
+        assert box.sentence == f"a {kind} named 'p' already exists; rename or delete it first", kind
+        assert box.beneath == gui_fields.fix_sentence("name") == (
             "Choose another name in the Save box, or in the 'Record name' or 'Comparison name' box "
             "on the FDT analysis or Sweep study cross-validation tab."), kind
-        assert box.detailedText() == "", kind
+        assert box.detail == "", kind
         assert loaded.name == "", "a refused rename must not relabel the loaded artifact"
         assert pane.lines[-1][0] == "warning" and "already exists" in pane.lines[-1][1], pane.lines
 
         monkeypatch.setattr(mod, "default_store", lambda: types.SimpleNamespace(rename=_bug))
-        SHOWN.clear()
+        forget_asked()
         save()
-        box = SHOWN[-1]
-        assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical, kind
-        assert box.text() == "manifest.json is locked", kind
-        assert "Traceback" in box.detailedText() and "PermissionError" in box.detailedText(), kind
+        box = asked()
+        assert (box.kind, box.title) == ("error", "Error"), kind
+        assert box.sentence == "manifest.json is locked", kind
+        assert "Traceback" in box.detail and "PermissionError" in box.detail, kind
         assert loaded.name == "", kind
         assert pane.lines[-1] == ("error", "manifest.json is locked"), pane.lines
 
@@ -1705,13 +1695,12 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
     once the four section panels were converted; the pin stays, because the scan is what stops a new
     tab reintroducing the call."""
     import types
-    from PySide6.QtWidgets import QMessageBox
     import core.gui.panels.inference as inference_pkg
     from core.gui import fields as gui_fields
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from core.refusals import Refusal
-    from tests._fixtures import SHOWN, PaneCapture, qt_app
+    from tests._fixtures import PaneCapture, asked, forget_asked, qt_app
 
     qt_app()
     inf = InferenceScreen()
@@ -1729,22 +1718,22 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
         raise ZeroDivisionError("division by zero")
 
     inf.session = SbiSession(draft=types.SimpleNamespace(make_config=_refusing))
-    SHOWN.clear()
+    forget_asked()
     pp._build_prior()
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-    assert box.text() == "The units are not parseable: 'furlong' is not a length unit."
-    assert box.informativeText() == gui_fields.fix_sentence("units")
-    assert "'Units'" in box.informativeText(), box.informativeText()
-    assert box.detailedText() == "" and reached == []
+    box = asked()
+    assert (box.kind, box.marker) == ("refusal", "warn")
+    assert box.sentence == "The units are not parseable: 'furlong' is not a length unit."
+    assert box.beneath == gui_fields.fix_sentence("units")
+    assert "'Units'" in box.text, box.text
+    assert box.detail == "" and reached == []
     assert pane.lines[-1][0] == "warning" and "'Units'" in pane.lines[-1][1], pane.lines
 
     inf.session = SbiSession(draft=types.SimpleNamespace(make_config=_buggy))
-    SHOWN.clear()
+    forget_asked()
     pp._build_prior()
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical
-    assert box.text() == "division by zero" and "ZeroDivisionError" in box.detailedText()
+    box = asked()
+    assert (box.kind, box.title) == ("error", "Error")
+    assert box.sentence == "division by zero" and "ZeroDivisionError" in box.detail
     assert reached == [] and pane.lines[-1] == ("error", "division by zero")
 
     # A bounds file that vanished between the picker's refresh and the click, through the REAL
@@ -1761,12 +1750,12 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
                                    bounds_dicts=bounds_dicts)
 
     inf.session = SbiSession(draft=types.SimpleNamespace(make_config=_real))
-    SHOWN.clear()
+    forget_asked()
     pp._build_prior()
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, box.text()
-    assert box.text() == f"The bounds file was not found: {gone!r}."
-    assert box.informativeText() == gui_fields.fix_sentence("bounds") and reached == []
+    box = asked()
+    assert (box.kind, box.marker) == ("refusal", "warn"), box.sentence
+    assert box.sentence == f"The bounds file was not found: {gone!r}."
+    assert box.beneath == gui_fields.fix_sentence("bounds") and reached == []
 
     for path in sorted(Path(inference_pkg.__file__).parent.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -1802,7 +1791,6 @@ def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch,
     """
     import ast
     from pathlib import Path
-    from PySide6.QtWidgets import QMessageBox
     from core import cli
     from core.gui import fields as gui_fields
     from core.gui.panels import simulate_panel as sim_mod
@@ -1812,7 +1800,7 @@ def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch,
     from core.gui.panels.reduction_panel import ReductionPanel
     from core.gui.panels.simulate_panel import SimulatePanel
     from core.refusals import Refusal
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import all_asked, asked, forget_asked, qt_app
 
     qt_app()
     cell = tmp_path / "bad_cell.txt"
@@ -1838,13 +1826,13 @@ def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch,
 
     _patch(_refusing)
     for name, click in clicks.items():
-        SHOWN.clear()
+        forget_asked()
         click()
-        box = SHOWN[-1]
-        assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, name
-        assert box.text() == msg, name
-        assert box.informativeText() == gui_fields.fix_sentence("cell"), name
-        assert box.detailedText() == "", name
+        box = asked()
+        assert (box.kind, box.marker) == ("refusal", "warn"), name
+        assert box.sentence == msg, name
+        assert box.beneath == gui_fields.fix_sentence("cell"), name
+        assert box.detail == "", name
 
     # (b) anything else is a bug: the red box, the message, and the traceback behind Details
     def _booming(*a, **k):
@@ -1852,12 +1840,12 @@ def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch,
 
     _patch(_booming)
     for name, click in clicks.items():
-        SHOWN.clear()
+        forget_asked()
         click()
-        box = SHOWN[-1]
-        assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical, name
-        assert box.text() == "the parser fell over", name
-        assert "RuntimeError" in box.detailedText(), name
+        box = asked()
+        assert (box.kind, box.title) == ("error", "Error"), name
+        assert box.sentence == "the parser fell over", name
+        assert "RuntimeError" in box.detail, name
 
     # (c) the Reduction panel's F0 box, checked at the click and before the builder: a blank
     #     box -- which value() would have read as 0 -- and a typed 0 are both the yellow box naming
@@ -1869,13 +1857,13 @@ def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch,
             ("", "The non-dimensional drive amplitude is blank (default 0.05)."),
             ("0", "The non-dimensional drive amplitude must be greater than 0; got 0 (default 0.05).")):
         reduction.f0.setText(typed)
-        SHOWN.clear()
+        forget_asked()
         reduction._run()
-        box = SHOWN[-1]
-        assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, typed
-        assert box.text() == said, typed
-        assert box.informativeText() == gui_fields.fix_sentence("f0"), typed
-        assert "NWK → Hopf reduction map" in box.informativeText(), box.informativeText()
+        box = asked()
+        assert (box.kind, box.marker) == ("refusal", "warn"), typed
+        assert box.sentence == said, typed
+        assert box.beneath == gui_fields.fix_sentence("f0"), typed
+        assert "NWK → Hopf reduction map" in box.text, box.text
 
     # (d) a cell deleted after it was picked. The panel checks the file itself, beside the F0 check
     #     (make_reduction_config stays untouched), so it is one yellow box naming the cell -- not a
@@ -1885,12 +1873,12 @@ def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch,
     reduction.cell_picker.selected_path = lambda: str(gone)
     reduction.f0.setText("0.05")
     monkeypatch.setattr(reduction, "_on_error", lambda *a, **k: pytest.fail("the red box opened"))
-    SHOWN.clear()
+    forget_asked()
     reduction._run()
-    assert len(SHOWN) == 1, [b.text() for b in SHOWN]
-    box = SHOWN[0]
-    assert box.windowTitle() == "Check your inputs" and "was not found" in box.text(), box.text()
-    assert box.informativeText() == gui_fields.fix_sentence("cell"), box.informativeText()
+    assert len(all_asked()) == 1, [a.sentence for a in all_asked()]
+    box = all_asked()[0]
+    assert box.kind == "refusal" and "was not found" in box.sentence, box.sentence
+    assert box.beneath == gui_fields.fix_sentence("cell"), box.beneath
 
     # (e) the generic box is gone, and nothing under core/gui reaches for it
     assert not hasattr(BasePanel, "_config_error")
@@ -1910,11 +1898,10 @@ def test_the_fdt_panel_leaves_an_unsupported_model_to_the_builders_refusal(monke
     the same reason as Refusal(field="model"). The backstop is gone, so the builder's refusal is the
     ONE path to the operator: the yellow box, fdt_support's own sentence, and the fix line naming the
     Model box. Nothing is dispatched."""
-    from PySide6.QtWidgets import QMessageBox
     from core import registry
     from core.gui import fields as gui_fields
     from core.gui.panels.fdt_panel import FdtPanel
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import all_asked, asked, forget_asked, qt_app
 
     qt_app()
     cell = tmp_path / "cell.txt"
@@ -1925,14 +1912,14 @@ def test_the_fdt_panel_leaves_an_unsupported_model_to_the_builders_refusal(monke
     reason = "FDT can't run 'NADROWSKI': a stand-in for fdt_support's per-model sentence."
     monkeypatch.setattr(registry, "fdt_support", lambda name: (False, reason))
 
-    SHOWN.clear()
+    forget_asked()
     panel._run()
-    assert SHOWN, "an unsupported model reached the operator as a log line, not as the refusal box"
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-    assert box.text() == reason
-    assert box.informativeText() == gui_fields.fix_sentence("model")
-    assert "FDT analysis" in box.informativeText(), box.informativeText()
+    assert all_asked(), "an unsupported model reached the operator as a log line, not as the refusal box"
+    box = asked()
+    assert (box.kind, box.marker) == ("refusal", "warn")
+    assert box.sentence == reason
+    assert box.beneath == gui_fields.fix_sentence("model")
+    assert "FDT analysis" in box.text, box.text
 
 
 def test_the_fdt_panel_offers_only_single_cell_records(monkeypatch):
@@ -2063,10 +2050,9 @@ def test_a_taken_fdt_record_name_is_refused_at_the_click(tmp_path):
     yellow "Check your inputs" box like every other input refusal on this screen. Raised out of the
     clicked slot instead, it would reach app.py's last-resort excepthook as a raw traceback with
     nothing in the panel's own log."""
-    from PySide6.QtWidgets import QMessageBox
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels.fdt_panel import FdtPanel
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import asked, forget_asked, qt_app
 
     qt_app()
     store = ArtifactStore(tmp_path)
@@ -2080,13 +2066,13 @@ def test_a_taken_fdt_record_name_is_refused_at_the_click(tmp_path):
         panel = FdtPanel()
         panel.dispatch = lambda *a, **k: pytest.fail("a refused click dispatched a run anyway")
         panel.record_name.setText("cell_a_first")
-        SHOWN.clear()
+        forget_asked()
         panel._run()
 
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-    assert "cell_a_first" in box.text(), box.text()
-    assert box.detailedText() == "", "a refusal is not a crash and carries no traceback"
+    box = asked()
+    assert (box.kind, box.marker) == ("refusal", "warn")
+    assert "cell_a_first" in box.sentence, box.sentence
+    assert box.detail == "", "a refusal is not a crash and carries no traceback"
     assert len(list((tmp_path / "fdt").iterdir())) == 1, "the refused click left a second directory"
 
 
@@ -2102,12 +2088,11 @@ def test_a_blank_knob_box_is_refused_as_blank_on_both_measurement_tabs(tmp_path,
     CrossVal tab refuses the blank itself before the builder (require_given): one yellow box, "is
     blank", the fix line naming the box, and nothing dispatched or minted. The fix line is read
     through ``fix_sentence``, never a copy of the box's label."""
-    from PySide6.QtWidgets import QMessageBox
     from core.artifacts import ArtifactStore, use_store
     from core.gui import fields as gui_fields
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.panels.fdt_panel import FdtPanel
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import all_asked, forget_asked, qt_app
 
     qt_app()
     store = ArtifactStore(tmp_path)
@@ -2117,14 +2102,14 @@ def test_a_blank_knob_box_is_refused_as_blank_on_both_measurement_tabs(tmp_path,
         panel.dispatch = lambda *a, **k: pytest.fail("a blank knob box dispatched a run anyway")
         assert panel.cell_picker.selected_path(), "the premise: a cell is selected"
         getattr(panel, key).setText("")
-        SHOWN.clear()
+        forget_asked()
         panel._run()
 
-    assert len(SHOWN) == 1, [b.text() for b in SHOWN]
-    box = SHOWN[0]
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-    assert "is blank" in box.text(), box.text()
-    assert box.informativeText() == gui_fields.fix_sentence(key), box.informativeText()
+    assert len(all_asked()) == 1, [a.sentence for a in all_asked()]
+    box = all_asked()[0]
+    assert (box.kind, box.marker) == ("refusal", "warn")
+    assert "is blank" in box.sentence, box.sentence
+    assert box.beneath == gui_fields.fix_sentence(key), box.beneath
 
 
 @pytest.mark.parametrize("how", ["too_long", "two_lines"])
@@ -2141,12 +2126,11 @@ def test_an_fdt_record_note_is_judged_at_the_click(tmp_path, monkeypatch, how):
     refusal is an input refusal: the yellow box, the rule's own sentence, the fix line naming the
     'Note' box, nothing dispatched and no id minted -- ``create`` is never reached, so nothing is on
     disk either."""
-    from PySide6.QtWidgets import QMessageBox
     from core.artifacts import ArtifactStore, use_store
     from core.gui import fields as gui_fields
     from core.gui.panels.fdt_panel import FdtPanel
     from core.refusals import NOTE_MAX_CHARS
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import all_asked, asked, forget_asked, qt_app
 
     qt_app()
     store = ArtifactStore(tmp_path)
@@ -2162,16 +2146,16 @@ def test_an_fdt_record_note_is_judged_at_the_click(tmp_path, monkeypatch, how):
             panel.record_note.insert("first line\nsecond line")
             assert "\n" in panel.record_note.text(), "the line edit dropped the break: nothing is tested"
             said = "must be one line"
-        SHOWN.clear()
+        forget_asked()
         panel._run()
 
-    assert SHOWN, "a refused note reached no box"
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, how
-    assert said in box.text(), box.text()
-    assert box.informativeText() == gui_fields.fix_sentence("note")
-    assert "'Note'" in box.informativeText() and "FDT analysis" in box.informativeText()
-    assert box.detailedText() == "", "a refusal is not a crash and carries no traceback"
+    assert all_asked(), "a refused note reached no box"
+    box = asked()
+    assert (box.kind, box.marker) == ("refusal", "warn"), how
+    assert said in box.sentence, box.sentence
+    assert box.beneath == gui_fields.fix_sentence("note")
+    assert "'Note'" in box.text and "FDT analysis" in box.text
+    assert box.detail == "", "a refusal is not a crash and carries no traceback"
 
 
 def test_the_fdt_panel_names_the_record_its_run_wrote(tmp_path):
@@ -2287,11 +2271,10 @@ def test_a_taken_crossval_record_name_is_refused_at_the_click(tmp_path):
     StoreError (field "name") of the yellow box rather than a raw traceback out of the clicked slot,
     and it is raised before anything is dispatched. The activity sweep's writer was already created
     by then, but create() writes nothing, so the refused click leaves no folder behind."""
-    from PySide6.QtWidgets import QMessageBox
     from core.artifacts import ArtifactStore, use_store
     from core.gui import fields as gui_fields
     from core.gui.panels.crossval_panel import CrossValPanel
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import asked, forget_asked, qt_app
 
     qt_app()
     store = ArtifactStore(tmp_path)
@@ -2305,14 +2288,14 @@ def test_a_taken_crossval_record_name_is_refused_at_the_click(tmp_path):
         panel = CrossValPanel()
         panel.dispatch = lambda *a, **k: pytest.fail("a refused click dispatched a run anyway")
         panel.record_name.setText("study_one")
-        SHOWN.clear()
+        forget_asked()
         panel._run()
 
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-    assert "study_one-temp" in box.text(), box.text()
-    assert box.informativeText() == gui_fields.fix_sentence("name")
-    assert box.detailedText() == "", "a refusal is not a crash and carries no traceback"
+    box = asked()
+    assert (box.kind, box.marker) == ("refusal", "warn")
+    assert "study_one-temp" in box.sentence, box.sentence
+    assert box.beneath == gui_fields.fix_sentence("name")
+    assert box.detail == "", "a refusal is not a crash and carries no traceback"
     assert len(list((tmp_path / "fdt").iterdir())) == 1, "the refused click left a second directory"
 
 
@@ -2331,12 +2314,11 @@ def test_a_blank_crossval_grid_box_is_refused_naming_its_grid(tmp_path, monkeypa
     house rule that a blank is refused as a blank; and every blank part is now named -- its minimum,
     its maximum or its point count. "Nothing minted" is asserted by ``create`` failing the test: a
     folder check could not fail, because ``create`` writes nothing."""
-    from PySide6.QtWidgets import QMessageBox
     from core.artifacts import ArtifactStore, use_store
     from core.gui import fields as gui_fields
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.refusals import describe
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import all_asked, asked, forget_asked, qt_app
 
     qt_app()
     store = ArtifactStore(tmp_path)
@@ -2348,17 +2330,17 @@ def test_a_blank_crossval_grid_box_is_refused_naming_its_grid(tmp_path, monkeypa
         row = getattr(panel, grid)
         assert all(v is not None for v in row.spec_or_none()), "the default grid is already blank"
         getattr(row, box).setText("")
-        SHOWN.clear()
+        forget_asked()
         panel._run()
 
-    assert SHOWN, "a blank grid box reached no box"
-    shown = SHOWN[-1]
-    assert shown.windowTitle() == "Check your inputs" and shown.icon() == QMessageBox.Warning
+    assert all_asked(), "a blank grid box reached no box"
+    shown = asked()
+    assert (shown.kind, shown.marker) == ("refusal", "warn")
     what = describe(grid)
-    assert shown.text().startswith(what[0].upper() + what[1:]), shown.text()
+    assert shown.sentence.startswith(what[0].upper() + what[1:]), shown.sentence
     part = {"lo": "minimum", "hi": "maximum", "points": "point count"}[box]
-    assert f"its {part} is blank" in shown.text(), shown.text()
-    assert shown.informativeText() == gui_fields.fix_sentence(grid)
+    assert f"its {part} is blank" in shown.sentence, shown.sentence
+    assert shown.beneath == gui_fields.fix_sentence(grid)
 
 
 def test_the_crossval_panel_fills_each_grid_in_ascending_order(tmp_path):
@@ -2375,7 +2357,7 @@ def test_the_crossval_panel_fills_each_grid_in_ascending_order(tmp_path):
     from core.artifacts import ArtifactStore, use_store
     from core.config import CELL_PATH
     from core.gui.panels.crossval_panel import CrossValPanel
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import all_asked, forget_asked, qt_app
 
     qt_app()
     text = (CELL_PATH / "nadrowski" / "master_spont.txt").read_text(encoding="utf-8")
@@ -2393,10 +2375,10 @@ def test_the_crossval_panel_fills_each_grid_in_ascending_order(tmp_path):
         assert panel.t_grid.spec_or_none()[:2] == (0.5, 1.0), panel.t_grid.spec_or_none()
         assert panel.s_grid.spec_or_none()[:2] == (0.0, 0.95), panel.s_grid.spec_or_none()
         panel.dispatch = lambda fn, *a, **k: cap.update(kwargs=k)
-        SHOWN.clear()
+        forget_asked()
         panel._run()
 
-    assert not SHOWN, [(b.windowTitle(), b.text()) for b in SHOWN]
+    assert not all_asked(), [(a.title, a.sentence) for a in all_asked()]
     t_grid = cap["kwargs"]["t_grid"]
     assert t_grid[0] == 0.5 and t_grid[-1] == 1.0 and np.all(np.diff(t_grid) > 0), t_grid
 
@@ -2411,12 +2393,11 @@ def test_a_crossval_record_note_is_judged_at_the_click(tmp_path, monkeypatch, ho
     The refusal is an input refusal: the yellow box, the rule's own sentence, the fix line naming the
     'Note' box on this tab, nothing dispatched and no id minted -- the note is judged before either
     ``create``."""
-    from PySide6.QtWidgets import QMessageBox
     from core.artifacts import ArtifactStore, use_store
     from core.gui import fields as gui_fields
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.refusals import NOTE_MAX_CHARS
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import all_asked, asked, forget_asked, qt_app
 
     qt_app()
     store = ArtifactStore(tmp_path)
@@ -2432,17 +2413,17 @@ def test_a_crossval_record_note_is_judged_at_the_click(tmp_path, monkeypatch, ho
             panel.record_note.insert("first line\nsecond line")
             assert "\n" in panel.record_note.text(), "the line edit dropped the break: nothing is tested"
             said = "must be one line"
-        SHOWN.clear()
+        forget_asked()
         panel._run()
 
-    assert SHOWN, "a refused note reached no box"
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, how
-    assert said in box.text(), box.text()
-    assert box.informativeText() == gui_fields.fix_sentence("note")
-    assert "'Note'" in box.informativeText()
-    assert "Sweep study cross-validation" in box.informativeText(), box.informativeText()
-    assert box.detailedText() == "", "a refusal is not a crash and carries no traceback"
+    assert all_asked(), "a refused note reached no box"
+    box = asked()
+    assert (box.kind, box.marker) == ("refusal", "warn"), how
+    assert said in box.sentence, box.sentence
+    assert box.beneath == gui_fields.fix_sentence("note")
+    assert "'Note'" in box.text
+    assert "Sweep study cross-validation" in box.text, box.text
+    assert box.detail == "", "a refusal is not a crash and carries no traceback"
 
 
 @pytest.mark.parametrize("s_refused", [False, True], ids=["both_finish", "s_measured_nothing"])
@@ -2468,7 +2449,7 @@ def test_the_crossval_window_shows_both_records_figures_and_names_them(tmp_path,
     from core.FDT import cross_validation
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.refusals import Refusal
-    from tests._fixtures import SHOWN, PaneCapture, qt_app
+    from tests._fixtures import PaneCapture, all_asked, forget_asked, qt_app
 
     app = qt_app()
 
@@ -2500,12 +2481,12 @@ def test_the_crossval_window_shows_both_records_figures_and_names_them(tmp_path,
         panel.dispatch = spy
         panel.record_name.setText("study_one")
         panel.seed.setText("7")
-        SHOWN.clear()
+        forget_asked()
         panel._run()
         assert cap, "nothing was dispatched"
         _wait_for_run(app, panel, limit=60.0)
 
-    assert SHOWN == [], [(b.windowTitle(), b.text()) for b in SHOWN]
+    assert all_asked() == [], [(a.title, a.sentence) for a in all_asked()]
     writers = cap["writers"]
     s_fig = writers["s"].dir / "figures" / "fdt_ratio_vs_s.png"
     t_fig = writers["temp"].dir / "figures" / "fdt_ratio_vs_temp.png"
@@ -2981,7 +2962,7 @@ def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch):
     which is what the picker shows."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels import fdt_panel
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import all_asked, asked, forget_asked, qt_app
 
     app = qt_app()
 
@@ -2998,12 +2979,12 @@ def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch):
         combo = panel.record_picker.combo
         _choose(combo, combo.findData(earlier.id))
         assert _tabs(panel) == ["x one", "x two"], _tabs(panel)
-        SHOWN.clear()
+        forget_asked()
         panel._run()
         _wait_for_run(app, panel, limit=60.0)
         _settle(app)
 
-        assert SHOWN and "measurement failed" in SHOWN[-1].text(), "the failure reached no box"
+        assert all_asked() and "measurement failed" in asked().sentence, "the failure reached no box"
         stack = panel.figure_stack
         shown = [stack.png_path(i) for i in range(stack.count())]
         assert _tabs(panel) == ["x one"] and str(earlier.dir) not in (shown[0] or ""), shown
@@ -4102,10 +4083,9 @@ def test_a_failed_inference_leaves_the_session_config_pristine(screen_run, monke
     (a) makes the pin non-vacuous: with SimConfig.copy_for_run switched off (public_entry then hands the
     composition the caller's own object), the same click leaves the truth on a throwaway session
     config -- the leak this test exists to catch."""
-    from PySide6.QtWidgets import QMessageBox
     from core import orchestrator
     from core.sim_config import SimConfig
-    from tests._fixtures import SHOWN, assert_cfg_unchanged, qt_app, snapshot_cfg
+    from tests._fixtures import all_asked, asked, assert_cfg_unchanged, forget_asked, qt_app, snapshot_cfg
 
     app = qt_app()
     inf = screen_run.screen
@@ -4130,7 +4110,7 @@ def test_a_failed_inference_leaves_the_session_config_pristine(screen_run, monke
         inf.session.cfg = pristine
     assert probe.has_ground_truth and "cell" in probe.sources, \
         "with the copy off the composition must write onto the session config; the pin below is vacuous"
-    SHOWN.clear()
+    forget_asked()
 
     # (b) the copy on: the same failure leaves nothing behind
     snap = snapshot_cfg(pristine)
@@ -4138,8 +4118,8 @@ def test_a_failed_inference_leaves_the_session_config_pristine(screen_run, monke
     _wait_for_run(app, panel)
     assert_cfg_unchanged(pristine, snap)
     assert not pristine.has_ground_truth and "cell" not in pristine.sources
-    assert len(SHOWN) == 1 and SHOWN[-1].icon() == QMessageBox.Critical, \
-        [(b.windowTitle(), b.text()) for b in SHOWN]
+    assert len(all_asked()) == 1 and asked().kind == "error", \
+        [(a.title, a.sentence) for a in all_asked()]
 
 
 def test_a_dispatched_inference_leaves_the_session_config_pristine(screen_run):
@@ -4149,7 +4129,7 @@ def test_a_dispatched_inference_leaves_the_session_config_pristine(screen_run):
     exactly as install_config set it: no truth, no cell among its sources, the T_obs it had (1.0 s
     from the fixture) although the run was typed 1.5 s. The box value differs from the session's on
     purpose, so the T_obs clause is not satisfied by coincidence."""
-    from tests._fixtures import SHOWN, assert_cfg_unchanged, qt_app, snapshot_cfg
+    from tests._fixtures import all_asked, assert_cfg_unchanged, qt_app, snapshot_cfg
 
     app = qt_app()
     inf = screen_run.screen
@@ -4162,7 +4142,7 @@ def test_a_dispatched_inference_leaves_the_session_config_pristine(screen_run):
     panel._infer()
     _wait_for_run(app, panel)
 
-    assert SHOWN == [], [(b.windowTitle(), b.text()) for b in SHOWN]
+    assert all_asked() == [], [(a.title, a.sentence) for a in all_asked()]
     assert inf.session.observation is not None and inf.session.observation is not before_obs, \
         "the run did not complete: _on_observation never installed an observation"
     assert_cfg_unchanged(cfg, snap)
@@ -4487,10 +4467,9 @@ def test_apply_confirms_before_it_discards_the_session(monkeypatch):
     load question, where buttons() orders by role and Enter landed on the destructive button.
     Anything but the destructive button leaves the session object identical.
     """
-    from PySide6.QtWidgets import QMessageBox
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
-    from tests._fixtures import PaneCapture, SHOWN, qt_app
+    from tests._fixtures import PaneCapture, all_asked, asked, choose, forget_asked, qt_app
 
     qt_app()
     inf = InferenceScreen()
@@ -4505,9 +4484,9 @@ def test_apply_confirms_before_it_discards_the_session(monkeypatch):
         return [text for _level, text in cap.lines if text.startswith("Model applied")]
 
     # (a) an EMPTY session: no dialog at all, and the session is replaced exactly as before
-    SHOWN.clear()
+    forget_asked()
     cfgp._build_config()
-    assert SHOWN == [], "an empty session must be replaced silently"
+    assert all_asked() == [], "an empty session must be replaced silently"
     assert inf.session.draft is not None and len(applied()) == 1, applied()
 
     # (b) a non-empty session, nothing clicked: the dialog names what is held and nothing changes
@@ -4516,34 +4495,28 @@ def test_apply_confirms_before_it_discards_the_session(monkeypatch):
     inf.refresh_gates()
     before = inf.session
     held = inf.session_contents()
-    SHOWN.clear()
+    forget_asked()
     cfgp._build_config()
-    assert len(SHOWN) == 1, SHOWN
-    box = SHOWN[-1]
-    assert box.icon() == QMessageBox.Warning
-    assert box.defaultButton() is not None, "no default button: Enter would do the destructive thing"
-    assert box.defaultButton().text() == "Keep this session", box.defaultButton().text()
+    assert len(all_asked()) == 1, all_asked()
+    box = asked()
+    assert box.marker == "warn"
+    assert box.default is not None, "no default button: Enter would do the destructive thing"
+    assert box.default == "Keep this session", box.default
     for phrase in held:
-        assert phrase in box.informativeText(), (phrase, box.informativeText())
-    assert "STAYS ON DISK" in box.informativeText(), box.informativeText()
+        assert phrase in box.text, (phrase, box.text)
+    assert "STAYS ON DISK" in box.text, box.text
     assert inf.session is before, "a dialog nobody answered replaced the session"
     assert len(applied()) == 1, "a refused Apply must not report a model as applied"
 
     # (c) Enter -- i.e. the default button -- keeps the session too
-    SHOWN.clear()
-    monkeypatch.setattr(QMessageBox, "exec",
-                        lambda self: SHOWN.append(self) or self.defaultButton().click() or 0)
+    forget_asked()
+    choose(monkeypatch, default=True)
     cfgp._build_config()
     assert inf.session is before, "clicking the default button replaced the session"
     assert len(applied()) == 1, applied()
 
     # (d) the destructive button: the session IS replaced, and the prior goes with it
-    def _click_apply(self):
-        SHOWN.append(self)
-        next(b for b in self.buttons() if b.text() == "Apply and start a new session").click()
-        return 0
-
-    monkeypatch.setattr(QMessageBox, "exec", _click_apply)
+    choose(monkeypatch, words="Apply and start a new session")
     cfgp._build_config()
     assert inf.session is not before, "the destructive button did not replace the session"
     assert inf.session.inf_prior is None and inf.session.cfg is None, inf.session
@@ -4935,7 +4908,7 @@ def test_a_comparison_from_either_screen_is_named_and_noted_and_a_taken_name_nam
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.panels.fdt_panel import FdtPanel
     from core.refusals import NOTE_MAX_CHARS
-    from tests._fixtures import SHOWN, build_fdt_record, qt_app
+    from tests._fixtures import all_asked, asked, build_fdt_record, forget_asked, qt_app
 
     assert "'Comparison name'" in gui_fields.fix_sentence("name"), gui_fields.fix_sentence("name")
     assert "'Comparison note'" in gui_fields.fix_sentence("note"), gui_fields.fix_sentence("note")
@@ -4957,29 +4930,29 @@ def test_a_comparison_from_either_screen_is_named_and_noted_and_a_taken_name_nam
                 panel.compare_list.list.addItem(item)
             panel.compare_name.setText(name)
             panel.compare_note.setText("  drawn from the screen  ")
-            SHOWN.clear()
+            forget_asked()
             panel.btn_compare.click()
             _wait_for_run(app, panel, limit=60.0)
             m = store.get("fdt", name)
             assert (m.name, m.note, m.body["study"]) == (name, "drawn from the screen", "comparison"), m
-            assert SHOWN == [], [b.text() for b in SHOWN]
+            assert all_asked() == [], [a.sentence for a in all_asked()]
 
             # the same name again: refused by the stage, and the box names the comparison's box
             panel.btn_compare.click()
             _wait_for_run(app, panel, limit=60.0)
-            box = SHOWN[-1]
-            assert box.windowTitle() == "Check your inputs" and "already exists" in box.text(), box.text()
-            assert box.informativeText() == gui_fields.fix_sentence("name"), box.informativeText()
+            box = asked()
+            assert box.kind == "refusal" and "already exists" in box.sentence, box.sentence
+            assert box.beneath == gui_fields.fix_sentence("name"), box.beneath
 
             # a note the house rule refuses: one box at the click, nothing dispatched
             panel.compare_name.setText(f"{name}_again")
             panel.compare_note.setText("n" * (NOTE_MAX_CHARS + 1))
             monkeypatch.setattr(panel, "dispatch", lambda *a, **k: pytest.fail("a refused note ran"))
-            SHOWN.clear()
+            forget_asked()
             panel.btn_compare.click()
-            assert len(SHOWN) == 1 and SHOWN[0].windowTitle() == "Check your inputs", \
-                [b.text() for b in SHOWN]
-            assert SHOWN[0].informativeText() == gui_fields.fix_sentence("note")
+            assert len(all_asked()) == 1 and all_asked()[0].kind == "refusal", \
+                [a.sentence for a in all_asked()]
+            assert all_asked()[0].beneath == gui_fields.fix_sentence("note")
     assert len([s for s in store.list("fdt") if s.study == "comparison"]) == 2
 
 
@@ -4994,7 +4967,7 @@ def test_a_half_typed_number_is_refused_never_read_as_blank(tmp_path, monkeypatc
     from core.gui import fields as gui_fields
     from core.gui.panels import crossval_panel as xv_mod
     from core.gui.panels import fdt_panel as fdt_mod
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import all_asked, forget_asked, qt_app
 
     qt_app()
     store = ArtifactStore(tmp_path)
@@ -5005,13 +4978,13 @@ def test_a_half_typed_number_is_refused_never_read_as_blank(tmp_path, monkeypatc
             p.dispatch = lambda *a, **k: pytest.fail("a half-typed box dispatched anyway")
 
         def refused(click, key, typed):
-            SHOWN.clear()
+            forget_asked()
             click()
-            assert len(SHOWN) == 1, (key, [b.text() for b in SHOWN])
-            box = SHOWN[0]
-            assert box.windowTitle() == "Check your inputs", box.windowTitle()
-            assert repr(typed) in box.text(), box.text()
-            assert box.informativeText() == gui_fields.fix_sentence(key), box.informativeText()
+            assert len(all_asked()) == 1, (key, [a.sentence for a in all_asked()])
+            box = all_asked()[0]
+            assert box.kind == "refusal", box.kind
+            assert repr(typed) in box.sentence, box.sentence
+            assert box.beneath == gui_fields.fix_sentence(key), box.beneath
 
         xv.slice_at.setText("-")
         refused(xv._compare, "slice_at", "-")
@@ -5042,7 +5015,7 @@ def test_every_comparison_refusal_reaches_the_yellow_box_naming_its_control(tmp_
     from core.gui import fields as gui_fields
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.panels.fdt_panel import FdtPanel
-    from tests._fixtures import SHOWN, build_fdt_record, compare_preflight_refusals, qt_app
+    from tests._fixtures import all_asked, asked, build_fdt_record, compare_preflight_refusals, forget_asked, qt_app
 
     fixes = {
         # the list quoted by its own row, and "Choose" -- the fix for "at most 2" or "named twice"
@@ -5079,13 +5052,13 @@ def test_every_comparison_refusal_reaches_the_yellow_box_naming_its_control(tmp_
                 panel.compare_mode.setCurrentText(mode)
                 prefactor = options.get("prefactor")
                 panel.renorm_prefactor.setText("" if prefactor is None else repr(prefactor))
-            SHOWN.clear()
+            forget_asked()
             panel.btn_compare.click()
             _wait_for_run(app, panel, limit=60.0)
-            assert len(SHOWN) == 1, f"{label}: {len(SHOWN)} boxes, not one"
-            box = SHOWN[-1]
-            assert box.windowTitle() == "Check your inputs", (label, box.windowTitle(), box.text())
-            assert words in box.text(), (label, box.text())
-            assert box.informativeText() == fixes[field], (label, box.informativeText())
+            assert len(all_asked()) == 1, f"{label}: {len(all_asked())} boxes, not one"
+            box = asked()
+            assert box.kind == "refusal", (label, box.kind, box.sentence)
+            assert words in box.sentence, (label, box.sentence)
+            assert box.beneath == fixes[field], (label, box.beneath)
         written = [s.name for s in store.list("fdt") if s.study == "comparison"]
         assert written == [], f"a refused comparison left a record behind: {written}"

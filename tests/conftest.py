@@ -171,30 +171,31 @@ def _isolated_settings(tmp_path):
 def _no_modal_dialogs():
     """Offscreen, QMessageBox.exec() spins a nested event loop that nothing ever closes, so a dialog a
     test did not expect is a STALL past the ten-minute tool-call limit (no timeout plugin is
-    installed), not a failure. For the whole session the box is appended to tests/_fixtures.SHOWN and
-    exec returns 0 -- no clicked button, which the consent dialogs read as Cancel and
-    MainWindow._delete_user_model's confirmation as the safe branch. A test that wants its own fake layers
-    it on top with monkeypatch, as test_the_fresh_cache_and_narrowed_posterior_dialogs_default_to_cancel
-    does; the undo puts this guard back, because a MonkeyPatch on a class records the __dict__ entry, this
-    lambda. Same MonkeyPatch shape as _checkpointing_off_unless_asked. Nothing under core/ calls the
-    statics any more: main_window.py's last three now go through MainWindow._tell, so this guard
-    covers every box the GUI shows and a test reads one off SHOWN -- and that is a FACT WITH A PIN,
-    not a claim: tests/test_refusals.py::
+    installed), not a failure. For the whole session the box is handed to tests/_dialogs.record, which
+    keeps it in SHOWN with its words, and exec returns 0 -- no clicked button, which the consent
+    dialogs read as Cancel and MainWindow._delete_user_model's confirmation as the safe branch. A test
+    that wants an answer calls tests/_dialogs.choose, which layers a fake that clicks on top with the
+    test's own monkeypatch; the undo puts this guard back, because a MonkeyPatch on a class records the
+    __dict__ entry, this lambda. Same MonkeyPatch shape as _checkpointing_off_unless_asked. Nothing
+    under core/ calls the statics any more: main_window.py's last three now go through
+    MainWindow._tell, so this guard covers every box the GUI shows and a test reads one with
+    tests/_dialogs.asked() -- and that is a FACT WITH A PIN, not a claim: tests/test_refusals.py::
     test_no_static_message_box_is_called_anywhere_under_core scans CODE_ROOTS + CODE_FILES for one,
     because a static added here would HANG this suite rather than fail it."""
     from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import SHOWN
+    from tests._dialogs import record
     mp = pytest.MonkeyPatch()
-    mp.setattr(QMessageBox, "exec", lambda self: SHOWN.append(self) or 0)
+    mp.setattr(QMessageBox, "exec", lambda self: record(self) or 0)
     yield
     mp.undo()
 
 
 @pytest.fixture(autouse=True)
 def _clear_shown():
-    """SHOWN holds this test's boxes only, so SHOWN[-1] is never a leftover from an earlier test."""
-    from tests._fixtures import SHOWN
-    SHOWN.clear()
+    """The dialog record holds this test's boxes only, so asked() is never a leftover from an earlier
+    test."""
+    from tests._dialogs import forget_asked
+    forget_asked()
     yield
 
 
@@ -202,7 +203,7 @@ def _clear_shown():
 def _no_file_choosers():
     """Offscreen a file chooser stalls the run exactly as a message box does, and QFileDialog's
     statics are not reached by a patched ``exec``. For the whole session the two the window calls,
-    getSaveFileName and getOpenFileName, are tests/_fixtures.chooser_guard: the call is recorded in
+    getSaveFileName and getOpenFileName, are tests/_dialogs.chooser_guard: the call is recorded in
     CHOOSER_CALLS and returns as cancelled unless the test answered it with answer_chooser. A test's
     own fake layered with monkeypatch wins while installed, and its undo puts this guard back.
     The save button of matplotlib's toolbar in a popped-out figure calls the same getSaveFileName,
@@ -210,7 +211,7 @@ def _no_file_choosers():
     nothing under core/ calls, and that toolbar's other dialogs, which matplotlib opens through
     static calls of its own -- a test must not press the buttons that lead to them."""
     from PySide6.QtWidgets import QFileDialog
-    from tests._fixtures import chooser_guard
+    from tests._dialogs import chooser_guard
     mp = pytest.MonkeyPatch()
     mp.setattr(QFileDialog, "getSaveFileName", chooser_guard("save"))
     mp.setattr(QFileDialog, "getOpenFileName", chooser_guard("open"))
@@ -223,7 +224,7 @@ def _every_file_chooser_is_answered():
     """CHOOSER_CALLS holds this test's choosers only, and a chooser the test did not answer FAILS it
     here, at teardown. The guard itself cannot: it runs inside a clicked slot, where a raise never
     reaches the test."""
-    from tests._fixtures import CHOOSER_CALLS, check_choosers_answered
+    from tests._dialogs import CHOOSER_CALLS, check_choosers_answered
     CHOOSER_CALLS.clear()
     yield
     try:

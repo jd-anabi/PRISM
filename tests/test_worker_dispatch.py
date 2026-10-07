@@ -83,9 +83,8 @@ def test_a_failed_run_does_not_pin_its_frames():
     traceback is dropped too, which the leg fails without)."""
     import gc
     import weakref
-    from PySide6.QtWidgets import QMessageBox
     from core.refusals import Refusal
-    from tests._fixtures import SHOWN
+    from tests._fixtures import all_asked, forget_asked
 
     app = qt_app()
 
@@ -108,23 +107,24 @@ def test_a_failed_run_does_not_pin_its_frames():
             held = cause
         raise Refusal("The run was refused.", field="name") from held
 
-    for fn, title, icon in ((crash, "Error", QMessageBox.Critical),
-                            (refuse, "Check your inputs", QMessageBox.Warning)):
+    for fn, title, marker in ((crash, "Error", "err"),
+                              (refuse, "Check your inputs", "warn")):
         panel = P()
         big = Big()
         ref = weakref.ref(big)
         was_enabled = gc.isenabled()
         gc.disable()
         try:
-            SHOWN.clear()
+            forget_asked()
             panel.dispatch(fn, big)
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline and panel._busy:
                 app.processEvents()
                 time.sleep(0.01)
             pump(app, 0.2)
-            assert SHOWN and SHOWN[-1].windowTitle() == title and SHOWN[-1].icon() == icon, \
-                (fn.__name__, [(b.windowTitle(), b.text()) for b in SHOWN])
+            shown = all_asked()
+            assert shown and (shown[-1].title, shown[-1].marker) == (title, marker), \
+                (fn.__name__, [(a.title, a.sentence) for a in shown])
             del big
             assert ref() is None, f"{fn.__name__}: a failed run still pins its frames after the box"
         finally:
@@ -300,7 +300,7 @@ def test_on_error_puts_the_traceback_in_details_not_the_body():
     """A run failure's traceback belongs in a collapsible Details panel, not pasted whole into the
     dialog body. The worker hands over the EXCEPTION now, not its text: a bug is anything that is not
     a Refusal, and it keeps this red box."""
-    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import asked
 
     qt_app()
 
@@ -308,24 +308,12 @@ def test_on_error_puts_the_traceback_in_details_not_the_body():
         pass
 
     panel = P()
-    captured = {}
-    orig_exec = QMessageBox.exec
-
-    def fake_exec(self):
-        captured["text"] = self.text()
-        captured["detail"] = self.detailedText()
-        return 0
-
-    QMessageBox.exec = fake_exec
-    try:
-        panel._on_error(RuntimeError("Something failed"),
-                        "Traceback (most recent call last):\n  ...\nRuntimeError: Something failed")
-    finally:
-        QMessageBox.exec = orig_exec
-
-    assert captured["text"] == "Something failed"
-    assert "Traceback" in captured["detail"], "the traceback was not routed to Details"
-    assert "Traceback" not in captured["text"], "the traceback leaked into the body"
+    panel._on_error(RuntimeError("Something failed"),
+                    "Traceback (most recent call last):\n  ...\nRuntimeError: Something failed")
+    told = asked()
+    assert told.sentence == "Something failed"
+    assert "Traceback" in told.detail, "the traceback was not routed to Details"
+    assert "Traceback" not in told.sentence, "the traceback leaked into the body"
 
 
 # ── the session dialog guard and the pane recorder ───────────────────────────────────────────────
@@ -336,9 +324,9 @@ def test_an_unexpected_modal_is_recorded_in_shown_and_returns_zero(monkeypatch):
     _no_modal_dialogs) turns it into a record -- the box lands in tests/_fixtures.SHOWN and exec
     returns 0 with no button clicked, which the consent dialogs read as Cancel and MainWindow.closeEvent
     reads as its ignore branch -- and _clear_shown empties the list before every test, so SHOWN[-1] is
-    always the box the code under test just tried to show. A test's own fake, layered with monkeypatch
-    the way test_the_fresh_cache_and_narrowed_posterior_dialogs_default_to_cancel does, wins while it is
-    installed, and the guard is back the moment it is undone."""
+    always the box the code under test just tried to show. A test's own answer, layered with the test's
+    monkeypatch the way tests/_dialogs.py's choose() does, wins while it is installed, and the guard is
+    back the moment it is undone."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN, qt_app
 
@@ -421,6 +409,267 @@ def test_answer_chooser_answers_every_later_chooser_and_a_cancel_counts_as_an_an
         assert CHOOSER_CALLS[-1] == ("save", "Back", "", "", None)
     finally:
         CHOOSER_CALLS.clear()            # the last call went unanswered on purpose
+
+
+def _raw_box(icon, title, text, *, beneath="", detail="", standard=None, added=(), default=None):
+    """An unshown QMessageBox built the way the window builds each of its shapes."""
+    from PySide6.QtWidgets import QMessageBox
+    box = QMessageBox()
+    box.setIcon(icon)
+    box.setWindowTitle(title)
+    box.setText(text)
+    if beneath:
+        box.setInformativeText(beneath)
+    if detail:
+        box.setDetailedText(detail)
+    if standard is not None:
+        box.setStandardButtons(standard)
+    made = {words: box.addButton(words, role) for words, role in added}
+    if default is not None:
+        box.setDefaultButton(made.get(default, default))
+    return box
+
+
+def _close_answers():
+    from PySide6.QtWidgets import QMessageBox as B
+    return (("Cancel task && quit", B.AcceptRole), ("Quit anyway", B.DestructiveRole),
+            ("Don't quit", B.RejectRole))
+
+
+def test_asked_reads_each_shape_of_box_into_one_record():
+    """Every shape of box the window builds, never shown, read into the same record of words."""
+    from PySide6.QtWidgets import QMessageBox as B
+    from tests._fixtures import Asked, all_asked, asked, forget_asked
+
+    qt_app()
+    assert "exec" in B.__dict__, \
+        "the session guard is not in force: a raw exec() would stall the run"
+    tb = "Traceback (most recent call last):\n  ...\nRuntimeError: it failed"
+    noted = "A cancel was requested before the run failed."
+    held = "This session holds:\n  a prior\n\nEvery one of them STAYS ON DISK."
+    two = (("Apply and start a new session", B.DestructiveRole), ("Keep this session", B.RejectRole))
+    one = dict(items=(), answers=("OK",), default="OK", safe="OK", loses_work=False)
+    refusal = dict(kind="refusal", title="Check your inputs", marker="warn", detail="", **one)
+    error = dict(kind="error", title="Error", marker="err", sentence="it failed", **one)
+    session = dict(kind="question", title="Start a new session?", marker="warn", sentence="Replace it?",
+                   beneath=held, items=(), detail="", safe="Keep this session", loses_work=True,
+                   answers=("Apply and start a new session", "Keep this session"))
+    shapes = [
+        (_raw_box(B.Warning, "Check your inputs", "It is blank.", beneath="Set it in the box.",
+                  standard=B.Ok, default=B.Ok),
+         Asked(sentence="It is blank.", beneath="Set it in the box.", **refusal)),
+        (_raw_box(B.Warning, "Check your inputs", "No cache.", standard=B.Ok, default=B.Ok),
+         Asked(sentence="No cache.", beneath="", **refusal)),
+        (_raw_box(B.Critical, "Error", "it failed", detail=tb),          # only "Show Details..."
+         Asked(beneath="", detail=tb, **error)),
+        (_raw_box(B.Critical, "Error", "it failed"),                     # no button at all
+         Asked(beneath="", detail="", **error)),
+        (_raw_box(B.Critical, "Error", "it failed", beneath=noted, detail=tb),
+         Asked(beneath=noted, detail=tb, **error)),
+        (_raw_box(B.Warning, "Cannot edit model", "Could not load 'M':\nbad", standard=B.Ok),
+         Asked(kind="notice", title="Cannot edit model", marker="warn",
+               sentence="Could not load 'M':\nbad", beneath="", detail="", **one)),
+        (_raw_box(B.Information, "A task is running", "Wait for it.", standard=B.Ok),
+         Asked(kind="notice", title="A task is running", marker="info", sentence="Wait for it.",
+               beneath="", detail="", **one)),
+        (_raw_box(B.Warning, "Delete model", "Delete 'M'?", beneath="This removes its files.",
+                  standard=B.Yes | B.No, default=B.No),
+         Asked(kind="question", title="Delete model", marker="warn", sentence="Delete 'M'?",
+               beneath="This removes its files.", items=(), detail="", answers=("Yes", "No"),
+               default="No", safe="No", loses_work=False)),
+        (_raw_box(B.Warning, "Start a new session?", "Replace it?", beneath=held, added=two,
+                  default="Keep this session"),
+         Asked(default="Keep this session", **session)),
+        (_raw_box(B.Warning, "Start a new session?", "Replace it?", beneath=held, added=two),
+         Asked(default=None, **session)),                                # never a guessed default
+        (_raw_box(B.Warning, "A task is still running", "A task is still running.",
+                  beneath="Cancelling stops it at its next checkpoint.", added=_close_answers(),
+                  default="Cancel task && quit"),
+         Asked(kind="question", title="A task is still running", marker="warn",
+               sentence="A task is still running.",
+               beneath="Cancelling stops it at its next checkpoint.", items=(), detail="",
+               answers=("Cancel task & quit", "Quit anyway", "Don't quit"),
+               default="Cancel task & quit", safe="Don't quit", loses_work=True)),
+    ]
+    forget_asked()
+    for box, _want in shapes:
+        assert box.exec() == 0 and box.clickedButton() is None      # recorded, shown to nobody
+    got = all_asked()
+    assert len(got) == len(shapes) == 11
+    for (_box, want), have in zip(shapes, got):
+        assert have == want, (want.title, have)
+    assert asked() == shapes[-1][1]
+    assert asked().text == "Cancelling stops it at its next checkpoint."
+    assert got[1].text == "" and got[8].text == held
+
+
+def test_asked_fails_in_words_on_nothing_and_forgetting_empties_the_one_list():
+    """One list whichever module names it; a record is the words the box had when it was opened."""
+    import pytest
+    import tests._dialogs as dialogs
+    import tests._fixtures as fixtures
+    from PySide6.QtWidgets import QMessageBox
+
+    qt_app()
+    assert "exec" in QMessageBox.__dict__, \
+        "the session guard is not in force: a raw exec() would stall the run"
+    assert fixtures.SHOWN is dialogs.SHOWN and fixtures.CHOOSER_CALLS is dialogs.CHOOSER_CALLS
+    for name in ("Asked", "record", "asked", "all_asked", "forget_asked", "choose", "answer_chooser"):
+        assert getattr(fixtures, name) is getattr(dialogs, name), name
+    assert dialogs.all_asked() == []
+    with pytest.raises(AssertionError, match="no box was shown"):
+        dialogs.asked()
+    held = dialogs.SHOWN
+    first, second = QMessageBox(), QMessageBox()
+    first.setText("one")
+    second.setText("two")
+    assert first.exec() == 0 and second.exec() == 0
+    assert held == [first, second], "the list still holds the boxes themselves, in order"
+    assert [a.sentence for a in dialogs.all_asked()] == ["one", "two"] and dialogs.asked().sentence == "two"
+    second.setText("changed after it was opened")
+    assert dialogs.asked().sentence == "two"
+    dialogs.forget_asked()
+    assert dialogs.all_asked() == [] and held == [] and dialogs.SHOWN is held, \
+        "forgetting must empty the one list in place"
+    with pytest.raises(AssertionError, match="not a message box"):
+        dialogs.record(object())
+    assert held == [], "what could not be read must not be kept"
+    held.append(QMessageBox())                       # by hand, past the guard
+    with pytest.raises(AssertionError, match="by hand"):
+        dialogs.all_asked()
+    dialogs.forget_asked()
+
+
+def test_choose_clicks_the_answer_it_was_given_and_a_box_without_it_takes_its_safe_one(monkeypatch):
+    """An answer is a CLICK on the box's own button, which is how the window reads one."""
+    import pytest
+    from PySide6.QtWidgets import QMessageBox as B
+    from tests._fixtures import all_asked, choose, forget_asked
+
+    qt_app()
+    assert "exec" in B.__dict__, \
+        "the session guard is not in force: a raw exec() would stall the run"
+
+    def clicked(which):
+        if which == "yes or no":
+            box = _raw_box(B.Warning, "Delete model", "Delete 'M'?", standard=B.Yes | B.No, default=B.No)
+        elif which == "close":
+            box = _raw_box(B.Warning, "A task is still running", "A task is still running.",
+                           added=_close_answers(), default="Cancel task && quit")
+        elif which == "refused":
+            box = _raw_box(B.Warning, "Check your inputs", "It is blank.", standard=B.Ok, default=B.Ok)
+        else:
+            box = _raw_box(B.Critical, "Error", "it failed")
+        got = box.exec()
+        pressed = box.clickedButton()
+        return got, (None if pressed is None else pressed.text())
+
+    # the other answer: the one that is not the safe one, on a box with exactly two
+    counts = []
+    forget_asked()
+    choose(monkeypatch, other=True, during=lambda: counts.append(len(all_asked())))
+    assert clicked("yes or no") == (B.Yes, "&Yes"), "the window reads this box as exec() == Yes"
+    assert clicked("refused") == (0, None), "one answer: there is no other, so it stays unanswered"
+    assert clicked("failed") == (0, None)
+    assert clicked("close") == (0, None), "three answers: 'the other' names none of them"
+    assert counts == [1, 2, 3, 4], "recorded first, then `during`, then the click"
+
+    # by its words as shown: no mnemonic mark, a doubled one read as one
+    for words, raw in (("Cancel task & quit", "Cancel task && quit"), ("Quit anyway", "Quit anyway"),
+                       ("Don't quit", "Don't quit")):
+        choose(monkeypatch, words=words)
+        assert clicked("close")[1] == raw, words
+    choose(monkeypatch, words="No such answer")
+    assert clicked("close") == (0, None)
+    choose(monkeypatch, words="Yes")
+    assert clicked("yes or no")[0] == B.Yes
+
+    # the default, as Enter presses it; a box whose code set none stays unanswered
+    choose(monkeypatch, default=True)
+    assert clicked("yes or no") == (B.No, "&No") and clicked("close")[1] == "Cancel task && quit"
+    assert clicked("failed") == (0, None)
+
+    # nothing chosen is the unanswered guard again, still recorded; and one way of choosing at most
+    choose(monkeypatch)
+    before = len(all_asked())
+    assert clicked("yes or no") == (0, None) and len(all_asked()) == before + 1
+    for bad in (dict(words="Yes", other=True), dict(other=True, default=True)):
+        with pytest.raises(TypeError, match="at most one"):
+            choose(monkeypatch, **bad)
+    monkeypatch.undo()
+    assert clicked("yes or no") == (0, None) and len(all_asked()) == before + 2, \
+        "the session guard must be back after the undo"
+
+
+def test_the_dialog_helpers_import_without_torch_or_the_program():
+    """A fresh interpreter: the module that holds the record loads neither torch nor the program."""
+    import subprocess
+    code = ("import sys, tests._dialogs as d\n"
+            "assert d.SHOWN == [] and d.CHOOSER_CALLS == [] and callable(d.answer_chooser)\n"
+            "bad = sorted(m for m in sys.modules if m.split('.')[0] in ('torch', 'sbi', 'core'))\n"
+            "assert not bad, bad\n")
+    done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
+                          capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+
+
+_RAW_BOX_READS = ("informativeText", "detailedText", "defaultButton", "standardButtons", "buttonRole",
+                  "clickedButton", "escapeButton")
+_MAY_HOLD_A_RAW_BOX = frozenset({
+    "test_an_unexpected_modal_is_recorded_in_shown_and_returns_zero",
+    "test_asked_reads_each_shape_of_box_into_one_record",
+    "test_asked_fails_in_words_on_nothing_and_forgetting_empties_the_one_list",
+    "test_choose_clicks_the_answer_it_was_given_and_a_box_without_it_takes_its_safe_one",
+})
+
+
+def _direct_box_reads(source: str) -> list[tuple[int, str, str]]:
+    """``(line, top-level definition, what)`` for every place a module names the recorded list, reads
+    an attribute only a message box has, or replaces ``QMessageBox.exec``. Parsed, so a comment or a
+    docstring cannot trip it."""
+    import ast
+    out = []
+    for top in ast.parse(source).body:
+        owner = getattr(top, "name", "<module>")
+        for node in ast.walk(top):
+            if ((isinstance(node, ast.Name) and node.id == "SHOWN")
+                    or (isinstance(node, ast.Attribute) and node.attr == "SHOWN")
+                    or (isinstance(node, ast.alias) and node.name == "SHOWN")):
+                out.append((node.lineno, owner, "SHOWN"))
+            elif isinstance(node, ast.Attribute) and node.attr in _RAW_BOX_READS:
+                out.append((node.lineno, owner, node.attr))
+            elif (isinstance(node, ast.Attribute) and node.attr == "exec"
+                  and isinstance(node.value, ast.Name) and node.value.id == "QMessageBox"):
+                out.append((node.lineno, owner, "QMessageBox.exec"))
+            elif (isinstance(node, ast.Call) and len(node.args) >= 2
+                  and isinstance(node.args[0], ast.Name) and node.args[0].id == "QMessageBox"
+                  and isinstance(node.args[1], ast.Constant) and node.args[1].value == "exec"):
+                out.append((node.lineno, owner, 'setattr(QMessageBox, "exec")'))
+    return sorted(set(out))
+
+
+def test_only_the_dialog_helpers_own_tests_hold_a_raw_message_box():
+    """Every other test reads what the window asked through the record, so the class behind a
+    question can change with one edit to the helper. The matcher is checked on a snippet first."""
+    snippet = ('from tests._fixtures import SHOWN\n'
+               'def test_x(monkeypatch):\n'
+               '    monkeypatch.setattr(QMessageBox, "exec", lambda self: 0)\n'
+               '    assert SHOWN[-1].informativeText() == ""\n'
+               'def helper():\n'
+               '    """SHOWN and informativeText() in prose are not reads."""\n'
+               '    QMessageBox.exec = None\n')
+    assert [(line, what) for line, _owner, what in _direct_box_reads(snippet)] == [
+        (1, "SHOWN"), (3, 'setattr(QMessageBox, "exec")'), (4, "SHOWN"), (4, "informativeText"),
+        (7, "QMessageBox.exec")], _direct_box_reads(snippet)
+    files = sorted(Path(__file__).resolve().parent.glob("test_*.py"))
+    assert len(files) >= 20, f"the scan walked only {len(files)} test files"
+    found = [f"{p.name}:{line} {owner}: {what}" for p in files
+             for line, owner, what in _direct_box_reads(p.read_text(encoding="utf-8"))
+             if owner not in _MAY_HOLD_A_RAW_BOX]
+    assert not found, (f"{len(found)} direct read(s) of a message box in "
+                       f"{len({f.split(':')[0] for f in found})} file(s); read it through asked(), "
+                       "all_asked(), forget_asked() and choose() (tests/_dialogs.py):\n  "
+                       + "\n  ".join(found))
 
 
 def test_pane_capture_records_level_and_text_and_the_pane_stays_blank():
@@ -513,10 +762,9 @@ def test_on_error_routes_a_refusal_to_the_yellow_box():
     louder. A refusal with no field has no fix sentence and no informative line. The same sentence
     goes to the log pane at warning, so it outlives the click that dismisses the box. And the plain
     string the tabs used to pass still works, and still means "bug": the red box."""
-    from PySide6.QtWidgets import QMessageBox
     from core.gui import fields as gui_fields
     from core.refusals import Refusal
-    from tests._fixtures import SHOWN, PaneCapture, qt_app
+    from tests._fixtures import PaneCapture, asked, forget_asked, qt_app
 
     qt_app()
 
@@ -529,30 +777,29 @@ def test_on_error_routes_a_refusal_to_the_yellow_box():
                   field="t_obs")
     panel._on_error(exc, "Traceback (most recent call last):\n  ...\nRefusal: blank")
 
-    box = SHOWN[-1]
-    assert isinstance(box, QMessageBox)
-    assert box.windowTitle() == "Check your inputs"
-    assert box.icon() == QMessageBox.Warning
-    assert box.text() == exc.message
-    assert box.informativeText() == "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
-    assert box.informativeText() == gui_fields.fix_sentence("t_obs")
-    assert box.detailedText() == "", "a refusal carries no traceback"
-    assert box.standardButtons() == QMessageBox.Ok
-    assert box.buttonRole(box.defaultButton()) == QMessageBox.AcceptRole, "OK is the default"
-    assert pane.lines[-1] == ("warning", f"{exc.message} {box.informativeText()}")
+    box = asked()
+    assert box.kind == "refusal"
+    assert box.marker == "warn"
+    assert box.sentence == exc.message
+    assert box.beneath == "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
+    assert box.beneath == gui_fields.fix_sentence("t_obs")
+    assert box.detail == "", "a refusal carries no traceback"
+    assert box.answers == ("OK",)
+    assert box.default == "OK", "OK is the default"
+    assert pane.lines[-1] == ("warning", f"{exc.message} {box.beneath}")
 
     # field=None: no fix sentence, so no informative line, and the log line is the message alone
-    SHOWN.clear()
+    forget_asked()
     panel._on_error(Refusal("resume='require' but there is no resumable cache at x."), "")
-    assert SHOWN[-1].windowTitle() == "Check your inputs"
-    assert SHOWN[-1].informativeText() == ""
+    assert asked().kind == "refusal"
+    assert asked().beneath == ""
     assert pane.lines[-1] == ("warning", "resume='require' but there is no resumable cache at x.")
 
     # a plain string is still accepted, and is still a bug: the red box
-    SHOWN.clear()
+    forget_asked()
     panel._on_error("plain text", "")
-    assert SHOWN[-1].windowTitle() == "Error" and SHOWN[-1].icon() == QMessageBox.Critical
-    assert SHOWN[-1].text() == "plain text"
+    assert (asked().kind, asked().title) == ("error", "Error")
+    assert asked().sentence == "plain text"
     assert pane.lines[-1] == ("error", "plain text")
 
 
@@ -561,12 +808,11 @@ def test_a_refusal_opens_the_yellow_box_without_a_traceback_and_a_bug_the_red_on
     signal, so the panel can route by type. Worker.run used to flatten every failure to
     (str(e), traceback) and the panel had nothing left to route on -- a refusal raised inside a
     stage (the direction count, a near miss, a narrowed parent's round on a foreign observation, a
-    load mismatch) opened the same red Critical box, traceback and all, as a genuine crash. Read off
-    the conftest's SHOWN record, which is what the class-level QMessageBox.exec guard leaves behind
-    instead of a modal that would stall offscreen."""
-    from PySide6.QtWidgets import QMessageBox
+    load mismatch) opened the same red Critical box, traceback and all, as a genuine crash. Read
+    through asked(), the record the class-level QMessageBox.exec guard leaves behind instead of a
+    modal that would stall offscreen."""
     from core.refusals import Refusal
-    from tests._fixtures import SHOWN, PaneCapture, pump, qt_app
+    from tests._fixtures import PaneCapture, all_asked, asked, forget_asked, pump, qt_app
 
     app = qt_app()
 
@@ -577,35 +823,35 @@ def test_a_refusal_opens_the_yellow_box_without_a_traceback_and_a_bug_the_red_on
     pane = PaneCapture(panel)
 
     def _run_to_dialog(fn):
-        SHOWN.clear()
+        forget_asked()
         panel.dispatch(fn)
         deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and (panel._busy or not SHOWN):
+        while time.monotonic() < deadline and (panel._busy or not all_asked()):
             app.processEvents()
             time.sleep(0.01)
         pump(app, 0.2)
         assert not panel._busy, "the panel stayed busy after the failure"
-        assert SHOWN, "no dialog opened"
-        return SHOWN[-1]
+        assert all_asked(), "no dialog opened"
+        return asked()
 
     def refuse():
         raise Refusal("The observation length, in seconds, must be greater than 0; got 0 "
                       "(default none: it must be given).", field="t_obs")
 
     box = _run_to_dialog(refuse)
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-    assert box.text().startswith("The observation length, in seconds, must be greater than 0")
-    assert box.informativeText() == "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
-    assert box.detailedText() == "", "a refusal must not carry a traceback"
+    assert (box.kind, box.marker) == ("refusal", "warn")
+    assert box.sentence.startswith("The observation length, in seconds, must be greater than 0")
+    assert box.beneath == "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
+    assert box.detail == "", "a refusal must not carry a traceback"
     assert pane.lines[-1][0] == "warning" and "'T_obs (s)'" in pane.lines[-1][1], pane.lines
 
     def bug():
         raise RuntimeError("Something failed")
 
     box = _run_to_dialog(bug)
-    assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical
-    assert box.text() == "Something failed"
-    assert "Traceback" in box.detailedText() and "RuntimeError: Something failed" in box.detailedText()
+    assert (box.kind, box.title) == ("error", "Error")
+    assert box.sentence == "Something failed"
+    assert "Traceback" in box.detail and "RuntimeError: Something failed" in box.detail
     assert pane.lines[-1] == ("error", "Something failed")
 
 
@@ -668,14 +914,14 @@ def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
     that drifts from this one.
 
     Two legs, because "the same box" and "the same code" are different claims. The first compares the
-    two boxes field by field off the conftest's SHOWN record. The second pins the DELEGATION: a
+    two boxes field by field through the dialog record. The second pins the DELEGATION: a
     copy-pasted twin in base_panel.py would pass the first leg today and rot the first time either
     copy is edited."""
-    from PySide6.QtWidgets import QMessageBox, QWidget
+    from PySide6.QtWidgets import QWidget
     from core.gui.panels import base_panel as bp
     from core.gui.widgets.refusal_box import show_refusal
     from core.refusals import Refusal
-    from tests._fixtures import SHOWN, PaneCapture, qt_app
+    from tests._fixtures import PaneCapture, all_asked, forget_asked, qt_app
 
     qt_app()
 
@@ -689,36 +935,35 @@ def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
     exc = Refusal("The observation length, in seconds, is blank (default none: it must be given).",
                   field="t_obs")
 
-    SHOWN.clear()
+    forget_asked()
     panel._refusal(exc)
     show_refusal(holder, exc)
-    assert len(SHOWN) == 2, [b.text() for b in SHOWN]
-    for who, box in (("panel", SHOWN[0]), ("widget", SHOWN[1])):
-        assert isinstance(box, QMessageBox), who
-        assert box.windowTitle() == "Check your inputs", who
-        assert box.icon() == QMessageBox.Warning, who
-        assert box.text() == exc.message, who
-        assert box.informativeText() == fix, who
-        assert box.detailedText() == "", f"{who}: a refusal carries no traceback"
-        assert box.standardButtons() == QMessageBox.Ok, who
-        assert box.buttonRole(box.defaultButton()) == QMessageBox.AcceptRole, f"{who}: OK is default"
+    assert len(all_asked()) == 2, [a.sentence for a in all_asked()]
+    for who, box in (("panel", all_asked()[0]), ("widget", all_asked()[1])):
+        assert box.kind == "refusal", who
+        assert box.marker == "warn", who
+        assert box.sentence == exc.message, who
+        assert box.beneath == fix, who
+        assert box.detail == "", f"{who}: a refusal carries no traceback"
+        assert box.answers == ("OK",), who
+        assert box.default == "OK", f"{who}: OK is default"
     assert pane.lines[-1] == ("warning", f"{exc.message} {fix}")
 
     # field=None through both callers: no fix sentence, so no informative line at all
-    SHOWN.clear()
+    forget_asked()
     bare = Refusal("resume='require' but there is no resumable cache at x.")
     panel._refusal(bare)
     show_refusal(holder, bare)
-    assert [b.informativeText() for b in SHOWN] == ["", ""]
-    assert [b.text() for b in SHOWN] == [bare.message, bare.message]
+    assert [a.beneath for a in all_asked()] == ["", ""]
+    assert [a.sentence for a in all_asked()] == [bare.message, bare.message]
 
     # the delegation itself: the panel must CALL the shared helper and keep no box of its own
     calls = []
     monkeypatch.setattr(bp, "show_refusal", lambda parent, e: calls.append((parent, e)))
-    SHOWN.clear()
+    forget_asked()
     panel._refusal(exc)
     assert calls == [(panel, exc)], "BasePanel._refusal no longer routes through refusal_box"
-    assert SHOWN == [], "the panel built a box of its own instead of delegating"
+    assert all_asked() == [], "the panel built a box of its own instead of delegating"
     assert pane.lines[-1] == ("warning", f"{exc.message} {fix}"), \
         "the log-pane line is the panel's own (a plain QWidget has no pane) and must stay"
 
@@ -1683,13 +1928,13 @@ def _run_leg(app, panel, pane, fn, wait_for_dialog):
     """Dispatch ``fn`` on ``panel`` and drive the event loop until the run has settled: the panel is
     idle and, when a dialog is expected, the box has been shown. Each leg reads only its own pane
     lines and its own dialogs."""
-    from tests._fixtures import SHOWN
+    from tests._fixtures import all_asked, forget_asked
 
-    SHOWN.clear()
+    forget_asked()
     del pane.lines[:]
     panel.dispatch(fn)
     deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and (panel._busy or (wait_for_dialog and not SHOWN)):
+    while time.monotonic() < deadline and (panel._busy or (wait_for_dialog and not all_asked())):
         app.processEvents()
         time.sleep(0.01)
     pump(app, 0.2)
@@ -1738,11 +1983,9 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     """
     import logging
 
-    from PySide6.QtWidgets import QMessageBox
-
     from core import runs
     from core.gui.streams import WorkerCancelled
-    from tests._fixtures import SHOWN, PaneCapture
+    from tests._fixtures import PaneCapture, all_asked, asked
 
     app = qt_app()
 
@@ -1795,11 +2038,11 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
 
     def reported_as_a_crash(message):
         assert _STOP not in pane.lines, ("a run that CRASHED was reported as a cancellation", pane.lines)
-        box = SHOWN[-1]
-        assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical
-        assert box.text() == message, box.text()
-        assert f"RuntimeError: {message}" in box.detailedText(), box.detailedText()
-        assert _NOTED in box.informativeText(), ("the box does not note the cancel", box.informativeText())
+        box = asked()
+        assert (box.kind, box.title) == ("error", "Error")
+        assert box.sentence == message, box.sentence
+        assert f"RuntimeError: {message}" in box.detail, box.detail
+        assert _NOTED in box.text, ("the box does not note the cancel", box.text)
         assert pane.lines[-2] == ("error", message), pane.lines
         assert pane.lines[-1][0] == "warning" and _NOTED in pane.lines[-1][1], \
             ("the pane does not note the cancel", pane.lines)
@@ -1819,7 +2062,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     # (b) a recovered guard, then normal flow: a plain cancel, taken at the first check after it
     del reached[:]
     _run_leg(app, panel, pane, recovered_guard_then_normal_flow, False)
-    assert SHOWN == [], "a recovered exception behind a cancel opened a dialog"
+    assert all_asked() == [], "a recovered exception behind a cancel opened a dialog"
     assert pane.lines == [("warning", "empty_cache() failed during recovery and was ignored"), _STOP], \
         pane.lines
     assert reached == ["after the guard"], reached
@@ -1827,11 +2070,12 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     # (c) normal flow: the very next check
     del reached[:]
     _run_leg(app, panel, pane, cancel_in_normal_flow, False)
-    assert pane.lines == [_STOP] and SHOWN == [] and reached == [], (pane.lines, SHOWN, reached)
+    assert pane.lines == [_STOP] and all_asked() == [] and reached == [], \
+        (pane.lines, all_asked(), reached)
 
     # (f) the fallback: a cancel that still carries a context stays a cancel; the context is kept
     _run_leg(app, panel, pane, cancel_raised_inside_a_handler, False)
-    assert SHOWN == [], "an exception behind a cancel opened a dialog"
+    assert all_asked() == [], "an exception behind a cancel opened a dialog"
     assert pane.lines.count(_STOP) == 1 and pane.lines[-1] == _STOP, pane.lines
     assert any(lv == "warning" and "may be a failure that was still in flight" in t
                for lv, t in pane.lines), pane.lines
@@ -1856,7 +2100,7 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
     A run that finishes with NO cancel pending says nothing extra: the sentence has to be the answer
     to a question somebody asked."""
     from core.gui.worker import CANCEL_TOO_LATE_TEXT
-    from tests._fixtures import SHOWN, PaneCapture
+    from tests._fixtures import PaneCapture, all_asked, forget_asked
 
     app = qt_app()
 
@@ -1868,7 +2112,7 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
     results = []
 
     def _drive(fn):
-        SHOWN.clear()
+        forget_asked()
         del pane.lines[:]
         del results[:]
         panel.dispatch(fn, on_result=results.append)
@@ -1889,7 +2133,7 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
 
     _drive(finishes_with_a_cancel_pending)
     assert results == ["the payload"], "the run's result was not delivered"
-    assert SHOWN == [], "a completed run opened a dialog"
+    assert all_asked() == [], "a completed run opened a dialog"
     assert ("warning", "Run cancelled.") not in pane.lines, \
         ("a run that FINISHED was reported as a cancellation", pane.lines)
     assert any(lv == "warning" and CANCEL_TOO_LATE_TEXT in text for lv, text in pane.lines), \
@@ -1915,7 +2159,7 @@ def test_a_crash_under_a_live_bar_is_a_crash_and_leaves_no_ignored_exception(mon
     ``sys.unraisablehook`` is put back to Python's own for the run. pytest installs a collecting hook,
     which would keep the "Exception ignored" block out of the pane and make the last assertion
     vacuous; Python's own writes it to ``sys.stderr``, which under the run is the window's stream."""
-    from tests._fixtures import SHOWN, PaneCapture
+    from tests._fixtures import PaneCapture, asked
 
     monkeypatch.setattr(sys, "unraisablehook", sys.__unraisablehook__)
     app = qt_app()
@@ -1936,9 +2180,9 @@ def test_a_crash_under_a_live_bar_is_a_crash_and_leaves_no_ignored_exception(mon
 
     _run_leg(app, panel, pane, crash_under_a_live_bar, True)
     assert _STOP not in pane.lines, ("a run that CRASHED was reported as a cancellation", pane.lines)
-    box = SHOWN[-1]
-    assert box.text() == "the batch failed under a live bar", box.text()
-    assert _NOTED in box.informativeText(), box.informativeText()
+    box = asked()
+    assert box.sentence == "the batch failed under a live bar", box.sentence
+    assert _NOTED in box.text, box.text
     assert tokens and tokens[0].requested.is_set() and tokens[0].fired is False, \
         "the bar's teardown consumed the cancel latch"
     assert not any("Exception ignored" in t for _lv, t in pane.lines), pane.lines

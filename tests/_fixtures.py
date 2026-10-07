@@ -10,11 +10,12 @@ Moved out of ``tests/test_artifact_store.py`` so ``tests/test_user_sbi.py``,
 module (which pytest would then also collect a second time under a different name).
 
 It also holds what the GUI suites used to copy per file -- ``qt_app``, ``pump``, ``code_only``,
-``PaneCapture`` -- and the two records tests/conftest.py's session guards append to, the dialogs in
-``SHOWN`` and the file choosers in ``CHOOSER_CALLS``. ONE import spelling, ``tests._fixtures``
-(pytest.ini puts the repo root on the path; tests/ has no __init__.py):
-``from _fixtures import SHOWN`` would import this module a second time under another name, with a
-second, empty SHOWN that the guard never touches.
+``PaneCapture`` -- and re-exports the two records tests/conftest.py's session guards append to, the
+dialogs in ``SHOWN`` and the file choosers in ``CHOOSER_CALLS``, with their helpers: they live in
+tests/_dialogs.py, whose import loads neither torch nor the program. ONE import spelling for each of
+the two modules, ``tests._fixtures`` and ``tests._dialogs`` (pytest.ini puts the repo root on the
+path; tests/ has no __init__.py): ``from _dialogs import SHOWN`` would import that module a second
+time under another name, with a second, empty SHOWN that the guard never touches.
 """
 import ast
 import inspect
@@ -23,11 +24,17 @@ import textwrap
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import NamedTuple
 
 import torch
 
 from core.artifacts import manifest as mf
+
+# The dialog record, the chooser record and their helpers live in tests/_dialogs.py, whose import
+# loads neither torch nor the program. Re-exported so a suite keeps one import line; the lists are
+# the SAME objects.
+from tests._dialogs import (CHOOSER_CALLS, SHOWN, Asked, ChooserCall, all_asked,  # noqa: F401
+                            answer_chooser, asked, check_choosers_answered, choose, chooser_guard,
+                            forget_asked, record)
 
 # The top-level repository directories that hold PRODUCT code, and therefore the ones the source
 # scans walk: among them the literal-path scan (tests/test_artifact_store.py), the rotation-reader
@@ -54,68 +61,6 @@ def backdate_tree(path, seconds: float = 3600.0) -> None:
     when = time.time() - seconds
     for p in [Path(path), *Path(path).rglob("*")]:
         os.utime(p, (when, when))
-
-
-# Every QMessageBox a test did not fake itself, in order. tests/conftest.py::_no_modal_dialogs replaces
-# QMessageBox.exec for the session with a record-and-return-0, and _clear_shown empties this list
-# before each test, so SHOWN[-1] is the box the code under test just tried to show.
-SHOWN: list = []
-
-
-class ChooserCall(NamedTuple):
-    """One file chooser the code under test opened: "save" or "open", the title, the start value and
-    the filter it was handed, and the path the test answered with. ``answer`` is "" when the test
-    answered by cancelling and None when no test answered at all."""
-    kind: str
-    title: str
-    start: str
-    filter: str
-    answer: str | None
-
-
-# Every file chooser opened since the test began, in order. tests/conftest.py::_no_file_choosers puts
-# chooser_guard in place of QFileDialog.getSaveFileName and getOpenFileName for the session, and
-# _every_file_chooser_is_answered empties this list around each test and fails the test at teardown
-# when it holds a call nobody answered.
-CHOOSER_CALLS: list = []
-_CHOOSER_ANSWER: dict = {}       # {"path": str} while a test's answer_chooser is in force
-
-
-def chooser_guard(kind: str):
-    """The stand-in for one of QFileDialog's two file-name statics; ``kind`` is "save" or "open".
-
-    It RECORDS the call in CHOOSER_CALLS and returns ``(path, "")``: the path a test gave with
-    answer_chooser, or "" -- what Cancel returns -- when no test answered. It never raises: a chooser
-    is opened from a clicked slot, and an exception raised inside a slot does not reach the test that
-    clicked. An unanswered chooser is reported by check_choosers_answered at the test's teardown.
-
-    A ``staticmethod``, as the entry it replaces is. The parameter names are Qt's own keywords, and
-    whatever follows the filter is accepted and ignored: matplotlib's toolbar in a popped-out figure
-    passes a selected filter as well."""
-    def stand_in(parent=None, caption="", dir="", filter="", *rest, **more):
-        answer = _CHOOSER_ANSWER.get("path")
-        CHOOSER_CALLS.append(ChooserCall(kind, str(caption), str(dir), str(filter), answer))
-        return (answer or "", "")
-    return staticmethod(stand_in)
-
-
-def answer_chooser(monkeypatch, path: str) -> None:
-    """Answer the next file chooser this test opens, and every later one, with ``path``. "" is the
-    operator cancelling, and counts as an answer. Undone with the test's ``monkeypatch``; a second
-    call replaces the answer."""
-    monkeypatch.setitem(_CHOOSER_ANSWER, "path", str(path))
-
-
-def check_choosers_answered() -> None:
-    """Fail when CHOOSER_CALLS holds a chooser no test answered, naming each one's kind and title.
-    Raised rather than asserted, so the check survives a run with assertions switched off."""
-    unanswered = [c for c in CHOOSER_CALLS if c.answer is None]
-    if unanswered:
-        raise AssertionError(
-            "a file chooser was opened that this test did not answer (it was recorded and returned "
-            "as cancelled): " + "; ".join(f"{c.kind} '{c.title}'" for c in unanswered)
-            + ". Answer it before the click with tests._fixtures.answer_chooser(monkeypatch, path); "
-              "pass \"\" for a cancel.")
 
 
 def qt_app():

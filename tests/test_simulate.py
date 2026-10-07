@@ -396,10 +396,9 @@ def test_saving_mp4_without_ffmpeg_is_a_refusal_not_a_config_error(monkeypatch):
     box, so the informative line is empty and the log line is the sentence alone. Nothing is
     exported."""
     import numpy as np
-    from PySide6.QtWidgets import QMessageBox
     from core.gui.panels import simulate_panel as sim_mod
     from core.gui.panels.simulate_panel import SimulatePanel
-    from tests._fixtures import CHOOSER_CALLS, SHOWN, PaneCapture, answer_chooser, qt_app
+    from tests._fixtures import CHOOSER_CALLS, PaneCapture, answer_chooser, asked, forget_asked, qt_app
 
     qt_app()
     p = SimulatePanel()
@@ -409,14 +408,14 @@ def test_saving_mp4_without_ffmpeg_is_a_refusal_not_a_config_error(monkeypatch):
     pane = PaneCapture(p)
     monkeypatch.setattr(sim_mod, "ffmpeg_available", lambda: False)
     answer_chooser(monkeypatch, "clip.mp4")
-    SHOWN.clear()
+    forget_asked()
     p._save_video()
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
-    assert box.text().startswith("Saving MP4 needs an ffmpeg binary on PATH"), box.text()
-    assert ".gif" in box.text() and "IMAGEIO_FFMPEG_EXE" in box.text()
-    assert box.informativeText() == "" and box.detailedText() == ""
-    assert pane.lines[-1] == ("warning", box.text()), pane.lines
+    box = asked()
+    assert (box.kind, box.marker) == ("refusal", "warn")
+    assert box.sentence.startswith("Saving MP4 needs an ffmpeg binary on PATH"), box.sentence
+    assert ".gif" in box.sentence and "IMAGEIO_FFMPEG_EXE" in box.sentence
+    assert box.beneath == "" and box.detail == ""
+    assert pane.lines[-1] == ("warning", box.sentence), pane.lines
     assert sent == [], "an MP4 export was dispatched without ffmpeg"
     assert CHOOSER_CALLS == [("save", "Save animation", "", "MP4 video (*.mp4);;GIF (*.gif)", "clip.mp4")]
 
@@ -438,11 +437,10 @@ def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(mon
     nothing to do with it.
     """
     import pytest
-    from PySide6.QtWidgets import QMessageBox
     from core.gui import fields as gui_fields
     from core.gui.panels import simulate_panel as sim_mod
     from core.gui.panels.simulate_panel import SimulatePanel
-    from tests._fixtures import CHOOSER_CALLS, SHOWN, answer_chooser, qt_app
+    from tests._fixtures import CHOOSER_CALLS, answer_chooser, asked, forget_asked, qt_app
 
     qt_app()
     cell = tmp_path / "cell.txt"
@@ -461,12 +459,12 @@ def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(mon
                                           (p.fps, "fps", "is blank")):
         original = box_widget.text()
         box_widget.setText("")
-        SHOWN.clear()
+        forget_asked()
         p._start()
-        shown = SHOWN[-1]
-        assert shown.windowTitle() == "Check your inputs" and shown.icon() == QMessageBox.Warning, key
-        assert blank_needle in shown.text(), shown.text()
-        assert shown.informativeText() == gui_fields.fix_sentence(key), key
+        shown = asked()
+        assert (shown.kind, shown.marker) == ("refusal", "warn"), key
+        assert blank_needle in shown.sentence, shown.sentence
+        assert shown.beneath == gui_fields.fix_sentence(key), key
         assert sent == [] and built == [], key
         box_widget.setText(original)
 
@@ -476,9 +474,9 @@ def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(mon
                                     (p.fps, "fps", "must be greater than 0")):
         original = box_widget.text()
         box_widget.setText("0")
-        SHOWN.clear()
+        forget_asked()
         p._start()
-        assert needle in SHOWN[-1].text(), (key, SHOWN[-1].text())
+        assert needle in asked().sentence, (key, asked().sentence)
         assert sent == [] and built == [], key
         box_widget.setText(original)
 
@@ -488,9 +486,9 @@ def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(mon
     monkeypatch.setattr(sim_mod, "ffmpeg_available", lambda: True)
     answer_chooser(monkeypatch, "clip.gif")
     p.fps.setText("")
-    SHOWN.clear()
+    forget_asked()
     p._save_video()
-    assert SHOWN[-1].windowTitle() == "Check your inputs"
+    assert asked().kind == "refusal"
     assert sent == [], "an export was dispatched with a blank frame rate"
     assert CHOOSER_CALLS == [("save", "Save animation", "", "MP4 video (*.mp4);;GIF (*.gif)", "clip.gif")]
 
