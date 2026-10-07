@@ -14,17 +14,17 @@ from . import design
 
 
 def _rc(dark: bool) -> dict:
-    t = design.tokens(dark)                                   # no accent: figure chrome is neutral
+    t = design.tokens(dark)
     return {
-        "figure.facecolor":  t["window"], "figure.edgecolor":  t["window"],
-        "savefig.facecolor": t["window"], "savefig.edgecolor": t["window"],
-        "axes.facecolor":    t["base"],   "axes.edgecolor":    t["text_2nd"],
-        "axes.labelcolor":   t["text"],   "axes.titlecolor":   t["text"],
-        "text.color":        t["text"],
-        "xtick.color":       t["text_2nd"], "ytick.color":     t["text_2nd"],
-        "xtick.labelcolor":  t["text"],   "ytick.labelcolor":  t["text"],
-        "grid.color":        t["mid"],
-        "legend.facecolor":  t["base"],   "legend.edgecolor":  t["mid"],
+        "figure.facecolor":  t["paper"],  "figure.edgecolor":  t["paper"],
+        "savefig.facecolor": t["paper"],  "savefig.edgecolor": t["paper"],
+        "axes.facecolor":    t["paper"],  "axes.edgecolor":    t["rule"],
+        "axes.labelcolor":   t["ink"],    "axes.titlecolor":   t["ink"],
+        "text.color":        t["ink"],
+        "xtick.color":       t["rule"],   "ytick.color":       t["rule"],
+        "xtick.labelcolor":  t["ink_2"],  "ytick.labelcolor":  t["ink_2"],
+        "grid.color":        t["rule_light"],
+        "legend.facecolor":  t["paper"],  "legend.edgecolor":  t["paper"],
     }
 
 

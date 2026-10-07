@@ -4,9 +4,14 @@ applies them.
 Each choice resolves to light or dark; then an apply does, in order:
   * ``styleHints().setColorScheme`` -- so the frames Windows draws (the title bar, the file
     choosers) follow;
+  * ``design.set_dark`` -- so every device that paints itself reads the colours of the theme in
+    force;
   * ``design.build_palette`` + ``design.build_qss`` -- the palette and the one application style
     sheet. A widget that paints itself (progress_pane._Sparkline) reads the palette, so the
-    palette -- not only the sheet -- must be right.
+    palette -- not only the sheet -- must be right;
+  * ``fonts.apply_class_fonts`` (a new sheet puts the system's font back on lists, tables,
+    headers, menus and tool tips), ``retheme()`` on each widget that has one, and an update of
+    every top-level widget.
 
 An apply whose resolved scheme is the one this Appearance already applied stops after the first
 of these: it sets neither the palette nor the sheet and signals nothing. ``should_apply``
@@ -20,8 +25,9 @@ matplotlib figures follow the theme through rcParams (see mpl_theme.install, wir
 The one deliberate exception is the Simulate video export, which stays white (simulate_export.py).
 """
 from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtWidgets import QWidget
 
-from . import design
+from . import design, fonts
 
 # (mode key, human label), in display order -- shared by the gear popover and the Settings screen.
 MODE_LABELS = (("system", "Follow Windows"), ("light", "Light"), ("dark", "Dark"))
@@ -99,9 +105,17 @@ class Appearance(QObject):
             # While the work is under way nothing is known to be applied, so an apply that fails
             # part-way is never mistaken for one that was made.
             self._applied = None
+            design.set_dark(self._dark)                          # first: all that follows reads the theme in force
             self._app.setPalette(design.build_palette(self._dark))
             self._app.setStyleSheet(design.build_qss(self._dark))
-            self._applied = wanted                               # only once both are set
+            fonts.apply_class_fonts(self._app)                   # after the sheet, and on this application alone
+            for top in self._app.topLevelWidgets():              # each widget that keeps colours of its own
+                for widget in (top, *top.findChildren(QWidget)):
+                    retheme = getattr(widget, "retheme", None)
+                    if callable(retheme):
+                        retheme()
+                top.update()
+            self._applied = wanted                               # only once all of it is done
         finally:
             self._applying = False
         self.theme_changed.emit(self._dark)

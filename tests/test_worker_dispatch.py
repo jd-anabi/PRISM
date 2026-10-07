@@ -1418,15 +1418,12 @@ def test_selection_changed_fires_on_a_selection_and_a_refresh_drops_it():
 
 
 def test_the_stylesheet_paints_the_item_view_in_both_themes():
-    """core/gui/design.py styled NO item view before the browser: its one QAbstractItemView rule is
-    the combo popup's (design.py:237). So a QTreeWidget would have rendered in the Fusion default -- a
-    white grid in dark mode under a header matching nothing else. The rules go in design.py, in the
-    same token vocabulary as the rest, so a theme flip recolours them for free (theming.Appearance
-    re-applies build_qss on every change).
-
-    The substitution is the real regression risk: _QSS is a string.Template, so one $name that is not
-    a key of _qss_vars raises KeyError inside substitute() and takes the WHOLE stylesheet down, not
-    just the new block. Both themes and an accent override are built here for that reason."""
+    """The records table is a tree view, and without rules of its own it would be drawn in the
+    toolkit's default: a white grid in the dark theme under a header that matches nothing else. Its
+    rules are filled from the look's table of colours, and one name the table does not hold raises
+    KeyError inside the fill and takes the WHOLE sheet down, so both themes are built here. What is
+    pinned is that the table's own rules resolved: alternate rows, header and selection carry this
+    theme's colours, and no placeholder survived."""
     from core.gui import design
 
     for dark in (False, True):
@@ -1434,16 +1431,11 @@ def test_the_stylesheet_paints_the_item_view_in_both_themes():
         for selector in ("QTreeView {", "QTreeView::item", "QHeaderView::section"):
             assert selector in qss, (dark, selector)
         t = design.tokens(dark)
-        assert f"alternate-background-color: {t['alt_base']}" in qss, dark
-        assert f"background: {t['alt_base']}; color: {t['text_2nd']}" in qss, (dark, "header section")
-        assert "$" not in qss, "an unsubstituted token escaped"
-    # an accent override is the substitution most likely to break, and "QTreeView" is a literal of
-    # the template, so its presence proves nothing: what is pinned is that the table's own rule
-    # RESOLVED -- the override reached its selection colour, and no placeholder survived anywhere.
-    accented = design.build_qss(True, "#AA3366")
-    assert "$" not in accented, "an unsubstituted token escaped under an accent override"
-    block = accented.split("QTreeView {", 1)[1].split("}", 1)[0]
-    assert "selection-background-color: #AA3366" in block, block
+        assert f"alternate-background-color: {t['margin']}" in qss, dark
+        assert f"background: {t['margin']}; color: {t['ink_2']}" in qss, (dark, "header section")
+        assert "$" not in qss, "an unsubstituted name escaped"
+        block = qss.split("QTreeView {", 1)[1].split("}", 1)[0]
+        assert f"selection-background-color: {t['accent']}" in block, block
 
 
 def test_a_sort_applied_before_the_first_fill_is_held_and_not_lost():

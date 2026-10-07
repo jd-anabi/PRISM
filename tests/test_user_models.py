@@ -1,5 +1,5 @@
 """User-defined model tests: parser/codegen, forcing kinds, registry, persistence, Simulate stream,
-and the OS-accent override and the application's font.
+and the appearance: the palette and the sheet from the look's table, and the application's font.
 
 WHAT THESE LOCK DOWN
     * The sympy parse -> torch compile path reproduces a hand-written model (HopfModel) numerically,
@@ -19,7 +19,6 @@ Run:  pytest tests/test_user_models.py
 """
 import math
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -1034,28 +1033,19 @@ def test_builder_validate_refuses_while_a_task_runs():
     assert mb._validate() is not None                              # and works again once idle
 
 
-# ── appearance: OS accent + Inter toggle ─────────────────────────────────────────────────────────
-def test_accent_tokens_and_palette_override():
+# ── appearance: the palette and the sheet from the look's table; the application's font ──
+def test_the_palette_and_the_sheet_take_the_accent_from_the_table():
     from core.gui import design
-    base = design.tokens(False)
-    t = design.tokens(False, "#AA3366")
-    assert t["accent"] == "#AA3366" and t is not base
-    assert t["accent_hover"] != t["accent"] and t["accent_press"] != t["accent"]
-    assert design.tokens(False, "not-a-colour") is base            # invalid -> fixed Fluent blue
-    assert design.tokens(False, "#EEEEEE")["on_accent"] == "#1B1B1B"   # light accent -> dark CTA text
-    assert design.tokens(False, "#112233")["on_accent"] == "#FFFFFF"
-
-    pal = design.build_palette(False, "#AA3366")
-    assert pal.color(QPalette.Highlight).name().upper() == "#AA3366"   # LOAD-BEARING (custom paint)
-    assert pal.color(QPalette.Mid).name().upper() == base["mid"].upper()
-    assert "#AA3366" in design.build_qss(True, "#AA3366")
-    assert "#AA3366" not in design.build_qss(True)
-
-
-def test_system_accent_returns_a_hex_or_none():
-    from core.gui import design
-    accent = design.system_accent()
-    assert accent is None or re.fullmatch(r"#[0-9A-F]{6}", accent), accent
+    for dark, accent in ((False, "#0072B2"), (True, "#56B4E9")):
+        t = design.tokens(dark)
+        assert t["accent"] == accent
+        pal = design.build_palette(dark)
+        assert pal.color(QPalette.Highlight).name().upper() == accent        # the sparkline's trace
+        assert pal.color(QPalette.Mid).name().upper() == t["rule_light"]      # the sparkline's baseline
+        assert accent in design.build_qss(dark)
+    assert "#56B4E9" not in design.build_qss(False), "the dark accent in the light sheet"
+    with pytest.raises(TypeError):
+        design.build_qss(True, "#AA3366")        # no caller can hand in an accent of its own
 
 
 def test_the_application_font_is_inter_with_digits_of_equal_width():
@@ -1286,6 +1276,11 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
         return real(app)
 
     monkeypatch.setattr(fonts, "apply_class_fonts", watched)
+    from core.gui import settings as stored
+    assert design.is_dark() is False, "a theme leaked into the suites"
+    remembered = stored.settings()                 # this test's own settings file
+    stored.set_appearance(remembered, "dark")      # so that the first apply has to turn the look's table
+    remembered.sync()
     with whole_program() as (app, window):
         assert app is ours, "the whole program must use the one application of the process"
         icon = app.windowIcon()
@@ -1307,15 +1302,20 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
         # the fonts are in force while the window is up is read on a real display, by the test beside
         # this one.
         assert QApplication.font("QMenu") == font
+        assert window.appearance.is_dark() is True, "the stored choice did not reach the appearance"
+        assert design.is_dark() is True, "an apply must tell the look's table which theme is in force"
+        assert app.styleSheet() == design.build_qss(True), "the application does not wear the built sheet"
+        assert app.palette().color(QPalette.Window).name().upper() == design.tokens(True)["paper"]
         during = process_state(app)
         window.close()
     changed = {key for key in found if during[key] != found[key]}
     assert {"sheet", "palette", "font", "figure settings", "error hook", "appearance",
             "appearance objects", "default store", "root log handler", "text factor",
-            "class fonts"} <= changed, \
+            "class fonts", "theme flag"} <= changed, \
         f"the whole program changed only {sorted(changed)}: the comparison below would prove nothing"
     after = process_state(app)
     left = sorted(key for key in found if after[key] != found[key])
     assert left == [], f"the whole program left these as it set them: {left}"
     assert design.text_scale() == before_factor
     assert QApplication.font() == before_font and QApplication.font("QMenu") == before_font
+    assert design.is_dark() is False, "the whole program left its theme in the look's table"

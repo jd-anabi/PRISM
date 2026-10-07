@@ -832,6 +832,7 @@ def process_state(app) -> dict:
         "palette set by hand": app.testAttribute(Qt.AA_SetPalette),
         "font": app.font().toString(),
         "text factor": design.text_scale(),
+        "theme flag": design.is_dark(),
         "class fonts": tuple(QApplication.font(name).toString() for name in (
             "QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu", "QMenuBar", "QTipLabel", "QStatusBar")),
         "window icon": app.windowIcon().cacheKey(),
@@ -876,7 +877,7 @@ def whole_program():
              "names": (app.organizationName(), app.applicationName()),
              "appearance": theming.active_appearance(), "hook": sys.excepthook,
              "quiet": config.QUIET_SEGMENT_BAR, "handler": logging_root.installed(),
-             "store": default_store(), "factor": design.text_scale()}
+             "store": default_store(), "factor": design.text_scale(), "dark": design.is_dark()}
     with matplotlib.rc_context():                     # the figure settings, exactly as found
         try:
             yield gui_app.build_app([])
@@ -892,6 +893,7 @@ def whole_program():
             design.set_text_scale(found["factor"])
             made = theming.active_appearance()
             theming._ACTIVE = found["appearance"]
+            design.set_dark(found["dark"])            # the theme every later test's painted device reads
             if made is not None and made is not found["appearance"]:
                 # Gone before the colour scheme is touched: alive, it applies the look again on
                 # the next change of scheme. Its own deferred delete only, never every receiver's.

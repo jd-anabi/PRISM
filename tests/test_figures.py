@@ -393,18 +393,18 @@ def test_the_parameter_table_is_readable_against_its_own_cells():
                 plt.close(fig)
 
 def test_apply_mpl_theme_sets_design_tokens():
-    """apply_mpl_theme drives figure/axes/savefig facecolor + text.color from the DARK/LIGHT tokens."""
+    """apply_mpl_theme drives figure/axes/savefig facecolor + text.color from the look's table, in the theme asked for."""
     import matplotlib
     from core.gui import design, mpl_theme
     with _rcparams_guard():
         mpl_theme.apply_mpl_theme(True)
         d = design.tokens(True)
-        assert matplotlib.rcParams["figure.facecolor"] == d["window"]
-        assert matplotlib.rcParams["axes.facecolor"] == d["base"]
-        assert matplotlib.rcParams["savefig.facecolor"] == d["window"]
-        assert matplotlib.rcParams["text.color"] == d["text"]
+        assert matplotlib.rcParams["figure.facecolor"] == d["paper"]
+        assert matplotlib.rcParams["axes.facecolor"] == d["paper"]
+        assert matplotlib.rcParams["savefig.facecolor"] == d["paper"]
+        assert matplotlib.rcParams["text.color"] == d["ink"]
         mpl_theme.apply_mpl_theme(False)
-        assert matplotlib.rcParams["figure.facecolor"] == design.tokens(False)["window"]
+        assert matplotlib.rcParams["figure.facecolor"] == design.tokens(False)["paper"]
 
 def test_mpl_theme_install_none_is_a_noop():
     """No Appearance (the test path) -> rcParams untouched, so figures keep matplotlib's default white."""
@@ -423,9 +423,9 @@ def test_mpl_theme_follows_the_appearance_signal():
     with _rcparams_guard():
         ap = _fake_appearance(True)
         mpl_theme.install(ap)
-        assert matplotlib.rcParams["figure.facecolor"] == design.tokens(True)["window"]
+        assert matplotlib.rcParams["figure.facecolor"] == design.tokens(True)["paper"]
         ap.flip(False)
-        assert matplotlib.rcParams["figure.facecolor"] == design.tokens(False)["window"]
+        assert matplotlib.rcParams["figure.facecolor"] == design.tokens(False)["paper"]
 
 def test_plot_ppc_summary_box_follows_the_dark_theme():
     """The two PPC summary boxes read plt.rcParams, so under a dark theme they are NOT the old hardcoded

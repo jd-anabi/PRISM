@@ -95,6 +95,18 @@ def test_simulate_heatmap_center_stays_off_the_edge_when_oscillating():
     assert v._cx(1.0) <= v._aspect - v._margin + 1e-9
     assert v._aspect > 1.0, "the heatmap field must be a wide rectangle"
 
+def test_the_live_view_takes_its_ground_and_its_trace_from_the_looks_table():
+    from core.gui import design
+    from core.gui.widgets.live_hair_bundle import LiveHairBundleView
+
+    qt_app()
+    view = LiveHairBundleView()
+    for dark in (False, True):
+        view._apply_theme(dark)
+        t = design.tokens(dark)
+        assert view.backgroundBrush().color().name().upper() == t["paper"], dark
+        assert view._curve.opts["pen"].color().name().upper() == t["ink"], dark
+
 def test_simulate_plan_stream_matches_generate_observations_arithmetic():
     """plan_stream must reproduce the pipeline's subsample/steady/total arithmetic so a streamed trace
     matches the observation the SBI pipeline would build from the same cell."""

@@ -12,6 +12,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -491,7 +492,9 @@ def stand_in_app():
     nothing on the real one. Its style hints answer colorScheme() as Windows does: the scheme last
     asked for, or what Windows itself holds (``windows``) when that was Unknown. Off screen the real
     hints always answer Unknown and never signal, so only a stand-in can play a computer that turns
-    dark. The module's active Appearance is put back afterwards."""
+    dark. The module's active Appearance is put back afterwards. It also records the fonts an apply
+    sets for widget classes and hands out no top-level widget; the look's theme flag is put back
+    afterwards."""
     from PySide6.QtCore import QObject, Qt, Signal
     from PySide6.QtWidgets import QApplication
     from core.gui import theming
@@ -516,6 +519,7 @@ def stand_in_app():
         def __init__(self):
             super().__init__()
             self.hints, self.palettes, self.sheets = Hints(), [], []
+            self.fonts, self.tops = [], []
 
         def styleHints(self):
             return self.hints
@@ -526,11 +530,19 @@ def stand_in_app():
         def setStyleSheet(self, sheet):
             self.sheets.append(sheet)
 
+        def setFont(self, font, name=None):        # the fonts of widget classes, as an apply sets them
+            self.fonts.append(name)
+
+        def topLevelWidgets(self):
+            return list(self.tops)
+
     active = theming._ACTIVE
+    was_dark = design.is_dark()
     try:
         yield Application()
     finally:
         theming._ACTIVE = active
+        design.set_dark(was_dark)
 
 
 def test_the_first_apply_goes_on_and_a_repeat_of_the_same_scheme_sets_nothing(stand_in_app):
@@ -811,3 +823,279 @@ def test_the_three_faces_resolve_on_a_real_windows_display():
         assert QApplication.font("QMenu").family() != "Inter", "Windows' own font is back on a menu"
         fonts.apply_class_fonts(app)
         assert {QApplication.font(name).family() for name in CLASSES_WITH_A_FONT} == {"Inter"}
+
+
+# ── the palette and the style sheet from the table; the order of an apply ────────────────────────
+def _rules(qss):
+    """Every rule of a built sheet, in order: (its selectors, its declarations)."""
+    rules = []
+    for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", qss):
+        declarations = {}
+        for part in body.split(";"):
+            if ":" in part:
+                name, value = part.split(":", 1)
+                declarations[name.strip()] = " ".join(value.split())
+        rules.append(([" ".join(s.split()) for s in selectors.split(",")], declarations))
+    return rules
+
+
+def _classes(selector):
+    """The widget classes a selector names: the word that opens it and each word after a space."""
+    return re.findall(r"(?:^|\s)([A-Za-z]+)", selector)
+
+
+def _keeps_the_selector_rule(selector):
+    """A widget class, narrowed only by one of the four properties: no object name, no wildcard."""
+    return ("#" not in selector and "*" not in selector and "QWidget" not in _classes(selector)
+            and set(re.findall(r"\[(\w+)", selector)) <= {"cls", "state", "current", "small"})
+
+
+def test_tokens_gives_the_whole_table_for_one_theme():
+    import inspect
+    from core.gui import design
+    light, dark = design.tokens(False), design.tokens(True)
+    assert light == {name: pair[0] for name, pair in design.COLOURS.items()}
+    assert dark == {name: pair[1] for name, pair in design.COLOURS.items()}
+    assert len(light) == 32 and (light["accent"], dark["accent"]) == ("#0072B2", "#56B4E9")
+    assert design.tokens(False) is not light, "a caller's edit must not reach the table"
+    for function in (design.tokens, design.build_palette, design.build_qss):
+        assert list(inspect.signature(function).parameters) == ["dark"], function.__name__
+    assert not [name for name in ("LIGHT", "DARK", "system_accent") if hasattr(design, name)]
+
+
+def test_the_palette_takes_every_role_from_the_table():
+    from PySide6.QtGui import QPalette
+    from core.gui import design
+    Role, Group = QPalette.ColorRole, QPalette.ColorGroup
+    roles = {Role.Window: "paper", Role.WindowText: "ink", Role.Base: "field", Role.AlternateBase: "margin",
+             Role.Text: "ink", Role.Button: "paper", Role.ButtonText: "ink", Role.BrightText: "on_accent",
+             Role.ToolTipBase: "raised", Role.ToolTipText: "ink", Role.PlaceholderText: "ink_3",
+             Role.Highlight: "accent", Role.HighlightedText: "on_accent", Role.Link: "accent",
+             Role.LinkVisited: "accent", Role.Mid: "rule_light", Role.Midlight: "margin", Role.Light: "paper",
+             Role.Dark: "field_line", Role.Shadow: "ink", Role.Accent: "accent"}
+    disabled = {Role.WindowText: "disabled_ink", Role.Text: "disabled_ink", Role.ButtonText: "disabled_ink",
+                Role.PlaceholderText: "disabled_ink", Role.Base: "disabled_fill", Role.Button: "disabled_fill",
+                Role.Highlight: "disabled_line"}
+    for dark in (False, True):
+        palette, t = design.build_palette(dark), design.tokens(dark)
+        for role, name in roles.items():
+            for group in (Group.Active, Group.Inactive):
+                assert palette.color(group, role).name().upper() == t[name], (dark, group, role, name)
+            assert palette.color(Group.Disabled, role).name().upper() == t[disabled.get(role, name)], (dark, role)
+
+
+def test_the_sheet_keeps_its_rules_and_only_the_named_interim_selectors_break_them():
+    from core.gui import design
+    for dark in (False, True):
+        qss = design.build_qss(dark)
+        for banned in ("$", "url(", "font-family", "letter-spacing", ":default", "::indicator", "*"):
+            assert banned not in qss, (dark, banned)
+        rules = _rules(qss)
+        assert len(rules) == 87, len(rules)
+        first = next(i for i, (selectors, _) in enumerate(rules) if selectors[0] in design.INTERIM_SELECTORS)
+        final, interim = rules[:first], rules[first:]
+        assert [s for selectors, _ in interim for s in selectors] == list(design.INTERIM_SELECTORS)
+        for selectors, declarations in final:
+            for selector in selectors:
+                assert _keeps_the_selector_rule(selector), (dark, selector)
+                assert selector not in design.INTERIM_SELECTORS, selector
+            assert not [name for name in declarations if name.startswith("qproperty-")], selectors
+        for selectors, _ in interim:                     # an old widget's rule still names a class of its own
+            assert not [s for s in selectors if "QWidget" in _classes(s)], selectors
+    assert len(set(design.INTERIM_SELECTORS)) == len(design.INTERIM_SELECTORS) == 45
+
+
+def test_no_pseudo_state_sets_a_weight_or_a_size_and_words_take_lettering_colours():
+    from core.gui import design
+    for dark in (False, True):
+        t = design.tokens(dark)
+        lettering = {t[name] for name in ("ink", "ink_2", "ink_3", "disabled_ink", "on_accent", "accent")}
+        for selectors, declarations in _rules(design.build_qss(dark)):
+            if any(re.search(r"(?<!:):(?!:)", selector) for selector in selectors):
+                assert not {"font", "font-size", "font-weight"} & set(declarations), selectors
+            for name in ("color", "selection-color"):
+                if name in declarations:
+                    assert declarations[name] in lettering, (dark, selectors, name, declarations[name])
+
+
+def test_the_sheets_lengths_follow_the_text_factor_and_its_line_weights_do_not():
+    from core.gui import design
+    with text_size(1.0):
+        one = {tuple(selectors): d for selectors, d in _rules(design.build_qss(False))}
+    with text_size(2.0):
+        two = {tuple(selectors): d for selectors, d in _rules(design.build_qss(False))}
+        sizes = design._sheet_sizes()
+    assert len(sizes) == 30 and all(name.startswith("px_") for name in sizes) and not set(sizes) & set(design.COLOURS)
+    button, field, bad = ("QPushButton",), ("QLineEdit", "QComboBox"), ('QLineEdit[state="error"]',)
+    title = ('QLabel[type="title"]',)
+    assert (one[button]["min-height"], two[button]["min-height"]) == ("32px", "66px")
+    assert (one[button]["padding"], two[button]["padding"]) == ("0px 16px", "0px 32px")
+    assert (one[field]["min-height"], two[field]["min-height"]) == ("30px", "62px")
+    assert (one[bad]["min-height"], one[bad]["padding"]) == ("28px", "0px 7px")
+    assert (two[bad]["min-height"], two[bad]["padding"]) == ("60px", "0px 15px")
+    assert (one[title]["font-size"], two[title]["font-size"]) == ("24px", "48px")
+    for built in (one, two):
+        assert built[button]["border"] == "1px solid #6B6B6B" and built[button]["border-radius"] == "3px"
+        assert built[bad]["border"] == "2px solid #C24E00"
+        assert built[("QScrollBar:vertical",)]["width"] == "8px"
+        assert built[("QScrollBar::handle:horizontal",)]["min-width"] == "28px"
+
+
+def test_an_apply_runs_its_steps_in_one_order_and_stops_when_nothing_changed(monkeypatch):
+    from PySide6.QtCore import QObject, Qt, Signal
+    from PySide6.QtWidgets import QWidget
+    from core.gui import design, fonts, theming
+    QApplication.instance() or QApplication([])
+    calls = []
+
+    class Hints(QObject):
+        colorSchemeChanged = Signal(object)
+        def setColorScheme(self, scheme): calls.append("scheme")
+        def colorScheme(self): return Qt.ColorScheme.Unknown
+
+    class Painted(QWidget):
+        def retheme(self): calls.append("retheme")
+        def update(self): calls.append("update")
+
+    class StandIn(QObject):                     # what an apply asks of the application, and no more
+        def __init__(self, tops):
+            super().__init__()
+            self.hints, self.tops = Hints(), tops
+        def styleHints(self): return self.hints
+        def setPalette(self, palette): calls.append("palette")
+        def setStyleSheet(self, text): calls.append("sheet")
+        def topLevelWidgets(self): return list(self.tops)
+
+    top = Painted()
+    child = Painted(top)
+    stand_in = StandIn([top])
+    monkeypatch.setattr(design, "set_dark", lambda dark: calls.append(("set_dark", dark)))
+    monkeypatch.setattr(fonts, "apply_class_fonts", lambda app=None: calls.append("class_fonts"))
+    monkeypatch.setattr(theming, "_ACTIVE", theming._ACTIVE)     # the constructor rebinds it
+    try:
+        appearance = theming.Appearance(stand_in)
+        appearance.theme_changed.connect(lambda dark: calls.append(("theme_changed", dark)))
+        appearance.set_mode("dark")
+        assert calls == ["scheme", ("set_dark", True), "palette", "sheet", "class_fonts",
+                         "retheme", "retheme", "update", ("theme_changed", True)]
+        del calls[:]
+        appearance.set_mode("dark")
+        assert calls == ["scheme"], "an apply that changes nothing stops after the colour scheme"
+    finally:
+        del stand_in.tops[:]     # the stand-in and its Appearance hold each other: the widget must not wait for them
+
+
+def test_an_apply_tells_the_looks_table_and_sets_the_class_fonts_on_its_own_application(stand_in_app):
+    from PySide6.QtGui import QPalette
+    from core.gui import design, theming
+    menu_font = QApplication.font("QMenu")
+    appearance = theming.Appearance(stand_in_app)
+    appearance.set_mode("dark")
+    assert design.is_dark() is True, "an apply must tell the look's table which theme is in force"
+    assert len(stand_in_app.fonts) == 7 and None not in stand_in_app.fonts, stand_in_app.fonts
+    assert QApplication.font("QMenu") == menu_font, "the class fonts were set on the real application"
+    assert stand_in_app.sheets == [design.build_qss(True)]
+    assert stand_in_app.palettes[0].color(QPalette.ColorRole.Window).name().upper() == design.tokens(True)["paper"]
+    appearance.set_mode("light")
+    assert design.is_dark() is False and len(stand_in_app.fonts) == 14
+
+
+def _messages_under(qss):
+    """What Qt says while one widget of every kind the sheet names is polished and painted under ``qss``. The
+    sheet is set on their holder alone, which is never shown: nothing is set on the application. The holder
+    and all it holds are gone when this returns: its last name goes with the call."""
+    from PySide6 import QtWidgets as W
+    from PySide6.QtCore import qInstallMessageHandler
+
+    QApplication.instance() or QApplication([])
+    said = []
+    previous = qInstallMessageHandler(lambda kind, context, text: said.append(text))
+    try:
+        holder = W.QWidget()
+        made = []
+
+        def add(make, name="", parent=None, **properties):
+            widget = make(parent or holder)
+            widget.setObjectName(name)
+            for prop, value in properties.items():
+                widget.setProperty(prop, value)
+            made.append(widget)
+            return widget
+
+        for kind in ("title", "head", "now", "strong", "small", "quiet", "book2"):
+            add(W.QLabel, cls=kind)
+        for kind in ("title", "subtitle", "heading", "caption"):
+            add(W.QLabel, type=kind)
+        add(W.QPushButton)
+        add(W.QPushButton).setEnabled(False)
+        for kind in ("primary", "danger", "nav", "fold", "link"):
+            add(W.QPushButton, cls=kind)
+        add(W.QPushButton, cls="nav", small=True, current=True)
+        add(W.QPushButton, accent=True)
+        add(W.QPushButton, "iconButton")
+        add(W.QLineEdit)
+        add(W.QLineEdit, state="error")
+        add(W.QLineEdit).setEnabled(False)
+        add(W.QComboBox).addItems(["one", "two"])
+        for make in (W.QPlainTextEdit, W.QCheckBox, W.QRadioButton, W.QTableView, W.QProgressBar, W.QScrollBar,
+                     W.QGroupBox, W.QMenu):
+            add(make)
+        tree = add(W.QTreeWidget)
+        tree.setHeaderLabels(["one", "two"])
+        W.QTreeWidgetItem(tree, ["row", "row"])
+        tabs = add(W.QTabWidget)
+        tabs.addTab(W.QLabel("page"), "one")
+        for name in ("", "navBack", "navSettings", "navRunning", "helpBadge"):
+            add(W.QToolButton, name)
+        add(W.QPushButton, parent=add(W.QDialog, cls="ask"), cls="danger")
+        holder.setStyleSheet(qss)
+        for widget in (holder, *made):
+            widget.ensurePolished()
+            widget.grab()
+    finally:
+        qInstallMessageHandler(previous)
+    return said
+
+
+def test_qt_takes_both_sheets_without_a_warning():
+    from core.gui import design
+    quiet = set(_messages_under(""))
+    for factor in (1.0, 2.25):                   # the ordinary text size, and the largest factor the look takes
+        for dark in (False, True):
+            with text_size(factor):
+                qss = design.build_qss(dark)
+            said = [text for text in _messages_under(qss) if text not in quiet]
+            assert said == [], (factor, dark, said)
+    # the same probe must hear a sheet Qt cannot read and a property it does not know
+    assert any("Could not parse" in text for text in _messages_under("QPushButton { color: red"))
+    assert any("Unknown property" in text for text in _messages_under("QPushButton { colour: red; }"))
+
+
+def _colour_strings(tree):
+    """The string literals of a parsed module that hold a six-digit colour, as (line, node)."""
+    return [(node.lineno, node) for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and re.search(r"#[0-9A-Fa-f]{6}\b", node.value)]
+
+
+def test_colours_are_written_in_the_looks_table_alone_and_a_sheet_is_set_by_the_appearance_alone():
+    gui = Path(__file__).resolve().parents[1] / "core" / "gui"
+    probe = ast.parse('a = "#12AB9F"\nb = f"1px solid #12ab9f"\nc = "no colour #12AB"\nw.setStyleSheet(a)\n')
+    assert [line for line, _ in _colour_strings(probe)] == [1, 2], "the scan must see a colour, and only a colour"
+    colours, sheets = [], []
+    for path in sorted(gui.rglob("*.py")):
+        rel = path.relative_to(gui).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if rel == "design.py":
+            table = next(node for node in tree.body if isinstance(node, (ast.Assign, ast.AnnAssign))
+                         and "COLOURS" in {getattr(target, "id", "") for target in
+                                           (node.targets if isinstance(node, ast.Assign) else [node.target])})
+            inside = {id(node) for node in ast.walk(table)}
+            colours += [f"{rel}:{line}" for line, node in _colour_strings(tree) if id(node) not in inside]
+        else:
+            colours += [f"{rel}:{line}" for line, _ in _colour_strings(tree)]
+        if rel != "theming.py":
+            sheets += [f"{rel}:{node.lineno}" for node in ast.walk(tree)
+                       if isinstance(node, ast.Attribute) and node.attr == "setStyleSheet"]
+    assert colours == [], f"a colour written outside the look's table: {colours}"
+    assert sheets == [], f"a style sheet set outside the appearance: {sheets}"

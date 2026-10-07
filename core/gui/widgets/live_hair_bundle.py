@@ -111,7 +111,7 @@ class LiveHairBundleView(pg.GraphicsLayoutWidget):
     def _apply_theme(self, dark: bool) -> None:
         from .. import design
         t = design.tokens(dark)
-        bg, fg = t["base"], t["text"]
+        bg, fg = t["paper"], t["ink"]
         self.setBackground(bg)
         for name in ("left", "bottom"):
             axis = self._trace_plot.getAxis(name)

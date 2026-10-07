@@ -4,10 +4,11 @@ Four things read the table and nothing else holds a colour or a size: the applic
 the small style over Fusion, and the devices that paint themselves. Pure and import-safe: it needs QtGui only,
 for QColor and QPalette, builds no application object, and asks Windows for its text size only when called to.
 
-Still here beside the table, until the palette and the sheet are built from it: the older LIGHT and DARK dicts
-with ``tokens``, ``build_palette`` and ``build_qss``. Two palette roles stay load-bearing whatever a sheet says,
-because custom painting reads them and a sheet does not feed it: ``QPalette.Mid`` (the sparkline's baseline in
-widgets/progress_pane.py) and ``QPalette.Highlight`` (its trace, and the selection colour).
+``tokens``, ``build_palette`` and ``build_qss`` give one theme's names, its palette and its style sheet, all
+from the table. Two palette roles stay load-bearing whatever a sheet says, because custom painting reads them
+and a sheet does not feed it: ``QPalette.Mid`` (the sparkline's baseline in widgets/progress_pane.py) and
+``QPalette.Highlight`` (its trace, and the selection colour). The sheet's last rules serve the widgets of the
+old layout: ``INTERIM_SELECTORS`` names them, and each leaves with its widget.
 """
 import math
 import numbers
@@ -311,11 +312,6 @@ def date_text(when: datetime, now: datetime | None = None) -> str:
     return f"{when.day} {MONTHS[when.month - 1]} {when.year}, {clock}"
 
 
-# ── the older tokens and sheet: unchanged below, until the palette and the sheet are built from the table ──
-RADIUS_SM = 4
-RADIUS_MD = 8
-CTL_H = 32              # standard Fluent control height
-CTL_H_SM = 28
 SPACE = (4, 8, 12, 16, 20, 24)
 
 # ── Layout sizing ─────────────────────────────────────────────────────────────────────────────────
@@ -332,314 +328,258 @@ HELP_VIEWER_MIN_H = 260   # Settings' help viewer: tall enough to be usable, it 
 LABEL_MAX_W = 190         # ceiling on a form's label column: one long option name (e.g. "F0 (ND
                           # forcing amplitude)") used to narrow every field in the same form
 
-# Type ramp: (pixel size, weight). Weight 600 = SemiBold (Fluent's "Strong"/heading weight).
-_OLD_TYPE = {
-    "caption":     (12, 400),
-    "body":        (14, 400),
-    "body_strong": (14, 600),
-    "heading":     (16, 600),
-    "subtitle":    (20, 600),
-    "title":       (28, 600),
-}
 
-# Neutral + accent palettes. Tuned to Fluent (Win11) light/dark. Retune here in ONE place.
-LIGHT = {
-    "window":       "#F3F3F3",
-    "base":         "#FFFFFF",   # cards, inputs, popups
-    "alt_base":     "#F7F7F7",
-    "mid":          "#D1D1D1",   # borders / dividers  (-> QPalette.Mid)
-    "mid_strong":   "#C4C4C4",
-    "text":         "#1B1B1B",
-    "text_2nd":     "#616161",   # secondary / placeholder / captions
-    "text_disabled":"#A0A0A0",
-    "button":       "#FBFBFB",
-    "button_hover": "#F0F0F0",
-    "button_press": "#E5E5E5",
-    "accent":       "#0F6CBD",   # -> QPalette.Highlight
-    "accent_hover": "#115EA3",
-    "accent_press": "#0C3B5E",
-    "on_accent":    "#FFFFFF",
-    "tooltip_bg":   "#FFFFFF",
-    "scrollbar":    "#B8B8B8",
-    "scrollbar_hover":"#9A9A9A",
-}
-DARK = {
-    "window":       "#202020",
-    "base":         "#2B2B2B",
-    "alt_base":     "#333333",
-    "mid":          "#3D3D3D",
-    "mid_strong":   "#4A4A4A",
-    "text":         "#F5F5F5",
-    "text_2nd":     "#C7C7C7",
-    "text_disabled":"#6E6E6E",
-    "button":       "#313131",
-    "button_hover": "#3A3A3A",
-    "button_press": "#454545",
-    "accent":       "#4CA0E0",
-    "accent_hover": "#62B0EE",
-    "accent_press": "#3A88CC",
-    "on_accent":    "#1B1B1B",
-    "tooltip_bg":   "#2B2B2B",
-    "scrollbar":    "#4A4A4A",
-    "scrollbar_hover":"#5E5E5E",
-}
+def tokens(dark: bool) -> dict[str, str]:
+    """The table's 32 names for one theme, each as '#RRGGBB'. A new dict at every call, so a caller may change
+    its own."""
+    return {name: pair[1 if dark else 0] for name, pair in COLOURS.items()}
 
 
-def _c(hex_str: str) -> QColor:
-    return QColor(hex_str)
+def build_palette(dark: bool) -> QPalette:
+    """The palette of one theme: every role in all three groups, from the table. A sheet does some things badly
+    or not at all (the placeholder and link colours, the selection, a disabled control), and a part it does not
+    style, or one that paints itself, falls back to the palette. The Disabled group is set in full because a
+    whole form is disabled for the length of a run."""
+    t = tokens(dark)
+    roles = {
+        QPalette.Window: "paper", QPalette.WindowText: "ink", QPalette.Base: "field", QPalette.AlternateBase: "margin",
+        QPalette.Text: "ink", QPalette.Button: "paper", QPalette.ButtonText: "ink", QPalette.BrightText: "on_accent",
+        QPalette.ToolTipBase: "raised", QPalette.ToolTipText: "ink", QPalette.PlaceholderText: "ink_3",
+        QPalette.Highlight: "accent",                       # load-bearing: the sparkline's trace, and the selection
+        QPalette.HighlightedText: "on_accent", QPalette.Link: "accent", QPalette.LinkVisited: "accent",
+        QPalette.Mid: "rule_light",                         # load-bearing: the sparkline's baseline
+        QPalette.Midlight: "margin", QPalette.Light: "paper", QPalette.Dark: "field_line", QPalette.Shadow: "ink",
+        QPalette.Accent: "accent",
+    }
+    disabled = {                                            # every other role is the same in a disabled control
+        QPalette.WindowText: "disabled_ink", QPalette.Text: "disabled_ink", QPalette.ButtonText: "disabled_ink",
+        QPalette.PlaceholderText: "disabled_ink", QPalette.Base: "disabled_fill", QPalette.Button: "disabled_fill",
+        QPalette.Highlight: "disabled_line",
+    }
+    palette = QPalette()
+    for role, name in roles.items():
+        for group in (QPalette.Active, QPalette.Inactive):
+            palette.setColor(group, role, QColor(t[name]))
+        palette.setColor(QPalette.Disabled, role, QColor(t[disabled.get(role, name)]))
+    return palette
 
 
-def system_accent() -> "str | None":
-    """The Windows OS accent colour as '#RRGGBB', or None (non-Windows, or any read failure).
-
-    Primary source is the Explorer accent (an ABGR DWORD -- the colour the user picked in Windows
-    Settings); fallback is the DWM ColorizationColor (ARGB). Both reads are wrapped: this must never
-    raise, it degrades to the fixed Fluent-blue token."""
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Accent") as key:
-            value, _ = winreg.QueryValueEx(key, "AccentColorMenu")
-        r, g, b = value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF          # ABGR
-        return f"#{r:02X}{g:02X}{b:02X}"
-    except Exception:                                       # noqa: BLE001
-        pass
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\DWM") as key:
-            value, _ = winreg.QueryValueEx(key, "ColorizationColor")
-        r, g, b = (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF          # ARGB
-        return f"#{r:02X}{g:02X}{b:02X}"
-    except Exception:                                       # noqa: BLE001
-        return None
-
-
-def tokens(dark: bool, accent: "str | None" = None) -> dict:
-    """The token dict for a scheme, optionally re-based on an accent override ('#RRGGBB').
-
-    The override recomputes accent/accent_hover/accent_press (hover/press follow the fixed tokens'
-    direction: light mode darkens on interaction, dark mode lightens then darkens) and picks on_accent
-    black/white by luminance so CTA text stays readable on any OS accent."""
-    base = DARK if dark else LIGHT
-    if not accent:
-        return base
-    c = _c(accent)
-    if not c.isValid():
-        return base
-    t = dict(base)
-    hover = c.lighter(112) if dark else c.darker(112)
-    press = c.darker(120) if dark else c.darker(145)
-    luminance = 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
-    t["accent"] = c.name().upper()
-    t["accent_hover"] = hover.name().upper()
-    t["accent_press"] = press.name().upper()
-    t["on_accent"] = "#1B1B1B" if luminance > 160 else "#FFFFFF"
-    return t
-
-
-def build_palette(dark: bool, accent: "str | None" = None) -> QPalette:
-    """A fully-populated QPalette from the tokens. Sets every role that matters (including the
-    Disabled group -- the whole controls column is disabled per run), because partially-QSS'd complex
-    controls fall back to the palette for their un-styled sub-parts."""
-    t = tokens(dark, accent)
-    p = QPalette()
-
-    def setall(role, color, groups=(QPalette.Active, QPalette.Inactive)):
-        for g in groups:
-            p.setColor(g, role, _c(color))
-
-    setall(QPalette.Window, t["window"])
-    setall(QPalette.WindowText, t["text"])
-    setall(QPalette.Base, t["base"])
-    setall(QPalette.AlternateBase, t["alt_base"])
-    setall(QPalette.Text, t["text"])
-    setall(QPalette.Button, t["button"])
-    setall(QPalette.ButtonText, t["text"])
-    setall(QPalette.BrightText, "#FFFFFF")
-    setall(QPalette.ToolTipBase, t["tooltip_bg"])
-    setall(QPalette.ToolTipText, t["text"])
-    setall(QPalette.PlaceholderText, t["text_2nd"])
-    setall(QPalette.Highlight, t["accent"])                 # LOAD-BEARING (custom paint + selection)
-    setall(QPalette.HighlightedText, t["on_accent"])
-    setall(QPalette.Link, t["accent"])
-    setall(QPalette.LinkVisited, t["accent_press"])
-    # Bevel/edge roles kept coherent so any Fusion-drawn sub-part we don't fully QSS matches.
-    setall(QPalette.Mid, t["mid"])                          # LOAD-BEARING (_Sparkline baseline, badge)
-    setall(QPalette.Midlight, t["alt_base"])
-    setall(QPalette.Light, t["base"])
-    setall(QPalette.Dark, t["mid_strong"])
-    setall(QPalette.Shadow, "#000000" if not dark else "#000000")
-
-    # Disabled group: BasePanel disables the entire controls column during a run.
-    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
-        p.setColor(QPalette.Disabled, role, _c(t["text_disabled"]))
-    p.setColor(QPalette.Disabled, QPalette.Base, _c(t["alt_base"]))
-    p.setColor(QPalette.Disabled, QPalette.Button, _c(t["button"]))
-    p.setColor(QPalette.Disabled, QPalette.Highlight, _c(t["mid"]))
-    p.setColor(QPalette.Disabled, QPalette.HighlightedText, _c(t["text_disabled"]))
-    return p
-
-
-# ── stylesheet ──────────────────────────────────────────────────────────────
-# Named-class selectors ONLY -- never `*` or bare `QWidget` (would paint backgrounds behind the
-# custom-painted _Sparkline, the pyqtgraph view, matplotlib QLabels, and the anim.py snapshot overlays).
-# $-substitution (string.Template) so CSS braces stay literal.
+# ── the one style sheet ──
+# Selectors name widget classes only, never `*` or a bare `QWidget`: either would paint a ground behind the
+# sparkline, the live view, the figure labels and the snapshot overlays. The names are filled in by
+# string.Template, so the braces of a rule stay as written. Every size carries the prefix `px_`, because the
+# filler lets a size and a colour of one name silently replace each other; the borders are written as numbers,
+# since a line's weight does not grow with the text. No comment stands inside a template: it would reach the
+# built text.
+#
+# The rules that stay. A sheet gives colours, borders and padding: a face and its features are set in code,
+# and the accent comes from a class, never from the default button, which follows the keyboard focus from
+# button to button. A tick box and a radio button keep their outline, the style's own mark of keyboard focus,
+# and no rule names their indicator: one would take the whole box away from the style. Nothing is said of a
+# drop-down's arrow either.
 _QSS = Template("""
-/* ---- type ramp (replaces the old inline font-size stylesheets) ---- */
-QLabel[type="title"]       { font-size: ${fs_title}px; font-weight: 600; }
-QLabel[type="subtitle"]    { font-size: ${fs_subtitle}px; font-weight: 600; }
-QLabel[type="heading"]     { font-size: ${fs_heading}px; font-weight: 600; }
-QLabel[type="caption"]     { font-size: ${fs_caption}px; color: $text_2nd; }
+QToolTip { background: $raised; color: $ink; border: 1px solid $field_line; padding: ${px_tip_v}px ${px_tip_h}px; }
+QDialog[cls="ask"] { background: $raised; }
 
-/* ---- push buttons: neutral + accent variant ---- */
-QPushButton {
-    min-height: ${ctl_h}px; padding: 4px 14px;
-    border: 1px solid $mid; border-radius: ${radius_sm}px;
-    background: $button; color: $text;
-}
-QPushButton:hover   { background: $button_hover; }
-QPushButton:pressed { background: $button_press; }
+QLabel[cls="title"]  { font-size: ${px_t_title}px; font-weight: 600; }
+QLabel[cls="head"]   { font-size: ${px_t_head}px; font-weight: 600; }
+QLabel[cls="now"]    { font-size: ${px_t_head}px; }
+QLabel[cls="strong"] { font-weight: 600; }
+QLabel[cls="small"]  { font-size: ${px_t_small}px; color: $ink_2; }
+QLabel[cls="quiet"]  { color: $ink_2; }
+QLabel[cls="book2"]  { color: $ink_2; }
+
+QPushButton { min-height: ${px_btn_in}px; padding: 0px ${px_btn_pad}px; border: 1px solid $field_line;
+              border-radius: ${px_radius}px; background: $paper; color: $ink; outline: none; }
+QPushButton:hover    { background: $hover_fill; }
+QPushButton:pressed  { background: $press_fill; }
+QPushButton:disabled { background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink; }
+QPushButton[cls="primary"] { font-weight: 600; padding: 0px ${px_primary_pad}px;
+                             background: $accent; border-color: $accent; color: $on_accent; }
+QPushButton[cls="primary"]:hover    { background: $accent_hover; border-color: $accent_hover; }
+QPushButton[cls="primary"]:pressed  { background: $accent_press; border-color: $accent_press; }
+QPushButton[cls="primary"]:disabled { background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink; }
+QPushButton[cls="danger"] { border-color: $err; font-weight: 600; }
+QPushButton[cls="danger"]:disabled { border-color: $disabled_line; }
+QDialog[cls="ask"] QPushButton[cls="danger"]         { background: $raised; }
+QDialog[cls="ask"] QPushButton[cls="danger"]:hover   { background: $hover_fill; }
+QDialog[cls="ask"] QPushButton[cls="danger"]:pressed { background: $press_fill; }
+QPushButton[cls="nav"]  { min-height: ${px_nav_h}px; padding: 0px ${px_nav_pad}px; border: none; border-radius: 0px;
+                          background: transparent; text-align: left; }
+QPushButton[cls="nav"][small="true"]   { min-height: ${px_nav_small}px; }
+QPushButton[cls="nav"][current="true"] { font-weight: 600; }
+QPushButton[cls="fold"] { min-height: ${px_line_h}px; padding: 0px; border: none; background: transparent;
+                          text-align: left; font-weight: 600; }
+QPushButton[cls="link"] { min-height: ${px_line_h}px; padding: 0px; border: none; background: transparent;
+                          color: $accent; text-decoration: underline; }
+
+QLineEdit, QComboBox {
+    min-height: ${px_fld_in}px; padding: 0px ${px_fld_pad}px; border: 1px solid $field_line;
+    border-radius: ${px_radius}px; background: $field; color: $ink;
+    selection-background-color: $accent; selection-color: $on_accent; }
+QLineEdit:disabled, QComboBox:disabled {
+    background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink; }
+QLineEdit[state="error"] { min-height: ${px_fld_in_err}px; padding: 0px ${px_fld_pad_err}px; border: 2px solid $err; }
+QComboBox { padding: 0px ${px_combo_r}px 0px ${px_combo_l}px; }
+QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: ${px_marker}px;
+                       border: none; }
+QComboBox QAbstractItemView { border: 1px solid $field_line; background: $field; color: $ink;
+                              selection-background-color: $accent_tint; selection-color: $ink; outline: 0; }
+QPlainTextEdit {
+    min-height: ${px_fld_in}px; padding: 2px ${px_fld_pad}px; border: 1px solid $field_line;
+    border-radius: ${px_radius}px; background: $field; color: $ink;
+    selection-background-color: $accent; selection-color: $on_accent; }
+
+QCheckBox, QRadioButton { spacing: ${px_check_gap}px; color: $ink; }
+QRadioButton { spacing: ${px_radio_gap}px; }
+QCheckBox:disabled, QRadioButton:disabled { color: $disabled_ink; }
+
+QTableView { border: none; background: $paper; color: $ink; outline: 0; }
+QHeaderView { background: $paper; border: none; }
+
+QScrollBar:vertical { background: $margin; width: ${px_bar}px; margin: 0px; }
+QScrollBar::handle:vertical { background: $ink_3; border-radius: ${px_handle_r}px; margin: ${px_handle_in}px;
+                              min-height: ${px_handle}px; }
+QScrollBar:horizontal { background: $margin; height: ${px_bar}px; margin: 0px; }
+QScrollBar::handle:horizontal { background: $ink_3; border-radius: ${px_handle_r}px; margin: ${px_handle_in}px;
+                                min-width: ${px_handle}px; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0px; width: 0px; border: none; background: none; }
+QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+""")
+
+# The rules of the old layout: each serves a widget that is still built the old way, and leaves with it. The
+# four ":focus" rules are that layout's sign of keyboard focus. The icon button takes no padding, so that a
+# glyph in a fixed width is not squeezed, and the inner height of the field beside it. The tree view is the
+# records table, a tree used flat; its selection is the accent, which is also QPalette.Highlight, so a row
+# painted by hand would match.
+_QSS_INTERIM = Template("""
+QLabel[type="title"]       { font-size: ${px_t_title}px; font-weight: 600; }
+QLabel[type="subtitle"]    { font-size: ${px_t_brand}px; font-weight: 600; }
+QLabel[type="heading"]     { font-size: ${px_t_head}px; font-weight: 600; }
+QLabel[type="caption"]     { font-size: ${px_t_small}px; color: $ink_2; }
+
 QPushButton:focus   { border: 1px solid $accent; }
-QPushButton:disabled{ color: $text_disabled; border-color: $mid; background: $button; }
 QPushButton[accent="true"] {
     background: $accent; color: $on_accent; border: 1px solid $accent; font-weight: 600;
 }
 QPushButton[accent="true"]:hover   { background: $accent_hover; border-color: $accent_hover; }
 QPushButton[accent="true"]:pressed { background: $accent_press; border-color: $accent_press; }
-QPushButton[accent="true"]:focus   { border: 1px solid $text; }
-QPushButton[accent="true"]:disabled{ background: $mid; border-color: $mid; color: $text_disabled; }
-/* compact square icon buttons (e.g. the picker refresh) -- override the wide default padding so a
-   fixed-width glyph button isn't squeezed to a sliver, and match the adjacent input height. */
-QPushButton#iconButton { padding: 0px; min-height: ${ctl_h_sm}px; font-size: ${fs_icon_btn}px; }
+QPushButton[accent="true"]:focus   { border: 1px solid $focus; }
+QPushButton[accent="true"]:disabled{ background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink; }
+QPushButton#iconButton { padding: 0px; min-height: ${px_fld_in}px; font-size: ${px_i_icon}px; }
 
-/* ---- text inputs (covers FloatField/IntField/PathField.edit subclasses of QLineEdit) ---- */
-QLineEdit, QPlainTextEdit {
-    min-height: ${ctl_h_sm}px; padding: 2px 8px;
-    border: 1px solid $mid; border-radius: ${radius_sm}px;
-    background: $base; color: $text; selection-background-color: $accent;
-    selection-color: $on_accent;
-}
 QLineEdit:focus, QPlainTextEdit:focus { border: 1px solid $accent; }
-QLineEdit:disabled { color: $text_disabled; background: $alt_base; }
-
-/* ---- combo box + its (separate top-level) popup. Do NOT null ::down-arrow (no arrow asset). ---- */
-QComboBox {
-    min-height: ${ctl_h_sm}px; padding: 2px 8px;
-    border: 1px solid $mid; border-radius: ${radius_sm}px; background: $base; color: $text;
-}
-QComboBox:hover { border-color: $mid_strong; }
 QComboBox:focus { border: 1px solid $accent; }
-QComboBox::drop-down { width: 22px; border: none; background: transparent; }
-QComboBox QAbstractItemView {
-    border: 1px solid $mid; border-radius: ${radius_sm}px;
-    background: $base; color: $text;
-    selection-background-color: $accent; selection-color: $on_accent; outline: 0;
-}
 
-/* ---- item views: the artifact browser's table, a QTreeWidget used flat. The app's only item view
-   besides the combo popup above, so these are all of it. Selection colour comes from $accent, which
-   is also QPalette.Highlight, so a custom-painted row would match. ---- */
 QTreeView {
-    border: 1px solid $mid; border-radius: ${radius_sm}px;
-    background: $base; alternate-background-color: $alt_base; color: $text;
+    border: 1px solid $rule_light; border-radius: ${px_radius}px;
+    background: $paper; alternate-background-color: $margin; color: $ink;
     selection-background-color: $accent; selection-color: $on_accent; outline: 0;
 }
 QTreeView::item { padding: 4px 6px; border: none; }
-QTreeView::item:hover { background: $button_hover; }
+QTreeView::item:hover { background: $hover_fill; }
 QTreeView::item:selected { background: $accent; color: $on_accent; }
-QHeaderView { background: transparent; border: none; }
 QHeaderView::section {
-    background: $alt_base; color: $text_2nd;
+    background: $margin; color: $ink_2;
     padding: 4px 6px; border: none;
-    border-right: 1px solid $mid; border-bottom: 1px solid $mid; font-weight: 600;
+    border-right: 1px solid $rule_light; border-bottom: 1px solid $rule_light; font-weight: 600;
 }
-QHeaderView::section:hover { color: $text; }
+QHeaderView::section:hover { color: $ink; }
 QHeaderView::section:last, QHeaderView::section:only-one { border-right: none; }
 
-/* ---- group box as a Fluent card ---- */
 QGroupBox {
-    background: $base; border: 1px solid $mid; border-radius: ${radius_md}px;
+    background: $paper; border: 1px solid $rule_light; border-radius: ${px_radius}px;
     margin-top: 14px; padding: 10px 12px 12px 12px; font-weight: 600;
 }
 QGroupBox::title {
     subcontrol-origin: margin; subcontrol-position: top left;
-    left: 12px; padding: 0 4px; background: $base; color: $text_2nd;
+    left: 12px; padding: 0 4px; background: $paper; color: $ink_2;
 }
 
-/* ---- tabs as a Fluent pivot (accent underline on the selected tab) ---- */
 QTabWidget::pane { border: none; }
 QTabBar { qproperty-drawBase: 0; }
 QTabBar::tab {
-    background: transparent; color: $text_2nd; border: none;
+    background: transparent; color: $ink_2; border: none;
     padding: 6px 14px; margin-right: 4px; border-bottom: 2px solid transparent;
 }
-QTabBar::tab:hover     { color: $text; }
-QTabBar::tab:selected  { color: $text; border-bottom: 2px solid $accent; }
-QTabBar::tab:disabled  { color: $text_disabled; }
+QTabBar::tab:hover     { color: $ink; }
+QTabBar::tab:selected  { color: $ink; border-bottom: 2px solid $accent; }
+QTabBar::tab:disabled  { color: $disabled_ink; }
 
-/* ---- progress bars ---- */
 QProgressBar {
-    border: none; border-radius: 3px; background: $alt_base; text-align: center; color: $text;
+    border: none; border-radius: 3px; background: $margin; text-align: center; color: $ink;
 }
 QProgressBar::chunk { border-radius: 3px; background: $accent; }
 
-/* ---- tool buttons (nav glyphs + help badge) ---- */
-QToolButton { border: none; background: transparent; border-radius: ${radius_sm}px; color: $text; }
-QToolButton:hover   { background: $button_hover; }
-QToolButton:pressed { background: $button_press; }
-QToolButton#navBack, QToolButton#navSettings { font-size: ${fs_nav_btn}px; padding: 2px 6px; }
+QToolButton { border: none; background: transparent; border-radius: ${px_radius}px; color: $ink; }
+QToolButton:hover   { background: $hover_fill; }
+QToolButton:pressed { background: $press_fill; }
+QToolButton#navBack, QToolButton#navSettings { font-size: ${px_i_nav}px; padding: 2px 6px; }
 QToolButton#navRunning {
-    font-size: ${fs_caption}px; padding: 2px 8px; color: $text_2nd;
-    border: 1px solid $mid; border-radius: ${radius_sm}px;
+    font-size: ${px_t_small}px; padding: 2px 8px; color: $ink_2;
+    border: 1px solid $field_line; border-radius: ${px_radius}px;
 }
-QToolButton#navRunning:hover { color: $text; border-color: $accent; }
+QToolButton#navRunning:hover { color: $ink; border-color: $accent; }
 QToolButton#helpBadge {
-    border: 1px solid $mid; border-radius: 8px; color: $text_2nd;
-    font-size: ${fs_badge}px; padding: 0px; background: transparent;
+    border: 1px solid $field_line; border-radius: 8px; color: $ink_2;
+    font-size: ${px_i_badge}px; padding: 0px; background: transparent;
 }
 QToolButton#helpBadge:hover { border-color: $accent; color: $accent; }
 
-/* ---- scroll bars: thin, no arrow buttons ---- */
-QScrollBar:vertical   { background: transparent; width: 12px; margin: 0; }
-QScrollBar:horizontal { background: transparent; height: 12px; margin: 0; }
-QScrollBar::handle:vertical   { background: $scrollbar; min-height: 28px; border-radius: 6px; margin: 2px; }
-QScrollBar::handle:horizontal { background: $scrollbar; min-width: 28px; border-radius: 6px; margin: 2px; }
-QScrollBar::handle:hover { background: $scrollbar_hover; }
-QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; background: none; border: none; }
-QScrollBar::add-page, QScrollBar::sub-page { background: none; }
-
-/* ---- menus (gear popover) ---- */
-QMenu { background: $base; border: 1px solid $mid; border-radius: ${radius_md}px; padding: 4px; }
-QMenu::item { padding: 6px 24px 6px 12px; border-radius: ${radius_sm}px; color: $text; }
+QMenu { background: $raised; border: 1px solid $field_line; border-radius: ${px_radius}px; padding: 4px; }
+QMenu::item { padding: 6px 24px 6px 12px; border-radius: ${px_radius}px; color: $ink; }
 QMenu::item:selected { background: $accent; color: $on_accent; }
-QMenu::separator { height: 1px; background: $mid; margin: 4px 8px; }
-
-/* ---- tooltips (help badge UX) ---- */
-QToolTip {
-    background: $tooltip_bg; color: $text; border: 1px solid $mid;
-    border-radius: ${radius_sm}px; padding: 4px 8px;
-}
+QMenu::separator { height: 1px; background: $rule_light; margin: 4px 8px; }
 """)
 
+# These rules serve the widgets of the old layout, and each leaves with its widget: every single selector of
+# the second template, in the sheet's order. They alone may name an object, or a property the rules that stay
+# do not use.
+INTERIM_SELECTORS = (
+    'QLabel[type="title"]', 'QLabel[type="subtitle"]', 'QLabel[type="heading"]', 'QLabel[type="caption"]',
+    "QPushButton:focus", 'QPushButton[accent="true"]', 'QPushButton[accent="true"]:hover',
+    'QPushButton[accent="true"]:pressed', 'QPushButton[accent="true"]:focus',
+    'QPushButton[accent="true"]:disabled', "QPushButton#iconButton", "QLineEdit:focus", "QPlainTextEdit:focus",
+    "QComboBox:focus", "QTreeView", "QTreeView::item", "QTreeView::item:hover", "QTreeView::item:selected",
+    "QHeaderView::section", "QHeaderView::section:hover", "QHeaderView::section:last",
+    "QHeaderView::section:only-one", "QGroupBox", "QGroupBox::title", "QTabWidget::pane", "QTabBar",
+    "QTabBar::tab", "QTabBar::tab:hover", "QTabBar::tab:selected", "QTabBar::tab:disabled", "QProgressBar",
+    "QProgressBar::chunk", "QToolButton", "QToolButton:hover", "QToolButton:pressed", "QToolButton#navBack",
+    "QToolButton#navSettings", "QToolButton#navRunning", "QToolButton#navRunning:hover", "QToolButton#helpBadge",
+    "QToolButton#helpBadge:hover", "QMenu", "QMenu::item", "QMenu::item:selected", "QMenu::separator")
 
-def _qss_vars(dark: bool, accent: "str | None" = None) -> dict:
-    t = tokens(dark, accent)
+# the icon font's glyph sizes at the ordinary text size; only rules of the old layout read them
+_GLYPH_PX = {"px_i_icon": 18, "px_i_nav": 20, "px_i_badge": 13}
+
+
+def _sheet_sizes() -> dict[str, int]:
+    """Every size the sheet writes, in pixels at the text size in force, under the name its placeholder has.
+    A height is what stands inside the border: the outer height less the two lines, and a field in error, whose
+    border is twice as heavy, gives up as much again in height and in padding, so it keeps its outer size. The
+    radius and the scroll bar with its handle do not grow with the text."""
+    size = SIZE
+    handle, handle_in, handle_r = size["scroll_handle"]
     return {
-        **t,
-        "radius_sm": RADIUS_SM,
-        "radius_md": RADIUS_MD,
-        "ctl_h": scaled(CTL_H),
-        "ctl_h_sm": scaled(CTL_H_SM),
-        # Type ramp, so the QSS sizes track the OS text setting instead of being frozen literals.
-        "fs_title": scaled(_OLD_TYPE["title"][0]),
-        "fs_subtitle": scaled(_OLD_TYPE["subtitle"][0]),
-        "fs_heading": scaled(_OLD_TYPE["heading"][0]),
-        "fs_caption": scaled(_OLD_TYPE["caption"][0]),
-        "fs_icon_btn": scaled(18),
-        "fs_nav_btn": scaled(20),
-        "fs_badge": scaled(13),
+        "px_t_title": scaled(TYPE["title"][0]), "px_t_head": scaled(TYPE["head"][0]),
+        "px_t_brand": scaled(TYPE["brand"][0]), "px_t_small": scaled(TYPE["small"][0]),
+        "px_btn_in": scaled(size["button_h"]) - 2,
+        "px_btn_pad": scaled(size["button_pad"]), "px_primary_pad": scaled(size["primary_pad"]),
+        "px_fld_in": scaled(size["field_h"]) - 2, "px_fld_in_err": scaled(size["field_h"]) - 4,
+        "px_fld_pad": scaled(size["field_pad"]), "px_fld_pad_err": scaled(size["field_pad"]) - 1,
+        "px_combo_l": scaled(size["combo_pad"][0]), "px_combo_r": scaled(size["combo_pad"][1]),
+        "px_marker": scaled(size["marker"]), "px_line_h": scaled(size["line_h"]),
+        "px_nav_h": scaled(size["nav_h"]), "px_nav_small": scaled(size["nav_h_small"]),
+        "px_nav_pad": scaled(size["nav_pad"]),
+        "px_check_gap": scaled(size["check_gap"]), "px_radio_gap": scaled(size["radio_gap"]),
+        "px_tip_v": scaled(size["tip_pad"][0]), "px_tip_h": scaled(size["tip_pad"][1]),
+        "px_radius": size["radius"], "px_bar": size["scroll_bar"],
+        "px_handle": handle, "px_handle_in": handle_in, "px_handle_r": handle_r,
+        **{name: scaled(px) for name, px in _GLYPH_PX.items()},
     }
 
 
-def build_qss(dark: bool, accent: "str | None" = None) -> str:
-    return _QSS.substitute(_qss_vars(dark, accent))
+def build_qss(dark: bool) -> str:
+    """The application's one style sheet for one theme, at the text size in force: the rules that stay, then
+    the rules of the old layout."""
+    names = {**tokens(dark), **_sheet_sizes()}
+    return _QSS.substitute(names) + _QSS_INTERIM.substitute(names)
