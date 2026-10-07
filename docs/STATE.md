@@ -1,15 +1,46 @@
 # PRISM — state
 
-**Last updated:** 2026-10-06, late (THE PLAN-AND-BUILD CHAT HAS STARTED: the plan for stage 1 of the window redesign is
-WRITTEN and AWAITS THE OWNER'S APPROVAL; nothing is built, and no file under `core/` or `tests/` has changed; the next
-paragraph says where it stands; the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+**Last updated:** 2026-10-07 (STAGE 1 OF THE WINDOW REDESIGN IS BEING BUILT: the owner approved its plan on 2026-10-07;
+Tasks 0, 1, 2, 3a and 3b are complete, all of them TESTS ONLY, so no file under `core/` has changed yet; the next
+paragraph is the build's state, the one after it the plan's story, and the design's own story is the paragraph that
+begins "THE REDESIGN CHAT HAS STARTED").
+
+**THE BUILD OF STAGE 1 (started 2026-10-07; the ledger `.superpowers/sdd/2026-10-06-window-redesign/progress.md` has
+every task's entry, ruling and gate line, and is the recovery map: trust it and `git log` over recollection).**
+**Done: Task 0** (the baseline fast gate at `24368c7`: 1188 passed, 1 skipped, 5 deselected, 203 warnings, 15 min 56 s
+on a quiet machine, the counts of `771a460`; 1194 items collected, the nine window suites 322 functions and 340 items;
+the "before" pictures of today's window, 50 of them, light and dark, taken with the window hidden on a scratch
+settings file and an empty scratch store, kept in the ledger's `stage-1/pictures/before/`: the picture recipe works);
+**Task 1** (`88eb7f3`: 26 unread `core.gui` import lines out of six suites, two docstrings corrected, a session guard
+on the two file-chooser statics with a teardown check, the static-dialog scan widened to `QInputDialog`; the
+carried-over list seeded, `carried-over.md` in the ledger, one row per window test); **Task 2** (`22cb301`: the new
+torch-free `tests/_dialogs.py`, one record of every box and one way to answer it, 57 tests moved onto it; afterwards
+three lines of the product were broken by hand and the three moved tests that pin them were seen to fail, then
+`git stash` took the faults out); **Task 3a** (`db15b42` and the fix `cd8464b`: `process_state` and `whole_program()`
+in `tests/_fixtures.py`; the one test that builds the whole program now puts back everything `build_app` sets on the
+process, and from this gate on the two hundred tests collected after it run without its leftovers, with no failure);
+**Task 3b** (`5f3640c` and the fix `4f4be89`: four builders, 157 constructions moved onto them, a standing scan that
+refuses a window, a part or a step built by hand). Every task had its review (opus) and one one-process fast gate,
+started together; **the last gate, at `4f4be89`: 1197 passed, 1 skipped, 5 deselected, 203 warnings, 17 min 32 s
+(not a quiet-machine time)**; after every gate the tree was clean, the real `Artifacts/` listing identical (428
+entries), the real `PRISM.ini` unchanged. **Rulings the controller made on the owner's behalf (each in the ledger with
+what it costs if wrong):** in Task 2, two lines of the product that give a refusal box its OK button and default
+(`core/gui/widgets/refusal_box.py:40-41`) are held by no assertion any more, and that stands, because the record says
+what a person would see and the toolkit shows OK as the default by itself; in Task 3a the helper gained a fifteenth
+key, the appearance object itself, after the review found its deletion unproven (the plan's registry corrected at
+`51e9e77`); in Task 3b the builders' own test was fixed so that it fails for a builder that refreshes the gates.
+**Open with the owner: Task 5**, the text-size test (Windows' slider to 150 % and back, about ten minutes, at a pause
+between two tasks): asked on 2026-10-07 and not yet answered; nothing waits on it before Task 6. **Next, in order:**
+Task 4 (the one file-chooser function: the first task that changes the product), Task 11a (what each plotting function
+draws, recorded; tests only), then Task 6 once Task 5 is done or declined, then 7, 8, 9, 10, the pictures for the owner
+(10p), 11b, 12 (E12, the stage's one engine change), 13 to 18, 19. **Engine changes built so far: none of E1–E12.**
 
 **THE WINDOW REDESIGN, PLAN AND BUILD (started 2026-10-06 from
 `docs/superpowers/prompts/2026-10-06-window-redesign-plan-and-build.md`; continue from that prompt, this paragraph and
 the ledger).** **Where it stands: the plan for stage 1, "the look's foundation", is
 `docs/superpowers/plans/2026-10-06-window-redesign-stage-1.md` (about 10,000 lines: a head with a plain-words section
 "For the owner", the rules every task keeps, the file map, the registry of shared names, 32 recorded departures; then
-23 task sections; then two appendices). It is NOT YET APPROVED by the owner and no task starts before it is.** Nineteen
+23 task sections; then two appendices). APPROVED by the owner on 2026-10-07, with no choice struck.** Nineteen
 implementer tasks and four controller tasks (the design estimated eleven), run in the order 0, 1, 2, 3a, 3b, 4, 11a, 6,
 7, 8, 9, 10, 10p, 11b, 12, 13, 14, 15, 16, 17, 18, 19, with Task 5 (the owner's hand) at the first quiet moment after
 Task 0 and at the latest before Task 6. **The owner's answers in this chat** (each in the ledger, two with the picture
