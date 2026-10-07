@@ -23,8 +23,10 @@ import pickle
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter
-from PySide6.QtWidgets import (QFileDialog, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView,
+from PySide6.QtWidgets import (QGraphicsPixmapItem, QGraphicsScene, QGraphicsView,
                                QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
+
+from ..file_chooser import choose_file
 
 _MIN_SCALE = 0.05
 _MAX_SCALE = 40.0
@@ -166,7 +168,7 @@ class ImageZoomWindow(QWidget):
             self.view.resetTransform()      # identity => one screen pixel per image pixel
 
     def _save(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save figure as", "", "PNG image (*.png)")
+        path = choose_file(self, "Save figure as", "", "PNG image (*.png)", save=True)
         if path:
             self._pixmap.save(path)
 

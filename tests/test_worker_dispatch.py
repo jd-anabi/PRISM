@@ -659,6 +659,137 @@ def test_only_the_dialog_helpers_own_tests_hold_a_raw_message_box():
                        + "\n  ".join(found))
 
 
+# ── the one file chooser ─────────────────────────────────────────────────────────────────────────
+def test_the_file_chooser_hands_its_title_start_and_filter_to_the_dialog(monkeypatch):
+    """``choose_file`` passes the parent, the title, the start value and the filter to the system's
+    dialog exactly as given, in that order and by position, asks for a file to save or to open as
+    ``save`` says, and returns the path alone. Left out, the start value and the filter are empty."""
+    import inspect
+    from PySide6.QtWidgets import QFileDialog, QWidget
+    from core.gui.file_chooser import choose_file
+
+    qt_app()
+    assert str(inspect.signature(choose_file)) == (
+        "(parent, title: str, start: str = '', filter: str = '', *, save: bool) -> str")
+    parent = QWidget()
+    calls = []
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (
+        calls.append(("save", a, k)) or ("C:/out/report.txt", "Text file (*.txt)")))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (
+        calls.append(("open", a, k)) or ("C:/in/trace.npy", "All files (*)")))
+    assert choose_file(parent, "Save what is shown", "prior_broad.txt", "Text file (*.txt)",
+                       save=True) == "C:/out/report.txt"
+    assert choose_file(parent, "Select file", "", "Data (*.csv *.npy);;All files (*)",
+                       save=False) == "C:/in/trace.npy"
+    assert choose_file(None, "Save figure as", save=True) == "C:/out/report.txt"
+    assert calls == [
+        ("save", (parent, "Save what is shown", "prior_broad.txt", "Text file (*.txt)"), {}),
+        ("open", (parent, "Select file", "", "Data (*.csv *.npy);;All files (*)"), {}),
+        ("save", (None, "Save figure as", "", ""), {})], calls
+
+
+def test_a_cancelled_file_chooser_gives_an_empty_path_and_open_or_save_must_be_said(monkeypatch):
+    """A cancelled dialog comes back as the empty string in both modes, which is what every caller
+    tests for. Whether to open or to save has no default and is said by name, so no call site can
+    ask for the wrong one by leaving it out or by position."""
+    import pytest
+    from PySide6.QtWidgets import QFileDialog
+    from core.gui.file_chooser import choose_file
+
+    qt_app()
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("", ""))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: ("", ""))
+    for save in (True, False):
+        path = choose_file(None, "Save animation", save=save)
+        assert path == "" and isinstance(path, str), (save, path)
+    with pytest.raises(TypeError):
+        choose_file(None, "Save animation")
+    with pytest.raises(TypeError):
+        choose_file(None, "Save animation", "", "", True)
+
+
+def test_an_answer_given_to_the_session_guard_reaches_through_the_file_chooser(monkeypatch, tmp_path):
+    """The session guard stands on the two static calls, and ``choose_file`` reaches them through
+    the class each time it runs. So an answer a test gives the guard is what the function returns,
+    to save and to open alike, with no stand-in for the function itself.
+
+    This is the one test here that opens a chooser with no stand-in of its own, so it first makes
+    sure the guard is there: Qt's own statics are built-ins and whatever stands in for them is
+    not, and a chooser opened on the real ones would stall the run instead of failing it."""
+    import inspect
+    from PySide6.QtWidgets import QFileDialog
+    from core.gui.file_chooser import choose_file
+    from tests._fixtures import answer_chooser
+
+    qt_app()
+    assert not (inspect.isbuiltin(QFileDialog.getSaveFileName)
+                or inspect.isbuiltin(QFileDialog.getOpenFileName)), \
+        "Qt's own chooser is on the class: the session guard is missing"   # BEFORE any chooser
+    picked = str(tmp_path / "picked.txt")
+    answer_chooser(monkeypatch, picked)
+    assert choose_file(None, "Save what is shown", "prior_broad.txt", "Text file (*.txt)",
+                       save=True) == picked
+    assert choose_file(None, "Select file", save=False) == picked
+
+
+def test_browse_asks_for_a_file_to_open_with_the_fields_own_filter(monkeypatch):
+    """The "Browse…" button of a path field asks for a file to OPEN, titled "Select file", with no
+    start value and the field's own filter. A cancelled chooser leaves the box as it was; a chosen
+    path replaces its text. Reached once through the button and once directly."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QFileDialog, QPushButton
+    from core.gui.widgets.labeled_inputs import PathField
+
+    qt_app()
+    calls, answers = [], iter(["", "C:/data/trace.npy"])
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        lambda *a, **k: calls.append(("open", a, k)) or (next(answers), ""))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *a, **k: calls.append(("save", a, k)) or ("", ""))
+    field = PathField()
+    field.edit.setText("kept.csv")
+    field.findChild(QPushButton).click()
+    assert field.value() == "kept.csv", "a cancelled chooser changed the box"
+    own = PathField("Traces (*.npy)")
+    own._browse()
+    assert own.value() == "C:/data/trace.npy"
+    assert calls == [("open", (field, "Select file", "", "Data (*.csv *.npy);;All files (*)"), {}),
+                     ("open", (own, "Select file", "", "Traces (*.npy)"), {})], calls
+    for built in (field, own):      # a field's own slot names the field, so its last name going
+        built.deleteLater()         # does not delete it: its own deferred delete is delivered here
+        QCoreApplication.sendPostedEvents(built, QEvent.DeferredDelete)
+
+
+def test_the_picture_viewer_saves_a_png_where_the_chooser_says(monkeypatch, tmp_path):
+    """The picture viewer's "Save As…" button asks for a file to SAVE, titled "Save figure as",
+    with no start value and the PNG filter, and writes the picture to the path it is given. A
+    cancelled chooser writes nothing."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtWidgets import QFileDialog
+    from core.gui.widgets.figure_window import ImageZoomWindow
+
+    qt_app()
+    pixmap = QPixmap(4, 4)
+    pixmap.fill()
+    window = ImageZoomWindow(pixmap, title="A figure")
+    out = tmp_path / "figure.png"
+    calls, answers = [], iter([str(out), ""])
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *a, **k: calls.append(("save", a, k)) or (next(answers), ""))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        lambda *a, **k: calls.append(("open", a, k)) or ("", ""))
+    window._save()
+    assert out.read_bytes()[:4] == b"\x89PNG", "the picture was not written where the chooser said"
+    out.unlink()
+    window._save()
+    assert not out.exists(), "a cancelled chooser wrote a file"
+    assert calls == [("save", (window, "Save figure as", "", "PNG image (*.png)"), {})] * 2, calls
+    window.deleteLater()            # two of its buttons' slots name the viewer: as for a path field
+    QCoreApplication.sendPostedEvents(window, QEvent.DeferredDelete)
+
+
+# ── the pane recorder ────────────────────────────────────────────────────────────────────────────
 def test_pane_capture_records_level_and_text_and_the_pane_stays_blank():
     """The window's refusals and warnings are asserted OFF THE PANE. PaneCapture stands in for BOTH of
     ``log_pane``'s channels on one panel -- ``append_line``, the panel's own messages, and

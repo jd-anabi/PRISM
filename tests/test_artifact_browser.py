@@ -1495,6 +1495,35 @@ def test_the_lineage_report_is_a_read_and_needs_a_complete_row(store, monkeypatc
         "a leftover and an empty selection must open no chooser"
 
 
+def test_the_two_save_buttons_ask_with_their_own_title_suggested_name_and_filter(store, monkeypatch):
+    """The browser's "Save…" and "Lineage report…" buttons each ask for a file to SAVE, under their
+    own title, with the text-file filter and a suggested file name built from the selected record:
+    its name, or its id when it has none. Every chooser is cancelled here, so nothing is written."""
+    from PySide6.QtWidgets import QFileDialog
+    from tests._fixtures import artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    named = _prior_artifact(store, cfg, name="ancestor")
+    bare = _prior_artifact(store, cfg, name="", seed=3)
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    calls = []
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *a, **k: calls.append(("save", a, k)) or ("", ""))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        lambda *a, **k: calls.append(("open", a, k)) or ("", ""))
+    for ref in (named.id, bare.id):
+        _select_ref(scr.table, ref)
+        scr._save_shown()
+        scr._lineage_report()
+    text = "Text file (*.txt)"
+    assert calls == [
+        ("save", (scr, "Save what is shown", "prior_ancestor.txt", text), {}),
+        ("save", (scr, "Save lineage report", "prior-ancestor-lineage.txt", text), {}),
+        ("save", (scr, "Save what is shown", f"prior_{bare.id}.txt", text), {}),
+        ("save", (scr, "Save lineage report", f"prior-{bare.id}-lineage.txt", text), {})], calls
+
+
 def test_the_lineage_button_is_disabled_without_a_complete_row(store):
     """btn_lineage must track the same condition its own handler guards on, so the button and the
     guard cannot disagree -- unlike btn_save, which is enabled off the pane's TEXT (something an

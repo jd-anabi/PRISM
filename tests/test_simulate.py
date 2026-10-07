@@ -416,6 +416,29 @@ def test_saving_mp4_without_ffmpeg_is_a_refusal_not_a_config_error(monkeypatch):
     assert CHOOSER_CALLS == [("save", "Save animation", "", "MP4 video (*.mp4);;GIF (*.gif)", "clip.mp4")]
 
 
+def test_save_video_asks_for_an_animation_file_and_a_cancel_exports_nothing(monkeypatch):
+    """The "Save video…" button asks for a file to SAVE, titled "Save animation", with no start
+    value and the two video formats as its filter. A cancelled chooser dispatches no export."""
+    import numpy as np
+    from PySide6.QtWidgets import QFileDialog
+    from core.gui.panels.simulate_panel import SimulatePanel
+    from tests._fixtures import build_part, qt_app
+
+    qt_app()
+    p = build_part(SimulatePanel)
+    p._record = [np.array([[0.0, 0.1], [1e-3, 0.2]])]
+    sent = []
+    p.dispatch = lambda *a, **k: sent.append(a)
+    calls = []
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *a, **k: calls.append(("save", a, k)) or ("", ""))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        lambda *a, **k: calls.append(("open", a, k)) or ("", ""))
+    p._save_video()
+    assert calls == [("save", (p, "Save animation", "", "MP4 video (*.mp4);;GIF (*.gif)"), {})], calls
+    assert sent == [], "a cancelled chooser exported something"
+
+
 def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(monkeypatch, tmp_path):
     """The panel used to dispatch ``max(1, frame_steps.value())`` and ``float(max(1, fps.value()))``
     and hand ``tobs.value()`` straight through. Every numeric box in this window returns 0 for a

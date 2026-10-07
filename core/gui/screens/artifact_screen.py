@@ -21,7 +21,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QVBoxLayout,
                                QWidget)
 
@@ -31,6 +31,7 @@ from core.refusals import NOTE_MAX_CHARS, Refusal, require_note
 
 from .. import settings
 from ..design import SPACE
+from ..file_chooser import choose_file
 from ..panels.base_panel import BasePanel
 from ..widgets.artifact_table import DEFAULT_SORT, ArtifactTable, columns_for
 from ..widgets.refusal_box import show_refusal
@@ -405,16 +406,16 @@ class ArtifactScreen(QWidget):
         """One half of the saveable run summary: what is on screen, to a file the operator picks.
 
         A FILE, never a store kind of its own -- a report DESCRIBES the store and must not be mistaken
-        for something the store holds. The dialog is QFileDialog.getSaveFileName, the same call
-        simulate_panel._save_video and figure_window use; cancelling returns "" and writes nothing.
+        for something the store holds. The file is chosen through the one file chooser
+        (core/gui/file_chooser.py), as simulate_panel._save_video and figure_window choose theirs;
+        cancelling returns "" and writes nothing.
         """
         text = self.detail.toPlainText()
         if not text:
             return                     # the button is disabled with nothing selected; belt and braces
         s = self.table.current_summary()
         suggested = f"{s.kind}_{(s.name or s.id) if s.complete else s.dir_name}.txt"
-        path, _ = QFileDialog.getSaveFileName(self, "Save what is shown", suggested,
-                                              "Text file (*.txt)")
+        path = choose_file(self, "Save what is shown", suggested, "Text file (*.txt)", save=True)
         if not path:
             return
         if not path.lower().endswith(".txt"):
@@ -460,9 +461,8 @@ class ArtifactScreen(QWidget):
             show_refusal(self, exc)
             self._set_status(exc.message, error=True)
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save lineage report",
-                                              f"{s.kind}-{s.name or s.id}-lineage.txt",
-                                              "Text file (*.txt)")
+        path = choose_file(self, "Save lineage report", f"{s.kind}-{s.name or s.id}-lineage.txt",
+                           "Text file (*.txt)", save=True)
         if not path:
             return
         if not path.lower().endswith(".txt"):

@@ -1,10 +1,11 @@
 """Small typed input widgets: the numeric fields and file pickers the GUI's forms are built from."""
 from PySide6.QtGui import QDoubleValidator, QIntValidator
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QPushButton, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QPushButton, QWidget
 
 from core.refusals import describe, refuse
 
 from ..design import FIELD_MIN_W, PATH_FIELD_MIN_W
+from ..file_chooser import choose_file
 
 # These classes set a validator and, now, a MINIMUM WIDTH. Qt's default QFormLayout policy on Windows
 # is FieldsStayAtSizeHint, so without a floor a numeric field rendered 3-6 characters wide: typing
@@ -102,7 +103,7 @@ class PathField(QWidget):
         layout.addWidget(browse)
 
     def _browse(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select file", "", self._filter)
+        path = choose_file(self, "Select file", "", self._filter, save=False)
         if path:
             self.edit.setText(path)
 

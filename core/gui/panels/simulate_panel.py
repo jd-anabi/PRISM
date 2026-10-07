@@ -14,7 +14,7 @@ import traceback
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QFormLayout, QGroupBox, QLabel, QPushButton)
+from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QLabel, QPushButton)
 
 from core.config import CELL_PATH, DT_EXP_S, T_MIN_EXP_S, VALID_MODELS
 from core.refusals import Refusal, require_at_least, require_positive
@@ -24,6 +24,7 @@ from .simulate_export import (estimate_frame_count, export_animation, export_str
 from .simulate_runner import build_stream_config, run_simulation_stream
 from .. import fields as gui_fields
 from .. import settings
+from ..file_chooser import choose_file
 from ..widgets.artifact_picker import ArtifactPicker
 from ..widgets.help_badge import add_help_row
 from ..widgets.labeled_inputs import FloatField, IntField
@@ -136,8 +137,7 @@ class SimulatePanel(BasePanel):
         if not self._record:
             self.log_pane.append_line("Run a stream first, then save it as a video.", "warning")
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save animation", "", "MP4 video (*.mp4);;GIF (*.gif)")
+        path = choose_file(self, "Save animation", "", "MP4 video (*.mp4);;GIF (*.gif)", save=True)
         if not path:
             return
         if not path.lower().endswith((".mp4", ".gif")):

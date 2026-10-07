@@ -980,6 +980,111 @@ def test_no_static_message_box_is_called_anywhere_under_core():
                        "the window may not open one:\n" + "\n".join(found))
 
 
+_CHOOSER_MODULE = "core/gui/file_chooser.py"
+
+
+def _file_dialog_uses(tree) -> list:
+    """``(lineno, spelling)`` for every place a parsed module names Qt's file dialog class: an
+    import of it under any alias, an attribute read off it however the class was reached
+    (``QFileDialog.getSaveFileName``, ``QtWidgets.QFileDialog.getOpenFileName``), and any other use
+    of the bare class (an instance built, the class handed on). A string or a comment that
+    mentions it is not one."""
+    out, read_through = [], set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            out += [(node.lineno, "import QFileDialog") for alias in node.names
+                    if alias.name.split(".")[-1] == "QFileDialog"]
+        elif isinstance(node, ast.Attribute):
+            owner = node.value
+            name = owner.attr if isinstance(owner, ast.Attribute) else getattr(owner, "id", None)
+            if name == "QFileDialog":
+                out.append((node.lineno, f"QFileDialog.{node.attr}"))
+                read_through.add(id(owner))
+    for node in ast.walk(tree):
+        if (isinstance(node, (ast.Name, ast.Attribute)) and id(node) not in read_through
+                and (node.attr if isinstance(node, ast.Attribute) else node.id) == "QFileDialog"):
+            out.append((node.lineno, "QFileDialog"))
+    return sorted(out)
+
+
+def test_only_the_one_chooser_module_names_the_file_dialog_class():
+    """Every file chooser PRISM's own code opens goes through ONE function,
+    ``core.gui.file_chooser.choose_file``, so that one guard can answer all of them.
+
+    The suites replace two static calls for the whole session, ``QFileDialog.getSaveFileName`` and
+    ``QFileDialog.getOpenFileName``. Nothing else of the class is replaced: an instance's ``exec``
+    and every other static would open a real dialog, which offscreen STALLS the run instead of
+    failing it. So (1) outside the one module nothing under the code roots names the class at
+    all, by import, static or instance; and (2) inside it the class is imported once and each of
+    the two answered statics is read exactly once, in the body of ``choose_file``. A static bound
+    to a name when the module is imported would go on calling whatever stood on the class at that
+    moment: the real dialog if the module is imported before the guard is installed, otherwise
+    the guard's own function or one test's stand-in, which no later test could then replace. The
+    scan reads the code this repository holds: the toolbar matplotlib gives a popped-out figure
+    opens a save chooser from matplotlib's own code, which no scan here sees, and the guard
+    answers that one because it stands on the static itself.
+
+    The scanner is checked on a SNIPPET first, so the walk cannot pass by finding nothing."""
+    from tests._fixtures import CODE_FILES, CODE_ROOTS
+    snippet = ast.parse(
+        'from PySide6.QtWidgets import QFileDialog\n'                      # 1: the import itself
+        'from PySide6.QtWidgets import QFileDialog as Chooser\n'           # 2: under another name
+        'path, _ = QFileDialog.getSaveFileName(self, "t", "", "f")\n'     # 3: an answered static
+        'path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "t")\n'    # 4: through the module
+        'folder = QFileDialog.getExistingDirectory(self, "t")\n'          # 5: a static nobody answers
+        'dialog = QFileDialog(self)\n'                                     # 6: an instance
+        'dialog.exec()\n'
+        'path = choose_file(self, "t", "", "f", save=True)\n'             # what is wanted
+        'note = "QFileDialog.getSaveFileName in a string is no call"\n')
+    assert _file_dialog_uses(snippet) == [
+        (1, "import QFileDialog"), (2, "import QFileDialog"), (3, "QFileDialog.getSaveFileName"),
+        (4, "QFileDialog.getOpenFileName"), (5, "QFileDialog.getExistingDirectory"),
+        (6, "QFileDialog")], _file_dialog_uses(snippet)
+
+    files = [py for sub in CODE_ROOTS for py in sorted((REPO / sub).rglob("*.py"))]
+    files += [REPO / name for name in CODE_FILES]
+    assert len(files) >= 20, f"the scan walked only {len(files)} files -- CODE_ROOTS is {CODE_ROOTS}"
+    found = []
+    for py in files:
+        rel = py.relative_to(REPO).as_posix()
+        if rel == _CHOOSER_MODULE:
+            continue
+        for ln, spelling in _file_dialog_uses(ast.parse(py.read_text(encoding="utf-8"))):
+            found.append(f"{rel}:{ln}: {spelling}")
+    assert not found, ("Qt's file dialog is named outside " + _CHOOSER_MODULE + ". The suites answer "
+                       "the two chooser calls that module makes and nothing else, so any other "
+                       "chooser opens for real and stalls the run. Call "
+                       "core.gui.file_chooser.choose_file instead:\n" + "\n".join(found))
+    chooser = ast.parse((REPO / _CHOOSER_MODULE).read_text(encoding="utf-8"))
+    fn = next(n for n in chooser.body if isinstance(n, ast.FunctionDef) and n.name == "choose_file")
+    in_body = sorted(s for stmt in fn.body for _ln, s in _file_dialog_uses(stmt))
+    assert in_body == ["QFileDialog.getOpenFileName", "QFileDialog.getSaveFileName"], in_body
+    everywhere = sorted(s for _ln, s in _file_dialog_uses(chooser))
+    assert everywhere == in_body + ["import QFileDialog"], everywhere
+
+
+def test_the_chooser_module_costs_only_the_toolkit():
+    """Two torch-free widget modules call the chooser (the typed input fields and the pop-out
+    figure windows), so the module they import must cost the toolkit and nothing else: its import
+    statements name ``PySide6.QtWidgets`` alone, and a fresh interpreter that imports it holds
+    neither torch nor any module of PRISM's that reaches torch. The subprocess is the real pin: in
+    this process torch is long since imported."""
+    src = (REPO / _CHOOSER_MODULE).read_text(encoding="utf-8")
+    imported = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Import):
+            imported |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module)
+    assert imported == {"PySide6.QtWidgets"}, imported
+    probe = ("import sys; import core.gui.file_chooser; "
+             "heavy = ('core.config', 'core.gui.fields', 'core.registry', 'core.Helpers.file_manager'); "
+             "bad = sorted(m for m in sys.modules if m == 'torch' or m.startswith('torch.') or m in heavy); "
+             "sys.exit(repr(bad) if bad else 0)")
+    r = subprocess.run([sys.executable, "-c", probe], cwd=str(REPO), capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+
+
 def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_registered():
     """The tool's half of the field-key rule, and the closure of the registry. A Refusal names its
     field by a key and says nothing about flags; the tool turns the key into a flag with ONE table,
