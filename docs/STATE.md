@@ -1,8 +1,67 @@
 # PRISM — state
 
-**Last updated:** 2026-10-06 (the window redesign's design is written and APPROVED by the owner; nothing is built; the
-plan and the build continue in a new chat from `docs/superpowers/prompts/2026-10-06-window-redesign-plan-and-build.md`;
-the paragraph is the one that begins "THE REDESIGN CHAT HAS STARTED", below). **THE CONSOLE RETRAIN IS STOPPED AND THE ORDER OF WORK HAS CHANGED (owner,
+**Last updated:** 2026-10-06, late (THE PLAN-AND-BUILD CHAT HAS STARTED: the plan for stage 1 of the window redesign is
+WRITTEN and AWAITS THE OWNER'S APPROVAL; nothing is built, and no file under `core/` or `tests/` has changed; the next
+paragraph says where it stands; the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**THE WINDOW REDESIGN, PLAN AND BUILD (started 2026-10-06 from
+`docs/superpowers/prompts/2026-10-06-window-redesign-plan-and-build.md`; continue from that prompt, this paragraph and
+the ledger).** **Where it stands: the plan for stage 1, "the look's foundation", is
+`docs/superpowers/plans/2026-10-06-window-redesign-stage-1.md` (about 10,000 lines: a head with a plain-words section
+"For the owner", the rules every task keeps, the file map, the registry of shared names, 32 recorded departures; then
+23 task sections; then two appendices). It is NOT YET APPROVED by the owner and no task starts before it is.** Nineteen
+implementer tasks and four controller tasks (the design estimated eleven), run in the order 0, 1, 2, 3a, 3b, 4, 11a, 6,
+7, 8, 9, 10, 10p, 11b, 12, 13, 14, 15, 16, 17, 18, 19, with Task 5 (the owner's hand) at the first quiet moment after
+Task 0 and at the latest before Task 6. **The owner's answers in this chat** (each in the ledger, two with the picture
+it was asked from): (1) a figure's line colours number **seven** (ink, blue, vermilion, green, orange, sky blue
+#56B4E9, purple #CC79A7): the design's item 16, asked from a picture of the thirteen-curve calibration figure drawn four
+ways; the eighth colour of the standard colour-blind-safe set, yellow, measures 1.32 to 1 on a white page; (2) **the
+separate design for saving the fit as it goes is made between stages 2 and 3**, and the build pauses there; (3) the
+commas that group a whole number arrive **page by page** (built and tested in stage 1, off by default; today's forms
+keep plain digits until each is rebuilt); (4) console text is set in **Cascadia Mono** (then Consolas, then Courier
+New), asked from a picture; its licence would allow bundling the file, which was not asked and is not planned.
+**The design gained section 8, "Deviations recorded while planning and building"** (32 rows, the same rows under the
+same numbers as the plan's head, each with what it costs if it is wrong), and its parts 4, 11 and 13 open with a
+pointer to it. **What the reading found that the design did not know** (all carried by the plan): 13.2.1's order
+cannot be followed to the letter (lettering and the sheet remove what the two appearance ticks pass, so the ticks go
+first); the one test that calls `build_app` (`tests/test_user_models.py:1247`) leaves the style, the font, the figure
+settings and the error hook on the process for the 200 tests after it, so part 4.1's "none of it runs under the suites"
+is wrong and Task 3a makes that test put back what it sets; **today a typed `6,5` in a decimal box silently becomes 65
+(both Qt validators rewrite the text when editing ends, in every regional setting; the memory-limit box among them)**,
+which stage 1's number-fields task ends on every form of today; off-screen (the suites' platform) there are no system
+fonts, so the book face and the fixed-width face are seen only on the real platform; the fast gate already draws
+through 42 of E12's 50 colour sites, and eight are drawn by no test today (Task 11a records what every plotting
+function draws before any colour changes); the icon-engine clone of the sample ends the process when a copy of an icon
+is changed; a raise under a live painter, and a widget built with no application, each end a pytest process with no
+summary. **How the plan was made:** three multi-agent passes, all read-only on the repository and none running pytest,
+torch or the window (scratch PySide6 and matplotlib probes only): 23 agents read the look part against the code and
+listed the 322 window tests (ten readers, a second reader behind each, a gaps report); 39 drafted (a drafter and a
+second reader per task, three cross-checks of order, interfaces and coverage); 38 revised to the controller's rulings
+(a reviser and a checker per draft, the head's shared parts, a last consistency check). **Still open with the owner:**
+the plan's approval, whose "For the owner" section lists the choices the owner has not seen (the order inside the
+stage; that on this computer the window opens DARK after the appearance task, because the stored mode is "Auto (time of
+day)", which goes and is then read as "Follow Windows"; the comma and the mouse-wheel behaviour on today's forms; the
+focus ring on every control; no row for a real screen written in stage 1; pictures taken at three moments with the real
+window built hidden on scratch settings and an empty scratch store); Task 5 needs the owner's hand (Windows' text-size
+slider to 150 % and back, about ten minutes) or the owner's choice of the stated fallback; corrected wording for two
+counts in `CLAUDE.md` (the session guards at `:66`, the suites at `:240`) is owed at the stage's exit, and `CLAUDE.md`
+is not edited before the owner approves it; the replacement wording for its two rules (what is remembered; the launch
+line) is still to be approved before the code that changes them lands (stages 4 and 3). **The ledger** is the
+gitignored `.superpowers/sdd/2026-10-06-window-redesign/`: `progress.md` (the answers, what was measured for each);
+`stage-1/understanding/` (the eleven reports and `gaps.md`); `stage-1/plan-skeleton.md`, `plan-rulings.md` (the plan's
+OWN rulings, which the controller's task sections cite as "ruling B3" and the like), `plan-head.md`;
+`stage-1/plan-drafts/` (every draft with its second reader's, reviser's and checker's records, the three cross-checks,
+`last-check.md`); `stage-1/plan-notes/` (each task's notes for the controller, cut from the plan when it was
+assembled); `questions/` (the two pictures). The scratch tools the plan leans on are under
+`C:\Users\J\AppData\Local\Temp\prism-redesign-scratch\`, which Windows may empty: each task's Files block says what
+its tool computes, so it can be written again there (never under `.superpowers/` or `docs/`). **Engine changes built
+so far: none of E1–E12. Gates run in this chat: none (documents only); the fast gate has not run since `771a460`, and
+Task 0 is the baseline.** **Next, in order:** the owner's approval of the plan; Task 0 (the baseline gate, the collected
+ids, the "before" pictures); Task 5 with the owner; Task 1 onward, each with its review and one one-process fast gate
+started together; pictures to the owner after Task 10 (Task 10p) and at the exit; then stage 2's plan from the parts as
+they stand; then the pause for the design of saving the fit.
+
+**THE CONSOLE RETRAIN IS STOPPED AND THE ORDER OF WORK HAS CHANGED (owner,
 2026-10-05).** The retrain started from PowerShell on 1 October reached a COMPLETE simulation cache (10,000 batches;
 gate 3 passed, 40.1 % against P = 37.9 %) and 62 epochs of the fit (61–63 minutes each; the capture's last count is 61,
 one behind) before the owner stopped it on
@@ -193,7 +252,8 @@ run is building; staging a failed save). **The audit's list has grown to ninetee
 good"), AND THE WORK CONTINUES IN A NEW CHAT, from `docs/superpowers/prompts/2026-10-06-window-redesign-plan-and-build.md`.**
 Nothing was struck, so the seventeen choices and the appendix stand as the design gives them (among them: no plan file
 is shipped by the redesign; "n of 3" for a posterior trained without the frequency response; the window's own tries
-only after an out-of-memory failure). **Still open, to put to the owner one at a time:** (a) the design's item 16, five
+only after an out-of-memory failure). **Still open when that chat ended (since ANSWERED in the plan-and-build chat, the paragraph near the top: (a) seven
+colours, (b) between stages 2 and 3; (c) still stands):** (a) the design's item 16, five
 figure colours or eight — it was put as a recommendation (eight) and not answered, and stage 1 needs it; (b) WHEN the
 separate design for saving the fit as it goes is made — the owner asked for it as its own design, to accept or leave,
 and has not said when; the design chat recommends before stage 3 is planned at the latest, since stage 3 builds what
