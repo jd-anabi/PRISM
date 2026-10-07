@@ -1254,7 +1254,7 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
         window.close()
     changed = {key for key in found if during[key] != found[key]}
     assert {"sheet", "palette", "font", "figure settings", "error hook", "appearance",
-            "default store", "root log handler"} <= changed, \
+            "appearance objects", "default store", "root log handler"} <= changed, \
         f"the whole program changed only {sorted(changed)}: the comparison below would prove nothing"
     after = process_state(app)
     left = sorted(key for key in found if after[key] != found[key])

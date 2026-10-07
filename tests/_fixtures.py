@@ -776,6 +776,10 @@ def process_state(app) -> dict:
         "names": (app.organizationName(), app.applicationName()),
         "colour scheme": app.styleHints().colorScheme(),
         "appearance": theming.active_appearance(),
+        # The object itself, beside the pointer to it: one that was made stays a child of the
+        # application, listening for a change of colour scheme, until it is deleted.
+        "appearance objects": len(app.findChildren(theming.Appearance,
+                                                   options=Qt.FindDirectChildrenOnly)),
         "error hook": sys.excepthook,
         "figure settings": {key: repr(value) for key, value in matplotlib.rcParams.items()},
         "quiet segment bar": config.QUIET_SEGMENT_BAR,
