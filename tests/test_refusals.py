@@ -890,14 +890,18 @@ def _field_key_literals(tree) -> list:
     return out
 
 
-# The five QMessageBox class methods that open a box WITHOUT an instance. They are C++ statics, so
-# patching the instance method ``exec`` (tests/conftest.py::_no_modal_dialogs) does not reach them.
-_STATIC_BOXES = ("warning", "information", "question", "critical", "about")
+# The class methods that open a modal dialog WITHOUT an instance, by class. They are C++ statics, so
+# patching an instance's ``exec`` (tests/conftest.py::_no_modal_dialogs) does not reach them.
+_STATIC_DIALOGS = {
+    "QMessageBox": ("warning", "information", "question", "critical", "about"),
+    "QInputDialog": ("getText", "getInt", "getDouble", "getItem", "getMultiLineText"),
+}
 
 
-def _static_message_box_calls(tree) -> list:
-    """``(lineno, spelling)`` for every ``QMessageBox.<static>(...)`` call in a parsed module,
-    however the class was imported (``QMessageBox.warning``, ``QtWidgets.QMessageBox.warning``).
+def _static_dialog_calls(tree) -> list:
+    """``(lineno, spelling)`` for every ``<class>.<static>(...)`` call in a parsed module whose class
+    and static are named in ``_STATIC_DIALOGS``, however the class was imported
+    (``QMessageBox.warning``, ``QtWidgets.QInputDialog.getText``).
 
     An INSTANCE call -- ``box = QMessageBox(self)`` then ``box.exec()`` -- is not one of these: the
     receiver has to be the class name itself."""
@@ -906,23 +910,26 @@ def _static_message_box_calls(tree) -> list:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
-        if node.func.attr not in _STATIC_BOXES:
-            continue
         owner = node.func.value
         name = owner.attr if isinstance(owner, ast.Attribute) else getattr(owner, "id", None)
-        if name == "QMessageBox":
-            out.append((node.lineno, f"QMessageBox.{node.func.attr}"))
+        if node.func.attr in _STATIC_DIALOGS.get(name, ()):
+            out.append((node.lineno, f"{name}.{node.func.attr}"))
     return out
 
 
 def test_no_static_message_box_is_called_anywhere_under_core():
     """The guard tests/conftest.py ASSERTS AS FACT, finally asserted.
 
-    ``_no_modal_dialogs`` patches the INSTANCE method ``QMessageBox.exec``. The five statics are C++
-    class methods and escape it, and offscreen each spins a nested event loop nothing ever closes --
-    so a static added anywhere under ``core/`` STALLS the suite past the ten-minute tool-call limit
-    instead of failing it. No timeout plugin is installed; the failure a reviewer would have to
-    diagnose is a stack dump of a stuck process.
+    ``_no_modal_dialogs`` patches the INSTANCE method ``QMessageBox.exec``. ``QMessageBox``'s five
+    statics are C++ class methods and escape it, and offscreen each spins a nested event loop nothing
+    ever closes -- so a static added anywhere under ``core/`` STALLS the suite past the ten-minute
+    tool-call limit instead of failing it. No timeout plugin is installed; the failure a reviewer
+    would have to diagnose is a stack dump of a stuck process.
+
+    ``QInputDialog``'s five statics (getText, getInt, getDouble, getItem, getMultiLineText) are
+    refused for the same reason and one more: nothing guards an input dialog at all, static or
+    instance, so the window may not open one. The scan reads the statics only: an input dialog built
+    as an instance and shown with ``exec`` would stall the same way and is not seen here.
 
     ``main_window.py``'s last three statics were converted to instance boxes, and then "Nothing
     under core/ calls the statics any more ... so this guard covers every box the GUI shows" went
@@ -945,9 +952,19 @@ def test_no_static_message_box_is_called_anywhere_under_core():
         'box.setText("m")\n'
         'box.exec()\n'
         'logging.warning("not a dialog at all")\n'           # 4: the same attribute name elsewhere
-        'self.log_pane.information("nor this")\n')
-    assert [s for _ln, s in _static_message_box_calls(snippet)] == [
-        "QMessageBox.warning", "QMessageBox.question"], _static_message_box_calls(snippet)
+        'self.log_pane.information("nor this")\n'
+        'name, ok = QInputDialog.getText(self, "t", "l")\n'           # 5: an input dialog's static
+        'QtWidgets.QInputDialog.getItem(self, "t", "l", items)\n'     # 6: through the module
+        'n, ok = QInputDialog.getInt(self, "t", "l")\n'
+        'x, ok = QInputDialog.getDouble(self, "t", "l")\n'
+        'text, ok = QInputDialog.getMultiLineText(self, "t", "l")\n'
+        'QMessageBox.getText(self)\n'                        # 7: each class has its own statics
+        'QInputDialog.warning(self)\n'
+        'self.name_edit.getText()\n')                        # 8: the same name on a widget
+    assert [s for _ln, s in _static_dialog_calls(snippet)] == [
+        "QMessageBox.warning", "QMessageBox.question", "QInputDialog.getText", "QInputDialog.getItem",
+        "QInputDialog.getInt", "QInputDialog.getDouble", "QInputDialog.getMultiLineText"], \
+        _static_dialog_calls(snippet)
 
     root = Path(__file__).resolve().parents[1]
     files = [py for sub in CODE_ROOTS for py in sorted((root / sub).rglob("*.py"))]
@@ -955,11 +972,12 @@ def test_no_static_message_box_is_called_anywhere_under_core():
     assert len(files) >= 20, f"the scan walked only {len(files)} files -- CODE_ROOTS is {CODE_ROOTS}"
     found = []
     for py in files:
-        for ln, spelling in _static_message_box_calls(ast.parse(py.read_text(encoding="utf-8"))):
+        for ln, spelling in _static_dialog_calls(ast.parse(py.read_text(encoding="utf-8"))):
             found.append(f"{py.relative_to(root)}:{ln}: {spelling}")
-    assert not found, ("a static QMessageBox call escapes tests/conftest.py's dialog guard and HANGS "
-                       "the offscreen suite instead of failing it. Build the box as an instance and "
-                       "show it with .exec():\n" + "\n".join(found))
+    assert not found, ("a static dialog call escapes tests/conftest.py's dialog guard and HANGS the "
+                       "offscreen suite instead of failing it. A message box is built as an instance "
+                       "and shown with .exec(); nothing guards a QInputDialog, static or instance, so "
+                       "the window may not open one:\n" + "\n".join(found))
 
 
 def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_registered():

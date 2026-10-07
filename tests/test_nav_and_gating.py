@@ -31,12 +31,6 @@ matplotlib.use("Agg")                                            # match the app
 import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
-from core.gui.panels.base_panel import BasePanel                  # noqa: E402
-from core.gui.streams import redirect_streams                     # noqa: E402
-from core.gui.vt import StreamRouter, parse_bar                   # noqa: E402
-from core.gui.widgets.log_pane import LogPane                     # noqa: E402
-from core.gui.widgets.progress_pane import ProgressPane           # noqa: E402
-from core.gui.worker import WorkerSignals                         # noqa: E402
 from tests._fixtures import qt_app                                # noqa: E402
 import contextlib                                                  # noqa: E402
 import pytest                                                      # noqa: E402
@@ -172,9 +166,9 @@ def test_fdt_panel_guard_translates_model_error_and_gate_admits_builtins(monkeyp
 def test_an_unparseable_cell_does_not_brick_the_gui():
     """Dropping a cell into Resources/Cells/<model>/ that cli.parse_cell cannot read makes it raise a
     bare ValueError (NOT a UnitParseError). CrossValPanel prefills from parse_cell in __init__, so
-    that exception used to escape CrossValPanel() -> MainWindow() -> build_app(), and
-    `python -m core.gui` died before the window ever appeared -- before app.py's excepthook was even
-    installed.
+    the panel has to catch that itself: a cell file that cannot be parsed must turn the prefill
+    label into a line saying so, and must never raise out of the panel's constructor, where one bad
+    file would cost the user every other cell the panel could still show.
 
     The probe used to be a cell with no sibling bounds file, which is no longer unparseable: a cell
     without a sibling now resolves to the model's shared master.txt (cli.resolve_bounds_for_cell), so
@@ -2656,9 +2650,9 @@ def test_selecting_a_saved_run_describes_it_and_re_opens_its_figures(tmp_path):
     touch the figure stack while a run is live: the stack then holds the figures the watcher is
     landing, and clearing it would delete the live run's output to show an older run's. (2) A record
     the store cannot read must degrade to a line in the label, never raise -- this slot runs inside
-    __init__ at every launch, and an exception there escapes CrossValPanel() -> MainWindow() ->
-    build_app() before app.py has installed its excepthook, so a single unreadable record would leave
-    the application unable to launch at all."""
+    the panel's __init__, so an exception there is an exception out of the panel's constructor, and
+    a single unreadable record would then stop the panel from being built at all, taking every
+    readable record's line and figures with it."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.panels.fdt_panel import FdtPanel

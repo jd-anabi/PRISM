@@ -29,11 +29,6 @@ import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
 from core.gui.panels.base_panel import BasePanel                  # noqa: E402
-from core.gui.streams import redirect_streams                     # noqa: E402
-from core.gui.vt import StreamRouter, parse_bar                   # noqa: E402
-from core.gui.widgets.log_pane import LogPane                     # noqa: E402
-from core.gui.widgets.progress_pane import ProgressPane           # noqa: E402
-from core.gui.worker import WorkerSignals                         # noqa: E402
 from tests._fixtures import qt_app, pump                          # noqa: E402
 import contextlib                                                  # noqa: E402
 
@@ -401,10 +396,10 @@ def test_saving_mp4_without_ffmpeg_is_a_refusal_not_a_config_error(monkeypatch):
     box, so the informative line is empty and the log line is the sentence alone. Nothing is
     exported."""
     import numpy as np
-    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    from PySide6.QtWidgets import QMessageBox
     from core.gui.panels import simulate_panel as sim_mod
     from core.gui.panels.simulate_panel import SimulatePanel
-    from tests._fixtures import SHOWN, PaneCapture, qt_app
+    from tests._fixtures import CHOOSER_CALLS, SHOWN, PaneCapture, answer_chooser, qt_app
 
     qt_app()
     p = SimulatePanel()
@@ -413,7 +408,7 @@ def test_saving_mp4_without_ffmpeg_is_a_refusal_not_a_config_error(monkeypatch):
     p.dispatch = lambda *a, **k: sent.append(a)
     pane = PaneCapture(p)
     monkeypatch.setattr(sim_mod, "ffmpeg_available", lambda: False)
-    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("clip.mp4", ""))
+    answer_chooser(monkeypatch, "clip.mp4")
     SHOWN.clear()
     p._save_video()
     box = SHOWN[-1]
@@ -423,6 +418,7 @@ def test_saving_mp4_without_ffmpeg_is_a_refusal_not_a_config_error(monkeypatch):
     assert box.informativeText() == "" and box.detailedText() == ""
     assert pane.lines[-1] == ("warning", box.text()), pane.lines
     assert sent == [], "an MP4 export was dispatched without ffmpeg"
+    assert CHOOSER_CALLS == [("save", "Save animation", "", "MP4 video (*.mp4);;GIF (*.gif)", "clip.mp4")]
 
 
 def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(monkeypatch, tmp_path):
@@ -446,7 +442,7 @@ def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(mon
     from core.gui import fields as gui_fields
     from core.gui.panels import simulate_panel as sim_mod
     from core.gui.panels.simulate_panel import SimulatePanel
-    from tests._fixtures import SHOWN, qt_app
+    from tests._fixtures import CHOOSER_CALLS, SHOWN, answer_chooser, qt_app
 
     qt_app()
     cell = tmp_path / "cell.txt"
@@ -488,15 +484,15 @@ def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(mon
 
     # the export path reads the same box and must refuse it the same way
     import numpy as np
-    from PySide6.QtWidgets import QFileDialog
     p._record = [np.array([[0.0, 0.1], [1e-3, 0.2]])]
     monkeypatch.setattr(sim_mod, "ffmpeg_available", lambda: True)
-    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("clip.gif", ""))
+    answer_chooser(monkeypatch, "clip.gif")
     p.fps.setText("")
     SHOWN.clear()
     p._save_video()
     assert SHOWN[-1].windowTitle() == "Check your inputs"
     assert sent == [], "an export was dispatched with a blank frame rate"
+    assert CHOOSER_CALLS == [("save", "Save animation", "", "MP4 video (*.mp4);;GIF (*.gif)", "clip.gif")]
 
     # the two new boxes are named on this screen, and T_obs names BOTH places it appears
     assert gui_fields.fix_sentence("frame_steps") == \

@@ -28,7 +28,6 @@ matplotlib.use("Agg")                                            # match the app
 import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
-from core.gui.panels.base_panel import BasePanel                  # noqa: E402
 from core.gui.streams import redirect_streams                     # noqa: E402
 from core.gui.vt import StreamRouter, parse_bar                   # noqa: E402
 from core.gui.widgets.log_pane import LogPane                     # noqa: E402

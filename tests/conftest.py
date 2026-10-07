@@ -196,3 +196,37 @@ def _clear_shown():
     from tests._fixtures import SHOWN
     SHOWN.clear()
     yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_file_choosers():
+    """Offscreen a file chooser stalls the run exactly as a message box does, and QFileDialog's
+    statics are not reached by a patched ``exec``. For the whole session the two the window calls,
+    getSaveFileName and getOpenFileName, are tests/_fixtures.chooser_guard: the call is recorded in
+    CHOOSER_CALLS and returns as cancelled unless the test answered it with answer_chooser. A test's
+    own fake layered with monkeypatch wins while installed, and its undo puts this guard back.
+    The save button of matplotlib's toolbar in a popped-out figure calls the same getSaveFileName,
+    so that chooser is covered too. Not covered: the directory and several-files choosers, which
+    nothing under core/ calls, and that toolbar's other dialogs, which matplotlib opens through
+    static calls of its own -- a test must not press the buttons that lead to them."""
+    from PySide6.QtWidgets import QFileDialog
+    from tests._fixtures import chooser_guard
+    mp = pytest.MonkeyPatch()
+    mp.setattr(QFileDialog, "getSaveFileName", chooser_guard("save"))
+    mp.setattr(QFileDialog, "getOpenFileName", chooser_guard("open"))
+    yield
+    mp.undo()
+
+
+@pytest.fixture(autouse=True)
+def _every_file_chooser_is_answered():
+    """CHOOSER_CALLS holds this test's choosers only, and a chooser the test did not answer FAILS it
+    here, at teardown. The guard itself cannot: it runs inside a clicked slot, where a raise never
+    reaches the test."""
+    from tests._fixtures import CHOOSER_CALLS, check_choosers_answered
+    CHOOSER_CALLS.clear()
+    yield
+    try:
+        check_choosers_answered()
+    finally:
+        CHOOSER_CALLS.clear()

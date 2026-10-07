@@ -31,11 +31,8 @@ from tqdm import tqdm                                             # noqa: E402
 from core.artifacts.store import KIND_DIRS, Summary                # noqa: E402
 from core.gui.panels.base_panel import BasePanel                  # noqa: E402
 from core.gui.streams import redirect_streams                     # noqa: E402
-from core.gui.vt import StreamRouter, parse_bar                   # noqa: E402
 from core.gui.widgets import artifact_table as at                 # noqa: E402
 from core.gui.widgets.artifact_table import ArtifactTable, cells_for, columns_for   # noqa: E402
-from core.gui.widgets.log_pane import LogPane                     # noqa: E402
-from core.gui.widgets.progress_pane import ProgressPane           # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
 from tests._fixtures import qt_app, pump                          # noqa: E402
 import contextlib                                                  # noqa: E402
@@ -356,6 +353,74 @@ def test_an_unexpected_modal_is_recorded_in_shown_and_returns_zero(monkeypatch):
     assert QMessageBox().exec() == 7 and SHOWN == [box], "a test's own fake must win while installed"
     monkeypatch.undo()
     assert QMessageBox().exec() == 0 and len(SHOWN) == 2, "the session guard must be back after undo"
+
+
+def test_an_unanswered_file_chooser_is_recorded_returns_cancelled_and_fails_the_check(request):
+    """A file chooser is the second thing that stalls an offscreen run: QFileDialog's statics spin a
+    nested event loop of their own, and a patched ``exec`` does not reach them. The session guard
+    (tests/conftest.py::_no_file_choosers) stands in for the two the window calls. It records the
+    call and returns what Cancel returns, and it never raises: a chooser is opened from a clicked
+    slot, and an exception raised inside a slot does not reach the test that clicked. What fails a
+    test is the per-test check on the calls nobody answered, run at teardown."""
+    import pytest
+    from PySide6.QtWidgets import QFileDialog
+    from tests._fixtures import CHOOSER_CALLS, check_choosers_answered, qt_app
+
+    qt_app()
+    assert {"_no_file_choosers", "_every_file_chooser_is_answered"} <= set(request.fixturenames), \
+        "both guards must be in force for every test without being asked for"   # BEFORE any chooser
+    assert CHOOSER_CALLS == [], "CHOOSER_CALLS must be empty at the start of every test"
+    try:
+        assert QFileDialog.getSaveFileName(None, "Save a thing", "thing.txt", "Text file (*.txt)") == ("", "")
+        assert QFileDialog.getOpenFileName(None, "Pick a thing", "", "Data (*.csv)") == ("", "")
+        # a selected filter after the filter, as matplotlib's toolbar passes one; then Qt's keywords
+        assert QFileDialog.getSaveFileName(None, "Five", "start", "PNG (*.png)", "PNG (*.png)") == ("", "")
+        assert QFileDialog.getOpenFileName(parent=None, caption="Keywords", dir="here",
+                                           filter="All files (*)") == ("", "")
+        assert CHOOSER_CALLS == [("save", "Save a thing", "thing.txt", "Text file (*.txt)", None),
+                                 ("open", "Pick a thing", "", "Data (*.csv)", None),
+                                 ("save", "Five", "start", "PNG (*.png)", None),
+                                 ("open", "Keywords", "here", "All files (*)", None)]
+        assert CHOOSER_CALLS[0].kind == "save" and CHOOSER_CALLS[0].answer is None
+        with pytest.raises(AssertionError) as failed:
+            check_choosers_answered()
+        for needle in ("save 'Save a thing'", "open 'Pick a thing'", "answer_chooser"):
+            assert needle in str(failed.value), str(failed.value)
+    finally:
+        CHOOSER_CALLS.clear()            # opened on purpose: this test's own teardown must find none
+
+
+def test_answer_chooser_answers_every_later_chooser_and_a_cancel_counts_as_an_answer(request, monkeypatch):
+    """A test that expects a chooser answers it BEFORE the click, with the path the operator picks or
+    with "" for a cancel; either way the call is recorded with its answer and the check at teardown
+    passes. The answer lasts until the test ends. A test's own fake over the static still wins while
+    installed and records nothing, and its undo puts the session guard back."""
+    from PySide6.QtWidgets import QFileDialog, QPushButton
+    from tests._fixtures import CHOOSER_CALLS, answer_chooser, check_choosers_answered, qt_app
+
+    qt_app()
+    assert "_no_file_choosers" in request.fixturenames                           # BEFORE any chooser
+    try:
+        answer_chooser(monkeypatch, "out/report.txt")
+        assert QFileDialog.getSaveFileName(None, "First", "", "") == ("out/report.txt", "")
+        assert QFileDialog.getOpenFileName(None, "Second", "", "") == ("out/report.txt", "")
+
+        answer_chooser(monkeypatch, "")                  # the operator cancels, and the test says so
+        button, got = QPushButton("Save"), []      # its slot names no widget: the button dies with the test
+        button.clicked.connect(lambda: got.append(QFileDialog.getSaveFileName(None, "From a slot", "", "")))
+        button.click()
+        assert got == [("", "")]
+        assert [(c.title, c.answer) for c in CHOOSER_CALLS] == [
+            ("First", "out/report.txt"), ("Second", "out/report.txt"), ("From a slot", "")]
+        check_choosers_answered()                        # three calls, three answers: nothing to fail
+
+        monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("own.txt", ""))
+        assert QFileDialog.getSaveFileName(None, "Own") == ("own.txt", "") and len(CHOOSER_CALLS) == 3
+        monkeypatch.undo()                               # the fake AND the answer are withdrawn
+        assert QFileDialog.getSaveFileName(None, "Back", "", "") == ("", "")
+        assert CHOOSER_CALLS[-1] == ("save", "Back", "", "", None)
+    finally:
+        CHOOSER_CALLS.clear()            # the last call went unanswered on purpose
 
 
 def test_pane_capture_records_level_and_text_and_the_pane_stays_blank():
