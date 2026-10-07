@@ -31,7 +31,8 @@ matplotlib.use("Agg")                                            # match the app
 import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
-from tests._fixtures import qt_app                                # noqa: E402
+from tests._fixtures import (build_inference, build_part, build_run_host,  # noqa: E402
+                             build_window, qt_app)
 import contextlib                                                  # noqa: E402
 import pytest                                                      # noqa: E402
 from PySide6.QtCore import Qt as _Qt                              # noqa: E402
@@ -195,9 +196,8 @@ def test_an_unparseable_cell_does_not_brick_the_gui():
         # cell and the prefill would parse fine -- masking the degrade path this test exists to check.
         # The per-test .ini (tests/conftest.py::_isolated_settings) is empty, so the picker defaults
         # to the alphabetically-first entry (the probe), regardless of the machine's state.
-        from core.gui.main_window import MainWindow
         from core.gui.panels.crossval_panel import CrossValPanel
-        window = MainWindow()                    # must not raise
+        window = build_window()                  # must not raise
         xval = window.panel(CrossValPanel)       # CrossVal now lives inside the FDT Analysis section
         assert "could not read cell" in xval.cell_values.text().lower(), \
             f"the bad cell should degrade the prefill label, got: {xval.cell_values.text()!r}"
@@ -243,7 +243,7 @@ def test_dispatch_watches_every_directory_it_is_given(tmp_path):
     app = qt_app()
     a, b = tmp_path / "a", tmp_path / "b"
     a.mkdir(); b.mkdir()
-    panel = BasePanel()
+    panel = build_run_host(BasePanel)
     seen = []
     panel.figure_stack.add_png = lambda title, path: seen.append((title, Path(path).name))
     panel.dispatch(lambda: None, watch_dir=[a, b])
@@ -287,16 +287,14 @@ def test_main_window_always_opens_on_home():
     qs = st.settings()
     qs.setValue("window/tab", 2)          # a stale key from the old flat-tab layout
     qs.sync()
-    from core.gui.main_window import MainWindow
-    w = MainWindow()
+    w = build_window()
     assert w.nav.stack.currentIndex() == 0, "the app must always open on the home screen"
 
 def test_inference_tab_gates_follow_the_session():
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
     qt_app()
-    inf = InferenceScreen()
+    inf = build_inference()
 
     def enabled():
         return [inf.tabs.isTabEnabled(i) for i in range(5)]   # Config Prior Posterior Validate Infer
@@ -325,11 +323,10 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
     Validate tab would catch it, so the wiring is pinned here and the maths in
     tests/test_conditioning_repair.py.
     """
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
     qt_app()
-    inf = InferenceScreen()
+    inf = build_inference()
     assert inf.tabs.count() == 6 and inf.tabs.tabText(5) == "TSNPE"
 
     inf.session = SbiSession(cfg=object(), posterior=object()); inf.refresh_gates()
@@ -387,7 +384,6 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
     from core.artifacts import Accept
     from core.SBI import reparam, truncate
     from core.SBI.training_checkpoint import bijection_probe
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from tests._fixtures import _nad_cfg, _posterior_artifact
 
@@ -400,8 +396,7 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
     loaded = store.load_posterior(cfg, trunc_artifact.id, accept=Accept(truncated=True))
 
     qt_app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(cfg=cfg, inf_prior=object())
+    inf = build_inference(session=SbiSession(cfg=cfg, inf_prior=object()))
     panel = inf.tsnpe_panel
 
     inf.posterior_panel._ask_load_non_amortized = lambda m: pytest.fail(
@@ -436,7 +431,6 @@ def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session(st
     from core.artifacts import Accept
     from core.SBI import reparam, truncate
     from core.SBI.training_checkpoint import bijection_probe
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from tests._fixtures import _nad_cfg, _posterior_artifact
 
@@ -449,8 +443,7 @@ def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session(st
     amortized = _posterior_artifact(store, cfg, name="amort")
 
     qt_app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(cfg=cfg, inf_prior=_prior_stub())
+    inf = build_inference(session=SbiSession(cfg=cfg, inf_prior=_prior_stub()))
     pp, vp = inf.posterior_panel, inf.validate_panel
 
     # the session half: a loaded region reaches Validate
@@ -508,13 +501,12 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     """Prior, Posterior and Validate all gained fields. Each must reach its orchestrator function as
     an ARGUMENT -- orchestrator snapshots those constants at import, so writing them would be a
     silent no-op and the run would use the defaults with nothing to say so."""
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from core import config as _cfg
 
     qt_app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(draft=object(), cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+    inf = build_inference(session=SbiSession(draft=object(), cfg=object(), inf_prior=_prior_stub(),
+                                             posterior=_posterior_stub()))
 
     cap = {}
     for panel in (inf.prior_panel, inf.posterior_panel, inf.validate_panel):
@@ -585,12 +577,11 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     assert len(refused) == 1, "the load click must not refuse a knob the load branch never reads"
 
 def test_posterior_from_scratch_is_gated_on_a_prior():
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
     qt_app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object()); inf.refresh_gates()
+    inf = build_inference(session=SbiSession(cfg=object()))
+    inf.refresh_gates()
     pp = inf.posterior_panel
     pp.post_picker.combo.setCurrentIndex(0)               # the "(from scratch)" sentinel (allow_new adds it first)
     assert pp.post_picker.selected()[1] is True, "index 0 should be the from-scratch sentinel"
@@ -604,11 +595,10 @@ def test_inference_pickers_repoint_from_draft_and_config():
     """The Prior tab's BOUNDS picker follows the applied model (new_draft), and the Infer tab's CELL
     picker follows the BUILT config's model (install_config) -- neither tab has its own model combo."""
     from core import config
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import ConfigDraft
 
     qt_app()
-    inf = InferenceScreen()
+    inf = build_inference()
 
     inf.new_draft(ConfigDraft(model="HOPF", labels=[], state_dep_drift=False))
     assert inf.prior_panel.bounds_picker.base_path.name == "hopf"
@@ -633,11 +623,9 @@ def test_chi_probe_table_is_variable_length_and_capped_by_the_posteriors_slots()
     frequencies; the GUI was the only thing forcing a fixed grid. Rows must be addable and removable,
     and the cap must be chi_k_pad -- which is FROZEN into the trained artifact, so exceeding it is not
     a soft limit."""
-    from core.gui.screens.inference_screen import InferenceScreen
 
     qt_app()
-    inf = InferenceScreen()
-    inf.install_config(_chi_cfg(k=3, pad=5))
+    inf = build_inference(cfg=_chi_cfg(k=3, pad=5))
     panel = inf.infer_panel
     assert len(panel._chi_forced_fields) == 3, "should seed chi_n_freqs rows when empty"
 
@@ -654,11 +642,9 @@ def test_chi_probe_rows_keep_each_recording_paired_with_its_own_frequency():
     """The one-widget-per-row invariant. Parallel path/frequency lists let a MIDDLE deletion pair
     recording k with frequency k+1 -- silent, because a lock-in at the wrong frequency decays like a
     sinc and simply returns a smaller number. Delete from the middle and check the survivors."""
-    from core.gui.screens.inference_screen import InferenceScreen
 
     qt_app()
-    inf = InferenceScreen()
-    inf.install_config(_chi_cfg(k=4))
+    inf = build_inference(cfg=_chi_cfg(k=4))
     panel = inf.infer_panel
     for i, row in enumerate(panel._chi_forced_fields):
         row.path.edit.setText(f"/tmp/rec{i}.csv")
@@ -682,11 +668,9 @@ def test_chi_probe_table_survives_a_config_rebuild_and_rejects_a_blank_frequency
     A TYPED zero keeps that sentence, because a zero somebody typed is a different state from a box
     nobody filled.
     """
-    from core.gui.screens.inference_screen import InferenceScreen
 
     qt_app()
-    inf = InferenceScreen()
-    inf.install_config(_chi_cfg(k=2))
+    inf = build_inference(cfg=_chi_cfg(k=2))
     panel = inf.infer_panel
     panel._chi_forced_fields[0].path.edit.setText("/tmp/keep.csv")
     panel._chi_forced_fields[0].freq.setText("2.5")
@@ -736,7 +720,6 @@ def test_a_new_probe_row_starts_blank_and_floatfield_accepts_none():
     has to fill is the point: the frequency is entered, never derived (see _ChiProbeRow's docstring),
     because the frequencies a bench achieves are not exactly mult_k * Omega_0."""
     from core.gui.panels.inference.rows import _ChiProbeRow
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.widgets.labeled_inputs import FloatField
     from tests._fixtures import qt_app
 
@@ -750,8 +733,7 @@ def test_a_new_probe_row_starts_blank_and_floatfield_accepts_none():
     assert _ChiProbeRow(lambda _row: None).freq.text() == ""
     assert _ChiProbeRow(lambda _row: None, 7.5).freq.text() == "7.5", "an explicit seed still seeds"
 
-    inf = InferenceScreen()
-    inf.install_config(_chi_cfg(k=3))
+    inf = build_inference(cfg=_chi_cfg(k=3))
     panel = inf.infer_panel
     assert len(panel._chi_forced_fields) == 3
     assert [r.freq.text() for r in panel._chi_forced_fields] == ["", "", ""]
@@ -832,10 +814,9 @@ def test_config_units_control_declares_units_and_validates_them():
     """Units DECLARE what the numbers in the files mean (never converting them). Typed units must reach
     the built config, and unusable tokens must be rejected when the model is applied -- not mid-run."""
     from core.config import BOUNDS_PATH
-    from core.gui.screens.inference_screen import InferenceScreen
 
     qt_app()
-    screen = InferenceScreen()
+    screen = build_inference()
     cfgp = screen.config_panel
     cfgp.model_combo.setCurrentText("NADROWSKI")
     cfgp._on_model_changed("NADROWSKI")
@@ -1146,12 +1127,10 @@ def test_the_infer_tab_dispatches_the_compositions(tmp_path):
     the simulated branch's cell (or hand-entered values) and the experimental branch's RecordingSet.
     """
     from core import orchestrator
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
     qt_app()
-    inf = InferenceScreen()
-    inf.install_config(_chi_cfg(k=2))
+    inf = build_inference(cfg=_chi_cfg(k=2))
     inf.session.posterior = _posterior_stub()
     inf.session.inf_prior = _prior_stub()
     panel = inf.infer_panel
@@ -1224,13 +1203,11 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
     And it FAILS OPEN in both the shapes that can happen in the wild: no near miss, and a detector
     that raises. A warning that can block a run is worse than no warning."""
     from core import orchestrator
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from tests._fixtures import PaneCapture
 
     qt_app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub())
+    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub()))
     pp = inf.posterior_panel
     pp.post_picker.selected = lambda: ("", True)              # "(from scratch)" -> a NEW run
     pp.num_runs.setText("2")
@@ -1290,11 +1267,10 @@ def test_the_fresh_cache_and_narrowed_posterior_dialogs_default_to_cancel(monkey
     dialog exists to stop. Every other test replaces the _ask_* methods, so only this one sees the
     dialogs themselves."""
     from types import SimpleNamespace
-    from core.gui.screens.inference_screen import InferenceScreen
     from tests._fixtures import all_asked, asked, choose, forget_asked
 
     qt_app()
-    inf = InferenceScreen()
+    inf = build_inference()
     pp = inf.posterior_panel
 
     def ask_new_run():
@@ -1337,14 +1313,13 @@ def test_the_tsnpe_tab_dispatches_a_loaded_observation(monkeypatch):
     import types
     from core import orchestrator
     from core.gui.panels.inference import tsnpe_tab as tt
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from core.refusals import Refusal
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub(),
+                                             posterior=_posterior_stub()))
     panel = inf.tsnpe_panel
     panel.obs_picker.key = lambda: "20260910T120000"
 
@@ -1395,14 +1370,13 @@ def test_the_tsnpe_tab_passes_a_load_bug_to_on_error_unwrapped(monkeypatch):
     it passes what it caught, and BasePanel._on_error decides by isinstance."""
     import types
     from core.gui.panels.inference import tsnpe_tab as tt
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from core.refusals import Refusal
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub(),
+                                             posterior=_posterior_stub()))
     panel = inf.tsnpe_panel
     panel.obs_picker.key = lambda: "20260910T120000"
     cap, errors = {}, []
@@ -1439,12 +1413,10 @@ def test_the_infer_tab_other_observation_box():
     a stale tick would silence the narrowed-model rule for a posterior the user never answered the
     question about."""
     from core.artifacts import Accept
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
     qt_app()
-    inf = InferenceScreen()
-    inf.install_config(_chi_cfg(k=1))
+    inf = build_inference(cfg=_chi_cfg(k=1))
     panel = inf.infer_panel
 
     # (a) amortized: greyed out, and no accept travels
@@ -1510,8 +1482,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     # Read off the built window, not off a list written here: a renamed tab must fail this, and an
     # entry that names the FDT analysis tab is as real as one that names the Infer tab.
     qt_app()
-    from core.gui.main_window import MainWindow
-    window = MainWindow()
+    window = build_window()
     tabs = []
     for section in (window.reduction_screen, window.fdt_screen, window.inference_screen,
                     window.simulate_screen):
@@ -1635,13 +1606,12 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
     from core.artifacts import StoreError
     from core.gui import fields as gui_fields
     from core.gui.panels.inference import posterior_tab as post_mod, prior_tab as prior_mod
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from tests._fixtures import PaneCapture, asked, forget_asked, qt_app
 
     qt_app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub(),
+                                             posterior=_posterior_stub()))
 
     def _taken(kind, ref, new_name):
         raise StoreError(f"a {kind} named {new_name!r} already exists; rename or delete it first",
@@ -1697,13 +1667,12 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
     import types
     import core.gui.panels.inference as inference_pkg
     from core.gui import fields as gui_fields
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from core.refusals import Refusal
     from tests._fixtures import PaneCapture, asked, forget_asked, qt_app
 
     qt_app()
-    inf = InferenceScreen()
+    inf = build_inference()
     pp = inf.prior_panel
     reached = []
     inf.install_config = lambda cfg: reached.append(("installed", cfg))
@@ -1805,8 +1774,8 @@ def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch,
     qt_app()
     cell = tmp_path / "bad_cell.txt"
     cell.write_text("# a cell that will not build\n", encoding="utf-8")
-    panels = {"fdt": FdtPanel(), "reduction": ReductionPanel(), "crossval": CrossValPanel(),
-              "simulate": SimulatePanel()}
+    panels = {"fdt": build_part(FdtPanel), "reduction": build_part(ReductionPanel),
+              "crossval": build_part(CrossValPanel), "simulate": build_part(SimulatePanel)}
     for p in panels.values():
         p.cell_picker.selected_path = lambda: str(cell)
         p.dispatch = lambda *a, **k: pytest.fail("a panel dispatched with a config that did not build")
@@ -1906,7 +1875,7 @@ def test_the_fdt_panel_leaves_an_unsupported_model_to_the_builders_refusal(monke
     qt_app()
     cell = tmp_path / "cell.txt"
     cell.write_text("# never parsed: the model is refused before the cell is read\n", encoding="utf-8")
-    panel = FdtPanel()
+    panel = build_part(FdtPanel)
     panel.cell_picker.selected_path = lambda: str(cell)
     panel.dispatch = lambda *a, **k: pytest.fail("an unsupported model was dispatched")
     reason = "FDT can't run 'NADROWSKI': a stand-in for fdt_support's per-model sentence."
@@ -1948,7 +1917,7 @@ def test_the_fdt_panel_offers_only_single_cell_records(monkeypatch):
             for study in ("single", "sweep", "comparison")]
     store = types.SimpleNamespace(list=lambda kind: list(rows) if kind == "fdt" else [])
     monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
-    panel = FdtPanel()
+    panel = build_part(FdtPanel)
     combo = panel.record_picker.combo
     assert [combo.itemData(i) for i in range(combo.count())] == ["single"], \
         [combo.itemText(i) for i in range(combo.count())]
@@ -2000,7 +1969,7 @@ def test_the_fdt_panel_creates_the_record_before_it_dispatches(tmp_path, monkeyp
     store = ArtifactStore(tmp_path)
     cap = {}
     with use_store(store):
-        panel = FdtPanel()
+        panel = build_part(FdtPanel)
         panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
         panel.seed.setText("4242")
         panel.record_name.setText("cell_a_first")
@@ -2063,7 +2032,7 @@ def test_a_taken_fdt_record_name_is_refused_at_the_click(tmp_path):
                       "results": None}
         taken.__enter__()                   # the record now exists, unfinished, holding its name
 
-        panel = FdtPanel()
+        panel = build_part(FdtPanel)
         panel.dispatch = lambda *a, **k: pytest.fail("a refused click dispatched a run anyway")
         panel.record_name.setText("cell_a_first")
         forget_asked()
@@ -2098,7 +2067,7 @@ def test_a_blank_knob_box_is_refused_as_blank_on_both_measurement_tabs(tmp_path,
     store = ArtifactStore(tmp_path)
     monkeypatch.setattr(store, "create", lambda *a, **k: pytest.fail("a blank knob minted a record"))
     with use_store(store):
-        panel = {"fdt": FdtPanel, "crossval": CrossValPanel}[panel_name]()
+        panel = build_part({"fdt": FdtPanel, "crossval": CrossValPanel}[panel_name])
         panel.dispatch = lambda *a, **k: pytest.fail("a blank knob box dispatched a run anyway")
         assert panel.cell_picker.selected_path(), "the premise: a cell is selected"
         getattr(panel, key).setText("")
@@ -2137,7 +2106,7 @@ def test_an_fdt_record_note_is_judged_at_the_click(tmp_path, monkeypatch, how):
     monkeypatch.setattr(store, "create",
                         lambda *a, **k: pytest.fail("a refused note still minted a record"))
     with use_store(store):
-        panel = FdtPanel()
+        panel = build_part(FdtPanel)
         panel.dispatch = lambda *a, **k: pytest.fail("a refused note dispatched a run anyway")
         if how == "too_long":
             panel.record_note.setText("n" * (NOTE_MAX_CHARS + 1))
@@ -2174,7 +2143,7 @@ def test_the_fdt_panel_names_the_record_its_run_wrote(tmp_path):
     qt_app()
     store = ArtifactStore(tmp_path)
     with use_store(store):
-        panel = FdtPanel()
+        panel = build_part(FdtPanel)
         pane = PaneCapture(panel)
         assert not panel.record_picker.has_entries(), "a fresh store offers no saved run"
         w = store.create("fdt", None, name="cell_a_first")
@@ -2218,7 +2187,7 @@ def test_the_crossval_panel_creates_one_writer_per_swept_parameter(tmp_path):
     store = ArtifactStore(tmp_path)
     cap = {}
     with use_store(store):
-        panel = CrossValPanel()
+        panel = build_part(CrossValPanel)
         panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
         panel.seed.setText("99")
         panel.record_name.setText("study_one")
@@ -2285,7 +2254,7 @@ def test_a_taken_crossval_record_name_is_refused_at_the_click(tmp_path):
                       "results": None}
         taken.__enter__()                   # the record now exists, unfinished, holding its name
 
-        panel = CrossValPanel()
+        panel = build_part(CrossValPanel)
         panel.dispatch = lambda *a, **k: pytest.fail("a refused click dispatched a run anyway")
         panel.record_name.setText("study_one")
         forget_asked()
@@ -2325,7 +2294,7 @@ def test_a_blank_crossval_grid_box_is_refused_naming_its_grid(tmp_path, monkeypa
     monkeypatch.setattr(store, "create",
                         lambda *a, **k: pytest.fail("a blank grid box still minted a record"))
     with use_store(store):
-        panel = CrossValPanel()
+        panel = build_part(CrossValPanel)
         panel.dispatch = lambda *a, **k: pytest.fail("a blank grid box dispatched a run anyway")
         row = getattr(panel, grid)
         assert all(v is not None for v in row.spec_or_none()), "the default grid is already blank"
@@ -2368,7 +2337,7 @@ def test_the_crossval_panel_fills_each_grid_in_ascending_order(tmp_path):
 
     cap = {}
     with use_store(ArtifactStore(tmp_path / "store")):
-        panel = CrossValPanel()
+        panel = build_part(CrossValPanel)
         panel.cell_picker.selected_path = lambda: str(cell)
         panel._on_cell_changed()
         assert "T_a/T = 0.5000" in panel.cell_values.text(), panel.cell_values.text()
@@ -2404,7 +2373,7 @@ def test_a_crossval_record_note_is_judged_at_the_click(tmp_path, monkeypatch, ho
     monkeypatch.setattr(store, "create",
                         lambda *a, **k: pytest.fail("a refused note still minted a record"))
     with use_store(store):
-        panel = CrossValPanel()
+        panel = build_part(CrossValPanel)
         panel.dispatch = lambda *a, **k: pytest.fail("a refused note dispatched a run anyway")
         if how == "too_long":
             panel.record_note.setText("n" * (NOTE_MAX_CHARS + 1))
@@ -2468,7 +2437,7 @@ def test_the_crossval_window_shows_both_records_figures_and_names_them(tmp_path,
     store = ArtifactStore(tmp_path)
     cap = {}
     with use_store(store):
-        panel = CrossValPanel()
+        panel = build_part(CrossValPanel)
         pane = PaneCapture(panel)
         seen = []
         panel.figure_stack.add_png = lambda title, path: seen.append(Path(path))
@@ -2655,7 +2624,7 @@ def test_selecting_a_saved_run_describes_it_and_re_opens_its_figures(tmp_path):
     with use_store(store):
         _record("single", "one_cell")
         _record("sweep", "a_sweep")
-        for panel, key in ((FdtPanel(), "one_cell"), (CrossValPanel(), "a_sweep")):
+        for panel, key in ((build_part(FdtPanel), "one_cell"), (build_part(CrossValPanel), "a_sweep")):
             panel.record_picker.restore_key(store.get("fdt", key).id)
             panel._show_record()
             text = panel.record_line.text()
@@ -2749,7 +2718,7 @@ def test_the_saved_run_viewer_opens_nothing_at_launch_and_closes_only_its_own_ta
         facts = {}
         for name, seed, titles in (("rec_a", 1, ["a one", "a two"]), ("rec_b", 2, ["b one"])):
             facts[_saved_fdt_record(store, name, study, seed, titles).id] = (seed, titles)
-        combo = cls().record_picker.combo
+        combo = build_part(cls).record_picker.combo
         first, second = combo.itemData(0), combo.itemData(1)
         qs = st.settings()
         qs.beginGroup(which)
@@ -2758,7 +2727,7 @@ def test_the_saved_run_viewer_opens_nothing_at_launch_and_closes_only_its_own_ta
         qs.sync()
 
         # a launch: the restored run is described, and nothing is opened
-        panel = cls()
+        panel = build_part(cls)
         combo = panel.record_picker.combo
         assert panel.record_picker.key() == second and combo.currentIndex() == 1
         assert f"seed {facts[second][0]}" in panel.record_line.text(), panel.record_line.text()
@@ -2821,7 +2790,6 @@ def test_a_picker_refresh_reopens_no_figure_and_moves_no_tab(tmp_path, how):
     and Rescan is the picker's own button."""
     from PySide6.QtWidgets import QPushButton
     from core.artifacts import ArtifactStore, use_store
-    from core.gui.main_window import MainWindow
     from core.gui.panels.fdt_panel import FdtPanel
     from tests._fixtures import qt_app
 
@@ -2830,7 +2798,7 @@ def test_a_picker_refresh_reopens_no_figure_and_moves_no_tab(tmp_path, how):
     with use_store(store):
         for name, seed, titles in (("rec_a", 1, ["a one", "a two"]), ("rec_b", 2, ["b one", "b two"])):
             _saved_fdt_record(store, name, "single", seed, titles)
-        w = MainWindow()
+        w = build_window()
         panel = w.panel(FdtPanel)
         combo = panel.record_picker.combo
         chosen, other = combo.itemData(1), combo.itemData(0)   # NOT the row a refresh passes first
@@ -2861,7 +2829,6 @@ def test_a_relaunch_opens_no_figure_even_after_an_unrelated_note_is_set(tmp_path
     later."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui import settings as st
-    from core.gui.main_window import MainWindow
     from core.gui.panels.fdt_panel import FdtPanel
     from tests._fixtures import qt_app
 
@@ -2871,7 +2838,7 @@ def test_a_relaunch_opens_no_figure_even_after_an_unrelated_note_is_set(tmp_path
         seeds = {}
         for name, seed in (("rec_a", 1), ("rec_b", 2)):
             seeds[_saved_fdt_record(store, name, "single", seed, [f"{name} fig"]).id] = seed
-        combo = FdtPanel().record_picker.combo
+        combo = build_part(FdtPanel).record_picker.combo
         first, second = combo.itemData(0), combo.itemData(1)
         qs = st.settings()
         qs.beginGroup("fdt")
@@ -2879,7 +2846,7 @@ def test_a_relaunch_opens_no_figure_even_after_an_unrelated_note_is_set(tmp_path
         qs.endGroup()
         qs.sync()
 
-        w = MainWindow()
+        w = build_window()
         panel = w.panel(FdtPanel)
         assert panel.record_picker.key() == second and _tabs(panel) == []
         assert f"seed {seeds[second]}" in panel.record_line.text(), panel.record_line.text()
@@ -2934,7 +2901,7 @@ def test_after_a_run_only_the_runs_own_figures_remain(tmp_path, monkeypatch, whi
     store = ArtifactStore(tmp_path)
     with use_store(store):
         earlier = _saved_fdt_record(store, "earlier", study, 1, titles)   # the run's own titles
-        panel = cls()
+        panel = build_part(cls)
         combo = panel.record_picker.combo
         _choose(combo, combo.findData(earlier.id))
         assert len(_tabs(panel)) == len(titles), _tabs(panel)
@@ -2975,7 +2942,7 @@ def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch):
     store = ArtifactStore(tmp_path)
     with use_store(store):
         earlier = _saved_fdt_record(store, "earlier", "single", 1, ["x one", "x two"])
-        panel = fdt_panel.FdtPanel()
+        panel = build_part(fdt_panel.FdtPanel)
         combo = panel.record_picker.combo
         _choose(combo, combo.findData(earlier.id))
         assert _tabs(panel) == ["x one", "x two"], _tabs(panel)
@@ -3051,12 +3018,11 @@ def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():
     from core import config
     from core.config import BOUNDS_PATH
     from core.gui.panels.inference.help_text import HELP
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.SBI.run_guards import _assert_chi_config_is_deliberate
     from tests._fixtures import PaneCapture, qt_app
 
     qt_app()
-    screen = InferenceScreen()
+    screen = build_inference()
     cfgp = screen.config_panel
     cfgp.model_combo.setCurrentText("NADROWSKI")
     cfgp._on_model_changed("NADROWSKI")
@@ -3103,12 +3069,11 @@ def test_the_config_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
     config.py's values, as the tool does."""
     from core import config
     from core.config import CHI_K_MAX
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.refusals import Refusal
     from tests._fixtures import qt_app
 
     qt_app()
-    screen = InferenceScreen()
+    screen = build_inference()
     cfgp = screen.config_panel
     cfgp.model_combo.setCurrentText("NADROWSKI")
     cfgp._on_model_changed("NADROWSKI")
@@ -3196,13 +3161,12 @@ def test_the_prior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
     the refusal can never name different limits."""
     from core import orchestrator
     from core.gui.fields import label
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from core.refusals import Refusal
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
+    inf = build_inference()
     cfg = _spont_cfg()
     inf.session = SbiSession(draft=object(), cfg=None, inf_prior=_prior_stub())
     inf.session.draft = type("D", (), {"make_config": lambda self, **kw: cfg})()
@@ -3321,13 +3285,12 @@ def test_the_prior_tabs_chi_line_reads_the_summary_width_at_the_click(monkeypatc
     """The Prior tab's chi line states the conditioning layout, [S(n) | log T_obs | chi(m)]. Both widths
     are read when the line is written, never typed in: a summary that gains or loses a feature must not
     leave the tab printing the old width, as it once printed 41 while the block was 49 wide."""
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from core.SBI import statistics
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
+    inf = build_inference()
     cfg = _chi_built_cfg()
     inf.session = SbiSession(draft=object(), cfg=None, inf_prior=_prior_stub())
     inf.session.draft = type("D", (), {"make_config": lambda self, **kw: cfg})()
@@ -3381,14 +3344,12 @@ def test_the_posterior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing
     None to its default and its load branch never reads them). Decided as the stage decides it:
     is_new from the picker mirrors `trains = train_new or ref is None`."""
     from core.artifacts import Accept
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from core.refusals import Refusal
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub())
+    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub()))
     pp = inf.posterior_panel
     pp.post_picker.selected = lambda: ("", True)              # "(from scratch)" -> the TRAIN branch
     pp._confirm_fresh_run = lambda cfg, n_runs, cap: (True, False)
@@ -3460,14 +3421,13 @@ def test_the_validate_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(
     allowed -- it is a choice, not a typo."""
     from core import config, orchestrator
     from core.gui import fields as gui_fields
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from core.refusals import Refusal
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub(),
+                                             posterior=_posterior_stub()))
     vp = inf.validate_panel
     sent, refused = {}, []
     vp.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
@@ -3508,13 +3468,12 @@ def test_the_validate_tab_summary_names_the_verdict_and_the_seed():
     """The tab's closing line leads with the calibration verdict and the seed the run drew, so the
     log pane says whether the posterior passed and how to repeat the calibration."""
     from types import SimpleNamespace
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub(),
+                                             posterior=_posterior_stub()))
     vp = inf.validate_panel
     lines = []
     vp.log_pane.append_line = lines.append
@@ -3539,15 +3498,14 @@ def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(mon
     from core import config, orchestrator
     from core.gui import fields as gui_fields
     from core.gui.panels.inference import tsnpe_tab as tt
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from core.refusals import Refusal
     from core.SBI import truncate as _tr
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub(),
+                                             posterior=_posterior_stub()))
     panel = inf.tsnpe_panel
     panel.obs_picker.key = lambda: "20260910T120000"
 
@@ -3647,11 +3605,10 @@ def test_a_blank_t_obs_is_refused_on_all_three_infer_branches(tmp_path):
     box's and not a missing file's; the dispatch is stubbed, so nothing reads them."""
     from core import orchestrator
     from core.refusals import Refusal
-    from core.gui.screens.inference_screen import InferenceScreen
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
+    inf = build_inference()
     inf.session.posterior = _posterior_stub()
     inf.session.inf_prior = _prior_stub()
     panel = inf.infer_panel
@@ -3729,12 +3686,10 @@ def test_the_driven_branch_refuses_a_zero_drive_and_a_missing_recording(tmp_path
     forcing NAME (what build_experiment_obs takes) and the forced file with no frequency."""
     from core import orchestrator
     from core.refusals import Refusal
-    from core.gui.screens.inference_screen import InferenceScreen
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
-    inf.install_config(_forced_cfg())
+    inf = build_inference(cfg=_forced_cfg())
     inf.session.posterior = _posterior_stub()
     inf.session.inf_prior = _prior_stub()
     panel = inf.infer_panel
@@ -3796,12 +3751,10 @@ def test_the_chi_branch_refuses_a_blank_drive_amplitude_and_a_missing_probe_at_t
     pairs, T_obs and F0 as typed."""
     from core import orchestrator
     from core.refusals import Refusal
-    from core.gui.screens.inference_screen import InferenceScreen
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
-    inf.install_config(_chi_cfg(k=2))
+    inf = build_inference(cfg=_chi_cfg(k=2))
     inf.session.posterior = _posterior_stub()
     inf.session.inf_prior = _prior_stub()
     panel = inf.infer_panel
@@ -3869,12 +3822,10 @@ def test_the_simulated_branch_refuses_a_missing_or_misfitting_cell_at_the_click(
     were warning lines with no dialog. The bounds-fit check itself is the pick-time one
     (_on_cell_changed) and is unchanged; the grid's own validation is pinned at its widget tests."""
     from core.refusals import Refusal
-    from core.gui.screens.inference_screen import InferenceScreen
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
-    inf.install_config(_forced_cfg())
+    inf = build_inference(cfg=_forced_cfg())
     inf.session.posterior = _posterior_stub()
     panel = inf.infer_panel
     sent, refused = {}, []
@@ -3920,12 +3871,10 @@ def test_the_probe_planner_refuses_a_blank_t_obs_through_the_yellow_box(tmp_path
     planner's own guarded step, and its "Could not measure Ω₀" error line is the evidence the rules
     ran first and let the click through."""
     from core.refusals import Refusal
-    from core.gui.screens.inference_screen import InferenceScreen
     from tests._fixtures import PaneCapture, qt_app
 
     qt_app()
-    inf = InferenceScreen()
-    inf.install_config(_chi_cfg(k=2))
+    inf = build_inference(cfg=_chi_cfg(k=2))
     panel = inf.infer_panel
     refused = []
     panel._refusal = lambda exc: refused.append(exc)
@@ -3979,14 +3928,12 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     from PySide6.QtWidgets import QFormLayout, QLabel
     from core.gui import fields as gui_fields
     from core.gui.panels.inference.infer_tab import InferPanel
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.widgets.field_row import LabeledFieldRow
     from core.Helpers import labels
     from tests._fixtures import code_only, qt_app
 
     qt_app()
-    inf = InferenceScreen()
-    inf.install_config(_forced_cfg())
+    inf = build_inference(cfg=_forced_cfg())
     tabs = {"Config": inf.config_panel, "Prior": inf.prior_panel, "Posterior": inf.posterior_panel,
             "Validate": inf.validate_panel, "Infer": inf.infer_panel, "TSNPE": inf.tsnpe_panel}
 
@@ -4005,8 +3952,7 @@ def test_the_gui_control_table_matches_the_tabs_labels():
 
     # A place may be any section's tab or one of the two screens, so read them all back off a built
     # window rather than the six inference tabs alone.
-    from core.gui.main_window import MainWindow
-    window = MainWindow()
+    window = build_window()
     for section in (window.reduction_screen, window.fdt_screen, window.simulate_screen):
         for i in range(section.tabs.count()):
             tabs[section.tabs.tabText(i)] = section.tabs.widget(i)
@@ -4166,10 +4112,7 @@ def test_run_state_publishes_the_running_panel_and_none_on_idle():
 
     qt_app()
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     seen = []
 
     def record(p):
@@ -4245,13 +4188,12 @@ def test_the_window_fills_the_run_slot_while_a_panel_runs_and_clears_it_after():
     __init__ and never started there: an unstarted QTimer registers nothing with the OS, which is
     what keeps the 150 ms of layout the 2026-09-11 taskbar-icon incident was made of off the launch
     path."""
-    from core.gui.main_window import MainWindow
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.screens.nav_shell import running_banner
     from tests._fixtures import qt_app
 
     qt_app()
-    w = MainWindow()
+    w = build_window()
     assert w.nav.btn_running.isHidden() and w.nav.btn_running.text() == ""
     assert not w._run_timer.isActive(), "a clock is ticking before anything has run"
     assert w._running_panel is None
@@ -4282,13 +4224,11 @@ def test_clicking_the_run_slot_opens_the_running_panel_and_an_unknown_one_goes_n
     tab cannot leave the banner naming a tab that is gone. A panel the map does not know -- the model
     builder is not a BasePanel, a future screen might not be mounted in a tab -- shows the banner with
     no destination rather than raising a KeyError inside a signal handler."""
-    from core.gui.main_window import MainWindow
-    from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.crossval_panel import CrossValPanel
     from tests._fixtures import qt_app
 
     qt_app()
-    w = MainWindow()
+    w = build_window()
     panel = w.panel(CrossValPanel)
     assert w._panel_home[panel] == ("FDT Analysis", "Sweep study cross-validation",
                                     w._section_index["FDT Analysis"], 1)
@@ -4305,10 +4245,7 @@ def test_clicking_the_run_slot_opens_the_running_panel_and_an_unknown_one_goes_n
     finally:
         panel._set_busy(False)
 
-    class P(BasePanel):
-        pass
-
-    orphan = P()
+    orphan = build_run_host()
     assert orphan not in w._panel_home
     # Start on a section that is NOT Home, so "stays where it is" is distinguishable from a wrong
     # fallback that navigates Home.
@@ -4337,14 +4274,12 @@ def test_the_running_section_tile_and_tab_carry_a_marker_and_nothing_is_disabled
     every tab stays selectable, and the marker survives refresh_gates -- which rewrites tab tooltips
     and enabled states after every stage, and would be running while a marked run is live. You must
     be able to look at another tab while a twenty-minute train runs."""
-    from core.gui.main_window import MainWindow
-    from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.screens.nav_shell import RUNNING_MARK
     from tests._fixtures import qt_app
 
     qt_app()
-    w = MainWindow()
+    w = build_window()
     fdt, inf = w.fdt_screen.tabs, w.inference_screen.tabs
     assert [fdt.tabText(i) for i in range(fdt.count())] == \
         ["FDT analysis", "Sweep study cross-validation"]
@@ -4386,10 +4321,7 @@ def test_the_running_section_tile_and_tab_carry_a_marker_and_nothing_is_disabled
         ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]
 
     # a panel with no known home marks nothing, and clears whatever was marked
-    class P(BasePanel):
-        pass
-
-    orphan = P()
+    orphan = build_run_host()
     orphan._set_busy(True)
     try:
         assert all(btn.text() == name for name, btn in w.home_screen.tiles.items())
@@ -4412,12 +4344,11 @@ def test_the_config_tab_says_what_the_session_holds():
     ``cfg``, ``inf_prior`` and ``posterior``, and a derived status line must never be able to raise
     into ``refresh_gates()`` and take the tab down with it (the rule ``_sync_budget`` states).
     """
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = InferenceScreen()
+    inf = build_inference()
     cfgp = inf.config_panel
 
     # (a) nothing held, and a DRAFT ALONE is still nothing held
@@ -4467,12 +4398,11 @@ def test_apply_confirms_before_it_discards_the_session(monkeypatch):
     load question, where buttons() orders by role and Enter landed on the destructive button.
     Anything but the destructive button leaves the session object identical.
     """
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from tests._fixtures import PaneCapture, all_asked, asked, choose, forget_asked, qt_app
 
     qt_app()
-    inf = InferenceScreen()
+    inf = build_inference()
     cfgp = inf.config_panel
     cfgp.model_combo.setCurrentText("NADROWSKI")
     cfgp._on_model_changed("NADROWSKI")
@@ -4545,7 +4475,6 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     """
     import types
     from PySide6.QtCore import Qt
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.widgets.artifact_picker import NARROWED_SUFFIX, StorePicker
     from tests._fixtures import qt_app
 
@@ -4575,7 +4504,7 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     store = types.SimpleNamespace(list=lambda kind: list(rows.get(kind, [])))
     monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
 
-    inf = InferenceScreen()
+    inf = build_inference()
     pp = inf.posterior_panel
     combo = pp.post_picker.combo
 
@@ -4779,7 +4708,7 @@ def test_the_fdt_and_crossval_screens_dispatch_their_comparison_modes():
 
     qt_app()
     sent = {}
-    panel = FdtPanel()
+    panel = build_part(FdtPanel)
     panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
     panel.compare_list.list.addItem("run A")
     panel.compare_list.list.item(0).setData(_USER_ROLE, "id_a")
@@ -4804,7 +4733,7 @@ def test_the_fdt_and_crossval_screens_dispatch_their_comparison_modes():
     assert sent["kwargs"]["prefactor"] is None, "a blank box travels as blank; the stage refuses it"
 
     sent.clear()
-    xv = CrossValPanel()
+    xv = build_part(CrossValPanel)
     xv.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
     xv.compare_list.list.addItem("S sweep")
     xv.compare_list.list.item(0).setData(_USER_ROLE, "id_s")
@@ -4848,7 +4777,7 @@ def test_a_comparison_from_the_screen_names_its_record_and_outlives_the_next_pic
         a = build_fdt_record(store, name="cell_a")
         b = build_fdt_record(store, name="cell_b", ratio=(1.0, 2.0, 1.1, 1.0))
         c = build_fdt_record(store, name="cell_c")
-        panel = FdtPanel()
+        panel = build_part(FdtPanel)
         pane = PaneCapture(panel)
         combo = panel.record_picker.combo
 
@@ -4923,7 +4852,8 @@ def test_a_comparison_from_either_screen_is_named_and_noted_and_a_taken_name_nam
                                    points=[(0.0, (1.0, 1.0, 1.0)), (0.5, (1.0, 3.0, 1.1))]),
                   build_fdt_record(store, name="s_high", study="sweep", omegas=om, sweep_param="s",
                                    points=[(0.25, (1.0, 2.0, 1.0)), (0.75, (1.0, 6.0, 1.2))])]
-        for panel, refs, name in ((FdtPanel(), cells, "ab_cells"), (CrossValPanel(), sweeps, "lo_hi")):
+        for panel, refs, name in ((build_part(FdtPanel), cells, "ab_cells"),
+                                  (build_part(CrossValPanel), sweeps, "lo_hi")):
             for ref in refs:
                 item = QListWidgetItem(ref)
                 item.setData(_USER_ROLE, ref)
@@ -4973,7 +4903,7 @@ def test_a_half_typed_number_is_refused_never_read_as_blank(tmp_path, monkeypatc
     store = ArtifactStore(tmp_path)
     monkeypatch.setattr(store, "create", lambda *a, **k: pytest.fail("a half-typed box minted a record"))
     with use_store(store):
-        fdt, xv = fdt_mod.FdtPanel(), xv_mod.CrossValPanel()
+        fdt, xv = build_part(fdt_mod.FdtPanel), build_part(xv_mod.CrossValPanel)
         for p in (fdt, xv):
             p.dispatch = lambda *a, **k: pytest.fail("a half-typed box dispatched anyway")
 
@@ -5037,7 +4967,7 @@ def test_every_comparison_refusal_reaches_the_yellow_box_naming_its_control(tmp_
             ("one run for a cells comparison", "cells", [a], {}, "compare_records", "at least 2"),
             ("a blank constant", "renormalise", [a], {"prefactor": None}, "prefactor", "blank"),
         ]
-        fdt, xv = FdtPanel(), CrossValPanel()
+        fdt, xv = build_part(FdtPanel), build_part(CrossValPanel)
         for label, mode, refs, options, field, words in cases:
             panel = xv if mode == "sweeps" else fdt
             panel.compare_list.list.clear()

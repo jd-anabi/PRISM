@@ -40,7 +40,7 @@ from core.Models.hopf_model import HopfModel                      # noqa: E402
 from core.Models.user_model import (ModelParseError, UserModel,   # noqa: E402
                                     parse_user_model)
 from core.SBI import pipeline                                     # noqa: E402
-from tests._fixtures import qt_app                                # noqa: E402
+from tests._fixtures import build_part, build_window, qt_app      # noqa: E402
 
 
 def _remove_user_model(name: str):
@@ -531,7 +531,7 @@ def test_builder_param_row_preserves_and_defaults():
     r.set_spec(0.05, 0.01, 0.1, "log")
     assert r.spec() == (0.05, 0.01, 0.1, "log")
 
-    mb = ModelBuilderScreen()
+    mb = build_part(ModelBuilderScreen)
     mb.vars_edit.setText("x")
     mb._set_variables()
     mb._var_rows[0].drift.setText("-k*x")
@@ -560,7 +560,7 @@ def test_builder_refuses_a_blank_bound_instead_of_reading_it_as_zero():
     from core.gui.screens.model_builder_screen import ModelBuilderScreen
     from core.refusals import Refusal
     qt_app()
-    mb = ModelBuilderScreen()
+    mb = build_part(ModelBuilderScreen)
     mb.vars_edit.setText("x")
     mb._set_variables()
     mb._var_rows[0].drift.setText("-k*x")
@@ -584,7 +584,7 @@ def test_builder_refuses_a_log_box_with_a_non_positive_minimum():
     from core.gui.screens.model_builder_screen import ModelBuilderScreen
     from core.refusals import Refusal
     qt_app()
-    mb = ModelBuilderScreen()
+    mb = build_part(ModelBuilderScreen)
     mb.vars_edit.setText("x")
     mb._set_variables()
     mb._var_rows[0].drift.setText("-k*x")
@@ -607,7 +607,7 @@ def test_a_log_box_under_automatic_bounds_is_refused_with_a_fix_that_can_be_done
     from core.gui.screens.model_builder_screen import ModelBuilderScreen
     from core.refusals import Refusal
     qt_app()
-    mb = ModelBuilderScreen()
+    mb = build_part(ModelBuilderScreen)
     mb.vars_edit.setText("x")
     mb._set_variables()
     mb._var_rows[0].drift.setText("-k*x")
@@ -648,7 +648,7 @@ def test_the_builder_shows_a_field_refusal_in_the_yellow_box():
     from tests._fixtures import asked, forget_asked, qt_app
 
     qt_app()
-    mb = ModelBuilderScreen()
+    mb = build_part(ModelBuilderScreen)
     mb.vars_edit.setText("x")
     mb._set_variables()
     mb._var_rows[0].drift.setText("-k*x")
@@ -724,7 +724,7 @@ def test_the_builder_refuses_at_validate_what_save_would_refuse():
     name = "UMTESTSAVEREF"
     kinds = [k for k, _ in _FORCE_KINDS]
     try:
-        mb = ModelBuilderScreen()
+        mb = build_part(ModelBuilderScreen)
         mb.name_edit.setText(name)
         mb.vars_edit.setText("x")
         mb._set_variables()
@@ -783,7 +783,7 @@ def test_a_negative_drive_amplitude_is_refused_at_validate_at_save_and_at_load(t
     qt_app()
     name = "UMTESTNEGAMP"
     try:
-        mb = ModelBuilderScreen()
+        mb = build_part(ModelBuilderScreen)
         mb.name_edit.setText(name)
         mb.vars_edit.setText("x")
         mb._set_variables()
@@ -842,7 +842,7 @@ def test_a_model_round_trips_through_the_builder_and_back():
     name = "UMTESTRT"
     sin_index = [k for k, _ in _FORCE_KINDS].index("sin")
     try:
-        mb = ModelBuilderScreen()
+        mb = build_part(ModelBuilderScreen)
         mb.name_edit.setText(name)
         mb.vars_edit.setText("x, y")
         mb._set_variables()
@@ -866,7 +866,7 @@ def test_a_model_round_trips_through_the_builder_and_back():
         mb._save()
         assert mb.status.text().startswith(f"Saved '{name}'"), mb.status.text()
 
-        reloaded = ModelBuilderScreen()               # shares no state with the screen that saved
+        reloaded = build_part(ModelBuilderScreen)     # shares no state with the screen that saved
         reloaded.load_existing(name)
         after = reloaded._assemble_doc()
         assert after == before, \
@@ -993,10 +993,9 @@ def test_user_model_streams_through_the_simulate_path():
 def test_combo_refresh_preserves_picker_selections():
     """A user-model save/delete must NOT reset the cell/bounds pickers when the panel's model
     selection did not change (the model-changed hook resets pickers to their first entry)."""
-    from core.gui.main_window import MainWindow
     from core.gui.panels.fdt_panel import FdtPanel
     qt_app()
-    window = MainWindow()
+    window = build_window()
     fdt = window.panel(FdtPanel)
     assert fdt.cell_picker.combo.count() > 1, "needs >1 nadrowski cells to be meaningful"
     fdt.cell_picker.combo.setCurrentIndex(1)
@@ -1020,7 +1019,7 @@ def test_builder_validate_refuses_while_a_task_runs():
     from core.gui.panels.base_panel import BasePanel
     from core.gui.screens.model_builder_screen import ModelBuilderScreen
     qt_app()
-    mb = ModelBuilderScreen()
+    mb = build_part(ModelBuilderScreen)
     mb.vars_edit.setText("x")
     mb._set_variables()
     mb._var_rows[0].drift.setText("-x")

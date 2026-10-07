@@ -605,9 +605,9 @@ def test_every_registry_default_is_the_trees_own_default():
     # freshly built panel is what owns them. The session's settings file is empty per
     # test (tests/conftest.py), so nothing restored over the construction defaults.
     from core.gui.panels.simulate_panel import SimulatePanel
-    from tests._fixtures import qt_app
+    from tests._fixtures import build_part, qt_app
     qt_app()
-    sim = SimulatePanel()
+    sim = build_part(SimulatePanel)
     owned_by_the_simulate_panel = {"frame_steps": sim.frame_steps.text(), "fps": sim.fps.text()}
     for key, box_text in owned_by_the_simulate_panel.items():
         assert FIELDS[key].default == box_text, (key, box_text, FIELDS[key].default)

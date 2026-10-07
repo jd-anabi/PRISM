@@ -89,13 +89,11 @@ def screen_run(tiny_run):
     Module-scoped like tiny_run, so a file pays for one screen. Its panels restore from the session's
     temporary settings file (_settings_home), never from the real PRISM.ini."""
     from types import SimpleNamespace
-    from core.gui.screens.inference_screen import InferenceScreen
-    from tests._fixtures import qt_app
+    from tests._fixtures import build_inference, qt_app
     qt_app()
     cfg = tiny_run.cfg.copy_for_run()
     cfg.clear_ground_truth()
-    inf = InferenceScreen()
-    inf.install_config(cfg)
+    inf = build_inference(cfg=cfg)
     inf.session.inf_prior = tiny_run.prior
     inf.session.posterior = tiny_run.posterior
     inf.refresh_gates()

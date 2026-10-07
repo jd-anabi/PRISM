@@ -34,7 +34,7 @@ from core.gui.streams import redirect_streams                     # noqa: E402
 from core.gui.widgets import artifact_table as at                 # noqa: E402
 from core.gui.widgets.artifact_table import ArtifactTable, cells_for, columns_for   # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
-from tests._fixtures import qt_app, pump                          # noqa: E402
+from tests._fixtures import build_inference, build_run_host, qt_app, pump  # noqa: E402
 import contextlib                                                  # noqa: E402
 
 
@@ -50,10 +50,7 @@ def test_worker_payload_is_released_after_the_run():
     class Big:
         pass
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     big = Big()
     ref = weakref.ref(big)
 
@@ -91,9 +88,6 @@ def test_a_failed_run_does_not_pin_its_frames():
     class Big:
         pass
 
-    class P(BasePanel):
-        pass
-
     def crash(payload):
         raise RuntimeError("the batch failed")
 
@@ -109,7 +103,7 @@ def test_a_failed_run_does_not_pin_its_frames():
 
     for fn, title, marker in ((crash, "Error", "err"),
                               (refuse, "Check your inputs", "warn")):
-        panel = P()
+        panel = build_run_host()
         big = Big()
         ref = weakref.ref(big)
         was_enabled = gc.isenabled()
@@ -192,10 +186,7 @@ def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
 
     app = qt_app()
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     started = {"v": False}
     outcome = {"cancelled": 0, "error": 0, "result": []}
 
@@ -278,7 +269,6 @@ def test_inference_config_restore_with_a_stale_model_does_not_desync_the_bounds_
     pointing at a nonexistent folder while the Config combo shows a real default. The picker is repointed
     when the model is APPLIED, so drive that path."""
     from core.gui import settings as st
-    from core.gui.screens.inference_screen import InferenceScreen
 
     qt_app()
     qs = st.settings()
@@ -287,7 +277,7 @@ def test_inference_config_restore_with_a_stale_model_does_not_desync_the_bounds_
     qs.endGroup()
     qs.sync()
 
-    screen = InferenceScreen()
+    screen = build_inference()
     model = screen.config_panel.model_combo.currentText()
     assert model in ("BP", "NADROWSKI", "HOPF"), model
     screen.config_panel._build_config()                 # apply -> new_draft -> repoint the picker
@@ -304,10 +294,7 @@ def test_on_error_puts_the_traceback_in_details_not_the_body():
 
     qt_app()
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     panel._on_error(RuntimeError("Something failed"),
                     "Traceback (most recent call last):\n  ...\nRuntimeError: Something failed")
     told = asked()
@@ -687,10 +674,7 @@ def test_pane_capture_records_level_and_text_and_the_pane_stays_blank():
 
     qt_app()
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     before = panel.log_pane.toPlainText()
     cap = PaneCapture(panel)
     panel.log_pane.append_line("plain")
@@ -723,10 +707,7 @@ def test_pane_capture_sees_the_pumps_batch_channel_through_a_dispatch():
 
     app = qt_app()
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     cap = PaneCapture(panel)                     # BEFORE the dispatch, or neither channel is captured
     before = panel.log_pane.toPlainText()
 
@@ -768,10 +749,7 @@ def test_on_error_routes_a_refusal_to_the_yellow_box():
 
     qt_app()
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     pane = PaneCapture(panel)
     exc = Refusal("The observation length, in seconds, is blank (default none: it must be given).",
                   field="t_obs")
@@ -816,10 +794,7 @@ def test_a_refusal_opens_the_yellow_box_without_a_traceback_and_a_bug_the_red_on
 
     app = qt_app()
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     pane = PaneCapture(panel)
 
     def _run_to_dialog(fn):
@@ -925,10 +900,7 @@ def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
 
     qt_app()
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     pane = PaneCapture(panel)
     holder = QWidget()                      # a parent that is NOT a panel; kept bound for its lifetime
     fix = "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
@@ -1989,10 +1961,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
 
     app = qt_app()
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     pane = PaneCapture(panel)
     log = logging.getLogger("core.SBI.pipeline")
     reached = []
@@ -2104,10 +2073,7 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
 
     app = qt_app()
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     pane = PaneCapture(panel)
     results = []
 
@@ -2164,10 +2130,7 @@ def test_a_crash_under_a_live_bar_is_a_crash_and_leaves_no_ignored_exception(mon
     monkeypatch.setattr(sys, "unraisablehook", sys.__unraisablehook__)
     app = qt_app()
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     pane = PaneCapture(panel)
     tokens = []
 

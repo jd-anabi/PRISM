@@ -28,7 +28,7 @@ import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
 from core.gui.worker import WorkerSignals                         # noqa: E402
-from tests._fixtures import qt_app, pump                          # noqa: E402
+from tests._fixtures import build_part, qt_app, pump              # noqa: E402
 import contextlib                                                  # noqa: E402
 
 # ── interactive "Pop out" for figures ────────────────────────────────────────────────────────────
@@ -311,7 +311,7 @@ def test_gui_form_labels_are_prettified():
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.panels.fdt_panel import FdtPanel
     from core.gui.panels.simulate_panel import SimulatePanel
-    FdtPanel(); CrossValPanel(); SimulatePanel()
+    build_part(FdtPanel); build_part(CrossValPanel); build_part(SimulatePanel)
 
 def test_a_theme_flip_between_build_and_save_cannot_split_a_figure():
     """THE 2026-08-25 RENDERING FAILURE, pinned, with its own counterfactual.

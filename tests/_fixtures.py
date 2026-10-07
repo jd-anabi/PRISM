@@ -16,6 +16,10 @@ tests/_dialogs.py, whose import loads neither torch nor the program. ONE import 
 the two modules, ``tests._fixtures`` and ``tests._dialogs`` (pytest.ini puts the repo root on the
 path; tests/ has no __init__.py): ``from _dialogs import SHOWN`` would import that module a second
 time under another name, with a second, empty SHOWN that the guard never touches.
+
+A window, a part of it, the inference screen and a bare run host are built by the four builders
+here -- ``build_window``, ``build_part``, ``build_inference``, ``build_run_host`` -- and by no suite
+itself, so a constructor's arguments are written in one place.
 """
 import ast
 import inspect
@@ -749,6 +753,60 @@ def compare_preflight_refusals(store) -> list:
     ]
 
 
+# The builders: every window, part, inference screen and bare run host a suite needs is made by one
+# of these four, so a constructor's arguments are written in one place. Plain functions, never
+# fixtures: a module-scoped fixture builds before any function-scoped one is set up.
+def build_window():
+    """The whole window, a ``MainWindow``, built anew at every call. It is not shown, not closed and
+    not kept: a test that wants its window closed closes it itself, because closing one writes
+    settings."""
+    qt_app()
+    from core.gui.main_window import MainWindow
+    return MainWindow()
+
+
+def build_part(cls, **kwargs):
+    """One part of the window -- a panel, a screen, a step of the inference screen -- as
+    ``cls(**kwargs)``, built anew at every call and kept nowhere. The class is the caller's: the
+    caller's own import of it says where the class lives, and moving a class fails only the tests
+    that use it."""
+    qt_app()
+    return cls(**kwargs)
+
+
+def build_inference(*, session=None, cfg=None):
+    """The inference SCREEN, built anew at every call and kept nowhere; its steps are reached from
+    it, and a dropped screen takes them with it. ``session`` is assigned when given, then ``cfg`` is
+    installed when given, and that is all: the gates are refreshed only as the constructor and
+    ``install_config`` refresh them themselves, so a test that writes to the session afterwards
+    refreshes them on its own line."""
+    qt_app()
+    from core.gui.screens.inference_screen import InferenceScreen
+    screen = InferenceScreen()
+    if session is not None:
+        screen.session = session
+    if cfg is not None:
+        screen.install_config(cfg)
+    return screen
+
+
+def build_run_host(cls=None):
+    """A bare run host: a panel with the shared run machinery and no controls of its own. With no
+    argument it is an instance of a new, empty subclass of ``BasePanel`` made at this call; with a
+    class, an instance of that class. The made class is always named ``P``: a panel stores its
+    layout under its class's name, and one test saves the layout with one host and restores it with
+    a second, so two hosts must share that name. Nothing is kept."""
+    qt_app()
+    from core.gui.panels.base_panel import BasePanel
+    if cls is not None:
+        return cls()
+
+    class P(BasePanel):
+        pass
+
+    return P()
+
+
 def process_state(app) -> dict:
     """What the whole program sets on the process, read as values that compare. The whole-program
     test reads it before, during and after; whatever ``whole_program`` learns to put back gets a
@@ -853,8 +911,7 @@ def artifact_screen(store):
     the ``refresh()`` here is what puts rows in the table.
     """
     from core.gui.screens.artifact_screen import ArtifactScreen
-    qt_app()
-    screen = ArtifactScreen(store=store)
+    screen = build_part(ArtifactScreen, store=store)
     screen.refresh()
     return screen
 

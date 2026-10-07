@@ -29,7 +29,7 @@ import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
 from core.gui.panels.base_panel import BasePanel                  # noqa: E402
-from tests._fixtures import qt_app, pump                          # noqa: E402
+from tests._fixtures import build_part, build_run_host, build_window, qt_app, pump  # noqa: E402
 import contextlib                                                  # noqa: E402
 
 # ── Simulate section: "Save video…" export ───────────────────────────────────────────────────────
@@ -152,10 +152,7 @@ def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
 
     app = qt_app()
 
-    class P(BasePanel):
-        pass
-
-    panel = P()
+    panel = build_run_host()
     chunks = []
     started = {"v": False}
     outcome = {"cancelled": 0, "error": 0}
@@ -197,11 +194,10 @@ def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
 def test_simulate_panel_is_wired_and_navigable():
     """The 4th home button is live: the Simulate section is registered, navigable, and its panel is in
     the persistence sweep."""
-    from core.gui.main_window import MainWindow
     from core.gui.panels.simulate_panel import SimulatePanel
 
     qt_app()
-    w = MainWindow()
+    w = build_window()
     assert w.panel(SimulatePanel) is not None
     assert "Simulate" in w._section_index
     w.nav.go_to(w._section_index["Simulate"])
@@ -213,7 +209,7 @@ def test_simulate_settings_round_trip():
     from core.gui.panels.simulate_panel import SimulatePanel
 
     qt_app()
-    sp = SimulatePanel()
+    sp = build_part(SimulatePanel)
     sp.tobs.setText("2.5")
     sp.fps.setText("24")
     sp.frame_steps.setText("1234")
@@ -226,7 +222,7 @@ def test_simulate_settings_round_trip():
     sp.save_settings(qs)
     qs.sync()
 
-    sp2 = SimulatePanel()
+    sp2 = build_part(SimulatePanel)
     assert sp2.tobs.value() == 2.5
     assert sp2.fps.value() == 24
     assert sp2.frame_steps.value() == 1234
@@ -338,7 +334,7 @@ def test_simulate_panel_records_chunks_and_gates_the_save_button():
     from core.gui.panels.simulate_panel import SimulatePanel
 
     qt_app()
-    p = SimulatePanel()
+    p = build_part(SimulatePanel)
     assert not p.btn_save_video.isEnabled(), "save must be disabled before any recording"
     p._on_chunk(np.array([[0.0, 0.1], [1e-3, 0.2]]))
     p._on_chunk(np.array([[2e-3, 0.3]]))
@@ -401,7 +397,7 @@ def test_saving_mp4_without_ffmpeg_is_a_refusal_not_a_config_error(monkeypatch):
     from tests._fixtures import CHOOSER_CALLS, PaneCapture, answer_chooser, asked, forget_asked, qt_app
 
     qt_app()
-    p = SimulatePanel()
+    p = build_part(SimulatePanel)
     p._record = [np.array([[0.0, 0.1], [1e-3, 0.2]])]
     sent = []
     p.dispatch = lambda *a, **k: sent.append(a)
@@ -445,7 +441,7 @@ def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(mon
     qt_app()
     cell = tmp_path / "cell.txt"
     cell.write_text("# values\n", encoding="utf-8")
-    p = SimulatePanel()
+    p = build_part(SimulatePanel)
     p.cell_picker.selected_path = lambda: str(cell)
     sent = []
     p.dispatch = lambda *a, **k: sent.append((a, k))

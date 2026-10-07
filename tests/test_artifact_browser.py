@@ -12,7 +12,7 @@ import pytest                                                          # noqa: E
 from core.artifacts import ArtifactStore                               # noqa: E402
 from core.artifacts.store import KIND_DIRS                             # noqa: E402
 from tests._fixtures import (_nad_cfg, _prior_artifact, artifact_screen,  # noqa: E402
-                             backdate_tree, build_browse_store, choose, qt_app)
+                             backdate_tree, build_browse_store, build_window, choose, qt_app)
 
 KINDS = list(KIND_DIRS)
 
@@ -146,7 +146,6 @@ def test_the_artifacts_tile_opens_the_browser_and_the_window_saves_its_state():
     """
     from PySide6.QtWidgets import QPushButton
     from core.gui import settings as st
-    from core.gui.main_window import MainWindow
     from core.gui.panels.base_panel import BasePanel
     from core.gui.screens.artifact_screen import ArtifactScreen
     from core.gui.screens.home_screen import SECTIONS
@@ -154,7 +153,7 @@ def test_the_artifacts_tile_opens_the_browser_and_the_window_saves_its_state():
     qt_app()
     assert SECTIONS[-1] == "Artifacts", SECTIONS
 
-    w = MainWindow()
+    w = build_window()
     assert isinstance(w.artifact_screen, ArtifactScreen)
     idx = w._section_index["Artifacts"]
     assert w._section_index["Simulate"] < idx < w._section_index["Settings"]
@@ -262,11 +261,10 @@ def test_a_store_change_in_the_browser_re_lists_every_artifact_picker():
     construction -- which is why what is asserted is EVERY picker the window holds, not a count. A
     count would make a later change that adds a picker break this test instead of being covered by it.
     The three kinds today are asserted as a SUBSET for the same reason."""
-    from core.gui.main_window import MainWindow
     from core.gui.widgets.artifact_picker import StorePicker
 
     qt_app()
-    w = MainWindow()
+    w = build_window()
     pickers = [p for panel in w._all_panels() for p in panel.findChildren(StorePicker)]
     assert pickers, "the window holds no artifact picker at all, so this proves nothing"
     assert {"prior", "posterior", "observation"} <= {p.kind for p in pickers}
@@ -1083,7 +1081,6 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
 
     The wiring (MainWindow._refresh_store_pickers and the store_changed connect) and the delete that
     emits store_changed are tested here together."""
-    from core.gui.main_window import MainWindow
     from core.gui.widgets.artifact_picker import StorePicker
     from tests._fixtures import qt_app
     qt_app()
@@ -1091,7 +1088,7 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
     cfg = _nad_cfg()
     keep = _prior_artifact(store, cfg, name="keep")
     doomed = _prior_artifact(store, cfg, name="doomed", seed=3)
-    w = MainWindow()
+    w = build_window()
     try:
         picker = w.inference_screen.prior_panel.prior_picker
         picker.refresh()
@@ -1132,7 +1129,6 @@ def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatc
     """
     from PySide6.QtWidgets import QMessageBox
     from core.Helpers import model_store
-    from core.gui.main_window import MainWindow
     from core.gui.panels.base_panel import BasePanel
     from tests._fixtures import all_asked, forget_asked, qt_app
     qt_app()
@@ -1144,7 +1140,7 @@ def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatc
     def boom(*a, **k):
         raise RuntimeError("corrupt definition")
 
-    w = MainWindow()
+    w = build_window()
     try:
         forget_asked()                      # this test is about the three sites, not construction
         monkeypatch.setattr(w.model_builder_screen, "load_existing", boom)
