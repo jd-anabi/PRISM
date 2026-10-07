@@ -259,12 +259,17 @@ A drafter or implementer may add private names; none of these is renamed or resh
 - **T3, first half (Task 3a).** In `tests/_fixtures.py`, plain functions with lazy imports, never
   fixtures:
   - `process_state(app) -> dict`: what the whole program sets on the process, as values that compare.
-    Fourteen keys at birth: `"style"`, `"sheet"`, `"palette"`, `"palette set by hand"`, `"font"`,
-    `"window icon"`, `"names"`, `"colour scheme"`, `"appearance"`, `"error hook"`,
+    Fifteen keys since Task 3a's fix commit `cd8464b` (fourteen in the task's section, which the
+    review of 2026-10-07 found one short): `"style"`, `"sheet"`, `"palette"`, `"palette set by hand"`,
+    `"font"`, `"window icon"`, `"names"`, `"colour scheme"`, `"appearance"`, `"appearance objects"`
+    (the number of appearance objects that are direct children of the application: the object
+    itself, beside the pointer to it, so that the lines which delete it are held), `"error hook"`,
     `"figure settings"`, `"quiet segment bar"`, `"root log handler"`, `"default store"`. The key
     `"style"` is `(app.style().inherits("QStyleSheetStyle"), app.style().objectName())`, never through
     `metaObject()`. Later keys: `"text factor"`, `"class fonts"` (Task 8), `"theme flag"` (Task 9),
-    `"small style"`, `"focus follower"` (Task 10): nineteen at the exit;
+    `"small style"`, `"focus follower"` (Task 10): twenty at the exit. The whole-program test
+    requires nine names to have changed while the program stood (the task's section lists eight;
+    `"appearance objects"` is the ninth);
   - `whole_program()`: a context manager, spelled in every task `with whole_program() as (app, window):`;
     it holds the one call of `build_app` under `tests/`, refuses to run without `PRISM_ARTIFACTS`, and
     on the way out everything `build_app` set on the process is as it was found (the figure settings
