@@ -417,8 +417,10 @@ def test_there_are_three_appearance_modes_and_no_others(tmp_path):
 def test_a_stored_mode_that_is_not_offered_reads_as_follow_windows(tmp_path):
     """A word an older build stored (the time-of-day mode among them), a word in another case, a
     blank and a number all read as the first choice: through the settings object that stored them,
-    through a second one on the same file, and from a file written by hand. Reading rewrites
-    nothing: the old word stays in the file until the next choice is made."""
+    through a second one on the same file, and from a file written by hand. Only the files written
+    by hand are read from disk (a second object on a file is served what the first one holds), so
+    the retired word, an unknown word, a blank and the spaced word are written by hand as well.
+    Reading rewrites nothing: the old word stays in the file until the next choice is made."""
     from PySide6.QtCore import QSettings
     from core.gui import settings
 
@@ -439,7 +441,8 @@ def test_a_stored_mode_that_is_not_offered_reads_as_follow_windows(tmp_path):
         assert settings.get_appearance(again) == "system", stored
         again.sync()
         assert path.read_bytes() == on_disk, f"reading rewrote the file that held {stored!r}"
-    for n, line in enumerate(("light, dark", "7", "Dark")):         # the first comes back as a list
+    # read from disk: the first comes back as a list; the last is the spaced word as the toolkit stores it, in quotes
+    for n, line in enumerate(("light, dark", "7", "Dark", "auto", "sepia", "", '" light "')):
         by_hand = tmp_path / f"by_hand_{n}.ini"
         by_hand.write_text(f"[appearance]\nmode={line}\n", encoding="utf-8")
         assert settings.get_appearance(QSettings(str(by_hand), QSettings.IniFormat)) == "system", line
@@ -759,6 +762,8 @@ def test_the_three_faces_resolve_on_a_real_windows_display():
         pytest.skip(f"needs the windows platform, got {QGuiApplication.platformName()!r}")
     for weight in (400, 600):
         assert QFontInfo(fonts.inter("body", weight)).family() == "Inter", weight
+    # both files are with the toolkit: with the regular one alone a semibold font still reads "Inter"
+    assert {"Regular", "SemiBold"} <= set(QFontDatabase.styles("Inter"))
     assert len({QFontMetricsF(fonts.inter("body")).horizontalAdvance(digit) for digit in "0123456789"}) == 1
     wanted = fonts.book_family(QFontDatabase.families())
     assert QFontInfo(fonts.book()).family() == wanted
