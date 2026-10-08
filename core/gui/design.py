@@ -337,9 +337,11 @@ def tokens(dark: bool) -> dict[str, str]:
 
 def build_palette(dark: bool) -> QPalette:
     """The palette of one theme: every role in all three groups, from the table. A sheet does some things badly
-    or not at all (the placeholder and link colours, the selection, a disabled control), and a part it does not
-    style, or one that paints itself, falls back to the palette. The Disabled group is set in full because a
-    whole form is disabled for the length of a run."""
+    or not at all (link colours, the selection, a disabled control), and a part it does not style, or one that
+    paints itself, falls back to the palette. The hint text of a field the sheet styles is the one thing this
+    palette does not decide: there the sheet names the colour, because the toolkit otherwise makes it of the
+    field's text colour, at half strength, and never reads the role set here. The Disabled group is set in full
+    because a whole form is disabled for the length of a run."""
     t = tokens(dark)
     roles = {
         QPalette.Window: "paper", QPalette.WindowText: "ink", QPalette.Base: "field", QPalette.AlternateBase: "margin",
@@ -376,7 +378,8 @@ def build_palette(dark: bool) -> QPalette:
 # and the accent comes from a class, never from the default button, which follows the keyboard focus from
 # button to button. A tick box and a radio button keep their outline, the style's own mark of keyboard focus,
 # and no rule names their indicator: one would take the whole box away from the style. Nothing is said of a
-# drop-down's arrow either.
+# drop-down's arrow either. A rule that gives a field its text colour names the colour of its hint as well:
+# left unnamed, the toolkit makes the hint of the text colour at half strength, in every state of the field.
 _QSS = Template("""
 QToolTip { background: $raised; color: $ink; border: 1px solid $field_line; padding: ${px_tip_v}px ${px_tip_h}px; }
 QDialog[cls="ask"] { background: $raised; }
@@ -415,7 +418,7 @@ QPushButton[cls="link"] { min-height: ${px_line_h}px; padding: 0px; border: none
 
 QLineEdit, QComboBox {
     min-height: ${px_fld_in}px; padding: 0px ${px_fld_pad}px; border: 1px solid $field_line;
-    border-radius: ${px_radius}px; background: $field; color: $ink;
+    border-radius: ${px_radius}px; background: $field; color: $ink; placeholder-text-color: $ink_3;
     selection-background-color: $accent; selection-color: $on_accent; }
 QLineEdit:disabled, QComboBox:disabled {
     background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink; }
@@ -427,7 +430,7 @@ QComboBox QAbstractItemView { border: 1px solid $field_line; background: $field;
                               selection-background-color: $accent_tint; selection-color: $ink; outline: 0; }
 QPlainTextEdit {
     min-height: ${px_fld_in}px; padding: 2px ${px_fld_pad}px; border: 1px solid $field_line;
-    border-radius: ${px_radius}px; background: $field; color: $ink;
+    border-radius: ${px_radius}px; background: $field; color: $ink; placeholder-text-color: $ink_3;
     selection-background-color: $accent; selection-color: $on_accent; }
 
 QCheckBox, QRadioButton { spacing: ${px_check_gap}px; color: $ink; }

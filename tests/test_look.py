@@ -941,6 +941,43 @@ def test_the_sheets_lengths_follow_the_text_factor_and_its_line_weights_do_not()
         assert built[("QScrollBar::handle:horizontal",)]["min-width"] == "28px"
 
 
+def test_a_fields_hint_text_is_the_hint_colour_in_both_themes():
+    """A sheet rule that gives a field its text colour makes the toolkit work the field's hint colour out of that
+    colour, at half strength; the palette's own hint colour is then never read. So the sheet names the hint colour
+    wherever it gives a field a colour, and a field's hint is the table's at full strength, disabled or not. The
+    sheet and the palette are set on each field itself, never on the application."""
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QComboBox, QLineEdit, QPlainTextEdit, QWidget
+    from core.gui import design
+    QApplication.instance() or QApplication([])
+    fields = ("QLineEdit", "QComboBox", "QPlainTextEdit")
+    hint, disabled = QPalette.ColorRole.PlaceholderText, QPalette.ColorGroup.Disabled
+    for dark in (False, True):
+        t, qss, palette = design.tokens(dark), design.build_qss(dark), design.build_palette(dark)
+        assert t["ink_3"] == design.COLOURS["ink_3"][1 if dark else 0]
+        holder = QWidget()
+        for make in (QLineEdit, QPlainTextEdit, QComboBox):
+            field = make(holder)
+            field.setPlaceholderText("a hint")
+            field.setPalette(palette)
+            field.setStyleSheet(qss)
+            field.ensurePolished()
+            own = field.palette()
+            assert own.color(hint).name(QColor.NameFormat.HexArgb).upper() == "#FF" + t["ink_3"][1:], (dark, make.__name__)
+            assert own.color(disabled, hint).name(QColor.NameFormat.HexArgb).upper() == "#FF" + t["disabled_ink"][1:], \
+                (dark, make.__name__, "disabled")
+        rules = _rules(qss)
+        named = {selector for selectors, declarations in rules if "placeholder-text-color" in declarations
+                 for selector in selectors}
+        assert set(fields) <= named, (dark, sorted(named))
+        for selectors, declarations in rules:
+            for selector in selectors:
+                subject = re.match(r"[A-Za-z]+", selector.split()[-1]).group()
+                if subject in fields and "color" in declarations:
+                    # a rule for one state of a field takes the hint colour that the field's plain rule names
+                    assert selector in named or subject in named, (dark, selector)
+
+
 def test_an_apply_runs_its_steps_in_one_order_and_stops_when_nothing_changed(monkeypatch):
     from PySide6.QtCore import QObject, Qt, Signal
     from PySide6.QtWidgets import QWidget
