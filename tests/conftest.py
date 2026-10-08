@@ -231,15 +231,16 @@ def _every_file_chooser_is_answered():
         CHOOSER_CALLS.clear()
 
 
-def check_drawing_code_raised_nothing(errors) -> None:
+def check_drawing_code_raised_nothing(errors, counts) -> None:
     """Fail when ``errors`` -- core.gui.reported.ERRORS as a test left it -- holds anything, naming
-    each method and what it raised. Raised rather than asserted, so the check survives a run with
-    assertions switched off."""
+    each method, what it raised the first time and, from ``counts`` (that module's COUNTS), how
+    often it failed. Raised rather than asserted, so the check survives a run with assertions
+    switched off."""
     if errors:
         raise AssertionError(
             "drawing code raised during this test (each error was caught and recorded, and the "
             "method answered its fallback, as in the running window): "
-            + "; ".join(f"{name}: {error!r}" for name, error in errors)
+            + "; ".join(f"{name}: {words} ({counts.get(name, 1)} time(s))" for name, words in errors)
             + ". A test that makes one raise on purpose does it inside "
               "`with reported.expected():` (core/gui/reported.py).")
 
@@ -250,12 +251,12 @@ def _drawing_code_raises_nothing():
     (core/gui/reported.py): the error is recorded, the method answers a fallback, and nothing
     reaches the test that made the window draw. So the record is emptied before every test and read
     after it, and a test that leaves anything in it FAILS here, at teardown. That module imports
-    the standard library and nothing else, so this costs a test two emptied containers and the copy
-    of a list that is empty."""
+    the standard library and nothing else, so this costs a test two emptied containers and the
+    copies of a list and a dictionary that are empty."""
     from core.gui import reported
     reported.forget()
     yield
     try:
-        check_drawing_code_raised_nothing(list(reported.ERRORS))
+        check_drawing_code_raised_nothing(list(reported.ERRORS), dict(reported.COUNTS))
     finally:
         reported.forget()

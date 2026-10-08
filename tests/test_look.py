@@ -18,6 +18,7 @@ import subprocess
 import sys
 import textwrap
 import types
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -2174,39 +2175,40 @@ def test_a_guarded_method_that_raises_is_reported_once_and_answers_its_fallback(
         def by_a_call_that_fails(self):
             raise ValueError("first")
 
-    def told():                              # what the record holds, as the errors' words
-        return [str(error) for _name, error in reported.ERRORS]
+    def told():                              # what the record lists: the first error under each name, as words
+        return [words for _name, words in reported.ERRORS]
 
     shown = []
     drawn, value, call = Drawn(), Drawn.by_a_value.__qualname__, Drawn.by_a_call.__qualname__
+    failing = Drawn.by_a_call_that_fails.__qualname__
     assert value.endswith("Drawn.by_a_value") and call.endswith("Drawn.by_a_call")
     # set after the class is made: the hook is looked for when a method fails, not when it is guarded
     monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: shown.append((kind, error, trace)))
     reported.forget()
     try:
         assert drawn.by_a_value(3) == "stock"
-        (name, error), = reported.ERRORS
-        assert name == value and str(error) == "no 3"
-        assert shown == [(ValueError, error, error.__traceback__)]
-        assert drawn.by_a_value(4) == "stock"                # the second time: recorded, and no second box
-        assert told() == ["no 3", "no 4"] and len(shown) == 1
+        assert reported.ERRORS == [(value, "ValueError: no 3")] and reported.COUNTS == {value: 1}
+        (kind, error, trace), = shown        # the hook is handed the error itself, with its traceback
+        assert kind is ValueError and str(error) == "no 3" and trace is error.__traceback__ is not None
+        assert drawn.by_a_value(4) == "stock"                # the second time: counted, and no second box
+        assert told() == ["ValueError: no 3"] and reported.COUNTS == {value: 2} and len(shown) == 1
         assert drawn.by_a_call(5, twice=True) == ("stock", drawn, 5, True)       # each method has its own first time
-        assert [name for name, _error in reported.ERRORS] == [value, value, call] and len(shown) == 2
-        reported.forget()                                    # the record goes, and so does what was shown
-        assert reported.ERRORS == []
+        assert [name for name, _words in reported.ERRORS] == [value, call] and len(shown) == 2
+        reported.forget()                                    # the record goes, and every count with it
+        assert reported.ERRORS == [] and reported.COUNTS == {}
         assert drawn.by_a_value(6) == "stock" and len(shown) == 3
 
         drawn.fail = False                                   # a method that does not raise is as it was
         assert drawn.by_a_value(6) == 6 and drawn.by_a_value(6, twice=True) == 12
         assert Drawn.by_a_value.__name__ == "by_a_value"
         assert Drawn.by_a_value.__doc__ == "What the method says of itself."
-        assert told() == ["no 6"] and len(shown) == 3
+        assert told() == ["ValueError: no 6"] and reported.COUNTS == {value: 1} and len(shown) == 3
         drawn.fail = True
 
-        for stop in (KeyboardInterrupt(), SystemExit(2)):    # neither is held back, neither is recorded
+        for stop in (KeyboardInterrupt(), SystemExit(2)):    # neither is held back, neither is counted
             with pytest.raises(type(stop)):
                 drawn.stopped(stop)
-        assert drawn.stopped(OSError("held")) is None and told() == ["no 6", "held"]
+        assert drawn.stopped(OSError("held")) is None and told() == ["ValueError: no 6", "OSError: held"]
 
         again = []
 
@@ -2216,7 +2218,8 @@ def test_a_guarded_method_that_raises_is_reported_once_and_answers_its_fallback(
 
         monkeypatch.setattr(sys, "excepthook", box)
         reported.forget()
-        assert drawn.by_a_value(7) == "stock" and len(again) == 1 and told() == ["no 7", "no 8"]
+        assert drawn.by_a_value(7) == "stock" and len(again) == 1
+        assert told() == ["ValueError: no 7"] and reported.COUNTS == {value: 2}
 
         def broken(kind, error, trace):
             raise RuntimeError("the hook failed")
@@ -2224,34 +2227,115 @@ def test_a_guarded_method_that_raises_is_reported_once_and_answers_its_fallback(
         monkeypatch.setattr(sys, "excepthook", broken)
         reported.forget()
         assert drawn.by_a_value(9) == "stock"
-        assert [(name, str(error)) for name, error in reported.ERRORS] == [
-            (value, "no 9"), ("sys.excepthook", "the hook failed")]
-        assert drawn.by_a_call_that_fails() is None          # a fallback that fails too: recorded, and no answer
-        assert [(name.rpartition(".")[2], type(error)) for name, error in reported.ERRORS[2:]] == [
-            ("by_a_call_that_fails", ValueError), ("excepthook", RuntimeError),
-            ("by_a_call_that_fails", ZeroDivisionError)]
+        assert reported.ERRORS == [(value, "ValueError: no 9"), ("sys.excepthook", "RuntimeError: the hook failed")]
+        assert drawn.by_a_call_that_fails() is None          # a fallback that fails too: listed, and no answer
+        assert [name for name, _words in reported.ERRORS[2:]] == [failing, failing + " (its fallback)"]
+        assert told()[2] == "ValueError: first" and told()[3].startswith("ZeroDivisionError: ")
+        assert reported.COUNTS == {value: 1, "sys.excepthook": 2, failing: 1, failing + " (its fallback)": 1}
 
-        # a test that makes a guarded method raise on purpose: recorded as always, shown to nobody, and
-        # on the way out the record and what was shown are as they were found
+        # a test that makes a guarded method raise on purpose: counted and listed as always, shown to
+        # nobody, and on the way out the record and the counts are as they were found
         del shown[:]
-        monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: shown.append(error))
+        monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: shown.append(str(error)))
         reported.forget()
         drawn.by_a_value(10)
         with reported.expected() as caught:
             assert drawn.by_a_value(11) == "stock" and drawn.by_a_call(12) == ("stock", drawn, 12, False)
-            assert [str(error) for _name, error in caught] == ["no 11", "no 12"]
-            assert told() == ["no 10", "no 11", "no 12"] and len(shown) == 1
-        assert told() == ["no 10"] and [name for name, _error in caught] == [value, call]
+            assert caught == [(call, "ValueError: no 12")]   # the other had failed before the block: a repeat
+            assert told() == ["ValueError: no 10", "ValueError: no 12"] and reported.COUNTS == {value: 2, call: 1}
+            assert shown == ["no 10"]
+        assert told() == ["ValueError: no 10"] and reported.COUNTS == {value: 1} and len(caught) == 1
         drawn.by_a_call(13)                  # not shown inside the block, so this is its first time
         drawn.by_a_value(14)                 # shown before the block: not again
-        assert [str(error) for error in shown] == ["no 10", "no 13"]
+        assert shown == ["no 10", "no 13"]
         with pytest.raises(KeyError):        # put back also when the block is left by an error
             with reported.expected():
-                drawn.by_a_value(15)
+                assert drawn.stopped(OSError("inside")) is None and len(reported.ERRORS) == 3
                 raise KeyError("the test's own")
-        assert told() == ["no 10", "no 13", "no 14"]
+        assert told() == ["ValueError: no 10", "ValueError: no 13"] and reported.COUNTS == {value: 2, call: 1}
     finally:
         reported.forget()                    # raised on purpose: the session's check must find nothing
+
+
+def test_a_method_that_keeps_failing_is_listed_once_and_counted(monkeypatch):
+    """A paint that fails at every repaint, for as long as a run of days lasts, must not fill the record: a
+    method's first failure is listed and shown, and its later ones are counted and nothing more."""
+    from core.gui import reported
+
+    class Drawn:
+        @reported.reported("stock")
+        def paintEvent(self, n):
+            raise ValueError(f"no {n}")
+
+    shown = []
+    monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: shown.append(str(error)))
+    drawn, name = Drawn(), Drawn.paintEvent.__qualname__
+    reported.forget()
+    try:
+        assert [drawn.paintEvent(n) for n in range(5)] == ["stock"] * 5
+        assert reported.ERRORS == [(name, "ValueError: no 0")]       # the first, as words; the other four are not
+        assert reported.COUNTS == {name: 5} and shown == ["no 0"]
+        reported.forget()
+        assert reported.ERRORS == [] and reported.COUNTS == {}
+        assert drawn.paintEvent(5) == "stock" and shown == ["no 0", "no 5"]      # a first time again
+        with reported.expected() as caught:  # a repeat inside the block is counted too, and is not caught
+            drawn.paintEvent(6)
+            assert caught == [] and reported.COUNTS == {name: 2}
+        assert reported.ERRORS == [(name, "ValueError: no 5")] and reported.COUNTS == {name: 1}
+        reported.forget()
+        with reported.expected() as caught:  # a block that begins with nothing recorded: the first, then counts
+            assert [drawn.paintEvent(n) for n in (7, 8, 9)] == ["stock"] * 3
+            assert caught == reported.ERRORS == [(name, "ValueError: no 7")] and reported.COUNTS == {name: 3}
+        assert reported.ERRORS == [] and reported.COUNTS == {} and shown == ["no 0", "no 5"]
+    finally:
+        reported.forget()
+
+
+def test_a_failed_paint_leaves_no_painter_behind():
+    """An error keeps its traceback, the traceback the frames of the failing call, and a frame its locals: in
+    a paint event that is the live painter. So the record keeps an error as words and nothing of the error
+    itself: when the guarded call returns, the painter a failed paint had opened is gone, and the widget
+    can be painted again. Two of the window's paint events open their painter as this one does, with no
+    ``finally``."""
+    from PySide6.QtCore import qInstallMessageHandler
+    from core.gui import reported
+    QApplication.instance() or QApplication([])
+
+    class Local:
+        pass
+
+    class Failing(QWidget):
+        fails, local = True, None
+
+        @reported.reported()
+        def paintEvent(self, _event):
+            painter = QPainter(self)         # a local, ended at the end and by nothing else
+            held = Local()
+            Failing.local = weakref.ref(held)
+            if Failing.fails:
+                Failing.fails = False
+                raise ValueError("the first paint fails")
+            painter.fillRect(self.rect(), Qt.magenta)        # a colour no ground has
+            painter.end()
+
+    widget = Failing()
+    widget.resize(20, 12)
+    picture = _image(20, 12, 1.0)            # both paints go into this one picture, which outlives them
+    said = []
+    previous = qInstallMessageHandler(lambda kind, context, text: said.append(text))
+    try:
+        with reported.expected():            # nothing of the block is kept past it: plain facts only
+            widget.render(picture)           # the first paint fails under its live painter
+            listed = [(name, type(words).__name__, str(words)) for name, words in reported.ERRORS]
+            left = (picture.paintingActive(), Failing.local() is not None, _at(picture, 10, 6))
+            widget.render(picture)           # the second paints
+    finally:
+        qInstallMessageHandler(previous)
+    assert [text for text in said if "paint" in text.lower()] == [], "the toolkit met a painter left behind"
+    assert _at(picture, 10, 6) == "#FF00FF" != left[2], "the second paint did not draw"
+    # at once, with no collection: the next paint may come before any
+    assert left[:2] == (False, False), "a painter on the picture, a local of the failing call: still there"
+    assert listed == [(Failing.paintEvent.__qualname__, "str", "ValueError: the first paint fails")]
 
 
 # What the toolkit calls while a window is drawn or laid out. In the main window each is entered from inside
@@ -2416,7 +2500,7 @@ def test_the_looks_overrides_fall_back_to_the_stock_answer_when_they_fail(monkey
         return picture
 
     def names(caught):
-        return [name for name, _error in caught]
+        return [name for name, _words in caught]
 
     with text_size(1.0), reported.expected() as caught:
         picture, where = tick_box()
@@ -2442,32 +2526,34 @@ def test_the_looks_overrides_fall_back_to_the_stock_answer_when_they_fail(monkey
             patch.setattr(style, "QStyle", SimpleNamespace())
             assert worn.styleHint(wheel) == stock.styleHint(wheel)
             assert worn.styleHint(wheel, None, r.box, None) == stock.styleHint(wheel, None, r.box, None)
-        assert names(caught) == ["PrismStyle.drawPrimitive"] * 2 + ["PrismStyle.pixelMetric"] * 2 + [
-            "PrismStyle.styleHint"] * 2
+        # each failed twice: listed the first time, counted both
+        assert names(caught) == ["PrismStyle.drawPrimitive", "PrismStyle.pixelMetric", "PrismStyle.styleHint"]
+        assert reported.COUNTS == dict.fromkeys(names(caught), 2)
 
-        del caught[:]
         _arrive(r.button, Qt.TabFocusReason)
         ring = r.follows.ring()
         with monkeypatch.context() as patch:                 # the ring's colour fails, under its live painter
             patch.setattr(design, "colour", fail)
             picture = _image(ring.width(), ring.height(), 1.0)
             ring.render(picture, QPoint(0, 0), QRegion(), QWidget.RenderFlag.DrawChildren)
-            assert picture == _image(ring.width(), ring.height(), 1.0) and not ring.paintingActive()
-        assert names(caught) == ["FocusRing.paintEvent"]
+            assert picture == _image(ring.width(), ring.height(), 1.0)
+            assert not ring.paintingActive() and not picture.paintingActive()
+        assert names(caught)[3:] == ["FocusRing.paintEvent"] and reported.COUNTS["FocusRing.paintEvent"] == 1
         _leave(r.button, Qt.TabFocusReason)
 
-        del caught[:]
         with monkeypatch.context() as patch:                 # the follower fails where the focus arrives
             patch.setattr(r.follows, "arrived", fail)
             assert r.follows.eventFilter(r.button, QFocusEvent(QEvent.FocusIn, Qt.TabFocusReason)) is False
             _arrive(r.button, Qt.TabFocusReason)             # and as the toolkit calls it: nothing comes out
-        assert names(caught) == ["FocusFollower.eventFilter"] * 2 and r.follows.target() is None
+        assert names(caught)[4:] == ["FocusFollower.eventFilter"] and r.follows.target() is None
+        assert reported.COUNTS["FocusFollower.eventFilter"] == 2
 
 
 def test_a_test_in_which_drawing_code_failed_is_failed(request):
     """A guarded method keeps its error from the test that made it draw, so that test would pass over it.
     After every test the session's check reads the record, and fails the test when the record holds
-    anything. The check is called here with lists of its own: the record itself stays empty."""
+    anything, naming each method with its first error and how often it failed. The check is called here with
+    a record of its own: the real one stays empty."""
     from core.gui import reported
     # tests/ is no package, so pytest holds its conftest under a name of its own; imported by name the
     # file would be loaded a second time, beside the one whose fixtures are in force
@@ -2475,11 +2561,12 @@ def test_a_test_in_which_drawing_code_failed_is_failed(request):
     guards = next(plugin for plugin in request.config.pluginmanager.get_plugins()
                   if getattr(plugin, "__file__", None) and Path(plugin.__file__).resolve() == here)
     assert "_drawing_code_raises_nothing" in request.fixturenames, "in force for every test, without being asked for"
-    assert guards.check_drawing_code_raised_nothing([]) is None
+    assert guards.check_drawing_code_raised_nothing([], {}) is None
     with pytest.raises(AssertionError) as failed:
-        guards.check_drawing_code_raised_nothing([("FocusRing.paintEvent", ValueError("no colour")),
-                                                  ("PrismStyle.styleHint", KeyError("hint"))])
-    for needle in ("FocusRing.paintEvent: ValueError('no colour')", "PrismStyle.styleHint: KeyError('hint')",
-                   "reported.expected()"):
+        guards.check_drawing_code_raised_nothing(
+            [("FocusRing.paintEvent", "ValueError: no colour"), ("PrismStyle.styleHint", "KeyError: 'hint'")],
+            {"FocusRing.paintEvent": 1, "PrismStyle.styleHint": 5})
+    for needle in ("FocusRing.paintEvent: ValueError: no colour (1 time(s))",
+                   "PrismStyle.styleHint: KeyError: 'hint' (5 time(s))", "reported.expected()"):
         assert needle in str(failed.value), str(failed.value)
-    assert reported.ERRORS == []
+    assert reported.ERRORS == [] and reported.COUNTS == {}
