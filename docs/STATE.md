@@ -84,7 +84,7 @@ until Task 10 paints it; in dark the percentage on the filled half of the old pr
 ordinary text size the comparison list's three buttons can ask for a horizontal bar. Also to tell, not to ask: on
 macOS and Linux the first appearance choice also reads "Follow Windows". **Next, in order:** Task 10 (the small style:
 painted tick boxes and radios, and the focus ring), the pictures for the owner (10p), 11b, 12 (E12, the stage's one
-engine change), 13 to 18, 19. **Engine changes built so far: none of E1–E12.** For the stage that rewrites the guide:
+engine change), 13 to 18, 19. **Engine changes built at that point: none (E12 has landed since: the paragraph "AFTER THE PICTURES").** For the stage that rewrites the guide:
 `docs/guide/window.md:28-29` and `docs/guide/architecture.md:216` describe the appearance choices as they were. Minor review findings not fixed are listed per task in the ledger for the
 stage's last review to sort.
 
