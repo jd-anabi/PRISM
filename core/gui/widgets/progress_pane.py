@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QProgressBar, QSizePolicy, Q
 
 from core import progress
 from core.gui import fonts
+from core.gui.reported import reported
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _SPIN_MS = 100
@@ -119,6 +120,7 @@ class _Sparkline(QWidget):
         self._samples = deque([None] * self._capacity, maxlen=self._capacity)
         self.update()
 
+    @reported()
     def paintEvent(self, _event) -> None:
         w, h = self.width(), self.height()
         if w <= 0 or h <= 0:

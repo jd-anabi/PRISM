@@ -15,6 +15,8 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QScrollArea, QTabWidget, QVBoxLayout,
                                QWidget)
 
+from ..reported import reported
+
 
 class _FitLabel(QLabel):
     """A QLabel that scales its pixmap DOWN to the available width, keeping aspect ratio.
@@ -32,6 +34,7 @@ class _FitLabel(QLabel):
         self._source = pix
         self._rescale()
 
+    @reported(QLabel.resizeEvent)
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._rescale()

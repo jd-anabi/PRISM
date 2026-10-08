@@ -16,6 +16,8 @@ from PySide6.QtCore import Property, QEasingCurve, QPoint, QPointF, QPropertyAni
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QWidget
 
+from ..reported import reported
+
 _SCREEN_MS = 280       # slide + fade for top-level screen navigation
 _TAB_MS = 180          # quick cross-fade for tab switches
 
@@ -64,6 +66,7 @@ class _TransitionOverlay(QWidget):
 
     progress = Property(float, _get_p, _set_p)
 
+    @reported()
     def paintEvent(self, _event):
         p = self._p
         w = self.width()               # LOGICAL width -- never pm.width() (DPR would slide twice as far)

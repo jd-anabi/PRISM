@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QFocusFram
                                QProxyStyle, QStyle)
 
 from . import design, paint
+from .reported import reported
 
 
 class PrismStyle(QProxyStyle):
@@ -32,6 +33,7 @@ class PrismStyle(QProxyStyle):
     def __init__(self):
         super().__init__("Fusion")
 
+    @reported(QProxyStyle.pixelMetric)
     def pixelMetric(self, metric, option=None, widget=None):
         if metric in self._INDICATORS:
             return design.scaled(design.SIZE["indicator"])           # the box grows with the lettering
@@ -43,6 +45,7 @@ class PrismStyle(QProxyStyle):
             return design.SIZE["focus_ring"] + design.SIZE["focus_gap"]      # a line and its gap: never scaled
         return super().pixelMetric(metric, option, widget)
 
+    @reported(QProxyStyle.styleHint)
     def styleHint(self, hint, option=None, widget=None, returnData=None):
         if hint == QStyle.SH_FocusFrame_AboveWidget:
             # The frame is a child of the window, or of a scroll area's viewport, and lies above its control.
@@ -52,6 +55,7 @@ class PrismStyle(QProxyStyle):
             return 0
         return super().styleHint(hint, option, widget, returnData)
 
+    @reported(QProxyStyle.drawPrimitive)
     def drawPrimitive(self, element, option, painter, widget=None):
         if element in (QStyle.PE_IndicatorCheckBox, QStyle.PE_IndicatorRadioButton):
             paint.paint_indicator(painter, "radio" if element == QStyle.PE_IndicatorRadioButton else "check",
@@ -71,6 +75,7 @@ class FocusRing(QFocusFrame):
     edge instead."""
     inset = False                                    # read by PrismStyle: no margin round an inset ring
 
+    @reported()
     def paintEvent(self, _event):
         target = self.widget()
         if target is None:
@@ -142,6 +147,7 @@ class FocusFollower(QObject):
         self._ring = None
         self.setParent(None)
 
+    @reported(False)
     def eventFilter(self, obj, event):
         kind = event.type()                  # first, and nothing else for almost every event there is
         if kind == _FOCUS_IN:

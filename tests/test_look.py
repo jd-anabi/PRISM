@@ -36,7 +36,7 @@ REPO = Path(__file__).resolve().parents[1]
 # fresh-interpreter test is then its proof that it loads no engine
 LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.gui.mpl_theme", "core.gui.settings",
                 "core.gui.file_chooser", "core.gui.widgets.labeled_inputs", "core.gui.paint", "core.gui.style",
-                "core.Helpers.plot_colours")
+                "core.gui.reported", "core.Helpers.plot_colours")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
 
@@ -2143,3 +2143,335 @@ def test_the_plotting_colours_are_the_second_to_fifth_line_colours():
     assert held == tuple(design.COLOURS[name][0] for name in design.SERIES[1:5])
     assert sorted(n for n in vars(plot_colours) if not n.startswith("_")) == [
         "BLUE", "GREEN", "ORANGE", "VERMILION"]
+
+
+# ── drawing code reports its own errors ──────────────────────────────────────────────────────────
+def test_a_guarded_method_that_raises_is_reported_once_and_answers_its_fallback(monkeypatch):
+    """The guard a method carries when the toolkit calls it while a window is drawn or laid out. Its error
+    goes to the hook in force at that moment, once for each method, and the method answers its fallback. A
+    keyboard interrupt and an exit pass; nothing else comes out, whether the hook fails or the fallback does."""
+    from core.gui import reported
+
+    class Drawn:
+        fail = True
+
+        @reported.reported("stock")
+        def by_a_value(self, n, twice=False):
+            """What the method says of itself."""
+            if self.fail:
+                raise ValueError(f"no {n}")
+            return n * (2 if twice else 1)
+
+        @reported.reported(lambda self, n, twice=False: ("stock", self, n, twice))
+        def by_a_call(self, n, twice=False):
+            raise ValueError(f"no {n}")
+
+        @reported.reported()
+        def stopped(self, by):
+            raise by
+
+        @reported.reported(lambda self: 1 // 0)
+        def by_a_call_that_fails(self):
+            raise ValueError("first")
+
+    def told():                              # what the record holds, as the errors' words
+        return [str(error) for _name, error in reported.ERRORS]
+
+    shown = []
+    drawn, value, call = Drawn(), Drawn.by_a_value.__qualname__, Drawn.by_a_call.__qualname__
+    assert value.endswith("Drawn.by_a_value") and call.endswith("Drawn.by_a_call")
+    # set after the class is made: the hook is looked for when a method fails, not when it is guarded
+    monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: shown.append((kind, error, trace)))
+    reported.forget()
+    try:
+        assert drawn.by_a_value(3) == "stock"
+        (name, error), = reported.ERRORS
+        assert name == value and str(error) == "no 3"
+        assert shown == [(ValueError, error, error.__traceback__)]
+        assert drawn.by_a_value(4) == "stock"                # the second time: recorded, and no second box
+        assert told() == ["no 3", "no 4"] and len(shown) == 1
+        assert drawn.by_a_call(5, twice=True) == ("stock", drawn, 5, True)       # each method has its own first time
+        assert [name for name, _error in reported.ERRORS] == [value, value, call] and len(shown) == 2
+        reported.forget()                                    # the record goes, and so does what was shown
+        assert reported.ERRORS == []
+        assert drawn.by_a_value(6) == "stock" and len(shown) == 3
+
+        drawn.fail = False                                   # a method that does not raise is as it was
+        assert drawn.by_a_value(6) == 6 and drawn.by_a_value(6, twice=True) == 12
+        assert Drawn.by_a_value.__name__ == "by_a_value"
+        assert Drawn.by_a_value.__doc__ == "What the method says of itself."
+        assert told() == ["no 6"] and len(shown) == 3
+        drawn.fail = True
+
+        for stop in (KeyboardInterrupt(), SystemExit(2)):    # neither is held back, neither is recorded
+            with pytest.raises(type(stop)):
+                drawn.stopped(stop)
+        assert drawn.stopped(OSError("held")) is None and told() == ["no 6", "held"]
+
+        again = []
+
+        def box(kind, error, trace):         # the box's own loop paints the failing widget once more
+            again.append(error)
+            drawn.by_a_value(8)
+
+        monkeypatch.setattr(sys, "excepthook", box)
+        reported.forget()
+        assert drawn.by_a_value(7) == "stock" and len(again) == 1 and told() == ["no 7", "no 8"]
+
+        def broken(kind, error, trace):
+            raise RuntimeError("the hook failed")
+
+        monkeypatch.setattr(sys, "excepthook", broken)
+        reported.forget()
+        assert drawn.by_a_value(9) == "stock"
+        assert [(name, str(error)) for name, error in reported.ERRORS] == [
+            (value, "no 9"), ("sys.excepthook", "the hook failed")]
+        assert drawn.by_a_call_that_fails() is None          # a fallback that fails too: recorded, and no answer
+        assert [(name.rpartition(".")[2], type(error)) for name, error in reported.ERRORS[2:]] == [
+            ("by_a_call_that_fails", ValueError), ("excepthook", RuntimeError),
+            ("by_a_call_that_fails", ZeroDivisionError)]
+
+        # a test that makes a guarded method raise on purpose: recorded as always, shown to nobody, and
+        # on the way out the record and what was shown are as they were found
+        del shown[:]
+        monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: shown.append(error))
+        reported.forget()
+        drawn.by_a_value(10)
+        with reported.expected() as caught:
+            assert drawn.by_a_value(11) == "stock" and drawn.by_a_call(12) == ("stock", drawn, 12, False)
+            assert [str(error) for _name, error in caught] == ["no 11", "no 12"]
+            assert told() == ["no 10", "no 11", "no 12"] and len(shown) == 1
+        assert told() == ["no 10"] and [name for name, _error in caught] == [value, call]
+        drawn.by_a_call(13)                  # not shown inside the block, so this is its first time
+        drawn.by_a_value(14)                 # shown before the block: not again
+        assert [str(error) for error in shown] == ["no 10", "no 13"]
+        with pytest.raises(KeyError):        # put back also when the block is left by an error
+            with reported.expected():
+                drawn.by_a_value(15)
+                raise KeyError("the test's own")
+        assert told() == ["no 10", "no 13", "no 14"]
+    finally:
+        reported.forget()                    # raised on purpose: the session's check must find nothing
+
+
+# What the toolkit calls while a window is drawn or laid out. In the main window each is entered from inside
+# the window's own handling of an event, where the binding drops whatever it raises.
+_CALLED_WHILE_DRAWING = frozenset({
+    "paintEvent", "eventFilter", "resizeEvent", "drawPrimitive", "drawControl", "drawComplexControl",
+    "pixelMetric", "styleHint", "sizeHint", "minimumSizeHint", "heightForWidth", "event"})
+# The eight there are today, each with the fallback its guard names as it is written (None: it names none).
+# Typed out so that a guard taken off, or a fallback changed, fails here by name; a new one need not join.
+_GUARDED_TODAY = {
+    "style.py: PrismStyle.pixelMetric": "QProxyStyle.pixelMetric",
+    "style.py: PrismStyle.styleHint": "QProxyStyle.styleHint",
+    "style.py: PrismStyle.drawPrimitive": "QProxyStyle.drawPrimitive",
+    "style.py: FocusRing.paintEvent": None,
+    "style.py: FocusFollower.eventFilter": "False",
+    "widgets/anim.py: _TransitionOverlay.paintEvent": None,
+    "widgets/progress_pane.py: _Sparkline.paintEvent": None,
+    "widgets/figure_stack.py: _FitLabel.resizeEvent": "QLabel.resizeEvent",
+}
+# The files the scan does not read, each with its reason.
+_NOT_GUARDED_FILES = {
+    "widgets/figure_window.py": "the popped-out figure is a window of its own, which does not keep the "
+                                "interpreter while it handles an event: its canvas is the plotting library's own "
+                                "drawing code, which cannot be made to report, so the binding still reports "
+                                "what is raised in that window",
+}
+
+
+def _drawing_methods(tree) -> list:
+    """Every place in a parsed module where a name the toolkit calls while a window is drawn or laid out is
+    bound, as (line, name, guarded, fallback). A method defined in a class is "Class.method": guarded when it
+    stands under ``@reported(...)`` and the module imports that name from the module called ``reported``;
+    ``fallback`` is the guard's argument as written, None when it has none. Such a name bound any other way
+    (assigned in a class body, or set on a class or an object afterwards) is listed as it is written and is
+    never guarded: the binding takes that for an override as well."""
+    imported = any(isinstance(node, ast.ImportFrom) and (node.module or "").rpartition(".")[2] == "reported"
+                   and any(alias.name == "reported" and alias.asname is None for alias in node.names)
+                   for node in ast.walk(tree))
+    own_scope = (ast.ClassDef, ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+    found = []
+    for cls in (node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)):
+        body = list(cls.body)                # the class's own statements, through its ifs and its tries,
+        while body:                          # and not into the functions and the classes it defines
+            node = body.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name in _CALLED_WHILE_DRAWING:
+                    guards = [d for d in node.decorator_list if isinstance(d, ast.Call)
+                              and isinstance(d.func, ast.Name) and d.func.id == "reported"]
+                    handed = guards[0].args + [keyword.value for keyword in guards[0].keywords] if guards else []
+                    found.append((node.lineno, f"{cls.name}.{node.name}", imported and bool(guards),
+                                  ast.unparse(handed[0]) if handed else None))
+            elif isinstance(node, ast.Name):
+                if isinstance(node.ctx, ast.Store) and node.id in _CALLED_WHILE_DRAWING:
+                    found.append((node.lineno, f"{cls.name}.{node.id}", False, None))
+            elif not isinstance(node, own_scope) and not (isinstance(node, ast.AnnAssign) and node.value is None):
+                body.extend(ast.iter_child_nodes(node))
+    found += [(node.lineno, ast.unparse(node), False, None) for node in ast.walk(tree)
+              if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store)
+              and node.attr in _CALLED_WHILE_DRAWING]
+    return sorted(found)
+
+
+def test_every_method_the_toolkit_calls_while_drawing_reports_its_errors():
+    """Every ``.py`` under core/gui is read: a method of one of the twelve names, defined in a class, stands
+    under the guard of core/gui/reported.py. The scanner is checked on snippets first: with the tree clean,
+    the walk would go on passing if the scanner stopped matching anything."""
+    def scan(source):
+        return [(name, guarded, fallback) for _line, name, guarded, fallback in _drawing_methods(ast.parse(source))]
+
+    head = "from .reported import reported\n"
+    for guard, fallback in (("@reported()", None), ("@reported(QLabel.resizeEvent)", "QLabel.resizeEvent"),
+                            ("@reported(fallback=False)", "False")):
+        for start in (head, "from ..reported import reported\n", "from core.gui.reported import reported\n"):
+            source = start + f"class Ring(QWidget):\n    {guard}\n    def paintEvent(self, event): pass\n"
+            assert scan(source) == [("Ring.paintEvent", True, fallback)], source
+    for name in sorted(_CALLED_WHILE_DRAWING):               # each of the twelve names, with no guard
+        source = head + f"class Bare(QWidget):\n    def {name}(self, *told): pass\n"
+        assert scan(source) == [(f"Bare.{name}", False, None)], name
+    for bare in ("class Bare(QWidget):\n    @reported\n    def paintEvent(self, event): pass\n",       # not called
+                 "class Bare(QWidget):\n    @other.reported()\n    def paintEvent(self, event): pass\n",
+                 "class Bare(QWidget):\n    @Slot()\n    def paintEvent(self, event): pass\n",
+                 "class Bare(QWidget):\n    if True:\n        def paintEvent(self, event): pass\n",
+                 "class Bare(QWidget):\n    try:\n        paintEvent = draw\n    finally:\n        pass\n",
+                 "def make():\n    class Bare(QWidget):\n        def paintEvent(self, event): pass\n",
+                 "class Outer:\n    class Bare(QWidget):\n        async def paintEvent(self, event): pass\n"):
+        assert scan(head + bare) == [("Bare.paintEvent", False, None)], bare
+    not_imported = "class Bare(QWidget):\n    @reported()\n    def paintEvent(self, event): pass\n"
+    for start in ("", "from .reported import expected\n", "from .other import reported\n",
+                  "from .reported import guard as reported\n"):
+        assert scan(start + not_imported) == [("Bare.paintEvent", False, None)], start
+    assert scan("Window.event = handle\n") == [("Window.event", False, None)]            # set on afterwards
+    assert scan("class Box:\n    def build(self):\n        self.sizeHint = lambda: size\n") == [
+        ("self.sizeHint", False, None)]
+    spared = (head + "class Plain(QWidget):\n    event: object\n    kinds = [event for event in ()]\n"
+              "    def closeEvent(self, event): pass\n    def showEvent(self, event): pass\n"
+              "    def update(self):\n        event = self.event(sent)\n        return event\n"
+              "def paintEvent(): pass\nhandled = window.event(sent)\n")
+    assert scan(spared) == []
+
+    gui = REPO / "core" / "gui"
+    found, bare = {}, []
+    for path in sorted(gui.rglob("*.py")):
+        rel = path.relative_to(gui).as_posix()
+        if rel in _NOT_GUARDED_FILES:
+            continue
+        for line, name, guarded, fallback in _drawing_methods(ast.parse(path.read_text(encoding="utf-8"))):
+            found[f"{rel}: {name}"] = fallback
+            if not guarded:
+                bare.append(f"{rel}:{line} {name}")
+    listed = f"all {len(found)} found:\n  " + "\n  ".join(f"{name} -> {fallback}" for name, fallback in found.items())
+    assert bare == [], (f"called by the toolkit while a window is drawn or laid out, and not reporting its own "
+                        f"errors: {bare}. Put it under @reported(...) of core/gui/reported.py, with what it "
+                        f"answers when it fails. {listed}")
+    assert {name: found.get(name, "not found") for name in _GUARDED_TODAY} == _GUARDED_TODAY, listed
+    missing = [rel for rel in _NOT_GUARDED_FILES if not (gui / rel).is_file()]
+    assert not missing, f"no such file any more, so it stops being an exception: {missing}"
+
+
+def test_the_looks_overrides_fall_back_to_the_stock_answer_when_they_fail(monkeypatch, ring_room):
+    """An override of the small style that fails answers, and draws, what Fusion itself does: a tick box is
+    still a tick box. The ring's paint draws nothing and ends its painter; the follower's filter answers
+    that the event is not taken. Nothing comes out, and each failure is recorded under its method's name."""
+    from core.gui import design, paint, reported, style
+    r = ring_room
+    worn, stock = style.PrismStyle(), QStyleFactory.create("Fusion")
+    wheel, width = QStyle.SH_ComboBox_AllowWheelScrolling, QStyle.PM_IndicatorWidth
+
+    def fail(*told, **named):
+        raise RuntimeError("made to fail")
+
+    def tick_box():                          # a set tick box as it paints itself, and where its indicator is
+        box = QCheckBox("words")
+        box.setStyle(worn)                   # on this one widget, never on the application
+        box.setChecked(True)
+        box.ensurePolished()
+        box.resize(box.sizeHint())
+        option = QStyleOptionButton()
+        option.initFrom(box)
+        where = box.style().subElementRect(QStyle.SE_CheckBoxIndicator, option, box)
+        picture = _image(box.width(), box.height(), 1.5)
+        box.render(picture)
+        return picture, where
+
+    def indicator(by):                       # the tick box's indicator alone, as one style draws it
+        option = QStyleOptionButton()
+        option.rect = QRect(0, 0, 18, 18)
+        option.state = QStyle.State_Enabled | QStyle.State_On
+        picture = _image(18, 18, 1.0)
+        painter = QPainter(picture)
+        try:
+            by.drawPrimitive(QStyle.PE_IndicatorCheckBox, option, painter, None)
+        finally:
+            painter.end()
+        return picture
+
+    def names(caught):
+        return [name for name, _error in caught]
+
+    with text_size(1.0), reported.expected() as caught:
+        picture, where = tick_box()
+        own, fusion = indicator(worn), indicator(stock)
+        assert _at(picture, where.x() + 2.5, where.y() + 9) == design.hex_colour("accent")
+        assert own != fusion and worn.styleHint(wheel) == 0 != stock.styleHint(wheel), "the lines below prove nothing"
+        assert worn.pixelMetric(width) == 18 != stock.pixelMetric(width), "the lines below prove nothing"
+        assert caught == []
+
+        with monkeypatch.context() as patch:                 # the indicator's paint fails
+            patch.setattr(paint, "paint_indicator", fail)
+            picture, where = tick_box()
+            assert names(caught) == ["PrismStyle.drawPrimitive"] and reported.ERRORS == caught
+            middle = picture.pixelColor(int((where.x() + 9) * 1.5), int((where.y() + 9) * 1.5))
+            assert middle.alpha() == 255, "nothing was drawn where the box stands"
+            assert _at(picture, where.x() + 2.5, where.y() + 9) != design.hex_colour("accent")
+            assert indicator(worn) == fusion                 # the stock box, to the pixel
+        with monkeypatch.context() as patch:                 # the size of the indicator fails
+            patch.setattr(design, "scaled", fail)
+            assert worn.pixelMetric(width) == stock.pixelMetric(width)
+            assert worn.pixelMetric(width, None, r.button) == stock.pixelMetric(width, None, r.button)
+        with monkeypatch.context() as patch:                 # the hints fail at their first comparison
+            patch.setattr(style, "QStyle", SimpleNamespace())
+            assert worn.styleHint(wheel) == stock.styleHint(wheel)
+            assert worn.styleHint(wheel, None, r.box, None) == stock.styleHint(wheel, None, r.box, None)
+        assert names(caught) == ["PrismStyle.drawPrimitive"] * 2 + ["PrismStyle.pixelMetric"] * 2 + [
+            "PrismStyle.styleHint"] * 2
+
+        del caught[:]
+        _arrive(r.button, Qt.TabFocusReason)
+        ring = r.follows.ring()
+        with monkeypatch.context() as patch:                 # the ring's colour fails, under its live painter
+            patch.setattr(design, "colour", fail)
+            picture = _image(ring.width(), ring.height(), 1.0)
+            ring.render(picture, QPoint(0, 0), QRegion(), QWidget.RenderFlag.DrawChildren)
+            assert picture == _image(ring.width(), ring.height(), 1.0) and not ring.paintingActive()
+        assert names(caught) == ["FocusRing.paintEvent"]
+        _leave(r.button, Qt.TabFocusReason)
+
+        del caught[:]
+        with monkeypatch.context() as patch:                 # the follower fails where the focus arrives
+            patch.setattr(r.follows, "arrived", fail)
+            assert r.follows.eventFilter(r.button, QFocusEvent(QEvent.FocusIn, Qt.TabFocusReason)) is False
+            _arrive(r.button, Qt.TabFocusReason)             # and as the toolkit calls it: nothing comes out
+        assert names(caught) == ["FocusFollower.eventFilter"] * 2 and r.follows.target() is None
+
+
+def test_a_test_in_which_drawing_code_failed_is_failed(request):
+    """A guarded method keeps its error from the test that made it draw, so that test would pass over it.
+    After every test the session's check reads the record, and fails the test when the record holds
+    anything. The check is called here with lists of its own: the record itself stays empty."""
+    from core.gui import reported
+    # tests/ is no package, so pytest holds its conftest under a name of its own; imported by name the
+    # file would be loaded a second time, beside the one whose fixtures are in force
+    here = Path(__file__).resolve().with_name("conftest.py")
+    guards = next(plugin for plugin in request.config.pluginmanager.get_plugins()
+                  if getattr(plugin, "__file__", None) and Path(plugin.__file__).resolve() == here)
+    assert "_drawing_code_raises_nothing" in request.fixturenames, "in force for every test, without being asked for"
+    assert guards.check_drawing_code_raised_nothing([]) is None
+    with pytest.raises(AssertionError) as failed:
+        guards.check_drawing_code_raised_nothing([("FocusRing.paintEvent", ValueError("no colour")),
+                                                  ("PrismStyle.styleHint", KeyError("hint"))])
+    for needle in ("FocusRing.paintEvent: ValueError('no colour')", "PrismStyle.styleHint: KeyError('hint')",
+                   "reported.expected()"):
+        assert needle in str(failed.value), str(failed.value)
+    assert reported.ERRORS == []

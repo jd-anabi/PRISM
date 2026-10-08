@@ -1,8 +1,8 @@
 """Fixtures for tests/ (the root conftest.py sets the environment and the marker skips).
 
 `qapp` is the one QApplication a process may hold; ``tests/_fixtures.qt_app()`` is the same
-expression as a plain call, which is what the GUI suites use. The settings and dialog fixtures at
-the end are autouse at session and function scope and are never requested by name.
+expression as a plain call, which is what the GUI suites use. The settings, dialog and drawing-code
+fixtures at the end are autouse at session and function scope and are never requested by name.
 """
 from pathlib import Path
 
@@ -229,3 +229,33 @@ def _every_file_chooser_is_answered():
         check_choosers_answered()
     finally:
         CHOOSER_CALLS.clear()
+
+
+def check_drawing_code_raised_nothing(errors) -> None:
+    """Fail when ``errors`` -- core.gui.reported.ERRORS as a test left it -- holds anything, naming
+    each method and what it raised. Raised rather than asserted, so the check survives a run with
+    assertions switched off."""
+    if errors:
+        raise AssertionError(
+            "drawing code raised during this test (each error was caught and recorded, and the "
+            "method answered its fallback, as in the running window): "
+            + "; ".join(f"{name}: {error!r}" for name, error in errors)
+            + ". A test that makes one raise on purpose does it inside "
+              "`with reported.expected():` (core/gui/reported.py).")
+
+
+@pytest.fixture(autouse=True)
+def _drawing_code_raises_nothing():
+    """A method the toolkit calls while a window is drawn or laid out catches its own error
+    (core/gui/reported.py): the error is recorded, the method answers a fallback, and nothing
+    reaches the test that made the window draw. So the record is emptied before every test and read
+    after it, and a test that leaves anything in it FAILS here, at teardown. That module imports
+    the standard library and nothing else, so this costs a test two emptied containers and the copy
+    of a list that is empty."""
+    from core.gui import reported
+    reported.forget()
+    yield
+    try:
+        check_drawing_code_raised_nothing(list(reported.ERRORS))
+    finally:
+        reported.forget()
