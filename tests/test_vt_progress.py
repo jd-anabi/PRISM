@@ -489,6 +489,30 @@ def test_spinner_animates_and_then_reports_a_stall():
     assert "no output for" not in prog.spinner.text()
     prog.end()
 
+def test_the_read_outs_keep_their_width_as_their_numbers_change():
+    """The pane's read-outs are numbers that change in place: a rate, a percentage, counts and clock times, and
+    the seconds a run has been silent. In the application's font a 1 is narrower than a 0, so a read-out would
+    change its width with its digits and move whatever stands after the number, at every tick. The four widgets
+    that show a number have the same lettering with its digits of equal width; the pane itself and its trend
+    line, which show none, are left as they were."""
+    from PySide6.QtGui import QFont, QFontMetricsF
+    from core.gui import fonts
+
+    qt_app()
+    prog = ProgressPane()
+    equal, body = QFont.Tag.fromString("tnum"), fonts.inter("body")
+    for name in ("solver_label", "overall", "spinner", "caption"):
+        font = getattr(prog, name).font()
+        assert font.isFeatureSet(equal), f"{name} shows its numbers in digits of unequal width"
+        assert (font.family(), font.pixelSize(), font.weight()) == (body.family(), body.pixelSize(), body.weight()), name
+        metrics = QFontMetricsF(font)
+        assert metrics.horizontalAdvance("00:00:00") == metrics.horizontalAdvance("11:11:11"), name
+    plain = QFontMetricsF(body)
+    assert plain.horizontalAdvance("00:00:00") != plain.horizontalAdvance("11:11:11"), \
+        "the digits have one width without the feature as well: the lines above prove nothing"
+    for untouched in (prog, prog.sparkline):
+        assert not untouched.font().isFeatureSet(equal), "more than the read-outs was given the digits' feature"
+
 def test_the_solver_step_iterator_closes_its_bar_when_the_consumer_raises():
     """`sdeint._step_iter` is a GENERATOR wrapping the tqdm bar, so it adds a frame to the cancel's tqdm-lock unwind
     path -- a cancel raises from inside a bar redraw, and tqdm's own `finally: self.close()` has to run

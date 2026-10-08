@@ -46,6 +46,7 @@ from PySide6.QtGui import QPainter, QPalette, QPen
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QProgressBar, QSizePolicy, QVBoxLayout, QWidget)
 
 from core import progress
+from core.gui import fonts
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _SPIN_MS = 100
@@ -227,6 +228,16 @@ class ProgressPane(QWidget):
         # very long mutating desc CLIP instead of widening the pane. Left in place (never hidden) when
         # empty, so the pane's height does not change as stages come and go.
         self.caption.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+
+        # -- the read-outs' digits ---------------------------------------------
+        # Each of these four shows numbers that change in place: a rate, a percentage, counts and clock
+        # times, the seconds a run has been silent. In the application's font a 1 is narrower than a 0,
+        # so a read-out would change its width with its digits and move whatever stands after the
+        # number, at every tick. They get the same lettering with its digits of equal width. It is
+        # given here, while the pane is built: a font handed to a widget the style sheet has already
+        # dressed is dropped at the next change of sheet.
+        for readout in (self.solver_label, self.overall, self.spinner, self.caption):
+            readout.setFont(fonts.inter("body", tabular=True))
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 2, 0, 2)
