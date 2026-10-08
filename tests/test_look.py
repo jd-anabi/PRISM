@@ -1435,8 +1435,37 @@ def test_the_small_style_sizes_the_indicators_and_paints_them_itself():
             assert fill(spoiled, cls, part, x, y) != design.hex_colour("accent"), "the lines above prove nothing"
     with text_size(1.25):
         assert worn.pixelMetric(QStyle.PM_IndicatorWidth) == 23        # the box grows with the lettering
-        assert worn.pixelMetric(QStyle.PM_FocusFrameHMargin) == 4      # the ring and its gap do not
-        assert worn.pixelMetric(QStyle.PM_FocusFrameVMargin) == 4
+        ring = style.FocusRing()                                       # the frame asks these two for itself
+        assert worn.pixelMetric(QStyle.PM_FocusFrameHMargin, None, ring) == 4      # the ring and its gap do not
+        assert worn.pixelMetric(QStyle.PM_FocusFrameVMargin, None, ring) == 4
+
+
+def test_the_focus_frames_margins_are_the_rings_for_the_ring_alone():
+    """The two metrics that tell the focus frame how far outside its control it stands are also where lists and
+    tables take the margin of their cells from. Answered with the ring's four pixels for every widget, they move
+    the text of every cell two pixels to the right and make every column four wider. So the small style gives
+    the ring's answer to the ring alone; any other widget, and none, gets the toolkit's own."""
+    from PySide6.QtWidgets import QListWidget, QTableView
+    from core.gui import design, style
+    QApplication.instance() or QApplication([])
+    worn, stock = style.PrismStyle(), QStyleFactory.create("Fusion")
+    table, rows = QTableView(), QListWidget()
+    ring, inset = style.FocusRing(), style.FocusRing()
+    inset.inset = True
+    for metric in (QStyle.PM_FocusFrameHMargin, QStyle.PM_FocusFrameVMargin):
+        assert stock.pixelMetric(metric, None, None) != 4, "the toolkit answers as the ring does: this proves nothing"
+        for widget in (table, rows, None):
+            assert worn.pixelMetric(metric, None, widget) == stock.pixelMetric(metric, None, widget), (metric, widget)
+        assert worn.pixelMetric(metric, None, ring) == design.SIZE["focus_ring"] + design.SIZE["focus_gap"] == 4
+        assert worn.pixelMetric(metric, None, inset) == 0
+
+    def column(by):                              # how wide a list makes its one column, under one style
+        listed = QListWidget()
+        listed.setStyle(by)                      # on this one widget, never on the application
+        listed.addItem("a row")
+        return listed.sizeHintForColumn(0)
+
+    assert column(worn) == column(stock), "a cell is wider under the small style than the toolkit makes it"
 
 
 def test_the_toolkits_dotted_focus_mark_is_never_drawn():

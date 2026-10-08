@@ -35,8 +35,10 @@ class PrismStyle(QProxyStyle):
     def pixelMetric(self, metric, option=None, widget=None):
         if metric in self._INDICATORS:
             return design.scaled(design.SIZE["indicator"])           # the box grows with the lettering
-        if metric in (QStyle.PM_FocusFrameHMargin, QStyle.PM_FocusFrameVMargin):
-            if getattr(widget, "inset", False):                      # asked of the frame itself: see FocusRing
+        if metric in (QStyle.PM_FocusFrameHMargin, QStyle.PM_FocusFrameVMargin) and isinstance(widget, FocusRing):
+            # Only when the frame asks for itself. Lists and tables take the margin of their cells from the
+            # same two metrics, so any other widget, and none, gets the toolkit's own answer below.
+            if widget.inset:
                 return 0
             return design.SIZE["focus_ring"] + design.SIZE["focus_gap"]      # a line and its gap: never scaled
         return super().pixelMetric(metric, option, widget)
