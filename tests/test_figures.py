@@ -92,6 +92,11 @@ def _fake_appearance(dark):
             self.theme_changed.emit(d)
 
     return _FakeAppearance(dark)
+def _settings_that_changed(before) -> list:
+    """The names of matplotlib's settings whose value is no longer the one in `before`, a plain copy of
+    all of them taken earlier. Empty when nothing was written over; a failure names what was."""
+    import matplotlib
+    return sorted(name for name, value in dict(matplotlib.rcParams).items() if before[name] != value)
 
 
 def test_fig_sink_emits_png_and_a_reloadable_pickle():
@@ -422,9 +427,11 @@ def test_mpl_theme_install_none_is_a_noop():
     import matplotlib
     from core.gui import mpl_theme
     with _rcparams_guard():
-        before = matplotlib.rcParams["figure.facecolor"]
+        matplotlib.rcdefaults()     # matplotlib's own in force, so the window's would show if they were written
+        before = dict(matplotlib.rcParams)
         mpl_theme.install(None)
-        assert matplotlib.rcParams["figure.facecolor"] == before
+        written = _settings_that_changed(before)
+        assert not written, f"install(None) wrote these figure settings: {written}"
 
 def test_a_change_of_theme_changes_no_figure_setting():
     """install(appearance) writes the light settings once, under a dark appearance too, and listens
@@ -437,11 +444,13 @@ def test_a_change_of_theme_changes_no_figure_setting():
         mpl_theme.install(ap)
         assert matplotlib.rcParams["figure.facecolor"] == "#FFFFFF"
         assert matplotlib.rcParams["text.color"] == "#1A1A1A"
+        matplotlib.rcdefaults()     # matplotlib's own back, so a setting install wrote would show if written again
         matplotlib.rcParams["figure.facecolor"] = "#123456"        # a mark no setting of the look has
+        before = dict(matplotlib.rcParams)
         ap.flip(False)
         ap.flip(True)
-        assert matplotlib.rcParams["figure.facecolor"] == "#123456", \
-            "a change of theme rewrote the figure settings"
+        rewritten = _settings_that_changed(before)
+        assert not rewritten, f"a change of theme rewrote these figure settings: {rewritten}"
 
 def test_plot_ppc_summary_box_takes_its_ground_from_the_figure_settings():
     """The two PPC summary boxes read plt.rcParams, so under dark figure settings they are NOT the old
@@ -771,3 +780,45 @@ def test_what_each_plotting_function_draws_is_unchanged(tmp_path, monkeypatch):
     assert got == _DRAWN_FIGURES, (
         "what the plotting functions draw has changed (colours are not compared). Every record is in "
         f"{tmp_path / 'drawn.json'}. The table as this run found it:\n{json.dumps(got, indent=4)}")
+
+def test_every_plotting_function_draws_under_the_windows_figure_settings(tmp_path, monkeypatch):
+    """The window draws the engine's figures under its own settings, which hold seven line colours
+    where matplotlib's own hold ten, another lettering face and no top or right spine, and the test
+    above draws them under matplotlib's own alone. Here each of its figures is built and then rendered
+    under the window's settings, and must do so without raising. What is drawn is not compared.
+
+    The cases are the body of the test above and are not written a second time: that test is run
+    again with four of the names it reads standing for something else. Its return to matplotlib's own
+    settings goes on to write the window's; its record of a figure also renders the figure; and its
+    digest of a record is one fixed word against a table of that word, so that its last comparison
+    says only that every figure the table names was drawn."""
+    import io
+    import matplotlib
+    from matplotlib import pyplot as plt
+    from core.gui import mpl_theme
+
+    names, record, own_settings = list(_DRAWN_FIGURES), _drawn, matplotlib.rcdefaults
+    windows, rendered, open_before = mpl_theme._rc(), [], plt.get_fignums()
+
+    def the_windows_settings():
+        own_settings()
+        mpl_theme.apply_mpl_theme()
+
+    def record_and_render(fig):
+        elsewhere = [name for name, value in windows.items() if matplotlib.rcParams[name] != value]
+        assert not elsewhere, f"not drawn under the window's figure settings: {elsewhere}"
+        what = record(fig)
+        picture = io.BytesIO()
+        fig.savefig(picture, format="png")
+        rendered.append(picture.tell())
+        return what
+
+    monkeypatch.setattr(matplotlib, "rcdefaults", the_windows_settings)
+    monkeypatch.setitem(globals(), "_drawn", record_and_render)
+    monkeypatch.setitem(globals(), "_digest", lambda _record: "drawn")
+    monkeypatch.setitem(globals(), "_DRAWN_FIGURES", dict.fromkeys(names, "drawn"))
+    with _rcparams_guard():
+        test_what_each_plotting_function_draws_is_unchanged(tmp_path, monkeypatch)
+    assert len(rendered) == len(names) and all(rendered), \
+        f"{len(names)} figures named, and the pictures rendered hold {rendered} bytes"
+    assert plt.get_fignums() == open_before, "a figure was left open"

@@ -1843,11 +1843,13 @@ def test_the_figure_settings_do_not_follow_the_theme_or_the_text_size():
         mpl_theme.install(appearance)
         assert {name: matplotlib.rcParams[name] for name in light} == light, \
             "under a dark appearance the settings written are not the light ones"
+        matplotlib.rcdefaults()   # matplotlib's own back, so a setting install wrote would show if written again
         matplotlib.rcParams["figure.facecolor"] = "#123456"      # a mark no setting of the look has
+        before = dict(matplotlib.rcParams)
         appearance.theme_changed.emit(False)
         appearance.theme_changed.emit(True)
-        assert matplotlib.rcParams["figure.facecolor"] == "#123456", \
-            "a change of theme rewrote the figure settings"
+        rewritten = sorted(name for name, value in dict(matplotlib.rcParams).items() if before[name] != value)
+        assert not rewritten, f"a change of theme rewrote these figure settings: {rewritten}"
 
 
 def test_the_figure_settings_name_inter_only_when_both_files_reached_matplotlib(monkeypatch):
