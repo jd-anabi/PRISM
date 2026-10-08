@@ -1,10 +1,13 @@
 # PRISM — state
 
 **Last updated:** 2026-10-07 (STAGE 1 OF THE WINDOW REDESIGN IS BEING BUILT: the owner approved its plan on 2026-10-07;
-Tasks 0, 1, 2, 3a, 3b, 4, 11a, 6, 7, 8 and 9 are complete, and Task 5, the text-size test, was run with the owner;
-the window now takes its colours, its lettering and its style sheet from one table, so IT LOOKS DIFFERENT FROM TODAY'S
-(on this computer it opens dark, following Windows); Task 10, the small style and the focus ring, is next, then the
-pictures for the owner; the next
+Tasks 0, 1, 2, 3a, 3b, 4, 11a, 6, 7, 8, 9 and 10 are complete, Task 5, the text-size test, was run with the owner,
+and a task the plan did not have, 10g, fixed the faults the first pictures of the new look showed; the window now takes
+its colours, its lettering, its style sheet, its tick boxes and its focus ring from one table, so IT LOOKS DIFFERENT
+FROM TODAY'S (on this computer it opens dark, following Windows); THE PICTURES OF EVERY SCREEN ARE TAKEN AND ARE BEING
+SHOWN TO THE OWNER (the paragraph "THE PICTURES" below); OPEN BEFORE TASK 13: the owner's remarks on the pictures,
+and Task 10f, which takes the Python-written style and the focus follower off the application because they make the
+window stutter while a run draws figures; the next
 paragraph is the build's state, the one after it the plan's story, and the design's own story is the paragraph that
 begins "THE REDESIGN CHAT HAS STARTED").
 
@@ -84,6 +87,43 @@ engine change), 13 to 18, 19. **Engine changes built so far: none of E1–E12.**
 `docs/guide/window.md:28-29` and `docs/guide/architecture.md:216` describe the appearance choices as they were. Minor review findings not fixed are listed per task in the ledger for the
 stage's last review to sort.
 
+**THE PICTURES, AND WHAT THEY AND A MEASUREMENT FOUND (2026-10-07, evening; the ledger's entries "Task 10p", "Task 10
+(TWO-1)" and "Task 10g" have every figure).** **Task 10** (`3fb2a46`: `core/gui/paint.py` and `core/gui/style.py`; a
+small style over Fusion that paints the tick box and the radio dot from the table and leaves the dotted focus mark
+out; the focus ring, shown after Tab, Shift+Tab or a shortcut, after a click only in a field one types in, and always
+on the button that holds the focus in an old message box; the four focus borders gone from the sheet) passed its gate
+(1271 passed, 3 skipped) and the display-marked run. **The pictures** were then taken with the real window hidden on a
+scratch settings file and an empty scratch store: 47 of every screen in light and dark, and the same 47 at a forced
+text size of 150 %. Four readers went through all of them against the "before" set and found FAULTS OF THE NEW LOOK,
+each traced to its cause: every hyphen inside a word had become as wide as a digit ("cross - validation"), because the
+equal-width-digits feature of the typeface replaces 61 glyphs, not only the digits; the "?" in a help badge could not
+be read on its ring; lists, the help viewer and bare scrolling areas had no outline of the look's (none at all in
+dark); the cells of every filled list and table had moved 2 px. **Task 10g** (`fc8c062` to `88a4ea3`, then a fix round
+to `bb75ad2`; brief written by the controller, `stage-1/briefs/task-10g-brief.md` in the ledger) fixed them: digits of
+equal width only for lists, tables, their headers, the progress read-outs and the run slot (deviation 37); the badge's
+ring faint again; the frames named in the sheet (deviation 38); the focus frame's margins for the ring alone; and a
+latent failure of a theme change on a top-level list. **The last gate, at `bb75ad2`: 1279 passed, 3 skipped,
+5 deselected, 203 warnings, 15 min 55 s; the display-marked run 3 passed.** The pictures were made again on that head
+and are kept in the ledger's `stage-1/pictures/`: `now/` and `now-text150/` (47 each), `compare-before-now.html` (94
+side by side), `for-the-owner/` (twelve before-and-now pairs), beside the "before" set. **A measurement in the real
+window** (Task 10's review raised it; a second agent checked the measurement): the small style as the APPLICATION's
+style and the follower as a filter on every event put Python into every repaint, which never entered it before; with
+nothing running that costs under a millisecond a repaint, but WHILE A FIGURE IS DRAWN ON THE WORKER THE WINDOW
+STUTTERS (about three repaints of over a tenth of a second per 13-parameter figure, the longest 0.86 s, where none took
+over 4 ms); simulation and training themselves do not cause it; a shorter interpreter switch interval was tried and
+rejected (it makes other cases worse). **Ruled: Task 10f**, before Task 13: the application wears the toolkit's own
+Fusion, the Python-written overrides serve only the widgets that need them, the follower decides from the
+application's focus signal and what was pressed last (deviation 36); a feasibility probe (two probes, a design, a
+skeptic) is running, its reports go to `stage-1/reviews/task-10f-*.md`, and its brief is written from them. **For the
+owner with the pictures:** locked tabs cannot be told from open ones at a glance (greyed text is darker by design;
+remedy on offer), hint text in an empty field reads as a value, a greyed main button looks pressable when alone; the
+old layout at 150 % text is awkward everywhere (the left column is a fixed 420 px) but nothing is unusable. **For
+later dispatches:** Tasks 14, 15 and 17 ask the lettering function for the tabular form where numbers stand in columns
+or change in place; a font handed to a widget after the sheet has dressed it is dropped at the next change of sheet
+(give it at build); a frameless scrolling area switches its frame off at build. **Next, in order:** the owner's
+remarks (Task 13 waits for them); Task 10f when its design is in; Tasks 11b and 12 (E12) may be built meanwhile; then
+13 to 18, 19.
+
 **THE WINDOW REDESIGN, PLAN AND BUILD (started 2026-10-06 from
 `docs/superpowers/prompts/2026-10-06-window-redesign-plan-and-build.md`; continue from that prompt, this paragraph and
 the ledger).** **Where it stands: the plan for stage 1, "the look's foundation", is
@@ -100,7 +140,7 @@ separate design for saving the fit as it goes is made between stages 2 and 3**, 
 commas that group a whole number arrive **page by page** (built and tested in stage 1, off by default; today's forms
 keep plain digits until each is rebuilt); (4) console text is set in **Cascadia Mono** (then Consolas, then Courier
 New), asked from a picture; its licence would allow bundling the file, which was not asked and is not planned.
-**The design gained section 8, "Deviations recorded while planning and building"** (32 rows at planning, 35 since
+**The design gained section 8, "Deviations recorded while planning and building"** (32 rows at planning, 38 since
 the build began, the same rows under the
 same numbers as the plan's head, each with what it costs if it is wrong), and its parts 4, 11 and 13 open with a
 pointer to it. **What the reading found that the design did not know** (all carried by the plan): 13.2.1's order
