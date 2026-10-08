@@ -69,7 +69,9 @@ class Appearance(QObject):
         self._app = app
         self._mode = "system"
         self._dark = False
-        self._applied = None                 # what the last apply that went on applied; None until the first
+        # What the last apply that finished applied. None until the first apply, while an apply is
+        # under way, and after one that did not finish.
+        self._applied = None
         self._applying = False               # re-entrancy guard: setColorScheme can re-fire colorSchemeChanged
         # Re-theme on a live OS light/dark flip -- but only while following the system (guarded so an
         # explicit setColorScheme below can't re-enter). setPalette/setStyleSheet don't emit this signal.
@@ -109,8 +111,10 @@ class Appearance(QObject):
             self._app.setPalette(design.build_palette(self._dark))
             self._app.setStyleSheet(design.build_qss(self._dark))
             fonts.apply_class_fonts(self._app)                   # after the sheet, and on this application alone
-            for top in self._app.topLevelWidgets():              # each widget that keeps colours of its own
+            for top in self._app.topLevelWidgets():              # each widget that keeps colours of its own, once
                 for widget in (top, *top.findChildren(QWidget)):
+                    if widget.window() is not top:               # in a window of its own that has this one for
+                        continue                                 # its parent: reached when that window's turn comes
                     retheme = getattr(widget, "retheme", None)
                     if callable(retheme):
                         retheme()

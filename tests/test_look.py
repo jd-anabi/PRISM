@@ -1047,6 +1047,39 @@ def test_an_apply_runs_its_steps_in_one_order_and_stops_when_nothing_changed(mon
         del stand_in.tops[:]     # the stand-in and its Appearance hold each other: the widget must not wait for them
 
 
+def test_an_apply_rethemes_each_widget_once_also_in_a_window_that_has_a_parent(stand_in_app):
+    """A dialog opened over a window is a top-level widget of the application and, having the window for its
+    parent, one of the window's children as well. An apply reaches it, and what it holds, once: in its own turn."""
+    from PySide6.QtWidgets import QDialog, QWidget
+    from core.gui import theming
+    counts = {}
+
+    def counted(widget, name):
+        widget.setObjectName(name)
+        counts[name] = 0
+        return widget
+
+    class Painted(QWidget):
+        def retheme(self): counts[self.objectName()] += 1
+
+    class Asked(QDialog):
+        def retheme(self): counts[self.objectName()] += 1
+
+    window = counted(Painted(), "the window")
+    held = counted(Painted(window), "the window's child")
+    dialog = counted(Asked(window), "the dialog")
+    asked = counted(Painted(dialog), "the dialog's child")
+    assert dialog.parent() is window and dialog.isWindow() and dialog in window.findChildren(QWidget)
+    stand_in_app.tops.extend([window, dialog])       # as the application lists them: both are top-level widgets
+    try:
+        appearance = theming.Appearance(stand_in_app)
+        appearance.set_mode("dark")
+        assert len(stand_in_app.sheets) == 1, "the apply did not go on"
+        assert counts == {"the window": 1, "the window's child": 1, "the dialog": 1, "the dialog's child": 1}
+    finally:
+        del stand_in_app.tops[:]                     # the widgets must not wait for the stand-in to go
+
+
 def test_an_apply_tells_the_looks_table_and_sets_the_class_fonts_on_its_own_application(stand_in_app):
     from PySide6.QtGui import QPalette
     from core.gui import design, theming
