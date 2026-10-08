@@ -338,9 +338,8 @@ def tokens(dark: bool) -> dict[str, str]:
 def build_palette(dark: bool) -> QPalette:
     """The palette of one theme: every role in all three groups, from the table. A sheet does some things badly
     or not at all (link colours, the selection, a disabled control), and a part it does not style, or one that
-    paints itself, falls back to the palette. The hint text of a field the sheet styles is the one thing this
-    palette does not decide: there the sheet names the colour, because the toolkit otherwise makes it of the
-    field's text colour, at half strength, and never reads the role set here. The Disabled group is set in full
+    paints itself, falls back to the palette. The hint text of a field the sheet styles is not decided here: the
+    toolkit derives it from the field's text colour unless the sheet names it. The Disabled group is set in full
     because a whole form is disabled for the length of a run."""
     t = tokens(dark)
     roles = {
@@ -421,7 +420,8 @@ QLineEdit, QComboBox {
     border-radius: ${px_radius}px; background: $field; color: $ink; placeholder-text-color: $ink_3;
     selection-background-color: $accent; selection-color: $on_accent; }
 QLineEdit:disabled, QComboBox:disabled {
-    background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink; }
+    background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink;
+    placeholder-text-color: $disabled_ink; }
 QLineEdit[state="error"] { min-height: ${px_fld_in_err}px; padding: 0px ${px_fld_pad_err}px; border: 2px solid $err; }
 QComboBox { padding: 0px ${px_combo_r}px 0px ${px_combo_l}px; }
 QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: ${px_marker}px;
