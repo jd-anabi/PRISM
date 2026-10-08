@@ -1905,73 +1905,213 @@ def test_under_the_figure_settings_a_character_the_lettering_lacks_is_drawn_with
 _PLOTTING_FILES = ("core/Helpers/visualizers.py", "core/FDT/plots.py", "core/FDT/compare.py",
                    "core/FDT/cross_validation_plots.py", "core/Reduction/plots.py",
                    "core/diagnostics/identifiability.py", "core/diagnostics/probes.py")
+# the names those files once wrote out themselves: each is refused now, as every other string is
 _OLD_LINE_COLOURS = frozenset({"steelblue", "tab:blue", "red", "r", "crimson", "tab:red", "green",
                                "tab:green", "darkorange", "orange", "tab:orange", "gray"})
 _COLOUR_KEYWORDS = frozenset({"color", "c", "colors", "edgecolor", "edgecolors", "facecolor",
                               "facecolors", "ecolor", "markerfacecolor", "markeredgecolor", "mfc",
                               "mec", "fc", "ec", "foreground", "labelcolor"})
+# The only colours a plotting file may write out itself, each because one of them does today, and why
+# it may stay. A string that is not a key here is refused wherever a call can take a colour.
+_COLOURS_THAT_STAY = {
+    "white": "a line or lettering laid over a colour map: its ground is the map, not the page",
+    "black": "lettering over the light cells of a colour map",
+    "none": "no edge round a marker, and no mesh lines on a surface",
+}
 _LINE_CALLS = frozenset({"plot", "semilogx", "semilogy", "loglog", "errorbar", "step", "stem"})
-_LINE_FORMAT = re.compile(r"(?:[bgrcmykw]|--|-\.|[-:.,ov^<>1-4sp*hH+xXDd|_])+")
+# A line call's short format: markers and line styles, and of the colour letters the white one alone,
+# for that same white line over a colour map. Any other string handed over that way is refused.
+_LINE_FORMAT = re.compile(r"(?:w|--|-\.|[-:.,ov^<>1-48spP*hH+xXDd|_])*")
+
+
+def _bound_values(tree) -> dict:
+    """Name to every expression a parsed file binds it to: by an assignment (pair by pair when a
+    written-out tuple is assigned to one), as a parameter's default, and as the variable of a loop
+    over a written-out tuple or list. Whole file, whatever the function: a name is looked up by its
+    spelling alone."""
+    bound = {}
+
+    def bind(target, value):
+        if isinstance(target, ast.Name):
+            bound.setdefault(target.id, []).append(value)
+        elif (isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List))
+              and len(target.elts) == len(value.elts)):
+            for one, its_value in zip(target.elts, value.elts):
+                bind(one, its_value)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                bind(target, node.value)
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+            bind(node.target, node.value)
+        elif isinstance(node, ast.For) and isinstance(node.iter, (ast.Tuple, ast.List)):
+            for element in node.iter.elts:
+                bind(node.target, element)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            named = node.args.posonlyargs + node.args.args
+            pairs = list(zip(named[len(named) - len(node.args.defaults):], node.args.defaults))
+            pairs += [pair for pair in zip(node.args.kwonlyargs, node.args.kw_defaults) if pair[1] is not None]
+            for parameter, default in pairs:
+                bound.setdefault(parameter.arg, []).append(default)
+    return bound
+
+
+def _written_out(value, bound, followed=()) -> list:
+    """``(line, text)`` for each colour written out in an expression that a call hands to a colour
+    keyword or a colour setter. Written out: a string other than the three of ``_COLOURS_THAT_STAY``;
+    a string put together on the spot (an f-string, a concatenation or a ``%`` with a string in it,
+    a method called on a string); a tuple or list of numbers alone. A name is followed to every value
+    the file binds it to, a conditional to both of its arms, an ``or`` to each side, a subscript to
+    what it indexes (a read of matplotlib's settings excepted), any other tuple, list, set or dict to
+    its members. Everything else is no literal and passes: a name of the colours module, a read of
+    the settings, a call, data, a number by itself."""
+    def is_text(node):
+        return isinstance(node, ast.JoinedStr) or (isinstance(node, ast.Constant) and isinstance(node.value, str))
+
+    def is_number(node):
+        node = node.operand if isinstance(node, ast.UnaryOp) else node
+        return isinstance(node, ast.Constant) and type(node.value) in (int, float)
+
+    def each(nodes, followed=followed):
+        return [hit for node in nodes for hit in _written_out(node, bound, followed)]
+
+    if isinstance(value, ast.Constant):
+        stays = not isinstance(value.value, str) or value.value in _COLOURS_THAT_STAY
+        return [] if stays else [(value.lineno, value.value)]
+    if (isinstance(value, ast.JoinedStr)
+            or (isinstance(value, ast.BinOp) and any(is_text(part) for part in ast.walk(value)))
+            or (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) and is_text(value.func.value))
+            or (isinstance(value, (ast.Tuple, ast.List)) and value.elts and all(is_number(e) for e in value.elts))):
+        return [(value.lineno, ast.unparse(value))]
+    if isinstance(value, (ast.Tuple, ast.List, ast.Set)):
+        return each(value.elts)
+    if isinstance(value, ast.Dict):
+        return each(value.values)
+    if isinstance(value, ast.IfExp):
+        return each([value.body, value.orelse])
+    if isinstance(value, ast.BoolOp):
+        return each(value.values)
+    if isinstance(value, ast.Name) and value.id not in followed:
+        return each(bound.get(value.id, ()), followed + (value.id,))
+    if isinstance(value, ast.Subscript):
+        held = value.value                                   # plt.rcParams[...], matplotlib.rcParams[...]
+        settings = (isinstance(held, ast.Attribute) and held.attr == "rcParams"
+                    and isinstance(held.value, ast.Name) and held.value.id in ("plt", "matplotlib"))
+        return [] if settings else each([held])
+    return []
 
 
 def _own_colour_arguments(tree) -> list:
-    """``(line, text)`` for every colour a call names itself: one of the old colour names, a hex
-    value or a ``tab:`` name as a colour keyword's value, and a line format string that carries a
-    colour letter other than white or black. Parsed, so a colour name in a comment, a label or a
-    file mode is not an argument."""
-    hits = []
+    """``(line, text)`` for every colour a parsed file writes out itself where a call can take one:
+    under a colour keyword (of a call, or as a key of a dict written out), as the first argument of a
+    colour setter (``set_`` and a colour keyword), and as the short format of a line call. Parsed, so
+    a colour name in a comment, a label or a file mode is not an argument."""
+    bound, hits = _bound_values(tree), []
     for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and isinstance(key.value, str) and key.value in _COLOUR_KEYWORDS:
+                    hits += _written_out(value, bound)
         if not isinstance(node, ast.Call):
             continue
         for kw in node.keywords:
             if kw.arg in _COLOUR_KEYWORDS:
-                hits += [(c.lineno, c.value) for c in ast.walk(kw.value)
-                         if isinstance(c, ast.Constant) and isinstance(c.value, str)
-                         and (c.value in _OLD_LINE_COLOURS or c.value.startswith(("#", "tab:")))]
-        if isinstance(node.func, ast.Attribute) and node.func.attr in _LINE_CALLS:
-            formats = [a for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
-            formats += [kw.value for kw in node.keywords if kw.arg == "fmt"
-                        and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str)]
-            hits += [(a.lineno, a.value) for a in formats
-                     if _LINE_FORMAT.fullmatch(a.value) and set(a.value) & set("bgrcmy")]
-    return sorted(hits)
+                hits += _written_out(kw.value, bound)
+        method = node.func.attr if isinstance(node.func, ast.Attribute) else ""
+        if method.startswith("set_") and method[4:] in _COLOUR_KEYWORDS and node.args:
+            hits += _written_out(node.args[0], bound)
+        if method in _LINE_CALLS:
+            for handed in node.args + [kw.value for kw in node.keywords if kw.arg == "fmt"]:
+                if isinstance(handed, ast.JoinedStr):
+                    hits.append((handed.lineno, ast.unparse(handed)))
+                elif (isinstance(handed, ast.Constant) and isinstance(handed.value, str)
+                      and not _LINE_FORMAT.fullmatch(handed.value)):
+                    hits.append((handed.lineno, handed.value))
+    return sorted(set(hits))
 
 
 def test_the_plotting_colour_scan_catches_each_form_and_spares_what_stays():
     """The scanner is checked on snippets first: with the tree clean, the walk of the seven files
     would go on passing if the scanner stopped matching anything."""
-    caught = ast.parse("ax.plot(x, y, color='steelblue')\n"
-                       "ax.scatter(x, y, c='gray', edgecolors='none')\n"
-                       "ax.axhline(0.0, color='r')\n"
-                       "ax.plot(x, y, 'r--')\n"
-                       "ax.errorbar(x, y, fmt='go')\n"
-                       "ax.bar(x, y, color=['tab:blue', 'tab:red'])\n"
-                       "ax.axvline(1.0, color='#0072B2')\n")
-    assert _own_colour_arguments(caught) == [
-        (1, "steelblue"), (2, "gray"), (3, "r"), (4, "r--"), (5, "go"), (6, "tab:blue"),
-        (6, "tab:red"), (7, "#0072B2")]
-    spared = ast.parse("ax.plot(x, y, 'o-', color=plot_colours.BLUE)\n"
-                       "ax.plot(x, y, 'w-', lw=2)\n"
-                       "ax.text(0, 0, 'r', color='white' if dark else 'black')\n"
-                       "ax.axhline(0, color=plt.rcParams['axes.edgecolor'])\n"
-                       "ax.scatter(x, y, c=plot_colours.ORANGE, edgecolors='none')\n"
-                       "ax.imshow(data, cmap='viridis')\n"
-                       "ax.plot(x, y, label='red')\n"
-                       "open(path, 'r')\n")
-    assert _own_colour_arguments(spared) == []
+    def found(source):
+        return _own_colour_arguments(ast.parse(source))
+
+    def as_written(expression):
+        return ast.unparse(ast.parse(expression, mode="eval").body)
+
+    by_number = "C" "3"                      # a colour of the cycle by its number, spelt here in two parts
+    others = ["blue", "navy", "grey", "k", "w", "0.5", by_number, "#0072B2", "xkcd:teal"]
+    for name in sorted(_OLD_LINE_COLOURS) + others:
+        assert found(f"ax.plot(x, y, color={name!r})") == [(1, name)], name
+    for source, reported in (
+            ("ax.scatter(x, y, c='gray', edgecolors='none')", [(1, "gray")]),
+            ("ax.bar(x, y, color=['tab:blue', 'tab:red'])", [(1, "tab:blue"), (1, "tab:red")]),
+            ("ax.plot(x, y, color=(0.1, 0.2, 0.3))", [(1, "(0.1, 0.2, 0.3)")]),
+            ("patch.set_facecolor([0.5, 0.5, 0.5, 1.0])", [(1, "[0.5, 0.5, 0.5, 1.0]")]),
+            ("ax.axvspan(0, 1, facecolor=f\"#{'00'}72B2\")", [(1, as_written("f\"#{'00'}72B2\""))]),
+            ("ax.axvline(1.0, color='tab:' + shade)", [(1, "'tab:' + shade")]),
+            ("ax.axvline(1.0, color='#{}'.format(code))", [(1, "'#{}'.format(code)")]),
+            ("ax.lines[0].set_color('teal')", [(1, "teal")]),
+            ("ax.text(0, 0, 'n', bbox={'facecolor': 'yellow'})", [(1, "yellow")]),
+            ("ax.text(0, 0, 'n', color='white' if dark else 'navy')", [(1, "navy")]),
+            ("shade = 'teal'\nax.axhline(0.0, color=shade)", [(1, "teal")]),
+            ("def draw(ax, shade='teal'):\n    ax.axhline(0.0, color=shade)", [(1, "teal")]),
+            ("for ax, shade in ((a, 'teal'), (b, 'navy')):\n    ax.axhline(0.0, color=shade)",
+             [(1, "navy"), (1, "teal")]),
+            ("shades = ['teal', 'navy']\nax.plot(x, y, color=shades[i])", [(1, "navy"), (1, "teal")]),
+            ("ax.plot(x, y, 'r--')", [(1, "r--")]),
+            ("ax.plot(x, y, 'k-')", [(1, "k-")]),
+            (f"ax.plot(x, y, '{by_number}-')", [(1, by_number + "-")]),
+            ("ax.plot(x, y, 'green')", [(1, "green")]),
+            ("ax.errorbar(x, y, fmt='go')", [(1, "go")])):
+        assert found(source) == reported, source
+    spared = ("ax.plot(x, y, 'o-', color=plot_colours.BLUE)\n"
+              "ax.plot(x, y, 'w-', lw=2)\n"
+              "ax.text(0, 0, 'r', color='white' if dark else 'black')\n"
+              "ax.axhline(0, color=plt.rcParams['axes.edgecolor'])\n"
+              "ax.axvline(0, color=matplotlib.rcParams['text.color'])\n"
+              "ax.scatter(x, y, c=plot_colours.ORANGE, edgecolors='none')\n"
+              "ink = plt.rcParams['text.color']\n"
+              "cell.get_text().set_color(ink)\n"
+              "cell.set_edgecolor(plt.rcParams['axes.edgecolor'])\n"
+              "box = dict(boxstyle='round', facecolor=plt.rcParams['axes.facecolor'], alpha=0.9)\n"
+              "ax.scatter(x, y, c=z_scores, cmap='viridis')\n"
+              "ax.plot(x, y, color=cmap(0.5))\n"
+              "ax.plot(x, y, color=None)\n"
+              "ax.imshow(data, cmap='viridis')\n"
+              "ax.plot(x, y, label='red')\n"
+              "open(path, 'r')\n")
+    assert found(spared) == []
 
 
 def test_no_plotting_file_names_a_line_colour_of_its_own():
-    """The seven plotting files take every named colour from core/Helpers/plot_colours.py, so a
-    figure saved from the command line and one saved from the window carry the same ones. White
-    and black lettering, the white line over a colour map, a colour read from matplotlib's
-    settings and a colour map stay; a line that names no colour takes matplotlib's cycle."""
-    left = []
+    """The scan reads the seven files of ``_PLOTTING_FILES`` and no other. In them, wherever a call
+    can take a colour (a colour keyword, a colour setter, a line call's short format), nothing is
+    written out but the exceptions the tree uses today, each named with its reason: the three
+    strings of ``_COLOURS_THAT_STAY`` and the white letter of a short format. Every other colour is
+    a name of core/Helpers/plot_colours.py or a read of matplotlib's settings, so a figure saved
+    from the command line and one saved from the window carry the same named ones; a line that
+    names no colour takes matplotlib's cycle, and a colour map is named as before. Refused: any
+    other string (a colour's name, a letter, a grey level, a hex value, a colour of the cycle by its
+    number), a string put together on the spot, a tuple or list of numbers, directly or through a
+    name the file binds to one. Not seen: a colour that reaches the call through another call, an
+    attribute of another module or a container filled elsewhere. An exception no file uses any more
+    fails here too, so the list cannot outlive its reasons."""
+    left, in_use, white_format = [], set(), False
     for rel in _PLOTTING_FILES:
         tree = ast.parse((REPO / rel).read_text(encoding="utf-8"))
         left += [f"{rel}:{line} {text!r}" for line, text in _own_colour_arguments(tree)]
+        for node in ast.walk(tree):
+            if isinstance(node, ast.keyword) and node.arg in _COLOUR_KEYWORDS:
+                in_use |= {part.value for part in ast.walk(node.value) if isinstance(part, ast.Constant)}
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _LINE_CALLS:
+                white_format |= any(isinstance(handed, ast.Constant) and isinstance(handed.value, str)
+                                    and "w" in handed.value for handed in node.args)
     assert left == [], (f"{len(left)} colour argument(s) still name a colour of their own; each "
                         f"takes its colour from core/Helpers/plot_colours.py:\n  " + "\n  ".join(left))
+    unused = sorted(set(_COLOURS_THAT_STAY) - in_use) + ([] if white_format else ["the white letter of a short format"])
+    assert not unused, f"no plotting file writes these out any more, so they stop being exceptions: {unused}"
 
 
 def test_the_plotting_colours_module_imports_nothing_but_itself():
