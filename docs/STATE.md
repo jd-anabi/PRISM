@@ -7,8 +7,8 @@ and a task the plan did not have, 10g, fixed the faults the first pictures of th
 its colours, its lettering, its style sheet, its tick boxes and its focus ring from one table, so IT LOOKS DIFFERENT
 FROM TODAY'S (on this computer it opens dark, following Windows); THE PICTURES OF EVERY SCREEN ARE TAKEN AND ARE BEING
 SHOWN TO THE OWNER (the paragraph "THE PICTURES" below); THE LINE WAITS AT TASK 13 for the owner's remarks on the
-pictures; and Task 10f (the window stutters while a run draws figures) was RE-RULED on 2026-10-08: the full structural
-change is not built, a lighter reduction is being probed (the paragraph "AFTER THE PICTURES" below); the next
+pictures; and Task 10f (the window stuttered while a run drew figures) is DONE, by a much smaller change than first
+ruled (the paragraph "TASK 10f" below); the next
 paragraph is the build's state, the one after it the plan's story, and the design's own story is the paragraph that
 begins "THE REDESIGN CHAT HAS STARTED").
 
@@ -149,6 +149,43 @@ second colour is that blue; before the stage the first repeat nearly matched): a
 draws, so it is the owner's call. **For the stage that rewrites the guide, also:** `docs/guide/architecture.md:219` and
 `docs/guide/rules-and-traps.md:263-266` say the figure settings follow the theme. **Next, in order:** the owner's
 remarks on the pictures (Task 13 waits); the reduction probe's result and Task 10f's brief; then 13 to 18, 19.
+
+**TASK 10f, THE STUTTER (2026-10-08; `3ef959a` to `d78c923`; the ledger's entries "Task 10 (TWO-1)" and "Task 10f"
+have every figure, and `stage-1/reviews/task-10f-*.md` every report).** Three rulings in a row, each made on a
+measurement or a probe: (1) the style and the follower off the application — probed, NOT built (three ways it could
+end the process); (2) a lighter reduction of the style — probed, NOT built (it halves the waiting and costs five
+guarantees); (3) BUILT: **the main window's class handles its events through a one-line method in Python that only
+calls the base class** (`core/gui/main_window.py`), so the toolkit's repaint, which runs inside the window's handling of
+its update request, keeps the interpreter for its whole length. Measured in the real window, shown off-screen, with the
+method in the code: one whole repaint beside plain Python takes 8 to 18 ms on every page where 196 to 1,107 ms stood;
+beside the real figure work the share of repaints over a tenth of a second falls from 2 % to 0.1 %; the run loses
+nothing measurable. **Its price, and what was built against it:** the binding then drops an error raised by Python
+code the toolkit calls from inside that handling, so the window's own drawing code reports its errors itself: the new
+`core/gui/reported.py` (a guard: the error handed to the window's hook once per method, kept as text, repeats counted,
+the stock answer as fallback) on the ten methods the toolkit calls while the window is drawn or laid out (the style's
+three, the ring's paint, the follower's filter, two old paint events, the figure stack's resize, two pages' show
+events); a standing scan in `tests/test_look.py` that lets no new such method into `core/gui` without it (twenty-one
+method names; the next two devices as their briefs dictate them are caught); and a sixth session-wide fixture in
+`tests/conftest.py` that FAILS a test during which a guarded method raised. Confirmed by measurement on a stock window
+with the same method: no slot of the main window can fail silently because of it, a box opened beneath it does not
+stall a working thread, a failure in the close handler is still reported, the order of events is unchanged. **Accepted
+and written down in the code:** an error inside a drawing LIBRARY's own Python code in the main window (the live
+simulation's plot) shows no box; the figure pop-out is left without the method for that reason; a change of page or
+tab, a resize, the pointer and the keyboard are only about halved while a figure is drawn. **The last gate, at
+`d78c923`: 1297 passed, 3 skipped, 5 deselected, 203 warnings, 16 min 0 s; the display-marked run 3 passed (at
+`8764a06`).** Deviation 36 in the plan's head and the design's section 8 is rewritten to this. **Carried to Task 13's
+dispatch:** a small tests-only commit first (the scan judges the real tree before its in-memory checks; a guarded
+method in the live view's class passes); every drawing method of Tasks 13 and 14 carries the guard, and both briefs'
+import rules let `core.gui.reported` in; the last test Task 13's brief dictates expects an error to come OUT of the
+icon's pixmap, which under the guard it does not; the indicator's painting gets its `try`/`finally`; Tasks 14, 15 and
+17 ask the lettering for digits of equal width; the shared question's class (Task 18) does NOT get the method. **For
+the audit's list, older than this stage and found on the way:** an error raised by the callable of a zero-delay single
+shot with a context object is silent in this binding (`core/gui/panels/record_view.py:200`); a tree item's less-than
+that raises during a sort ended a probe's process (`core/gui/widgets/artifact_table.py:196` is such a method; not
+followed further); a failure in the main window's close handler before "Don't quit" is read closes the window with a
+run still going. **Owed at the stage's exit, with the owner's approval of the wording:** `CLAUDE.md` and
+`docs/guide/testing.md` count and list the session guards without the two this stage added (the file choosers'; the
+drawing code's). **Next:** the owner's remarks on the pictures; then Task 13.
 
 **THE WINDOW REDESIGN, PLAN AND BUILD (started 2026-10-06 from
 `docs/superpowers/prompts/2026-10-06-window-redesign-plan-and-build.md`; continue from that prompt, this paragraph and
