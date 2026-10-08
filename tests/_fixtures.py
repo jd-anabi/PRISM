@@ -819,12 +819,17 @@ def process_state(app) -> dict:
     from core import config, logging_root
     from core.artifacts import default_store
     from core.gui import design, theming
+    from core.gui import style as small_style
     palette = app.palette()
     style = app.style()
     return {
         # Told apart by inherits() and the name. A style's meta-object is never asked: taken from
         # a style made in Python, that was part of what ended a process as it left.
         "style": (style.inherits("QStyleSheetStyle"), style.objectName()),
+        # The small style and the follower that shows the focus ring, as their module keeps them:
+        # under a sheet the application's own style() is the toolkit's sheet style, laid over ours.
+        "small style": small_style.current_style(),
+        "focus follower": small_style.current_follower(),
         "sheet": app.styleSheet(),
         "palette": tuple(palette.color(group, role).name(QColor.HexArgb)
                          for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled)
@@ -866,6 +871,7 @@ def whole_program():
     from core.artifacts import default_store, set_default_store
     from core.gui import app as gui_app
     from core.gui import design, theming
+    from core.gui import style as small_style
     if not os.environ.get("PRISM_ARTIFACTS"):
         raise AssertionError("whole_program() needs PRISM_ARTIFACTS set to a temporary folder: "
                              "build_app makes the folder it names and installs it as the process's "
@@ -891,6 +897,7 @@ def whole_program():
                 logging_root.remove()
             config.QUIET_SEGMENT_BAR = found["quiet"]
             design.set_text_scale(found["factor"])
+            small_style.uninstall(app)                # the follower off the application before its style goes
             made = theming.active_appearance()
             theming._ACTIVE = found["appearance"]
             design.set_dark(found["dark"])            # the theme every later test's painted device reads

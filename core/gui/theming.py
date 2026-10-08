@@ -11,7 +11,9 @@ Each choice resolves to light or dark; then an apply does, in order:
     palette -- not only the sheet -- must be right;
   * ``fonts.apply_class_fonts`` (a new sheet puts the system's font back on lists, tables,
     headers, menus and tool tips), ``retheme()`` on each widget that has one, and an update of
-    every top-level widget.
+    every top-level widget;
+  * ``style.refresh_focus`` -- a change of style hides the focus frame, so the ring is put back on
+    the control that shows it.
 
 An apply whose resolved scheme is the one this Appearance already applied stops after the first
 of these: it sets neither the palette nor the sheet and signals nothing. ``should_apply``
@@ -27,7 +29,7 @@ The one deliberate exception is the Simulate video export, which stays white (si
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QWidget
 
-from . import design, fonts
+from . import design, fonts, style
 
 # (mode key, human label), in display order -- shared by the gear popover and the Settings screen.
 MODE_LABELS = (("system", "Follow Windows"), ("light", "Light"), ("dark", "Dark"))
@@ -119,6 +121,7 @@ class Appearance(QObject):
                     if callable(retheme):
                         retheme()
                 top.update()
+            style.refresh_focus()                                # a change of style hides the ring: put it back
             self._applied = wanted                               # only once all of it is done
         finally:
             self._applying = False

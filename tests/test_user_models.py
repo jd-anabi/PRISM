@@ -1240,8 +1240,13 @@ def test_on_a_real_windows_display_the_whole_program_sets_its_look_and_gives_it_
     with whole_program() as (app, window):
         assert not window.isVisible()
         assert {QFontInfo(QApplication.font(name)).family() for name in classes} == {"Inter"}
+        from core.gui import style as small_style
+        assert isinstance(small_style.current_style(), small_style.PrismStyle), \
+            "the class fonts above count only if they were set after the small style went on"
         window.close()
     assert QFontInfo(QApplication.font("QMenu")).family() == found, "Windows' own font is back on a menu"
+    assert small_style.current_style() is None and small_style.current_follower() is None
+    assert not app.style().inherits("QProxyStyle"), "the small style was left on the application"
 
 
 def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
@@ -1306,12 +1311,19 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
         assert design.is_dark() is True, "an apply must tell the look's table which theme is in force"
         assert app.styleSheet() == design.build_qss(True), "the application does not wear the built sheet"
         assert app.palette().color(QPalette.Window).name().upper() == design.tokens(True)["paper"]
+        from core.gui import style as small_style
+        follows = small_style.current_follower()
+        assert isinstance(small_style.current_style(), small_style.PrismStyle)
+        assert app.style().inherits("QStyleSheetStyle"), "under a sheet the toolkit lays its own style over ours"
+        assert not follows.listening(), "the follower must wait for the application's first change of focus"
+        app.focusChanged.emit(None, None)
+        assert follows.listening()
         during = process_state(app)
         window.close()
     changed = {key for key in found if during[key] != found[key]}
     assert {"sheet", "palette", "font", "figure settings", "error hook", "appearance",
             "appearance objects", "default store", "root log handler", "text factor",
-            "class fonts", "theme flag"} <= changed, \
+            "class fonts", "theme flag", "small style", "focus follower"} <= changed, \
         f"the whole program changed only {sorted(changed)}: the comparison below would prove nothing"
     after = process_state(app)
     left = sorted(key for key in found if after[key] != found[key])
@@ -1319,3 +1331,4 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     assert design.text_scale() == before_factor
     assert QApplication.font() == before_font and QApplication.font("QMenu") == before_font
     assert design.is_dark() is False, "the whole program left its theme in the look's table"
+    assert not follows.listening(), "the follower was left on the application"

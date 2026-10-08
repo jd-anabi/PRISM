@@ -11,6 +11,7 @@ import contextlib
 import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -18,10 +19,15 @@ import sys
 import textwrap
 import types
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from PySide6.QtGui import QFont, QFontDatabase, QFontInfo, QFontMetricsF, QGuiApplication
-from PySide6.QtWidgets import QApplication, QMenu, QStyleFactory
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, Qt
+from PySide6.QtGui import (QFocusEvent, QFont, QFontDatabase, QFontInfo, QFontMetricsF, QGuiApplication, QImage,
+                           QKeyEvent, QMouseEvent, QPainter, QRegion, QWheelEvent)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QLineEdit, QMenu, QPlainTextEdit, QPushButton,
+                               QRadioButton, QStyle, QStyleFactory, QStyleOptionButton, QStyleOptionFocusRect,
+                               QWidget)
 
 from core.gui import design, fonts
 
@@ -29,7 +35,7 @@ REPO = Path(__file__).resolve().parents[1]
 # every module of the look that exists; a new one joins this tuple in the commit that adds it, and the
 # fresh-interpreter test is then its proof that it loads no engine
 LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.gui.mpl_theme", "core.gui.settings",
-                "core.gui.file_chooser", "core.gui.widgets.labeled_inputs")
+                "core.gui.file_chooser", "core.gui.widgets.labeled_inputs", "core.gui.paint", "core.gui.style")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
 
@@ -612,6 +618,27 @@ def test_a_retired_mode_handed_to_the_appearance_is_follow_windows_and_no_clock_
     assert appearance.findChildren(QTimer) == []
 
 
+def test_a_listener_of_the_theme_signal_may_choose_a_mode(stand_in_app):
+    """A listener that is told the theme changed may choose a mode itself, and its choice is applied.
+    The signal is sent once the apply is over: sent from inside it, the listener's choice would meet
+    the guard against an apply entered twice and be dropped without a word."""
+    from core.gui import theming
+
+    app = stand_in_app
+    appearance = theming.Appearance(app)
+    heard = []
+
+    def listener(dark):
+        heard.append(dark)
+        if heard == [True]:                    # told for the first time that the theme went dark
+            appearance.set_mode("light")
+
+    appearance.theme_changed.connect(listener)
+    appearance.set_mode("dark")
+    assert (len(app.palettes), len(app.sheets)) == (2, 2), "the listener's own choice was not applied"
+    assert heard == [True, False] and appearance.mode() == "light" and appearance.is_dark() is False
+
+
 @pytest.mark.parametrize("step", ["setPalette", "setStyleSheet", "setFont", "retheme"])
 def test_an_apply_that_fails_part_way_is_made_again_when_the_scheme_before_it_is_chosen(stand_in_app, step):
     """An apply that raises part-way -- at the palette, at the sheet, at the fonts of the widget
@@ -930,7 +957,7 @@ def test_the_sheet_keeps_its_rules_and_only_the_named_interim_selectors_break_th
         for banned in ("$", "url(", "font-family", "letter-spacing", ":default", "::indicator", "*"):
             assert banned not in qss, (dark, banned)
         rules = _rules(qss)
-        assert len(rules) == 87, len(rules)
+        assert len(rules) == 83, len(rules)
         first = next(i for i, (selectors, _) in enumerate(rules) if selectors[0] in design.INTERIM_SELECTORS)
         final, interim = rules[:first], rules[first:]
         assert [s for selectors, _ in interim for s in selectors] == list(design.INTERIM_SELECTORS)
@@ -941,7 +968,7 @@ def test_the_sheet_keeps_its_rules_and_only_the_named_interim_selectors_break_th
             assert not [name for name in declarations if name.startswith("qproperty-")], selectors
         for selectors, _ in interim:                     # an old widget's rule still names a class of its own
             assert not [s for s in selectors if "QWidget" in _classes(s)], selectors
-    assert len(set(design.INTERIM_SELECTORS)) == len(design.INTERIM_SELECTORS) == 45
+    assert len(set(design.INTERIM_SELECTORS)) == len(design.INTERIM_SELECTORS) == 40
 
 
 def test_no_pseudo_state_sets_a_weight_or_a_size_and_words_take_lettering_colours():
@@ -1025,7 +1052,7 @@ def test_a_fields_hint_text_is_the_hint_colour_in_both_themes():
 def test_an_apply_runs_its_steps_in_one_order_and_stops_when_nothing_changed(monkeypatch):
     from PySide6.QtCore import QObject, Qt, Signal
     from PySide6.QtWidgets import QWidget
-    from core.gui import design, fonts, theming
+    from core.gui import design, fonts, style, theming
     QApplication.instance() or QApplication([])
     calls = []
 
@@ -1052,13 +1079,14 @@ def test_an_apply_runs_its_steps_in_one_order_and_stops_when_nothing_changed(mon
     stand_in = StandIn([top])
     monkeypatch.setattr(design, "set_dark", lambda dark: calls.append(("set_dark", dark)))
     monkeypatch.setattr(fonts, "apply_class_fonts", lambda app=None: calls.append("class_fonts"))
+    monkeypatch.setattr(style, "refresh_focus", lambda: calls.append("ring"))
     monkeypatch.setattr(theming, "_ACTIVE", theming._ACTIVE)     # the constructor rebinds it
     try:
         appearance = theming.Appearance(stand_in)
         appearance.theme_changed.connect(lambda dark: calls.append(("theme_changed", dark)))
         appearance.set_mode("dark")
         assert calls == ["scheme", ("set_dark", True), "palette", "sheet", "class_fonts",
-                         "retheme", "retheme", "update", ("theme_changed", True)]
+                         "retheme", "retheme", "update", "ring", ("theme_changed", True)]
         del calls[:]
         appearance.set_mode("dark")
         assert calls == ["scheme"], "an apply that changes nothing stops after the colour scheme"
@@ -1216,3 +1244,364 @@ def test_colours_are_written_in_the_looks_table_alone_and_a_sheet_is_set_by_the_
                        if isinstance(node, ast.Attribute) and node.attr == "setStyleSheet"]
     assert colours == [], f"a colour written outside the look's table: {colours}"
     assert sheets == [], f"a style sheet set outside the appearance: {sheets}"
+
+
+# ── the small style: the indicators it paints, the focus ring and where the ring shows ───────────
+def _image(width, height, ratio):
+    """A clear picture of that many logical pixels at a display scaling, its size rounded up."""
+    picture = QImage(math.ceil(width * ratio), math.ceil(height * ratio), QImage.Format_ARGB32_Premultiplied)
+    picture.setDevicePixelRatio(ratio)
+    picture.fill(Qt.transparent)
+    return picture
+
+
+def _at(picture, x, y):
+    """The colour, as the look's table writes it, of the device pixel under a logical point."""
+    ratio = picture.devicePixelRatio()
+    return picture.pixelColor(int(x * ratio), int(y * ratio)).name().upper()
+
+
+def test_the_tick_box_and_the_radio_dot_are_painted_from_the_table():
+    from core.gui import design, paint
+
+    def drawn(kind, on, enabled, ratio):
+        picture = _image(18, 18, ratio)
+        painter = QPainter(picture)
+        try:
+            paint.paint_indicator(painter, kind, QRectF(0, 0, 18, 18), on=on, enabled=enabled)
+        finally:
+            painter.end()                    # a raise under a live painter would end the run, not this test
+        return picture
+
+    def edge(picture):                       # the first device pixel of the middle row: the box's outline
+        return picture.pixelColor(0, picture.height() // 2).name().upper()
+
+    name = design.hex_colour
+    for dark in (False, True):
+        with theme(dark):
+            for ratio in (1.0, 1.25, 1.5, 2.0):
+                where = (dark, ratio)
+                empty = drawn("check", False, True, ratio)
+                assert (_at(empty, 9, 9), edge(empty)) == (name("field"), name("field_line")), where
+                ticked = drawn("check", True, True, ratio)
+                assert (_at(ticked, 2.5, 9), _at(ticked, 7.6, 11.5)) == (name("accent"), name("on_accent")), where
+                greyed = drawn("check", True, False, ratio)           # it keeps its tick and loses the accent
+                assert (_at(greyed, 2.5, 9), _at(greyed, 7.6, 11.5), edge(greyed)) == (
+                    name("disabled_fill"), name("disabled_ink"), name("disabled_line")), where
+                dot = drawn("radio", True, True, ratio)
+                assert (_at(dot, 9, 2.5), _at(dot, 9, 9)) == (name("accent"), name("on_accent")), where
+                assert _at(drawn("radio", False, True, ratio), 9, 9) == name("field"), where
+                off = drawn("radio", True, False, ratio)
+                assert (_at(off, 9, 2.5), _at(off, 9, 9)) == (name("disabled_fill"), name("disabled_ink")), where
+                assert drawn("neither", True, True, ratio) == _image(18, 18, ratio), "an unknown kind painted"
+
+
+def test_the_small_style_sizes_the_indicators_and_paints_them_itself():
+    from core.gui import design, style
+    QApplication.instance() or QApplication([])
+    worn = style.PrismStyle()
+
+    def fill(sheet, cls, part, x, y, enabled=True):    # a pixel inside a set indicator, under one holder's own sheet
+        holder = QWidget()
+        holder.setStyleSheet(sheet)
+        box = cls("words", holder)
+        box.setStyle(worn)                   # on this one widget, never on the application
+        box.setChecked(True)
+        box.setEnabled(enabled)
+        box.ensurePolished()
+        box.resize(box.sizeHint())
+        option = QStyleOptionButton()
+        option.initFrom(box)
+        where = box.style().subElementRect(part, option, box)
+        assert (where.width(), where.height()) == (18, 18)
+        picture = _image(box.width(), box.height(), 1.5)
+        box.render(picture)
+        return _at(picture, where.x() + x, where.y() + y)
+
+    with text_size(1.0):
+        for metric in (QStyle.PM_IndicatorWidth, QStyle.PM_IndicatorHeight,
+                       QStyle.PM_ExclusiveIndicatorWidth, QStyle.PM_ExclusiveIndicatorHeight):
+            assert worn.pixelMetric(metric) == 18
+        for cls, part, x, y in ((QCheckBox, QStyle.SE_CheckBoxIndicator, 2.5, 9),
+                                (QRadioButton, QStyle.SE_RadioButtonIndicator, 9, 2.5)):
+            sheets = ("", design.build_qss(False), design.build_qss(True))     # none, and the whole sheet twice
+            assert [fill(s, cls, part, x, y) for s in sheets] == [design.hex_colour("accent")] * 3, cls.__name__
+            assert [fill(s, cls, part, x, y, enabled=False) for s in sheets] == [
+                design.hex_colour("disabled_fill")] * 3, cls.__name__          # greyed: set, and no accent
+            spoiled = cls.__name__ + "::indicator { border: 1px solid red; }"
+            assert fill(spoiled, cls, part, x, y) != design.hex_colour("accent"), "the lines above prove nothing"
+    with text_size(1.25):
+        assert worn.pixelMetric(QStyle.PM_IndicatorWidth) == 23        # the box grows with the lettering
+        assert worn.pixelMetric(QStyle.PM_FocusFrameHMargin) == 4      # the ring and its gap do not
+        assert worn.pixelMetric(QStyle.PM_FocusFrameVMargin) == 4
+
+
+def test_the_toolkits_dotted_focus_mark_is_never_drawn():
+    from core.gui import style
+    QApplication.instance() or QApplication([])
+    option = QStyleOptionFocusRect()
+    option.rect = QRect(2, 2, 56, 20)
+    option.state = QStyle.State_Enabled | QStyle.State_HasFocus | QStyle.State_KeyboardFocusChange
+
+    def drawn(by):
+        picture = _image(60, 24, 1.0)
+        painter = QPainter(picture)
+        try:
+            by.drawPrimitive(QStyle.PE_FrameFocusRect, option, painter, None)
+        finally:
+            painter.end()
+        return picture
+
+    assert drawn(QStyleFactory.create("Fusion")) != _image(60, 24, 1.0), "the stock style draws no mark to leave out"
+    assert drawn(style.PrismStyle()) == _image(60, 24, 1.0)
+
+
+def test_the_wheel_over_a_closed_drop_down_leaves_its_choice():
+    from core.gui import style
+    QApplication.instance() or QApplication([])
+
+    def one_notch(worn):
+        box = QComboBox()
+        box.addItems(["a", "b", "c"])
+        box.setStyle(worn)
+        turn = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, -120), Qt.NoButton,
+                           Qt.NoModifier, Qt.NoScrollPhase, False)
+        QApplication.sendEvent(box, turn)
+        return box.currentIndex(), turn.isAccepted()
+
+    assert one_notch(QStyleFactory.create("Fusion")) == (1, True)      # the toolkit's own answer: the choice moves
+    assert one_notch(style.PrismStyle()) == (0, False)                 # not taken: left for the page behind it
+
+
+def test_a_class_set_after_the_first_polish_takes_effect():
+    from core.gui import style
+    QApplication.instance() or QApplication([])
+    holder = QWidget()
+    holder.setStyleSheet('QPushButton[cls="primary"] { font-weight: 600; }')     # this one widget's own sheet
+    button = QPushButton("Start", holder)
+    button.ensurePolished()
+    assert button.font().weight() == 400
+    button.setProperty("cls", "primary")
+    assert button.font().weight() == 400, "a property alone took effect: this test proves nothing"
+    assert style.set_class(button, cls="primary") is button and button.font().weight() == 600
+    assert style.set_class(button, cls="").font().weight() == 400
+    assert style.set_class(QPushButton("never polished"), cls="primary").property("cls") == "primary"
+
+
+@pytest.fixture
+def ring_room():
+    """A window that is never shown, four controls in it, and one follower whose ring wears its own
+    copy of the small style. Never shown, so no real keyboard focus and no activation reach the one
+    application the suites share; the follower comes off that application before the window goes."""
+    from core.gui import style
+    app = QApplication.instance() or QApplication([])
+    window = QWidget()
+    window.resize(420, 300)
+    button, field = QPushButton("Check again", window), QLineEdit(window)
+    row, box = QPushButton("A row", window), QPlainTextEdit(window)
+    button.setGeometry(40, 40, 120, 34)
+    field.setGeometry(40, 100, 120, 32)
+    row.setGeometry(0, 200, 420, 36)
+    row.setProperty("ring", "inset")
+    box.setGeometry(200, 100, 200, 80)
+    follows = style.FocusFollower(app, style.PrismStyle())
+    try:
+        yield SimpleNamespace(window=window, button=button, field=field, row=row, box=box, follows=follows)
+    finally:
+        follows.stop()                       # first: the ring holds its control by address
+
+
+def _moved_on(widget, reason):
+    """The focus arrives with no press of its own, as when the toolkit moves it on from a greyed control."""
+    QApplication.sendEvent(widget, QFocusEvent(QEvent.FocusIn, reason))
+
+
+def _arrive(widget, reason):
+    """The focus arrives as a person moves it: first the press, which the application alone hears (a key for
+    the keyboard's three reasons, a mouse button for a click), then the focus itself."""
+    if reason in (Qt.TabFocusReason, Qt.BacktabFocusReason, Qt.ShortcutFocusReason):
+        QApplication.sendEvent(QObject(), QKeyEvent(QEvent.KeyPress, Qt.Key_Tab, Qt.NoModifier))
+    elif reason == Qt.MouseFocusReason:
+        QApplication.sendEvent(QObject(), QMouseEvent(QEvent.MouseButtonPress, QPointF(1, 1), QPointF(1, 1),
+                                                      Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    _moved_on(widget, reason)
+
+
+def _leave(widget, reason):
+    QApplication.sendEvent(widget, QFocusEvent(QEvent.FocusOut, reason))
+
+
+def _ringed(room, widget):
+    ring = room.follows.ring()
+    return ring is not None and ring.widget() is widget and ring.isVisibleTo(room.window)
+
+
+def test_the_ring_shows_after_the_keyboard_and_after_a_click_only_in_a_field_one_types_in(ring_room):
+    r = ring_room
+
+    def comes(widget, reason, arrive=_arrive):       # the focus arrives, the ring is looked for, the focus leaves
+        arrive(widget, reason)
+        shown = _ringed(r, widget)
+        _leave(widget, reason)
+        return shown and r.follows.target() is None and not _ringed(r, widget)
+
+    assert not comes(r.button, Qt.TabFocusReason, _moved_on)   # nothing pressed yet: no key moved it
+    assert not comes(r.button, Qt.MouseFocusReason)
+    assert comes(r.field, Qt.MouseFocusReason)
+    for reason in (Qt.TabFocusReason, Qt.BacktabFocusReason, Qt.ShortcutFocusReason):
+        assert comes(r.button, reason), reason
+    assert comes(r.button, Qt.ActiveWindowFocusReason)         # the window coming back keeps what it had
+    assert not comes(r.button, Qt.MouseFocusReason)            # the mouse again: the keyboard's turn is over
+    assert not comes(r.button, Qt.ActiveWindowFocusReason)
+    # A clicked control that is then greyed or hidden loses the focus to the next one, and the toolkit gives
+    # that move the Tab key's reason. No key was pressed, so no ring, except in a field one types in.
+    for reason in (Qt.TabFocusReason, Qt.BacktabFocusReason):
+        assert not comes(r.button, reason, _moved_on), reason
+    assert comes(r.field, Qt.TabFocusReason, _moved_on)
+    assert comes(r.button, Qt.ShortcutFocusReason, _moved_on)  # a shortcut is a key, whatever was pressed before
+    assert not comes(r.button, Qt.MouseFocusReason)
+    assert comes(r.button, Qt.TabFocusReason)                  # and the Tab key itself still shows it
+
+
+def test_in_a_message_box_the_focus_is_shown_whatever_brought_it(ring_room):
+    """A message box of the old layout marks the answer the Enter key gives by nothing but the focus, and it
+    opens with the focus already on that answer: no key and no click brought it there. So inside such a box
+    the ring shows wherever the focus is. A plain dialog gets no such favour."""
+    from PySide6.QtWidgets import QDialog, QMessageBox
+    r = ring_room
+    box = QMessageBox(r.window)              # never shown and never run; it goes with the window it belongs to
+    start, cancel = box.addButton("Start", QMessageBox.AcceptRole), box.addButton("Cancel", QMessageBox.RejectRole)
+    box.setDefaultButton(start)
+    in_box = SimpleNamespace(follows=r.follows, window=box)
+    _moved_on(start, Qt.ActiveWindowFocusReason)             # as the box opens: nothing was pressed
+    assert r.follows.target() is start and _ringed(in_box, start)
+    _arrive(cancel, Qt.MouseFocusReason)                     # a click on the other answer: the ring goes with it
+    assert r.follows.target() is cancel and _ringed(in_box, cancel)
+    _leave(cancel, Qt.MouseFocusReason)
+    assert r.follows.target() is None and not _ringed(in_box, cancel)
+    plain = QDialog(r.window)                                # the same two arrivals in a plain dialog: no ring
+    first, second = QPushButton("Start", plain), QPushButton("Cancel", plain)
+    _moved_on(first, Qt.ActiveWindowFocusReason)
+    assert r.follows.target() is None
+    _arrive(second, Qt.MouseFocusReason)
+    assert r.follows.target() is None
+    # Whose turn it is goes on being kept as everywhere: a click inside a box ends the keyboard's.
+    _arrive(r.button, Qt.TabFocusReason)
+    assert _ringed(r, r.button)
+    _leave(r.button, Qt.TabFocusReason)
+    _arrive(cancel, Qt.MouseFocusReason)
+    assert _ringed(in_box, cancel)
+    _leave(cancel, Qt.MouseFocusReason)
+    _moved_on(r.button, Qt.ActiveWindowFocusReason)          # the window comes back: no ring, the mouse was last
+    assert r.follows.target() is None and not _ringed(r, r.button)
+
+
+def test_the_ring_stands_four_pixels_outside_a_control_and_just_inside_one_that_fills_its_place(ring_room):
+    r = ring_room
+    _arrive(r.button, Qt.TabFocusReason)
+    ring = r.follows.ring()
+    assert ring.geometry() == r.button.geometry().adjusted(-4, -4, 4, 4)
+    assert ring.parentWidget() is r.window and not ring.inset
+    _leave(r.button, Qt.TabFocusReason)
+    for inside in (r.row, r.box):            # one asks by its property; one is a widget that scrolls
+        _arrive(inside, Qt.TabFocusReason)
+        assert r.follows.ring().inset and r.follows.ring().geometry() == inside.geometry()
+        _leave(inside, Qt.TabFocusReason)
+    _arrive(r.button, Qt.TabFocusReason)     # and outside again: the form is decided at every arrival
+    assert r.follows.ring().geometry() == r.button.geometry().adjusted(-4, -4, 4, 4)
+
+
+def test_the_ring_is_put_back_after_a_change_of_style_and_goes_with_its_control(ring_room):
+    r = ring_room
+    _arrive(r.button, Qt.TabFocusReason)
+    QApplication.sendEvent(r.button, QEvent(QEvent.StyleChange))       # what every change of theme sends it
+    assert not _ringed(r, r.button), "the toolkit no longer hides its focus frame at a change of style"
+    r.follows.refresh()
+    assert _ringed(r, r.button)
+    r.button.hide()
+    assert r.follows.target() is None and not _ringed(r, r.button)
+
+
+class _OwnSign(QPushButton):
+    """A control that shows keyboard focus itself, as a table does for its current row."""
+    shown = None
+
+    def set_focus_shown(self, on):
+        self.shown = on
+
+
+def test_the_ring_is_left_off_a_control_that_shows_focus_itself_and_off_an_opened_list(ring_room):
+    r = ring_room
+    own = _OwnSign("a table", r.window)
+    _arrive(own, Qt.TabFocusReason)
+    assert own.shown is True and r.follows.target() is own and not _ringed(r, own)
+    _leave(own, Qt.TabFocusReason)
+    assert own.shown is False and r.follows.target() is None
+    opened = QWidget(None, Qt.Popup)         # never shown: an opened list marks its own row
+    line = QPushButton("a row of the list", opened)
+    _arrive(line, Qt.TabFocusReason)
+    assert r.follows.target() is None and not _ringed(r, line)
+
+
+def test_the_ring_is_two_pixels_of_the_focus_colour_and_clear_inside(ring_room):
+    from core.gui import design
+    r = ring_room
+
+    def painted(widget, ratio):              # the ring on a control, as it paints itself at a display scaling
+        _arrive(widget, Qt.TabFocusReason)
+        ring = r.follows.ring()
+        picture = _image(ring.width(), ring.height(), ratio)
+        ring.render(picture, QPoint(0, 0), QRegion(), QWidget.RenderFlag.DrawChildren)
+        middle, half = ring.width() / 2, ring.height() / 2
+        _leave(widget, Qt.TabFocusReason)
+        return picture, middle, half
+
+    def cover(picture, x, y):                # how solid the device pixel under a logical point is, 0 to 255
+        ratio = picture.devicePixelRatio()
+        return picture.pixelColor(int(x * ratio), int(y * ratio)).alpha()
+
+    band = (0.5, 1.5, 2.5, 3.5)              # logical points across the ring: two inside it, two past it
+    r.row.setProperty("ring_left", 4)        # a row with a bar four wide at its left: the ring starts after it
+    for dark in (False, True):
+        with theme(dark):
+            focus = design.hex_colour("focus")
+            for ratio in (1.0, 1.25, 1.5, 2.0):
+                where = (dark, ratio)
+                outside, middle, half = painted(r.button, ratio)
+                assert [cover(outside, middle, y) for y in band + (half,)] == [255, 255, 0, 0, 0], where
+                assert [_at(outside, middle, y) for y in band[:2]] == [focus] * 2, where
+                inside, middle, half = painted(r.row, ratio)
+                assert [cover(inside, x, half) for x in band] == [0] * 4, where       # the bar's four, left free
+                assert [cover(inside, 4 + x, half) for x in band] == [255, 255, 0, 0], where
+                assert [cover(inside, middle, y) for y in band + (half,)] == [255, 255, 0, 0, 0], where
+                assert _at(inside, 4.5, half) == focus, where
+
+
+def test_a_follower_told_to_wait_hears_nothing_until_it_listens():
+    from core.gui import style
+    app = QApplication.instance() or QApplication([])
+    window = QWidget()
+    button = QPushButton("Check again", window)
+    button.setGeometry(40, 40, 120, 34)
+    follows = style.FocusFollower(app, style.PrismStyle(), listen=False)
+    try:
+        _arrive(button, Qt.TabFocusReason)
+        assert not follows.listening() and follows.target() is None
+        follows.listen()
+        follows.listen()                     # twice is once
+        _arrive(button, Qt.TabFocusReason)
+        assert follows.listening() and follows.target() is button
+    finally:
+        follows.stop()
+    follows.stop()                           # and stopping twice is once
+    assert not follows.listening() and follows.ring() is None and follows.parent() is None
+
+
+def test_the_sheet_marks_no_focus_of_its_own():
+    from core.gui import design
+    assert not [selector for selector in design.INTERIM_SELECTORS if ":focus" in selector]
+    for dark in (False, True):
+        qss = design.build_qss(dark)
+        assert ":focus" not in qss, dark
+        rules = {tuple(selectors): declarations for selectors, declarations in _rules(qss)}
+        assert rules[("QCheckBox", "QRadioButton")]["outline"] == "none"    # the ring is the one sign of focus

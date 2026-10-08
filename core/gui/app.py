@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from core import config, logging_root, registry
 
-from . import app_icon, design, fonts, mpl_theme, settings, theming
+from . import app_icon, design, fonts, mpl_theme, settings, style, theming
 from .main_window import MainWindow
 
 
@@ -93,10 +93,12 @@ def build_app(argv=None):
     # inherits it, so there is no per-window wiring to forget. PRISM had no icon at all before this.
     app.setWindowIcon(app_icon.app_icon())
     design.set_text_scale(design.system_text_scale())    # first: every size read after this line is a scaled one
-    # Fusion repaints every control from the palette (the native Windows style doesn't), so a light/dark
-    # colour-scheme switch recolours consistently on Win/Mac/Linux. Theming lives here (never in
-    # MainWindow) so it stays out of the test path.
-    app.setStyle("Fusion")
+    # The small style over Fusion paints the tick boxes and the radio dots from the look's table, leaves
+    # the toolkit's dotted focus mark out and places the focus ring. On the APPLICATION, and before the
+    # font and the first sheet: a change of style throws every per-class font away. The follower that
+    # shows the ring is built with it and starts to listen at the first change of focus, so the
+    # window's construction does not pass through it. tests/_fixtures.whole_program takes both off.
+    style.install(app)
     qs = settings.settings()
     fonts.load_app_font(app)                             # the lettering face, before any widget
     appearance = theming.Appearance(app)

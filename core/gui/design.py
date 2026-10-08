@@ -375,10 +375,11 @@ def build_palette(dark: bool) -> QPalette:
 #
 # The rules that stay. A sheet gives colours, borders and padding: a face and its features are set in code,
 # and the accent comes from a class, never from the default button, which follows the keyboard focus from
-# button to button. A tick box and a radio button keep their outline, the style's own mark of keyboard focus,
-# and no rule names their indicator: one would take the whole box away from the style. Nothing is said of a
-# drop-down's arrow either. A rule that gives a field its text colour names the colour of its hint as well:
-# left unnamed, the toolkit makes the hint of the text colour at half strength, in every state of the field.
+# button to button. No rule marks keyboard focus: the focus ring is its one sign, so a tick box and a radio
+# button give up their outline, the style's own mark of it. No rule names their indicator: one would take the
+# whole box away from the style. Nothing is said of a drop-down's arrow either. A rule that gives a field its
+# text colour names the colour of its hint as well: left unnamed, the toolkit makes the hint of the text colour
+# at half strength, in every state of the field.
 _QSS = Template("""
 QToolTip { background: $raised; color: $ink; border: 1px solid $field_line; padding: ${px_tip_v}px ${px_tip_h}px; }
 QDialog[cls="ask"] { background: $raised; }
@@ -433,7 +434,7 @@ QPlainTextEdit {
     border-radius: ${px_radius}px; background: $field; color: $ink; placeholder-text-color: $ink_3;
     selection-background-color: $accent; selection-color: $on_accent; }
 
-QCheckBox, QRadioButton { spacing: ${px_check_gap}px; color: $ink; }
+QCheckBox, QRadioButton { spacing: ${px_check_gap}px; color: $ink; outline: none; }
 QRadioButton { spacing: ${px_radio_gap}px; }
 QCheckBox:disabled, QRadioButton:disabled { color: $disabled_ink; }
 
@@ -451,28 +452,22 @@ QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 """)
 
 # The rules of the old layout: each serves a widget that is still built the old way, and leaves with it. The
-# four ":focus" rules are that layout's sign of keyboard focus. The icon button takes no padding, so that a
-# glyph in a fixed width is not squeezed, and the inner height of the field beside it. The tree view is the
-# records table, a tree used flat; its selection is the accent, which is also QPalette.Highlight, so a row
-# painted by hand would match.
+# icon button takes no padding, so that a glyph in a fixed width is not squeezed, and the inner height of the
+# field beside it. The tree view is the records table, a tree used flat; its selection is the accent, which is
+# also QPalette.Highlight, so a row painted by hand would match.
 _QSS_INTERIM = Template("""
 QLabel[type="title"]       { font-size: ${px_t_title}px; font-weight: 600; }
 QLabel[type="subtitle"]    { font-size: ${px_t_brand}px; font-weight: 600; }
 QLabel[type="heading"]     { font-size: ${px_t_head}px; font-weight: 600; }
 QLabel[type="caption"]     { font-size: ${px_t_small}px; color: $ink_2; }
 
-QPushButton:focus   { border: 1px solid $accent; }
 QPushButton[accent="true"] {
     background: $accent; color: $on_accent; border: 1px solid $accent; font-weight: 600;
 }
 QPushButton[accent="true"]:hover   { background: $accent_hover; border-color: $accent_hover; }
 QPushButton[accent="true"]:pressed { background: $accent_press; border-color: $accent_press; }
-QPushButton[accent="true"]:focus   { border: 1px solid $focus; }
 QPushButton[accent="true"]:disabled{ background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink; }
 QPushButton#iconButton { padding: 0px; min-height: ${px_fld_in}px; font-size: ${px_i_icon}px; }
-
-QLineEdit:focus, QPlainTextEdit:focus { border: 1px solid $accent; }
-QComboBox:focus { border: 1px solid $accent; }
 
 QTreeView {
     border: 1px solid $rule_light; border-radius: ${px_radius}px;
@@ -540,10 +535,9 @@ QMenu::separator { height: 1px; background: $rule_light; margin: 4px 8px; }
 # do not use.
 INTERIM_SELECTORS = (
     'QLabel[type="title"]', 'QLabel[type="subtitle"]', 'QLabel[type="heading"]', 'QLabel[type="caption"]',
-    "QPushButton:focus", 'QPushButton[accent="true"]', 'QPushButton[accent="true"]:hover',
-    'QPushButton[accent="true"]:pressed', 'QPushButton[accent="true"]:focus',
-    'QPushButton[accent="true"]:disabled', "QPushButton#iconButton", "QLineEdit:focus", "QPlainTextEdit:focus",
-    "QComboBox:focus", "QTreeView", "QTreeView::item", "QTreeView::item:hover", "QTreeView::item:selected",
+    'QPushButton[accent="true"]', 'QPushButton[accent="true"]:hover', 'QPushButton[accent="true"]:pressed',
+    'QPushButton[accent="true"]:disabled', "QPushButton#iconButton",
+    "QTreeView", "QTreeView::item", "QTreeView::item:hover", "QTreeView::item:selected",
     "QHeaderView::section", "QHeaderView::section:hover", "QHeaderView::section:last",
     "QHeaderView::section:only-one", "QGroupBox", "QGroupBox::title", "QTabWidget::pane", "QTabBar",
     "QTabBar::tab", "QTabBar::tab:hover", "QTabBar::tab:selected", "QTabBar::tab:disabled", "QProgressBar",
