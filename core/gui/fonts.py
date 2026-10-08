@@ -4,10 +4,10 @@ the program says, and a fixed-width face for text quoted from the console.
 Every font is made here, in code: a style sheet can name a family but cannot switch on the digits of
 equal width. Those are on where numbers stand under one another, in lists and tables and their headers,
 and for a caller that asks for them. They are not on everywhere, because in the bundled files the same
-feature also widens the hyphen, the brackets and other marks to a digit's width, and a compound word
-then reads as if it were spaced. Sizes come from the look's table, scaled by the text
-factor. The two bundled Inter files are handed to the toolkit the first time a font is asked for, so a
-painted device has its face in a test as well, where no application font is loaded.
+feature also widens the hyphen and the asterisk to a digit's width (the brackets and other marks change
+by a little), and a compound word then reads as if it were spaced. Sizes come from the look's table,
+scaled by the text factor. The two bundled Inter files are handed to the toolkit the first time a font
+is asked for, so a painted device has its face in a test as well, where no application font is loaded.
 """
 from pathlib import Path
 
@@ -51,7 +51,7 @@ def inter(kind: str = "body", weight: int | None = None, *, tabular: bool = Fals
     """The lettering font of one row of the look's type table, at the text size in force. ``weight``
     replaces the row's own; the files hold 400 and 600. ``tabular`` switches on the digits of equal
     width, for where numbers stand under one another. They are off unless asked for: the same feature
-    widens the hyphen and other marks to a digit's width. The caller gets a copy and may change it."""
+    widens the hyphen and the asterisk to a digit's width. The caller gets a copy and may change it."""
     register_fonts()                                        # on every call: the application may exist by now
     size, _line, own = design.TYPE[kind]
     weight = weight or own
@@ -147,8 +147,8 @@ def apply_class_fonts(app=None) -> None:
 def load_app_font(app) -> str:
     """Make the lettering font the application's own, so that every widget inherits it, hand the
     bundled files to the figure library, and return the family the application's font resolved to.
-    The digits of equal width are not switched on in it: the same feature widens the hyphen and other
-    marks to a digit's width, in every word the window shows."""
+    The digits of equal width are not switched on in it: the same feature widens the hyphen to a
+    digit's width, in every word the window shows."""
     register_fonts()
     register_with_matplotlib()
     app.setFont(inter("body"))

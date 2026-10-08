@@ -455,15 +455,20 @@ QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 # and a text viewer are boxes one picks or reads in, so they are dressed as the log pane is; left to the toolkit
 # their frame is the page's colour made darker, which is a pale line on the light page and none on the dark one.
 # The rule names the list widget and not every list view: the list a drop-down opens is a list view with a rule
-# of its own, and must keep its square corners. A bare scrolling area takes the quiet separator for its frame,
-# and the square where two scroll bars meet takes the bars' own track. The icon button takes no padding, so
-# that a glyph in a fixed width is not squeezed, and the inner height of the field beside it. The tree view is
-# the records table, a tree used flat; its selection is the accent, which is also QPalette.Highlight, so a row
-# painted by hand would match.
+# of its own, and must keep its square corners. Greyed, the two look as a greyed field does: a rule that gives a
+# box its ground and its text colour takes the palette's greyed ones away, so they are named again. A bare
+# scrolling area takes the quiet separator for its frame, but only where it has the frame an area is born with
+# (the styled panel, which the toolkit numbers 6): one whose frame was switched off would be given a line, and
+# lose a pixel on each side to it. The square where two scroll bars meet takes the bars' own track. The icon
+# button takes no padding, so that a glyph in a fixed width is not squeezed, and the inner height of the field
+# beside it. The tree view is the records table, a tree used flat; its selection is the accent, which is also
+# QPalette.Highlight, so a row painted by hand would match.
 _QSS_INTERIM = Template("""
 QListWidget, QTextEdit { border: 1px solid $field_line; border-radius: ${px_radius}px; background: $field;
                          color: $ink; placeholder-text-color: $ink_3; }
-QScrollArea { border: 1px solid $rule_light; }
+QListWidget:disabled, QTextEdit:disabled { border: 1px solid $disabled_line; background: $disabled_fill;
+                                           color: $disabled_ink; placeholder-text-color: $disabled_ink; }
+QScrollArea[frameShape="6"] { border: 1px solid $rule_light; }
 QAbstractScrollArea::corner { background: $margin; border: none; }
 
 QLabel[type="title"]       { font-size: ${px_t_title}px; font-weight: 600; }
@@ -544,7 +549,8 @@ QMenu::separator { height: 1px; background: $rule_light; margin: 4px 8px; }
 # the second template, in the sheet's order. They alone may name an object, or a property the rules that stay
 # do not use.
 INTERIM_SELECTORS = (
-    "QListWidget", "QTextEdit", "QScrollArea", "QAbstractScrollArea::corner",
+    "QListWidget", "QTextEdit", "QListWidget:disabled", "QTextEdit:disabled", 'QScrollArea[frameShape="6"]',
+    "QAbstractScrollArea::corner",
     'QLabel[type="title"]', 'QLabel[type="subtitle"]', 'QLabel[type="heading"]', 'QLabel[type="caption"]',
     'QPushButton[accent="true"]', 'QPushButton[accent="true"]:hover', 'QPushButton[accent="true"]:pressed',
     'QPushButton[accent="true"]:disabled', "QPushButton#iconButton",

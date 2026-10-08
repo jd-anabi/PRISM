@@ -745,9 +745,9 @@ def font_and_style_put_back(app):
 
 
 def test_an_inter_font_has_digits_of_equal_width_only_when_asked_and_a_copy_keeps_them():
-    """In the bundled files the feature that gives the digits one width also widens the hyphen, the brackets
-    and other marks to a digit's width: switched on everywhere, every compound word reads as if it were spaced.
-    So a font carries it only when it is asked for."""
+    """In the bundled files the feature that gives the digits one width also widens the hyphen and the asterisk
+    to a digit's width: switched on everywhere, every compound word reads as if it were spaced. So a font
+    carries it only when it is asked for."""
     QApplication.instance() or QApplication([])
     assert design.LETTERING == "Inter" and design.text_scale() == 1.0
     for kind in INTER_KINDS:
@@ -995,7 +995,7 @@ def test_the_sheet_keeps_its_rules_and_only_the_named_interim_selectors_break_th
         for banned in ("$", "url(", "font-family", "letter-spacing", ":default", "::indicator", "*"):
             assert banned not in qss, (dark, banned)
         rules = _rules(qss)
-        assert len(rules) == 86, len(rules)
+        assert len(rules) == 87, len(rules)
         first = next(i for i, (selectors, _) in enumerate(rules) if selectors[0] in design.INTERIM_SELECTORS)
         final, interim = rules[:first], rules[first:]
         assert [s for selectors, _ in interim for s in selectors] == list(design.INTERIM_SELECTORS)
@@ -1006,7 +1006,7 @@ def test_the_sheet_keeps_its_rules_and_only_the_named_interim_selectors_break_th
             assert not [name for name in declarations if name.startswith("qproperty-")], selectors
         for selectors, _ in interim:                     # an old widget's rule still names a class of its own
             assert not [s for s in selectors if "QWidget" in _classes(s)], selectors
-    assert len(set(design.INTERIM_SELECTORS)) == len(design.INTERIM_SELECTORS) == 44
+    assert len(set(design.INTERIM_SELECTORS)) == len(design.INTERIM_SELECTORS) == 46
 
 
 def test_no_pseudo_state_sets_a_weight_or_a_size_and_words_take_lettering_colours():
@@ -1092,8 +1092,8 @@ def test_a_fields_hint_text_is_the_hint_colour_in_both_themes():
         assert t["ink_3"] == design.COLOURS["ink_3"][1 if dark else 0]
         holder = QWidget()
         # the sheet has no disabled rule for a text box, so a disabled one keeps the hint colour of its plain rule
-        for make, when_disabled in ((QLineEdit, "disabled_ink"), (QPlainTextEdit, "ink_3"), (QTextEdit, "ink_3"),
-                                    (QComboBox, "disabled_ink")):
+        for make, when_disabled in ((QLineEdit, "disabled_ink"), (QPlainTextEdit, "ink_3"),
+                                    (QTextEdit, "disabled_ink"), (QComboBox, "disabled_ink")):
             box = make(holder)
             if make is QComboBox:
                 box.setEditable(True)
@@ -1119,8 +1119,11 @@ def test_a_list_a_text_viewer_and_a_scrolling_area_are_framed_from_the_table():
     picks or reads in, so they take a field's outline and ground; a bare scrolling area takes the quiet
     separator; and the square where two scroll bars meet is the bars' own track. The list a drop-down opens has
     a rule of its own and keeps all of it, its square corners too: the rule for lists names the list widget, so
-    it does not reach that one. The palette and the sheet are set on one holder, which is never shown."""
-    from PySide6.QtWidgets import QListWidget, QScrollArea, QTextBrowser
+    it does not reach that one. An area whose own frame was switched off is given none: the rule names the
+    frame an area has by default, or it would put a line round a page that scrolls and take a pixel from each
+    of its sides. And a list or a viewer that is greyed, as the list of a form is for the length of a run, looks
+    greyed as a field does. The palette and the sheet are set on one holder, which is never shown."""
+    from PySide6.QtWidgets import QFrame, QListWidget, QScrollArea, QTextBrowser
     QApplication.instance() or QApplication([])
     width, height = 120, 80
 
@@ -1144,6 +1147,18 @@ def test_a_list_a_text_viewer_and_a_scrolling_area_are_framed_from_the_table():
             assert (_at(picture, width / 2, 0), _at(picture, width / 2, height / 2)) == (outline, ground), (
                 dark, type(boxed).__name__)
         assert _at(painted(area), width / 2, 0) == quiet, dark
+        bare = QScrollArea(holder)                   # its own frame switched off: the sheet gives it none
+        bare.setFrameShape(QFrame.NoFrame)
+        bare.setWidget(QWidget())
+        unframed = painted(bare)
+        assert bare.frameWidth() == 0, (dark, "an area that switched its frame off was given one")
+        assert _at(unframed, width / 2, 0) == _at(unframed, width / 2, height / 2) != quiet, dark
+        greyed_look = (design.hex_colour("disabled_line", dark), design.hex_colour("disabled_fill", dark))
+        for greyed in (QListWidget(holder), QTextBrowser(holder)):
+            greyed.setEnabled(False)
+            picture = painted(greyed)
+            assert (_at(picture, width / 2, 0), _at(picture, width / 2, height / 2)) == greyed_look, (
+                dark, type(greyed).__name__, "greyed")
         opened = painted(box.view())                 # the drop-down's own list, with no rows in it; never opened
         corners = [_at(opened, x, y) for x in (0, width - 1) for y in (0, height - 1)]
         assert corners == [outline] * 4, (dark, "the list a drop-down opens lost its square corners")
@@ -1311,6 +1326,8 @@ def _messages_under(qss):
         for make in (W.QPlainTextEdit, W.QCheckBox, W.QRadioButton, W.QTableView, W.QProgressBar, W.QScrollBar,
                      W.QGroupBox, W.QMenu, W.QListWidget, W.QTextBrowser, W.QScrollArea):
             add(make)
+        for make in (W.QListWidget, W.QTextBrowser):
+            add(make).setEnabled(False)
         tree = add(W.QTreeWidget)
         tree.setHeaderLabels(["one", "two"])
         W.QTreeWidgetItem(tree, ["row", "row"])
