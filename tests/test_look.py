@@ -1029,7 +1029,7 @@ def test_the_sheets_lengths_follow_the_text_factor_and_its_line_weights_do_not()
     with text_size(2.0):
         two = {tuple(selectors): d for selectors, d in _rules(design.build_qss(False))}
         sizes = design._sheet_sizes()
-    assert len(sizes) == 30 and all(name.startswith("px_") for name in sizes) and not set(sizes) & set(design.COLOURS)
+    assert len(sizes) == 31 and all(name.startswith("px_") for name in sizes) and not set(sizes) & set(design.COLOURS)
     button, field, bad = ("QPushButton",), ("QLineEdit", "QComboBox"), ('QLineEdit[state="error"]',)
     title = ('QLabel[type="title"]',)
     assert (one[button]["min-height"], two[button]["min-height"]) == ("32px", "66px")
@@ -1043,6 +1043,31 @@ def test_the_sheets_lengths_follow_the_text_factor_and_its_line_weights_do_not()
         assert built[bad]["border"] == "2px solid #C24E00"
         assert built[("QScrollBar:vertical",)]["width"] == "8px"
         assert built[("QScrollBar::handle:horizontal",)]["min-width"] == "28px"
+
+
+def _help_badge_rule(dark):
+    """What the built sheet declares for the small round help button."""
+    rules = {tuple(selectors): declarations for selectors, declarations in _rules(design.build_qss(dark))}
+    return rules[("QToolButton#helpBadge",)]
+
+
+def test_the_help_badges_ring_is_the_faint_rule_and_not_the_outline_of_a_control():
+    """The badge's mark lies on its ring. In the outline colour of a control the ring is nearly the mark's own
+    tone and the mark cannot be read; in the faint rule's colour the mark reads on its own."""
+    for dark in (False, True):
+        rule = _help_badge_rule(dark)
+        assert rule["border"] == "1px solid " + design.hex_colour("rule_light", dark), dark
+        assert design.hex_colour("field_line", dark) not in rule["border"], dark
+        assert rule["color"] == design.hex_colour("ink_2", dark), dark
+
+
+def test_the_help_badge_is_round_at_every_text_size():
+    """The badge is as wide as the text makes it, so its corner is half that width: a corner of a fixed size
+    leaves a soft square once the text is larger."""
+    for factor, side, corner in ((1.0, 16, "8px"), (1.5, 24, "12px")):
+        with text_size(factor):
+            assert design.scaled(16) == side, "the side the badge gives itself"
+            assert _help_badge_rule(False)["border-radius"] == _help_badge_rule(True)["border-radius"] == corner, factor
 
 
 def test_a_fields_hint_text_is_the_hint_colour_in_both_themes():

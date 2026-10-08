@@ -519,7 +519,7 @@ QToolButton#navRunning {
 }
 QToolButton#navRunning:hover { color: $ink; border-color: $accent; }
 QToolButton#helpBadge {
-    border: 1px solid $field_line; border-radius: 8px; color: $ink_2;
+    border: 1px solid $rule_light; border-radius: ${px_badge_r}px; color: $ink_2;
     font-size: ${px_i_badge}px; padding: 0px; background: transparent;
 }
 QToolButton#helpBadge:hover { border-color: $accent; color: $accent; }
@@ -553,7 +553,8 @@ def _sheet_sizes() -> dict[str, int]:
     """Every size the sheet writes, in pixels at the text size in force, under the name its placeholder has.
     A height is what stands inside the border: the outer height less the two lines, and a field in error, whose
     border is twice as heavy, gives up as much again in height and in padding, so it keeps its outer size. The
-    radius and the scroll bar with its handle do not grow with the text."""
+    radius and the scroll bar with its handle do not grow with the text; the help badge's corner does, being
+    half the badge's side."""
     size = SIZE
     handle, handle_in, handle_r = size["scroll_handle"]
     return {
@@ -572,6 +573,9 @@ def _sheet_sizes() -> dict[str, int]:
         "px_radius": size["radius"], "px_bar": size["scroll_bar"],
         "px_handle": handle, "px_handle_in": handle_in, "px_handle_r": handle_r,
         **{name: scaled(px) for name, px in _GLYPH_PX.items()},
+        # 16 is the side the help badge gives itself (widgets/help_badge.py), scaled as it scales it: half of
+        # that, rounded down, keeps the badge round at every text size
+        "px_badge_r": scaled(16) // 2,
     }
 
 
