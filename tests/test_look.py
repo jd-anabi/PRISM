@@ -612,19 +612,29 @@ def test_a_retired_mode_handed_to_the_appearance_is_follow_windows_and_no_clock_
     assert appearance.findChildren(QTimer) == []
 
 
-@pytest.mark.parametrize("step", ["setPalette", "setStyleSheet", "setFont"])
+@pytest.mark.parametrize("step", ["setPalette", "setStyleSheet", "setFont", "retheme"])
 def test_an_apply_that_fails_part_way_is_made_again_when_the_scheme_before_it_is_chosen(stand_in_app, step):
-    """An apply that raises part-way -- at the palette, at the sheet or at the fonts of the widget
-    classes -- leaves a look that is half one scheme and half the other. The error comes out,
-    nothing is signalled, and the Appearance can be used again. Nothing counts as applied while the
-    work is under way, so neither scheme is taken for a repeat when it is chosen next: not the one
-    shown before the failure, and not the one that failed. Either sets the palette and the sheet
-    again."""
+    """An apply that raises part-way -- at the palette, at the sheet, at the fonts of the widget
+    classes or in a widget's own ``retheme()`` -- leaves a look that is half one scheme and half
+    the other. The error comes out, nothing is signalled, and the Appearance can be used again.
+    Nothing counts as applied while the work is under way, so neither scheme is taken for a repeat
+    when it is chosen next: not the one shown before the failure, and not the one that failed.
+    Either sets the palette and the sheet again."""
     from PySide6.QtGui import QPalette
+    from PySide6.QtWidgets import QWidget
     from core.gui import theming
 
+    class Painted(QWidget):
+        def retheme(self): pass
+
     app = stand_in_app
-    set_before_the_step = {"setPalette": (0, 0), "setStyleSheet": (1, 0), "setFont": (1, 1)}[step]
+    # what the failed apply had set when the step refused: palettes, sheets, fonts of widget classes
+    set_before_the_step = {"setPalette": (0, 0, 0), "setStyleSheet": (1, 0, 0), "setFont": (1, 1, 0),
+                           "retheme": (1, 1, len(CLASSES_WITH_A_FONT))}[step]
+    refuser = app                              # whose step refuses: the stand-in, or a widget it lists
+    if step == "retheme":
+        refuser = Painted()                    # a top-level widget of the stand-in; never shown
+        app.tops.append(refuser)
 
     def chosen(appearance, mode):
         """Choose ``mode``: how often that asked the hints, set a palette and set a sheet."""
@@ -644,30 +654,34 @@ def test_an_apply_that_fails_part_way_is_made_again_when_the_scheme_before_it_is
         def refuse(*args):
             raise RuntimeError("this step could not be made")
 
-        before = (len(app.palettes), len(app.sheets))
-        setattr(app, step, refuse)
+        before = (len(app.palettes), len(app.sheets), len(app.fonts))
+        setattr(refuser, step, refuse)
         try:
             with pytest.raises(RuntimeError, match="this step could not be made"):
                 appearance.set_mode("dark")
         finally:
-            delattr(app, step)                 # repaired: the stand-in's own method again
-        assert (len(app.palettes) - before[0], len(app.sheets) - before[1]) == set_before_the_step, \
+            delattr(refuser, step)             # repaired: its own method again
+        now = (len(app.palettes), len(app.sheets), len(app.fonts))
+        assert tuple(n - was for n, was in zip(now, before)) == set_before_the_step, \
             "the apply did not stop at the step that refused"
         assert signalled == [False], "an apply that failed signalled"
         return appearance, signalled
 
-    # the scheme shown before the failure, chosen again: it is half gone, so it is made again
-    appearance, signalled = after_a_failed_dark()
-    assert chosen(appearance, "light") == (1, 1, 1), \
-        "the scheme shown before the failure was taken for a repeat (or the Appearance stayed shut)"
-    assert signalled == [False, False]
-    # the scheme that failed, chosen again once the step works: it was never finished, so it is made
-    appearance, signalled = after_a_failed_dark()
-    assert chosen(appearance, "dark") == (1, 1, 1), \
-        "the scheme that failed was taken for one that was applied, and the half-set look stayed"
-    assert signalled == [False, True] and appearance.is_dark() is True
-    assert app.sheets[-1] == design.build_qss(True)
-    assert app.palettes[-1].color(QPalette.ColorRole.Window).name().upper() == design.tokens(True)["paper"]
+    try:
+        # the scheme shown before the failure, chosen again: it is half gone, so it is made again
+        appearance, signalled = after_a_failed_dark()
+        assert chosen(appearance, "light") == (1, 1, 1), \
+            "the scheme shown before the failure was taken for a repeat (or the Appearance stayed shut)"
+        assert signalled == [False, False]
+        # the scheme that failed, chosen again once the step works: it was never finished, so it is made
+        appearance, signalled = after_a_failed_dark()
+        assert chosen(appearance, "dark") == (1, 1, 1), \
+            "the scheme that failed was taken for one that was applied, and the half-set look stayed"
+        assert signalled == [False, True] and appearance.is_dark() is True
+        assert app.sheets[-1] == design.build_qss(True)
+        assert app.palettes[-1].color(QPalette.ColorRole.Window).name().upper() == design.tokens(True)["paper"]
+    finally:
+        del app.tops[:]                        # a widget handed to the stand-in must not wait for it to go
 
 
 # ── lettering: Inter with digits of equal width, the book face, the fixed-width face ─────────────
@@ -1054,7 +1068,9 @@ def test_an_apply_runs_its_steps_in_one_order_and_stops_when_nothing_changed(mon
 
 def test_an_apply_rethemes_each_widget_once_also_in_a_window_that_has_a_parent(stand_in_app):
     """A dialog opened over a window is a top-level widget of the application and, having the window for its
-    parent, one of the window's children as well. An apply reaches it, and what it holds, once: in its own turn."""
+    parent, one of the window's children as well. An apply reaches it, and what it holds, once: in its own turn.
+    What the dialog holds stands inside a plain container, so a walk over a window's own children alone, which
+    would miss it, cannot pass."""
     from PySide6.QtWidgets import QDialog, QWidget
     from core.gui import theming
     counts = {}
@@ -1073,14 +1089,15 @@ def test_an_apply_rethemes_each_widget_once_also_in_a_window_that_has_a_parent(s
     window = counted(Painted(), "the window")
     held = counted(Painted(window), "the window's child")
     dialog = counted(Asked(window), "the dialog")
-    asked = counted(Painted(dialog), "the dialog's child")
+    asked = counted(Painted(QWidget(dialog)), "inside the dialog")       # two levels below its window
+    assert asked.parent().parent() is dialog and asked.window() is dialog
     assert dialog.parent() is window and dialog.isWindow() and dialog in window.findChildren(QWidget)
     stand_in_app.tops.extend([window, dialog])       # as the application lists them: both are top-level widgets
     try:
         appearance = theming.Appearance(stand_in_app)
         appearance.set_mode("dark")
         assert len(stand_in_app.sheets) == 1, "the apply did not go on"
-        assert counts == {"the window": 1, "the window's child": 1, "the dialog": 1, "the dialog's child": 1}
+        assert counts == {"the window": 1, "the window's child": 1, "the dialog": 1, "inside the dialog": 1}
     finally:
         del stand_in_app.tops[:]                     # the widgets must not wait for the stand-in to go
 
