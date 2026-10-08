@@ -499,7 +499,8 @@ def stand_in_app():
     asked for, or what Windows itself holds (``windows``) when that was Unknown. Off screen the real
     hints always answer Unknown and never signal, so only a stand-in can play a computer that turns
     dark. The module's active Appearance is put back afterwards. It also records the fonts an apply
-    sets for widget classes and hands out no top-level widget; the look's theme flag is put back
+    sets for widget classes, keeps the font last set under each name (``given``; None is the
+    application's own) and hands out no top-level widget; the look's theme flag is put back
     afterwards."""
     from PySide6.QtCore import QObject, Qt, Signal
     from PySide6.QtWidgets import QApplication
@@ -525,7 +526,7 @@ def stand_in_app():
         def __init__(self):
             super().__init__()
             self.hints, self.palettes, self.sheets = Hints(), [], []
-            self.fonts, self.tops = [], []
+            self.fonts, self.tops, self.given = [], [], {}
 
         def styleHints(self):
             return self.hints
@@ -538,6 +539,10 @@ def stand_in_app():
 
         def setFont(self, font, name=None):        # the fonts of widget classes, as an apply sets them
             self.fonts.append(name)
+            self.given[name] = font
+
+        def font(self):                            # the application's own font, once one was set
+            return self.given[None]
 
         def topLevelWidgets(self):
             return list(self.tops)
@@ -711,10 +716,11 @@ def test_an_apply_that_fails_part_way_is_made_again_when_the_scheme_before_it_is
         del app.tops[:]                        # a widget handed to the stand-in must not wait for it to go
 
 
-# ── lettering: Inter with digits of equal width, the book face, the fixed-width face ─────────────
+# ── lettering: Inter, its digits of equal width in lists and tables, the book face, the fixed-width face ──
 INTER_KINDS = ("small", "body", "strong", "head", "brand", "title")
 CLASSES_WITH_A_FONT = ("QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu", "QMenuBar", "QTipLabel",
                        "QStatusBar")
+CLASSES_WITH_EQUAL_DIGITS = ("QAbstractItemView", "QHeaderView")      # where numbers stand under one another
 FIXED_FACE_CALLERS = {"screens/artifact_screen.py"}       # the record's text; each later caller joins by name
 
 
@@ -738,7 +744,10 @@ def font_and_style_put_back(app):
         app.setStyle(QStyleFactory.create(style))
 
 
-def test_every_inter_font_has_digits_of_equal_width_and_so_does_a_copy():
+def test_an_inter_font_has_digits_of_equal_width_only_when_asked_and_a_copy_keeps_them():
+    """In the bundled files the feature that gives the digits one width also widens the hyphen, the brackets
+    and other marks to a digit's width: switched on everywhere, every compound word reads as if it were spaced.
+    So a font carries it only when it is asked for."""
     QApplication.instance() or QApplication([])
     assert design.LETTERING == "Inter" and design.text_scale() == 1.0
     for kind in INTER_KINDS:
@@ -746,11 +755,15 @@ def test_every_inter_font_has_digits_of_equal_width_and_so_does_a_copy():
         font = fonts.inter(kind)
         assert (font.family(), font.pixelSize(), font.weight()) == ("Inter", size, QFont.Weight(weight)), kind
         assert QFontInfo(font).family() == "Inter", "the bundled files are registered on first use"
-        assert font.isFeatureSet(_tabular()) and font.featureValue(_tabular()) == 1, kind
-        copy = QFont(font)
+        assert not font.isFeatureSet(_tabular()), kind
+        columns = fonts.inter(kind, tabular=True)
+        assert (columns.family(), columns.pixelSize(), columns.weight()) == ("Inter", size, QFont.Weight(weight)), kind
+        assert columns.isFeatureSet(_tabular()) and columns.featureValue(_tabular()) == 1, kind
+        copy = QFont(columns)
         copy.setPixelSize(size + 3)
         assert copy.isFeatureSet(_tabular()), kind
-        assert len({QFontMetricsF(font).horizontalAdvance(digit) for digit in "0123456789"}) == 1, kind
+        assert len({QFontMetricsF(columns).horizontalAdvance(digit) for digit in "0123456789"}) == 1, kind
+        assert not fonts.inter(kind).isFeatureSet(_tabular()), "the font with the feature reached the one without"
     assert fonts.inter("small", 600).weight() == QFont.Weight.DemiBold      # a table's header
     assert fonts.inter("head", 400).weight() == QFont.Weight.Normal         # the line that says where a run stands
 
@@ -781,7 +794,7 @@ def test_the_book_face_falls_back_to_georgia_and_then_to_inter():
     assert font.pixelSize() == design.TYPE["book"][0] == 16, "the book's own size, whichever face is found"
     assert fonts.book(bold=True).bold() and fonts.book(bold=True).pixelSize() == 16
     if not set(design.BOOK_FACES) & set(QFontDatabase.families()):             # off-screen: no book face at all
-        assert (font.family(), font.weight(), font.isFeatureSet(_tabular())) == ("Inter", QFont.Weight.Normal, True)
+        assert (font.family(), font.weight(), font.isFeatureSet(_tabular())) == ("Inter", QFont.Weight.Normal, False)
         assert fonts.book(bold=True).weight() == QFont.Weight.DemiBold
 
 
@@ -815,16 +828,33 @@ def test_the_class_fonts_are_inter_again_after_a_change_of_style():
     with font_and_style_put_back(app) as style:
         fonts.apply_class_fonts(app)
         for name in CLASSES_WITH_A_FONT:
-            font = QApplication.font(name)
-            assert (font.family(), font.pixelSize(), font.isFeatureSet(_tabular())) == ("Inter", 14, True), name
+            font, columns = QApplication.font(name), name in CLASSES_WITH_EQUAL_DIGITS
+            assert (font.family(), font.pixelSize(), font.isFeatureSet(_tabular())) == ("Inter", 14, columns), name
         app.setStyle(QStyleFactory.create(style))               # what the first style sheet does too
         assert QApplication.font("QMenu") == app.font(), "a change of style empties the per-class fonts"
-        assert not QApplication.font("QMenu").isFeatureSet(_tabular())
+        assert not QApplication.font("QAbstractItemView").isFeatureSet(_tabular())
         fonts.apply_class_fonts()                               # no argument: the running application
         menu = QMenu()
         menu.ensurePolished()                                   # a widget takes its class font when polished
         assert (menu.font().family(), menu.font().pixelSize()) == ("Inter", 14)
     assert QApplication.font("QMenu") == app.font() == found
+
+
+def test_digits_of_equal_width_go_to_lists_tables_and_their_headers_and_nowhere_else(stand_in_app):
+    """Numbers stand under one another in lists and tables, so the fonts of those classes and of their headers
+    carry the digits of equal width. No other font does, the application's own least of all, which every other
+    widget inherits: the same feature widens a hyphen to a digit's width. The stand-in takes the fonts, so
+    nothing is set on the application."""
+    app = stand_in_app
+    assert fonts.load_app_font(app) == "Inter"
+    own = app.font()
+    assert (own.family(), own.pixelSize(), own.isFeatureSet(_tabular())) == ("Inter", 14, False)
+    fonts.apply_class_fonts(app)
+    assert set(app.given) == {None, *CLASSES_WITH_A_FONT}
+    for name in CLASSES_WITH_A_FONT:
+        assert (app.given[name].family(), app.given[name].pixelSize()) == ("Inter", 14), name
+    equal = {name for name in CLASSES_WITH_A_FONT if app.given[name].isFeatureSet(_tabular())}
+    assert equal == set(CLASSES_WITH_EQUAL_DIGITS), equal
 
 
 def test_inter_is_handed_to_matplotlib_once():
@@ -875,7 +905,12 @@ def test_the_three_faces_resolve_on_a_real_windows_display():
         assert QFontInfo(fonts.inter("body", weight)).family() == "Inter", weight
     # both files are with the toolkit: with the regular one alone a semibold font still reads "Inter"
     assert {"Regular", "SemiBold"} <= set(QFontDatabase.styles("Inter"))
-    assert len({QFontMetricsF(fonts.inter("body")).horizontalAdvance(digit) for digit in "0123456789"}) == 1
+    # The digits of equal width come with a hyphen as wide as a digit, so a font has them only when asked.
+    plain = QFontMetricsF(fonts.inter("body"))
+    assert plain.horizontalAdvance("-") < plain.horizontalAdvance("0"), "a hyphen as wide as a digit"
+    columns = QFontMetricsF(fonts.inter("body", tabular=True))
+    assert columns.horizontalAdvance("-") == columns.horizontalAdvance("0")
+    assert len({columns.horizontalAdvance(digit) for digit in "0123456789"}) == 1
     wanted = fonts.book_family(QFontDatabase.families())
     assert QFontInfo(fonts.book()).family() == wanted
     assert fonts.book().pixelSize() == 16 and fonts.book(bold=True).bold()
@@ -885,10 +920,13 @@ def test_the_three_faces_resolve_on_a_real_windows_display():
                                 QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family())
     with font_and_style_put_back(app) as style:
         fonts.load_app_font(app)
+        assert not app.font().isFeatureSet(_tabular())
         app.setStyle(QStyleFactory.create(style))
         assert QApplication.font("QMenu").family() != "Inter", "Windows' own font is back on a menu"
         fonts.apply_class_fonts(app)
         assert {QApplication.font(name).family() for name in CLASSES_WITH_A_FONT} == {"Inter"}
+        assert {name for name in CLASSES_WITH_A_FONT if QApplication.font(name).isFeatureSet(_tabular())} == set(
+            CLASSES_WITH_EQUAL_DIGITS)
 
 
 # ── the palette and the style sheet from the table; the order of an apply ────────────────────────

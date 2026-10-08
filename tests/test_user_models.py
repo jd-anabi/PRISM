@@ -1048,8 +1048,10 @@ def test_the_palette_and_the_sheet_take_the_accent_from_the_table():
         design.build_qss(True, "#AA3366")        # no caller can hand in an accent of its own
 
 
-def test_the_application_font_is_inter_with_digits_of_equal_width():
-    from PySide6.QtGui import QFont, QFontInfo, QFontMetricsF
+def test_the_application_font_is_inter_with_its_ordinary_digits():
+    """The digits of equal width are not switched on in the font every widget inherits: the same feature
+    widens a hyphen to a digit's width, and every compound word would read as if it were spaced."""
+    from PySide6.QtGui import QFont, QFontInfo
     from core.gui import design, fonts
     app = qt_app()
     saved = app.font()
@@ -1058,9 +1060,7 @@ def test_the_application_font_is_inter_with_digits_of_equal_width():
         assert fonts.load_app_font(app) == "Inter"          # the bundled files always register
         font = app.font()
         assert QFontInfo(font).family() == "Inter" and font.pixelSize() == design.scaled(design.TYPE["body"][0]) == 14
-        assert font.isFeatureSet(QFont.Tag.fromString("tnum")), "digits of equal width are switched on in code"
-        metrics = QFontMetricsF(font)
-        assert len({metrics.horizontalAdvance(digit) for digit in "0123456789"}) == 1
+        assert not font.isFeatureSet(QFont.Tag.fromString("tnum")), "equal digits are for lists and tables alone"
         with pytest.raises(TypeError):
             fonts.load_app_font(app, prefer_inter=True)
     finally:
@@ -1299,13 +1299,15 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
         assert design.text_scale() == 1.25, "build_app installs the text factor before anything is sized"
         font = app.font()
         assert (QFontInfo(font).family(), font.pixelSize()) == ("Inter", 18)        # 14 at the factor
-        assert font.isFeatureSet(QFont.Tag.fromString("tnum"))
+        # Digits of equal width for lists and tables alone. A class with no font of its own reads as the
+        # application's, which has none: so the second line also says that the class was given its font.
+        assert not font.isFeatureSet(QFont.Tag.fromString("tnum"))
+        assert QApplication.font("QAbstractItemView").isFeatureSet(QFont.Tag.fromString("tnum"))
         assert sheet_was_set and all(sheet_was_set), "the per-class fonts are set after the first style sheet"
-        # Whatever a widget class is given, it is the application's own font, at the factor. Under the
-        # suites this line cannot tell whether a class was given a font at all: a class with none reads
-        # as the application font. That the call was made, after a style sheet, is the line above; that
-        # the fonts are in force while the window is up is read on a real display, by the test beside
-        # this one.
+        # A menu is given the application's own font, at the factor. Under the suites this line cannot
+        # tell whether a menu was given a font at all: a class with none reads as the application font.
+        # That the call was made, after a style sheet, is the line above; that the fonts are in force
+        # while the window is up is read on a real display, by the test beside this one.
         assert QApplication.font("QMenu") == font
         assert window.appearance.is_dark() is True, "the stored choice did not reach the appearance"
         assert design.is_dark() is True, "an apply must tell the look's table which theme is in force"
