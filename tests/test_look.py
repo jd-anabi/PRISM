@@ -995,7 +995,7 @@ def test_the_sheet_keeps_its_rules_and_only_the_named_interim_selectors_break_th
         for banned in ("$", "url(", "font-family", "letter-spacing", ":default", "::indicator", "*"):
             assert banned not in qss, (dark, banned)
         rules = _rules(qss)
-        assert len(rules) == 83, len(rules)
+        assert len(rules) == 86, len(rules)
         first = next(i for i, (selectors, _) in enumerate(rules) if selectors[0] in design.INTERIM_SELECTORS)
         final, interim = rules[:first], rules[first:]
         assert [s for selectors, _ in interim for s in selectors] == list(design.INTERIM_SELECTORS)
@@ -1006,7 +1006,7 @@ def test_the_sheet_keeps_its_rules_and_only_the_named_interim_selectors_break_th
             assert not [name for name in declarations if name.startswith("qproperty-")], selectors
         for selectors, _ in interim:                     # an old widget's rule still names a class of its own
             assert not [s for s in selectors if "QWidget" in _classes(s)], selectors
-    assert len(set(design.INTERIM_SELECTORS)) == len(design.INTERIM_SELECTORS) == 40
+    assert len(set(design.INTERIM_SELECTORS)) == len(design.INTERIM_SELECTORS) == 44
 
 
 def test_no_pseudo_state_sets_a_weight_or_a_size_and_words_take_lettering_colours():
@@ -1078,10 +1078,10 @@ def test_a_fields_hint_text_is_the_hint_colour_in_both_themes():
     role; one that cannot be typed in paints its hint in the text colour, whatever the role holds. The sheet and
     the palette are set on each field itself, never on the application."""
     from PySide6.QtGui import QColor, QPalette
-    from PySide6.QtWidgets import QComboBox, QLineEdit, QPlainTextEdit, QWidget
+    from PySide6.QtWidgets import QComboBox, QLineEdit, QPlainTextEdit, QTextEdit, QWidget
     from core.gui import design
     QApplication.instance() or QApplication([])
-    fields = ("QLineEdit", "QComboBox", "QPlainTextEdit")
+    fields = ("QLineEdit", "QComboBox", "QPlainTextEdit", "QTextEdit")
     hint, disabled = QPalette.ColorRole.PlaceholderText, QPalette.ColorGroup.Disabled
 
     def read(own, *group):
@@ -1092,7 +1092,8 @@ def test_a_fields_hint_text_is_the_hint_colour_in_both_themes():
         assert t["ink_3"] == design.COLOURS["ink_3"][1 if dark else 0]
         holder = QWidget()
         # the sheet has no disabled rule for a text box, so a disabled one keeps the hint colour of its plain rule
-        for make, when_disabled in ((QLineEdit, "disabled_ink"), (QPlainTextEdit, "ink_3"), (QComboBox, "disabled_ink")):
+        for make, when_disabled in ((QLineEdit, "disabled_ink"), (QPlainTextEdit, "ink_3"), (QTextEdit, "ink_3"),
+                                    (QComboBox, "disabled_ink")):
             box = make(holder)
             if make is QComboBox:
                 box.setEditable(True)
@@ -1110,6 +1111,45 @@ def test_a_fields_hint_text_is_the_hint_colour_in_both_themes():
                 # the class a rule colours is the last one its selector names: a drop-down's list is not a field
                 if re.match(r"[A-Za-z]+", selector.split()[-1]).group() in fields and "color" in declarations:
                     assert "placeholder-text-color" in declarations, (dark, selector)
+
+
+def test_a_list_a_text_viewer_and_a_scrolling_area_are_framed_from_the_table():
+    """Left to the toolkit, the frame of a list, of a text viewer and of a scrolling area is the page's colour made
+    darker: a pale line on the light page and next to none on the dark one. A list and a viewer are boxes one
+    picks or reads in, so they take a field's outline and ground; a bare scrolling area takes the quiet
+    separator; and the square where two scroll bars meet is the bars' own track. The list a drop-down opens has
+    a rule of its own and keeps all of it, its square corners too: the rule for lists names the list widget, so
+    it does not reach that one. The palette and the sheet are set on one holder, which is never shown."""
+    from PySide6.QtWidgets import QListWidget, QScrollArea, QTextBrowser
+    QApplication.instance() or QApplication([])
+    width, height = 120, 80
+
+    def painted(widget):
+        widget.setFixedSize(width, height)
+        widget.ensurePolished()
+        picture = _image(width, height, 1.0)
+        widget.render(picture)
+        return picture
+
+    for dark in (False, True):
+        outline, quiet, ground = (design.hex_colour(name, dark) for name in ("field_line", "rule_light", "field"))
+        qss = design.build_qss(dark)
+        holder = QWidget()
+        holder.setPalette(design.build_palette(dark))
+        holder.setStyleSheet(qss)
+        a_list, viewer, area, box = QListWidget(holder), QTextBrowser(holder), QScrollArea(holder), QComboBox(holder)
+        area.setWidget(QWidget())
+        for boxed in (a_list, viewer):               # the middle of its top edge, and its middle
+            picture = painted(boxed)
+            assert (_at(picture, width / 2, 0), _at(picture, width / 2, height / 2)) == (outline, ground), (
+                dark, type(boxed).__name__)
+        assert _at(painted(area), width / 2, 0) == quiet, dark
+        opened = painted(box.view())                 # the drop-down's own list, with no rows in it; never opened
+        corners = [_at(opened, x, y) for x in (0, width - 1) for y in (0, height - 1)]
+        assert corners == [outline] * 4, (dark, "the list a drop-down opens lost its square corners")
+        assert (_at(opened, width / 2, 0), _at(opened, width / 2, height / 2)) == (outline, ground), dark
+        rules = {tuple(selectors): declarations for selectors, declarations in _rules(qss)}
+        assert rules[("QAbstractScrollArea::corner",)]["background"] == rules[("QScrollBar:vertical",)]["background"]
 
 
 def test_an_apply_runs_its_steps_in_one_order_and_stops_when_nothing_changed(monkeypatch):
@@ -1246,7 +1286,7 @@ def _messages_under(qss):
         add(W.QLineEdit).setEnabled(False)
         add(W.QComboBox).addItems(["one", "two"])
         for make in (W.QPlainTextEdit, W.QCheckBox, W.QRadioButton, W.QTableView, W.QProgressBar, W.QScrollBar,
-                     W.QGroupBox, W.QMenu):
+                     W.QGroupBox, W.QMenu, W.QListWidget, W.QTextBrowser, W.QScrollArea):
             add(make)
         tree = add(W.QTreeWidget)
         tree.setHeaderLabels(["one", "two"])
