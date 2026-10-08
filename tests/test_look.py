@@ -612,37 +612,62 @@ def test_a_retired_mode_handed_to_the_appearance_is_follow_windows_and_no_clock_
     assert appearance.findChildren(QTimer) == []
 
 
-def test_an_apply_that_fails_part_way_is_made_again_when_the_scheme_before_it_is_chosen(stand_in_app):
-    """An apply that raises after the palette is set leaves a look that is half one scheme and half
-    the other. The error comes out, nothing is signalled, and the Appearance can be used again; and
-    because nothing counts as applied while the work is under way, choosing the scheme shown before
-    the failure is not taken for a repeat: the palette and the sheet are set again."""
-    from PySide6.QtCore import Qt
+@pytest.mark.parametrize("step", ["setPalette", "setStyleSheet", "setFont"])
+def test_an_apply_that_fails_part_way_is_made_again_when_the_scheme_before_it_is_chosen(stand_in_app, step):
+    """An apply that raises part-way -- at the palette, at the sheet or at the fonts of the widget
+    classes -- leaves a look that is half one scheme and half the other. The error comes out,
+    nothing is signalled, and the Appearance can be used again. Nothing counts as applied while the
+    work is under way, so neither scheme is taken for a repeat when it is chosen next: not the one
+    shown before the failure, and not the one that failed. Either sets the palette and the sheet
+    again."""
+    from PySide6.QtGui import QPalette
     from core.gui import theming
 
     app = stand_in_app
-    appearance = theming.Appearance(app)
-    signalled = []
-    appearance.theme_changed.connect(signalled.append)
-    appearance.set_mode("light")
-    assert (len(app.palettes), len(app.sheets), signalled) == (1, 1, [False]), "the first apply"
-    recording, refused = app.setStyleSheet, []
+    set_before_the_step = {"setPalette": (0, 0), "setStyleSheet": (1, 0), "setFont": (1, 1)}[step]
 
-    def raise_once(sheet):
-        if not refused:
-            refused.append(sheet)
-            raise RuntimeError("the sheet could not be set")
-        recording(sheet)
+    def chosen(appearance, mode):
+        """Choose ``mode``: how often that asked the hints, set a palette and set a sheet."""
+        before = (len(app.hints.asked), len(app.palettes), len(app.sheets))
+        appearance.set_mode(mode)
+        return tuple(now - was for now, was in
+                     zip((len(app.hints.asked), len(app.palettes), len(app.sheets)), before))
 
-    app.setStyleSheet = raise_once
-    with pytest.raises(RuntimeError, match="the sheet could not be set"):
-        appearance.set_mode("dark")
-    assert (len(app.palettes), len(app.sheets), signalled) == (2, 1, [False]), "the palette went on, the sheet did not"
-    appearance.set_mode("light")
-    assert app.hints.asked == [Qt.ColorScheme.Light, Qt.ColorScheme.Dark, Qt.ColorScheme.Light], \
-        "the failed apply left the Appearance shut"
-    assert (len(app.palettes), len(app.sheets), signalled) == (3, 2, [False, False]), \
-        "the scheme shown before the failure was taken for a repeat, and the half-set look stayed"
+    def after_a_failed_dark():
+        """A new Appearance on the stand-in: light applied, then dark refused at ``step``, which is
+        repaired before this returns. What the Appearance signalled comes with it."""
+        appearance = theming.Appearance(app)
+        signalled = []
+        appearance.theme_changed.connect(signalled.append)
+        assert chosen(appearance, "light") == (1, 1, 1) and signalled == [False], "the first apply"
+
+        def refuse(*args):
+            raise RuntimeError("this step could not be made")
+
+        before = (len(app.palettes), len(app.sheets))
+        setattr(app, step, refuse)
+        try:
+            with pytest.raises(RuntimeError, match="this step could not be made"):
+                appearance.set_mode("dark")
+        finally:
+            delattr(app, step)                 # repaired: the stand-in's own method again
+        assert (len(app.palettes) - before[0], len(app.sheets) - before[1]) == set_before_the_step, \
+            "the apply did not stop at the step that refused"
+        assert signalled == [False], "an apply that failed signalled"
+        return appearance, signalled
+
+    # the scheme shown before the failure, chosen again: it is half gone, so it is made again
+    appearance, signalled = after_a_failed_dark()
+    assert chosen(appearance, "light") == (1, 1, 1), \
+        "the scheme shown before the failure was taken for a repeat (or the Appearance stayed shut)"
+    assert signalled == [False, False]
+    # the scheme that failed, chosen again once the step works: it was never finished, so it is made
+    appearance, signalled = after_a_failed_dark()
+    assert chosen(appearance, "dark") == (1, 1, 1), \
+        "the scheme that failed was taken for one that was applied, and the half-set look stayed"
+    assert signalled == [False, True] and appearance.is_dark() is True
+    assert app.sheets[-1] == design.build_qss(True)
+    assert app.palettes[-1].color(QPalette.ColorRole.Window).name().upper() == design.tokens(True)["paper"]
 
 
 # ── lettering: Inter with digits of equal width, the book face, the fixed-width face ─────────────
