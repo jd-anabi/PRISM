@@ -51,10 +51,10 @@ def _png_fig_sink(figure_signal):
             fig_pickle = None
         buf = io.BytesIO()
         try:
-            # save_figure, not fig.savefig: it pins the saved background to the theme the figure was
-            # BUILT in. rcParams is global and mpl_theme rewrites it on every appearance change, so a
-            # run that straddles a theme flip otherwise saves dark artists onto a light page with
-            # light text -- unreadable. See visualizers.save_figure.
+            # save_figure, not fig.savefig: it saves the page in the colours the figure was BUILT
+            # with, whatever matplotlib's settings are at the moment of saving. The window writes its
+            # figure settings once, when the application is built, so the two agree here; the guard
+            # stays for anything that changes them between build and save. See visualizers.save_figure.
             from core.Helpers.visualizers import save_figure
             save_figure(fig, buf, format="png", dpi=110, bbox_inches="tight")
         finally:

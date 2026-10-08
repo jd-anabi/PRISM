@@ -88,9 +88,10 @@ def export_animation(series, path, *, window_pts, grid_x, grid_y, sigma_x, sigma
     stride = export_stride(sample_rate_hz, video_fps)
     grid_x, grid_y = np.asarray(grid_x), np.asarray(grid_y)
 
-    # Insulated from the app's dark/light matplotlib theme (mpl_theme): the exported video must look the
-    # same regardless of the global rcParams, so force the classic white/black look with explicit colors
-    # (an rc_context would transiently mutate the process-global rcParams on this worker thread).
+    # The page, the axes' ground, the spines and the lettering are pinned white and black by explicit
+    # colours (an rc_context would change the process-wide settings for a moment on this worker thread).
+    # What is not pinned here (the trace's colour, which axis lines are drawn and how heavy, the face)
+    # comes from the figure settings the window writes once, so a video looks the same in both appearances.
     fig = Figure(figsize=figsize, dpi=dpi, facecolor="white")  # 640x480 @ dpi 100: even + a multiple of 16
     canvas = FigureCanvasAgg(fig)
     ax_tr = fig.add_subplot(2, 1, 1)

@@ -1777,3 +1777,122 @@ def test_the_sheet_marks_no_focus_of_its_own():
         assert ":focus" not in qss, dark
         rules = {tuple(selectors): declarations for selectors, declarations in _rules(qss)}
         assert rules[("QCheckBox", "QRadioButton")]["outline"] == "none"    # the ring is the one sign of focus
+
+
+# ── the figures the engine draws: light settings, written once ───────────────────────────────────
+@contextlib.contextmanager
+def _figure_settings_kept():
+    """matplotlib's process-wide settings may be written inside the block; what was in force before
+    is put back."""
+    import matplotlib
+    saved = dict(matplotlib.rcParams)
+    try:
+        yield
+    finally:
+        matplotlib.rcParams.update(saved)
+
+
+_LIGHT_FIGURE_SETTINGS = {
+    "figure.facecolor": "#FFFFFF", "figure.edgecolor": "#FFFFFF",
+    "savefig.facecolor": "#FFFFFF", "savefig.edgecolor": "#FFFFFF",
+    "axes.facecolor": "#FFFFFF", "axes.edgecolor": "#1A1A1A",
+    "axes.labelcolor": "#1A1A1A", "axes.titlecolor": "#1A1A1A", "text.color": "#1A1A1A",
+    "xtick.color": "#1A1A1A", "ytick.color": "#1A1A1A",
+    "xtick.labelcolor": "#4D4D4D", "ytick.labelcolor": "#4D4D4D", "grid.color": "#D4D4D4",
+    "legend.facecolor": "#FFFFFF", "legend.edgecolor": "#FFFFFF", "legend.framealpha": 1.0,
+    "axes.spines.top": False, "axes.spines.right": False,
+    "xtick.direction": "out", "ytick.direction": "out",
+    "xtick.major.size": 3.6, "ytick.major.size": 3.6,
+    "axes.linewidth": 0.72, "xtick.major.width": 0.72, "ytick.major.width": 0.72,
+    "lines.linewidth": 1.44, "lines.solid_joinstyle": "round", "lines.dash_joinstyle": "round",
+    "axes.unicode_minus": True, "font.family": ["Inter", "DejaVu Sans"],
+}
+_LINE_COLOURS = ["#1A1A1A", "#0072B2", "#C24E00", "#007A5A", "#E69F00", "#56B4E9", "#CC79A7"]
+
+
+def test_the_figure_settings_are_the_light_column_and_nothing_else():
+    from core.gui import mpl_theme
+    rc = mpl_theme._rc()
+    cycle = rc.pop("axes.prop_cycle")
+    assert set(rc) == set(_LIGHT_FIGURE_SETTINGS), sorted(set(rc) ^ set(_LIGHT_FIGURE_SETTINGS))
+    for name, value in _LIGHT_FIGURE_SETTINGS.items():
+        assert rc[name] == (pytest.approx(value) if isinstance(value, float) else value), name
+    assert cycle.keys == {"color"}, "the cycle carries more than a colour"
+    assert cycle.by_key()["color"] == _LINE_COLOURS
+    assert _LINE_COLOURS == [design.hex_colour(name, dark=False) for name in design.SERIES]
+
+
+def test_the_figure_settings_do_not_follow_the_theme_or_the_text_size():
+    """Neither way a theme reaches the window moves a figure setting: not the look's own flag
+    (nor the text factor beside it), and not the signal a change of appearance sends."""
+    import matplotlib
+    from PySide6.QtCore import QObject, Signal
+    from core.gui import mpl_theme
+
+    class DarkAppearance(QObject):            # all that install() may ask of an appearance
+        theme_changed = Signal(bool)
+
+        def is_dark(self):
+            return True
+
+    with theme(False), text_size(1.0):
+        light = mpl_theme._rc()
+    with theme(True), text_size(2.0), _figure_settings_kept():
+        assert mpl_theme._rc() == light
+        appearance = DarkAppearance()
+        mpl_theme.install(appearance)
+        assert {name: matplotlib.rcParams[name] for name in light} == light, \
+            "under a dark appearance the settings written are not the light ones"
+        matplotlib.rcParams["figure.facecolor"] = "#123456"      # a mark no setting of the look has
+        appearance.theme_changed.emit(False)
+        appearance.theme_changed.emit(True)
+        assert matplotlib.rcParams["figure.facecolor"] == "#123456", \
+            "a change of theme rewrote the figure settings"
+
+
+def test_the_figure_settings_name_inter_only_when_both_files_reached_matplotlib(monkeypatch):
+    from core.gui import fonts, mpl_theme
+    monkeypatch.setattr(fonts, "register_with_matplotlib", lambda: False)
+    assert "font.family" not in mpl_theme._rc() and len(mpl_theme._rc()) == 31
+    monkeypatch.setattr(fonts, "register_with_matplotlib", lambda: True)
+    assert mpl_theme._rc()["font.family"] == ["Inter", "DejaVu Sans"]
+
+
+def test_under_the_figure_settings_unnamed_lines_take_the_seven_colours_in_order():
+    from matplotlib.figure import Figure
+    from core.gui import mpl_theme
+    with _figure_settings_kept():
+        mpl_theme.apply_mpl_theme()
+        ax = Figure().add_subplot()
+        lines = [ax.plot([0, 1], [i, i + 1])[0] for i in range(8)]
+        assert [ln.get_color() for ln in lines] == _LINE_COLOURS + _LINE_COLOURS[:1]
+        assert {ln.get_linestyle() for ln in lines} == {"-"}
+        assert not ax.spines["top"].get_visible() and not ax.spines["right"].get_visible()
+
+
+def test_under_the_figure_settings_a_character_the_lettering_lacks_is_drawn_without_a_warning():
+    """A record's or a parameter's name can hold a character Inter has no drawing for. The settings
+    name a second face for those, so the label is drawn and matplotlib warns of no missing glyph.
+    With Inter alone the same label does warn, which is what makes this test able to fail."""
+    import io
+    import warnings
+    import matplotlib
+    from matplotlib.figure import Figure
+    from core.gui import mpl_theme
+
+    def missing_glyphs():
+        fig = Figure()
+        ax = fig.add_subplot()
+        ax.set_title("run ✖ seven")              # a heavy multiplication sign: not in Inter
+        ax.set_xlabel("ordinary words")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            fig.savefig(io.BytesIO(), format="png")
+        return [str(w.message) for w in caught if "missing from font" in str(w.message)]
+
+    with _figure_settings_kept():
+        mpl_theme.apply_mpl_theme()
+        assert matplotlib.rcParams["font.family"][0] == "Inter", "Inter did not reach matplotlib"
+        assert missing_glyphs() == []
+        matplotlib.rcParams["font.family"] = ["Inter"]
+        assert missing_glyphs(), "this label no longer holds a character Inter lacks: choose another"

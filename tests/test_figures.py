@@ -1,4 +1,4 @@
-"""Figure sinks, pop-out windows, dark-theme matplotlib and label rendering. Split from test_gui_progress.py; run directly: pytest tests/test_figures.py"""
+"""Figure sinks, pop-out windows, the figure settings and label rendering. Split from test_gui_progress.py; run directly: pytest tests/test_figures.py"""
 """Progress-rendering regression tests for the GUI.
 
 THE BUG THESE LOCK DOWN
@@ -54,17 +54,27 @@ def _export_kwargs():
                 sigma_x=0.10, sigma_y=0.20, aspect=2.6, margin=0.35, video_fps=30)
 @contextlib.contextmanager
 def _rcparams_guard():
-    """Snapshot + restore matplotlib rcParams (process-global) so a theming test never bleeds its dark
-    colours into the plot-producing tests that expect matplotlib's white defaults."""
+    """Snapshot + restore matplotlib rcParams (process-global), so a test that writes figure settings
+    leaves matplotlib's own for the tests after it."""
     import matplotlib
     saved = dict(matplotlib.rcParams)
     try:
         yield
     finally:
         matplotlib.rcParams.update(saved)
+# Dark figure settings, written out by hand: nothing in the window writes dark ones, and three tests
+# still need them to show what the engine's helpers and the video export do under them.
+_DARK_BY_HAND = {
+    "figure.facecolor": "#1C1C1C", "figure.edgecolor": "#1C1C1C",
+    "savefig.facecolor": "#1C1C1C", "savefig.edgecolor": "#1C1C1C",
+    "axes.facecolor": "#1C1C1C", "axes.edgecolor": "#C8C8C8",
+    "axes.labelcolor": "#EDEDED", "axes.titlecolor": "#EDEDED", "text.color": "#EDEDED",
+    "xtick.color": "#C8C8C8", "ytick.color": "#C8C8C8",
+    "xtick.labelcolor": "#B8B8B8", "ytick.labelcolor": "#B8B8B8",
+}
 def _fake_appearance(dark):
-    """A minimal Appearance stand-in (is_dark + a real theme_changed Signal) so the theming test never
-    touches theming._ACTIVE / the app styleHints wiring a real Appearance installs."""
+    """A minimal Appearance stand-in (is_dark + a real theme_changed Signal) so the test of the figure
+    settings never touches theming._ACTIVE / the app styleHints wiring a real Appearance installs."""
     from PySide6.QtCore import QObject, Signal
 
     class _FakeAppearance(QObject):
@@ -316,12 +326,15 @@ def test_gui_form_labels_are_prettified():
 def test_a_theme_flip_between_build_and_save_cannot_split_a_figure():
     """THE 2026-08-25 RENDERING FAILURE, pinned, with its own counterfactual.
 
-    matplotlib bakes artist colours at BUILD time but reads `savefig.facecolor` at SAVE time, and
-    mpl_theme rewrites rcParams GLOBALLY on every appearance change. A multi-day run straddling one
-    flip therefore saved dark axes onto a light page with `text.color` still light -- every tick
+    matplotlib bakes artist colours at BUILD time but reads `savefig.facecolor` at SAVE time. The
+    window used to rewrite the process-wide settings at every change of appearance, so a multi-day
+    run straddling one saved dark axes onto a light page with `text.color` still light -- every tick
     label, axis label, title and table cell at ~1.06:1 contrast, i.e. invisible. 14 of 15 figures.
+    The window writes its figure settings once now; `save_figure` still guards a figure against
+    anything that changes them between its build and its save, and this test is that guard's.
     """
     import io as _io
+    import matplotlib
     import matplotlib.pyplot as plt
     import numpy as np
     from PIL import Image
@@ -330,12 +343,12 @@ def test_a_theme_flip_between_build_and_save_cannot_split_a_figure():
 
     qt_app()
     with _rcparams_guard():
-        mpl_theme.apply_mpl_theme(True)                 # build under DARK
+        matplotlib.rcParams.update(_DARK_BY_HAND)   # build under dark settings
         fig, ax = plt.subplots()
         ax.plot([0, 1], [0, 1])
         ax.set_xlabel("x")
         try:
-            mpl_theme.apply_mpl_theme(False)            # ...then the theme flips to LIGHT
+            mpl_theme.apply_mpl_theme()   # ...then the settings turn light before the save
 
             def corner_luminance(save):
                 buf = _io.BytesIO()
@@ -370,41 +383,39 @@ def test_the_parameter_table_is_readable_against_its_own_cells():
         return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
     qt_app()
-    for dark in (True, False):
-        with _rcparams_guard():
-            mpl_theme.apply_mpl_theme(dark)
-            t = np.linspace(0, 1, 32)
-            fig = visualizers.plot_best_fit_overlay(
-                t, np.sin(t), np.sin(t) * 1.02,
-                param_labels=[f"p{i}" for i in range(13)], param_values=list(range(13)))
-            try:
-                tables = [c for a in fig.axes for c in a.tables]
-                assert tables, "the parameter table is gone"
-                cells = list(tables[0].get_celld().values())
-                for cell in cells:
-                    bg = cell.get_facecolor()
-                    assert bg[3] > 0.5, "a transparent cell: the text falls back to the FIGURE colour"
-                    l1 = relative_luminance(bg[:3])
-                    l2 = relative_luminance(cell.get_text().get_color())
-                    ratio = (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
-                    assert ratio >= 3.0, \
-                        f"dark={dark}: table text at {ratio:.2f}:1 against its cell (was 1.06:1)"
-            finally:
-                plt.close(fig)
+    with _rcparams_guard():
+        mpl_theme.apply_mpl_theme()
+        t = np.linspace(0, 1, 32)
+        fig = visualizers.plot_best_fit_overlay(
+            t, np.sin(t), np.sin(t) * 1.02,
+            param_labels=[f"p{i}" for i in range(13)], param_values=list(range(13)))
+        try:
+            tables = [c for a in fig.axes for c in a.tables]
+            assert tables, "the parameter table is gone"
+            cells = list(tables[0].get_celld().values())
+            for cell in cells:
+                bg = cell.get_facecolor()
+                assert bg[3] > 0.5, "a transparent cell: the text falls back to the FIGURE colour"
+                l1 = relative_luminance(bg[:3])
+                l2 = relative_luminance(cell.get_text().get_color())
+                ratio = (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+                assert ratio >= 3.0, \
+                    f"table text at {ratio:.2f}:1 against its cell (was 1.06:1)"
+        finally:
+            plt.close(fig)
 
-def test_apply_mpl_theme_sets_design_tokens():
-    """apply_mpl_theme drives figure/axes/savefig facecolor + text.color from the look's table, in the theme asked for."""
+def test_apply_mpl_theme_writes_the_light_settings():
+    """apply_mpl_theme() writes the light side of the look's table into matplotlib's settings."""
     import matplotlib
     from core.gui import design, mpl_theme
     with _rcparams_guard():
-        mpl_theme.apply_mpl_theme(True)
-        d = design.tokens(True)
-        assert matplotlib.rcParams["figure.facecolor"] == d["paper"]
-        assert matplotlib.rcParams["axes.facecolor"] == d["paper"]
-        assert matplotlib.rcParams["savefig.facecolor"] == d["paper"]
-        assert matplotlib.rcParams["text.color"] == d["ink"]
-        mpl_theme.apply_mpl_theme(False)
-        assert matplotlib.rcParams["figure.facecolor"] == design.tokens(False)["paper"]
+        mpl_theme.apply_mpl_theme()
+        light = design.tokens(False)
+        assert matplotlib.rcParams["figure.facecolor"] == light["paper"] == "#FFFFFF"
+        assert matplotlib.rcParams["axes.facecolor"] == light["paper"]
+        assert matplotlib.rcParams["savefig.facecolor"] == light["paper"]
+        assert matplotlib.rcParams["text.color"] == light["ink"] == "#1A1A1A"
+        assert all(matplotlib.rcParams[name] == value for name, value in mpl_theme._rc().items())
 
 def test_mpl_theme_install_none_is_a_noop():
     """No Appearance (the test path) -> rcParams untouched, so figures keep matplotlib's default white."""
@@ -415,27 +426,32 @@ def test_mpl_theme_install_none_is_a_noop():
         mpl_theme.install(None)
         assert matplotlib.rcParams["figure.facecolor"] == before
 
-def test_mpl_theme_follows_the_appearance_signal():
-    """install(appearance) applies now AND subscribes: flipping the theme re-applies the rcParams."""
+def test_a_change_of_theme_changes_no_figure_setting():
+    """install(appearance) writes the light settings once, under a dark appearance too, and listens
+    to nothing afterwards: a later change of theme leaves every figure setting as it finds it."""
     import matplotlib
-    from core.gui import design, mpl_theme
+    from core.gui import mpl_theme
     qt_app()
     with _rcparams_guard():
         ap = _fake_appearance(True)
         mpl_theme.install(ap)
-        assert matplotlib.rcParams["figure.facecolor"] == design.tokens(True)["paper"]
+        assert matplotlib.rcParams["figure.facecolor"] == "#FFFFFF"
+        assert matplotlib.rcParams["text.color"] == "#1A1A1A"
+        matplotlib.rcParams["figure.facecolor"] = "#123456"        # a mark no setting of the look has
         ap.flip(False)
-        assert matplotlib.rcParams["figure.facecolor"] == design.tokens(False)["paper"]
+        ap.flip(True)
+        assert matplotlib.rcParams["figure.facecolor"] == "#123456", \
+            "a change of theme rewrote the figure settings"
 
-def test_plot_ppc_summary_box_follows_the_dark_theme():
-    """The two PPC summary boxes read plt.rcParams, so under a dark theme they are NOT the old hardcoded
-    white -- a regression back to that hardcoded white fails here."""
+def test_plot_ppc_summary_box_takes_its_ground_from_the_figure_settings():
+    """The two PPC summary boxes read plt.rcParams, so under dark figure settings they are NOT the old
+    hardcoded white -- a regression back to that hardcoded white fails here."""
     import numpy as np
+    import matplotlib
     import matplotlib.pyplot as plt
-    from core.gui import mpl_theme
     from core.Helpers.visualizers import plot_ppc
     with _rcparams_guard():
-        mpl_theme.apply_mpl_theme(True)
+        matplotlib.rcParams.update(_DARK_BY_HAND)
         ppc = {"z_scores": np.array([0.1, 0.5, 2.5, np.nan]),
                "coverage_90": 0.9, "num_outside": 1, "num_invalid": 1}
         fig = plot_ppc(ppc)
@@ -448,21 +464,21 @@ def test_plot_ppc_summary_box_follows_the_dark_theme():
         finally:
             plt.close(fig)
 
-def test_export_animation_background_stays_white_under_dark_theme():
-    """The Simulate video export is insulated from the app's matplotlib theme: its background stays
-    white even when the global rcParams are dark, so exported videos look the same in any theme."""
+def test_export_animation_page_stays_white_under_dark_figure_settings():
+    """The Simulate video export pins its own page: it stays white even when matplotlib's process-wide
+    settings are dark, so the page of an exported video does not depend on the settings in force."""
     import os
     import tempfile
-    from core.gui import mpl_theme
+    import matplotlib
     from core.gui.panels.simulate_export import export_animation
     with _rcparams_guard():
-        mpl_theme.apply_mpl_theme(True)                            # global dark theme active
+        matplotlib.rcParams.update(_DARK_BY_HAND)                  # dark settings in force
         path = os.path.join(tempfile.mkdtemp(), "dark.gif")
         export_animation(_tiny_series(), path, **_export_kwargs())
         import imageio
         frame0 = imageio.mimread(path)[0]
         corner = frame0[0, 0][:3]                                  # top-left = figure background margin
-        assert min(int(c) for c in corner) > 230, corner          # near-white, not the dark theme bg
+        assert min(int(c) for c in corner) > 230, corner          # near-white, not the dark page
 
 # ── what a figure draws, its colours left out ────────────────────────────────────────────────────
 def _plain(value):

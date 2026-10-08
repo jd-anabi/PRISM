@@ -1,42 +1,66 @@
-"""Drive matplotlib's global rcParams from the app's design tokens so figures follow the dark/light
-theme (B-c). Installed once by ``app.build_app`` and re-applied on ``Appearance.theme_changed`` -- the
-same "apply-now + subscribe" shape the pyqtgraph live view uses (widgets/live_hair_bundle._install_theme).
+"""matplotlib's process-wide settings for every figure the engine builds.
 
-Figures are one-shot in this app (rasterized to a PNG at build time, shown as a QPixmap), so colours only
-need to be right AT CONSTRUCTION -- global rcParams delivers that with no per-figure code, and the core
-plot modules (visualizers.py, FDT/plots.py, Reduction/plots.py) stay CLI-safe by reading plt.rcParams
-(matplotlib's own defaults under the CLI/tests) rather than these GUI tokens. Known limitation: a theme
-flip does NOT recolour figures already displayed -- they adopt the new theme on the next run/build.
+They are the LIGHT side of the look's table in both appearances, written once, when the application
+is built; a change of appearance does not touch them. So a stored figure never carries dark colours,
+and a run that straddles a change of appearance cannot build a figure under one set of settings and
+save it under another. The lengths do not grow with the text size: a stored figure must not depend
+on the computer that drew it.
+
+The engine's plotting code imports nothing of the window. It reads matplotlib's settings, which are
+these in the window and matplotlib's own on the command line. A figure already on screen is a
+picture and is not drawn again.
 """
 import matplotlib
 
-from . import design
+from . import design, fonts
+
+_PT = 0.72                        # points in one pixel at 100 dots per inch
+_FALLBACK_FACE = "DejaVu Sans"    # matplotlib's own face: it draws the characters Inter lacks
 
 
-def _rc(dark: bool) -> dict:
-    t = design.tokens(dark)
-    return {
-        "figure.facecolor":  t["paper"],  "figure.edgecolor":  t["paper"],
-        "savefig.facecolor": t["paper"],  "savefig.edgecolor": t["paper"],
-        "axes.facecolor":    t["paper"],  "axes.edgecolor":    t["rule"],
-        "axes.labelcolor":   t["ink"],    "axes.titlecolor":   t["ink"],
-        "text.color":        t["ink"],
-        "xtick.color":       t["rule"],   "ytick.color":       t["rule"],
-        "xtick.labelcolor":  t["ink_2"],  "ytick.labelcolor":  t["ink_2"],
-        "grid.color":        t["rule_light"],
-        "legend.facecolor":  t["paper"],  "legend.edgecolor":  t["paper"],
+def _rc() -> dict:
+    """The figure settings, built anew at each call: the light side of the look's table whatever the
+    theme in force, the three lengths as the table holds them, the lettering face only when matplotlib
+    has both of its files."""
+    light = design.tokens(False)
+    tick = design.FIGURE["tick"] * _PT
+    axis_w = design.FIGURE["axis_w"] * _PT
+    rc = {
+        "figure.facecolor":  light["paper"],  "figure.edgecolor":  light["paper"],
+        "savefig.facecolor": light["paper"],  "savefig.edgecolor": light["paper"],
+        "axes.facecolor":    light["paper"],  "axes.edgecolor":    light["rule"],
+        "axes.labelcolor":   light["ink"],    "axes.titlecolor":   light["ink"],
+        "text.color":        light["ink"],
+        "xtick.color":       light["rule"],   "ytick.color":       light["rule"],
+        "xtick.labelcolor":  light["ink_2"],  "ytick.labelcolor":  light["ink_2"],
+        "grid.color":        light["rule_light"],
+        "legend.facecolor":  light["paper"],  "legend.edgecolor":  light["paper"],
+        "legend.framealpha": 1.0,
+        "axes.spines.top":   False,           "axes.spines.right": False,
+        "xtick.direction":   "out",           "ytick.direction":   "out",
+        "xtick.major.size":  tick,            "ytick.major.size":  tick,
+        "axes.linewidth":    axis_w,
+        "xtick.major.width": axis_w,          "ytick.major.width": axis_w,
+        "lines.linewidth":   design.FIGURE["line_w"] * _PT,
+        "lines.solid_joinstyle": "round",     "lines.dash_joinstyle": "round",
+        "axes.unicode_minus": True,
+        # the seven colours in their order, and a colour only: the set carries no line style
+        "axes.prop_cycle":   matplotlib.cycler(color=[light[name] for name in design.SERIES]),
     }
+    if fonts.register_with_matplotlib():
+        rc["font.family"] = [design.LETTERING, _FALLBACK_FACE]
+    return rc
 
 
-def apply_mpl_theme(dark: bool) -> None:
-    """Set the theme-driven rcParams. Affects only figures built AFTER this call (rcParams is global)."""
-    matplotlib.rcParams.update(_rc(dark))
+def apply_mpl_theme() -> None:
+    """Write the light figure settings into matplotlib's process-wide settings. Only a figure built
+    after the call takes them."""
+    matplotlib.rcParams.update(_rc())
 
 
 def install(appearance) -> None:
-    """Apply the current theme now and re-apply on every theme change. No-op without an Appearance
-    (the test path builds MainWindow directly, so figures keep matplotlib's default white there)."""
-    if appearance is None:                                    # mirrors live_hair_bundle._install_theme
+    """Write the light figure settings now. Nothing without an appearance; and it listens to nothing,
+    so a later change of appearance leaves the settings as they are."""
+    if appearance is None:
         return
-    apply_mpl_theme(appearance.is_dark())
-    appearance.theme_changed.connect(apply_mpl_theme)
+    apply_mpl_theme()

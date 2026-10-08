@@ -21,10 +21,11 @@ decides, and an Appearance's first apply always goes on.
 
 ``build_app`` constructs the one Appearance. A test that builds the window directly has none.
 
-Two rendering surfaces stay outside the palette pipeline but still follow the theme via the
-``theme_changed`` signal: the pyqtgraph live view re-themes itself (see live_hair_bundle.py), and
-matplotlib figures follow the theme through rcParams (see mpl_theme.install, wired in app.build_app).
-The one deliberate exception is the Simulate video export, which stays white (simulate_export.py).
+One drawing surface sits outside the palette and follows the theme through the ``theme_changed``
+signal: the pyqtgraph live view (live_hair_bundle.py). The figures the engine draws do not follow
+it: their settings are the light ones, written once when the application is built
+(mpl_theme.install, called in app.build_app), and the Simulate video export pins its own white
+page (simulate_export.py).
 """
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QWidget

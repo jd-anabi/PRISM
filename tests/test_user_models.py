@@ -1320,6 +1320,7 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
         assert not follows.listening(), "the follower must wait for the application's first change of focus"
         app.focusChanged.emit(None, None)
         assert follows.listening()
+        assert len(matplotlib.rcParams["axes.prop_cycle"]) == 7, "build_app did not write the figure settings"
         during = process_state(app)
         window.close()
     changed = {key for key in found if during[key] != found[key]}

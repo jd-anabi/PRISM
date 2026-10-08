@@ -104,7 +104,7 @@ def build_app(argv=None):
     appearance = theming.Appearance(app)
     appearance.set_mode(settings.get_appearance(qs))     # the first apply: the palette and the first style sheet
     fonts.apply_class_fonts(app)                         # after the style AND the first sheet: each one empties them
-    mpl_theme.install(appearance)   # matplotlib figures follow the theme (built after this point)
+    mpl_theme.install(appearance)   # the light figure settings, written once, whatever the appearance
 
     window_ref = {}
     _install_excepthook(lambda: window_ref.get("w"))
