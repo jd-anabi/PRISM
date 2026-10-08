@@ -5,17 +5,21 @@ written in Python for that, so that the parts of the look written in Python are 
 for the interpreter once per call while a run's thread is working. One thing goes wrong with it. When
 Python code the toolkit calls from inside that handling raises, and the toolkit enters another method
 written in Python before the handling returns, the binding drops the error without a word, where it used
-to reach ``sys.excepthook`` and the window's "Unhandled error" box. That is what happens to anything
-raised while the window is painted, and to a page's ``showEvent`` when the window comes back from
-minimised. So the methods this program writes that the toolkit calls while a window is drawn, laid out or
-shown carry ``reported``: a ``paintEvent``, an override of the style, the event filter that hears every
-paint, a ``resizeEvent``, a page's ``showEvent``, and likewise a delegate's or an icon engine's ``paint``
-and a model's ``data`` when the program has one. Each hands its own error to the hook, and answers with a
+to reach ``sys.excepthook`` and the window's "Unhandled error" box. An error of the last such method the
+handling enters is still reported, under a longer first line. In practice the loss is what happens to
+whatever is raised while the window is painted, and to a page's ``showEvent`` when the window comes back
+from minimised. So the methods this program writes that the toolkit calls while a window is drawn, laid
+out or shown carry ``reported``: a ``paintEvent``, an override of the style, the event filter that hears
+every paint, a ``resizeEvent``, a page's ``showEvent``, and likewise a delegate's or an icon engine's
+``paint`` and what a model answers in every repaint (``data``, ``headerData``, ``flags``, ``rowCount``,
+``columnCount``) when the program has one. Each hands its own error to the hook, and answers with a
 fallback so that the drawing goes on.
 
-Not guarded is a drawing library's own code inside the main window, which this program cannot decorate --
-today the live simulation's plotting widget (core/gui/widgets/live_hair_bundle.py): an error it raises
-during a repaint shows no box.
+Not guarded is a drawing library's own code inside the main window, which this program cannot decorate:
+today what the live simulation's plotting widget (core/gui/widgets/live_hair_bundle.py) inherits from its
+library. An error raised there during a repaint is dropped in the same way, and reported only when no
+other method written in Python is entered after it. What this program itself writes in that class
+carries the guard like any other.
 
 What is kept of an error is words and a count, never the error. An error keeps its traceback, the
 traceback the frames of the failing call, and a frame its locals: in a paint event that is the live

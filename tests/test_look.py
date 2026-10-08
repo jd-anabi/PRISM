@@ -2385,11 +2385,13 @@ def test_a_failed_paint_leaves_no_painter_behind(monkeypatch):
 _CALLED_WHILE_DRAWING = frozenset({
     "paintEvent", "eventFilter", "resizeEvent", "drawPrimitive", "drawControl", "drawComplexControl",
     "pixelMetric", "styleHint", "sizeHint", "minimumSizeHint", "heightForWidth", "event"})
-# Seven more that the toolkit calls from inside that handling: a delegate's and an icon engine's ``paint``, a
-# header's ``paintSection``, an icon engine's ``pixmap``, a model's ``data``, ``headerData`` and ``flags``, and
-# the ``showEvent`` of a page when the window comes back from minimised. Four of them are ordinary words, so
-# these count only as a method of a class that has a class of the toolkit among its bases.
-_CALLED_IN_A_TOOLKIT_CLASS = frozenset({"paint", "paintSection", "pixmap", "data", "headerData", "flags", "showEvent"})
+# Nine more that the toolkit calls from inside that handling: a delegate's and an icon engine's ``paint``, a
+# header's ``paintSection``, an icon engine's ``pixmap``, what a model answers in every repaint (``data``,
+# ``headerData``, ``flags`` and its two counts, ``rowCount`` and ``columnCount``), and the ``showEvent`` of a
+# page when the window comes back from minimised. Several of them are ordinary words, so these count only as
+# a method of a class that has a class of the toolkit among its bases.
+_CALLED_IN_A_TOOLKIT_CLASS = frozenset({"paint", "paintSection", "pixmap", "data", "headerData", "flags", "rowCount",
+                                        "columnCount", "showEvent"})
 # The ten there are today, each with the fallback its guard names as it is written (None: it names none).
 # Typed out so that a guard taken off, or a fallback changed, fails here by name; a new one need not join.
 _GUARDED_TODAY = {
@@ -2410,12 +2412,16 @@ _NOT_GUARDED_FILES = {
                                 "interpreter while it handles an event: its canvas is the plotting library's own "
                                 "drawing code, which cannot be made to report, so the binding still reports "
                                 "what is raised in that window",
-    "widgets/live_hair_bundle.py": "the live simulation's plotting widget is a class of the plotting library "
-                                   "placed inside the main window: its paint and resize events and its items' "
-                                   "painting are that library's own code, which this program cannot make report, "
-                                   "so an error raised there during a repaint shows no box",
 }
-# The one method of those names that carries no guard, with its reason.
+# NOT in that table, and read like every other file: widgets/live_hair_bundle.py, the live simulation's
+# plotting widget, which stands inside the main window. A method this program writes in its class carries
+# the guard. What no scan of this program's text can reach is the code the class inherits: the paint and
+# resize events of the plotting library's view and its items' painting are that library's own, written in
+# Python, and cannot be made to report. An error raised there during a repaint is dropped by the binding
+# whenever another method written in Python is entered after it in the same handling, and is still reported
+# when it was the last.
+# The methods of those names that carry no guard, each with its reason: what must not have one, and any
+# helper that only shares its name with a method of the toolkit, which the toolkit therefore never calls.
 _NOT_GUARDED = {
     "main_window.py: MainWindow.event": "what keeps the interpreter while the window handles an event: it only "
                                         "calls the base class, and a fallback would handle the event a second time",
@@ -2477,7 +2483,7 @@ def _drawing_methods(tree, rel="", modules=None) -> list:
     other way (assigned in a class body, or set on a class or an object afterwards) is listed as it is
     written and is never guarded: the binding takes that for an override as well.
 
-    One of the seven further names counts only as a method, and only in a class built on the toolkit
+    One of the nine further names counts only as a method, and only in a class built on the toolkit
     (``_built_on``, which needs ``modules``, every parsed file of the program by its path, and ``rel``, the
     path of this one; without them the module is read by itself). In a plain class it is left alone. In a
     class whose base cannot be followed it is listed with that base in its name, so that the doubt is seen:
@@ -2516,9 +2522,10 @@ def _drawing_methods(tree, rel="", modules=None) -> list:
 def test_every_method_the_toolkit_calls_while_drawing_reports_its_errors():
     """Every ``.py`` under core/gui is read, but the files of ``_NOT_GUARDED_FILES``: a method of one of the
     twelve names, defined in a class, stands under the guard of core/gui/reported.py, all but the one of
-    ``_NOT_GUARDED``; and so does a method of one of the seven further names in a class built on the toolkit.
-    The scanner is checked on snippets first: with the tree clean, the walk would go on passing if the
-    scanner stopped matching anything."""
+    ``_NOT_GUARDED``; and so does a method of one of the nine further names in a class built on the toolkit.
+    Of those nine the scan does not see a method written in a plain class that a class built on the toolkit
+    only mixes in, nor one assigned rather than defined. The scanner is checked on snippets first: with the
+    tree clean, the walk would go on passing if the scanner stopped matching anything."""
     def scan(source, **beside):              # ``beside``: other files of the program, by name, as their text
         modules = {"scanned.py": ast.parse(source)}
         modules.update({f"{name}.py": ast.parse(text) for name, text in beside.items()})
@@ -2534,13 +2541,15 @@ def test_every_method_the_toolkit_calls_while_drawing_reports_its_errors():
     for name in sorted(_CALLED_WHILE_DRAWING):               # each of the twelve names, with no guard
         source = head + f"class Bare(QWidget):\n    def {name}(self, *told): pass\n"
         assert scan(source) == [(f"Bare.{name}", False, None)], name
-    for name in sorted(_CALLED_IN_A_TOOLKIT_CLASS):          # each of the seven: refused bare, passed guarded,
+    nine = ("paint", "paintSection", "pixmap", "data", "headerData", "flags", "rowCount", "columnCount", "showEvent")
+    assert set(nine) == _CALLED_IN_A_TOOLKIT_CLASS and len(nine) == 9        # typed out: none can drop out unseen
+    for name in nine:                                        # each of the nine: refused bare, passed guarded,
         bare = head + f"class Bare(QWidget):\n    def {name}(self, *told): pass\n"
         kept = head + f"class Kept(QWidget):\n    @reported(QWidget.{name})\n    def {name}(self, *told): pass\n"
         assert scan(bare) == [(f"Bare.{name}", False, None)], name
         assert scan(kept) == [(f"Kept.{name}", True, f"QWidget.{name}")], name
         assert scan(head + f"class Plain:\n    def {name}(self, *told): pass\n") == [], name     # and left alone
-    # which classes those seven count in: one built on the toolkit, as far as the text says
+    # which classes those nine count in: one built on the toolkit, as far as the text says
     model = "    def data(self, index, role): pass\n"
     rows = "class Row(QWidget): pass\n"
     for built in ("class Bare(QAbstractTableModel):\n", "class Bare(QtCore.QAbstractTableModel):\n",
@@ -2582,25 +2591,63 @@ def test_every_method_the_toolkit_calls_while_drawing_reports_its_errors():
               "    def update(self):\n        event = self.event(sent)\n        self.data = event\n"
               "        return event\n"
               "def paintEvent(): pass\ndef paint(): pass\nhandled = window.event(sent)\n")
-    assert scan(spared) == []                # of the seven, a method alone counts: not a value of that name
+    assert scan(spared) == []                # of the nine, a method alone counts: not a value of that name
 
     gui = REPO / "core" / "gui"
     modules = {path.relative_to(gui).as_posix(): ast.parse(path.read_text(encoding="utf-8"))
                for path in sorted(gui.rglob("*.py"))}
-    found, bare, excepted = {}, [], set()
-    for rel, tree in modules.items():
-        if rel in _NOT_GUARDED_FILES:
-            continue
-        for line, name, guarded, fallback in _drawing_methods(tree, rel, modules):
-            found[f"{rel}: {name}"] = fallback
-            if not guarded and f"{rel}: {name}" in _NOT_GUARDED:
-                excepted.add(f"{rel}: {name}")
-            elif not guarded:
-                bare.append(f"{rel}:{line} {name}")
+
+    def walk(modules, not_guarded=_NOT_GUARDED):
+        """The program's files walked: every method found with its fallback, the ones refused as
+        "file:line Class.method", and the entries of ``not_guarded`` that were met."""
+        found, bare, excepted = {}, [], set()
+        for rel, tree in modules.items():
+            if rel in _NOT_GUARDED_FILES:
+                continue
+            for line, name, guarded, fallback in _drawing_methods(tree, rel, modules):
+                key = f"{rel}: {name.partition(' (')[0]}"
+                found[key] = fallback
+                if not guarded and key in not_guarded:
+                    excepted.add(key)
+                elif not guarded:
+                    bare.append(f"{rel}:{line} {name}")
+        return found, bare, excepted
+
+    def refused(modules, not_guarded=_NOT_GUARDED):
+        return [entry.partition(" ")[2] for entry in walk(modules, not_guarded)[1]]
+
+    # The live simulation's plotting widget is read like any other file: what this program writes in that
+    # class carries the guard. Shown on the file's own text, with a method written into the class in memory.
+    live = "widgets/live_hair_bundle.py"
+    text = (gui / live).read_text(encoding="utf-8").splitlines(keepends=True)
+    view, = [node for node in ast.walk(modules[live]) if isinstance(node, ast.ClassDef)
+             and node.name == "LiveHairBundleView"]
+
+    def with_in_the_view(method, start=""):
+        lines = text[:view.end_lineno] + ["\n", method] + text[view.end_lineno:]
+        return {**modules, live: ast.parse(start + "".join(lines))}
+
+    paints = "    def paintEvent(self, event):\n        super().paintEvent(event)\n"
+    assert refused(with_in_the_view(paints)) == ["LiveHairBundleView.paintEvent"]
+    assert refused(with_in_the_view("    @reported()\n" + paints, "from ..reported import reported\n")) == []
+    # one of the nine there: the class is built on the plotting library's, which the scan cannot place, so
+    # the method is refused with that said until it is guarded
+    shows = "    def showEvent(self, event):\n        super().showEvent(event)\n"
+    assert refused(with_in_the_view(shows)) == ["LiveHairBundleView.showEvent (cannot follow pg.GraphicsLayoutWidget)"]
+    # the other way out of a refusal, for a method of such a name that the toolkit does not call
+    table = ast.parse("class Table(QWidget):\n    def data(self): return self.rows\n")
+    helper = {**modules, "widgets/helper.py": table}
+    assert refused(helper) == ["Table.data"]
+    assert refused(helper, {**_NOT_GUARDED, "widgets/helper.py: Table.data": "the widget's own rows"}) == []
+
+    found, bare, excepted = walk(modules)
+    assert not [name for name in found if name.startswith(live)], "the file as it stands writes none of these"
     listed = f"all {len(found)} found:\n  " + "\n  ".join(f"{name} -> {fallback}" for name, fallback in found.items())
-    assert bare == [], (f"called by the toolkit while a window is drawn or laid out, and not reporting its own "
-                        f"errors: {bare}. Put it under @reported(...) of core/gui/reported.py, with what it "
-                        f"answers when it fails. {listed}")
+    assert bare == [], (
+        f"called by the toolkit while a window is drawn or laid out, and not reporting its own errors: {bare}. "
+        f"Two ways out. Give it the guard: put it under @reported(...) of core/gui/reported.py, with what it "
+        f"answers when it fails. Or, if the toolkit does not call it (a helper that only shares the name of "
+        f"one of the toolkit's methods), name it in _NOT_GUARDED in this file, with the reason. {listed}")
     assert {name: found.get(name, "not found") for name in _GUARDED_TODAY} == _GUARDED_TODAY, listed
     missing = [rel for rel in _NOT_GUARDED_FILES if not (gui / rel).is_file()] + sorted(set(_NOT_GUARDED) - excepted)
     assert not missing, f"no longer there, or guarded now, so it stops being an exception: {missing}"
