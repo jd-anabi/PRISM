@@ -8,6 +8,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
+from ..reported import reported
 from .nav_shell import RUNNING_MARK
 
 # The five sections, in display order. All five are live; MainWindow passes them all in
@@ -79,6 +80,7 @@ class HomeScreen(QWidget):
             if btn.text() != text:
                 btn.setText(text)
 
+    @reported(QWidget.showEvent)
     def showEvent(self, event):
         super().showEvent(event)
         self._refresh_greeting()

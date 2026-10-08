@@ -7,6 +7,7 @@ so the theme and the text factor are changed here only inside a helper or a fixt
 ``theme`` and ``text_size`` are the two helpers for it.
 """
 import ast
+import builtins
 import contextlib
 import datetime
 import hashlib
@@ -2147,6 +2148,11 @@ def test_the_plotting_colours_are_the_second_to_fifth_line_colours():
 
 
 # ── drawing code reports its own errors ──────────────────────────────────────────────────────────
+def _name_of(method) -> str:
+    """The name a guarded method is recorded under: its module's and its own."""
+    return f"{method.__module__}.{method.__qualname__}"
+
+
 def test_a_guarded_method_that_raises_is_reported_once_and_answers_its_fallback(monkeypatch):
     """The guard a method carries when the toolkit calls it while a window is drawn or laid out. Its error
     goes to the hook in force at that moment, once for each method, and the method answers its fallback. A
@@ -2179,8 +2185,8 @@ def test_a_guarded_method_that_raises_is_reported_once_and_answers_its_fallback(
         return [words for _name, words in reported.ERRORS]
 
     shown = []
-    drawn, value, call = Drawn(), Drawn.by_a_value.__qualname__, Drawn.by_a_call.__qualname__
-    failing = Drawn.by_a_call_that_fails.__qualname__
+    drawn, value, call = Drawn(), _name_of(Drawn.by_a_value), _name_of(Drawn.by_a_call)
+    failing = _name_of(Drawn.by_a_call_that_fails)
     assert value.endswith("Drawn.by_a_value") and call.endswith("Drawn.by_a_call")
     # set after the class is made: the hook is looked for when a method fails, not when it is guarded
     monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: shown.append((kind, error, trace)))
@@ -2269,7 +2275,7 @@ def test_a_method_that_keeps_failing_is_listed_once_and_counted(monkeypatch):
 
     shown = []
     monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: shown.append(str(error)))
-    drawn, name = Drawn(), Drawn.paintEvent.__qualname__
+    drawn, name = Drawn(), _name_of(Drawn.paintEvent)
     reported.forget()
     try:
         assert [drawn.paintEvent(n) for n in range(5)] == ["stock"] * 5
@@ -2287,6 +2293,34 @@ def test_a_method_that_keeps_failing_is_listed_once_and_counted(monkeypatch):
             assert [drawn.paintEvent(n) for n in (7, 8, 9)] == ["stock"] * 3
             assert caught == reported.ERRORS == [(name, "ValueError: no 7")] and reported.COUNTS == {name: 3}
         assert reported.ERRORS == [] and reported.COUNTS == {} and shown == ["no 0", "no 5"]
+    finally:
+        reported.forget()
+
+
+def test_two_methods_of_one_name_in_two_modules_each_have_their_first_time(monkeypatch):
+    """Two modules can each hold a private class of one name. Their methods are two methods: the second
+    one's first failure is shown and listed as the first one's was, under the module's name and its own."""
+    from core.gui import reported
+
+    def twin(module):                        # the paint event of a class called _Row, as that module would hold it
+        def paintEvent(self):
+            raise ValueError(f"in {module}")
+
+        paintEvent.__qualname__, paintEvent.__module__ = "_Row.paintEvent", module
+        return reported.reported()(paintEvent)
+
+    shown = []
+    monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: shown.append(str(error)))
+    first, second = twin("core.gui.widgets.first"), twin("core.gui.widgets.second")
+    reported.forget()
+    try:
+        assert first(None) is None and second(None) is None and first(None) is None
+        assert shown == ["in core.gui.widgets.first", "in core.gui.widgets.second"]
+        assert reported.ERRORS == [
+            ("core.gui.widgets.first._Row.paintEvent", "ValueError: in core.gui.widgets.first"),
+            ("core.gui.widgets.second._Row.paintEvent", "ValueError: in core.gui.widgets.second")]
+        assert reported.COUNTS == {"core.gui.widgets.first._Row.paintEvent": 2,
+                                   "core.gui.widgets.second._Row.paintEvent": 1}
     finally:
         reported.forget()
 
@@ -2335,7 +2369,7 @@ def test_a_failed_paint_leaves_no_painter_behind():
     assert _at(picture, 10, 6) == "#FF00FF" != left[2], "the second paint did not draw"
     # at once, with no collection: the next paint may come before any
     assert left[:2] == (False, False), "a painter on the picture, a local of the failing call: still there"
-    assert listed == [(Failing.paintEvent.__qualname__, "str", "ValueError: the first paint fails")]
+    assert listed == [(_name_of(Failing.paintEvent), "str", "ValueError: the first paint fails")]
 
 
 # What the toolkit calls while a window is drawn or laid out. In the main window each is entered from inside
@@ -2343,9 +2377,16 @@ def test_a_failed_paint_leaves_no_painter_behind():
 _CALLED_WHILE_DRAWING = frozenset({
     "paintEvent", "eventFilter", "resizeEvent", "drawPrimitive", "drawControl", "drawComplexControl",
     "pixelMetric", "styleHint", "sizeHint", "minimumSizeHint", "heightForWidth", "event"})
-# The eight there are today, each with the fallback its guard names as it is written (None: it names none).
+# Seven more that the toolkit calls from inside that handling: a delegate's and an icon engine's ``paint``, a
+# header's ``paintSection``, an icon engine's ``pixmap``, a model's ``data``, ``headerData`` and ``flags``, and
+# the ``showEvent`` of a page when the window comes back from minimised. Four of them are ordinary words, so
+# these count only as a method of a class that has a class of the toolkit among its bases.
+_CALLED_IN_A_TOOLKIT_CLASS = frozenset({"paint", "paintSection", "pixmap", "data", "headerData", "flags", "showEvent"})
+# The ten there are today, each with the fallback its guard names as it is written (None: it names none).
 # Typed out so that a guard taken off, or a fallback changed, fails here by name; a new one need not join.
 _GUARDED_TODAY = {
+    "screens/artifact_screen.py: ArtifactScreen.showEvent": "QWidget.showEvent",
+    "screens/home_screen.py: HomeScreen.showEvent": "QWidget.showEvent",
     "style.py: PrismStyle.pixelMetric": "QProxyStyle.pixelMetric",
     "style.py: PrismStyle.styleHint": "QProxyStyle.styleHint",
     "style.py: PrismStyle.drawPrimitive": "QProxyStyle.drawPrimitive",
@@ -2361,6 +2402,10 @@ _NOT_GUARDED_FILES = {
                                 "interpreter while it handles an event: its canvas is the plotting library's own "
                                 "drawing code, which cannot be made to report, so the binding still reports "
                                 "what is raised in that window",
+    "widgets/live_hair_bundle.py": "the live simulation's plotting widget is a class of the plotting library "
+                                   "placed inside the main window: its paint and resize events and its items' "
+                                   "painting are that library's own code, which this program cannot make report, "
+                                   "so an error raised there during a repaint shows no box",
 }
 # The one method of those names that carries no guard, with its reason.
 _NOT_GUARDED = {
@@ -2369,13 +2414,67 @@ _NOT_GUARDED = {
 }
 
 
-def _drawing_methods(tree) -> list:
+def _built_on(cls, rel, modules, seen=frozenset()) -> str:
+    """What a class is built on, as far as the text says: "toolkit" when a class of the toolkit is among its
+    bases, "plain" when none can be, and else "cannot follow <base>" for the first base, as it is written,
+    that the scan cannot place. ``modules`` holds every parsed file of the program by its path, ``rel`` is
+    the file of ``cls``.
+
+    A base is the toolkit's when its last name is a capital Q and a capital letter with more behind them, or
+    when the file imports the name it begins with from the toolkit. It is plain when that name comes from the
+    standard library or is a built-in. Any other bare name is taken for a class of the program and looked
+    for by that name alone, in the same file first and else in every file; each class found is followed in
+    the same way, to any depth, and one of them built on the toolkit is enough. Whatever is left (a name no
+    file defines, a class of another library, a call) cannot be followed."""
+    placed = {}
+    for node in ast.walk(modules[rel]):
+        if isinstance(node, ast.Import):
+            bound = [(alias.asname or alias.name.partition(".")[0], alias.name) for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            bound = [(alias.asname or alias.name, node.module or "") for alias in node.names]
+        else:
+            continue
+        for name, module in bound:
+            root = module.partition(".")[0]
+            if root in ("PySide6", "shiboken6") or root in sys.stdlib_module_names:
+                placed[name] = "toolkit" if root in ("PySide6", "shiboken6") else "plain"
+    doubt = None
+    for base in cls.bases:
+        first = base
+        while isinstance(first, ast.Attribute):
+            first = first.value
+        first = getattr(first, "id", "")     # the name the base begins with, as it is written
+        last = base.attr if isinstance(base, ast.Attribute) else first
+        if re.fullmatch(r"Q[A-Z]\w+", last) or placed.get(first) == "toolkit":
+            return "toolkit"
+        if placed.get(first) == "plain" or (isinstance(base, ast.Name) and hasattr(builtins, first)):
+            continue
+        named = [(where, node) for where, tree in modules.items() for node in ast.walk(tree)
+                 if isinstance(base, ast.Name) and isinstance(node, ast.ClassDef) and node.name == first]
+        named = [one for one in named if one[0] == rel] or named
+        kinds = [_built_on(node, where, modules, seen | {(rel, cls.lineno)}) for where, node in named
+                 if (where, node.lineno) not in seen]
+        if "toolkit" in kinds:
+            return "toolkit"
+        if set(kinds) != {"plain"}:
+            doubt = doubt or next((kind for kind in kinds if kind != "plain"), f"cannot follow {ast.unparse(base)}")
+    return doubt or "plain"
+
+
+def _drawing_methods(tree, rel="", modules=None) -> list:
     """Every place in a parsed module where a name the toolkit calls while a window is drawn or laid out is
     bound, as (line, name, guarded, fallback). A method defined in a class is "Class.method": guarded when it
     stands under ``@reported(...)`` and the module imports that name from the module called ``reported``;
-    ``fallback`` is the guard's argument as written, None when it has none. Such a name bound any other way
-    (assigned in a class body, or set on a class or an object afterwards) is listed as it is written and is
-    never guarded: the binding takes that for an override as well."""
+    ``fallback`` is the guard's argument as written, None when it has none. One of the twelve names bound any
+    other way (assigned in a class body, or set on a class or an object afterwards) is listed as it is
+    written and is never guarded: the binding takes that for an override as well.
+
+    One of the seven further names counts only as a method, and only in a class built on the toolkit
+    (``_built_on``, which needs ``modules``, every parsed file of the program by its path, and ``rel``, the
+    path of this one; without them the module is read by itself). In a plain class it is left alone. In a
+    class whose base cannot be followed it is listed with that base in its name, so that the doubt is seen:
+    it passes only under the guard."""
+    modules = modules or {rel: tree}
     imported = any(isinstance(node, ast.ImportFrom) and (node.module or "").rpartition(".")[2] == "reported"
                    and any(alias.name == "reported" and alias.asname is None for alias in node.names)
                    for node in ast.walk(tree))
@@ -2386,11 +2485,14 @@ def _drawing_methods(tree) -> list:
         while body:                          # and not into the functions and the classes it defines
             node = body.pop()
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if node.name in _CALLED_WHILE_DRAWING:
+                built_on = _built_on(cls, rel, modules) if node.name in _CALLED_IN_A_TOOLKIT_CLASS else "plain"
+                if node.name in _CALLED_WHILE_DRAWING or built_on != "plain":
                     guards = [d for d in node.decorator_list if isinstance(d, ast.Call)
                               and isinstance(d.func, ast.Name) and d.func.id == "reported"]
                     handed = guards[0].args + [keyword.value for keyword in guards[0].keywords] if guards else []
-                    found.append((node.lineno, f"{cls.name}.{node.name}", imported and bool(guards),
+                    guarded = imported and bool(guards)
+                    doubt = "" if guarded or built_on in ("plain", "toolkit") else f" ({built_on})"
+                    found.append((node.lineno, f"{cls.name}.{node.name}{doubt}", guarded,
                                   ast.unparse(handed[0]) if handed else None))
             elif isinstance(node, ast.Name):
                 if isinstance(node.ctx, ast.Store) and node.id in _CALLED_WHILE_DRAWING:
@@ -2406,10 +2508,14 @@ def _drawing_methods(tree) -> list:
 def test_every_method_the_toolkit_calls_while_drawing_reports_its_errors():
     """Every ``.py`` under core/gui is read, but the files of ``_NOT_GUARDED_FILES``: a method of one of the
     twelve names, defined in a class, stands under the guard of core/gui/reported.py, all but the one of
-    ``_NOT_GUARDED``. The scanner is checked on snippets first: with the tree clean, the walk would go on
-    passing if the scanner stopped matching anything."""
-    def scan(source):
-        return [(name, guarded, fallback) for _line, name, guarded, fallback in _drawing_methods(ast.parse(source))]
+    ``_NOT_GUARDED``; and so does a method of one of the seven further names in a class built on the toolkit.
+    The scanner is checked on snippets first: with the tree clean, the walk would go on passing if the
+    scanner stopped matching anything."""
+    def scan(source, **beside):              # ``beside``: other files of the program, by name, as their text
+        modules = {"scanned.py": ast.parse(source)}
+        modules.update({f"{name}.py": ast.parse(text) for name, text in beside.items()})
+        return [(name, guarded, fallback) for _line, name, guarded, fallback
+                in _drawing_methods(modules["scanned.py"], "scanned.py", modules)]
 
     head = "from .reported import reported\n"
     for guard, fallback in (("@reported()", None), ("@reported(QLabel.resizeEvent)", "QLabel.resizeEvent"),
@@ -2420,6 +2526,34 @@ def test_every_method_the_toolkit_calls_while_drawing_reports_its_errors():
     for name in sorted(_CALLED_WHILE_DRAWING):               # each of the twelve names, with no guard
         source = head + f"class Bare(QWidget):\n    def {name}(self, *told): pass\n"
         assert scan(source) == [(f"Bare.{name}", False, None)], name
+    for name in sorted(_CALLED_IN_A_TOOLKIT_CLASS):          # each of the seven: refused bare, passed guarded,
+        bare = head + f"class Bare(QWidget):\n    def {name}(self, *told): pass\n"
+        kept = head + f"class Kept(QWidget):\n    @reported(QWidget.{name})\n    def {name}(self, *told): pass\n"
+        assert scan(bare) == [(f"Bare.{name}", False, None)], name
+        assert scan(kept) == [(f"Kept.{name}", True, f"QWidget.{name}")], name
+        assert scan(head + f"class Plain:\n    def {name}(self, *told): pass\n") == [], name     # and left alone
+    # which classes those seven count in: one built on the toolkit, as far as the text says
+    model = "    def data(self, index, role): pass\n"
+    rows = "class Row(QWidget): pass\n"
+    for built in ("class Bare(QAbstractTableModel):\n", "class Bare(QtCore.QAbstractTableModel):\n",
+                  "from PySide6.QtCore import QAbstractTableModel as Table\nclass Bare(Mixin, Table):\n",
+                  "import PySide6.QtCore as kit\nclass Bare(kit.Model):\n",
+                  rows + "class Bare(Row):\n",                                  # through a class of the program,
+                  rows + "class Wide(Row): pass\nclass Bare(Other, Wide):\n"):   # to any depth
+        assert scan(built + model) == [("Bare.data", False, None)], built
+    in_another_file = "from .rows import Row\nclass Bare(Row):\n" + model
+    assert scan(in_another_file, rows=rows) == [("Bare.data", False, None)]
+    assert scan(in_another_file, rows="class Row: pass\n", more=rows) == [("Bare.data", False, None)]    # one is enough
+    assert scan("class Row: pass\nclass Bare(Row):\n" + model, rows=rows) == []     # the one in the same file is meant
+    for plain in ("class Plain:\n", "class Plain(object):\n", "class Plain(dict):\n",
+                  "import logging\nclass Plain(logging.Handler):\n", "from enum import Enum\nclass Plain(Enum):\n",
+                  "class Other: pass\nclass Plain(Other):\n", "class Queue: pass\nclass Plain(Queue):\n"):
+        assert scan(plain + model) == [], plain
+    for unknown, base in (("import pyqtgraph as pg\nclass Bare(pg.GraphicsLayoutWidget):\n", "pg.GraphicsLayoutWidget"),
+                          ("class Bare(Elsewhere):\n", "Elsewhere"), ("class Bare(make()):\n", "make()"),
+                          ("from .other import Base\nclass Row(Base): pass\nclass Bare(Row):\n", "Base")):
+        assert scan(unknown + model) == [(f"Bare.data (cannot follow {base})", False, None)], unknown   # refused
+        assert scan(head + unknown + "    @reported(None)\n" + model) == [("Bare.data", True, "None")], unknown
     for bare in ("class Bare(QWidget):\n    @reported\n    def paintEvent(self, event): pass\n",       # not called
                  "class Bare(QWidget):\n    @other.reported()\n    def paintEvent(self, event): pass\n",
                  "class Bare(QWidget):\n    @Slot()\n    def paintEvent(self, event): pass\n",
@@ -2436,18 +2570,20 @@ def test_every_method_the_toolkit_calls_while_drawing_reports_its_errors():
     assert scan("class Box:\n    def build(self):\n        self.sizeHint = lambda: size\n") == [
         ("self.sizeHint", False, None)]
     spared = (head + "class Plain(QWidget):\n    event: object\n    kinds = [event for event in ()]\n"
-              "    def closeEvent(self, event): pass\n    def showEvent(self, event): pass\n"
-              "    def update(self):\n        event = self.event(sent)\n        return event\n"
-              "def paintEvent(): pass\nhandled = window.event(sent)\n")
-    assert scan(spared) == []
+              "    flags = 0\n    def closeEvent(self, event): pass\n    def keyPressEvent(self, event): pass\n"
+              "    def update(self):\n        event = self.event(sent)\n        self.data = event\n"
+              "        return event\n"
+              "def paintEvent(): pass\ndef paint(): pass\nhandled = window.event(sent)\n")
+    assert scan(spared) == []                # of the seven, a method alone counts: not a value of that name
 
     gui = REPO / "core" / "gui"
+    modules = {path.relative_to(gui).as_posix(): ast.parse(path.read_text(encoding="utf-8"))
+               for path in sorted(gui.rglob("*.py"))}
     found, bare, excepted = {}, [], set()
-    for path in sorted(gui.rglob("*.py")):
-        rel = path.relative_to(gui).as_posix()
+    for rel, tree in modules.items():
         if rel in _NOT_GUARDED_FILES:
             continue
-        for line, name, guarded, fallback in _drawing_methods(ast.parse(path.read_text(encoding="utf-8"))):
+        for line, name, guarded, fallback in _drawing_methods(tree, rel, modules):
             found[f"{rel}: {name}"] = fallback
             if not guarded and f"{rel}: {name}" in _NOT_GUARDED:
                 excepted.add(f"{rel}: {name}")
@@ -2513,7 +2649,7 @@ def test_the_looks_overrides_fall_back_to_the_stock_answer_when_they_fail(monkey
         with monkeypatch.context() as patch:                 # the indicator's paint fails
             patch.setattr(paint, "paint_indicator", fail)
             picture, where = tick_box()
-            assert names(caught) == ["PrismStyle.drawPrimitive"] and reported.ERRORS == caught
+            assert names(caught) == ["core.gui.style.PrismStyle.drawPrimitive"] and reported.ERRORS == caught
             middle = picture.pixelColor(int((where.x() + 9) * 1.5), int((where.y() + 9) * 1.5))
             assert middle.alpha() == 255, "nothing was drawn where the box stands"
             assert _at(picture, where.x() + 2.5, where.y() + 9) != design.hex_colour("accent")
@@ -2527,7 +2663,8 @@ def test_the_looks_overrides_fall_back_to_the_stock_answer_when_they_fail(monkey
             assert worn.styleHint(wheel) == stock.styleHint(wheel)
             assert worn.styleHint(wheel, None, r.box, None) == stock.styleHint(wheel, None, r.box, None)
         # each failed twice: listed the first time, counted both
-        assert names(caught) == ["PrismStyle.drawPrimitive", "PrismStyle.pixelMetric", "PrismStyle.styleHint"]
+        small = "core.gui.style.PrismStyle."
+        assert names(caught) == [small + "drawPrimitive", small + "pixelMetric", small + "styleHint"]
         assert reported.COUNTS == dict.fromkeys(names(caught), 2)
 
         _arrive(r.button, Qt.TabFocusReason)
@@ -2538,15 +2675,16 @@ def test_the_looks_overrides_fall_back_to_the_stock_answer_when_they_fail(monkey
             ring.render(picture, QPoint(0, 0), QRegion(), QWidget.RenderFlag.DrawChildren)
             assert picture == _image(ring.width(), ring.height(), 1.0)
             assert not ring.paintingActive() and not picture.paintingActive()
-        assert names(caught)[3:] == ["FocusRing.paintEvent"] and reported.COUNTS["FocusRing.paintEvent"] == 1
+        assert names(caught)[3:] == ["core.gui.style.FocusRing.paintEvent"]
+        assert reported.COUNTS[names(caught)[3]] == 1
         _leave(r.button, Qt.TabFocusReason)
 
         with monkeypatch.context() as patch:                 # the follower fails where the focus arrives
             patch.setattr(r.follows, "arrived", fail)
             assert r.follows.eventFilter(r.button, QFocusEvent(QEvent.FocusIn, Qt.TabFocusReason)) is False
             _arrive(r.button, Qt.TabFocusReason)             # and as the toolkit calls it: nothing comes out
-        assert names(caught)[4:] == ["FocusFollower.eventFilter"] and r.follows.target() is None
-        assert reported.COUNTS["FocusFollower.eventFilter"] == 2
+        assert names(caught)[4:] == ["core.gui.style.FocusFollower.eventFilter"] and r.follows.target() is None
+        assert reported.COUNTS[names(caught)[4]] == 2
 
 
 def test_a_test_in_which_drawing_code_failed_is_failed(request):

@@ -2,12 +2,20 @@
 
 The main window keeps the interpreter while it handles an event, a repaint among them: its ``event`` is
 written in Python for that, so that the parts of the look written in Python are entered without waiting
-for the interpreter once per call while a run's thread is working. One thing goes wrong with it. An error
-raised by Python code the toolkit calls from inside that handling -- a ``paintEvent``, an override of the
-style, an event filter hearing a paint, a ``resizeEvent`` -- is then dropped by the binding without a
-word, where it used to reach ``sys.excepthook`` and the window's "Unhandled error" box. So every method
-the toolkit calls while a window is drawn or laid out carries ``reported``: it hands its own error to the
-hook, and answers with a fallback so that the drawing goes on.
+for the interpreter once per call while a run's thread is working. One thing goes wrong with it. When
+Python code the toolkit calls from inside that handling raises, and the toolkit enters another method
+written in Python before the handling returns, the binding drops the error without a word, where it used
+to reach ``sys.excepthook`` and the window's "Unhandled error" box. That is what happens to anything
+raised while the window is painted, and to a page's ``showEvent`` when the window comes back from
+minimised. So the methods this program writes that the toolkit calls while a window is drawn, laid out or
+shown carry ``reported``: a ``paintEvent``, an override of the style, the event filter that hears every
+paint, a ``resizeEvent``, a page's ``showEvent``, and likewise a delegate's or an icon engine's ``paint``
+and a model's ``data`` when the program has one. Each hands its own error to the hook, and answers with a
+fallback so that the drawing goes on.
+
+Not guarded is a drawing library's own code inside the main window, which this program cannot decorate --
+today the live simulation's plotting widget (core/gui/widgets/live_hair_bundle.py): an error it raises
+during a repaint shows no box.
 
 What is kept of an error is words and a count, never the error. An error keeps its traceback, the
 traceback the frames of the failing call, and a frame its locals: in a paint event that is the live
@@ -21,8 +29,9 @@ import functools
 import sys
 
 # One (name, words) for the FIRST error raised under each name since the record was last emptied. The name
-# is a guarded method's qualified name, that name with " (its fallback)" for an error its fallback raised,
-# or "sys.excepthook" for one the hook raised; the words are the error's type and its text.
+# is a guarded method's module and qualified name ("core.gui.style.FocusRing.paintEvent": two modules may
+# each hold a class of one name), that name with " (its fallback)" for an error its fallback raised, or
+# "sys.excepthook" for one the hook raised; the words are the error's type and its text.
 ERRORS: list = []
 COUNTS: dict = {}            # name: how many errors were raised under it since then, the listed one included
 _EXPECTED: list = []         # one list for every open ``expected`` block, the innermost last
@@ -64,7 +73,7 @@ def reported(fallback=None):
     When the call returns nothing here holds the error, its traceback or a frame of the failing call.
     """
     def guard(method):
-        name = method.__qualname__
+        name = f"{method.__module__}.{method.__qualname__}"
 
         @functools.wraps(method)
         def guarded(self, *args, **kwargs):

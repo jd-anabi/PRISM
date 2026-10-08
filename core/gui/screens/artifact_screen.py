@@ -32,6 +32,7 @@ from .. import fonts, settings
 from ..design import SPACE
 from ..file_chooser import choose_file
 from ..panels.base_panel import BasePanel
+from ..reported import reported
 from ..widgets.artifact_table import DEFAULT_SORT, ArtifactTable, columns_for
 from ..widgets.refusal_box import show_refusal
 
@@ -276,6 +277,7 @@ class ArtifactScreen(QWidget):
         """The kind key currently selected."""
         return str(self.kind_combo.currentData())
 
+    @reported(QWidget.showEvent)
     def showEvent(self, event):
         """List on every visit, so an artifact written since the last look is there. NOT from
         __init__: MainWindow builds this screen at launch, and a directory scan per launch is exactly
