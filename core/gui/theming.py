@@ -120,7 +120,8 @@ class Appearance(QObject):
                     retheme = getattr(widget, "retheme", None)
                     if callable(retheme):
                         retheme()
-                top.update()
+                QWidget.update(top)                              # through the class: a list, a tree or a table
+                                                                 # refuses the plain call made on itself
             style.refresh_focus()                                # a change of style hides the ring: put it back
             self._applied = wanted                               # only once all of it is done
         finally:

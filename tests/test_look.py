@@ -1166,7 +1166,6 @@ def test_an_apply_runs_its_steps_in_one_order_and_stops_when_nothing_changed(mon
 
     class Painted(QWidget):
         def retheme(self): calls.append("retheme")
-        def update(self): calls.append("update")
 
     class StandIn(QObject):                     # what an apply asks of the application, and no more
         def __init__(self, tops):
@@ -1184,6 +1183,9 @@ def test_an_apply_runs_its_steps_in_one_order_and_stops_when_nothing_changed(mon
     monkeypatch.setattr(fonts, "apply_class_fonts", lambda app=None: calls.append("class_fonts"))
     monkeypatch.setattr(style, "refresh_focus", lambda: calls.append("ring"))
     monkeypatch.setattr(theming, "_ACTIVE", theming._ACTIVE)     # the constructor rebinds it
+    # An apply asks the repaint through the widget class, so a method of that name on a widget would not hear
+    # it: the class's own is stood in for, for the length of this test.
+    monkeypatch.setattr(QWidget, "update", lambda widget, *region: calls.append("update"))
     try:
         appearance = theming.Appearance(stand_in)
         appearance.theme_changed.connect(lambda dark: calls.append(("theme_changed", dark)))
@@ -1231,6 +1233,27 @@ def test_an_apply_rethemes_each_widget_once_also_in_a_window_that_has_a_parent(s
         assert counts == {"the window": 1, "the window's child": 1, "the dialog": 1, "inside the dialog": 1}
     finally:
         del stand_in_app.tops[:]                     # the widgets must not wait for the stand-in to go
+
+
+def test_an_apply_reaches_a_top_level_list_without_failing(stand_in_app):
+    """A list, a tree or a table refuses the plain repaint when it is asked on the widget itself: on those
+    classes the name stands for the repaint of one row, which wants the row. An apply that asked it so of a
+    list that is a window of its own stopped there, with the new look set and nothing recorded or signalled.
+    Asked through the widget class, every widget takes it."""
+    from PySide6.QtWidgets import QListWidget
+    from core.gui import theming
+    app = stand_in_app
+    app.tops.append(QListWidget())                   # a window of its own; never shown
+    try:
+        appearance = theming.Appearance(app)
+        signalled = []
+        appearance.theme_changed.connect(signalled.append)
+        appearance.set_mode("dark")
+        assert (len(app.palettes), len(app.sheets), signalled) == (1, 1, [True])
+        appearance.set_mode("dark")                  # recorded as applied: the same scheme again sets nothing
+        assert (len(app.palettes), len(app.sheets), signalled) == (1, 1, [True])
+    finally:
+        del app.tops[:]                              # the list must not wait for the stand-in to go
 
 
 def test_an_apply_tells_the_looks_table_and_sets_the_class_fonts_on_its_own_application(stand_in_app):
