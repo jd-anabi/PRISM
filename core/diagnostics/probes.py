@@ -60,7 +60,7 @@ import torch
 
 from core import orchestrator as orch
 from core.artifacts import resolve_store
-from core.Helpers import file_manager
+from core.Helpers import file_manager, plot_colours
 from core.refusals import (Refusal, describe, refuse, require_at_least, require_between, require_finite,
                            require_positive)
 from core.rng import require_seed
@@ -1322,9 +1322,9 @@ def _drive_figure(sink, strengths, ratios, free_min: float, captured_max: float)
     from matplotlib import pyplot as plt
     fig, ax = plt.subplots(figsize=(6.5, 4.0))
     ax.set_xscale("log")
-    ax.plot(strengths, [np.nan if r is None else r for r in ratios], "o-", color="tab:blue")
-    ax.axhline(free_min, ls="--", color="tab:green", label=f"free-running at or above {free_min:g}")
-    ax.axhline(captured_max, ls="--", color="tab:red", label=f"captured at or below {captured_max:g}")
+    ax.plot(strengths, [np.nan if r is None else r for r in ratios], "o-", color=plot_colours.BLUE)
+    ax.axhline(free_min, ls="--", color=plot_colours.GREEN, label=f"free-running at or above {free_min:g}")
+    ax.axhline(captured_max, ls="--", color=plot_colours.VERMILION, label=f"captured at or below {captured_max:g}")
     ax.set_xlim(strengths[0] / 1.5, strengths[-1] * 1.5)
     ax.set_xlabel("drive strength (model units)")
     ax.set_ylabel("own-peak power, driven / undriven")

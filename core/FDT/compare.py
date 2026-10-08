@@ -50,6 +50,7 @@ import h5py
 import numpy as np
 
 from core.artifacts import StoreError, resolve_store
+from core.Helpers import plot_colours
 from core.refusals import refuse, require_finite, require_positive
 from core.runs import public_entry
 
@@ -506,8 +507,9 @@ def peak_of(curve: Curve, grid, values) -> dict:
 def ratio_axes(title: str, blanks: int):
     """A figure and axes for T_eff/T against frequency, drawn the way ``plots.plot_eff_temp_ratio``
     draws its own: log x, symlog y so the chi''=0 crossing is visible on both sides of zero, and the
-    two reference lines in ``axes.edgecolor`` -- figure CHROME follows the theme, which is why it is
-    not a hardcoded gray (core/FDT/plots.py says why at length)."""
+    two reference lines in ``axes.edgecolor`` -- they belong to the figure's frame, not to the data,
+    so they take the axes' colour from matplotlib's settings and name none of their own
+    (core/FDT/plots.py says why at length)."""
     from matplotlib import pyplot as plt
     fig, ax = plt.subplots(figsize=(7, 5))
     ax.set_xscale("log")
@@ -598,10 +600,10 @@ def draw_repeats(w, records, *, sink):
         for key, arr in (("lo", lo), ("hi", hi), ("mean", mean)):
             band.create_dataset(key, data=np.asarray(arr, dtype=np.float64))
     fig, ax = ratio_axes("FDT ratio across repeats", blanks)
-    ax.fill_between(grid, lo, hi, alpha=0.25, color="steelblue", label="spread across the repeats")
+    ax.fill_between(grid, lo, hi, alpha=0.25, color=plot_colours.BLUE, label="spread across the repeats")
     # Markers on every curve, as the other modes draw theirs: a line alone draws nothing for a
     # measured point with a blank on each side.
-    ax.plot(grid, mean, color="steelblue", linewidth=1.4, marker="o", markersize=4,
+    ax.plot(grid, mean, color=plot_colours.BLUE, linewidth=1.4, marker="o", markersize=4,
             label="mean of the repeats")
     for curve, vals in zip(curves, values):
         ax.plot(grid, vals, linewidth=0.6, alpha=0.7, marker="o", markersize=3, label=curve.label)
@@ -856,7 +858,7 @@ def draw_sweeps(w, records, *, sink, at=None):
         ax = fig.add_subplot(1, len(records), i + 1)
         mesh = ax.pcolormesh(*np.meshgrid(omega_norm, param_values), matrix, cmap="viridis",
                              shading="auto", vmin=0.0, vmax=2.0)
-        ax.axvline(1.0, color="darkorange", ls=":", lw=1.2)
+        ax.axvline(1.0, color=plot_colours.ORANGE, ls=":", lw=1.2)
         ax.axhline(row_value, color=plt.rcParams["axes.edgecolor"], ls="--", lw=0.8)
         ax.set_xlabel(r"$\tilde\omega / \Omega_0$")
         ax.set_ylabel(plan.param)

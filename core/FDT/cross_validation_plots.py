@@ -14,6 +14,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from core.Helpers import plot_colours
+
 # Default linear x-window. omega/omega_0 spans [0.1, 30] but the structure
 # (deviation from FDT) lives near resonance; a linear axis out to 30 squashes it.
 # Crop to focus on the active band; full data is saved in the HDF5 for re-plotting.
@@ -113,7 +115,7 @@ def plot_fdt_3d_vs_param(
 
     im = ax2d.pcolormesh(X, Y, T_disp, cmap="viridis", shading="auto",
                          vmin=vmin, vmax=vmax)
-    ax2d.axvline(1.0, color="darkorange", ls=":", lw=1.2, label=r"$\tilde\omega/\Omega_0 = 1$")
+    ax2d.axvline(1.0, color=plot_colours.ORANGE, ls=":", lw=1.2, label=r"$\tilde\omega/\Omega_0 = 1$")
     ax2d.set_xlabel(r"$\tilde\omega / \Omega_0$")
     ax2d.set_ylabel(param_symbol)
     ax2d.set_title("2D projection")

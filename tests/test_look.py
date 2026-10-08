@@ -35,7 +35,8 @@ REPO = Path(__file__).resolve().parents[1]
 # every module of the look that exists; a new one joins this tuple in the commit that adds it, and the
 # fresh-interpreter test is then its proof that it loads no engine
 LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.gui.mpl_theme", "core.gui.settings",
-                "core.gui.file_chooser", "core.gui.widgets.labeled_inputs", "core.gui.paint", "core.gui.style")
+                "core.gui.file_chooser", "core.gui.widgets.labeled_inputs", "core.gui.paint", "core.gui.style",
+                "core.Helpers.plot_colours")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
 
@@ -1898,3 +1899,107 @@ def test_under_the_figure_settings_a_character_the_lettering_lacks_is_drawn_with
         assert missing_glyphs() == []
         matplotlib.rcParams["font.family"] = ["Inter"]
         assert missing_glyphs(), "this label no longer holds a character Inter lacks: choose another"
+
+
+# ── the plotting code's line colours ────────────────────────────────────────────────────────────
+_PLOTTING_FILES = ("core/Helpers/visualizers.py", "core/FDT/plots.py", "core/FDT/compare.py",
+                   "core/FDT/cross_validation_plots.py", "core/Reduction/plots.py",
+                   "core/diagnostics/identifiability.py", "core/diagnostics/probes.py")
+_OLD_LINE_COLOURS = frozenset({"steelblue", "tab:blue", "red", "r", "crimson", "tab:red", "green",
+                               "tab:green", "darkorange", "orange", "tab:orange", "gray"})
+_COLOUR_KEYWORDS = frozenset({"color", "c", "colors", "edgecolor", "edgecolors", "facecolor",
+                              "facecolors", "ecolor", "markerfacecolor", "markeredgecolor", "mfc",
+                              "mec", "fc", "ec", "foreground", "labelcolor"})
+_LINE_CALLS = frozenset({"plot", "semilogx", "semilogy", "loglog", "errorbar", "step", "stem"})
+_LINE_FORMAT = re.compile(r"(?:[bgrcmykw]|--|-\.|[-:.,ov^<>1-4sp*hH+xXDd|_])+")
+
+
+def _own_colour_arguments(tree) -> list:
+    """``(line, text)`` for every colour a call names itself: one of the old colour names, a hex
+    value or a ``tab:`` name as a colour keyword's value, and a line format string that carries a
+    colour letter other than white or black. Parsed, so a colour name in a comment, a label or a
+    file mode is not an argument."""
+    hits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg in _COLOUR_KEYWORDS:
+                hits += [(c.lineno, c.value) for c in ast.walk(kw.value)
+                         if isinstance(c, ast.Constant) and isinstance(c.value, str)
+                         and (c.value in _OLD_LINE_COLOURS or c.value.startswith(("#", "tab:")))]
+        if isinstance(node.func, ast.Attribute) and node.func.attr in _LINE_CALLS:
+            formats = [a for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+            formats += [kw.value for kw in node.keywords if kw.arg == "fmt"
+                        and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str)]
+            hits += [(a.lineno, a.value) for a in formats
+                     if _LINE_FORMAT.fullmatch(a.value) and set(a.value) & set("bgrcmy")]
+    return sorted(hits)
+
+
+def test_the_plotting_colour_scan_catches_each_form_and_spares_what_stays():
+    """The scanner is checked on snippets first: with the tree clean, the walk of the seven files
+    would go on passing if the scanner stopped matching anything."""
+    caught = ast.parse("ax.plot(x, y, color='steelblue')\n"
+                       "ax.scatter(x, y, c='gray', edgecolors='none')\n"
+                       "ax.axhline(0.0, color='r')\n"
+                       "ax.plot(x, y, 'r--')\n"
+                       "ax.errorbar(x, y, fmt='go')\n"
+                       "ax.bar(x, y, color=['tab:blue', 'tab:red'])\n"
+                       "ax.axvline(1.0, color='#0072B2')\n")
+    assert _own_colour_arguments(caught) == [
+        (1, "steelblue"), (2, "gray"), (3, "r"), (4, "r--"), (5, "go"), (6, "tab:blue"),
+        (6, "tab:red"), (7, "#0072B2")]
+    spared = ast.parse("ax.plot(x, y, 'o-', color=plot_colours.BLUE)\n"
+                       "ax.plot(x, y, 'w-', lw=2)\n"
+                       "ax.text(0, 0, 'r', color='white' if dark else 'black')\n"
+                       "ax.axhline(0, color=plt.rcParams['axes.edgecolor'])\n"
+                       "ax.scatter(x, y, c=plot_colours.ORANGE, edgecolors='none')\n"
+                       "ax.imshow(data, cmap='viridis')\n"
+                       "ax.plot(x, y, label='red')\n"
+                       "open(path, 'r')\n")
+    assert _own_colour_arguments(spared) == []
+
+
+def test_no_plotting_file_names_a_line_colour_of_its_own():
+    """The seven plotting files take every named colour from core/Helpers/plot_colours.py, so a
+    figure saved from the command line and one saved from the window carry the same ones. White
+    and black lettering, the white line over a colour map, a colour read from matplotlib's
+    settings and a colour map stay; a line that names no colour takes matplotlib's cycle."""
+    left = []
+    for rel in _PLOTTING_FILES:
+        tree = ast.parse((REPO / rel).read_text(encoding="utf-8"))
+        left += [f"{rel}:{line} {text!r}" for line, text in _own_colour_arguments(tree)]
+    assert left == [], (f"{len(left)} colour argument(s) still name a colour of their own; each "
+                        f"takes its colour from core/Helpers/plot_colours.py:\n  " + "\n  ".join(left))
+
+
+def test_the_plotting_colours_module_imports_nothing_but_itself():
+    """The effective-temperature and reduction plotting files, and a comparison of saved runs, must
+    be able to import the colours with neither torch nor matplotlib behind them. RUN in a fresh
+    interpreter: this process already holds both, so a look at its own modules would prove
+    nothing. The module's own statements are read too: it holds four values and imports nothing."""
+    probe = ("import sys\n"
+             "before = set(sys.modules)\n"
+             "import core.Helpers.plot_colours\n"
+             "new = sorted(set(sys.modules) - before)\n"
+             "sys.exit(0 if new == ['core', 'core.Helpers', 'core.Helpers.plot_colours'] else repr(new))\n")
+    r = subprocess.run([sys.executable, "-c", probe], cwd=str(REPO), capture_output=True, text=True,
+                       timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    tree = ast.parse((REPO / "core" / "Helpers" / "plot_colours.py").read_text(encoding="utf-8"))
+    imports = [n.lineno for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
+    assert imports == [], f"core/Helpers/plot_colours.py imports at lines {imports}"
+
+
+def test_the_plotting_colours_are_the_second_to_fifth_line_colours():
+    """The engine holds its own copy of four colours, so that it imports nothing of the window;
+    this is what keeps the copy equal to the window's table. The first line colour, the ink, is
+    not held (a plotting function reads it from matplotlib's settings), and nothing else is."""
+    from core.Helpers import plot_colours
+    held = (plot_colours.BLUE, plot_colours.VERMILION, plot_colours.GREEN, plot_colours.ORANGE)
+    assert held == ("#0072B2", "#C24E00", "#007A5A", "#E69F00")
+    assert design.SERIES[1:5] == ("series_2", "err", "ok", "warn")
+    assert held == tuple(design.COLOURS[name][0] for name in design.SERIES[1:5])
+    assert sorted(n for n in vars(plot_colours) if not n.startswith("_")) == [
+        "BLUE", "GREEN", "ORANGE", "VERMILION"]

@@ -29,7 +29,7 @@ import torch
 
 from core import orchestrator as orch
 from core.artifacts import resolve_store
-from core.Helpers import file_manager
+from core.Helpers import file_manager, plot_colours
 from core.refusals import Refusal, require_at_least, require_between, require_positive
 from core.runs import public_entry
 
@@ -806,7 +806,7 @@ def _summaries(ctx, J, fnoise, dead, names, kinds, vfr, zero_tol, sink):
     sink("Jacobian cosine matrix", fig)
     fig2, ax2 = plt.subplots(figsize=(7, 4))
     if S.size:
-        ax2.bar(range(S.size), S / S[0], color="steelblue"); ax2.set_yscale("log")
+        ax2.bar(range(S.size), S / S[0], color=plot_colours.BLUE); ax2.set_yscale("log")
     ax2.set_xlabel("singular index"); ax2.set_ylabel("sigma / sigma_max (log)")
     ax2.set_title("Jacobian singular spectrum over stiff cols (small = sloppy)")
     fig2.tight_layout()

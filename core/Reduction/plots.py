@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from .. import config
+from ..Helpers import plot_colours
 
 
 def _plot_dir():
@@ -24,23 +25,22 @@ def _plot_dir():
 
 
 def _overlay_halo() -> list:
-    """A themed outline for a WHITE line drawn on a colormap (B-c's last residue).
+    """An outline in the settings' text colour for a WHITE line drawn on a colour map.
 
-    White is the right colour for the line itself and must NOT follow the page theme -- its backdrop
-    is viridis, not the figure, so a themed colour would be near-black on dark purple under the light
-    theme. That is the same call ``cross_validation_plots`` makes with ``darkorange`` and
-    ``simulate_export`` makes by pinning a white video figure.
+    White is the right colour for the line itself and must NOT be the text colour -- its backdrop is
+    viridis, not the page, so the text colour would be near-black on dark purple. That is the same
+    call ``cross_validation_plots`` makes with its orange line and ``simulate_export`` makes by
+    pinning a white video figure.
 
     Its LEGEND swatch is the part that was actually broken: the legend sits on ``legend.facecolor``,
-    which is ``#FFFFFF`` under the light theme and ``inherit`` -> white under plain matplotlib, so the
-    entry for the predicted-Omega_0 line was an invisible white line on white. A stroke in
-    ``text.color`` fixes the swatch on any background -- the token pair is contrast-guaranteed by
-    construction -- and on the surface it only adds a thin halo, which helps in light and is neutral
-    in dark.
+    which is white under the window's figure settings and ``inherit`` -> white under plain matplotlib,
+    so the entry for the predicted-Omega_0 line was an invisible white line on white. A stroke in
+    ``text.color`` fixes the swatch on any background -- the text colour is chosen to be read on that
+    ground -- and on the surface it only adds a thin halo.
 
-    Read at CALL time, never hoisted to a module constant: rcParams is global and re-applied on a
-    theme flip (``gui.mpl_theme``), so an import-time snapshot would pin the theme the process started
-    in.
+    Read at CALL time, never hoisted to a module constant: rcParams is global, and the window writes
+    its figure settings when the application is built, which can be after this module was imported;
+    an import-time snapshot would pin whatever was in force at the import.
     """
     return [pe.Stroke(linewidth=3.5, foreground=plt.rcParams["text.color"]), pe.Normal()]
 
@@ -57,22 +57,22 @@ def plot_sweep_summary(df: pd.DataFrame, save: bool = True, show: bool = False) 
     ax_mu, ax_Omega = axes[0]
     ax_alpha, ax_beta = axes[1]
 
-    ax_mu.plot(ok["f_max"], ok["mu_N"], "o-", color="tab:blue")
+    ax_mu.plot(ok["f_max"], ok["mu_N"], "o-", color=plot_colours.BLUE)
     ax_mu.axhline(0.0, color=plt.rcParams['axes.edgecolor'], lw=0.5, ls="--")
     ax_mu.set_ylabel(r"$\mu_H^{(N)}$")
     ax_mu.set_title("Bifurcation distance")
 
-    ax_Omega.plot(ok["f_max"], ok["Omega0_N"], "o-", color="tab:green")
+    ax_Omega.plot(ok["f_max"], ok["Omega0_N"], "o-", color=plot_colours.GREEN)
     ax_Omega.set_ylabel(r"$\Omega_0^{(N)}$")
     ax_Omega.set_title("Intrinsic frequency")
 
-    ax_alpha.plot(ok["f_max"], ok["alpha_H_N"], "o-", color="tab:orange")
+    ax_alpha.plot(ok["f_max"], ok["alpha_H_N"], "o-", color=plot_colours.ORANGE)
     ax_alpha.axhline(0.0, color=plt.rcParams['axes.edgecolor'], lw=0.5, ls="--")
     ax_alpha.set_ylabel(r"$\alpha_H^{(N)}$")
     ax_alpha.set_xlabel(r"$f_{\max}$")
     ax_alpha.set_title("Cubic real part")
 
-    ax_beta.plot(ok["f_max"], ok["beta_H_N"], "o-", color="tab:red")
+    ax_beta.plot(ok["f_max"], ok["beta_H_N"], "o-", color=plot_colours.VERMILION)
     ax_beta.axhline(0.0, color=plt.rcParams['axes.edgecolor'], lw=0.5, ls="--")
     ax_beta.set_ylabel(r"$\beta_H^{(N)}$")
     ax_beta.set_xlabel(r"$f_{\max}$")
@@ -88,10 +88,10 @@ def plot_sweep_summary(df: pd.DataFrame, save: bool = True, show: bool = False) 
         for ax in axes.flat:
             if not sub.empty:
                 ax.axvspan(sub["f_max"].min(), sub["f_max"].max(),
-                           color="tab:blue", alpha=0.05, zorder=0)
+                           color=plot_colours.BLUE, alpha=0.05, zorder=0)
             if not sup.empty:
                 ax.axvspan(sup["f_max"].min(), sup["f_max"].max(),
-                           color="tab:red", alpha=0.05, zorder=0)
+                           color=plot_colours.VERMILION, alpha=0.05, zorder=0)
 
     fig.suptitle(r"Reduction-map sweep: NWK-ND Hopf parameters vs $f_{\max}$", y=1.0)
     fig.tight_layout()
@@ -176,7 +176,7 @@ def plot_cross_validation_3d(
     im = ax2d.pcolormesh(OMEGA, MU, T_eff_matrix, cmap="viridis", shading="auto")
     ax2d.plot(Omega_axis, mu_axis, "w-", lw=2, path_effects=halo,
               label=r"predicted $\Omega_0^{(N)}(\mu_H)$")
-    ax2d.axhline(0.0, color="r", lw=0.7, ls="--", label="Hopf manifold")
+    ax2d.axhline(0.0, color=plot_colours.VERMILION, lw=0.7, ls="--", label="Hopf manifold")
     ax2d.set_xlabel(r"$\tilde\omega$")
     ax2d.set_ylabel(r"$\mu_H^{(N)}$")
     ax2d.set_title("2D projection")

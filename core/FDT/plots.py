@@ -5,6 +5,8 @@ from os import PathLike
 import numpy as np
 from matplotlib import pyplot as plt
 
+from core.Helpers import plot_colours
+
 # Dropped non-finite points are a warning record.
 log = logging.getLogger(__name__)
 
@@ -60,21 +62,22 @@ def plot_eff_temp_ratio(omegas: np.ndarray, ratio: np.ndarray,
     x, xlabel, x_res = _normalized_freq_axis(omegas, omega_natural)
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(x, ratio, marker='o', linestyle='none', markersize=4, color='steelblue')
+    ax.plot(x, ratio, marker='o', linestyle='none', markersize=4, color=plot_colours.BLUE)
     ax.set_xscale('log')
     ax.set_yscale('symlog', linthresh=linthresh)
     ax.axhline(1.0, color=plt.rcParams['axes.edgecolor'], linestyle='--', linewidth=0.8,
                label=r'$T_{\rm eff}/T = 1$ (equilibrium)')
-    # axes.edgecolor, not 'gray': this is figure CHROME and must follow the theme, exactly like the
-    # equilibrium line above it. Deliberately the SAME token as that line -- the two are separated by
-    # dash pattern and width, which is matplotlib's own convention for reference lines and survives a
-    # theme flip. `grid.color` was the obvious "dimmer neutral" and is WRONG: it is the border token
-    # (#3D3D3D) and the dark theme paints axes on #2B2B2B, so the line and its legend swatch both
-    # disappear -- worse than the hardcoded gray it replaced.
+    # axes.edgecolor, not a colour of its own: this line is part of the figure's frame, not data, so
+    # it takes the axes' colour from matplotlib's settings, exactly like the equilibrium line above
+    # it. Deliberately the SAME setting as that line -- the two are told apart by dash pattern and
+    # width, which is matplotlib's own convention for reference lines. `grid.color` looks like the
+    # obvious dimmer neutral and is WRONG: the grid colour of the window's figure settings is a faint
+    # separator, meant to recede on the page, so the line and its legend swatch would all but
+    # disappear.
     ax.axhline(0.0, color=plt.rcParams['axes.edgecolor'], linestyle=':', linewidth=0.6,
                 label=r"$T_{\rm eff}/T = 0$ ($\chi''=0$ crossing)")
     if x_res is not None:
-        ax.axvline(x_res, color='darkorange', linestyle=':', linewidth=1.2,
+        ax.axvline(x_res, color=plot_colours.ORANGE, linestyle=':', linewidth=1.2,
                     label=fr'$\omega/\Omega_0 = 1$ ($\Omega_0 \approx {omega_natural:.3f}$)')
     ax.set_xlabel(xlabel)
     ax.set_ylabel(r'$T_{\rm eff}(\tilde\omega) / T$, symlog scale')
@@ -113,10 +116,10 @@ def plot_spontaneous_trajectory(t: np.ndarray, x_mean: np.ndarray,
     x_mean = np.asarray(x_mean)
 
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(t, x_mean, linewidth=0.8, color='steelblue')
+    ax.plot(t, x_mean, linewidth=0.8, color=plot_colours.BLUE)
     ax.axhline(0.0, color=plt.rcParams['axes.edgecolor'], linestyle='--', linewidth=0.8)
     if burn_in is not None:
-        ax.axvline(burn_in, color='darkorange', linestyle=':', linewidth=1.2,
+        ax.axvline(burn_in, color=plot_colours.ORANGE, linestyle=':', linewidth=1.2,
                     label=fr'burn-in ends: $\tilde t = {burn_in:.0f}$')
         ax.legend()
     ax.set_xlabel(r'$\tilde t$ (ND)')
@@ -189,15 +192,15 @@ def plot_psd(omegas: np.ndarray, G: np.ndarray,
     fig, ax = plt.subplots(figsize=(7, 5))
     if np.any(G > 0):
         x, xlabel, x_res = _normalized_freq_axis(omegas, omega_natural)
-        ax.plot(x, G, marker='.', linestyle='none', markersize=3, color='steelblue')
+        ax.plot(x, G, marker='.', linestyle='none', markersize=3, color=plot_colours.BLUE)
         ax.set_xscale('log')
         ax.set_yscale('log')
         if missed_band is not None:
             per = omega_natural if x_res is not None else 1.0     # the band in the axis' own units
-            ax.axvspan(missed_band[0] / per, missed_band[1] / per, color='darkorange', alpha=0.2,
+            ax.axvspan(missed_band[0] / per, missed_band[1] / per, color=plot_colours.ORANGE, alpha=0.2,
                        label='probe band (no spectrum point inside it)')
         if x_res is not None:
-            ax.axvline(x_res, color='darkorange', linestyle=':', linewidth=1.2,
+            ax.axvline(x_res, color=plot_colours.ORANGE, linestyle=':', linewidth=1.2,
                         label=fr'$\omega/\Omega_0 = 1$ ($\Omega_0 \approx {omega_natural:.3f}$)')
         if x_res is not None or missed_band is not None:
             ax.legend()
@@ -248,10 +251,10 @@ def plot_chi_components(omegas: np.ndarray, chis: np.ndarray,
     ax_real.set_xscale('log')   # shared with ax_imag via sharex=True
 
     # chi' (real / in-phase)
-    ax_real.plot(x, chi_real, marker='o', linestyle='none', markersize=4, color='steelblue')
+    ax_real.plot(x, chi_real, marker='o', linestyle='none', markersize=4, color=plot_colours.BLUE)
     ax_real.axhline(0.0, color=plt.rcParams['axes.edgecolor'], linestyle='--', linewidth=0.8)
     if x_res is not None:
-        ax_real.axvline(x_res, color='darkorange', linestyle=':', linewidth=1.2,
+        ax_real.axvline(x_res, color=plot_colours.ORANGE, linestyle=':', linewidth=1.2,
                          label=fr'$\omega/\Omega_0 = 1$ ($\Omega_0 \approx {omega_natural:.3f}$)')
         ax_real.legend()
     ax_real.set_ylabel(r"$\chi'(\tilde\omega)$ (in-phase)")
@@ -259,10 +262,10 @@ def plot_chi_components(omegas: np.ndarray, chis: np.ndarray,
     ax_real.grid(False)
 
     # chi'' (imaginary / dissipative)
-    ax_imag.plot(x, chi_imag, marker='o', linestyle='none', markersize=4, color='steelblue')
+    ax_imag.plot(x, chi_imag, marker='o', linestyle='none', markersize=4, color=plot_colours.BLUE)
     ax_imag.axhline(0.0, color=plt.rcParams['axes.edgecolor'], linestyle='--', linewidth=0.8)
     if x_res is not None:
-        ax_imag.axvline(x_res, color='darkorange', linestyle=':', linewidth=1.2)
+        ax_imag.axvline(x_res, color=plot_colours.ORANGE, linestyle=':', linewidth=1.2)
     ax_imag.set_xlabel(xlabel)
     ax_imag.set_ylabel(r"$\chi''(\tilde\omega)$ (dissipative)")
     ax_imag.grid(False)

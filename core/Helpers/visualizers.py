@@ -6,6 +6,8 @@ import numpy as np
 import torch
 from matplotlib import pyplot as plt
 
+from core.Helpers import plot_colours
+
 # The plot helpers' voice: a helper with nothing to draw says so as a warning record.
 log = logging.getLogger(__name__)
 
@@ -13,22 +15,23 @@ log = logging.getLogger(__name__)
 def save_figure(fig: "plt.Figure", target, **kwargs) -> None:
     """``fig.savefig`` with the SAVED BACKGROUND PINNED TO THE FIGURE'S OWN COLOURS.
 
-    ⚠ USE THIS, NOT ``fig.savefig``, ANYWHERE A THEME MIGHT CHANGE MID-RUN.
+    ⚠ USE THIS, NOT ``fig.savefig``, WHEREVER THE FIGURE SETTINGS COULD CHANGE BETWEEN BUILD AND SAVE.
 
     matplotlib reads ``savefig.facecolor`` at SAVE time, while every artist's colour is baked at BUILD
-    time. Anything that changes the theme between the two splits one figure across two palettes. The
-    GUI does exactly that: ``core.gui.mpl_theme.apply_mpl_theme`` mutates GLOBAL rcParams whenever the
-    appearance changes, and a multi-day run straddles one easily -- a manual flip, or Windows
-    switching light/dark on its own schedule.
+    time. Anything that rewrites the settings between the two splits one figure across two palettes.
+    The window used to do exactly that: it rewrote the GLOBAL rcParams at every change of appearance,
+    and a multi-day run straddled one easily. It now writes its light figure settings once, when the
+    application is built, and the command line writes none, so nothing in PRISM changes them mid-run;
+    this function stays as the guard for anything that ever does.
 
-    The result is not subtle and it is not cosmetic. Measured on the 2026-08-25 retrain: dark axes
-    (#2B2B2B, the DARK token) on a light page (#F3F3F3, the LIGHT token) with ``text.color`` still
+    The result is not subtle and it is not cosmetic. Measured on the 2026-08-25 retrain: dark axes on a
+    light page, the grounds of the window's dark and light appearances then, with ``text.color`` still
     light -- so every tick label, axis label, title and table cell rendered light-on-light at a
     contrast ratio of **1.06:1**. 14 of the 15 figures were unreadable, and the parameter tables
     carrying the actual best-fit numbers were blank.
 
     ``fig.get_facecolor()`` is what the figure was CONSTRUCTED with, so passing it explicitly pins the
-    save to the theme the artists were drawn in, whatever the global has become since.
+    save to the settings the artists were drawn under, whatever the global has become since.
     """
     kwargs.setdefault("facecolor", fig.get_facecolor())
     kwargs.setdefault("edgecolor", fig.get_edgecolor())
@@ -61,7 +64,7 @@ def plot(x: np.ndarray, y: np.ndarray, scatter: bool = False, title: str = None,
             ax.set_ylim(*lims[1])
 
     if hlines is not None:
-        ax.hlines(*hlines, linestyle='--', color='r')
+        ax.hlines(*hlines, linestyle='--', color=plot_colours.VERMILION)
 
     if tight:
         fig.tight_layout()
@@ -134,7 +137,7 @@ def plot_ppc(ppc_results: dict, ground_truth: list = None, param_names: list = N
     valid_z = z_scores[valid_mask]
     abs_z = np.abs(valid_z)
 
-    # classify points: blue (|z| <= 1), orange (1 < |z| <= 2), red (|z| > 2)
+    # classify points: blue (|z| <= 1), orange (1 < |z| <= 2), vermilion (|z| > 2)
     outside_mask = valid_mask & (np.abs(z_scores) > 2)
     warning_mask = valid_mask & (np.abs(z_scores) > 1) & (np.abs(z_scores) <= 2)
     safe_mask = valid_mask & (np.abs(z_scores) <= 1)
@@ -154,22 +157,22 @@ def plot_ppc(ppc_results: dict, ground_truth: list = None, param_names: list = N
         gs, ax = None, fig.add_subplot(1, 1, 1)
 
     # shaded |z| < 2 region
-    ax.axhspan(-2, 2, alpha=0.1, color='green', label=r'$|z| < 2$ region')
+    ax.axhspan(-2, 2, alpha=0.1, color=plot_colours.GREEN, label=r'$|z| < 2$ region')
 
     # reference lines
     ax.axhline(0, color=plt.rcParams["axes.edgecolor"], linewidth=0.8)
-    ax.axhline(2, color='red', linestyle='--', linewidth=0.8, label=r'$|z| = 2$')
-    ax.axhline(-2, color='red', linestyle='--', linewidth=0.8)
+    ax.axhline(2, color=plot_colours.VERMILION, linestyle='--', linewidth=0.8, label=r'$|z| = 2$')
+    ax.axhline(-2, color=plot_colours.VERMILION, linestyle='--', linewidth=0.8)
 
     # plot points by category
-    ax.scatter(indices[safe_mask], z_scores[safe_mask], c='steelblue',
+    ax.scatter(indices[safe_mask], z_scores[safe_mask], c=plot_colours.BLUE,
                s=40, alpha=0.7, edgecolors='none', zorder=3)
-    ax.scatter(indices[warning_mask], z_scores[warning_mask], c='orange',
+    ax.scatter(indices[warning_mask], z_scores[warning_mask], c=plot_colours.ORANGE,
                s=40, alpha=0.8, edgecolors='none', zorder=3)
-    ax.scatter(indices[outside_mask], z_scores[outside_mask], c='red',
+    ax.scatter(indices[outside_mask], z_scores[outside_mask], c=plot_colours.VERMILION,
                s=50, alpha=0.9, edgecolors='none', zorder=4)
     if invalid_mask.any():
-        ax.scatter(indices[invalid_mask], np.zeros(invalid_mask.sum()), c='gray',
+        ax.scatter(indices[invalid_mask], np.zeros(invalid_mask.sum()), color=plt.rcParams["axes.edgecolor"],
                    s=50, marker='x', linewidths=1.5, zorder=4, label='Invalid (zero variance)')
 
     ax.set_xlabel('Statistic Index')
@@ -251,21 +254,21 @@ def plot_posterior_vs_truth(t: np.ndarray, x_true: np.ndarray,
     # the posterior actually predicts. (Phase-aware comparisons live in the dedicated overlay figures.)
     if x_samples is not None and len(x_samples) > 1:
         lo, hi = np.percentile(x_samples, [2.5, 97.5], axis=0)
-        ax.fill_between(t, lo, hi, alpha=0.15, color='steelblue', label='Posterior 95% band')
+        ax.fill_between(t, lo, hi, alpha=0.15, color=plot_colours.BLUE, label='Posterior 95% band')
 
         # Individual sample trajectories. Seeded via a LOCAL RandomState so the figure is reproducible
         # across re-renders without disturbing the global numpy RNG the pipeline draws from.
         rng = np.random.RandomState(0)
         show_idx = rng.choice(len(x_samples), size=min(n_show, len(x_samples)), replace=False)
         for i, idx in enumerate(show_idx):
-            ax.plot(t, x_samples[idx], color='steelblue', alpha=0.25, linewidth=0.5,
+            ax.plot(t, x_samples[idx], color=plot_colours.BLUE, alpha=0.25, linewidth=0.5,
                     label='Posterior samples' if i == 0 else None)
 
     ax.plot(t, x_true, color=plt.rcParams["text.color"], linewidth=1.2, label='Ground truth')
     if x_median is not None:
-        ax.plot(t, x_median, color='red', linewidth=1.0, linestyle='--', label='Posterior median')
+        ax.plot(t, x_median, color=plot_colours.VERMILION, linewidth=1.0, linestyle='--', label='Posterior median')
     if x_mean is not None:
-        ax.plot(t, x_mean, color='darkorange', linewidth=1.0, linestyle='-.', label='Posterior mean')
+        ax.plot(t, x_mean, color=plot_colours.ORANGE, linewidth=1.0, linestyle='-.', label='Posterior mean')
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -299,11 +302,11 @@ def _param_table(ax, labels, values, ground_truth=None, value_header: str = "bes
     table.scale(1.0, 1.18)
     fg = plt.rcParams["text.color"]
     # An EXPLICIT cell background, not "none". A transparent cell shows the FIGURE background, while
-    # the text is `text.color` -- and those two are only guaranteed to contrast while the theme is
-    # self-consistent. `axes.facecolor` is the surface `text.color` is chosen against, so pinning the
-    # cell to it makes the table readable by construction rather than by coincidence. (Transparent
-    # cells are how the 13-row best-fit table came out completely blank at 1.06:1 contrast; see
-    # save_figure.)
+    # the text is `text.color` -- and those two are only guaranteed to contrast while the figure is
+    # built and saved under one set of settings. `axes.facecolor` is the surface `text.color` is
+    # chosen against, so pinning the cell to it makes the table readable by construction rather than
+    # by coincidence. (Transparent cells are how the 13-row best-fit table came out completely blank
+    # at 1.06:1 contrast; see save_figure.)
     for cell in table.get_celld().values():
         cell.set_edgecolor(plt.rcParams["axes.edgecolor"])
         cell.get_text().set_color(fg)
@@ -326,7 +329,7 @@ def plot_best_fit_overlay(t: np.ndarray, x_true: np.ndarray, x_fit: np.ndarray, 
     gs = fig.add_gridspec(1, 2, width_ratios=[3.0, 1.25])
     ax = fig.add_subplot(gs[0, 0])
     ax.plot(t, x_true, color=plt.rcParams["text.color"], linewidth=1.2, label="Observation")
-    ax.plot(t, x_fit, color="crimson", linewidth=1.0, alpha=0.9, label="Best-fit draw (aligned)")
+    ax.plot(t, x_fit, color=plot_colours.VERMILION, linewidth=1.0, alpha=0.9, label="Best-fit draw (aligned)")
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(f"Best-fit posterior draw — {criterion}" + (f"   ({score_text})" if score_text else ""))
@@ -341,9 +344,9 @@ def plot_overlay_band(t: np.ndarray, x_true: np.ndarray, lo: np.ndarray, med: np
                       xlabel: str = r"$t$ (s)", ylabel: str = r"$x$ (nm)") -> plt.Figure:
     """The top-N best-matching draws, each individually phase-aligned, as a percentile band."""
     fig, ax = plt.subplots(figsize=(14, 5), constrained_layout=True)
-    ax.fill_between(t, lo, hi, alpha=0.25, color="steelblue",
+    ax.fill_between(t, lo, hi, alpha=0.25, color=plot_colours.BLUE,
                     label=f"best {n_used} draws, {pct[0]}–{pct[1]}%")
-    ax.plot(t, med, color="steelblue", linewidth=1.0, label="median of best draws")
+    ax.plot(t, med, color=plot_colours.BLUE, linewidth=1.0, label="median of best draws")
     ax.plot(t, x_true, color=plt.rcParams["text.color"], linewidth=1.2, label="Observation")
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -366,16 +369,16 @@ def plot_psd_overlay(freqs: np.ndarray, gt_power: np.ndarray, lo: np.ndarray, me
     fig, ax = plt.subplots(figsize=(11, 5), constrained_layout=True)
     m = freqs > 0                                        # log axes: drop DC
     drop_note = f"  [{n_dropped} non-finite draw(s) dropped]" if n_dropped else ""
-    ax.fill_between(freqs[m], lo[m], hi[m], alpha=0.25, color="steelblue",
+    ax.fill_between(freqs[m], lo[m], hi[m], alpha=0.25, color=plot_colours.BLUE,
                     label=f"posterior predictive, {pct[0]}–{pct[1]}%{drop_note}")
-    ax.plot(freqs[m], med[m], color="steelblue", linewidth=1.0, label="posterior median")
+    ax.plot(freqs[m], med[m], color=plot_colours.BLUE, linewidth=1.0, label="posterior median")
     ax.plot(freqs[m], gt_power[m], color=plt.rcParams["text.color"], linewidth=1.1,
             label="Observation")
     if not np.isfinite(med[m]).any():
         # Nothing survived. Say so in the middle of the axes: a silently empty band is exactly the
         # failure this argument exists to make impossible.
         ax.text(0.5, 0.5, f"no finite posterior-predictive PSD\n({n_dropped} draw(s) dropped)",
-                transform=ax.transAxes, ha="center", va="center", fontsize=11, color="crimson")
+                transform=ax.transAxes, ha="center", va="center", fontsize=11, color=plot_colours.VERMILION)
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel(f"frequency ({freq_unit})")
@@ -400,9 +403,9 @@ def plot_cycle_average(phase: np.ndarray, gt_mean: np.ndarray, sim_mean: np.ndar
     """
     fig, ax = plt.subplots(figsize=(9, 5), constrained_layout=True)
     drop_note = f"  [{n_dropped} non-finite sample(s) dropped]" if n_dropped else ""
-    ax.fill_between(phase, sim_lo, sim_hi, alpha=0.25, color="steelblue",
+    ax.fill_between(phase, sim_lo, sim_hi, alpha=0.25, color=plot_colours.BLUE,
                     label=f"posterior predictive, 25–75% (pooled){drop_note}")
-    ax.plot(phase, sim_mean, color="steelblue", linewidth=1.2, label="posterior mean cycle")
+    ax.plot(phase, sim_mean, color=plot_colours.BLUE, linewidth=1.2, label="posterior mean cycle")
     ax.plot(phase, gt_mean, color=plt.rcParams["text.color"], linewidth=1.4, label="Observation")
     ax.set_xlabel("cycle phase (rad)")
     ax.set_ylabel(ylabel)
@@ -438,15 +441,15 @@ def plot_training_loss(diagnostics: dict, save_path: str | PathLike[str] = None,
 
     fig, ax = plt.subplots(figsize=fig_size)
     if len(train):
-        ax.plot(np.arange(1, len(train) + 1), train, color='steelblue', label='training loss')
-    ax.plot(np.arange(1, len(val) + 1), val, color='darkorange', label='validation loss')
+        ax.plot(np.arange(1, len(train) + 1), train, color=plot_colours.BLUE, label='training loss')
+    ax.plot(np.arange(1, len(val) + 1), val, color=plot_colours.ORANGE, label='validation loss')
 
     best_epoch = int(np.argmin(val)) + 1
-    ax.axvline(best_epoch, color='green', linestyle='--', linewidth=1.0,
+    ax.axvline(best_epoch, color=plot_colours.GREEN, linestyle='--', linewidth=1.0,
                label=f'best epoch ({best_epoch})')
     sae = diagnostics.get("stop_after_epochs")
     if sae:
-        ax.axvspan(best_epoch, len(val), alpha=0.08, color='red',
+        ax.axvspan(best_epoch, len(val), alpha=0.08, color=plot_colours.VERMILION,
                    label=f'early-stop window ({sae}-epoch patience)')
 
     ax.set_xlabel('epoch')
