@@ -4255,6 +4255,34 @@ def test_the_window_fills_the_run_slot_while_a_panel_runs_and_clears_it_after():
     assert not w._run_timer.isActive(), "the clock must stop when the run does"
 
 
+def test_the_run_slot_keeps_its_width_as_its_clock_ticks():
+    """The slot is rewritten every second while a run is live, and it is an outlined button, so its
+    width is seen. In the application's font a 1 is narrower than a 0: the slot would be wider at 4:07
+    than at 4:11 and its edge would move with the clock. Its own font is the small lettering with the
+    digits of equal width, so the two are one width. The widths are those of the banner's words in the
+    button's own font; without the feature the same font gives two widths."""
+    from PySide6.QtGui import QFont, QFontMetricsF
+    from core.gui import fonts
+    from core.gui.screens.nav_shell import running_banner
+
+    qt_app()
+    w = build_window()
+    font, equal, small = w.nav.btn_running.font(), QFont.Tag.fromString("tnum"), fonts.inter("small")
+    assert font.isFeatureSet(equal), "the run slot shows its clock in digits of unequal width"
+    assert (font.family(), font.pixelSize(), font.weight()) == (small.family(), small.pixelSize(), small.weight())
+
+    def widths(of, *seconds):
+        return [QFontMetricsF(of).horizontalAdvance(running_banner("Posterior", s)) for s in seconds]
+
+    for pair in ((247, 251), (600, 671), (36000, 40271)):          # 4:07 and 4:11, and so on by the hour
+        one, other = widths(font, *pair)
+        assert one == other, (pair, one, other)
+    without = QFont(font)
+    without.unsetFeature(equal)
+    one, other = widths(without, 247, 251)
+    assert one != other, "the digits have one width without the feature as well: the lines above prove nothing"
+
+
 def test_clicking_the_run_slot_opens_the_running_panel_and_an_unknown_one_goes_nowhere():
     """The banner is clickable and lands on the panel that is running -- the section screen AND its
     tab, because a run on the second tab of a section is not found by arriving at the first.

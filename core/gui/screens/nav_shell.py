@@ -11,7 +11,7 @@ MainWindow owns what it says and when -- this module owns only the widget and th
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QStackedWidget, QToolButton, QVBoxLayout, QWidget
 
-from .. import icons
+from .. import fonts, icons
 from ..widgets.anim import slide_screens, snapshot
 
 # The app-wide "a run is live" marker. A PLAIN CHARACTER, not an icons.NAMES entry: the bundled icon
@@ -74,6 +74,11 @@ class NavShell(QWidget):
         # MainWindow fills it from base_panel.RUN_STATE and starts the 1 s clock.
         self.btn_running = QToolButton()
         self.btn_running.setObjectName("navRunning")     # -> QToolButton#navRunning in the global QSS
+        # Its clock is rewritten every second, and in the application's font a 1 is narrower than a 0:
+        # the slot's outline would move with the clock. So it has the small lettering with its digits
+        # of equal width. Given here, at build: a font handed to a widget the style sheet has already
+        # dressed is dropped at the next change of sheet.
+        self.btn_running.setFont(fonts.inter("small", tabular=True))
         self.btn_running.setAutoRaise(True)
         self.btn_running.setVisible(False)
 
