@@ -2325,12 +2325,13 @@ def test_two_methods_of_one_name_in_two_modules_each_have_their_first_time(monke
         reported.forget()
 
 
-def test_a_failed_paint_leaves_no_painter_behind():
+def test_a_failed_paint_leaves_no_painter_behind(monkeypatch):
     """An error keeps its traceback, the traceback the frames of the failing call, and a frame its locals: in
     a paint event that is the live painter. So the record keeps an error as words and nothing of the error
     itself: when the guarded call returns, the painter a failed paint had opened is gone, and the widget
     can be painted again. Two of the window's paint events open their painter as this one does, with no
-    ``finally``."""
+    ``finally``. Checked on the two roads a failing paint takes in the running window: its first failure,
+    which is handed to the hook, and a repeat, which is counted and nothing more."""
     from PySide6.QtCore import qInstallMessageHandler
     from core.gui import reported
     QApplication.instance() or QApplication([])
@@ -2339,7 +2340,7 @@ def test_a_failed_paint_leaves_no_painter_behind():
         pass
 
     class Failing(QWidget):
-        fails, local = True, None
+        fails, local = False, None
 
         @reported.reported()
         def paintEvent(self, _event):
@@ -2347,29 +2348,36 @@ def test_a_failed_paint_leaves_no_painter_behind():
             held = Local()
             Failing.local = weakref.ref(held)
             if Failing.fails:
-                Failing.fails = False
-                raise ValueError("the first paint fails")
+                raise ValueError("the paint fails")
             painter.fillRect(self.rect(), Qt.magenta)        # a colour no ground has
             painter.end()
 
-    widget = Failing()
+    shown = []                               # a quiet hook: it keeps the error's words and not the error
+    monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: shown.append(str(error)))
+    widget, name = Failing(), _name_of(Failing.paintEvent)
     widget.resize(20, 12)
-    picture = _image(20, 12, 1.0)            # both paints go into this one picture, which outlives them
+    picture = _image(20, 12, 1.0)            # every paint goes into this one picture, which outlives them all
     said = []
     previous = qInstallMessageHandler(lambda kind, context, text: said.append(text))
+    reported.forget()
     try:
-        with reported.expected():            # nothing of the block is kept past it: plain facts only
-            widget.render(picture)           # the first paint fails under its live painter
-            listed = [(name, type(words).__name__, str(words)) for name, words in reported.ERRORS]
-            left = (picture.paintingActive(), Failing.local() is not None, _at(picture, 10, 6))
-            widget.render(picture)           # the second paints
+        for failures in (1, 2):              # the failure that is shown, then a repeat
+            Failing.fails = True
+            widget.render(picture)           # the paint fails under its live painter
+            Failing.fails = False
+            assert shown == ["the paint fails"], failures                    # handed to the hook the first time alone
+            assert reported.ERRORS == [(name, "ValueError: the paint fails")], failures      # and kept as words
+            assert reported.COUNTS == {name: failures}
+            # at once, with no collection: the next paint may come before any
+            assert not picture.paintingActive(), f"failure {failures} left its painter on the picture"
+            assert Failing.local() is None, f"a local of the failing call lives on after failure {failures}"
+            assert _at(picture, 10, 6) != "#FF00FF"
+            widget.render(picture)           # and the next paint is a good one
+            assert [text for text in said if "paint" in text.lower()] == [], failures
+            assert _at(picture, 10, 6) == "#FF00FF", failures
     finally:
         qInstallMessageHandler(previous)
-    assert [text for text in said if "paint" in text.lower()] == [], "the toolkit met a painter left behind"
-    assert _at(picture, 10, 6) == "#FF00FF" != left[2], "the second paint did not draw"
-    # at once, with no collection: the next paint may come before any
-    assert left[:2] == (False, False), "a painter on the picture, a local of the failing call: still there"
-    assert listed == [(_name_of(Failing.paintEvent), "str", "ValueError: the first paint fails")]
+        reported.forget()                    # failed on purpose, outside any block: the session's check finds nothing
 
 
 # What the toolkit calls while a window is drawn or laid out. In the main window each is entered from inside
@@ -2687,11 +2695,12 @@ def test_the_looks_overrides_fall_back_to_the_stock_answer_when_they_fail(monkey
         assert reported.COUNTS[names(caught)[4]] == 2
 
 
-def test_a_test_in_which_drawing_code_failed_is_failed(request):
+def test_a_test_in_which_drawing_code_failed_is_failed(request, monkeypatch):
     """A guarded method keeps its error from the test that made it draw, so that test would pass over it.
-    After every test the session's check reads the record, and fails the test when the record holds
-    anything, naming each method with its first error and how often it failed. The check is called here with
-    a record of its own: the real one stays empty."""
+    The session's fixture empties the record before every test and reads it after, and fails the test when
+    it holds anything, naming each method with its first error and how often it failed. The fixture's own
+    function is driven here as the test runner drives it: what stands before its ``yield``, a test's worth
+    of drawing, then the rest."""
     from core.gui import reported
     # tests/ is no package, so pytest holds its conftest under a name of its own; imported by name the
     # file would be loaded a second time, beside the one whose fixtures are in force
@@ -2699,12 +2708,32 @@ def test_a_test_in_which_drawing_code_failed_is_failed(request):
     guards = next(plugin for plugin in request.config.pluginmanager.get_plugins()
                   if getattr(plugin, "__file__", None) and Path(plugin.__file__).resolve() == here)
     assert "_drawing_code_raises_nothing" in request.fixturenames, "in force for every test, without being asked for"
-    assert guards.check_drawing_code_raised_nothing([], {}) is None
-    with pytest.raises(AssertionError) as failed:
-        guards.check_drawing_code_raised_nothing(
-            [("FocusRing.paintEvent", "ValueError: no colour"), ("PrismStyle.styleHint", "KeyError: 'hint'")],
-            {"FocusRing.paintEvent": 1, "PrismStyle.styleHint": 5})
-    for needle in ("FocusRing.paintEvent: ValueError: no colour (1 time(s))",
-                   "PrismStyle.styleHint: KeyError: 'hint' (5 time(s))", "reported.expected()"):
-        assert needle in str(failed.value), str(failed.value)
-    assert reported.ERRORS == [] and reported.COUNTS == {}
+    around_a_test = guards._drawing_code_raises_nothing.__wrapped__      # the function the fixture was made from
+
+    class Drawn:
+        @reported.reported()
+        def paintEvent(self):
+            raise ValueError("no colour")
+
+    monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: None)      # quiet
+    drawn, name = Drawn(), _name_of(Drawn.paintEvent)
+    try:
+        drawn.paintEvent()                   # left by whatever ran before the test
+        run = around_a_test()
+        next(run)                            # before the test: the record is emptied
+        assert reported.ERRORS == [] and reported.COUNTS == {}
+        assert drawn.paintEvent() is None and drawn.paintEvent() is None         # the test: drawing code fails twice
+        with pytest.raises(AssertionError) as failed:        # after the test
+            next(run)
+        for needle in (f"{name}: ValueError: no colour (2 time(s))", "reported.expected()"):
+            assert needle in str(failed.value), str(failed.value)
+        assert reported.ERRORS == [] and reported.COUNTS == {}                   # and nothing is left for the next one
+
+        run = around_a_test()                # a test in which drawing code failed only where the test said it would
+        next(run)
+        with reported.expected():
+            drawn.paintEvent()
+        with pytest.raises(StopIteration):   # the function ends, and nothing is raised
+            next(run)
+    finally:
+        reported.forget()
