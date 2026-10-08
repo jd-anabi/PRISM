@@ -1,13 +1,14 @@
 # PRISM — state
 
 **Last updated:** 2026-10-07 (STAGE 1 OF THE WINDOW REDESIGN IS BEING BUILT: the owner approved its plan on 2026-10-07;
-Tasks 0, 1, 2, 3a, 3b, 4, 11a, 6, 7, 8, 9 and 10 are complete, Task 5, the text-size test, was run with the owner,
+Tasks 0, 1, 2, 3a, 3b, 4, 11a, 6, 7, 8, 9, 10, 11b and 12 are complete (Task 12 is E12, THE STAGE'S ONE ENGINE
+CHANGE, landed at `d23aa84`), Task 5, the text-size test, was run with the owner,
 and a task the plan did not have, 10g, fixed the faults the first pictures of the new look showed; the window now takes
 its colours, its lettering, its style sheet, its tick boxes and its focus ring from one table, so IT LOOKS DIFFERENT
 FROM TODAY'S (on this computer it opens dark, following Windows); THE PICTURES OF EVERY SCREEN ARE TAKEN AND ARE BEING
-SHOWN TO THE OWNER (the paragraph "THE PICTURES" below); OPEN BEFORE TASK 13: the owner's remarks on the pictures,
-and Task 10f, which takes the Python-written style and the focus follower off the application because they make the
-window stutter while a run draws figures; the next
+SHOWN TO THE OWNER (the paragraph "THE PICTURES" below); THE LINE WAITS AT TASK 13 for the owner's remarks on the
+pictures; and Task 10f (the window stutters while a run draws figures) was RE-RULED on 2026-10-08: the full structural
+change is not built, a lighter reduction is being probed (the paragraph "AFTER THE PICTURES" below); the next
 paragraph is the build's state, the one after it the plan's story, and the design's own story is the paragraph that
 begins "THE REDESIGN CHAT HAS STARTED").
 
@@ -123,6 +124,31 @@ or change in place; a font handed to a widget after the sheet has dressed it is 
 (give it at build); a frameless scrolling area switches its frame off at build. **Next, in order:** the owner's
 remarks (Task 13 waits for them); Task 10f when its design is in; Tasks 11b and 12 (E12) may be built meanwhile; then
 13 to 18, 19.
+
+**AFTER THE PICTURES (2026-10-07 late to 2026-10-08).** **Task 11b** (`a9e97f8`: `core/gui/mpl_theme.py` rewritten;
+the figures the engine draws always take the LIGHT figure settings from the look's table, written once at start,
+whatever theme the window wears; 32 settings, a cycle of seven line colours starting with ink, the top and right axis
+lines off, lettering Inter; nothing follows the theme any more but the live view) and **Task 12 = E12** (`b9089fa`
+tests, `d23aa84` the change, `746a146` a tests-only fix: the new `core/Helpers/plot_colours.py` — BLUE #0072B2,
+VERMILION #C24E00, GREEN #007A5A, ORANGE #E69F00 — and the 50 colour arguments of seven plotting files re-pointed to
+it; NOTHING BUT A COLOUR CHANGED, by a parsed-tree comparison written twice, independently, and by the record of what
+22 figures draw passing unchanged; no tensor code touched, so no card gate is owed for it). **The last gate, at
+`746a146`: 1289 passed, 3 skipped, 5 deselected, 203 warnings, 16 min 4 s; the display-marked run 3 passed (at
+`d23aa84`).** **Engine changes built so far: E12 only.** **Task 10f re-ruled:** the feasibility workflow (two probes,
+a 71 KB design, a skeptic; `stage-1/reviews/task-10f-*.md` in the ledger) showed that taking the small style off the
+application works and keeps the look, but only with guards against three ways it can END THE PROCESS (a style changed
+from inside the polish of the widget it styles) and with five holes in the follower's part that must be fixed first,
+all proven on stock widgets off-screen only; the harm it cures is three slow repaints per figure. So the full change is
+NOT built; a REDUCTION is being probed instead that keeps the two application-wide mechanisms and takes most of the
+Python entries out of them (the style overrides the painting of the tick box and radio dot alone; the indicator's size
+from the sheet; the ring's margins from a small style the ring alone wears); its report goes to
+`stage-1/reviews/task-10f-probe-reduced.md`, and it is built, or not, on what that shows. The owner was told and may
+overrule either way. **For the owner at the stage's exit, with the figures:** in the figure of an FDT ratio across
+repeats the mean and the second repeat now share one blue (the mean named blue, the repeats from the cycle, whose
+second colour is that blue; before the stage the first repeat nearly matched): a one-line remedy changes what a figure
+draws, so it is the owner's call. **For the stage that rewrites the guide, also:** `docs/guide/architecture.md:219` and
+`docs/guide/rules-and-traps.md:263-266` say the figure settings follow the theme. **Next, in order:** the owner's
+remarks on the pictures (Task 13 waits); the reduction probe's result and Task 10f's brief; then 13 to 18, 19.
 
 **THE WINDOW REDESIGN, PLAN AND BUILD (started 2026-10-06 from
 `docs/superpowers/prompts/2026-10-06-window-redesign-plan-and-build.md`; continue from that prompt, this paragraph and
