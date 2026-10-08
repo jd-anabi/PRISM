@@ -1,9 +1,10 @@
 # PRISM — state
 
 **Last updated:** 2026-10-07 (STAGE 1 OF THE WINDOW REDESIGN IS BEING BUILT: the owner approved its plan on 2026-10-07;
-Tasks 0, 1, 2, 3a, 3b, 4 and 11a are complete; the product has changed in ONE place so far, the window's five file
-choosers now go through one function (Task 4); Task 6, the look's table, is next and is built WITHOUT the text-size
-test, which stays owed by the owner; the next
+Tasks 0, 1, 2, 3a, 3b, 4, 11a, 6, 7, 8 and 9 are complete, and Task 5, the text-size test, was run with the owner;
+the window now takes its colours, its lettering and its style sheet from one table, so IT LOOKS DIFFERENT FROM TODAY'S
+(on this computer it opens dark, following Windows); Task 10, the small style and the focus ring, is next, then the
+pictures for the owner; the next
 paragraph is the build's state, the one after it the plan's story, and the design's own story is the paragraph that
 begins "THE REDESIGN CHAT HAS STARTED").
 
@@ -28,9 +29,27 @@ title, start and filter; nine tests, among them a standing scan that lets no oth
 toolkit's file-dialog class); **Task 11a** (`24dd3d3` and the fix `6b1f7f9`, tests only: `tests/test_figures.py`
 records what 22 figures draw, everything but their colours, against a committed table of digests, reaching all 50
 places the engine's colour change will edit; the fix added the frame a text's position is in and whether a 2-D
-scatter's marker has an edge). Every task had its review (opus) and one one-process fast gate,
-started together; **the last gate, at `6b1f7f9`: 1208 passed, 1 skipped, 5 deselected, 203 warnings, 15 min 58 s
-(a reviewer read beside it)**; two gates in between ran 17 min 32 s and 18 min 3 s on a loaded machine, and the next
+scatter's marker has an edge); **Task 6** (`f00b308`: the look's table in `core/gui/design.py` — 32 colour names in
+light and dark, seven line colours, the type and size tables, `scaled()`, the text factor read from Windows once at
+start and held to 225 %, numbers and dates written by one function each — born with the suite `tests/test_look.py`;
+nothing read it yet and the old look was byte-identical); **Task 7** (`408e343`: three appearance choices, "Follow
+Windows", "Light", "Dark"; the time-of-day mode and the two ticks gone from Settings and the gear's menu; an apply that
+changes nothing does nothing; a stored older word reads as "Follow Windows" and the file is rewritten only at the next
+choice); **Task 8** (`c162970`: `core/gui/fonts.py` rewritten — Inter always, digits of equal width, the book face,
+the console face Cascadia Mono then Consolas then Courier New, the per-class fonts; the text factor installed at
+start-up; the window sized by the room on the screen); **Task 9** (`84c3461`, then two small fix rounds to `3526ff8`:
+the palette and the style sheet rebuilt from the table, 17 of the old 61 rules replaced, 42 kept under the new names
+for the old layout, 2 gone; the apply's final order; a field's hint text named in the sheet, because the toolkit
+otherwise paints it at half strength; a theme change reaches each widget once, pop-up windows included). **Task 5, the
+text-size test, was run with the owner on 2026-10-07** (the slider to 150 % and back, four minutes): Windows hands a
+program the number set, its own text grows by exactly that amount, the toolkit tells a running program at once, and a
+font the program sets itself is not enlarged again; what Task 6 had built is what the test asks for (deviation 33
+closed); PRISM picks a new text size up at its next start, and following it live is possible but not built (told to the
+owner). Every task had its review (opus; Task 9 three readers and a skeptic on each serious finding, as one read-only
+workflow) and one one-process fast gate,
+started together; **the last gate, at `3526ff8`: 1257 passed, 3 skipped, 5 deselected, 203 warnings, 15 min 48 s
+(a reviewer read beside it); the three display-marked tests, two of them new, pass on the real platform with hidden
+windows (`pytest -m display`, 7 s), and were seen to FAIL with a deliberate one-line fault**; two gates in between ran 17 min 32 s and 18 min 3 s on a loaded machine, and the next
 was back at 15 min 55 s with more tests, so it was not the code; after every gate the tree was clean, the real `Artifacts/` listing identical (428
 entries), the real `PRISM.ini` unchanged. **Rulings the controller made on the owner's behalf (each in the ledger with
 what it costs if wrong):** in Task 2, two lines of the product that give a refusal box its OK button and default
@@ -44,12 +63,25 @@ built before the text-size test** (the plan said it waits; the owner was asked a
 every later task stands behind Task 6): what is built is the plan's own fallback, PRISM reads Windows' own text-size
 number once at start, held to 225 %, which is what the plan builds in every outcome of the test but one; if the test
 later shows that Windows gives its own text another factor and the owner prefers that one, one function and its tests
-are redone in a task of its own; nothing differs at 100 % (the design's and the plan's deviation 33).
-**Open with the owner: Task 5**, the text-size test (Windows' slider to 150 % and back, about ten minutes, at a pause
-between two tasks): asked on 2026-10-07, not answered and NOT declined; it is run at the first gap after the owner says
-"ready". **Next, in order:** Task 6 (the look's table: `core/gui/design.py`, born with `tests/test_look.py`), then 7,
-8, 9, 10, the pictures for the owner (10p), 11b, 12 (E12, the stage's one engine change), 13 to 18, 19. **Engine
-changes built so far: none of E1–E12.** Minor review findings not fixed are listed per task in the ledger for the
+are redone in a task of its own; nothing differs at 100 % (the design's and the plan's deviation 33, closed by the
+test); the text-size test itself was run while Task 9's implementer was at work, against the plan's rule that nothing
+else works meanwhile, because the owner was at the keyboard then and nothing the implementer still ran reads Windows'
+text size (its report shows no disturbed run); the controller's dispatch for Task 8 wrongly forbade the implementer to
+run the two new display-marked tests, so the controller ran them and stood a deliberate fault in for the red run that
+was not seen; small test gaps the reviews found were closed by small commits at the front of the next task (five so
+far) or in Task 9's two fix rounds; the hint colour in the sheet is deviation 34; and for Task 10 it is ruled that an
+old message box always shows the focus ring on the button that has the focus, since the ring's task removes the thin
+border that marks the answer Enter gives (deviation 35; it leaves with the last old box).
+**For the owner at the pictures after Task 10 (not yet asked):** a locked tab of Parameter Inference is now hard to
+tell from an open one (1.4 to 1, it was 2.4 and 3.0), which the plan's head named as "less grey than today" and the
+pictures will show; the one-word remedy is on offer. Known weak spots of the old layout under the new sheet, each until
+its page is rebuilt: Home's tiles and every button 8 px lower; in dark an empty stock tick box is nearly invisible
+until Task 10 paints it; in dark the percentage on the filled half of the old progress bar is 2 to 1; above Windows'
+ordinary text size the comparison list's three buttons can ask for a horizontal bar. Also to tell, not to ask: on
+macOS and Linux the first appearance choice also reads "Follow Windows". **Next, in order:** Task 10 (the small style:
+painted tick boxes and radios, and the focus ring), the pictures for the owner (10p), 11b, 12 (E12, the stage's one
+engine change), 13 to 18, 19. **Engine changes built so far: none of E1–E12.** For the stage that rewrites the guide:
+`docs/guide/window.md:28-29` and `docs/guide/architecture.md:216` describe the appearance choices as they were. Minor review findings not fixed are listed per task in the ledger for the
 stage's last review to sort.
 
 **THE WINDOW REDESIGN, PLAN AND BUILD (started 2026-10-06 from
@@ -68,8 +100,8 @@ separate design for saving the fit as it goes is made between stages 2 and 3**, 
 commas that group a whole number arrive **page by page** (built and tested in stage 1, off by default; today's forms
 keep plain digits until each is rebuilt); (4) console text is set in **Cascadia Mono** (then Consolas, then Courier
 New), asked from a picture; its licence would allow bundling the file, which was not asked and is not planned.
-**The design gained section 8, "Deviations recorded while planning and building"** (32 rows at planning, 33 since
-Task 5's ruling, the same rows under the
+**The design gained section 8, "Deviations recorded while planning and building"** (32 rows at planning, 35 since
+the build began, the same rows under the
 same numbers as the plan's head, each with what it costs if it is wrong), and its parts 4, 11 and 13 open with a
 pointer to it. **What the reading found that the design did not know** (all carried by the plan): 13.2.1's order
 cannot be followed to the letter (lettering and the sheet remove what the two appearance ticks pass, so the ticks go
