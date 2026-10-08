@@ -4753,6 +4753,33 @@ def test_the_main_window_takes_its_opening_and_smallest_size_from_the_look(monke
     assert (again.width(), again.height()) == (1111, 777)
 
 
+def test_the_main_window_handles_its_events_in_python_and_changes_nothing():
+    """The window's class handles its events in a method of its own, written in Python, so that a
+    repaint the toolkit makes from inside that handling runs with the interpreter kept by the
+    window's thread; the method's own comment has the reason and what it costs. It stands in the
+    class body, because the binding decides at an object's first event whether its handler is
+    written in Python. And it stays one call of the base class: anything more would run at every
+    event the window receives, and an error raised in it would have nowhere to be reported."""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QMainWindow
+    from core.gui import main_window as mw
+
+    qt_app()
+    assert "event" in mw.MainWindow.__dict__, "not in the class body: inherited, or missing"
+    tree = ast.parse(Path(mw.__file__).read_text(encoding="utf-8"))
+    cls, = [node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "MainWindow"]
+    method, = [node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "event"]
+    assert ast.unparse(method) == "def event(self, event):\n    return super().event(event)"
+    assert not [node for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+                and isinstance(node.ctx, ast.Store) and node.attr == "event"], "set a second time"
+    window = build_window()
+    answers = []
+    for kind in (QEvent.User, QEvent.LayoutRequest):         # one the base class takes, one it does not
+        answers.append(window.event(QEvent(kind)))
+        assert answers[-1] is QMainWindow.event(window, QEvent(kind)), kind
+    assert answers == [True, False]
+
+
 def test_the_comparison_list_appends_from_the_single_selection_picker():
     """StorePicker is single-selection, so the comparison controls hold a LIST the picker appends to
     and no multi-select widget is built. Adding the same record twice is not an error and is not a

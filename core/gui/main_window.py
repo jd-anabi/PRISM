@@ -392,6 +392,21 @@ class MainWindow(QMainWindow):
         """The first panel of type ``cls`` across all screens (convenience for callers + tests)."""
         return next((p for p in self._all_panels() if isinstance(p, cls)), None)
 
+    # Written in Python so that the interpreter stays with this thread while the base class handles an
+    # event, a repaint among them. The parts of the look written in Python (the small style, the focus
+    # follower) are entered dozens to hundreds of times in one repaint, and without this each entry
+    # waits for the interpreter while a run's thread is working: a repaint of a page then took 0.2 to
+    # 1.5 s beside plain Python, where it takes about 20 ms now. Measured, this costs a run nothing
+    # while the window does what a run does to it; the run stands still only for as long as the window
+    # is inside this call, so a page repainted without pause would hold it up. It stands in the class
+    # body because the binding decides at an object's first event whether its handler is written in
+    # Python. One thing is lost by it: an error raised by Python code the toolkit calls from inside
+    # this handling is no longer reported by the binding, which is why drawing code carries the guard
+    # of core/gui/reported.py. This method carries none, and stays this one call: a fallback would
+    # handle the event twice.
+    def event(self, event):
+        return super().event(event)
+
     def closeEvent(self, event):
         """On close, offer to cancel a running task first; otherwise close normally.
 

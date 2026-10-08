@@ -2278,6 +2278,11 @@ _NOT_GUARDED_FILES = {
                                 "drawing code, which cannot be made to report, so the binding still reports "
                                 "what is raised in that window",
 }
+# The one method of those names that carries no guard, with its reason.
+_NOT_GUARDED = {
+    "main_window.py: MainWindow.event": "what keeps the interpreter while the window handles an event: it only "
+                                        "calls the base class, and a fallback would handle the event a second time",
+}
 
 
 def _drawing_methods(tree) -> list:
@@ -2315,9 +2320,10 @@ def _drawing_methods(tree) -> list:
 
 
 def test_every_method_the_toolkit_calls_while_drawing_reports_its_errors():
-    """Every ``.py`` under core/gui is read: a method of one of the twelve names, defined in a class, stands
-    under the guard of core/gui/reported.py. The scanner is checked on snippets first: with the tree clean,
-    the walk would go on passing if the scanner stopped matching anything."""
+    """Every ``.py`` under core/gui is read, but the files of ``_NOT_GUARDED_FILES``: a method of one of the
+    twelve names, defined in a class, stands under the guard of core/gui/reported.py, all but the one of
+    ``_NOT_GUARDED``. The scanner is checked on snippets first: with the tree clean, the walk would go on
+    passing if the scanner stopped matching anything."""
     def scan(source):
         return [(name, guarded, fallback) for _line, name, guarded, fallback in _drawing_methods(ast.parse(source))]
 
@@ -2352,22 +2358,24 @@ def test_every_method_the_toolkit_calls_while_drawing_reports_its_errors():
     assert scan(spared) == []
 
     gui = REPO / "core" / "gui"
-    found, bare = {}, []
+    found, bare, excepted = {}, [], set()
     for path in sorted(gui.rglob("*.py")):
         rel = path.relative_to(gui).as_posix()
         if rel in _NOT_GUARDED_FILES:
             continue
         for line, name, guarded, fallback in _drawing_methods(ast.parse(path.read_text(encoding="utf-8"))):
             found[f"{rel}: {name}"] = fallback
-            if not guarded:
+            if not guarded and f"{rel}: {name}" in _NOT_GUARDED:
+                excepted.add(f"{rel}: {name}")
+            elif not guarded:
                 bare.append(f"{rel}:{line} {name}")
     listed = f"all {len(found)} found:\n  " + "\n  ".join(f"{name} -> {fallback}" for name, fallback in found.items())
     assert bare == [], (f"called by the toolkit while a window is drawn or laid out, and not reporting its own "
                         f"errors: {bare}. Put it under @reported(...) of core/gui/reported.py, with what it "
                         f"answers when it fails. {listed}")
     assert {name: found.get(name, "not found") for name in _GUARDED_TODAY} == _GUARDED_TODAY, listed
-    missing = [rel for rel in _NOT_GUARDED_FILES if not (gui / rel).is_file()]
-    assert not missing, f"no such file any more, so it stops being an exception: {missing}"
+    missing = [rel for rel in _NOT_GUARDED_FILES if not (gui / rel).is_file()] + sorted(set(_NOT_GUARDED) - excepted)
+    assert not missing, f"no longer there, or guarded now, so it stops being an exception: {missing}"
 
 
 def test_the_looks_overrides_fall_back_to_the_stock_answer_when_they_fail(monkeypatch, ring_room):
