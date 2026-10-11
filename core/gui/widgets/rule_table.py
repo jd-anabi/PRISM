@@ -36,7 +36,8 @@ class TextCell:
 
 @dataclass(frozen=True)
 class ValueCell:
-    """A value in a cell, at its right, never cut."""
+    """A value in a cell, at its right. It is never shortened with an ellipsis: in a column too narrow for
+    it, its left end is not drawn."""
     figure: str               # semibold
     unit: str = ""            # plain, one space after the figure
     second: str = ""          # a second line in the small size
@@ -44,7 +45,8 @@ class ValueCell:
 
 @dataclass(frozen=True)
 class StateCell:
-    """A state in a cell: its marker and, after it, the word for it, never cut."""
+    """A state in a cell: its marker and, after it, the word for it. The word is never shortened with an
+    ellipsis: in a column too narrow for it, its right end is not drawn."""
     kind: str                 # one of paint.MARKERS
     word: str
 
@@ -380,14 +382,16 @@ class RuleView(QTableView):
     def _cell_height(self, index) -> int:
         """The height one cell asks of its row: a line of words, or as many lines as its wrapped words take
         at the width its column will have, or a line and a small one under it; the space above and below; and
-        never under a row's least height. Wrapped words in the first column are measured semibold, which is
-        how a selected row sets them."""
+        never under a row's least height. Wrapped words in the first column are measured semibold where a row
+        can be selected, which is how a selected row sets them; a table that selects nothing never sets them
+        so, and measures them plain."""
         cell = index.data(Qt.UserRole)
         line = design.scaled(design.TYPE["body"][1])
         lines = line
         if isinstance(cell, TextCell) and cell.wrap:
             lead, gap = _pads(index.column(), len(self._columns))
-            font = _face("selected" if index.column() == 0 else "text")
+            semibold = index.column() == 0 and self.selectionMode() != QAbstractItemView.NoSelection
+            font = _face("selected" if semibold else "text")
             lines = line * _wrapped(cell.text, font, self._column_width(index.column()) - lead - gap, line)[1]
         elif isinstance(cell, ValueCell) and cell.second:
             lines = line + design.scaled(design.TYPE["small"][1])

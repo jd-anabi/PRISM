@@ -4029,6 +4029,18 @@ def test_a_wrapped_cell_makes_its_row_as_tall_as_its_lines_at_the_width_it_has()
         assert 30 <= wide < narrow and (wide - 10) % 20 == 0          # more room, fewer lines: measured again
         assert table.height() == 2 + 27 + wide + 30 + 2
 
+    # Words in the first column that take one line plain and two semibold. Where a row can be selected the row
+    # keeps the second line, since a selected row sets them semibold; a table that selects nothing never does,
+    # and keeps one line. Heights only: no pixel of a letter is read.
+    name = "Graphics card memory"
+    room = math.ceil(QFontMetricsF(fonts.inter("body")).horizontalAdvance(name))
+    assert QFontMetricsF(fonts.inter("strong")).horizontalAdvance(name) > room
+    for selectable, height in ((True, 50), (False, 30)):
+        first = rt.RuleTable([rt.Column("", room + 10 + 16), rt.Column("")],
+                             [[rt.TextCell(name, wrap=True), rt.TextCell("")]], selectable=selectable)
+        with _on_a_page(first, width=500):
+            assert first.view.rowHeight(0) == height, selectable
+
 
 def test_a_table_whose_painting_fails_draws_the_stock_cell_and_section_and_leaves_each_painter_as_found(monkeypatch):
     """What the table's four painting methods answer when a colour fails under them. A cell and a header section
