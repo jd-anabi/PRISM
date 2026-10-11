@@ -2,7 +2,9 @@
 
 **Last updated:** 2026-10-11 (THE NEW CHAT IS AT WORK AND THE OWNER HAS ANSWERED ON THE PICTURES: the three answers
 are built as Task 12q (`7158a85`, `2cd2272`, `2553d87`; review clean, gate green: 1302 passed, 3 skipped), deviation
-rows 39 to 41 are recorded, and THE LINE STANDS AT TASK 13, prepared and not yet dispatched; the paragraph "THE NEW
+rows 39 to 41 are recorded; TASK 13, THE PAINTED DEVICES, AND ITS TESTS-ONLY FRONT ARE COMPLETE (`4b91839`,
+`0d7317e`, `8575635`, `4b651cc`, `aeba085`; gate green on `aeba085`: 1319 passed, 3 skipped), and THE LINE
+STANDS AT TASK 14; the paragraph "THE NEW
 CHAT" below is that chat's record. What follows in this parenthesis is the head as the hand-off left it:
 THE BUILD IS HANDED TO A NEW CHAT, which continues from
 `docs/superpowers/prompts/2026-10-10-window-redesign-continue-stage-1.md`, the paragraph "THE HAND-OFF" below and the
@@ -44,22 +46,14 @@ spared that ground; three commits, one for each answer; the task's tests may rea
 Important, and its minors are sorted in the ledger (three tests-only ones ride the front of Task 13, the others go to
 the stage's final review); the real `Artifacts/` (428 entries) and the real `PRISM.ini` (hash unchanged) are as they
 were; the pictures were made again (`stage-1/pictures/task12q-plain/`) and the three changed places shown to the owner.
-**Engine changes built so far: E12 only.** **Prepared for Task 13 (not yet dispatched when this was written):** its
-brief was checked against the code by three readers and three skeptics (`stage-1/briefs/task-13-dispatch-notes.md`:
-eleven places where the brief must be done otherwise, the four guards and their fallbacks, the counts of today); the five
-tests-only additions that an earlier review ruled and nobody built have a brief of their own, checked the same way
-(`stage-1/briefs/task-13-front-tests-brief.md`; all five gaps were measured to be still open); and the seven choices its
-dispatch left open, with the two items the carry list left to the controller, are ruled in the ledger (among them: the
-marker's and the hatching's painting restore the painter in a `finally`; one more test holds what the two paint events
-answer when they fail; the front tests change three files). **Open with the owner:** the rest of what was asked with the
+**Engine changes built so far: E12 only.** **The tests-only front of Task 13** (a task of its own by ruling, with its own review and gate; `4b91839`, `0d7317e`, `8575635`): the scan of drawing methods judges the real tree first, and one assertion that could never fail is dropped; a greyed list's lettering is held; three repairs of the tabs' pointer test that Task 12q's review asked for; and the five tests-only additions an earlier review ruled and nobody had built (the focus follower never takes an event; the ring's two pixels and its corner at every text size; the ring seen over its control; a stopped follower hears nothing; the ring's refresh as a fifth step of the part-way test), with one more reading in the helper that reads the process's state (21 keys). Each new or changed assertion was seen to fail once by a one-line fault stood in and taken out again (25 such runs for the five additions; nothing under `core/` is in the commits). Gate at `8575635`: 1307 passed, 3 skipped. **Task 13, the painted devices** (`4b651cc`, then fix round 1 `aeba085`): the paint functions for the markers, the glyphs, whole-pixel rules and the hatching in `core/gui/paint.py`; the new `core/gui/widgets/marker.py` (the state marker, the painted icon and its factory) and `core/gui/widgets/ruled.py` (a block ruled above and below; the section heading); twelve tests born; mounted on no screen. Every drawing method carries the guard; the indicator's, the marker's and the hatching's painting restore the painter in a `finally` (for the last two a difference of FORM from the approved sample's drawing code; nothing that is drawn differs). Its brief was checked against the code twice before the dispatch (the second notes, `stage-1/briefs/task-13-dispatch-notes-v2.md`, with the riskiest prediction measured). Its review (three readers; one drew every device beside the sample's own code at sixteen scalings in both themes and found the same picture to the pixel) found one Important fault, in a test the plan dictated: the painted icon's test passed wherever the glyph stood. Fixed in `aeba085` (tests only, two red runs) and re-reviewed clean. **The last gate, at `aeba085`: 1319 passed, 3 skipped, 5 deselected, 203 warnings, 17 min 24 s** (the three gates since 03:46 ran about a quarter slower than the one at 02:01; read to be the machine and not the tests added: the slowdown is the same in tests that run before the look's suite in the one process as in those after it); the display-marked run 3 passed; the real `Artifacts/` and `PRISM.ini` are as they were. **Ruled for the FRONT OF TASK 14** (the table is ruled with the whole-pixel fill and Task 15 mounts the hatching, so these are mended before they are built on, each with its test first): the whole-pixel fill is made with the painter's smoothing off (under a smoothing painter a band could hold a pixel one level off its colour); the hatching intersects a clip its caller set, where it replaced it; the ruled block refuses a bad colour before it builds its widget; and four gaps of the marker's and the hatching's tests. The first two are one more difference each from the sample's drawing code, to be named to the owner at the stage's exit. Carried to Task 15's dispatch: the hatching loops over the rectangle it is handed, not over what can be seen. **Open with the owner:** the rest of what was asked with the
 pictures on 7 October (anything else to change, or "fine as it is"; what the owner can and cannot live with at a text
 size of 150 % until each page is rebuilt), put in the chat on 2026-10-11 and not answered when this was written; ruled
 that Task 13 does not wait for it. The focus ring is the owner's to judge by opening PRISM, which opens dark on this
 computer. **To tell the owner at the stage's exit, new with this task:** the pointer's ground also shows on the figure
 tabs and on the tabs of the plotting library's own "Figure options" box; the page as it first opens (one tab in front,
 five locked) looks exactly as before. **For stage 4's plan:** the greyed main button of the first rebuilt page is shown
-to the owner. **Next, in order:** Task 13's dispatch notes refreshed on the head that holds Task 12q; Task 13 (three
-tests-only commits at its front, then its own); then 14 to 18, and 19.
+to the owner. **Next, in order:** Task 14 (the three-rule table; its brief is being checked against the code, and its front comes first), then 15 to 18, and 19.
 
 **THE HAND-OFF (2026-10-10; documents only: no file under `core/` or `tests/` has changed and no test has run since the
 gate at `d78c923`).** The owner continues in a new chat, from
