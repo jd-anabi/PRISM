@@ -1126,6 +1126,7 @@ def test_a_list_a_text_viewer_and_a_scrolling_area_are_framed_from_the_table():
     frame an area has by default, or it would put a line round a page that scrolls and take a pixel from each
     of its sides. And a list or a viewer that is greyed, as the list of a form is for the length of a run, looks
     greyed as a field does. The palette and the sheet are set on one holder, which is never shown."""
+    from PySide6.QtGui import QPalette
     from PySide6.QtWidgets import QFrame, QListWidget, QScrollArea, QTextBrowser
     QApplication.instance() or QApplication([])
     width, height = 120, 80
@@ -1162,6 +1163,8 @@ def test_a_list_a_text_viewer_and_a_scrolling_area_are_framed_from_the_table():
             picture = painted(greyed)
             assert (_at(picture, width / 2, 0), _at(picture, width / 2, height / 2)) == greyed_look, (
                 dark, type(greyed).__name__, "greyed")
+            assert greyed.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text).name().upper() \
+                == design.hex_colour("disabled_ink", dark), (dark, type(greyed).__name__, "greyed lettering")
         opened = painted(box.view())                 # the drop-down's own list, with no rows in it; never opened
         corners = [_at(opened, x, y) for x in (0, width - 1) for y in (0, height - 1)]
         assert corners == [outline] * 4, (dark, "the list a drop-down opens lost its square corners")
@@ -2616,6 +2619,14 @@ def test_every_method_the_toolkit_calls_while_drawing_reports_its_errors():
     def refused(modules, not_guarded=_NOT_GUARDED):
         return [entry.partition(" ")[2] for entry in walk(modules, not_guarded)[1]]
 
+    # The program's own files first: a refusal there is told with its file, its line and the two ways out.
+    found, bare, excepted = walk(modules)
+    listed = f"all {len(found)} found:\n  " + "\n  ".join(f"{name} -> {fallback}" for name, fallback in found.items())
+    assert bare == [], (
+        f"called by the toolkit while a window is drawn or laid out, and not reporting its own errors: {bare}. "
+        f"Two ways out. Give it the guard: put it under @reported(...) of core/gui/reported.py, with what it "
+        f"answers when it fails. Or, if the toolkit does not call it (a helper that only shares the name of "
+        f"one of the toolkit's methods), name it in _NOT_GUARDED in this file, with the reason. {listed}")
     # The live simulation's plotting widget is read like any other file: what this program writes in that
     # class carries the guard. Shown on the file's own text, with a method written into the class in memory.
     live = "widgets/live_hair_bundle.py"
@@ -2640,14 +2651,6 @@ def test_every_method_the_toolkit_calls_while_drawing_reports_its_errors():
     assert refused(helper) == ["Table.data"]
     assert refused(helper, {**_NOT_GUARDED, "widgets/helper.py: Table.data": "the widget's own rows"}) == []
 
-    found, bare, excepted = walk(modules)
-    assert not [name for name in found if name.startswith(live)], "the file as it stands writes none of these"
-    listed = f"all {len(found)} found:\n  " + "\n  ".join(f"{name} -> {fallback}" for name, fallback in found.items())
-    assert bare == [], (
-        f"called by the toolkit while a window is drawn or laid out, and not reporting its own errors: {bare}. "
-        f"Two ways out. Give it the guard: put it under @reported(...) of core/gui/reported.py, with what it "
-        f"answers when it fails. Or, if the toolkit does not call it (a helper that only shares the name of "
-        f"one of the toolkit's methods), name it in _NOT_GUARDED in this file, with the reason. {listed}")
     assert {name: found.get(name, "not found") for name in _GUARDED_TODAY} == _GUARDED_TODAY, listed
     missing = [rel for rel in _NOT_GUARDED_FILES if not (gui / rel).is_file()] + sorted(set(_NOT_GUARDED) - excepted)
     assert not missing, f"no longer there, or guarded now, so it stops being an exception: {missing}"
