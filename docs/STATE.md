@@ -1,18 +1,63 @@
 # PRISM — state
 
-**Last updated:** 2026-10-07 (STAGE 1 OF THE WINDOW REDESIGN IS BEING BUILT: the owner approved its plan on 2026-10-07;
+**Last updated:** 2026-10-10 (THE BUILD IS HANDED TO A NEW CHAT, which continues from
+`docs/superpowers/prompts/2026-10-10-window-redesign-continue-stage-1.md`, the paragraph "THE HAND-OFF" below and the
+ledger; nothing was built or run between the gate of 2026-10-08 and the hand-off. STAGE 1 OF THE WINDOW REDESIGN IS
+BEING BUILT: the owner approved its plan on 2026-10-07;
 Tasks 0, 1, 2, 3a, 3b, 4, 11a, 6, 7, 8, 9, 10, 11b and 12 are complete (Task 12 is E12, THE STAGE'S ONE ENGINE
 CHANGE, landed at `d23aa84`), Task 5, the text-size test, was run with the owner,
 and a task the plan did not have, 10g, fixed the faults the first pictures of the new look showed; the window now takes
 its colours, its lettering, its style sheet, its tick boxes and its focus ring from one table, so IT LOOKS DIFFERENT
-FROM TODAY'S (on this computer it opens dark, following Windows); THE PICTURES OF EVERY SCREEN ARE TAKEN AND ARE BEING
-SHOWN TO THE OWNER (the paragraph "THE PICTURES" below); THE LINE WAITS AT TASK 13 for the owner's remarks on the
-pictures; and Task 10f (the window stuttered while a run drew figures) is DONE, by a much smaller change than first
-ruled (the paragraph "TASK 10f" below); the next
-paragraph is the build's state, the one after it the plan's story, and the design's own story is the paragraph that
-begins "THE REDESIGN CHAT HAS STARTED").
+FROM THE WINDOW AS IT WAS BEFORE THE STAGE (on this computer it opens dark, following Windows); THE PICTURES OF EVERY
+SCREEN WERE TAKEN AND SHOWN TO THE OWNER on 2026-10-07 (the paragraph "THE PICTURES" below); THE LINE WAITS AT TASK 13
+for the owner's remarks on the pictures; and Task 10f (the window stuttered while a run drew figures) is DONE, by a
+much smaller change than first ruled (the paragraph "TASK 10f" below); the next paragraph is the hand-off; after it
+the build's state stands in four paragraphs, each as it was written on its date ("THE BUILD OF STAGE 1", up to Task 9;
+"THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
+or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
+plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
 
-**THE BUILD OF STAGE 1 (started 2026-10-07; the ledger `.superpowers/sdd/2026-10-06-window-redesign/progress.md` has
+**THE HAND-OFF (2026-10-10; documents only: no file under `core/` or `tests/` has changed and no test has run since the
+gate at `d78c923`).** The owner continues in a new chat, from
+`docs/superpowers/prompts/2026-10-10-window-redesign-continue-stage-1.md` (written in the owner's voice; its header
+names what in it is not the owner's own words). The owner asked that the next chat use all relevant skills and
+plug-ins: the prompt names them (the superpowers skills for running a plan task by task, tests first, reviews,
+debugging, planning and brainstorming; workflows for the heavy steps) and KEEPS every standing limit: the Qt
+Development Skills plugin is not used; claude-mem is not relied on or set up; and the owner's decision U20 stands, that
+the three design plugins' methods are applied by hand, nothing of theirs is written into the repository and
+impeccable's program is never run. One sentence of the prompt is the last chat's and says how U20 sits beside "all
+relevant skills and plug-ins" (what a plugin says about design may be read and is applied by hand; nothing it says to
+run or to write is done); the header tells the owner it is the one to change if that is not what was meant, the owner
+was told with the prompt, and the prompt as the owner pastes it is the answer.
+**Where the line stands:** Tasks 0 to 12 of stage 1 are complete, with the two tasks the plan did not have (10g, 10f);
+Tasks 13 to 19 are left; the last commit that touched code is `d78c923`; `origin/main` stood at `cb2b0de`, so
+everything before the hand-off's own commit is pushed. **The first thing the next chat does** is ask the owner again
+for the remarks on the pictures shown on 2026-10-07 and not answered since: the three questions put with them (locked
+tabs that look open; hint text that reads as a value; a greyed main button that looks pressable when alone), then
+anything else the owner wants changed; Task 13 is not dispatched before the answers are ruled, as the plan's Task 10p,
+Steps 9 and 10, says (those two steps are open). **What each remaining dispatch must carry** that its brief does not
+know is gathered in one file of the ledger, `stage-1/carry-to-tasks-13-19.md`: where the way a task is run is written
+out, then by task (13 to 18), the exit (Task 19), later stages, what is open with the owner, the audit's list, and
+what is accepted and not cured, each item with the ledger entry it comes from; the ledger's `progress.md` stays the
+record. **The controller's tools** (the gate script, the picture script, the check of the carried-over list, the two
+measurements of a repaint) live in `C:\Users\J\AppData\Local\Temp\prism-redesign-scratch\`; text copies are kept in
+the ledger's `stage-1/tools/` (twelve files, each with `.txt` after its name), in case Windows clears the temporary
+folder. **Checked at the hand-off:** eight read-only readers went through the prompt, the carry list and this
+paragraph against the ledger, git, the briefs, the code and the owner's own messages (115 findings, applied; the
+first draft of the prompt had told the next chat to load the design plugins' skills and apply whatever they say,
+which went past U20, and that was taken out; a second pass by three readers over the corrected text found fifteen
+more, applied). **Found by that check, each now on the carry list:** a ruling of Task 10's review that was never built (five
+tests-only additions for the ring and the follower; the ledger's line 281), for the next chat to rule where they go;
+three more briefs (Tasks 15, 16 and 17, beside 13 and 14) write a drawing method without the guard or shut it out of
+their import lists; the brief of the exit counts the standing guards of the tests one short, and counts 27 planning
+rows of deviations where there were 32 (the ledger's own table said the same and is corrected); the copy of the plan's
+head kept for implementers lacked deviation rows 33 to 38 (cut again); the report file of the reduction probe of Task
+10f, which the ledger says was kept, was never written (its check is kept); when the stage's final review runs is
+ruled nowhere; and the list of the carried-over tests has no row for any test of the look's own suite.
+
+**THE BUILD OF STAGE 1, UP TO TASK 9 (started 2026-10-07; written on 2026-10-07 after Task 9's gate and left as it stood
+then: what it calls last, next or not yet asked is of that moment, and the paragraphs below it carry it on; the ledger
+`.superpowers/sdd/2026-10-06-window-redesign/progress.md` has
 every task's entry, ruling and gate line, and is the recovery map: trust it and `git log` over recollection).**
 **Done: Task 0** (the baseline fast gate at `24368c7`: 1188 passed, 1 skipped, 5 deselected, 203 warnings, 15 min 56 s
 on a quiet machine, the counts of `771a460`; 1194 items collected, the nine window suites 322 functions and 340 items;
@@ -165,8 +210,9 @@ code the toolkit calls from inside that handling, so the window's own drawing co
 the stock answer as fallback) on the ten methods the toolkit calls while the window is drawn or laid out (the style's
 three, the ring's paint, the follower's filter, two old paint events, the figure stack's resize, two pages' show
 events); a standing scan in `tests/test_look.py` that lets no new such method into `core/gui` without it (twenty-one
-method names; the next two devices as their briefs dictate them are caught); and a sixth session-wide fixture in
-`tests/conftest.py` that FAILS a test during which a guarded method raised. Confirmed by measurement on a stock window
+method names; the next two devices as their briefs dictate them are caught); and a new autouse fixture in
+`tests/conftest.py` (`_drawing_code_raises_nothing`: it runs for every test, a per-test check, not session scope) that
+FAILS a test during which a guarded method raised. Confirmed by measurement on a stock window
 with the same method: no slot of the main window can fail silently because of it, a box opened beneath it does not
 stall a working thread, a failure in the close handler is still reported, the order of events is unchanged. **Accepted
 and written down in the code:** an error inside a drawing LIBRARY's own Python code in the main window (the live
@@ -183,13 +229,18 @@ the audit's list, older than this stage and found on the way:** an error raised 
 shot with a context object is silent in this binding (`core/gui/panels/record_view.py:200`); a tree item's less-than
 that raises during a sort ended a probe's process (`core/gui/widgets/artifact_table.py:196` is such a method; not
 followed further); a failure in the main window's close handler before "Don't quit" is read closes the window with a
-run still going. **Owed at the stage's exit, with the owner's approval of the wording:** `CLAUDE.md` and
-`docs/guide/testing.md` count and list the session guards without the two this stage added (the file choosers'; the
-drawing code's). **Next:** the owner's remarks on the pictures; then Task 13.
+run still going. **Owed at the stage's exit:** `CLAUDE.md` counts the standing guards of the tests without the two
+this stage added (the file choosers', session-wide; the drawing code's, a per-test check) and is corrected only with
+the owner's approval of the wording; `docs/guide/testing.md` lists them without the same two, and whether that page
+is corrected at the exit or left for the stage that rewrites the guide is not ruled (the carry list, Task 19).
+**Next:** the owner's remarks on the pictures; then Task 13.
 
 **THE WINDOW REDESIGN, PLAN AND BUILD (started 2026-10-06 from
-`docs/superpowers/prompts/2026-10-06-window-redesign-plan-and-build.md`; continue from that prompt, this paragraph and
-the ledger).** **Where it stands: the plan for stage 1, "the look's foundation", is
+`docs/superpowers/prompts/2026-10-06-window-redesign-plan-and-build.md`; since 2026-10-10 the build is continued from
+`docs/superpowers/prompts/2026-10-10-window-redesign-continue-stage-1.md`, the paragraphs above and the ledger; the
+body below is the plan's story as written on 2026-10-06 and 2026-10-07 and is left so: its "Still open with the
+owner", "Engine changes built so far", "Gates run in this chat" and "Next, in order" are of that time, and "this chat"
+in it is the chat that ended with the hand-off).** **Where it stands: the plan for stage 1, "the look's foundation", is
 `docs/superpowers/plans/2026-10-06-window-redesign-stage-1.md` (about 10,000 lines: a head with a plain-words section
 "For the owner", the rules every task keeps, the file map, the registry of shared names, 32 recorded departures; then
 23 task sections; then two appendices). APPROVED by the owner on 2026-10-07, with no choice struck.** Nineteen
