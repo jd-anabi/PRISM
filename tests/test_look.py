@@ -647,29 +647,37 @@ def test_a_listener_of_the_theme_signal_may_choose_a_mode(stand_in_app):
     assert heard == [True, False] and appearance.mode() == "light" and appearance.is_dark() is False
 
 
-@pytest.mark.parametrize("step", ["setPalette", "setStyleSheet", "setFont", "retheme"])
+@pytest.mark.parametrize("step", ["setPalette", "setStyleSheet", "setFont", "retheme", "refresh_focus"])
 def test_an_apply_that_fails_part_way_is_made_again_when_the_scheme_before_it_is_chosen(stand_in_app, step):
     """An apply that raises part-way -- at the palette, at the sheet, at the fonts of the widget
-    classes or in a widget's own ``retheme()`` -- leaves a look that is half one scheme and half
-    the other. The error comes out, nothing is signalled, and the Appearance can be used again.
-    Nothing counts as applied while the work is under way, so neither scheme is taken for a repeat
-    when it is chosen next: not the one shown before the failure, and not the one that failed.
-    Either sets the palette and the sheet again."""
+    classes, in a widget's own ``retheme()`` or, last of all, where the focus ring is put back on
+    its control -- leaves a look that is not whole: half one scheme and half the other, or the new
+    scheme with its ring not put back. The error comes out, nothing is signalled, and the
+    Appearance can be used again. Nothing counts as applied while the work is under way, so
+    neither scheme is taken for a repeat when it is chosen next: not the one shown before the
+    failure, and not the one that failed. Either sets the palette and the sheet again."""
     from PySide6.QtGui import QPalette
     from PySide6.QtWidgets import QWidget
-    from core.gui import theming
+    from core.gui import style, theming
 
     class Painted(QWidget):
         def retheme(self): pass
 
     app = stand_in_app
     # what the failed apply had set when the step refused: palettes, sheets, fonts of widget classes
+    all_set = (1, 1, len(CLASSES_WITH_A_FONT))      # the palette, the sheet and every class font
     set_before_the_step = {"setPalette": (0, 0, 0), "setStyleSheet": (1, 0, 0), "setFont": (1, 1, 0),
-                           "retheme": (1, 1, len(CLASSES_WITH_A_FONT))}[step]
-    refuser = app                              # whose step refuses: the stand-in, or a widget it lists
-    if step == "retheme":
+                           "retheme": all_set, "refresh_focus": all_set}[step]
+    refuser = app                              # whose step refuses: the stand-in, a widget it lists,
+    if step == "retheme":                      # or the module that puts the ring back
         refuser = Painted()                    # a top-level widget of the stand-in; never shown
         app.tops.append(refuser)
+    elif step == "refresh_focus":
+        refuser = style
+    # A module holds its function itself, and that function is what the repair puts back. The stand-in
+    # and the widget take the step from their class: the refusal is set in front of it on the one
+    # object, and taking the refusal away is the repair.
+    own = vars(refuser).get(step)
 
     def chosen(appearance, mode):
         """Choose ``mode``: how often that asked the hints, set a palette and set a sheet."""
@@ -695,7 +703,10 @@ def test_an_apply_that_fails_part_way_is_made_again_when_the_scheme_before_it_is
             with pytest.raises(RuntimeError, match="this step could not be made"):
                 appearance.set_mode("dark")
         finally:
-            delattr(refuser, step)             # repaired: its own method again
+            if own is None:
+                delattr(refuser, step)         # repaired: its own method again
+            else:
+                setattr(refuser, step, own)    # repaired: the module's own function again
         now = (len(app.palettes), len(app.sheets), len(app.fonts))
         assert tuple(n - was for n, was in zip(now, before)) == set_before_the_step, \
             "the apply did not stop at the step that refused"
@@ -3004,3 +3015,156 @@ def test_a_greyed_main_button_of_the_old_layout_is_lettered_in_the_ordinary_weig
             old.setEnabled(False)
             assert drawn(old, dark)[0] == greyed and old.sizeHint() == asked, (dark, "greyed again")
             assert old.font().weight() == QFont.Weight.DemiBold, "its own font is the bold one in every state"
+
+
+def test_the_follower_hears_an_event_and_never_takes_it(ring_room):
+    """The follower's filter stands before every event of the program, and an event it took would end
+    there: a field would not learn that it holds the keyboard, a key would type nothing, a click would
+    press nothing, and a control would not learn that it was hidden. So on each road of the filter -- a
+    key pressed, the focus arriving, the focus leaving the control that shows it, that control hidden, a
+    mouse button pressed -- and for a kind of event it does nothing with, the event reaches what it was
+    sent to. Each road is also shown to have been taken, by what the follower did on it."""
+    class Control(QPushButton):              # a control that notes the kind of every event that reaches it
+        def __init__(self, *args):
+            super().__init__(*args)
+            self.kinds = []
+
+        def event(self, event):
+            self.kinds.append(event.type())
+            return super().event(event)
+
+    class Elsewhere(QObject):                # the same for an object that is no control: a press on it moves nothing
+        def __init__(self):
+            super().__init__()
+            self.kinds = []
+
+        def event(self, event):
+            self.kinds.append(event.type())
+            return super().event(event)
+
+    def reached(what, kind):                 # whether an event of that kind came through to it since last asked
+        came = kind in what.kinds
+        del what.kinds[:]
+        return came
+
+    r = ring_room
+    control, elsewhere = Control("Check again", r.window), Elsewhere()
+    control.setGeometry(220, 20, 120, 34)
+    QApplication.sendEvent(elsewhere, QKeyEvent(QEvent.KeyPress, Qt.Key_Tab, Qt.NoModifier))
+    assert reached(elsewhere, QEvent.KeyPress), "the follower took a key press"
+    _moved_on(control, Qt.TabFocusReason)
+    assert r.follows.target() is control, "the key press was not heard: the focus it moved brought no ring"
+    assert reached(control, QEvent.FocusIn), "the follower took the focus on its way to the control"
+    _leave(control, Qt.TabFocusReason)
+    assert r.follows.target() is None, "the focus leaving the control was not heard"
+    assert reached(control, QEvent.FocusOut), "the follower took the focus on its way out of the control"
+    _moved_on(control, Qt.TabFocusReason)
+    assert r.follows.target() is control, "the focus coming back brought no ring: the next lines prove nothing"
+    control.hide()
+    assert r.follows.target() is None, "the control being hidden was not heard"
+    assert reached(control, QEvent.Hide), "the follower took the word that the control was hidden"
+    QApplication.sendEvent(elsewhere, QMouseEvent(QEvent.MouseButtonPress, QPointF(1, 1), QPointF(1, 1),
+                                                  Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    assert reached(elsewhere, QEvent.MouseButtonPress), "the follower took a mouse press"
+    _moved_on(r.button, Qt.MouseFocusReason)         # a click ends the keyboard's turn; and with a mouse button
+    _moved_on(r.button, Qt.TabFocusReason)           # the last thing pressed, no key moved the focus on
+    assert r.follows.target() is None, "the mouse press was not heard: the key before it still counted"
+    QApplication.sendEvent(elsewhere, QEvent(QEvent.User))
+    assert reached(elsewhere, QEvent.User), "the follower took an event it does nothing with"
+
+
+def test_the_ring_keeps_its_two_pixels_and_its_corner_at_every_text_size(ring_room):
+    """The ring is a line, the gap to its control and a corner, and the look's table names all three among
+    the lengths that do not grow with the text. Painted at the ordinary size the line is two pixels deep,
+    the corner is clear, and the top line is whole from seven pixels in: the control's own corner of
+    three, the gap's two and the line's two. At two larger text sizes the line is two pixels deep still,
+    and the whole picture is the one painted at the ordinary size."""
+    r = ring_room
+
+    def painted():                           # the ring round the button, as it paints itself at one to one
+        _arrive(r.button, Qt.TabFocusReason)
+        ring = r.follows.ring()
+        picture = _image(ring.width(), ring.height(), 1.0)
+        ring.render(picture, QPoint(0, 0), QRegion(), QWidget.RenderFlag.DrawChildren)
+        _leave(r.button, Qt.TabFocusReason)
+        return picture
+
+    def cover(picture, x, y):                # how solid the pixel at a place is, 0 to 255
+        return picture.pixelColor(x, y).alpha()
+
+    with text_size(1.0):
+        ordinary = painted()
+    middle = ordinary.width() // 2
+    assert [cover(ordinary, middle, y) for y in range(4)] == [255, 255, 0, 0], \
+        "the ring's line is not two pixels at the ordinary text size"
+    assert [cover(ordinary, at, at) for at in (0, 1)] == [0, 0], "the ring's corner is not clear: it is not round"
+    whole = [x for x in range(ordinary.width()) if cover(ordinary, x, 0) == 255]    # the top line where it is whole
+    assert (whole[0], whole[-1]) == (7, ordinary.width() - 8), \
+        "the ring's corner is not the control's own, seen across the gap"
+    for factor in (1.25, 2.25):
+        with text_size(factor):
+            larger = painted()
+        assert [cover(larger, middle, y) for y in range(4)] == [255, 255, 0, 0], \
+            f"the ring's line is not two pixels at a text factor of {factor}"
+        assert larger == ordinary, f"the ring is not the same picture at a text factor of {factor}"
+
+
+def test_the_ring_is_seen_over_its_control_and_outside_the_group_that_holds_it(ring_room):
+    """The toolkit asks the style whether the focus frame lies above its control. Told no, it makes the
+    frame a child of the control's own parent and paints it beneath the control: the ring just inside the
+    edge of a text box is then painted over by the box, and the ring round a control at the edge of a
+    group is cut off where the group ends. Neither is seen. So the window is painted with the ring on
+    such a control, and the pixel where the ring's line must show is the focus colour: outside the group
+    for the one, just inside the box's own edge for the other."""
+    from core.gui import design
+    r = ring_room
+    group = QWidget(r.window)                # a group in the window's free corner, and a control flush with its edge
+    group.setGeometry(220, 20, 180, 60)
+    held = QPushButton("In a group", group)
+    held.setGeometry(0, 0, 120, 34)
+
+    def painted_at(x, y):                    # one pixel of the window, as it paints itself with all it holds
+        picture = _image(r.window.width(), r.window.height(), 1.0)
+        r.window.render(picture)
+        return _at(picture, x, y)
+
+    with theme(False):
+        focus = design.hex_colour("focus")
+        for control, x, y in ((held, group.x() - 3.5, group.y() + 17),      # the ring's left line, outside the group
+                              (r.box, r.box.x() + 0.5, r.box.y() + r.box.height() / 2)):      # and just inside the box
+            assert painted_at(x, y) != focus, "the ground there is the ring's colour: the next line proves nothing"
+            _arrive(control, Qt.TabFocusReason)
+            assert painted_at(x, y) == focus, f"the ring is not seen on a {type(control).__name__}"
+            _leave(control, Qt.TabFocusReason)
+
+
+def test_a_stopped_follower_is_off_the_application_and_hears_nothing_more():
+    """Stopping takes the follower's filter off the application itself. Its own word that it listens no
+    longer is not enough: a filter left on is still called for every event of the program, for as long as
+    any name holds the follower, whatever it then does with the event. So the follower here notes every
+    call of its filter. Stopped, it shows the focus nowhere; and when the focus then arrives by the
+    keyboard, as it did before the stop, its filter is not called at all."""
+    from core.gui import style
+    calls = []
+
+    class Noting(style.FocusFollower):       # a follower that notes the kind of every event its filter is handed
+        def eventFilter(self, obj, event):
+            calls.append(event.type())
+            return super().eventFilter(obj, event)
+
+    app = QApplication.instance() or QApplication([])
+    window = QWidget()
+    button = QPushButton("Check again", window)
+    button.setGeometry(40, 40, 120, 34)
+    follows = Noting(app, style.PrismStyle())
+    try:
+        _arrive(button, Qt.TabFocusReason)
+        assert calls and follows.target() is button, \
+            "the follower heard nothing while it listened: the next lines prove nothing"
+        follows.stop()
+        assert follows.target() is None, "a stopped follower still shows the focus where it was"
+        del calls[:]                         # what it was handed up to the stop, and by the stop itself
+        _arrive(button, Qt.TabFocusReason)
+        assert calls == [], "a stopped follower's filter is still on the application"
+    finally:
+        follows.stop()

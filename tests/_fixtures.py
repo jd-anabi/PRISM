@@ -830,6 +830,11 @@ def process_state(app) -> dict:
         # under a sheet the application's own style() is the toolkit's sheet style, laid over ours.
         "small style": small_style.current_style(),
         "focus follower": small_style.current_follower(),
+        # Every follower that is the application's own child, beside the one the module names. A test
+        # that builds a follower of its own and does not stop it leaves one here that the module knows
+        # nothing of, and it goes on hearing every event of every later test.
+        "follower objects": len(app.findChildren(small_style.FocusFollower,
+                                                 options=Qt.FindDirectChildrenOnly)),
         "sheet": app.styleSheet(),
         "palette": tuple(palette.color(group, role).name(QColor.HexArgb)
                          for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled)

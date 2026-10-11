@@ -1283,6 +1283,8 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     monkeypatch.setattr(fonts, "apply_class_fonts", watched)
     from core.gui import settings as stored
     assert design.is_dark() is False, "a theme leaked into the suites"
+    assert found["follower objects"] == 0, \
+        "a focus follower leaked into the suites: an earlier test left one on the application"
     remembered = stored.settings()                 # this test's own settings file
     stored.set_appearance(remembered, "dark")      # so that the first apply has to turn the look's table
     remembered.sync()
@@ -1326,7 +1328,7 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     changed = {key for key in found if during[key] != found[key]}
     assert {"sheet", "palette", "font", "figure settings", "error hook", "appearance",
             "appearance objects", "default store", "root log handler", "text factor",
-            "class fonts", "theme flag", "small style", "focus follower"} <= changed, \
+            "class fonts", "theme flag", "small style", "focus follower", "follower objects"} <= changed, \
         f"the whole program changed only {sorted(changed)}: the comparison below would prove nothing"
     after = process_state(app)
     left = sorted(key for key in found if after[key] != found[key])
