@@ -1,6 +1,10 @@
 # PRISM — state
 
-**Last updated:** 2026-10-10 (THE BUILD IS HANDED TO A NEW CHAT, which continues from
+**Last updated:** 2026-10-11 (THE NEW CHAT IS AT WORK AND THE OWNER HAS ANSWERED ON THE PICTURES: the three answers
+are built as Task 12q (`7158a85`, `2cd2272`, `2553d87`; review clean, gate green: 1302 passed, 3 skipped), deviation
+rows 39 to 41 are recorded, and THE LINE STANDS AT TASK 13, prepared and not yet dispatched; the paragraph "THE NEW
+CHAT" below is that chat's record. What follows in this parenthesis is the head as the hand-off left it:
+THE BUILD IS HANDED TO A NEW CHAT, which continues from
 `docs/superpowers/prompts/2026-10-10-window-redesign-continue-stage-1.md`, the paragraph "THE HAND-OFF" below and the
 ledger; nothing was built or run between the gate of 2026-10-08 and the hand-off. STAGE 1 OF THE WINDOW REDESIGN IS
 BEING BUILT: the owner approved its plan on 2026-10-07;
@@ -9,13 +13,53 @@ CHANGE, landed at `d23aa84`), Task 5, the text-size test, was run with the owner
 and a task the plan did not have, 10g, fixed the faults the first pictures of the new look showed; the window now takes
 its colours, its lettering, its style sheet, its tick boxes and its focus ring from one table, so IT LOOKS DIFFERENT
 FROM THE WINDOW AS IT WAS BEFORE THE STAGE (on this computer it opens dark, following Windows); THE PICTURES OF EVERY
-SCREEN WERE TAKEN AND SHOWN TO THE OWNER on 2026-10-07 (the paragraph "THE PICTURES" below); THE LINE WAITS AT TASK 13
-for the owner's remarks on the pictures; and Task 10f (the window stuttered while a run drew figures) is DONE, by a
-much smaller change than first ruled (the paragraph "TASK 10f" below); the next paragraph is the hand-off; after it
+SCREEN WERE TAKEN AND SHOWN TO THE OWNER on 2026-10-07 (the paragraph "THE PICTURES" below); THE LINE WAITED AT TASK 13
+for the owner's remarks on the pictures (answered on 2026-10-11: "THE NEW CHAT"); and Task 10f (the window stuttered while a run drew figures) is DONE, by a
+much smaller change than first ruled (the paragraph "TASK 10f" below); the next paragraph is the new chat's, the one after it the hand-off; after it
 the build's state stands in four paragraphs, each as it was written on its date ("THE BUILD OF STAGE 1", up to Task 9;
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**THE NEW CHAT (2026-10-10 evening to 2026-10-11; started from the owner's pasted prompt, with Ultracode on; the
+ledger's entries from "NEW CHAT 2026-10-10" on have every figure and every ruling).** **The owner answered the three
+questions on the pictures**, each asked alone with pictures (the remedies drawn in the real window, hidden, on a scratch
+settings file and an empty scratch store: the ledger's `questions/q5` to `q8`): (1) locked tabs, "Open tabs darker": the
+words of the tabs that can be opened take the full text colour, locked ones keep the readable grey; (2) hint text,
+"Reword the one hint": the model builder's empty variables box shows "e.g. x, y", no colour changes; (3) the greyed main
+button, "No bold, on today's forms": greyed, the main button of an old form is in the ordinary weight, and the rebuilt
+pages keep the approved bold button with its reason beside it, to be judged on the first rebuilt page. **Built as Task
+12q** (a task the plan did not have; `7158a85`, `2cd2272`, `2553d87`; its brief written, attacked and verified by
+workflows before the dispatch; tests first, each seen to fail for its stated reason): one colour name and three
+declarations in the interim rules of `core/gui/design.py`, one string in `core/gui/screens/model_builder_screen.py`,
+four tests born in `tests/test_look.py` and one in `tests/test_user_models.py`, and the test of the sheet's rule on
+states narrowed by one clause. **Ruled by the controller beside the owner's answers** (each in the ledger with what it
+costs if wrong; the owner was told of the first): a tab that can be opened and is not in front takes the look's pale
+pointer ground under the pointer, because its word has no stronger colour left to answer with; the tab one is on is
+spared that ground; three commits, one for each answer; the task's tests may read painted words within stated bounds.
+**Deviation rows 39, 40 and 41** are in the design's section 8, the plan's head and the ledger. **The gate at `2553d87`:
+1302 passed, 3 skipped, 5 deselected, 203 warnings, 13 min 55 s** (at night the desktop held 1.0 GiB of the card where
+2.8 stood by day; two reviewers read beside it, so not a quiet-machine time); the display-marked run 3 passed; the review
+(two readers, read-only) found the build equal to the brief at each of the three commits and nothing Critical or
+Important, and its minors are sorted in the ledger (three tests-only ones ride the front of Task 13, the others go to
+the stage's final review); the real `Artifacts/` (428 entries) and the real `PRISM.ini` (hash unchanged) are as they
+were; the pictures were made again (`stage-1/pictures/task12q-plain/`) and the three changed places shown to the owner.
+**Engine changes built so far: E12 only.** **Prepared for Task 13 (not yet dispatched when this was written):** its
+brief was checked against the code by three readers and three skeptics (`stage-1/briefs/task-13-dispatch-notes.md`:
+eleven places where the brief must be done otherwise, the four guards and their fallbacks, the counts of today); the five
+tests-only additions that an earlier review ruled and nobody built have a brief of their own, checked the same way
+(`stage-1/briefs/task-13-front-tests-brief.md`; all five gaps were measured to be still open); and the seven choices its
+dispatch left open, with the two items the carry list left to the controller, are ruled in the ledger (among them: the
+marker's and the hatching's painting restore the painter in a `finally`; one more test holds what the two paint events
+answer when they fail; the front tests change three files). **Open with the owner:** the rest of what was asked with the
+pictures on 7 October (anything else to change, or "fine as it is"; what the owner can and cannot live with at a text
+size of 150 % until each page is rebuilt), put in the chat on 2026-10-11 and not answered when this was written; ruled
+that Task 13 does not wait for it. The focus ring is the owner's to judge by opening PRISM, which opens dark on this
+computer. **To tell the owner at the stage's exit, new with this task:** the pointer's ground also shows on the figure
+tabs and on the tabs of the plotting library's own "Figure options" box; the page as it first opens (one tab in front,
+five locked) looks exactly as before. **For stage 4's plan:** the greyed main button of the first rebuilt page is shown
+to the owner. **Next, in order:** Task 13's dispatch notes refreshed on the head that holds Task 12q; Task 13 (three
+tests-only commits at its front, then its own); then 14 to 18, and 19.
 
 **THE HAND-OFF (2026-10-10; documents only: no file under `core/` or `tests/` has changed and no test has run since the
 gate at `d78c923`).** The owner continues in a new chat, from
