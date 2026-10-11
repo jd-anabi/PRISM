@@ -3443,6 +3443,11 @@ def test_a_ruled_block_paints_whole_rules_from_its_own_edges_in_both_themes_at_f
     assert (room.left(), room.top(), room.right(), room.bottom(), spaced.box.spacing()) == (0, 9, 0, 4, 0)
     with pytest.raises(ValueError):                             # a colour is named when the block is built, not when it paints
         Ruled(top=1, colour="grey")
+    blocks = [widget for widget in QApplication.topLevelWidgets() if isinstance(widget, Ruled)]
+    try:
+        Ruled(top=1, colour="grey")
+    except ValueError:                       # while the error is held, whatever was built before it was raised is held with it
+        assert sum(isinstance(widget, Ruled) for widget in QApplication.topLevelWidgets()) == len(blocks), "a block was built before its colour was refused"
     plain = Ruled()
     plain.resize(20, 20)
     assert all(pixel == _BLANK for pixel in _every_pixel(_screen_of(plain, 1.0)))

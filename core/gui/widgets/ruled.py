@@ -22,9 +22,9 @@ class Ruled(QWidget):
 
     def __init__(self, top: int = 0, bottom: int = 0, colour: str = "rule", *, gap_top: int = 0,
                  gap_bottom: int = 0):
-        super().__init__()
         if colour not in design.COLOURS:     # named when the block is built, not found out when it paints
             raise ValueError(f"not a colour of the look: {colour!r}")
+        super().__init__()
         self._top, self._bottom, self._colour = top, bottom, colour
         self.box = QVBoxLayout(self)
         self.box.setContentsMargins(0, top + gap_top, 0, bottom + gap_bottom)
