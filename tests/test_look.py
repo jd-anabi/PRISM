@@ -3482,9 +3482,14 @@ def test_a_painted_icon_is_sharp_at_every_scaling_follows_the_theme_and_greys_wh
             picture = pixmap.toImage()
             assert picture.pixelColor(0, 0).alpha() == 0 and _every_pixel(picture).count(design.colour("err")) == square[ratio]
             for mode, name in ((QIcon.Normal, "err"), (QIcon.Disabled, "disabled_ink")):
-                image = _screen(32, 24, ratio, draw=lambda p: icon.paint(p, QRect(4, 4, 20, 16), Qt.AlignCenter, mode, QIcon.Off))
-                # a wider icon keeps the glyph at its left: the room before a button's words stays bare
-                assert (_at(image, 12, 12), _at(image, 22, 12)) == (design.hex_colour(name), _BARE), (dark, ratio, name)
+                shade = design.hex_colour(name)
+                wide = _screen(32, 24, ratio, draw=lambda p: icon.paint(p, QRect(4, 4, 20, 16), Qt.AlignCenter, mode, QIcon.Off))
+                tall = _screen(32, 24, ratio, draw=lambda p: icon.paint(p, QRect(4, 2, 16, 20), Qt.AlignCenter, mode, QIcon.Off))
+                # a wider icon keeps the glyph at its left, so the room before a button's words stays bare: the square
+                # of "stop" runs from 7 to 17 there; centred or at the right, the point at 8 would be bare
+                assert [_at(wide, x, 12) for x in (5, 8, 16, 18)] == [_BARE, shade, shade, _BARE], (dark, ratio, name)
+                # a taller one centres it down its height: at the head or at the foot one of the two inner points is bare
+                assert [_at(tall, 12, y) for y in (6, 8, 16, 18)] == [_BARE, shade, shade, _BARE], (dark, ratio, name)
     with theme(False):
         button = QPushButton()                                  # no words: no pixel of lettering is read
         button.setIcon(icon)
