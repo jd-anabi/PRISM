@@ -27,7 +27,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QItemSelectionModel, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import (QColor, QFocusEvent, QFont, QFontDatabase, QFontInfo, QFontMetricsF, QGuiApplication,
                            QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QRegion, QWheelEvent)
 from PySide6.QtTest import QTest
@@ -3934,6 +3934,23 @@ def test_the_current_row_wears_its_own_ring_clear_of_the_bar():
                         assert _at(image, 0.5, top + 15) == _at(image, 3.5, top + 15) == accent, where   # the bar is whole
                     if dark and not shown:                  # in dark the ring's colour is no other colour of a table
                         assert design.colour("focus").rgb() not in _pixels(_rendered(table, 1.0))
+                # The ring is the current row's and the bar the selected row's: with the third row made current
+                # and the second still selected, each wears its own.
+                table.view.selectionModel().setCurrentIndex(table.view.model().index(2, 0),
+                                                            QItemSelectionModel.NoUpdate)
+                table.view.set_focus_shown(True)
+                _settle()
+                for ratio in SCALINGS:
+                    image = _rendered(table, ratio)
+                    assert table.selected_row() == 1
+                    assert (_at(image, 250, top + 30 + 3) == focus, _at(image, 250, top + 3) == focus) == (
+                        True, False), (dark, ratio)
+                    assert _at(image, 0.5, top + 15) == accent, (dark, ratio)
+                table.select_row(None)                  # nothing selected, as when the focus arrives by Tab:
+                _settle()                               # the current row keeps its ring
+                for ratio in SCALINGS:
+                    assert table.selected_row() is None
+                    assert _at(_rendered(table, ratio), 250, top + 30 + 3) == focus, (dark, ratio)
 
 
 def test_a_cell_is_a_plain_description_and_the_table_keeps_its_words():
