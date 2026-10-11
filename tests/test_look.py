@@ -9,6 +9,7 @@ so the theme and the text factor are changed here only inside a helper or a fixt
 import ast
 import builtins
 import contextlib
+import dataclasses
 import datetime
 import gc
 import hashlib
@@ -26,12 +27,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import (QColor, QFocusEvent, QFont, QFontDatabase, QFontInfo, QFontMetricsF, QGuiApplication,
-                           QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QRegion, QWheelEvent)
+                           QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QRegion, QWheelEvent)
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QLineEdit, QMenu, QPlainTextEdit, QPushButton,
                                QRadioButton, QStyle, QStyleFactory, QStyleOptionButton, QStyleOptionFocusRect,
-                               QWidget)
+                               QVBoxLayout, QWidget)
 
 from core.gui import design, fonts, paint
 from core.gui.widgets.marker import Marker, painted_icon
@@ -42,7 +44,8 @@ REPO = Path(__file__).resolve().parents[1]
 # fresh-interpreter test is then its proof that it loads no engine
 LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.gui.mpl_theme", "core.gui.settings",
                 "core.gui.file_chooser", "core.gui.widgets.labeled_inputs", "core.gui.paint", "core.gui.style",
-                "core.gui.reported", "core.Helpers.plot_colours", "core.gui.widgets.marker", "core.gui.widgets.ruled")
+                "core.gui.reported", "core.Helpers.plot_colours", "core.gui.widgets.marker", "core.gui.widgets.ruled",
+                "core.gui.widgets.rule_table")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
 
@@ -3631,3 +3634,456 @@ def test_a_painted_icon_never_ends_the_process():
     assert (done.returncode, done.stdout.split()) == (
         0, [vermilion, vermilion, engine + "paint", engine + "pixmap", "16", "0", "16", "0"]), \
         (done.returncode, done.stdout, done.stderr[-2000:])
+
+
+SCALINGS = (1.0, 1.25, 1.5, 2.0)
+
+
+def _rt():
+    QApplication.instance() or QApplication([])    # a widget needs the application, whichever test runs first
+    from core.gui.widgets import rule_table        # inside each test: until the module exists only these fail
+    return rule_table
+
+
+def _settle():
+    for _ in range(4):
+        QApplication.sendPostedEvents()
+        QApplication.processEvents()
+
+
+@contextlib.contextmanager
+def _the_look(dark, sheet=True):
+    """One theme in force, its palette on the application and its sheet too unless that is left out; all three
+    put back, whatever the block does."""
+    app = QApplication.instance() or QApplication([])
+    was_sheet, was_palette = app.styleSheet(), QPalette(app.palette())
+    with theme(dark):
+        try:
+            app.setPalette(design.build_palette(dark))
+            if sheet:
+                app.setStyleSheet(design.build_qss(dark))
+            yield
+        finally:
+            app.setStyleSheet(was_sheet)
+            app.setPalette(was_palette)
+
+
+def _gone(widget):
+    """Delete a widget now. Asked only to delete itself later it would stay to the end of the run: no event
+    loop turns between two tests. This widget's own request is delivered, and nobody else's."""
+    widget.deleteLater()
+    QCoreApplication.sendPostedEvents(widget, QEvent.DeferredDelete)
+
+
+@contextlib.contextmanager
+def _on_a_page(table, width=500, height=400):
+    """The table as a page holds it: alone in a column, with room to spare under it. The page is shown where no
+    screen sees it and is never the active window; it goes, with the table in it, when the block ends."""
+    page = QWidget()
+    column = QVBoxLayout(page)
+    column.setContentsMargins(0, 0, 0, 0)
+    column.addWidget(table)
+    page.resize(width, height)
+    page.setAttribute(Qt.WA_DontShowOnScreen, True)
+    page.setAttribute(Qt.WA_ShowWithoutActivating, True)
+    try:
+        page.show()
+        _settle()
+        yield page
+    finally:
+        page.close()
+        _gone(page)
+
+
+def _blank(rows=3, **options):
+    """Columns 120 wide, stretching and 110 wide, and no lettering anywhere: no pixel read off it is a letter's."""
+    rt = _rt()
+    columns = [rt.Column("", 120), rt.Column(""), rt.Column("", 110, right=True)]
+    return rt.RuleTable(columns, [[rt.TextCell(""), rt.TextCell(""), rt.ValueCell("")]] * rows, **options)
+
+
+def _rendered(widget, ratio):
+    """The widget, its own ground with it, drawn at a display scaling. The painter is ended whatever the drawing
+    does: a picture let go under a live painter ends the whole run, where the test should only fail."""
+    image = _image(widget.width(), widget.height(), ratio)
+    painter = QPainter(image)
+    try:
+        widget.render(painter, QPoint(0, 0))
+    finally:
+        painter.end()
+    return image
+
+
+def _down(image, x):
+    """One column of device pixels, top to bottom, as (pixel, how many in a run)."""
+    runs = []
+    for y in range(image.height()):
+        pixel = image.pixel(x, y)
+        if runs and runs[-1][0] == pixel:
+            runs[-1][1] += 1
+        else:
+            runs.append([pixel, 1])
+    return [(pixel, n) for pixel, n in runs]
+
+
+def _pixels(image):
+    return {image.pixel(x, y) for y in range(image.height()) for x in range(image.width())}
+
+
+def _marked(image, x0, x1, ground, ratio):
+    """Where the header's line of words holds a mark between two x of the table: for each device row, its
+    first and last marked x. The rules above and below the header are left out."""
+    rows = {}
+    for y in range(math.ceil(2 * ratio) + 1, int(28 * ratio) - 1):
+        xs = [x for x in range(int(x0 * ratio), int(x1 * ratio)) if image.pixel(x, y) != ground]
+        if xs:
+            rows[y] = (xs[0], xs[-1])
+    return rows
+
+
+def test_a_tables_three_rules_are_whole_device_pixels_at_every_scaling():
+    weights = {1.0: [2, 1, 2], 1.25: [2, 1, 2], 1.5: [3, 1, 3], 2.0: [4, 2, 4]}
+    for dark in (False, True):
+        with _the_look(dark):
+            table = _blank(selectable=False)
+            with _on_a_page(table):
+                rule = design.colour("rule").rgb()
+                for ratio, expected in weights.items():
+                    image = _rendered(table, ratio)
+                    for x in (1, image.width() // 2, image.width() - 2):
+                        found = [n for pixel, n in _down(image, x) if pixel == rule]
+                        assert found == expected, (dark, ratio, x, found)
+
+
+def test_a_table_is_as_tall_as_its_rows_and_stands_on_the_page():
+    rt = _rt()
+    for dark in (False, True):
+        with _the_look(dark):
+            table = _blank()
+            with _on_a_page(table):
+                view = table.view
+                assert table.header.height() == 27                    # 16 + 2 x 5 + 1
+                assert [view.rowHeight(r) for r in range(3)] == [30, 30, 30]
+                assert table.height() == 121                          # 2 + 27 + 3 x 30 + 2, on a page 400 high
+                assert view.verticalScrollBar().maximum() == 0        # nothing of its own to scroll:
+                assert view.horizontalScrollBar().maximum() == 0      # the wheel goes on to the page
+                assert view.tabKeyNavigation() is False               # Tab leaves the table
+                assert view.showGrid() is False
+                paper = design.hex_colour("paper")
+                accent, tint = design.colour("accent").rgb(), design.colour("accent_tint").rgb()
+                for ratio in SCALINGS:
+                    image = _rendered(table, ratio)
+                    assert _at(image, 250, 2 + 10) == paper, (dark, ratio)             # the header's ground
+                    assert _at(image, 250, 2 + 27 + 15) == paper, (dark, ratio)        # a row's ground
+                    assert not {accent, tint} & _pixels(image), (dark, ratio)          # nothing selected: no accent
+                table.set_rows([[rt.TextCell(""), rt.TextCell(""), rt.ValueCell("", second="x")]])
+                _settle()
+                assert view.rowHeight(0) == 46 and table.height() == 77                  # 20 + 16 + 2 x 5
+                table.set_rows([])
+                _settle()
+                assert table.height() == 31                                              # the header and the two rules
+    with _the_look(True, sheet=False):                                # the palette alone: a table stands on the
+        table = _blank()                                              # page whatever a sheet says of its class
+        with _on_a_page(table):
+            image = _rendered(table, 1.0)
+            assert _at(image, 250, 2 + 10) == design.hex_colour("paper")
+            assert _at(image, 250, 2 + 27 + 15) == design.hex_colour("paper")
+    with text_size(1.25):                                             # nothing is shown or painted in this leg
+        table = rt.RuleTable([rt.Column("", 100), rt.Column("")])
+        assert table.header.height() == 33                            # 20 + 2 x 6 + 1: a hairline does not grow
+        assert table.view.verticalHeader().minimumSectionSize() == 38
+        assert table.header.sectionSize(0) == 125
+        _gone(table)
+
+
+def test_a_selected_row_has_its_tint_a_line_above_and_below_and_a_bar():
+    lines = {1.0: 1, 1.25: 1, 1.5: 1, 2.0: 2}
+    bars = {1.0: 4, 1.25: 5, 1.5: 6, 2.0: 8}
+    for dark in (False, True):
+        with _the_look(dark):
+            table = _blank()
+            with _on_a_page(table):
+                table.select_row(1)
+                _settle()
+                assert table.selected_row() == 1
+                accent, tint = design.colour("accent").rgb(), design.colour("accent_tint").rgb()
+                for ratio in SCALINGS:
+                    image = _rendered(table, ratio)
+                    column = _down(image, image.width() // 2)
+                    first = [pixel for pixel, _ in column].index(accent)
+                    assert [pixel for pixel, _ in column[first:first + 3]] == [accent, tint, accent], (dark, ratio)
+                    assert column[first][1] == column[first + 2][1] == lines[ratio], (dark, ratio)
+                    assert accent not in [pixel for pixel, _ in column[first + 3:]], (dark, ratio)
+                    tall = sum(n for _, n in column[first:first + 3])
+                    assert [(p, n) for p, n in _down(image, 0) if p in (accent, tint)] == [(accent, tall)]
+                    y = int((2 + 27 + 30 + 15) * ratio)               # half-way down the selected row
+                    across = [image.pixel(x, y) == accent for x in range(bars[ratio] + 1)]
+                    assert across == [True] * bars[ratio] + [False], (dark, ratio)
+                table.select_row(None)
+                _settle()
+                assert table.selected_row() is None
+                for ratio in SCALINGS:
+                    assert not {accent, tint} & _pixels(_rendered(table, ratio)), (dark, ratio)
+
+
+def test_a_fitted_column_measures_every_kind_of_cell_and_stops_at_its_limit():
+    rt = _rt()
+
+    def fitted(cells, title="", sortable=False):
+        """The width of a fitted column that is neither first nor last: no lead, a gap of 16 after it."""
+        table = rt.RuleTable([rt.Column("", 50), rt.Column(title, "fit"), rt.Column("")],
+                             [[rt.TextCell(""), cell, rt.TextCell("")] for cell in cells], sortable=sortable)
+        width = table.header.sectionSize(1)
+        _gone(table)
+        return width
+
+    figure = QFontMetricsF(fonts.inter("strong")).horizontalAdvance("20,480,000")
+    word = QFontMetricsF(fonts.inter("body")).horizontalAdvance("Done")
+    assert fitted([rt.TextCell("")]) == 20                            # nothing to hold: a column's least width
+    assert 16 + figure < fitted([rt.ValueCell("20,480,000", "simulations")]) <= 16 + 180
+    assert fitted([rt.ValueCell("1", second="of 10,000 batches")]) > fitted([rt.ValueCell("1")])
+    assert fitted([rt.StateCell("done", "Done")]) >= 16 + 16 + 6 + math.floor(word)      # gap, marker, its gap
+    assert fitted([rt.TextCell("a")]) < fitted([rt.TextCell("a"), rt.TextCell("a longer name")])
+    assert fitted([rt.TextCell("x" * 200)]) == 16 + 180              # at most 180, then the gap
+    assert fitted([rt.TextCell("")], "Made", sortable=True) - fitted([rt.TextCell("")], "Made") == 4 + 16
+
+    table = rt.RuleTable([rt.Column("", "fit"), rt.Column("")], [[rt.TextCell("x" * 200), rt.TextCell("")]])
+    assert table.header.sectionSize(0) == 10 + 180 + 16              # the first column also leads by 10
+    table.set_rows([[rt.TextCell(""), rt.TextCell("")]])             # rows set later are measured again
+    assert table.header.sectionSize(0) == 10 + 16
+    _gone(table)
+
+    table = rt.RuleTable([rt.Column("", 50), rt.Column("", "fit"), rt.Column("")], [[rt.TextCell("")] * 3])
+    assert table.view.minimumWidth() == 50 + 20 + 40                 # the view's own two widths (the fitted one held
+    _gone(table)                                                     # to a column's least) and a stretching column's least
+
+
+def test_a_header_that_sorts_starts_with_no_column_sorted_and_paints_a_chevron_after_the_words():
+    click = (Qt.LeftButton, Qt.NoModifier, QPoint(200, 10))           # inside the middle column's header
+    for dark in (False, True):
+        with _the_look(dark):
+            plain, table = _blank(), _blank(sortable=True)
+            with _on_a_page(plain), _on_a_page(table):
+                paper = design.colour("paper").rgb()
+                unheard, heard = [], []
+                plain.header.sortIndicatorChanged.connect(lambda column, order: unheard.append((column, order)))
+                table.header.sortIndicatorChanged.connect(lambda column, order: heard.append((column, order)))
+                QTest.mouseClick(plain.header.viewport(), *click)
+                assert plain.header.sectionsClickable() is False and unheard == []
+                assert table.header.sortIndicatorSection() == -1     # the toolkit's own header starts at column 0
+                assert table.view.isSortingEnabled() is False        # the toolkit never sorts the rows itself
+                assert _marked(_rendered(table, 1.0), 0, 500, paper, 1.0) == {}
+                table.select_row(2)
+                before = [table.view.model().index(r, 0).data(Qt.UserRole) for r in range(3)]
+                QTest.mouseClick(table.header.viewport(), *click)
+                assert heard == [(1, Qt.AscendingOrder)]
+                for ratio in SCALINGS:
+                    image = _rendered(table, ratio)
+                    rows = _marked(image, 120, 390, paper, ratio)
+                    assert rows and not _marked(image, 0, 120, paper, ratio)
+                    assert not _marked(image, 390, 500, paper, ratio)
+                    top, bottom = rows[min(rows)], rows[max(rows)]
+                    assert top[1] - top[0] < bottom[1] - bottom[0], (dark, ratio)        # smallest first: it points up
+
+                QTest.mouseClick(table.header.viewport(), *click)
+                assert heard[-1] == (1, Qt.DescendingOrder)
+                tall = {}
+                for ratio in SCALINGS:
+                    rows = _marked(_rendered(table, ratio), 120, 390, paper, ratio)
+                    top, bottom = rows[min(rows)], rows[max(rows)]
+                    assert top[1] - top[0] > bottom[1] - bottom[0], (dark, ratio)        # largest first: it points down
+                    tall[ratio] = len(rows)
+
+                table.header.setSortIndicator(2, Qt.DescendingOrder)  # set from code, as a page restores an order
+                for ratio in SCALINGS:
+                    image = _rendered(table, ratio)
+                    assert not _marked(image, 0, 390, paper, ratio)
+                    assert len(_marked(image, 390, 500, paper, ratio)) == tall[ratio]    # whole, inside the last column
+
+                # the header says which column and which way; the rows and the selection are the page's
+                assert [table.view.model().index(r, 0).data(Qt.UserRole) for r in range(3)] == before
+                assert table.selected_row() == 2
+
+
+def test_the_current_row_wears_its_own_ring_clear_of_the_bar():
+    still = _blank(selectable=False)
+    assert still.view.focusPolicy() == Qt.NoFocus
+    _gone(still)
+    top = 2 + 27 + 30                                                 # where the second row begins
+    # The ring is 2 wide, 2 inside the row's edge and right of the bar of 4. Read where no scaling blurs it:
+    # the middle of each of its four sides, and a point on either side of each that it must leave alone.
+    sides = ((250, top + 3), (250, top + 27), (7, top + 15), (497, top + 15))
+    beside = ((250, top + 0.5), (250, top + 5.5), (250, top + 24.5), (250, top + 29.5),
+              (5, top + 15), (9.5, top + 15), (494.5, top + 15), (499.5, top + 15))
+    for dark in (False, True):
+        with _the_look(dark):
+            table = _blank()
+            with _on_a_page(table):
+                assert table.view.focusPolicy() == Qt.StrongFocus
+                table.select_row(1)
+                _settle()
+                focus, accent = design.hex_colour("focus"), design.hex_colour("accent")
+                for shown in (False, True, False):
+                    table.view.set_focus_shown(shown)
+                    _settle()
+                    for ratio in SCALINGS:
+                        image = _rendered(table, ratio)
+                        where = (dark, shown, ratio)
+                        assert [_at(image, x, y) == focus for x, y in sides] == [shown] * 4, where
+                        assert not [point for point in beside if _at(image, *point) == focus], where
+                        assert _at(image, 0.5, top + 15) == _at(image, 3.5, top + 15) == accent, where   # the bar is whole
+                    if dark and not shown:                  # in dark the ring's colour is no other colour of a table
+                        assert design.colour("focus").rgb() not in _pixels(_rendered(table, 1.0))
+
+
+def test_a_cell_is_a_plain_description_and_the_table_keeps_its_words():
+    rt = _rt()
+    name = rt.TextCell("retrain_posterior", elide="middle")
+    count = rt.ValueCell("20,480,000", "simulations")
+    state = rt.StateCell("done", "Done")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        name.text = "another"
+    assert rt.TextCell("a") == rt.TextCell("a", quiet=False, elide="end", wrap=False)
+    assert rt.ValueCell("1") == rt.ValueCell("1", unit="", second="")
+    assert rt.Column("a") == rt.Column("a", width=None, right=False)
+
+    table = rt.RuleTable([rt.Column("Name", "fit"), rt.Column("Holds", None, right=True), rt.Column("State", 120)],
+                         [[name, count, state]])
+    model = table.view.model()
+    assert [model.index(0, c).data(Qt.UserRole) for c in range(3)] == [name, count, state]
+    assert model.index(0, 1).data(Qt.UserRole) is count
+    assert [model.index(0, c).data(Qt.DisplayRole) for c in range(3)] == [
+        "retrain_posterior", "20,480,000 simulations", "Done"]
+    assert [model.headerData(c, Qt.Horizontal) for c in range(3)] == ["Name", "Holds", "State"]
+    assert not model.index(0, 0).flags() & Qt.ItemIsEditable
+    assert isinstance(table.header, rt.RuleHeader) and table.header is table.view.horizontalHeader()
+    assert isinstance(table.view.itemDelegate(), rt.RuleDelegate)
+    assert rt.RuleHeader().sortable is False and rt.RuleHeader(sortable=True).sortable is True
+
+    with pytest.raises(ValueError):
+        table.set_rows([[name, count]])                               # a cell short
+    with pytest.raises(TypeError):
+        table.set_rows([[name, count, "Done"]])                       # words in place of a description
+    with pytest.raises(ValueError):
+        table.set_rows([[name, count, rt.StateCell("finished", "Finished")]])            # no such marker
+    with pytest.raises(ValueError):
+        rt.RuleTable([rt.Column("a"), rt.Column("b")])                # two columns cannot both take the room left
+    assert model.rowCount() == 1 and model.index(0, 2).data(Qt.UserRole) is state    # a refused call changed nothing
+
+    table.select_row(0)
+    assert table.selected_row() == 0
+    table.set_rows([[name, count, state], [name, count, state]])
+    assert table.view.model() is model and model.rowCount() == 2      # the same model: what listens to it stays
+    assert table.selected_row() is None                               # new rows, nothing selected
+    with _on_a_page(table):
+        QTest.mouseClick(table.view.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(200, 30 + 15))
+        assert table.selected_row() == 1
+
+    # Every kind of lettering a table draws, drawn once and never read (no pixel of a letter is): a test in which
+    # drawing code raised is failed when it ends, so no kind of cell can fail unseen for want of a picture.
+    lettered = rt.RuleTable(
+        [rt.Column("Name", "fit"), rt.Column("Note"), rt.Column("Holds", "fit", right=True), rt.Column("State", "fit")],
+        [[rt.TextCell("a name too long for its column " * 4, elide="middle"),
+          rt.TextCell("a note that runs on " * 12, wrap=True), rt.ValueCell("1,024", "rows", "of 20,480"),
+          rt.StateCell("warn", "Held")],
+         [rt.TextCell("a name", quiet=True), rt.TextCell("a note cut at its end " * 12, quiet=True), count, state]],
+        sortable=True)
+    with _on_a_page(lettered, width=900):
+        lettered.select_row(0)                                  # its first cell is semibold, and cut in its middle
+        lettered.view.set_focus_shown(True)
+        lettered.header.setSortIndicator(2, Qt.DescendingOrder)     # a chevron after words that stand at the right
+        _settle()
+        _rendered(lettered, 1.0)
+
+
+def test_a_wrapped_cell_makes_its_row_as_tall_as_its_lines_at_the_width_it_has():
+    rt = _rt()
+    words = " ".join(["a note that runs on"] * 12)
+    table = rt.RuleTable([rt.Column("", 120), rt.Column("")],
+                         [[rt.TextCell(""), rt.TextCell(words, wrap=True)], [rt.TextCell(""), rt.TextCell(words)]])
+    with _on_a_page(table, width=500) as page:
+        narrow = table.view.rowHeight(0)
+        assert narrow > 30 and (narrow - 10) % 20 == 0                # whole lines of 20, with 5 above and below
+        assert table.view.rowHeight(1) == 30                          # not wrapped: one line, cut at its end
+        assert table.height() == 2 + 27 + narrow + 30 + 2
+        page.resize(780, 400)
+        _settle()
+        wide = table.view.rowHeight(0)
+        assert 30 <= wide < narrow and (wide - 10) % 20 == 0          # more room, fewer lines: measured again
+        assert table.height() == 2 + 27 + wide + 30 + 2
+
+
+def test_a_table_whose_painting_fails_draws_the_stock_cell_and_section_and_leaves_each_painter_as_found(monkeypatch):
+    """What the table's four painting methods answer when a colour fails under them. A cell and a header section
+    are then drawn as the toolkit itself draws them, from the words the model keeps, and the painter each was
+    handed is left with nothing saved on it: the view paints cell after cell, and the header section after
+    section, with one painter. The two paint events draw nothing more, and each has ended its own painter by the
+    time its error is recorded: the words of the error, which are read while the failed call still stands, say
+    whether that painter still paints. Nothing comes out of any call."""
+    from PySide6.QtCore import qInstallMessageHandler
+    from PySide6.QtWidgets import QHeaderView, QStyledItemDelegate, QStyleOptionViewItem
+    from core.gui import reported
+    rt = _rt()
+    opened, said = [], []                                       # the painters the table opens; what the toolkit says
+
+    class Noted(QPainter):
+        def __init__(self, device):
+            super().__init__(device)
+            opened.append(weakref.ref(self))
+
+    class NoColour(Exception):                                  # its words are made when the record reads them
+        def __str__(self):
+            return f"its painter still paints: {[painter().isActive() for painter in opened[-1:]]}"
+
+    real = design.colour
+
+    def without(*names):                                        # the look's colours with these failing, or all
+        def colour(name):
+            if not names or name in names:
+                raise NoColour()
+            return real(name)
+        return colour
+
+    def drawn(by, *told):                                       # one call on a painter of the test's own
+        heard, picture = len(said), _image(120, 30, 1.0)
+        painter = QPainter(picture)
+        try:
+            by(painter, *told)
+        finally:
+            painter.end()                                       # a save left on the painter is told here
+        return picture, [text for text in said[heard:] if "paint" in text.lower()]
+
+    previous = qInstallMessageHandler(lambda kind, context, text: said.append(text))
+    try:
+        with _the_look(True), reported.expected() as caught:
+            table = _blank(sortable=True)
+            with _on_a_page(table):
+                view, header, delegate = table.view, table.header, table.view.itemDelegate()
+                table.select_row(1)                             # a selected cell has its ground to draw,
+                header.setSortIndicator(0, Qt.AscendingOrder)   # a sorted section its chevron,
+                view.set_focus_shown(True)                      # and the current row its ring
+                _settle()
+                option = QStyleOptionViewItem()
+                option.initFrom(view)
+                option.rect, option.state = QRect(0, 0, 120, 30), option.state | QStyle.State_Selected
+                cell, section = (option, view.model().index(1, 0)), (QRect(0, 0, 120, 27), 0)
+                own_cell, own_section = drawn(delegate.paint, *cell), drawn(header.paintSection, *section)
+                stock_cell = drawn(lambda *told: QStyledItemDelegate.paint(delegate, *told), *cell)
+                stock_section = drawn(lambda *told: QHeaderView.paintSection(header, *told), *section)
+                with monkeypatch.context() as patch:            # every colour fails: the cell, then the section
+                    patch.setattr(design, "colour", without())
+                    assert drawn(delegate.paint, *cell) == stock_cell != own_cell
+                    assert drawn(header.paintSection, *section) == stock_section != own_section
+                with monkeypatch.context() as patch:            # the ring's colour fails under the view's painter,
+                    patch.setattr(rt, "QPainter", Noted)        # then the hairline's under the header's
+                    patch.setattr(design, "colour", without("focus"))
+                    _rendered(view, 1.0)
+                    patch.setattr(design, "colour", without("rule"))
+                    _rendered(header, 1.0)
+        module = "core.gui.widgets.rule_table."
+        assert caught == [(module + "RuleDelegate.paint", "NoColour: its painter still paints: []"),
+                          (module + "RuleHeader.paintSection", "NoColour: its painter still paints: []"),
+                          (module + "RuleView.paintEvent", "NoColour: its painter still paints: [False]"),
+                          (module + "RuleHeader.paintEvent", "NoColour: its painter still paints: [False]")]
+    finally:
+        qInstallMessageHandler(previous)
