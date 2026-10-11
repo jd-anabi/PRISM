@@ -10,7 +10,9 @@ import ast
 import builtins
 import contextlib
 import datetime
+import gc
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -24,21 +26,23 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, Qt
-from PySide6.QtGui import (QFocusEvent, QFont, QFontDatabase, QFontInfo, QFontMetricsF, QGuiApplication, QImage,
-                           QKeyEvent, QMouseEvent, QPainter, QRegion, QWheelEvent)
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt
+from PySide6.QtGui import (QColor, QFocusEvent, QFont, QFontDatabase, QFontInfo, QFontMetricsF, QGuiApplication,
+                           QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QRegion, QWheelEvent)
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QLineEdit, QMenu, QPlainTextEdit, QPushButton,
                                QRadioButton, QStyle, QStyleFactory, QStyleOptionButton, QStyleOptionFocusRect,
                                QWidget)
 
-from core.gui import design, fonts
+from core.gui import design, fonts, paint
+from core.gui.widgets.marker import Marker, painted_icon
+from core.gui.widgets.ruled import Ruled, SectionHead
 
 REPO = Path(__file__).resolve().parents[1]
 # every module of the look that exists; a new one joins this tuple in the commit that adds it, and the
 # fresh-interpreter test is then its proof that it loads no engine
 LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.gui.mpl_theme", "core.gui.settings",
                 "core.gui.file_chooser", "core.gui.widgets.labeled_inputs", "core.gui.paint", "core.gui.style",
-                "core.gui.reported", "core.Helpers.plot_colours")
+                "core.gui.reported", "core.Helpers.plot_colours", "core.gui.widgets.marker", "core.gui.widgets.ruled")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
 
@@ -2406,8 +2410,8 @@ _CALLED_WHILE_DRAWING = frozenset({
 # a method of a class that has a class of the toolkit among its bases.
 _CALLED_IN_A_TOOLKIT_CLASS = frozenset({"paint", "paintSection", "pixmap", "data", "headerData", "flags", "rowCount",
                                         "columnCount", "showEvent"})
-# The ten there are today, each with the fallback its guard names as it is written (None: it names none).
-# Typed out so that a guard taken off, or a fallback changed, fails here by name; a new one need not join.
+# Ten of them, each with the fallback its guard names as it is written (None: it names none). Typed out so
+# that a guard taken off one of them, or a fallback changed, fails here by name; a new one need not join.
 _GUARDED_TODAY = {
     "screens/artifact_screen.py: ArtifactScreen.showEvent": "QWidget.showEvent",
     "screens/home_screen.py: HomeScreen.showEvent": "QWidget.showEvent",
@@ -2671,6 +2675,7 @@ def test_the_looks_overrides_fall_back_to_the_stock_answer_when_they_fail(monkey
     """An override of the small style that fails answers, and draws, what Fusion itself does: a tick box is
     still a tick box. The ring's paint draws nothing and ends its painter; the follower's filter answers
     that the event is not taken. Nothing comes out, and each failure is recorded under its method's name."""
+    from PySide6.QtWidgets import QListWidget, QListWidgetItem
     from core.gui import design, paint, reported, style
     r = ring_room
     worn, stock = style.PrismStyle(), QStyleFactory.create("Fusion")
@@ -2735,6 +2740,24 @@ def test_the_looks_overrides_fall_back_to_the_stock_answer_when_they_fail(monkey
         small = "core.gui.style.PrismStyle."
         assert names(caught) == [small + "drawPrimitive", small + "pixelMetric", small + "styleHint"]
         assert reported.COUNTS == dict.fromkeys(names(caught), 2)
+
+        rows = QListWidget()                 # two ticked rows and no words: one painter paints them both
+        rows.setStyle(worn)                  # on this one widget, never on the application
+        for _row in range(2):
+            QListWidgetItem(rows).setCheckState(Qt.Checked)
+        rows.setFixedSize(120, 80)
+        rows.ensurePolished()
+        with monkeypatch.context() as patch:                 # a colour fails after the indicator saved the painter
+            patch.setattr(design, "colour", fail)
+            picture = _image(rows.width(), rows.height(), 1.0)
+            rows.render(picture)
+
+        def under(row):                      # the pixels under one row; its place is told inside the list's frame
+            box = rows.visualItemRect(rows.item(row)).translated(rows.frameWidth(), rows.frameWidth())
+            return [picture.pixel(x, y) for y in range(box.top(), box.bottom() + 1)
+                    for x in range(box.left(), box.right() + 1)]
+
+        assert under(1) == under(0) and len(set(under(1))) > 1, "the row after a failed tick box is not drawn as the first"
 
         _arrive(r.button, Qt.TabFocusReason)
         ring = r.follows.ring()
@@ -3168,3 +3191,385 @@ def test_a_stopped_follower_is_off_the_application_and_hears_nothing_more():
         assert calls == [], "a stopped follower's filter is still on the application"
     finally:
         follows.stop()
+
+
+# ── painted devices: markers, glyphs, icons, ruled lines, the hatching ─────────────────────────
+_SCALINGS = (1.0, 1.25, 1.5, 2.0)                    # the display scalings a device is drawn at
+_BLANK = QColor(255, 0, 255)                         # a ground no colour of the look can be taken for
+_BARE = _BLANK.name().upper()                        # that ground, as the colour of a pixel is named
+_HEAVY_RULE = {1.0: 2, 1.25: 2, 1.5: 3, 2.0: 4}      # a 2 px rule in device pixels at each scaling
+_HAIR_RULE = {1.0: 1, 1.25: 1, 1.5: 1, 2.0: 2}       # a 1 px rule
+# Where each shape shows which colour, and where it leaves the ground bare, in the 16-unit box a
+# marker is drawn in. Every point lies on the middle of a stroke or well inside a fill.
+_MARK_SHOWS = {
+    "done": ((8, 2.5, "ink"), (9.25, 8.2, "paper")), "now": ((8, 8, "accent"),),
+    "later": ((14.42, 9.04, "ink_3"),), "lock": ((8, 11, "ink_2"), (8, 2, "ink_2")),
+    "half": ((5, 8, "ink"), (11, 8, "paper"), (8, 1, "ink")), "none": ((8, 8, "ink_3"),),
+    "fine": ((8, 1, "ok"), (9.1, 8.2, "ok")), "info": ((8, 1, "ink_2"), (8, 4.9, "ink_2"), (8, 9.6, "ink_2")),
+    "warn": ((5, 12.5, "warn"), (8, 8, "warn_mark"), (8, 12.1, "warn_mark"), (8, 14.3, "warn_edge")),
+    "err": ((2, 8, "err"), (8, 8, "on_err"), (5.5, 5.5, "on_err")), "stop": ((8, 8, "err"),),
+    "chev_right": ((10.5, 8, "ink"),), "chev_down": ((8, 10.5, "ink"),), "chev_up": ((8, 5.5, "ink"),),
+    "help": ((8, 1, "ink"), (8, 12, "ink")),
+}
+_MARK_BARE = {
+    "done": ((0.5, 0.5),), "now": ((1.5, 1.5),), "later": ((8, 8), (13.78, 10.97)), "lock": ((8, 5.5),),
+    "half": ((0.5, 0.5),), "none": ((8, 4),), "fine": ((10, 12),), "info": ((5, 8),), "warn": ((2, 3),),
+    "err": ((0.1, 0.1),), "chev_right": ((4, 8), (12.5, 8)), "chev_down": ((8, 5.5),),
+    "chev_up": ((8, 10.5),), "help": ((3.5, 8),), "stop": ((1.5, 8),),
+}
+_MARK_INNER = ("paper", "on_err", "warn_mark")       # the marks that stand ON a filled shape
+
+
+def _screen(width, height, ratio, ground=_BLANK, draw=None):
+    """A picture standing in for a screen at one scaling, on a ground of one colour, with
+    ``draw(painter)`` painted into it. The painter is ended whatever ``draw`` does: a picture that
+    goes while a painter still paints on it ends the whole run, where the test should only fail."""
+    image = _image(width, height, ratio)             # its size is rounded UP there: rounded down, a last row is cut
+    image.fill(ground)
+    if draw is not None:
+        painter = QPainter(image)
+        try:
+            draw(painter)
+        finally:
+            painter.end()
+    return image
+
+
+def _screen_of(widget, ratio, ground=_BLANK):
+    """A widget painted into such a picture, with no ground of its own under it."""
+    image = _screen(widget.width(), widget.height(), ratio, ground)
+    widget.render(image, QPoint(0, 0), QRegion(), QWidget.RenderFlag.DrawChildren)
+    return image
+
+
+def _every_pixel(image):
+    return [image.pixelColor(x, y) for y in range(image.height()) for x in range(image.width())]
+
+
+def _run_of(image, colour, *, column=None, row=None):
+    """Where one colour's device pixels lie down one column, or along one row."""
+    if column is not None:
+        return [y for y in range(image.height()) if image.pixelColor(column, y) == colour]
+    return [x for x in range(image.width()) if image.pixelColor(x, row) == colour]
+
+
+def _device_edge(value):
+    return int(math.floor(value + 0.5))
+
+
+def test_the_ten_states_and_the_five_glyphs_are_named_once():
+    assert paint.MARKERS == ("done", "now", "later", "lock", "half", "none", "fine", "info", "warn", "err")
+    assert paint.GLYPHS == ("chev_right", "chev_down", "chev_up", "help", "stop")
+    assert set(_MARK_SHOWS) == set(_MARK_BARE) == set(paint.MARKERS + paint.GLYPHS)
+
+
+def test_each_marker_and_glyph_shows_its_colours_in_both_themes_at_four_scalings(monkeypatch):
+    QApplication.instance() or QApplication([])
+
+    def draw(painter):
+        paint.paint_marker(painter, kind, QRectF(4, 4, 64, 64))                  # 4 px to a unit
+        assert painter.transform().isIdentity() and not painter.testRenderHint(QPainter.Antialiasing)   # left as found
+
+    for dark, ratio, kind in itertools.product((False, True), _SCALINGS, paint.MARKERS + paint.GLYPHS):
+        with theme(dark):
+            image = _screen(72, 72, ratio, draw=draw)
+            for x, y, name in _MARK_SHOWS[kind]:
+                assert _at(image, 4 + 4 * x, 4 + 4 * y) == design.hex_colour(name), (kind, dark, ratio, x, y, name)
+            for x, y in _MARK_BARE[kind]:
+                assert _at(image, 4 + 4 * x, 4 + 4 * y) == _BARE, (kind, dark, ratio, x, y)
+
+    def fails(painter):                      # no colour to be had: the paint fails once the painter is moved, scaled and smoothing
+        with pytest.raises(KeyError):
+            paint.paint_marker(painter, "done", QRectF(4, 4, 64, 64))
+        assert painter.transform().isIdentity() and not painter.testRenderHint(QPainter.Antialiasing), "a paint that failed did not leave the painter as it found it"
+
+    with monkeypatch.context() as patch:
+        patch.setattr(design, "COLOURS", {})
+        _screen(72, 72, 1.0, draw=fails)
+
+
+def test_a_disabled_marker_keeps_its_inner_mark():
+    """Drawn disabled, a shape takes the colour of disabled text and the mark that stands on it stays
+    the page's colour: a tick, a cross or a half must not vanish into its shape."""
+    QApplication.instance() or QApplication([])
+    for dark, ratio, kind in itertools.product((False, True), _SCALINGS, paint.MARKERS + paint.GLYPHS):
+        with theme(dark):
+            image = _screen(72, 72, ratio, draw=lambda p: paint.paint_marker(p, kind, QRectF(4, 4, 64, 64), disabled=True))
+            for x, y, name in _MARK_SHOWS[kind]:
+                want = "paper" if name in _MARK_INNER else "disabled_ink"
+                assert _at(image, 4 + 4 * x, 4 + 4 * y) == design.hex_colour(want), (kind, dark, ratio, x, y, name)
+            assert design.hex_colour("paper") != design.hex_colour("disabled_ink")
+
+
+def test_a_marker_stays_inside_its_box_and_an_unknown_kind_paints_nothing():
+    QApplication.instance() or QApplication([])
+    for ratio, kind in itertools.product(_SCALINGS, paint.MARKERS + paint.GLYPHS + ("tick",)):
+        image = _screen(24, 24, ratio, draw=lambda p: paint.paint_marker(p, kind, QRectF(4, 4, 16, 16)))   # as on a page
+        low, high = int(4 * ratio), int(20 * ratio)
+        touched = [(x, y) for y in range(image.height()) for x in range(image.width())
+                   if image.pixelColor(x, y) != _BLANK]
+        assert all(low <= x < high and low <= y < high for x, y in touched), (kind, ratio)
+        assert bool(touched) == (kind != "tick"), (kind, ratio)
+
+
+def test_fill_px_lays_whole_device_pixels_from_the_edge_named_at_every_position():
+    QApplication.instance() or QApplication([])
+    ink = QColor(26, 26, 26)
+    # the four scalings, and two that lie between and beyond them: a weight is rounded DOWN to whole
+    # device pixels there too, and is never none
+    heavy, hair = {**_HEAVY_RULE, 1.75: 3, 2.5: 5}, {**_HAIR_RULE, 1.75: 1, 2.5: 2}
+    bar = {1.0: 4, 1.25: 5, 1.5: 6, 1.75: 7, 2.0: 8, 2.5: 10}
+    for ratio, (weight, want), position, side in itertools.product(
+            sorted(bar), ((2, heavy), (1, hair), (4, bar)), range(24), ("top", "bottom", "left", "right")):
+        across = side in ("top", "bottom")
+        rect = QRectF(5, position, 30, 11) if across else QRectF(position, 5, 11, 30)
+        image = _screen(48, 48, ratio, draw=lambda p: paint.fill_px(p, rect, ink, **{side: weight}))
+        middle = int(20 * ratio)
+        run = _run_of(image, ink, column=middle) if across else _run_of(image, ink, row=middle)
+        first = _device_edge(position * ratio) if side in ("top", "left") else _device_edge((position + 11) * ratio) - want[ratio]
+        assert run == list(range(first, first + want[ratio])), (ratio, weight, side, position, run)
+
+    def frame(painter):
+        painter.setRenderHint(QPainter.Antialiasing, True)      # a caller's painter may be smoothing
+        painter.translate(0, 0.3)                               # and may stand between two pixels
+        paint.fill_px(painter, QRectF(5, 5, 30, 20), ink, top=1, bottom=1, left=1, right=1)
+
+    for ratio in sorted(bar):
+        pixels = _every_pixel(_screen(48, 48, ratio, draw=frame))
+        assert {pixel.rgb() for pixel in pixels} == {ink.rgb(), _BLANK.rgb()}, ratio        # no blended pixel
+        n, wide, high = hair[ratio], _device_edge(35 * ratio) - _device_edge(5 * ratio), _device_edge(25.3 * ratio) - _device_edge(5.3 * ratio)
+        assert pixels.count(ink) == wide * high - (wide - 2 * n) * (high - 2 * n), ratio     # each corner once, the inside bare
+
+    def smaller(painter):
+        painter.scale(0.4, 0.4)                                 # a drawing made smaller: 1 px is 0.4 of a device pixel
+        paint.fill_px(painter, QRectF(10, 10, 60, 40), ink, top=1, left=1)
+
+    small = _screen(48, 48, 1.0, draw=smaller)
+    assert (_run_of(small, ink, column=10), _run_of(small, ink, row=10)) == ([4], [4])   # one device pixel each, never none
+    nothing = _screen(48, 48, 1.5, draw=lambda p: paint.fill_px(p, QRectF(5, 5, 30, 20), ink))
+    assert all(pixel == _BLANK for pixel in _every_pixel(nothing))                               # no edge named, nothing painted
+
+
+def test_the_hatching_stays_in_its_rectangle_and_does_not_move_with_it(monkeypatch):
+    QApplication.instance() or QApplication([])
+    for dark, ratio in itertools.product((False, True), _SCALINGS):
+        with theme(dark):
+            paper, hatch = design.colour("paper"), design.colour("hatch")
+
+            def hatched(painter):
+                paint.paint_hatch(painter, QRectF(10, 4, 212, 12), hatch)
+                assert not painter.hasClipping() and not painter.testRenderHint(QPainter.Antialiasing)   # left as found
+
+            image = _screen(240, 20, ratio, paper, hatched)
+            left, right, top, bottom = int(10 * ratio), math.ceil(222 * ratio), int(4 * ratio), math.ceil(16 * ratio)
+            assert all(image.pixelColor(x, y) == paper for y in range(image.height()) for x in range(image.width())
+                       if not (left <= x < right and top <= y < bottom)), (dark, ratio)
+            row = [image.pixelColor(x, int(10 * ratio)).red() for x in range(image.width())]
+            strokes = sum(1 for i, red in enumerate(row) if red != paper.red() and (i == 0 or row[i - 1] == paper.red()))
+            assert strokes in (29, 30, 31), (dark, ratio, strokes)  # one every 5 px ACROSS the stroke: 212 / (5 x root 2) = 29.98
+            low, high = sorted((paper.red(), hatch.red()))
+            assert all(low - 1 <= red <= high + 1 for red in row)   # the two colours and their mixtures, nothing else
+            assert max(abs(red - paper.red()) for red in row) >= 0.9 * (high - low), (dark, ratio)
+            # A range is hatched twice on the time axis, ahead of the elapsed bar and through it: the strokes
+            # of two rectangles with one top and one height fall on each other wherever both are.
+            wide, narrow = (_screen(240, 20, ratio, paper, lambda p: paint.paint_hatch(p, QRectF(x0, 4, 160 - x0, 12), hatch))
+                            for x0 in (10, 47))
+            worst = max(abs(wide.pixelColor(x, y).red() - narrow.pixelColor(x, y).red())
+                        for y in range(int(4 * ratio) + 1, int(16 * ratio) - 1)
+                        for x in range(math.ceil(48 * ratio) + 1, int(160 * ratio) - 1))
+            assert worst <= 8, (dark, ratio, worst)     # smoothing rounds by a level or two; a moved stroke by over a hundred
+    for width in (0, -5):
+        empty = _screen(40, 20, 1.0, draw=lambda p: paint.paint_hatch(p, QRectF(10, 4, width, 12), QColor(77, 77, 77)))
+        assert all(pixel == _BLANK for pixel in _every_pixel(empty))
+
+    def fails(painter):                      # no hatch step to be had: the paint fails once the painter is clipped and smoothing
+        with pytest.raises(KeyError):
+            paint.paint_hatch(painter, QRectF(10, 4, 20, 12), QColor(77, 77, 77))
+        assert not painter.hasClipping() and not painter.testRenderHint(QPainter.Antialiasing), "a paint that failed did not leave the painter as it found it"
+
+    with monkeypatch.context() as patch:
+        patch.setattr(design, "SIZE", {name: size for name, size in design.SIZE.items() if name != "hatch_step"})
+        _screen(40, 20, 1.0, draw=fails)
+
+
+def test_a_ruled_block_paints_whole_rules_from_its_own_edges_in_both_themes_at_four_scalings():
+    QApplication.instance() or QApplication([])
+    for dark, ratio in itertools.product((False, True), _SCALINGS):
+        with theme(dark):
+            block, child = Ruled(top=2, bottom=2), QWidget()        # what a block holds never covers its rules
+            child.setAutoFillBackground(True)
+            look = child.palette()
+            look.setColor(child.backgroundRole(), QColor(0, 255, 0))
+            child.setPalette(look)
+            block.box.addWidget(child)
+            block.resize(60, 31)                                    # 31: at 1.25 and 1.5 its foot falls inside a pixel
+            block.layout().activate()
+            column, n, foot = int(30 * ratio), _HEAVY_RULE[ratio], _device_edge(31 * ratio)
+            assert _run_of(_screen_of(block, ratio), design.colour("rule"), column=column) == [*range(n), *range(foot - n, foot)], (dark, ratio)
+            quiet = Ruled(top=1, colour="rule_light")
+            quiet.resize(60, 31)
+            assert _run_of(_screen_of(quiet, ratio), design.colour("rule_light"), column=column) == [*range(_HAIR_RULE[ratio])], (dark, ratio)
+    spaced = Ruled(top=2, bottom=1, gap_top=7, gap_bottom=3)    # held in a name: its layout goes when it does
+    room = spaced.box.contentsMargins()
+    assert (room.left(), room.top(), room.right(), room.bottom(), spaced.box.spacing()) == (0, 9, 0, 4, 0)
+    with pytest.raises(ValueError):                             # a colour is named when the block is built, not when it paints
+        Ruled(top=1, colour="grey")
+    plain = Ruled()
+    plain.resize(20, 20)
+    assert all(pixel == _BLANK for pixel in _every_pixel(_screen_of(plain, 1.0)))
+
+
+def test_a_section_heading_is_sixteen_pixels_semibold_over_a_heavy_rule_six_pixels_under_it():
+    QApplication.instance() or QApplication([])
+    with text_size(1.0):                                        # the sizes below are those of the ordinary text size
+        head = SectionHead("Main settings")
+        font = head.label.font()
+        assert (head.label.text(), font.pixelSize(), font.weight()) == ("Main settings", 16, QFont.Weight.DemiBold)
+        assert head.label.property("cls") == "head" and head.label.textFormat() == Qt.PlainText   # a name may hold "<" or "&"
+        assert head.sizeHint().height() == 22 + 6 + 2           # the heading's line, the gap, the rule
+        head.resize(600, 30)
+        head.layout().activate()
+        for dark, ratio in itertools.product((False, True), _SCALINGS):
+            with theme(dark):
+                image, n, foot = _screen_of(head, ratio), _HEAVY_RULE[ratio], _device_edge(30 * ratio)
+                # read at the far right, where no letter stands: in the light theme a letter has the rule's colour
+                assert _run_of(image, design.colour("rule"), column=image.width() - 3) == [*range(foot - n, foot)], (dark, ratio)
+        aside = QWidget()                                       # of a fixed size: no width of lettering is read
+        aside.setFixedSize(40, 12)
+        head.add_right(aside)
+        head.layout().activate()
+        assert (aside.geometry().right(), aside.geometry().bottom()) == (599, 21)     # at the right, on the heading's foot
+        head.set_text("This training")
+        assert head.label.text() == "This training"
+    with text_size(1.25):                                       # lengths grow with the text; the rule does not
+        assert SectionHead("Main settings").sizeHint().height() == 28 + 8 + 2
+
+
+def test_a_marker_widget_is_sixteen_pixels_grows_with_the_text_and_reads_the_theme_when_it_paints():
+    QApplication.instance() or QApplication([])
+    with text_size(1.0):                                        # the sizes below are those of the ordinary text size
+        dot = Marker("now")
+        assert (dot.width(), dot.height(), dot.kind) == (16, 16, "now")
+        assert Marker("warn", design.DIALOG["marker"]).width() == 24
+        assert design.hex_colour("accent", False) != design.hex_colour("accent", True)
+        for ratio, dark in itertools.product(_SCALINGS, (False, True)):
+            with theme(dark):
+                image = _screen_of(dot, ratio)                          # the SAME widget: it keeps no colour
+                assert (_at(image, 8, 8), _at(image, 0.3, 0.3)) == (design.hex_colour("accent"), _BARE), (ratio, dark)
+        dot.set_kind("stop")
+        assert dot.kind == "stop" and _at(_screen_of(dot, 2.0), 8, 8) == design.hex_colour("err")
+        dot.setEnabled(False)                                   # greyed with the form it stands in
+        assert _at(_screen_of(dot, 1.0), 8, 8) == design.hex_colour("disabled_ink")
+        for unknown in ("tick", "", None):
+            with pytest.raises(ValueError):
+                Marker(unknown)
+        with pytest.raises(ValueError):
+            dot.set_kind("tick")
+    with text_size(1.25):                                       # a length grows with the text
+        assert Marker("done").width() == 20 and Marker("warn", design.DIALOG["marker"]).width() == 30
+
+
+def test_a_painted_icon_is_sharp_at_every_scaling_follows_the_theme_and_greys_when_disabled():
+    QApplication.instance() or QApplication([])
+    square = {1.0: 100, 1.25: 144, 1.5: 196, 2.0: 400}          # the 10-unit square of "stop" in whole device pixels
+    icon = painted_icon("stop")
+    gc.collect()                                                # the engine lives on with no name of its own
+    assert not icon.isNull()
+    for dark, ratio in itertools.product((False, True), _SCALINGS):
+        with theme(dark):
+            pixmap = icon.pixmap(QSize(16, 16), ratio)
+            assert (pixmap.width(), pixmap.devicePixelRatio()) == (math.ceil(16 * ratio), ratio)
+            picture = pixmap.toImage()
+            assert picture.pixelColor(0, 0).alpha() == 0 and _every_pixel(picture).count(design.colour("err")) == square[ratio]
+            for mode, name in ((QIcon.Normal, "err"), (QIcon.Disabled, "disabled_ink")):
+                image = _screen(32, 24, ratio, draw=lambda p: icon.paint(p, QRect(4, 4, 20, 16), Qt.AlignCenter, mode, QIcon.Off))
+                # a wider icon keeps the glyph at its left: the room before a button's words stays bare
+                assert (_at(image, 12, 12), _at(image, 22, 12)) == (design.hex_colour(name), _BARE), (dark, ratio, name)
+    with theme(False):
+        button = QPushButton()                                  # no words: no pixel of lettering is read
+        button.setIcon(icon)
+        button.setIconSize(QSize(20, 16))
+        button.resize(60, 34)
+        assert _every_pixel(_screen_of(button, 1.0, QColor(255, 255, 255))).count(design.colour("err")) == 100
+        button.setEnabled(False)
+        greyed = _every_pixel(_screen_of(button, 1.0, QColor(255, 255, 255)))
+        assert greyed.count(design.colour("err")) == 0 and greyed.count(design.colour("disabled_ink")) >= 100
+    with pytest.raises(ValueError):
+        painted_icon("tick")
+
+
+def test_a_marker_and_a_ruled_block_whose_paint_fails_draw_nothing_end_their_painter_and_report_it(monkeypatch):
+    """What the two paint events answer when a colour fails under their painter: nothing is drawn, nothing
+    comes out of the call that made the widget draw, and the error stands in the record under the paint
+    event's own name. Each has ended its painter by then: the words of the error, which are read while the
+    failed call still stands, say whether its painter still paints. The next paint is a whole one."""
+    from core.gui import reported
+    from core.gui.widgets import marker, ruled
+    QApplication.instance() or QApplication([])
+    with text_size(1.0):                                        # the marker's middle is read at the ordinary text size
+        dot, block = Marker("now"), Ruled(top=2)
+    block.resize(60, 31)
+    opened = []                                                 # each painter a paint event opens, noted and not kept alive
+
+    class Noted(QPainter):
+        def __init__(self, device):
+            super().__init__(device)
+            opened.append(weakref.ref(self))
+
+    class NoColour(Exception):                                  # its words are made when the record reads them
+        def __str__(self):
+            return f"its painter still paints: {opened[-1]().isActive()}"
+
+    def fail(*told, **named):
+        raise NoColour()
+
+    with reported.expected() as caught, monkeypatch.context() as patch:
+        patch.setattr(marker, "QPainter", Noted)
+        patch.setattr(ruled, "QPainter", Noted)
+        patch.setattr(design, "colour", fail)                   # each paint fails under its live painter
+        for widget in (dot, block):
+            assert all(pixel == _BLANK for pixel in _every_pixel(_screen_of(widget, 1.0))), type(widget).__name__
+    assert caught == [("core.gui.widgets.marker.Marker.paintEvent", "NoColour: its painter still paints: False"),
+                      ("core.gui.widgets.ruled.Ruled.paintEvent", "NoColour: its painter still paints: False")]
+    assert _at(_screen_of(dot, 1.0), 8, 8) == design.hex_colour("accent")       # and each paints whole again
+    assert _run_of(_screen_of(block, 1.0), design.colour("rule"), column=30) == [0, 1]
+
+
+def test_a_painted_icon_never_ends_the_process():
+    """In an interpreter of its own, because each fault here ends the whole process, which would be
+    the test run itself. When a copy of an icon is changed the toolkit asks the icon's engine for a
+    twin, and a twin that nothing keeps alive ends the process. So does a picture that is let go while
+    the engine's painter still paints on it, as after an error raised under that painter; the toolkit
+    says so before it happens, and whatever it says about painting is printed. No error comes out of the
+    engine: each is recorded under its method's name, and the toolkit is answered a clear picture."""
+    code = "\n".join((
+        "import gc",
+        "from PySide6.QtCore import QRect, QSize, qInstallMessageHandler",
+        "from PySide6.QtGui import QIcon, QImage, QPainter, QPixmap",
+        "from PySide6.QtWidgets import QApplication",
+        "app = QApplication([])",
+        "qInstallMessageHandler(lambda kind, context, text: print('the toolkit said:', text) if 'paint' in text.lower() else None)",
+        "from core.gui import paint, reported",
+        "from core.gui.widgets import marker",
+        "icon = marker.painted_icon('stop'); copy = QIcon(icon); copy.addPixmap(QPixmap(8, 8)); gc.collect()",
+        "image = QImage(32, 32, QImage.Format_ARGB32_Premultiplied); image.fill(0); painter = QPainter(image)",
+        "icon.paint(painter, QRect(0, 0, 16, 16)); copy.paint(painter, QRect(16, 16, 16, 16)); painter.end()",
+        "print(image.pixelColor(8, 8).name(), image.pixelColor(24, 24).name())",
+        "del icon, copy; gc.collect()",
+        "def broken(*args, **kwargs): raise KeyError('a colour the table lacks')",
+        "with reported.expected() as caught:",
+        "    paint.paint_marker = broken",
+        "    first = marker.painted_icon('stop').pixmap(QSize(16, 16), 1.0)",
+        "    marker.PaintedIcon.paint = broken",
+        "    second = marker.painted_icon('stop').pixmap(QSize(16, 16), 1.0)",
+        "    gc.collect()",
+        "    print(*(name for name, _words in caught))",
+        "    print(first.width(), first.toImage().pixelColor(8, 8).alpha(), second.width(), second.toImage().pixelColor(8, 8).alpha())",
+        "gc.collect()"))
+    done = subprocess.run([sys.executable, "-u", "-c", code], cwd=str(REPO),
+                          env=dict(os.environ, QT_QPA_PLATFORM="offscreen"),
+                          capture_output=True, text=True, timeout=120)     # -u: what was printed before a fault is kept
+    vermilion, engine = design.hex_colour("err", False).lower(), "core.gui.widgets.marker.PaintedIcon."
+    assert (done.returncode, done.stdout.split()) == (
+        0, [vermilion, vermilion, engine + "paint", engine + "pixmap", "16", "0", "16", "0"]), \
+        (done.returncode, done.stdout, done.stderr[-2000:])
