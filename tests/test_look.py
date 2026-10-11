@@ -2875,7 +2875,7 @@ def test_an_open_tab_is_lettered_in_the_full_text_colour_and_a_locked_one_in_the
 def test_the_pointer_gives_an_open_tab_a_ground_and_a_locked_tab_nothing():
     """An open tab's word is in the full text colour already, so its colour cannot answer the pointer: the tab
     takes the ground an ordinary button takes under the pointer. A locked tab keeps its look there, because the
-    sheet's rule for the pointer is never given to a greyed tab (its tool tip shows all the same), and the tab
+    sheet's rule for the pointer is never given to a greyed tab (the bar does give the pointer's place to it), and the tab
     in front keeps its ground and its line. The pointer here is a hover event handed to a bar that is never shown."""
     from PySide6.QtGui import QHoverEvent
 
@@ -2883,6 +2883,7 @@ def test_the_pointer_gives_an_open_tab_a_ground_and_a_locked_tab_nothing():
         box = bar.tabRect(index)
         middle = QPointF(box.center())
         QApplication.sendEvent(bar, QHoverEvent(QEvent.HoverMove, middle, middle, QPointF(-1, -1)))
+        assert bar.tabAt(middle.toPoint()) == index, (dark, index, "the bar gives that point to another tab")
         picture = _over_paper(bar, dark)
         ground, word, _wide = _lettering(picture, box.adjusted(2, 2, -2, -4))
         return ground, word, _at(picture, box.center().x(), box.bottom())
@@ -2900,6 +2901,7 @@ def test_the_pointer_gives_an_open_tab_a_ground_and_a_locked_tab_nothing():
         rules = {tuple(selectors): declarations for selectors, declarations in _rules(design.build_qss(dark))}
         assert rules[("QTabBar::tab:hover",)] == {"color": ink, "background": under}, dark
         assert "background" not in rules[("QTabBar::tab:disabled",)], dark
+        assert pointed(bar, 1, dark)[0] == under, (dark, "the pointer back on the open tab")
         QApplication.sendEvent(bar, QHoverEvent(QEvent.HoverLeave, QPointF(-1, -1), QPointF(-1, -1), QPointF(1, 1)))
         gone = _lettering(_over_paper(bar, dark), bar.tabRect(1).adjusted(2, 2, -2, -4))
         assert gone[:2] == (paper, ink), (dark, "the pointer gone")
