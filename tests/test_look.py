@@ -3388,6 +3388,16 @@ def test_the_hatching_stays_in_its_rectangle_and_does_not_move_with_it(monkeypat
             low, high = sorted((paper.red(), hatch.red()))
             assert all(low - 1 <= red <= high + 1 for red in row)   # the two colours and their mixtures, nothing else
             assert max(abs(red - paper.red()) for red in row) >= 0.9 * (high - low), (dark, ratio)
+            # The strokes' ink along that row, in device pixels of the full colour. A stroke 1 px thick at every
+            # 5 px covers a fifth of the row; at 100 %, where it is one device pixel thick, the toolkit lays one
+            # pixel of ink to a row, 0.71 of that. Twice as thick, it is twice the ink.
+            inked = sum(abs(red - paper.red()) for red in row) / (high - low)
+            assert 0.65 < inked / (212 * ratio / 5) < 1.1, (dark, ratio, inked)
+            # Every stroke climbs to the right at 45 degrees: moved one device pixel right and one up, the picture
+            # falls on itself. Leaning the other way, it would not.
+            lean = max(abs(image.pixelColor(x + 1, y - 1).red() - image.pixelColor(x, y).red())
+                       for y in range(top + 2, bottom - 1) for x in range(left + 1, right - 2))
+            assert lean <= 8, (dark, ratio, lean)       # smoothing rounds by a level; strokes leaning the other way by over a hundred
             # A range is hatched twice on the time axis, ahead of the elapsed bar and through it: the strokes
             # of two rectangles with one top and one height fall on each other wherever both are.
             wide, narrow = (_screen(240, 20, ratio, paper, lambda p: paint.paint_hatch(p, QRectF(x0, 4, 160 - x0, 12), hatch))
@@ -3399,6 +3409,9 @@ def test_the_hatching_stays_in_its_rectangle_and_does_not_move_with_it(monkeypat
     for width in (0, -5):
         empty = _screen(40, 20, 1.0, draw=lambda p: paint.paint_hatch(p, QRectF(10, 4, width, 12), QColor(77, 77, 77)))
         assert all(pixel == _BLANK for pixel in _every_pixel(empty))
+    for height in (0, -5):                   # nor is a rectangle with no height hatched
+        empty = _screen(40, 20, 1.0, draw=lambda p: paint.paint_hatch(p, QRectF(10, 4, 20, height), QColor(77, 77, 77)))
+        assert all(pixel == _BLANK for pixel in _every_pixel(empty)), height
 
     def clipped(painter):                    # a clip the caller set stands: the hatching is cut to both
         painter.setClipRect(QRectF(0, 0, 30, 20))
@@ -3484,13 +3497,18 @@ def test_a_marker_widget_is_sixteen_pixels_grows_with_the_text_and_reads_the_the
     with text_size(1.0):                                        # the sizes below are those of the ordinary text size
         dot = Marker("now")
         assert (dot.width(), dot.height(), dot.kind) == (16, 16, "now")
+        assert (dot.minimumSize(), dot.maximumSize()) == (QSize(16, 16), QSize(16, 16))     # fixed: no layout squeezes or stretches it
         assert Marker("warn", design.DIALOG["marker"]).width() == 24
         assert design.hex_colour("accent", False) != design.hex_colour("accent", True)
         for ratio, dark in itertools.product(_SCALINGS, (False, True)):
             with theme(dark):
                 image = _screen_of(dot, ratio)                          # the SAME widget: it keeps no colour
                 assert (_at(image, 8, 8), _at(image, 0.3, 0.3)) == (design.hex_colour("accent"), _BARE), (ratio, dark)
+        asked = []
+        dot.update = lambda *told: asked.append(told)           # on this one widget, in place of the toolkit's own
         dot.set_kind("stop")
+        del dot.update
+        assert asked == [()], "a marker given another kind did not ask to be painted again"
         assert dot.kind == "stop" and _at(_screen_of(dot, 2.0), 8, 8) == design.hex_colour("err")
         dot.setEnabled(False)                                   # greyed with the form it stands in
         assert _at(_screen_of(dot, 1.0), 8, 8) == design.hex_colour("disabled_ink")
@@ -3499,6 +3517,7 @@ def test_a_marker_widget_is_sixteen_pixels_grows_with_the_text_and_reads_the_the
                 Marker(unknown)
         with pytest.raises(ValueError):
             dot.set_kind("tick")
+        assert dot.kind == "stop"                               # a refused kind changes nothing
     with text_size(1.25):                                       # a length grows with the text
         assert Marker("done").width() == 20 and Marker("warn", design.DIALOG["marker"]).width() == 30
 
