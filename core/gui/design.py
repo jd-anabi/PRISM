@@ -462,7 +462,11 @@ QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 # lose a pixel on each side to it. The square where two scroll bars meet takes the bars' own track. The icon
 # button takes no padding, so that a glyph in a fixed width is not squeezed, and the inner height of the field
 # beside it. The tree view is the records table, a tree used flat; its selection is the accent, which is also
-# QPalette.Highlight, so a row painted by hand would match.
+# QPalette.Highlight, so a row painted by hand would match. A tab that can be opened is written in the full
+# text colour and a locked one in the greyed colour: in the secondary text colour an open tab stood too near a
+# locked one to be told from it. The word of an open tab then has no stronger colour left to answer the pointer
+# with, so the tab takes the ground an ordinary button takes there; the sheet's rule for the pointer is never
+# given to a greyed tab, so a locked one keeps its look. The tab in front keeps its ground: it leads nowhere.
 _QSS_INTERIM = Template("""
 QListWidget, QTextEdit { border: 1px solid $field_line; border-radius: ${px_radius}px; background: $field;
                          color: $ink; placeholder-text-color: $ink_3; }
@@ -512,11 +516,11 @@ QGroupBox::title {
 QTabWidget::pane { border: none; }
 QTabBar { qproperty-drawBase: 0; }
 QTabBar::tab {
-    background: transparent; color: $ink_2; border: none;
+    background: transparent; color: $ink; border: none;
     padding: 6px 14px; margin-right: 4px; border-bottom: 2px solid transparent;
 }
-QTabBar::tab:hover     { color: $ink; }
-QTabBar::tab:selected  { color: $ink; border-bottom: 2px solid $accent; }
+QTabBar::tab:hover     { color: $ink; background: $hover_fill; }
+QTabBar::tab:selected  { color: $ink; background: transparent; border-bottom: 2px solid $accent; }
 QTabBar::tab:disabled  { color: $disabled_ink; }
 
 QProgressBar {

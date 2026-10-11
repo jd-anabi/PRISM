@@ -2784,3 +2784,119 @@ def test_a_test_in_which_drawing_code_failed_is_failed(request, monkeypatch):
             next(run)
     finally:
         reported.forget()
+
+
+# ── the tabs and the main button of the old layout, as the toolkit draws them under the sheet ────
+def _dressed(dark):
+    """A holder that wears one theme's sheet and is never shown; nothing is set on the application. Whoever
+    builds a widget in it gives that widget its own font: a holder with a sheet of its own does not hand its
+    font down. Given to the holder after its sheet, a font reaches no child; given before, it reaches the
+    children built until the holder is polished, which the first drawing of any child does, and none after."""
+    QApplication.instance() or QApplication([])
+    holder = QWidget()
+    holder.setStyleSheet(design.build_qss(dark))
+    return holder
+
+
+def _over_paper(widget, dark, ratio=4.0):
+    """A widget drawn on the page's colour, at a display scaling at which the stroke of a letter covers whole
+    device pixels. The widget's own window ground is left out: it would come from a palette the holder does
+    not hand down, in a grey of the toolkit's own."""
+    from PySide6.QtGui import QColor
+    picture = _image(widget.width(), widget.height(), ratio)
+    picture.fill(QColor(design.hex_colour("paper", dark)))
+    widget.render(picture, QPoint(0, 0), QRegion(), QWidget.RenderFlag.DrawChildren)
+    return picture
+
+
+def _lettering(picture, box):
+    """What stands in a box of a picture: its commonest colour (the ground), the colour farthest from that
+    (the core of the letters), both as the look's table writes a colour, and how wide the letters stand, in
+    logical pixels. A box with nothing in it gives its ground, None and 0.0."""
+    import collections
+    ratio = picture.devicePixelRatio()
+    part = picture.copy(QRect(round(box.x() * ratio), round(box.y() * ratio), round(box.width() * ratio),
+                              round(box.height() * ratio))).convertToFormat(QImage.Format_RGB32)
+    values, across = memoryview(part.constBits()).cast("I"), part.width()
+    seen = collections.Counter(values)
+
+    def apart(one, other):                   # how far two pixel values stand from each other, over the three channels
+        return sum(abs((one >> shift & 255) - (other >> shift & 255)) for shift in (16, 8, 0))
+
+    def written(value):
+        return f"#{value & 0xFFFFFF:06X}"
+
+    ground = seen.most_common(1)[0][0]
+    core = max(seen, key=lambda value: apart(value, ground))
+    if core == ground:
+        return written(ground), None, 0.0
+    inked = {value for value in seen if 2 * apart(value, ground) > apart(core, ground)}
+    columns = [index % across for index, value in enumerate(values) if value in inked]
+    return written(ground), written(core), (max(columns) - min(columns) + 1) / ratio
+
+
+def _tab_row(dark):
+    """A stock tab bar under one theme's sheet, with its holder, which must outlive it: the first tab is the
+    one in front, the second can be opened, the last two are locked."""
+    from PySide6.QtWidgets import QTabBar
+    holder = _dressed(dark)
+    bar = QTabBar(holder)
+    bar.setFont(fonts.inter("body"))
+    for word in ("Config", "Prior", "Posterior", "Validate"):
+        bar.addTab(word)
+    for locked in (2, 3):
+        bar.setTabEnabled(locked, False)
+    bar.ensurePolished()
+    bar.resize(bar.sizeHint())
+    return holder, bar
+
+
+def test_an_open_tab_is_lettered_in_the_full_text_colour_and_a_locked_one_in_the_greyed_colour():
+    """A tab that can be opened is written in the full text colour, in front or not, and a locked one in the
+    greyed colour, which is dark enough to be read: written in the secondary text colour, an open tab stood so
+    near a locked one that the two could not be told apart at a glance. The tab in front is then marked by its
+    line in the accent alone, and no other tab has that line. Read off a stock tab bar as it paints itself
+    under the built sheet, in both themes."""
+    for dark in (False, True):
+        ink, greyed, accent, paper = (design.hex_colour(name, dark)
+                                      for name in ("ink", "disabled_ink", "accent", "paper"))
+        holder, bar = _tab_row(dark)
+        picture = _over_paper(bar, dark)
+        boxes = [bar.tabRect(index) for index in range(bar.count())]
+        words = [_lettering(picture, box.adjusted(2, 2, -2, -4))[1] for box in boxes]     # clear of the foot line
+        assert words == [ink, ink, greyed, greyed], (dark, words)
+        feet = [_at(picture, box.center().x(), box.bottom()) for box in boxes]
+        assert feet == [accent, paper, paper, paper], (dark, feet)
+
+
+def test_the_pointer_gives_an_open_tab_a_ground_and_a_locked_tab_nothing():
+    """An open tab's word is in the full text colour already, so its colour cannot answer the pointer: the tab
+    takes the ground an ordinary button takes under the pointer. A locked tab keeps its look there, because the
+    sheet's rule for the pointer is never given to a greyed tab (its tool tip shows all the same), and the tab
+    in front keeps its ground and its line. The pointer here is a hover event handed to a bar that is never shown."""
+    from PySide6.QtGui import QHoverEvent
+
+    def pointed(bar, index, dark):           # a tab as the bar draws it with the pointer over its middle
+        box = bar.tabRect(index)
+        middle = QPointF(box.center())
+        QApplication.sendEvent(bar, QHoverEvent(QEvent.HoverMove, middle, middle, QPointF(-1, -1)))
+        picture = _over_paper(bar, dark)
+        ground, word, _wide = _lettering(picture, box.adjusted(2, 2, -2, -4))
+        return ground, word, _at(picture, box.center().x(), box.bottom())
+
+    for dark in (False, True):
+        ink, greyed, accent, paper, under = (design.hex_colour(name, dark) for name in
+                                             ("ink", "disabled_ink", "accent", "paper", "hover_fill"))
+        assert under != paper, "the pointer's ground is the page's colour: the lines below prove nothing"
+        holder, bar = _tab_row(dark)
+        assert pointed(bar, 1, dark) == (under, ink, under), (dark, "a tab that can be opened")
+        assert pointed(bar, 2, dark) == (paper, greyed, paper), (dark, "a locked tab")
+        left = _lettering(_over_paper(bar, dark), bar.tabRect(1).adjusted(2, 2, -2, -4))[0]
+        assert left == paper, (dark, "the pointer left the open tab for the locked one")
+        assert pointed(bar, 0, dark) == (paper, ink, accent), (dark, "the tab in front")
+        rules = {tuple(selectors): declarations for selectors, declarations in _rules(design.build_qss(dark))}
+        assert rules[("QTabBar::tab:hover",)] == {"color": ink, "background": under}, dark
+        assert "background" not in rules[("QTabBar::tab:disabled",)], dark
+        QApplication.sendEvent(bar, QHoverEvent(QEvent.HoverLeave, QPointF(-1, -1), QPointF(-1, -1), QPointF(1, 1)))
+        gone = _lettering(_over_paper(bar, dark), bar.tabRect(1).adjusted(2, 2, -2, -4))
+        assert gone[:2] == (paper, ink), (dark, "the pointer gone")
