@@ -255,7 +255,7 @@ class ModelBuilderScreen(QWidget):
         dform = make_form(definition)
         self.name_edit = QLineEdit()
         self.vars_edit = QLineEdit()
-        self.vars_edit.setPlaceholderText("x, y")
+        self.vars_edit.setPlaceholderText("e.g. x, y")
         btn_vars = QPushButton("Set variables")
         btn_vars.clicked.connect(self._set_variables)
         vrow = QHBoxLayout()

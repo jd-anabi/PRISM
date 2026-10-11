@@ -1335,3 +1335,15 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     assert QApplication.font() == before_font and QApplication.font("QMenu") == before_font
     assert design.is_dark() is False, "the whole program left its theme in the look's table"
     assert not follows.listening(), "the follower was left on the application"
+
+
+def test_the_builders_empty_variables_box_shows_a_hint_that_cannot_be_an_entry():
+    """The hint in an empty box is dark enough to be read, so a hint that is itself a valid entry looks as if
+    it had been typed: "x, y" in the variables box read as two variables already declared. With "e.g." before
+    it the hint cannot be taken for an entry, and it is worded as the other examples on the forms are. The
+    box itself is empty."""
+    from core.gui.screens.model_builder_screen import ModelBuilderScreen
+    qt_app()
+    mb = build_part(ModelBuilderScreen)
+    assert mb.vars_edit.text() == "", "the box is not empty, so its hint does not show"
+    assert mb.vars_edit.placeholderText() == "e.g. x, y"
