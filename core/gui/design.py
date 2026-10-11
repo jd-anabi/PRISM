@@ -467,6 +467,10 @@ QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 # locked one to be told from it. The word of an open tab then has no stronger colour left to answer the pointer
 # with, so the tab takes the ground an ordinary button takes there; the sheet's rule for the pointer is never
 # given to a greyed tab, so a locked one keeps its look. The tab in front keeps its ground: it leads nowhere.
+# The greyed main button names the ordinary weight, the one rule with a state that names a weight at all: bold
+# words on a greyed button read as a button one may press. A state otherwise names no weight because a control
+# is measured once, at the weight of its plain rule, and wider words would be cut; here the plain rule is the
+# bold one, so the lighter words are narrower than what was measured and cannot be cut.
 _QSS_INTERIM = Template("""
 QListWidget, QTextEdit { border: 1px solid $field_line; border-radius: ${px_radius}px; background: $field;
                          color: $ink; placeholder-text-color: $ink_3; }
@@ -485,7 +489,8 @@ QPushButton[accent="true"] {
 }
 QPushButton[accent="true"]:hover   { background: $accent_hover; border-color: $accent_hover; }
 QPushButton[accent="true"]:pressed { background: $accent_press; border-color: $accent_press; }
-QPushButton[accent="true"]:disabled{ background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink; }
+QPushButton[accent="true"]:disabled{ background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink;
+                                     font-weight: 400; }
 QPushButton#iconButton { padding: 0px; min-height: ${px_fld_in}px; font-size: ${px_i_icon}px; }
 
 QTreeView {

@@ -1018,8 +1018,8 @@ def test_no_pseudo_state_sets_a_weight_or_a_size_and_words_take_lettering_colour
         t = design.tokens(dark)
         lettering = {t[name] for name in ("ink", "ink_2", "ink_3", "disabled_ink", "on_accent", "accent")}
         for selectors, declarations in _rules(design.build_qss(dark)):
-            if any(re.search(r"(?<!:):(?!:)", selector) for selector in selectors):
-                assert not {"font", "font-size", "font-weight"} & set(declarations), selectors
+            named = _named_in_a_state(selectors, declarations)      # a face, a size or a weight in a state; one greyed button may name 400
+            assert not named, (dark, selectors, named)
             for name in ("color", "selection-color"):
                 if name in declarations:
                     assert declarations[name] in lettering, (dark, selectors, name, declarations[name])
@@ -2900,3 +2900,102 @@ def test_the_pointer_gives_an_open_tab_a_ground_and_a_locked_tab_nothing():
         QApplication.sendEvent(bar, QHoverEvent(QEvent.HoverLeave, QPointF(-1, -1), QPointF(-1, -1), QPointF(1, 1)))
         gone = _lettering(_over_paper(bar, dark), bar.tabRect(1).adjusted(2, 2, -2, -4))
         assert gone[:2] == (paper, ink), (dark, "the pointer gone")
+
+
+# the one rule with a state that may name a weight: the greyed main button of the old layout
+_GREYED_MAIN = 'QPushButton[accent="true"]:disabled'
+
+
+def _named_in_a_state(selectors, declarations):
+    """What a rule names of a face, a size or a weight where it may name none: an empty dict for a rule with no
+    state, and for the one rule with a state that may name a weight, as long as it names the ordinary weight
+    and nothing else. A control is measured once, at the face of its plain rule; a state that names a larger
+    size or a heavier weight draws words wider than what was measured, and they are cut. The greyed main button
+    of the old layout is the exception because its plain rule is the bold one: its lighter words are narrower
+    than what was measured and cannot be cut."""
+    if not any(re.search(r"(?<!:):(?!:)", selector) for selector in selectors):
+        return {}
+    named = {name: declarations[name] for name in ("font", "font-size", "font-weight") if name in declarations}
+    return {} if (selectors, named) == ([_GREYED_MAIN], {"font-weight": "400"}) else named
+
+
+def test_one_greyed_button_alone_may_name_a_weight_in_a_state_and_only_the_ordinary_weight():
+    """No rule with a state names a face, a size or a weight: the words would be drawn wider than the control
+    was measured for, and cut. One rule may, because it can cut nothing: the greyed main button of the old
+    layout names the ordinary weight, 400, where its plain rule is the bold one. The exception is that one
+    rule with that one value. It covers no other rule and no other value, it is not kept for a rule that does
+    not use it, and it goes when the old main button does."""
+    def refused(qss):                        # the rules of a sheet that the check does not let pass
+        return [selectors for selectors, declarations in _rules(qss) if _named_in_a_state(selectors, declarations)]
+
+    assert _GREYED_MAIN in design.INTERIM_SELECTORS, "the old main button is gone: the exception made for it goes too"
+    for dark in (False, True):
+        qss = design.build_qss(dark)
+        rules = {tuple(selectors): declarations for selectors, declarations in _rules(qss)}
+        weight = rules[(_GREYED_MAIN,)].get("font-weight")
+        assert weight == "400", (dark, weight, "the excepted rule does not use its exception")
+        assert refused(qss) == [], dark
+    # a weight, a size or a face in any state is still refused; so is the excepted rule with any other value,
+    # and the excepted value in any other rule: a kept one, or the excepted rule widened by a second selector
+    for sample in ("QTabBar::tab:selected { font-weight: 600; }", "QPushButton:hover { font-size: 15px; }",
+                   "QLineEdit:disabled { font: 14px Inter; }", _GREYED_MAIN + " { font-weight: 600; }",
+                   _GREYED_MAIN + " { font-weight: 400; font-size: 12px; }",
+                   'QPushButton[cls="primary"]:disabled { font-weight: 400; }',
+                   "QPushButton:disabled, " + _GREYED_MAIN + " { font-weight: 400; }"):
+        assert refused(sample) != [], sample
+    assert refused(_GREYED_MAIN + " { font-weight: 400; }") == []
+    assert refused('QPushButton[cls="primary"] { font-weight: 600; }') == [], "a rule with no state may name a weight"
+
+
+def test_a_greyed_main_button_of_the_old_layout_is_lettered_in_the_ordinary_weight():
+    """Greyed, a main button of the old layout has its words in the ordinary weight and so looks as every
+    other greyed button does: bold words on a greyed button read as a button one may press. It is bold again
+    the moment it can be pressed, and it keeps one size throughout, because a button is measured once, at the
+    weight of its plain rule. That is why this one rule may name a weight for a state: its plain rule is the
+    bold one, so the lighter words are narrower than what was measured and cannot be cut. A button of the two
+    classes that stay is bold when greyed, as before: those classes are for the pages built the new way, where
+    a greyed main button stands beside a sentence that says why it cannot be pressed, which an old form does
+    not have. Read off stock buttons as they paint themselves under the built sheet, in both themes: how wide
+    the words stand tells the two weights apart."""
+    QApplication.instance() or QApplication([])
+    words, wide, high = "Build / Load prior", 200, 34
+    with text_size(1.0):
+        needs = {weight: QFontMetricsF(fonts.inter("body", weight)).horizontalAdvance(words)
+                 for weight in (400, 600)}       # the room the words take at each weight
+        assert needs[600] - needs[400] > 6, "the two weights stand too near for the lines below to tell them apart"
+
+        def button(holder, usable=False, **properties):    # greyed unless asked, with its own font and its class
+            made = QPushButton(words, holder)
+            made.setFont(fonts.inter("body"))
+            for name, value in properties.items():
+                made.setProperty(name, value)
+            made.setEnabled(usable)
+            made.ensurePolished()
+            return made
+
+        def drawn(made, dark):               # at one size for all, so that two pictures can be laid on each other
+            made.resize(wide, high)
+            picture = _over_paper(made, dark)
+            stands = _lettering(picture, QRect(4, 4, wide - 8, high - 8))[2]
+            near = [weight for weight, room in needs.items() if abs(room - stands) < 3]
+            return picture, (near[0] if len(near) == 1 else None)
+
+        for dark in (False, True):
+            holder = _dressed(dark)
+            plain, old = button(holder), button(holder, accent=True)
+            asked = old.sizeHint()
+            assert asked.width() > plain.sizeHint().width(), (dark, "measured for the bold words of its plain rule")
+            # a button answers a change of state from the size it stored: only one measured usable from the start can
+            # show that both states are measured alike
+            assert button(holder, usable=True, accent=True).sizeHint() == asked, (dark, "measured usable")
+            ordinary, weight = drawn(plain, dark)
+            assert weight == 400, (dark, "a greyed ordinary button", weight)
+            for cls in ("primary", "danger"):                # the kept classes are bold when greyed too
+                assert drawn(button(holder, cls=cls), dark)[1] == 600, (dark, cls, "greyed")
+            greyed, weight = drawn(old, dark)
+            assert (weight, greyed == ordinary) == (400, True), (dark, "the old main button, greyed", weight)
+            old.setEnabled(True)
+            assert drawn(old, dark)[1] == 600 and old.sizeHint() == asked, (dark, "the old main button, usable")
+            old.setEnabled(False)
+            assert drawn(old, dark)[0] == greyed and old.sizeHint() == asked, (dark, "greyed again")
+            assert old.font().weight() == QFont.Weight.DemiBold, "its own font is the bold one in every state"
