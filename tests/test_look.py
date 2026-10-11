@@ -3312,13 +3312,19 @@ def test_a_marker_stays_inside_its_box_and_an_unknown_kind_paints_nothing():
         assert bool(touched) == (kind != "tick"), (kind, ratio)
 
 
-def test_fill_px_lays_whole_device_pixels_from_the_edge_named_at_every_position():
+def test_fill_px_lays_whole_device_pixels_from_the_edge_named_at_every_position(monkeypatch):
     QApplication.instance() or QApplication([])
     ink = QColor(26, 26, 26)
     # the four scalings, and two that lie between and beyond them: a weight is rounded DOWN to whole
     # device pixels there too, and is never none
     heavy, hair = {**_HEAVY_RULE, 1.75: 3, 2.5: 5}, {**_HAIR_RULE, 1.75: 1, 2.5: 2}
     bar = {1.0: 4, 1.25: 5, 1.5: 6, 1.75: 7, 2.0: 8, 2.5: 10}
+
+    def smoothed(painter):                   # a caller's painter may be smoothing: the rule is the same whole pixels
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        paint.fill_px(painter, rect, ink, **{side: weight})
+        assert painter.testRenderHint(QPainter.Antialiasing), "the fill did not leave the painter's smoothing as it found it"
+
     for ratio, (weight, want), position, side in itertools.product(
             sorted(bar), ((2, heavy), (1, hair), (4, bar)), range(24), ("top", "bottom", "left", "right")):
         across = side in ("top", "bottom")
@@ -3328,6 +3334,7 @@ def test_fill_px_lays_whole_device_pixels_from_the_edge_named_at_every_position(
         run = _run_of(image, ink, column=middle) if across else _run_of(image, ink, row=middle)
         first = _device_edge(position * ratio) if side in ("top", "left") else _device_edge((position + 11) * ratio) - want[ratio]
         assert run == list(range(first, first + want[ratio])), (ratio, weight, side, position, run)
+        assert _screen(48, 48, ratio, draw=smoothed) == image, (ratio, weight, side, position)      # pixel for pixel
 
     def frame(painter):
         painter.setRenderHint(QPainter.Antialiasing, True)      # a caller's painter may be smoothing
@@ -3343,11 +3350,22 @@ def test_fill_px_lays_whole_device_pixels_from_the_edge_named_at_every_position(
     def smaller(painter):
         painter.scale(0.4, 0.4)                                 # a drawing made smaller: 1 px is 0.4 of a device pixel
         paint.fill_px(painter, QRectF(10, 10, 60, 40), ink, top=1, left=1)
+        assert not painter.testRenderHint(QPainter.Antialiasing), "the fill switched a plain painter's smoothing on"
 
     small = _screen(48, 48, 1.0, draw=smaller)
     assert (_run_of(small, ink, column=10), _run_of(small, ink, row=10)) == ([4], [4])   # one device pixel each, never none
     nothing = _screen(48, 48, 1.5, draw=lambda p: paint.fill_px(p, QRectF(5, 5, 30, 20), ink))
     assert all(pixel == _BLANK for pixel in _every_pixel(nothing))                               # no edge named, nothing painted
+
+    def fails(painter):                      # no rectangle to be made: the fill fails once the painter's smoothing is off
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        with pytest.raises(TypeError):
+            paint.fill_px(painter, QRectF(5, 5, 30, 20), ink, top=1)
+        assert painter.testRenderHint(QPainter.Antialiasing), "a fill that failed did not leave the painter's smoothing as it found it"
+
+    with monkeypatch.context() as patch:
+        patch.setattr(paint, "QRectF", None)
+        _screen(48, 48, 1.0, draw=fails)
 
 
 def test_the_hatching_stays_in_its_rectangle_and_does_not_move_with_it(monkeypatch):

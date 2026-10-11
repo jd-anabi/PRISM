@@ -173,7 +173,9 @@ def fill_px(painter, rect: QRectF, colour: QColor, *, top: int = 0, bottom: int 
     A rule's thickness is a whole number of device pixels, worked out once, rounded down as a browser
     rounds a border and never under one; it is laid from the edge it is named for. So it has one weight
     wherever it falls, stays inside its rectangle, and no widget beside it covers part of it. Left to
-    the painter, a 1 px line at 150 % is 1 or 2 pixels by position. No edge named, nothing painted."""
+    the painter, a 1 px line at 150 % is 1 or 2 pixels by position. No edge named, nothing painted. The
+    fill is made with the painter's smoothing off, and the smoothing is left as it was found, also when the
+    fill fails: filled under a painter that smooths, a rule can hold pixels one level off its colour."""
     to_device = painter.deviceTransform()
     to_logical, invertible = to_device.inverted()
     if not invertible or rect.width() <= 0 or rect.height() <= 0:
@@ -194,8 +196,13 @@ def fill_px(painter, rect: QRectF, colour: QColor, *, top: int = 0, bottom: int 
         bands.append((x0, y0, x0 + whole(left, to_device.m11()), y1))
     if right:
         bands.append((x1 - whole(right, to_device.m11()), y0, x1, y1))
-    for a, b, c, d in bands:
-        painter.fillRect(QRectF(to_logical.map(QPointF(a, b)), to_logical.map(QPointF(c, d))), colour)
+    smoothing = painter.testRenderHint(QPainter.Antialiasing)
+    painter.setRenderHint(QPainter.Antialiasing, False)
+    try:                                     # a raise below must not leave the painter's smoothing off
+        for a, b, c, d in bands:
+            painter.fillRect(QRectF(to_logical.map(QPointF(a, b)), to_logical.map(QPointF(c, d))), colour)
+    finally:
+        painter.setRenderHint(QPainter.Antialiasing, smoothing)
 
 
 def paint_hatch(painter, rect: QRectF, colour: QColor) -> None:
