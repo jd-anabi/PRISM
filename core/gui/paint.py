@@ -213,7 +213,7 @@ def paint_hatch(painter, rect: QRectF, colour: QColor) -> None:
         return
     painter.save()
     try:                                     # a raise below must not leave the caller's painter clipped
-        painter.setClipRect(rect)
+        painter.setClipRect(rect, Qt.IntersectClip)      # a clip the caller set stands: the strokes are cut to both
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setPen(QPen(colour, 1.0))
         step, h = design.SIZE["hatch_step"] * math.sqrt(2.0), rect.height()

@@ -3400,6 +3400,17 @@ def test_the_hatching_stays_in_its_rectangle_and_does_not_move_with_it(monkeypat
         empty = _screen(40, 20, 1.0, draw=lambda p: paint.paint_hatch(p, QRectF(10, 4, width, 12), QColor(77, 77, 77)))
         assert all(pixel == _BLANK for pixel in _every_pixel(empty))
 
+    def clipped(painter):                    # a clip the caller set stands: the hatching is cut to both
+        painter.setClipRect(QRectF(0, 0, 30, 20))
+        paint.paint_hatch(painter, QRectF(10, 4, 100, 12), QColor(77, 77, 77))
+        assert painter.hasClipping() and painter.clipBoundingRect() == QRectF(0, 0, 30, 20), "the hatching did not leave its caller's clip as it found it"
+
+    for ratio in _SCALINGS:
+        kept, edge = _screen(120, 20, ratio, draw=clipped), math.ceil(30 * ratio)
+        columns = [x for y in range(kept.height()) for x in range(kept.width()) if kept.pixelColor(x, y) != _BLANK]
+        assert sum(x >= edge for x in columns) == 0, (ratio, "hatched outside the clip its caller set")
+        assert columns and min(columns) >= int(10 * ratio), (ratio, "not hatched inside its rectangle and the clip its caller set")
+
     def fails(painter):                      # no hatch step to be had: the paint fails once the painter is clipped and smoothing
         with pytest.raises(KeyError):
             paint.paint_hatch(painter, QRectF(10, 4, 20, 12), QColor(77, 77, 77))
