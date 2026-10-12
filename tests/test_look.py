@@ -3862,6 +3862,8 @@ def test_a_fitted_column_measures_every_kind_of_cell_and_stops_at_its_limit():
     assert table.header.sectionSize(2) == 180 + 6                    # the last column keeps 6 after its words:
     assert table.view.minimumWidth() == 50 + 186 + 40                # the first column's 10 less the bar's 4
     _gone(table)
+    with text_size(1.5):                                             # at a larger text the 10 is 15 and the bar still 4:
+        assert (rt._pads(2, 3), rt._pads(0, 1)) == ((0, 15 - 4), (15, 15 - 4))    # a last column, and a table's only one
 
 
 def test_a_header_that_sorts_starts_with_no_column_sorted_and_paints_a_chevron_after_the_words():
@@ -3905,6 +3907,7 @@ def test_a_header_that_sorts_starts_with_no_column_sorted_and_paints_a_chevron_a
                     image = _rendered(table, ratio)
                     assert not _marked(image, 0, 390, paper, ratio)
                     assert len(_marked(image, 390, 500, paper, ratio)) == tall[ratio]    # whole, inside the last column
+                    assert not _marked(image, 494, 500, paper, ratio)                    # and clear of the room it keeps
 
                 # the header says which column and which way; the rows and the selection are the page's
                 assert [table.view.model().index(r, 0).data(Qt.UserRole) for r in range(3)] == before
@@ -4027,6 +4030,8 @@ def test_a_wrapped_cell_makes_its_row_as_tall_as_its_lines_at_the_width_it_has()
     with _on_a_page(table, width=500) as page:
         narrow = table.view.rowHeight(0)
         assert narrow > 30 and (narrow - 10) % 20 == 0                # whole lines of 20, with 5 above and below
+        laid = rt._wrapped(words, rt._face("text"), table.view.columnWidth(1) - 6, 20)[1]    # the last column keeps 6
+        assert narrow == 10 + 20 * laid                               # as many lines as the painting lays there
         assert table.view.rowHeight(1) == 30                          # not wrapped: one line, cut at its end
         assert table.height() == 2 + 27 + narrow + 30 + 2
         page.resize(780, 400)
