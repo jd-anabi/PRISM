@@ -3857,6 +3857,12 @@ def test_a_fitted_column_measures_every_kind_of_cell_and_stops_at_its_limit():
     assert table.view.minimumWidth() == 50 + 20 + 40                 # the view's own two widths (the fitted one held
     _gone(table)                                                     # to a column's least) and a stretching column's least
 
+    table = rt.RuleTable([rt.Column("", 50), rt.Column(""), rt.Column("", "fit")],
+                         [[rt.TextCell(""), rt.TextCell(""), rt.TextCell("x" * 200)]])
+    assert table.header.sectionSize(2) == 180 + 6                    # the last column keeps 6 after its words:
+    assert table.view.minimumWidth() == 50 + 186 + 40                # the first column's 10 less the bar's 4
+    _gone(table)
+
 
 def test_a_header_that_sorts_starts_with_no_column_sorted_and_paints_a_chevron_after_the_words():
     click = (Qt.LeftButton, Qt.NoModifier, QPoint(200, 10))           # inside the middle column's header

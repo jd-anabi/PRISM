@@ -81,9 +81,14 @@ def _face(part: str):
 
 def _pads(column: int, count: int) -> tuple[int, int]:
     """The room a column keeps clear of its words, in a table of ``count`` columns: before them in the first
-    column, after them in every column but the last."""
+    column, and after them in every column. Between two columns that is the space between them; the last
+    column keeps what the first keeps before its words, less the bar, so that the ring round the current row
+    crosses no word at either end."""
     lead = design.scaled(design.SIZE["table_lead"]) if column == 0 else 0
-    gap = 0 if column == count - 1 else design.scaled(design.SIZE["table_col_gap"])
+    if column == count - 1:
+        gap = design.scaled(design.SIZE["table_lead"]) - design.SIZE["bar"]
+    else:
+        gap = design.scaled(design.SIZE["table_col_gap"])
     return lead, gap
 
 
