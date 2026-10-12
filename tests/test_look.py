@@ -4054,10 +4054,12 @@ def test_a_wrapped_cell_makes_its_row_as_tall_as_its_lines_at_the_width_it_has()
 
 
 def test_a_value_or_a_states_word_too_long_for_its_column_is_cut_with_an_ellipsis_and_never_loses_its_start(monkeypatch):
-    """What the painting is handed to draw when a value or a state's word is wider than the place it has, and
-    whether it asks for it. Which letters fit is lettering, so only the shape of each answer is held and no pixel
-    is read: a value gives up its unit first and then its figure, a second line and a state's word are cut at
-    their end, and the start of a number stays."""
+    """What the painting is handed to draw when a value or a state's word is wider than the place it has,
+    whether it asks for it, and whether it letters what it is answered, each part in its place. Which letters
+    fit is lettering, so only the shape of each answer is held and no pixel is read: a value gives up its unit
+    first and then its figure, a second line and a state's word are cut at their end, and the start of a number
+    stays."""
+    from PySide6.QtWidgets import QStyleOptionViewItem
     rt = _rt()
     dots = ("\u2026", "...")                                    # the ellipsis the toolkit's own eliding puts in
     assert rt._as_drawn(rt.ValueCell("10.4", "of 16 GiB"), 102.0) == ("10.4", " of 16 GiB", "")    # what fits is whole
@@ -4079,22 +4081,68 @@ def test_a_value_or_a_states_word_too_long_for_its_column_is_cut_with_an_ellipsi
     assert word.startswith("U") and word.endswith(dots)
     assert rt._as_drawn(rt.StateCell("fine", "Fine"), 34.0) == ("Fine",)
     assert rt._as_drawn(rt.ValueCell(""), 102.0) == ("", "", "")
+    # In a place too narrow for the ellipsis itself nothing is answered, and so nothing is drawn.
+    cells = rt.StateCell("half", "Unfinished"), rt.ValueCell("101.3", "of 128 GiB")
+    assert [rt._as_drawn(cell, 2.0) for cell in cells] == [("",), ("", "", "")]
+
+    # Each part is measured in the face it is drawn in: with one pixel to spare it is whole, and one pixel
+    # short it is cut. A number of ones is narrow in a face whose digits are not of equal width, so another
+    # face would answer otherwise.
+    def wide(part, words):
+        return QFontMetricsF(rt._face(part)).horizontalAdvance(words)
+
+    def edge(cell, room):                                       # the answer with a pixel to spare, and a pixel short
+        return rt._as_drawn(cell, room + 1), rt._as_drawn(cell, room - 1)
+
+    spare, short = edge(rt.ValueCell("1,111", "runs"), wide("figure", "1,111") + wide("unit", " runs"))
+    assert spare == ("1,111", " runs", "") and short[0] == "1,111" and short[1].endswith(dots), (spare, short)
+    spare, short = edge(rt.ValueCell("1,111"), wide("figure", "1,111"))
+    assert spare[0] == "1,111" and short[0].endswith(dots), (spare, short)
+    spare, short = edge(rt.ValueCell("1", second="of 1,111"), wide("second", "of 1,111"))
+    assert spare[2] == "of 1,111" and short[2].endswith(dots), (spare, short)
+    spare, short = edge(rt.StateCell("fine", "Fine"), wide("word", "Fine"))
+    assert spare == ("Fine",) and short[0].endswith(dots), (spare, short)
 
     # The painting asks for these words, in the places its columns leave: the value's 118 less the space after
     # its column; the state's 62 less the space after the last column, the marker and the gap after the marker.
-    real, asked = rt._as_drawn, []
+    # And it letters what it is answered, each part in its place: the stand-in answers words that are no cell's
+    # own, and each cell is then painted once more by a painter that notes the words it is handed, how they
+    # are set and the place they are set in. No pixel is read.
+    asked, lettered = [], []
 
     def noted(cell, width):
         asked.append((cell, width))
-        return real(cell, width)
+        return ("so",) if isinstance(cell, rt.StateCell) else ("7", " of 1,111", "under")
 
-    value, state = rt.ValueCell("101.3", "of 128 GiB"), rt.StateCell("half", "Unfinished")
+    class Lettering(QPainter):
+        def drawText(self, place, flags, words):
+            lettered.append((words, flags, place.getRect()))
+            super().drawText(place, flags, words)
+
+    value, state = rt.ValueCell("101.3", "of 128 GiB", "expected 37.9 %"), rt.StateCell("half", "Unfinished")
     table = rt.RuleTable([rt.Column("", 50), rt.Column("", 118, right=True), rt.Column("", 62)],
                          [[rt.TextCell(""), value, state]])
     with _on_a_page(table):
         monkeypatch.setattr(rt, "_as_drawn", noted)
         _rendered(table, 1.0)                                   # drawn once and not read
-    assert set(asked) == {(value, 102.0), (state, 34.0)}, asked
+        assert set(asked) == {(value, 102.0), (state, 34.0)}, asked
+        option = QStyleOptionViewItem()
+        option.initFrom(table.view)
+        for column, across in ((1, 118), (2, 62)):              # each cell again, in its column's width
+            option.rect = QRect(0, 0, across, 46)
+            picture = _image(across, 46, 1.0)
+            painter = Lettering(picture)
+            try:
+                table.view.itemDelegate().paint(painter, option, table.view.model().index(0, column))
+            finally:
+                painter.end()
+    # Each place is its left, its top, its width and its height, in a row 46 high: 5 above, the line of 20, the
+    # second line of 16 under it. The figure has what its unit leaves; the word begins after the marker's 16
+    # and its gap of 6.
+    right, left = Qt.AlignRight | Qt.AlignVCenter, Qt.AlignLeft | Qt.AlignVCenter
+    leaves = 102.0 - QFontMetricsF(rt._face("unit")).horizontalAdvance(" of 1,111")
+    assert set(lettered) == {(" of 1,111", right, (0.0, 5.0, 102.0, 20.0)), ("7", right, (0.0, 5.0, leaves, 20.0)),
+                             ("under", right, (0.0, 25.0, 102.0, 16.0)), ("so", left, (22.0, 5.0, 34.0, 20.0))}, lettered
 
 
 def test_a_table_whose_painting_fails_draws_the_stock_cell_and_section_and_leaves_each_painter_as_found(monkeypatch):

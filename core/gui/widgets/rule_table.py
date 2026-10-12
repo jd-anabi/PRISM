@@ -36,8 +36,9 @@ class TextCell:
 
 @dataclass(frozen=True)
 class ValueCell:
-    """A value in a cell, at its right. Too long for its column, its unit is cut first and then its figure,
-    each with an ellipsis; its start is never lost."""
+    """A value in a cell, at its right. Too long for its column it is cut at its end, the unit before the
+    figure, and an ellipsis stands where it was cut; a line of it that has no room for the ellipsis itself
+    is not drawn. ``_as_drawn`` says it in full, a single letter included."""
     figure: str               # semibold
     unit: str = ""            # plain, one space after the figure
     second: str = ""          # a second line in the small size
@@ -45,8 +46,9 @@ class ValueCell:
 
 @dataclass(frozen=True)
 class StateCell:
-    """A state in a cell: its marker and, after it, the word for it, cut at its end with an ellipsis where
-    the column is too narrow."""
+    """A state in a cell: its marker and, after it, the word for it. Too long for its column the word is cut
+    at its end and an ellipsis stands there; with no room for the ellipsis itself the marker stands alone.
+    ``_as_drawn`` says it in full, a single letter included."""
     kind: str                 # one of paint.MARKERS
     word: str
 
@@ -116,9 +118,12 @@ def _as_drawn(cell, width: float) -> tuple:
     """The words of a value or of a state as they are drawn in a place ``width`` wide (for a state, what its
     marker and the gap after it leave): ``(word,)`` for a state, ``(figure, unit, second)`` for a value, the
     unit with the space before it. What fits is whole. A value keeps its figure whole and cuts its unit to
-    what the figure leaves; where not even an ellipsis is left for the unit, figure and unit are cut as one,
-    in the figure's own form. A second line and a state's word are cut at their end. Every cut ends in an
-    ellipsis: nothing is lost without a sign, and never the start of a number."""
+    what the figure leaves; where not even an ellipsis is left for the unit, figure and unit are taken as
+    one, in the figure's own form, and cut as one if still too long. A second line and a state's word are
+    cut at their end. Every cut takes the end of the words and leaves an ellipsis there: what stays is their
+    start, or the ellipsis alone. Where there is no room for the ellipsis itself the words are answered
+    empty and nothing of them is drawn. Words of one letter are never cut: the toolkit's eliding hands one
+    letter back as it is, and in a place narrower than the letter only what fits of it is drawn."""
 
     def cut(part, words, room):
         return QFontMetricsF(_face(part)).elidedText(words, Qt.ElideRight, max(0.0, room))
@@ -200,6 +205,8 @@ class RuleDelegate(QStyledItemDelegate):
             if isinstance(cell, StateCell):
                 side = design.scaled(design.SIZE["marker"])
                 at = side + design.scaled(design.SIZE["state_gap"])          # where its word begins
+                # Asked before the marker is painted: if the asking fails the toolkit draws this cell itself,
+                # and a marker painted first would be left standing under its words.
                 (word,) = _as_drawn(cell, box.width() - at)
                 paint.paint_marker(painter, cell.kind, QRectF(box.left(), box.top() + (height - side) / 2, side, side))
                 painter.setFont(_face("word"))
