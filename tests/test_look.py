@@ -30,11 +30,11 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QItemSelectionModel, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import (QColor, QFocusEvent, QFont, QFontDatabase, QFontInfo, QFontMetricsF, QGuiApplication,
-                           QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QRegion, QWheelEvent)
+                           QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QRegion, QTextDocument, QWheelEvent)
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QLineEdit, QMenu, QPlainTextEdit, QPushButton,
-                               QRadioButton, QStyle, QStyleFactory, QStyleOptionButton, QStyleOptionFocusRect,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QBoxLayout, QCheckBox, QComboBox, QFrame, QLineEdit, QMenu,
+                               QPlainTextEdit, QPushButton, QRadioButton, QStyle, QStyleFactory, QStyleOptionButton,
+                               QStyleOptionFocusRect, QVBoxLayout, QWidget)
 
 from core.gui import design, fonts, paint
 from core.gui.widgets.marker import Marker, painted_icon
@@ -46,7 +46,8 @@ REPO = Path(__file__).resolve().parents[1]
 LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.gui.mpl_theme", "core.gui.settings",
                 "core.gui.file_chooser", "core.gui.widgets.labeled_inputs", "core.gui.paint", "core.gui.style",
                 "core.gui.reported", "core.Helpers.plot_colours", "core.gui.widgets.marker", "core.gui.widgets.ruled",
-                "core.gui.widgets.rule_table", "core.gui.widgets.time_axis")
+                "core.gui.widgets.rule_table", "core.gui.widgets.time_axis",
+                "core.gui.widgets.message_row", "core.gui.widgets.page")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
 
@@ -4615,3 +4616,433 @@ def test_a_time_axis_and_its_key_whose_paint_fails_draw_nothing_end_their_painte
                       (module + "_HatchKey.paintEvent", "NoColour: its painter still paints: False")]
     assert _at(_screen_of(axis, 1.0), 470, 1) == design.hex_colour("accent")        # and each paints whole again
     assert _at(_screen_of(line.key, 1.0), 0, 0) == design.hex_colour("rule")
+
+
+# the page devices
+BOOK_FACE_MODULES = ("core/gui/widgets/message_row.py", "core/gui/widgets/page.py")
+SENTENCE_LINES = {16: 22}      # a sentence's pixel size and its line height, in a book face or, with none, the lettering's
+
+
+def _shown_text(label):
+    """What a rich-text label shows, as plain text."""
+    document = QTextDocument()
+    document.setHtml(label.text())
+    return document.toPlainText()
+
+
+def _least(width=0, height=0):
+    widget = QWidget()
+    widget.setMinimumSize(width, height)
+    return widget
+
+
+def test_a_sentence_shows_its_text_as_written():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import page
+    text = 'Set {name} to <b>3 & 4</b>, not {0}; "two  spaces".\nA second line.'
+    label = page.Sentence(text)
+    assert _shown_text(label) == text == label.plain_text()
+    label.set_text(text, lead="Lead & <co>.")
+    assert _shown_text(label) == "Lead & <co>. " + text == label.plain_text()
+    assert "<b>" not in label.text() and "&lt;b&gt;" in label.text() and "&amp;" in label.text()
+    label.set_text("")
+    assert label.text() == "" == label.plain_text()
+
+
+def test_a_sentence_is_a_whole_number_of_lines_of_one_fixed_height():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import page
+    assert design.text_scale() == 1.0, "a text factor leaked into this suite"
+    label = page.Sentence("One line.")
+    assert label.wordWrap() and label.textFormat() == Qt.TextFormat.RichText
+    size = label.font().pixelSize()
+    assert size == fonts.book().pixelSize() == 16, "a sentence is set 16 on 22 in whichever face it gets"
+    line = SENTENCE_LINES[size]
+    assert line == 22 and f"line-height:{line}px" in label.text()
+    assert label.sizeHint().height() == line == label.heightForWidth(2000)
+    assert page.Sentence("One.\nTwo.").heightForWidth(2000) == 2 * line
+    height = page.Sentence("word " * 60).heightForWidth(200)
+    assert height >= 3 * line and height % line == 0, height
+    lift = max(0, math.ceil((line - QFontMetricsF(label.font()).lineSpacing()) / 2))
+    margins = label.contentsMargins()
+    assert (margins.left(), margins.top(), margins.right(), margins.bottom()) == (0, -lift, 0, lift)
+
+
+def test_a_sentence_writes_bold_at_a_weight_its_face_has():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import page
+    assert page.bold_weight(design.LETTERING) == 600
+    assert [page.bold_weight(face) for face in design.BOOK_FACES] == [700, 700]
+    label = page.Sentence()
+    label.set_text("The rest.", lead="Lead.")
+    weight = page.bold_weight(fonts.book_family(QFontDatabase.families()))
+    assert f"font-weight:{weight}" in label.text() and "<b" not in label.text()
+
+
+def test_a_quiet_sentence_carries_the_second_ink_and_follows_the_theme():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import page
+    with theme(False):
+        plain, quiet = page.Sentence("Text."), page.Sentence("Text.", quiet=True)
+        quiet.set_text("Text.", lead="Lead.")
+        assert "color" not in plain.text()
+        assert design.hex_colour("ink_2", False) in quiet.text() and design.hex_colour("ink", False) in quiet.text()
+        with theme(True):
+            quiet.retheme()
+            assert design.hex_colour("ink_2", True) in quiet.text() and design.hex_colour("ink", True) in quiet.text()
+            assert design.hex_colour("ink_2", False) not in quiet.text()
+
+
+def test_a_message_row_opens_with_its_bold_lead_and_date():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import message_row, page
+    from core.gui.widgets.marker import Marker
+    when, now = datetime.datetime(2026, 10, 4, 12, 10), datetime.datetime(2026, 10, 6, 9, 0)
+    assert message_row.opening("Attention", when, now) == "Attention, Sun 4 Oct, 12:10."
+    assert message_row.opening("Attention", when) == "Attention, 4 Oct 2026, 12:10."
+    assert message_row.opening("Error", None) == "Error." == message_row.opening("Error.", None)
+    assert message_row.opening(None, when, now) == "Sun 4 Oct, 12:10."
+    assert message_row.opening(None, None) == "" == message_row.opening("", None)
+    row = message_row.MessageRow("warn", "No output for 12 minutes.", lead="Attention", when=when, now=now)
+    assert row.sentence.plain_text() == "Attention, Sun 4 Oct, 12:10. No output for 12 minutes."
+    assert isinstance(row.sentence, page.Sentence) and "color" not in row.sentence.text()
+    assert row.kind == "warn" and row.findChildren(Marker) == [row.marker]
+    bare = message_row.MessageRow("", "An explanation with no marker.")
+    assert bare.marker is None and bare.findChildren(Marker) == [] and "font-weight" not in bare.sentence.text()
+    odd = message_row.MessageRow("info", "Set {name} to <b>3 & 4</b>.\nA second line.", lead="Lead & <co>")
+    assert _shown_text(odd.sentence) == "Lead & <co>. Set {name} to <b>3 & 4</b>.\nA second line."
+    assert odd.sentence.plain_text() == _shown_text(odd.sentence) and "<b>" not in odd.sentence.text()
+    with pytest.raises(ValueError):
+        message_row.MessageRow("error", "No marker has this name.")
+    with pytest.raises(ValueError):                             # nor is a glyph of a control a row's marker
+        message_row.MessageRow("help", "A glyph is no marker.")
+    rows = sum(isinstance(widget, message_row.MessageRow) for widget in QApplication.topLevelWidgets())
+    try:
+        message_row.MessageRow("error", "No marker has this name.")
+    except ValueError:                       # while the error is held, whatever was built before it was raised is held with it
+        assert sum(isinstance(widget, message_row.MessageRow) for widget in QApplication.topLevelWidgets()) == rows, "a row was built before its kind was refused"
+
+
+def test_a_message_row_sets_its_marker_and_sentence_by_the_table():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import message_row
+    row = message_row.MessageRow("err", "A network named retrain already exists. Choose another name.", lead="Error")
+    row.resize(300, row.heightForWidth(300))
+    row.layout().activate()
+    marker = row.marker
+    at = marker.mapTo(row, QPoint(0, 0))
+    assert (at.x(), at.y(), marker.width(), marker.height()) == (10, 4 + 3, 16, 16)
+    assert (row.sentence.x(), row.sentence.y()) == (10 + 16 + 10, 4)
+    assert row.sentence.x() + row.sentence.width() == 300
+    line = SENTENCE_LINES[row.sentence.font().pixelSize()]
+    assert row.sentence.height() % line == 0 and row.height() == 4 + row.sentence.height() + 4
+    bare = message_row.MessageRow("", "An explanation.")
+    bare.resize(300, bare.heightForWidth(300))
+    bare.layout().activate()
+    assert bare.sentence.x() == 10
+
+
+def test_an_error_row_has_an_edge_of_whole_pixels_and_no_ground():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import message_row
+    for dark in (False, True):
+        with theme(dark):
+            err, ground = design.colour("err").rgb(), design.colour("paper")
+            for ratio, wanted in ((1, 2), (1.25, 2), (1.5, 3), (2, 4)):
+                for kind in ("err", "warn", "info", "fine", ""):
+                    row = message_row.MessageRow(kind, "A sentence long enough to wrap in a narrow row.", lead="Lead")
+                    row.resize(300, row.heightForWidth(300))
+                    image = _screen_of(row, ratio, ground)
+                    for y in (0, image.height() // 2, int(row.height() * ratio) - 1):
+                        run = 0
+                        while image.pixel(run, y) == err:
+                            run += 1
+                        assert run == (wanted if kind == "err" else 0), (dark, ratio, kind, y, run)
+                        assert image.pixel(round(5 * ratio), y) == ground.rgb(), (dark, ratio, kind, y)
+
+
+def test_a_page_head_has_its_title_its_sentence_and_its_actions():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import page
+    head = page.PageHead("Train a <network>", "Simulates the recordings, then fits the network to them.")
+    assert head.title.text() == "Train a <network>" and head.title.textFormat() == Qt.TextFormat.PlainText
+    assert head.title.font().pixelSize() == 24 and head.title.font().weight() == QFont.Weight.DemiBold
+    assert head.title.minimumHeight() == head.title.maximumHeight() == 30
+    assert isinstance(head.sentence, page.Sentence) and design.hex_colour("ink_2") in head.sentence.text()
+    assert head.sentence.plain_text() == "Simulates the recordings, then fits the network to them."
+    first, second = QPushButton("Help"), QPushButton("Show the full text")
+    head.add_action(first)
+    head.add_action(second)
+    head.resize(900, head.sizeHint().height())
+    head.layout().activate()
+    assert (head.title.x(), head.title.y()) == (0, 0) == (first.y(), second.y())
+    assert head.sentence.y() - (head.title.y() + head.title.height()) == 2
+    assert second.x() + second.width() == 900
+    assert second.x() - (first.x() + first.width()) == 12 == first.x() - (head.title.x() + head.title.width())
+    head.set_small(True)
+    assert head.sentence.isHidden()
+    head.set_small(False)
+    assert not head.sentence.isHidden()
+    head.set_sentence("")
+    assert head.sentence.isHidden()
+    head.set_sentence("Another sentence.")
+    assert not head.sentence.isHidden() and head.sentence.plain_text() == "Another sentence."
+    untold = page.PageHead("Records")          # held in a name: a temporary takes its children with it
+    assert untold.sentence.isHidden()
+
+
+def test_a_page_lines_up_what_stays_and_what_scrolls():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import page
+    def margins(of):
+        m = of.box.contentsMargins()
+        return m.left(), m.top(), m.right(), m.bottom()
+    made = page.Page()
+    assert margins(made) == (22 - 4, 20, 20 - 4, 14) and made.box.spacing() == 0
+    assert made.first_focus() is None and not made.is_small()
+    head = page.PageHead("Train a network", "Simulates the recordings, then fits the network to them.")
+    body, foot = _least(height=2000), QPushButton("Start training")
+    made.add_fixed(head)
+    made.add_gap(22, 14)
+    scroller = made.add_scrolling(body)
+    made.add_fixed(foot)
+    assert isinstance(scroller, page.Scroller) and scroller.body is body
+    at = lambda widget: widget.mapTo(made, QPoint(0, 0))
+    made.resize(1000, 600)
+    made.grab()
+    assert at(head).x() == at(body).x() == at(foot).x() == 22 and at(head).y() == 20
+    assert at(head).x() + head.width() == at(foot).x() + foot.width() == 1000 - 20
+    assert at(foot).y() + foot.height() == 600 - 14
+    assert scroller.y() - (at(head).y() + head.height()) == 22
+    made.set_small(True)
+    made.grab()
+    assert made.is_small() and margins(made) == (16 - 4, 16, 14 - 4, 14) and head.sentence.isHidden()
+    assert at(head).x() == at(body).x() == at(foot).x() == 16
+    assert scroller.y() - (at(head).y() + head.height()) == 14
+    made.set_small(False)
+    made.grab()
+    assert margins(made) == (22 - 4, 20, 20 - 4, 14) and not head.sentence.isHidden()
+    assert scroller.y() - (at(head).y() + head.height()) == 22
+
+
+def test_a_scroller_keeps_the_rings_room_and_is_a_tab_stop_only_while_it_scrolls():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import page
+    class Told(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.fits = []
+            self.setMinimumHeight(900)
+        def fit(self, width):
+            self.fits.append(width)
+    def room(of):
+        m = of.widget().layout().contentsMargins()
+        return m.left(), m.top(), m.right(), m.bottom()
+    before = sum(isinstance(w, page.Scroller) for w in QApplication.topLevelWidgets())      # the scrollers that are nobody's child
+    body = Told()
+    scroller = page.Scroller(body)
+    assert scroller.frameShape() == QFrame.Shape.NoFrame and scroller.widgetResizable()
+    assert scroller.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert scroller.property("ring") == "inset" and scroller.body is body
+    assert scroller.focusPolicy() == Qt.FocusPolicy.NoFocus and room(scroller) == (4, 0, 4, 4)
+    scroller.resize(500, 300)
+    scroller.grab()
+    assert scroller.verticalScrollBar().maximum() > 0 and body.mapTo(scroller, QPoint(0, 0)).x() == 4
+    assert scroller.focusPolicy() == Qt.FocusPolicy.TabFocus and room(scroller) == (4, 0, 4 + 2, 4)
+    assert body.fits and set(body.fits) == {500 - 2 * 4 - 8 - 2}
+    scroller.resize(500, 1200)
+    scroller.grab()
+    assert scroller.verticalScrollBar().maximum() == 0 and body.width() == 500 - 2 * 4
+    assert scroller.focusPolicy() == Qt.FocusPolicy.NoFocus and room(scroller) == (4, 0, 4, 4)
+    silent = page.Scroller(QWidget())          # a body that offers no fit() is held all the same
+    silent.resize(300, 200)
+    silent.grab()
+    columns = page.Columns(QWidget(), QWidget())
+    holder = page.Scroller(columns)
+    holder.resize(940 + 2 * 4 + 8 + 2 - 1, 300)
+    holder.grab()
+    assert columns.stacked()
+    holder.resize(940 + 2 * 4 + 8 + 2, 300)
+    holder.grab()
+    assert not columns.stacked()
+    del scroller, silent, holder, columns, body
+    assert sum(isinstance(w, page.Scroller) for w in QApplication.topLevelWidgets()) == before, "a scroller with no parent outlived its last name"
+
+
+def test_two_columns_stack_below_940_or_below_their_own_least_widths():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import page
+    left, right = _least(100), _least(100)
+    columns = page.Columns(left, right)
+    assert not columns.stacked() and columns.box.spacing() == 32
+    columns.fit(939)
+    assert columns.stacked() and columns.box.direction() == QBoxLayout.Direction.TopToBottom
+    assert columns.box.spacing() == 20 and columns.box.itemAt(0).widget() is left
+    columns.fit(940)
+    assert not columns.stacked() and columns.box.direction() == QBoxLayout.Direction.LeftToRight
+    assert columns.box.spacing() == 32 and columns.box.itemAt(1).widget() is right
+    wide = page.Columns(_least(600), _least(500))
+    wide.fit(600 + 500 + 32 - 1)
+    assert wide.stacked()
+    wide.fit(600 + 500 + 32)
+    assert not wide.stacked()
+    own = page.Columns(_least(10), _least(10), stretch=(470, 536), gap=16, gap_stacked=14)
+    assert (own.box.stretch(0), own.box.stretch(1), own.box.spacing()) == (470, 536, 16)
+    own.fit(100)
+    assert own.box.spacing() == 14
+
+
+def test_the_page_devices_grow_with_the_text_and_their_line_weights_do_not():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import message_row, page
+    with text_size(1.25):
+        made = page.Page()
+        pad = made.box.contentsMargins()
+        assert (pad.left(), pad.top(), pad.right(), pad.bottom()) == (28 - 4, 25, 25 - 4, 18)     # the ring's room stays 4
+        head = page.PageHead("Records", "One sentence.")
+        assert head.title.font().pixelSize() == 30 and head.title.maximumHeight() == 38
+        assert head.sentence.font().pixelSize() == 20 and "line-height:28px" in head.sentence.text()
+        columns = page.Columns(_least(height=900), QWidget())
+        assert columns.box.spacing() == 40
+        scroller = page.Scroller(columns)
+        scroller.resize(1175 + 2 * 4 + 8 + 2 - 1, 300)        # the threshold grows; the ring's room, the bar and its gap stay 4, 8 and 2
+        scroller.grab()
+        assert columns.stacked() and columns.box.spacing() == 25
+        scroller.resize(1175 + 2 * 4 + 8 + 2, 300)
+        scroller.grab()
+        assert not columns.stacked() and scroller.verticalScrollBar().maximum() > 0
+        room = scroller.widget().layout().contentsMargins()
+        assert (room.left(), room.top(), room.right(), room.bottom()) == (4, 0, 4 + 2, 4)         # nor the gap beside the bar
+        row = message_row.MessageRow("err", "A sentence.", lead="Error")
+        inside = row.layout().contentsMargins()
+        assert (inside.left(), inside.top(), inside.right(), inside.bottom()) == (13, 5, 0, 5)
+        assert row.layout().spacing() == 13 and row.marker.width() == 20
+        row.resize(300, row.heightForWidth(300))
+        image, err = _screen_of(row, 1, design.colour("paper")), design.colour("err").rgb()
+        assert [image.pixel(x, 0) == err for x in range(4)] == [True, True, False, False]          # the edge is still 2 px
+
+
+def test_a_page_with_nothing_selected_and_no_main_action_shows_no_accent():
+    """A page of the shared devices under one theme's palette and sheet: a heading with two ordinary buttons and
+    a middle of message rows. It has no words, so no pixel read is a letter's. The accent stands for what is
+    selected, what is now and the main action; this page has none of the three, so no pixel of it or its tint."""
+    QApplication.instance() or QApplication([])
+    from core.gui import paint
+    from core.gui.widgets import message_row, page
+    # every marker but "now", which is the accent's own; the error row first, where a low page still shows it
+    kinds = ["err"] + [kind for kind in paint.MARKERS if kind not in ("err", "now")] + [""]
+    assert len(kinds) == 10
+    for dark in (False, True):
+        with _the_look(dark):
+            made = page.Page()
+            try:
+                head = page.PageHead("")
+                head.add_action(QPushButton())
+                head.add_action(QPushButton())
+                middle = QWidget()
+                rows = QVBoxLayout(middle)
+                for kind in kinds:
+                    rows.addWidget(message_row.MessageRow(kind, ""))
+                made.add_fixed(head)
+                made.add_gap(22, 14)
+                scroller = made.add_scrolling(middle)
+                bar = scroller.verticalScrollBar()
+                paper, err = design.colour("paper"), design.colour("err").rgb()
+                accent, tint = design.colour("accent").rgb(), design.colour("accent_tint").rgb()
+                for height, scrolls in ((640, False), (220, True)):      # every row in sight; then too low for them
+                    made.resize(360, height)
+                    made.grab()
+                    assert (bar.maximum() > 0) is scrolls, (dark, height, bar.maximum())
+                    track = bar.mapTo(made, QPoint(bar.width() // 2, bar.height() - 3))     # under the handle
+                    for ratio in (1, 1.25, 1.5, 2):
+                        image = _screen_of(made, ratio, paper)
+                        seen = _pixels(image)
+                        assert err in seen, (dark, height, ratio, "the rows were not drawn")
+                        if scrolls:                                  # only the sheet paints a scroll bar's track so
+                            assert _at(image, track.x(), track.y()) == design.hex_colour("margin"), (dark, ratio)
+                        assert not {accent, tint} & seen, (dark, height, ratio)
+            finally:
+                _gone(made)
+
+
+def test_the_book_face_is_reached_only_from_its_places():
+    """The book face has four places and no fifth. One label class asks the font factory for it, and only the
+    modules of those places may build that label or ask the factory themselves; none may name a book face."""
+    root = Path(__file__).resolve().parents[1]
+    missing = [name for name in BOOK_FACE_MODULES if not (root / name).is_file()]
+    assert not missing, f"a module allowed the book face does not exist: {missing}"
+    users, strays = set(), []
+    for path in sorted((root / "core" / "gui").rglob("*.py")):
+        rel = path.relative_to(root).as_posix()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call):
+                callee = node.func
+                name = getattr(callee, "id", None) or getattr(callee, "attr", "")
+                if name == "Sentence" or (name == "book" and rel != "core/gui/fonts.py"):
+                    users.add(rel)
+                    if rel not in BOOK_FACE_MODULES:
+                        strays.append(f"{rel}:{node.lineno} calls {name}()")
+            elif (isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in design.BOOK_FACES
+                  and rel not in ("core/gui/design.py", "core/gui/fonts.py")):
+                strays.append(f"{rel}:{node.lineno} names {node.value!r}")
+    assert not strays, "the book face is reached outside its places:\n" + "\n".join(strays)
+    unused = sorted(set(BOOK_FACE_MODULES) - users)
+    assert not unused, f"allowed the book face and not using it: {unused}"
+
+
+def test_an_error_edge_whose_colour_fails_and_a_middle_whose_fit_fails_are_reported_and_go_on(monkeypatch):
+    """What the guarded methods of the page devices answer when they fail. Nothing comes out of the call that
+    made the widget draw or resize, and the error stands in the record under the method's own name. The row's
+    paint event draws nothing and has ended its painter by then: the words of the error, which are read while
+    the failed call still stands, say whether its painter still paints. The middle's resize event answers with
+    the toolkit's own resize, so the middle is laid out and has its range though its body was not told its
+    width; the method that hears of the range answers nothing. The next paint and the next resize are whole."""
+    QApplication.instance() or QApplication([])                 # before any widget
+    from core.gui import reported
+    from core.gui.widgets import message_row, page
+    row = message_row.MessageRow("err", "")                     # no words: no pixel read is a letter's
+    row.marker.hide()                                           # the marker paints itself, in a method of its own
+    row.resize(300, 40)
+    body, widths = QWidget(), []
+    body.setMinimumHeight(900)
+    middle = page.Scroller(body)
+    bar = middle.verticalScrollBar()
+    middle.resize(500, 1200)                                    # drawn once with room for all it holds: the first
+    middle.grab()                                               # drawing lays a middle out whatever its resize answers
+    opened = []                                                 # each painter a paint event opens, noted and not kept alive
+
+    class Noted(QPainter):
+        def __init__(self, device):
+            super().__init__(device)
+            opened.append(weakref.ref(self))
+
+    class NoColour(Exception):                                  # its words are made when the record reads them
+        def __str__(self):
+            return f"its painter still paints: {opened[-1]().isActive()}"
+
+    def no_colour(*told, **named):
+        raise NoColour()
+
+    def no_room(*told, **named):
+        raise ValueError("no room")
+
+    with reported.expected() as caught:
+        with monkeypatch.context() as patch:
+            patch.setattr(message_row, "QPainter", Noted)
+            patch.setattr(design, "colour", no_colour)          # the paint fails under its live painter
+            assert all(pixel == _BLANK for pixel in _every_pixel(_screen_of(row, 1.0)))
+        body.fit = no_room                                      # the body cannot be told its width, and what hears
+        middle.setFocusPolicy = no_room                         # of the range cannot say whether the Tab key stops here
+        middle.resize(640, 300)                                 # too low now for what it holds
+        middle.grab()
+        del body.fit, middle.setFocusPolicy
+        assert bar.maximum() > 0, "the middle was not given the toolkit's own resize"
+    module = "core.gui.widgets."
+    assert caught == [(module + "message_row.MessageRow.paintEvent", "NoColour: its painter still paints: False"),
+                      (module + "page.Scroller.resizeEvent", "ValueError: no room"),
+                      (module + "page.Scroller._range_changed", "ValueError: no room")]
+    assert _at(_screen_of(row, 1.0), 0, 0) == design.hex_colour("err")          # and each is whole again: the edge,
+    body.fit = widths.append
+    middle.resize(640, 280)                                     # another height, so the range changes again
+    middle.grab()
+    assert set(widths) == {640 - 2 * 4 - 8 - 2} and middle.focusPolicy() == Qt.FocusPolicy.TabFocus     # the width, the Tab stop
