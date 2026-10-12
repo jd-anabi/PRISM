@@ -4345,6 +4345,9 @@ def test_a_time_axis_tick_label_is_short_and_english_and_is_left_out_sooner_than
         assert [text for _, text in clock] == ["12:00", "18:00", f"3 {name} 00:00", "06:00", "12:00", "18:00"]
     crowded = _axis(_FIT, dt.datetime(2026, 10, 14), _EARLIEST, None)["labels"]
     assert [text for _, text in crowded][:3] == ["1 Oct", "3 Oct", "4 Oct"]              # "2 Oct" would touch "1 Oct"
+    odd = _SIM + _plus(seconds=13, microseconds=456789)          # a run begun on no whole second, as a real one is
+    clock = _axis(odd, odd + _plus(hours=11), _SIM + _plus(hours=26), _SIM + _plus(hours=28))["labels"]
+    assert [text for _, text in clock] == ["18:00", "1 Oct 00:00", "06:00", "12:00", "18:00"]    # the midnight keeps its day
     for moment in AXIS_MOMENTS:
         labels = _axis(*moment[1])["labels"]
         for (x, text), (following, _) in zip(labels, labels[1:]):
@@ -4411,6 +4414,9 @@ def test_the_time_axis_hatching_lies_exactly_between_the_two_end_estimates_and_n
                 inner = range(math.ceil(5 * ratio) + 1, math.floor(17 * ratio) - 1)
                 for x in [x_from] + ([x_by - 1] if lay["late"] else []):     # and, late, where the run was due
                     assert {image.pixel(math.floor(x * ratio + 0.5), dy) for dy in inner} == {paper}, (name, x)
+                    column = math.floor(x * ratio + 0.5)             # and the outline is whole above and below it
+                    ends = image.pixel(column, _device_edge(4 * ratio)), image.pixel(column, _device_edge(18 * ratio) - 1)
+                    assert ends == (rule, rule), (name, x)
 
 
 @pytest.mark.parametrize("ratio, weight", [(1.0, 1), (1.25, 1), (1.5, 1), (2.0, 2)])
@@ -4438,6 +4444,18 @@ def test_the_time_axis_track_is_outlined_on_whole_device_pixels_and_the_now_mark
             row = [images[470].pixel(dx, int(20.5 * ratio)) for dx in range(images[470].width())]
             assert all(row[math.floor(x * ratio + 0.5)] == rule for x in _MIDNIGHTS), dark
             assert row.count(rule) == len(_MIDNIGHTS) * weight, (dark, row.count(rule))
+            # outside the track nothing is drawn but the mark and the ticks: over the range ahead, past the last
+            # tick, the rows above the track and those between its foot and the lettering are left clear
+            image = images[470]
+            band = range(math.ceil(905 * ratio), math.floor(1035 * ratio))
+            rows = itertools.chain(range(math.floor(4 * ratio)), range(math.ceil(18 * ratio), int(25 * ratio)))
+            assert [dy for dy in rows if any(image.pixel(dx, dy) for dx in band)] == [], dark
+            # a tick is five pixels long from the track's foot: the column of a midnight ahead of the bar, read from
+            # there to where the lettering begins
+            foot = [dy for dy in range(_device_edge(18 * ratio), int(25 * ratio))
+                    if image.pixel(_device_edge(555 * ratio), dy) == rule]
+            assert foot == list(range(_device_edge(18 * ratio), _device_edge(23 * ratio))), (dark, foot)
+            assert image.pixel(image.width() - 1, int(11 * ratio)) == rule, dark      # the track is closed at its right end
 
 
 def test_the_time_axis_grows_with_the_text_size_and_its_mark_keeps_its_width():
@@ -4542,6 +4560,24 @@ def test_the_key_under_the_time_axis_is_the_hatched_range_in_small():
             assert edge == {_axis_rgb("rule")}, (dark, ratio)
             inner = {image.pixel(dx, dy) for dx in range(3, wide - 3) for dy in range(3, high - 3)}
             assert paper in inner and len(inner) > 1, (dark, ratio)
+
+
+def test_a_time_axis_and_its_key_read_every_colour_when_they_paint():
+    """Each is drawn in the colours of the theme in force when it paints, whatever theme it was built in: the
+    picture of one built before the theme was set equals the picture of one built in it. The two show the same
+    moments at the same width, which are drawn alike to the pixel; of the axis only the rows above its lettering
+    are compared."""
+    QApplication.instance() or QApplication([])                 # before any widget
+    from core.gui.widgets.time_axis import AxisCaption, TimeAxis
+    times = (_FIT, _FIT_NOW, _DUE_FROM, _DUE_BY)
+    axis, line = TimeAxis(*times), AxisCaption(*times)          # built in the theme in force, drawn in both
+    for dark in (False, True):
+        with theme(dark):
+            fresh = AxisCaption(*times)                         # held in a name: its key goes when it goes
+            over = (0, 0, _AXIS_W, 24)                          # the rows above the lettering: none of it is read
+            new = _axis_image(TimeAxis(*times), 1.0, _AXIS_W)   # the same moments, built in this theme
+            assert _axis_image(axis, 1.0, _AXIS_W).copy(*over) == new.copy(*over), dark
+            assert _axis_image(line.key, 1.0) == _axis_image(fresh.key, 1.0), dark
 
 
 def test_a_time_axis_and_its_key_whose_paint_fails_draw_nothing_end_their_painter_and_report_it(monkeypatch):
