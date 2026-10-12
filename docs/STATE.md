@@ -1,6 +1,12 @@
 # PRISM — state
 
-**Last updated:** 2026-10-11 (THE BUILD IS HANDED TO A NEW CHAT AGAIN, which continues from
+**Last updated:** 2026-10-12 (THE BUILD IS HANDED TO A NEW CHAT A THIRD TIME, which continues from
+`docs/superpowers/prompts/2026-10-12-window-redesign-continue-stage-1.md`, the paragraph "THE CHAT OF 12 OCTOBER"
+below and the ledger: the owner chose how much to spend ("in between": lean preparation, the review by three
+readers kept for every task); TASK 14q, THE OWNER'S TWO ANSWERS ON THE TABLE, AND TASK 15, THE TIME AXIS, ARE
+COMPLETE, each after one fix round (gate green on `6da8215`: 1360 passed, 3 skipped); deviation rows 42 to 44 are
+recorded; Task 16 is prepared, its notes run on a stand-in; and THE LINE STANDS AT TASK 16. What follows in this
+parenthesis is the head as the chat of 11 October left it: THE BUILD IS HANDED TO A NEW CHAT AGAIN, which continues from
 `docs/superpowers/prompts/2026-10-11-window-redesign-continue-stage-1.md`, the paragraph "THE NEW CHAT" below and
 the ledger: the chat of 10 and 11 October reached the end of its room, and the owner asked how to spend less; the
 owner answered the two questions on the table on 2026-10-11 (the recommendations: room after a last column's words;
@@ -28,6 +34,57 @@ the build's state stands in four paragraphs, each as it was written on its date 
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**THE CHAT OF 12 OCTOBER (2026-10-12; started from the owner's pasted prompt of 11 October; the ledger's entries from
+"NEW CHAT 2026-10-12" on have every figure and every ruling).** **The owner chose how much to spend**, asked once with
+three options: "In between" (no workflow at every step; one preparation pass a task after the task before has landed, a
+reader on Sonnet and then a skeptic on Opus who runs the notes on a stand-in; the implementer on Opus; the review by
+three readers kept for EVERY task, one skeptic on the Important findings; a fix re-read on Sonnet); it holds until the
+owner says otherwise. The word that names the app's multi-agent mode stood in the pasted prompt and switched that mode
+on for that one message; no workflow was run. **Task 14q, the owner's two answers on the table** (a task the plan did
+not have; `e53b8e2`, `0d9c9f5`, then fix round 1 `b5ef317`, `5082dec`): a table's last column keeps room after its
+words, so that the ring round the current row crosses no letter (measured after: none crossed in 2,160 of 2,160 cases
+drawn, where 1,088 were before); and a value or a state's word too long for its column is drawn cut with an ellipsis,
+the unit first, the start of a number never lost ("101.3 of 128 …" where "01.3 of 128 GiB" stood). Its brief was written
+against the code and then run on a scratch copy before the build; its review (three readers) found the build equal to
+the brief and two Important gaps in the DICTATED TESTS (the cut's test passed when the painting lettered the cell's own
+words; no leg stood at the edge of a place), both confirmed by a skeptic and closed in the fix round with five small
+holds and one docstring made true. **Ruled by the controller** (each in the ledger with its cost): the room is the first
+column's lead less the bar, 6 px at the ordinary text size and growing with it, so that both ends of a row stand alike
+at every text size; its measured cost is that in a FIXED last column the room is taken from the words (the approved
+health table's last column of 56 cuts "Fine" at every text size above about 104 %, and never fitted the design's longer
+words for it: that column is widened or fitted when the table is mounted); when a number fits and not even an ellipsis
+fits after it, number and unit are cut as one. **Deviation rows 42 and 43** are in the design's section 8, the plan's
+head and the ledger; the owner was shown the two pictures of 11 October drawn again from the code as built
+(`questions/q11-…`, `q12-…` in the ledger). Gate at `5082dec`: 1329 passed, 3 skipped, 5 deselected. **Task 15, the time
+axis** (`d444fc4`, then fix round 1 `20ad654`, `6da8215`): the new `core/gui/widgets/time_axis.py` (a pure layout
+function, the axis, the line under it with its hatch key), thirteen tests born, mounted on no screen; both paint events
+carry the guard; built from the plan's brief and the second notes, all twenty-three one-run faults seen red. Its review
+(three readers; one drew the axis beside the approved sample's own code at six scalings and in every form it takes)
+found the build equal to its instructions and FOUR things that needed a fix, each confirmed by a skeptic: two ends
+handed over crossed made the line under the axis read a range that runs backwards while the axis drew a firm end (by the
+design's own rule for a fit's range this happens in ordinary use; now such ends read as one firm end, **deviation row
+44**), and three gaps of the dictated tests (nothing read outside the track; a colour kept from the build; no start off
+the whole second). **The last gate, at `6da8215`: 1360 passed, 3 skipped, 5 deselected, 203 warnings** (not a
+quiet-machine time; the gates that ran beside readers who draw took 23 to 24 minutes, the others 18); the display-marked
+run 3 passed; the real `Artifacts/` (428 entries) and the real `PRISM.ini` (hash unchanged) are as they were. **For the
+owner at the stage's exit, new with these two tasks:** two questions on the time axis, each to be asked alone with
+pictures and a recommendation, so that a remedy is built before stage 3 mounts the axis: (1) an axis with no tick and no
+label for about four runs in ten of 5 to 15 minutes and of 2 to 6 hours, as the approved rule gives it (measured over
+20,000 start times a band); (2) a short run that turns late keeps almost none of its bar, because the axis grows by a
+whole day (the plan's row 20); and to tell: the form of the room after a table's last column and its cost in a fixed
+column; what a cut number looks like at its worst ("10…" for 10.4 and for 101.3 alike in a very narrow column; no
+approved column is that narrow). **Carried to stage 3's plan (the stage that mounts the axis and the health table):**
+the line under the axis cannot be narrower than its two sentences, which for a six-day fit are wider than the page in
+the smallest window on 151 of 365 start dates; what the page says of a fit that cannot end before its expected end; the
+health table's last column fitted or at least 62 wide, its state's words held whole at the five text sizes; a fixed
+column of values sized for its longest number, and a cut cell showing its whole words under the pointer. **Task 16 (the
+page pieces) is prepared:** its notes were written against the code and run on a stand-in
+(`stage-1/briefs/task-16-dispatch-notes.md`; none of the brief's fourteen tests is wrong; one more test and eight
+one-run faults are dictated; the slot that hears the scroll bar's range carries the guard, because a raise in it
+unguarded is seen by no test), and its rulings are in the ledger. **Engine changes built so far: E12 only.** **Next, in
+order:** Task 16's dispatch; then 17 and 18 (their briefs are unread; one preparation pass each); then the stage's last
+review and Task 19.
 
 **THE NEW CHAT (2026-10-10 evening to 2026-10-11; started from the owner's pasted prompt, with Ultracode on; the
 ledger's entries from "NEW CHAT 2026-10-10" on have every figure and every ruling).** **The owner answered the three
