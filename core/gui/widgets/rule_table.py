@@ -36,8 +36,8 @@ class TextCell:
 
 @dataclass(frozen=True)
 class ValueCell:
-    """A value in a cell, at its right. It is never shortened with an ellipsis: in a column too narrow for
-    it, its left end is not drawn."""
+    """A value in a cell, at its right. Too long for its column, its unit is cut first and then its figure,
+    each with an ellipsis; its start is never lost."""
     figure: str               # semibold
     unit: str = ""            # plain, one space after the figure
     second: str = ""          # a second line in the small size
@@ -45,8 +45,8 @@ class ValueCell:
 
 @dataclass(frozen=True)
 class StateCell:
-    """A state in a cell: its marker and, after it, the word for it. The word is never shortened with an
-    ellipsis: in a column too narrow for it, its right end is not drawn."""
+    """A state in a cell: its marker and, after it, the word for it, cut at its end with an ellipsis where
+    the column is too narrow."""
     kind: str                 # one of paint.MARKERS
     word: str
 
@@ -112,6 +112,30 @@ def _wrapped(text: str, font, width: float, height: int):
     return layout, count
 
 
+def _as_drawn(cell, width: float) -> tuple:
+    """The words of a value or of a state as they are drawn in a place ``width`` wide (for a state, what its
+    marker and the gap after it leave): ``(word,)`` for a state, ``(figure, unit, second)`` for a value, the
+    unit with the space before it. What fits is whole. A value keeps its figure whole and cuts its unit to
+    what the figure leaves; where not even an ellipsis is left for the unit, figure and unit are cut as one,
+    in the figure's own form. A second line and a state's word are cut at their end. Every cut ends in an
+    ellipsis: nothing is lost without a sign, and never the start of a number."""
+
+    def cut(part, words, room):
+        return QFontMetricsF(_face(part)).elidedText(words, Qt.ElideRight, max(0.0, room))
+
+    if isinstance(cell, StateCell):
+        return (cut("word", cell.word, width),)
+    unit = f" {cell.unit}" if cell.unit else ""
+    second = cut("second", cell.second, width)
+    figure_wide = QFontMetricsF(_face("figure")).horizontalAdvance(cell.figure)
+    if figure_wide + QFontMetricsF(_face("unit")).horizontalAdvance(unit) <= width:
+        return cell.figure, unit, second
+    short = cut("unit", unit, width - figure_wide) if unit else ""
+    if short:
+        return cell.figure, short, second
+    return cut("figure", cell.figure + unit, width), "", second
+
+
 def _words(cell) -> str:
     """A cell's plain words, as assistive technology reads them."""
     if isinstance(cell, ValueCell):
@@ -175,25 +199,26 @@ class RuleDelegate(QStyledItemDelegate):
             line = QRectF(box.left(), box.top(), box.width(), height)
             if isinstance(cell, StateCell):
                 side = design.scaled(design.SIZE["marker"])
+                at = side + design.scaled(design.SIZE["state_gap"])          # where its word begins
+                (word,) = _as_drawn(cell, box.width() - at)
                 paint.paint_marker(painter, cell.kind, QRectF(box.left(), box.top() + (height - side) / 2, side, side))
                 painter.setFont(_face("word"))
                 painter.setPen(design.colour("ink"))
-                painter.drawText(line.adjusted(side + design.scaled(design.SIZE["state_gap"]), 0, 0, 0),
-                                 Qt.AlignLeft | Qt.AlignVCenter, cell.word)
+                painter.drawText(line.adjusted(at, 0, 0, 0), Qt.AlignLeft | Qt.AlignVCenter, word)
             elif isinstance(cell, ValueCell):
                 plain = _face("unit")
-                unit = f" {cell.unit}" if cell.unit else ""
+                figure, unit, second = _as_drawn(cell, box.width())
                 painter.setPen(design.colour("ink"))
                 painter.setFont(plain)
                 painter.drawText(line, Qt.AlignRight | Qt.AlignVCenter, unit)
                 painter.setFont(_face("figure"))
                 painter.drawText(line.adjusted(0, 0, -QFontMetricsF(plain).horizontalAdvance(unit), 0),
-                                 Qt.AlignRight | Qt.AlignVCenter, cell.figure)
-                if cell.second:
+                                 Qt.AlignRight | Qt.AlignVCenter, figure)
+                if second:
                     painter.setFont(_face("second"))
                     painter.setPen(design.colour("ink_2"))
                     under = QRectF(box.left(), box.top() + height, box.width(), design.scaled(design.TYPE["small"][1]))
-                    painter.drawText(under, Qt.AlignRight | Qt.AlignVCenter, cell.second)
+                    painter.drawText(under, Qt.AlignRight | Qt.AlignVCenter, second)
             elif isinstance(cell, TextCell):
                 font = _face("selected" if selected and first else "text")
                 painter.setFont(font)

@@ -4048,6 +4048,50 @@ def test_a_wrapped_cell_makes_its_row_as_tall_as_its_lines_at_the_width_it_has()
             assert first.view.rowHeight(0) == height, selectable
 
 
+def test_a_value_or_a_states_word_too_long_for_its_column_is_cut_with_an_ellipsis_and_never_loses_its_start(monkeypatch):
+    """What the painting is handed to draw when a value or a state's word is wider than the place it has, and
+    whether it asks for it. Which letters fit is lettering, so only the shape of each answer is held and no pixel
+    is read: a value gives up its unit first and then its figure, a second line and a state's word are cut at
+    their end, and the start of a number stays."""
+    rt = _rt()
+    dots = ("\u2026", "...")                                    # the ellipsis the toolkit's own eliding puts in
+    assert rt._as_drawn(rt.ValueCell("10.4", "of 16 GiB"), 102.0) == ("10.4", " of 16 GiB", "")    # what fits is whole
+    figure, unit, _ = rt._as_drawn(rt.ValueCell("101.3", "of 128 GiB"), 102.0)
+    assert figure == "101.3" and unit.startswith(" of") and unit.endswith(dots)                    # the unit goes first
+    figure, unit, _ = rt._as_drawn(rt.ValueCell("20,480,000", "simulations"), 54.0)
+    assert figure.startswith("20") and figure.endswith(dots) and unit == ""                         # then the figure
+    figure, unit, _ = rt._as_drawn(rt.ValueCell("20,480,000"), 54.0)
+    assert figure.startswith("20") and figure.endswith(dots) and unit == ""                         # with no unit too
+    # A place as wide as the figure and no wider holds the figure whole and nothing after it, not even the
+    # ellipsis. The figure drawn whole there would not say that its unit is gone, so the two are cut as one:
+    # the answer still begins as the number does and ends in the ellipsis.
+    room = QFontMetricsF(rt._face("figure")).horizontalAdvance("101.3")
+    figure, unit, _ = rt._as_drawn(rt.ValueCell("101.3", "of 128 GiB"), room)
+    assert figure.startswith("1") and figure.endswith(dots) and unit == ""
+    figure, unit, second = rt._as_drawn(rt.ValueCell("40.1 %", second="expected 37.9 % of them"), 102.0)
+    assert (figure, unit) == ("40.1 %", "") and second.startswith("expected") and second.endswith(dots)
+    (word,) = rt._as_drawn(rt.StateCell("half", "Unfinished"), 34.0)
+    assert word.startswith("U") and word.endswith(dots)
+    assert rt._as_drawn(rt.StateCell("fine", "Fine"), 34.0) == ("Fine",)
+    assert rt._as_drawn(rt.ValueCell(""), 102.0) == ("", "", "")
+
+    # The painting asks for these words, in the places its columns leave: the value's 118 less the space after
+    # its column; the state's 62 less the space after the last column, the marker and the gap after the marker.
+    real, asked = rt._as_drawn, []
+
+    def noted(cell, width):
+        asked.append((cell, width))
+        return real(cell, width)
+
+    value, state = rt.ValueCell("101.3", "of 128 GiB"), rt.StateCell("half", "Unfinished")
+    table = rt.RuleTable([rt.Column("", 50), rt.Column("", 118, right=True), rt.Column("", 62)],
+                         [[rt.TextCell(""), value, state]])
+    with _on_a_page(table):
+        monkeypatch.setattr(rt, "_as_drawn", noted)
+        _rendered(table, 1.0)                                   # drawn once and not read
+    assert set(asked) == {(value, 102.0), (state, 34.0)}, asked
+
+
 def test_a_table_whose_painting_fails_draws_the_stock_cell_and_section_and_leaves_each_painter_as_found(monkeypatch):
     """What the table's four painting methods answer when a colour fails under them. A cell and a header section
     are then drawn as the toolkit itself draws them, from the words the model keeps, and the painter each was
