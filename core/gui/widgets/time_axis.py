@@ -99,7 +99,8 @@ def _tick_font():
 def _words(start, now, end_from, end_by, unknown) -> tuple:
     """The line under the axis for these moments: the form it takes, its left-hand words and its right-hand
     ones. The forms are tried in this order and the first that holds is taken: "no end" (the caller's own
-    sentence, as given), "late", "firm" (an end with no earliest end, or the two equal), "inside" (the clock
+    sentence, as given), "late", "firm" (an end with no earliest end, or with one that is not before it:
+    the two equal, or the two crossed, for which the layout leaves the range no width), "inside" (the clock
     has reached the range) and "ahead". Every time is written as the window writes a date, without seconds."""
     left = f"Started {design.date_text(start, now)}"
     if end_by is None:
@@ -107,7 +108,7 @@ def _words(start, now, end_from, end_by, unknown) -> tuple:
     due = design.date_text(end_by, now)
     if now > end_by:
         return "late", left, f"Later than expected: it was due by {due}"
-    if end_from is None or end_from == end_by:
+    if end_from is None or end_from >= end_by:
         return "firm", left, f"Expected to end by {due}"
     if end_from <= now:
         return "inside", left, f"Expected to end by {due}"

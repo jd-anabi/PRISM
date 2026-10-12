@@ -4322,6 +4322,8 @@ def test_the_time_axis_layout_takes_odd_times_without_raising_or_leaving_the_axi
     assert _axis(_FIT, _FIT_NOW, _FIT - _plus(hours=5), _DUE_BY)["x_from"] == 0          # an earliest end before it
     crossed = _axis(_FIT, _FIT_NOW, _DUE_BY + _plus(hours=5), _DUE_BY)                   # the two ends crossed
     assert crossed["x_from"] == crossed["x_by"] == 1038
+    late = _axis(_FIT, _DUE_BY + _plus(hours=9), _DUE_BY + _plus(hours=5), _DUE_BY)      # crossed, the clock past both
+    assert (late["late"], late["x_from"], late["x_by"]) == (True, 890, 890)             # the earliest end held to the end
     early = _axis(_FIT, _FIT - _plus(hours=1), _DUE_FROM, _DUE_BY)                       # a clock that went back
     assert (early["x_done"], early["x_now"]) == (0, 3.0)
     gone = _axis(_FIT, _FIT - _plus(days=400), _FIT - _plus(days=380), _FIT - _plus(days=370))  # all before the start
@@ -4474,6 +4476,11 @@ def test_the_line_under_the_time_axis_and_its_spoken_name_say_when_the_run_start
             ((_FIT, _FIT_NOW, None, _FIRM), "", "Expected to end by Fri 9 Oct, 22:00", False, False),  # no earliest end
             ((_FIT, dt.datetime(2026, 10, 7, 1, 45), _DUE_FROM, _DUE_FROM), "",
              "Later than expected: it was due by Tue 6 Oct, 19:00", False, True),                # late, though firm
+            # the two ends crossed, the earliest end after the end: the end stands alone, as the axis draws it,
+            # and the run is late once the clock has passed that end
+            ((_FIT, _FIT_NOW, _DUE_BY + _plus(hours=5), _DUE_BY), "", "Expected to end by Wed 7 Oct, 19:00", False, False),
+            ((_FIT, _DUE_BY + _plus(hours=9), _DUE_BY + _plus(hours=5), _DUE_BY), "",
+             "Later than expected: it was due by Wed 7 Oct, 19:00", False, True),
             ((_FIT, _FIT_NOW, None, None), waiting, waiting, False, False),
             ((_FIT, _FIT_NOW, _EARLIEST, None), "a <b>name</b> & more", "a <b>name</b> & more", False, False),
             ((_FIT, _FIT_NOW, None, None), "", "", False, False)):
