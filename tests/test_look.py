@@ -11,6 +11,7 @@ import builtins
 import contextlib
 import dataclasses
 import datetime
+import datetime as dt
 import gc
 import hashlib
 import itertools
@@ -45,7 +46,7 @@ REPO = Path(__file__).resolve().parents[1]
 LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.gui.mpl_theme", "core.gui.settings",
                 "core.gui.file_chooser", "core.gui.widgets.labeled_inputs", "core.gui.paint", "core.gui.style",
                 "core.gui.reported", "core.Helpers.plot_colours", "core.gui.widgets.marker", "core.gui.widgets.ruled",
-                "core.gui.widgets.rule_table")
+                "core.gui.widgets.rule_table", "core.gui.widgets.time_axis")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
 
@@ -4219,3 +4220,355 @@ def test_a_table_whose_painting_fails_draws_the_stock_cell_and_section_and_leave
                           (module + "RuleHeader.paintEvent", "NoColour: its painter still paints: [False]")]
     finally:
         qInstallMessageHandler(previous)
+
+
+# the time axis
+_plus = dt.timedelta
+_FIT = dt.datetime(2026, 10, 1, 19, 2)                       # a fit that began on a Thursday evening
+_FIT_NOW = dt.datetime(2026, 10, 4, 12, 10)                  # the Sunday after, at noon
+_DUE_FROM, _DUE_BY = dt.datetime(2026, 10, 6, 19, 0), dt.datetime(2026, 10, 7, 19, 0)
+_SIM = dt.datetime(2026, 9, 30, 16, 0)
+_FIRM = dt.datetime(2026, 10, 9, 22, 0)
+_EARLIEST = dt.datetime(2026, 10, 13, 9, 30)
+_AXIS_W = 1038
+_AXIS_KEYS = ["axis_end", "inside", "labels", "late", "step", "ticks", "x_by", "x_done", "x_from", "x_now"]
+_MIDNIGHTS = [36, 209, 382, 555, 728, 901]
+_DAY_NAMES = [(0.0, "1 Oct"), (104.83, "2 Oct"), (277.87, "3 Oct"), (450.91, "4 Oct"), (623.95, "5 Oct"),
+              (796.99, "6 Oct"), (952.0, "7 Oct")]
+# name, (start, now, end_from, end_by), step, ticks, x_done, x_now, x_from, x_by, inside, late, axis_end, labels
+AXIS_MOMENTS = [
+    ("the run page", (_FIT, _FIT_NOW, _DUE_FROM, _DUE_BY),
+     86400, _MIDNIGHTS, 470, 470, 865, 1038, False, False, _DUE_BY, _DAY_NAMES),
+    ("the very start", (_FIT, _FIT, _DUE_FROM, _DUE_BY),
+     86400, _MIDNIGHTS, 0, 3.0, 865, 1038, False, False, _DUE_BY, _DAY_NAMES),
+    ("early in fitting", (_FIT, _FIT + _plus(hours=7, minutes=12), _DUE_FROM, _DUE_BY),
+     86400, _MIDNIGHTS, 52, 52, 865, 1038, False, False, _DUE_BY, _DAY_NAMES),
+    ("late in fitting, inside the range", (_FIT, dt.datetime(2026, 10, 7, 1, 45), _DUE_FROM, _DUE_BY),
+     86400, _MIDNIGHTS, 914, 914, 865, 1038, True, False, _DUE_BY, _DAY_NAMES),
+    ("the last minute of the range", (_FIT, _DUE_BY, _DUE_FROM, _DUE_BY),
+     86400, _MIDNIGHTS, 1038, 1035.0, 865, 1038, True, False, _DUE_BY, _DAY_NAMES),
+    ("later than expected", (_FIT, _FIT + _plus(hours=153), _DUE_FROM, _DUE_BY),
+     86400, [31, 179, 327, 476, 624, 772, 921], 946, 946, 741, 890, False, True, _DUE_BY + _plus(days=1),
+     [(0.0, "1 Oct"), (87.35, "2 Oct"), (235.67, "3 Oct"), (383.98, "4 Oct"), (532.3, "5 Oct"), (680.61, "6 Oct"),
+      (828.93, "7 Oct"), (961.79, "8 Oct")]),
+    ("a simulation of 27 hours",
+     (_SIM, _SIM + _plus(hours=11, minutes=11), _SIM + _plus(hours=26), _SIM + _plus(hours=28)),
+     21600, [74, 297, 519, 741, 964], 415, 415, 964, 1038, False, False, _SIM + _plus(hours=28),
+     [(56.64, "18:00"), (258.07, "1 Oct 00:00"), (501.5, "06:00"), (723.93, "12:00"), (946.36, "18:00")]),
+    ("a run of 40 minutes", (_SIM, _SIM + _plus(minutes=13), _SIM + _plus(minutes=34), _SIM + _plus(minutes=40)),
+     900, [389, 779], 337, 337, 882, 1038, False, False, _SIM + _plus(minutes=40),
+     [(371.75, "16:15"), (761.0, "16:30")]),
+    ("a run of 4 minutes", (_SIM, _SIM + _plus(seconds=95), _SIM + _plus(seconds=200), _SIM + _plus(seconds=240)),
+     30, [130, 260, 389, 519, 649, 779, 908], 411, 411, 865, 1038, False, False, _SIM + _plus(seconds=240),
+     [(101.75, "16:00:30"), (231.5, "16:01:00"), (361.25, "16:01:30"), (491.0, "16:02:00"), (620.75, "16:02:30"),
+      (750.5, "16:03:00"), (880.25, "16:03:30")]),
+]
+# the two forms with no range to hatch: a firm end; no end known, with and without an earliest end
+AXIS_WITHOUT_A_RANGE = [("a firm end", (_FIT, _FIT_NOW, _FIRM, _FIRM)),
+                        ("a firm end that has passed", (_FIT, _FIRM + _plus(hours=2), _FIRM, _FIRM)),
+                        ("no end, an earliest one", (_FIT, _FIT_NOW, _EARLIEST, None)),
+                        ("no end at all", (_FIT, _FIT_NOW, None, None))]
+
+
+def _seven(text):
+    """Seven pixels a character: a measure that needs no font."""
+    return 7.0 * len(text)
+
+
+def _axis(*times):
+    from core.gui.widgets.time_axis import axis_layout
+    return axis_layout(*times, _AXIS_W, _seven)
+
+
+@pytest.mark.parametrize("moment", AXIS_MOMENTS, ids=[m[0] for m in AXIS_MOMENTS])
+def test_the_time_axis_layout_at_the_run_page_and_the_eight_other_moments(moment):
+    _, times, step, ticks, x_done, x_now, x_from, x_by, inside, late, axis_end, labels = moment
+    got = _axis(*times)
+    assert sorted(got) == _AXIS_KEYS
+    assert (got["step"], got["ticks"]) == (step, ticks)
+    assert (got["x_done"], got["x_now"], got["x_from"], got["x_by"]) == (x_done, x_now, x_from, x_by)
+    assert (got["inside"], got["late"], got["axis_end"]) == (inside, late, axis_end)
+    assert [text for _, text in got["labels"]] == [text for _, text in labels]
+    assert [x for x, _ in got["labels"]] == pytest.approx([x for x, _ in labels], abs=0.01)
+
+
+def test_the_time_axis_layout_of_a_firm_end_has_no_range_to_hatch():
+    firm = _axis(_FIT, _FIT_NOW, _FIRM, _FIRM)
+    assert (firm["x_from"], firm["x_by"], firm["late"], firm["inside"]) == (1038, 1038, False, False)
+    assert (firm["x_done"], firm["axis_end"], len(firm["ticks"])) == (347, _FIRM, 8)
+    assert _axis(_FIT, _FIT_NOW, None, _FIRM) == firm                    # an end with no earliest end is firm
+    past = _axis(_FIT, _FIRM + _plus(hours=2), _FIRM, _FIRM)
+    assert (past["late"], past["axis_end"]) == (True, _FIRM + _plus(days=1))
+    assert (past["x_from"], past["x_by"], past["x_done"]) == (924, 924, 934)
+
+
+def test_the_time_axis_with_no_end_known_hatches_nothing_is_never_late_and_never_spans_under_30_seconds():
+    waiting = _axis(_FIT, _FIT_NOW, _EARLIEST, None)                     # to the moment before which it cannot end
+    assert (waiting["axis_end"], waiting["x_done"]) == (_EARLIEST, 243)
+    passed = _axis(_FIT, dt.datetime(2026, 10, 14), _EARLIEST, None)     # now has passed that moment: to now
+    assert (passed["axis_end"], passed["x_done"], passed["x_now"]) == (dt.datetime(2026, 10, 14), 1038, 1035.0)
+    bare = _axis(_FIT, _FIT_NOW, None, None)                             # no such moment given: to now
+    assert (bare["axis_end"], bare["x_done"]) == (_FIT_NOW, 1038)
+    first = _axis(_FIT, _FIT, None, None)                                # the first instant: 30 s of axis, not none
+    assert (first["axis_end"], first["step"]) == (_FIT + _plus(seconds=30), 30)
+    assert (first["ticks"], first["labels"], first["x_done"], first["x_now"]) == ([], [], 0, 3.0)
+    assert _axis(_FIT, _FIT + _plus(seconds=10), None, None)["x_done"] == 346
+    for got in (waiting, passed, bare, first):
+        assert (got["late"], got["inside"], got["x_from"], got["x_by"]) == (False, False, 1038, 1038)
+
+
+def test_the_time_axis_layout_takes_odd_times_without_raising_or_leaving_the_axis():
+    assert _axis(_FIT, _FIT, _FIT, _FIT)["axis_end"] == _FIT + _plus(seconds=30)         # an end at the start itself
+    assert _axis(_FIT, _FIT_NOW, _FIT - _plus(hours=5), _DUE_BY)["x_from"] == 0          # an earliest end before it
+    crossed = _axis(_FIT, _FIT_NOW, _DUE_BY + _plus(hours=5), _DUE_BY)                   # the two ends crossed
+    assert crossed["x_from"] == crossed["x_by"] == 1038
+    early = _axis(_FIT, _FIT - _plus(hours=1), _DUE_FROM, _DUE_BY)                       # a clock that went back
+    assert (early["x_done"], early["x_now"]) == (0, 3.0)
+    gone = _axis(_FIT, _FIT - _plus(days=400), _FIT - _plus(days=380), _FIT - _plus(days=370))  # all before the start
+    assert (gone["x_from"], gone["x_by"], gone["x_done"], gone["late"]) == (0, 0, 0, False)     # each held to the axis
+    overdue = _axis(_FIT, _DUE_BY + _plus(days=3.2), _DUE_FROM, _DUE_BY)                 # 3.2 days late: four more days
+    assert (overdue["late"], overdue["axis_end"]) == (True, _DUE_BY + _plus(days=4))
+    assert (overdue["x_done"], overdue["x_from"], overdue["x_by"]) == (955, 519, 623)
+    zone = dt.timezone(_plus(hours=-7))                                                  # times that carry a zone
+    aware = _axis(*(t.replace(tzinfo=zone) for t in (_FIT, _FIT_NOW, _DUE_FROM, _DUE_BY)))
+    assert (aware["x_done"], aware["ticks"]) == (470, _MIDNIGHTS)
+
+
+def test_a_time_axis_tick_label_is_short_and_english_and_is_left_out_sooner_than_printed_over_its_neighbour():
+    for number, name in enumerate("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(), 1):
+        start = dt.datetime(2026, number, 2, 6, 0)
+        days = _axis(start, start, start + _plus(days=3), start + _plus(days=4))["labels"]
+        assert [text for _, text in days][:2] == [f"2 {name}", f"3 {name}"]
+        clock = _axis(start, start, start + _plus(hours=30), start + _plus(hours=40))["labels"]
+        assert [text for _, text in clock] == ["12:00", "18:00", f"3 {name} 00:00", "06:00", "12:00", "18:00"]
+    crowded = _axis(_FIT, dt.datetime(2026, 10, 14), _EARLIEST, None)["labels"]
+    assert [text for _, text in crowded][:3] == ["1 Oct", "3 Oct", "4 Oct"]              # "2 Oct" would touch "1 Oct"
+    for moment in AXIS_MOMENTS:
+        labels = _axis(*moment[1])["labels"]
+        for (x, text), (following, _) in zip(labels, labels[1:]):
+            assert following >= x + _seven(text) + 8, moment[0]
+        assert all(0 <= x <= _AXIS_W - _seven(text) for x, text in labels), moment[0]
+
+
+def test_the_time_axis_takes_its_months_from_the_looks_table(monkeypatch):
+    source = (REPO / "core" / "gui" / "widgets" / "time_axis.py").read_text(encoding="utf-8")
+    called = {node.func.attr for node in ast.walk(ast.parse(source))
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
+    assert "strftime" not in called        # a month or a weekday asked of the system follows the regional setting
+    monkeypatch.setattr(design, "MONTHS", tuple("abcdefghijkl"))         # one letter where each month stands
+    days = _axis(_FIT, _FIT_NOW, _DUE_FROM, _DUE_BY)["labels"]
+    assert [text for _, text in days][:2] == ["1 j", "2 j"]              # the tenth, read when the tick is written
+
+
+def _axis_image(widget, ratio, width=None):
+    """The widget alone (made `width` wide first), drawn into a clear picture of that display scaling."""
+    if width:
+        widget.resize(width, widget.height())
+    image = _image(widget.width(), widget.height(), ratio)                # its size rounded up
+    widget.render(image, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)    # no ground of its own, no painter held
+    return image
+
+
+def _axis_rgb(name):
+    return design.colour(name).rgb()
+
+
+def _axis_stroked(image, ratio, x0, x1, ground):
+    """For each device column of the logical span x0 to x1: is any pixel inside the track not `ground`?"""
+    top, height = design.AXIS["track_y"], design.AXIS["track_h"]
+    rows = range(math.ceil((top + 1) * ratio) + 1, math.floor((top + height - 1) * ratio) - 1)
+    return [any(image.pixel(dx, dy) != ground for dy in rows)
+            for dx in range(math.ceil(x0 * ratio), math.floor(x1 * ratio))]
+
+
+@pytest.mark.parametrize("ratio", [1.0, 1.25, 1.5, 2.0])
+@pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
+def test_the_time_axis_hatching_lies_exactly_between_the_two_end_estimates_and_nowhere_without_two(dark, ratio):
+    QApplication.instance() or QApplication([])                 # before any widget: a run may begin at this test
+    from core.gui.widgets.time_axis import TimeAxis
+    with theme(dark):
+        paper, bar, rule = _axis_rgb("paper"), _axis_rgb("elapsed"), _axis_rgb("rule")
+        for name, times in [moment[:2] for moment in AXIS_MOMENTS] + AXIS_WITHOUT_A_RANGE:
+            image, lay = _axis_image(TimeAxis(*times), ratio, _AXIS_W), _axis(*times)
+            x_from, x_by, x_done = lay["x_from"], lay["x_by"], lay["x_done"]
+            left, right = lay["x_now"] - 4, lay["x_now"] + 4          # the mark, its halo and a pixel to spare
+            reached = lay["late"] or lay["inside"]                    # the bar has reached the range
+            behind = min(x_done, left, x_from if reached else _AXIS_W) - 1
+            assert not any(_axis_stroked(image, ratio, 2, behind, bar)), name
+            if reached:
+                assert all(_axis_stroked(image, ratio, x_from + 1, min(x_done, x_by, left) - 1, bar)), name
+            if lay["late"]:
+                assert not any(_axis_stroked(image, ratio, x_by + 1, left - 1, bar)), name
+                assert not any(_axis_stroked(image, ratio, right + 1, _AXIS_W - 1, paper)), name
+            else:
+                assert not any(_axis_stroked(image, ratio, max(x_done, right) + 1, x_from - 1, paper)), name
+                assert all(_axis_stroked(image, ratio, max(x_from + 1, right), _AXIS_W - 1, paper)), name
+            if not reached and x_from < _AXIS_W:                      # the range begins on one whole device pixel
+                assert image.pixel(math.floor(x_from * ratio + 0.5), int(11 * ratio)) == rule, name
+            if reached:                                               # where the range begins shows through the bar,
+                inner = range(math.ceil(5 * ratio) + 1, math.floor(17 * ratio) - 1)
+                for x in [x_from] + ([x_by - 1] if lay["late"] else []):     # and, late, where the run was due
+                    assert {image.pixel(math.floor(x * ratio + 0.5), dy) for dy in inner} == {paper}, (name, x)
+
+
+@pytest.mark.parametrize("ratio, weight", [(1.0, 1), (1.25, 1), (1.5, 1), (2.0, 2)])
+def test_the_time_axis_track_is_outlined_on_whole_device_pixels_and_the_now_mark_stands_through_it(ratio, weight):
+    QApplication.instance() or QApplication([])                 # before any widget: a run may begin at this test
+    from core.gui.widgets.time_axis import TimeAxis
+    for dark in (False, True):
+        with theme(dark):
+            rule, accent, paper = _axis_rgb("rule"), _axis_rgb("accent"), _axis_rgb("paper")
+            images = {x: _axis_image(TimeAxis(_FIT, now, _DUE_FROM, _DUE_BY), ratio, _AXIS_W)     # the first instant,
+                      for now, x in ((_FIT, 3), (_FIT_NOW, 470), (_DUE_BY, 1035))}              # the middle, the last
+            for x, image in images.items():
+                for y in (1, 11, 20):                                            # above the track, in it, below it
+                    across = {image.pixel(dx, int(y * ratio))
+                              for dx in range(math.ceil((x - 2) * ratio), math.floor((x + 2) * ratio))}
+                    assert across == {accent}, (dark, x, y)
+                    for beside in (x - 2.5, x + 2.5):        # a pixel of the page each side, over the bar and the outline too
+                        assert image.pixel(math.floor(beside * ratio), int(y * ratio)) == paper, (dark, x, y, beside)
+            # at the middle moment, a column ahead of the bar, before the range and on no tick, read
+            # from the top to the track's foot only: the lettering below it is never read
+            column = [images[470].pixel(int(600 * ratio), dy) for dy in range(int(22 * ratio))]
+            runs = [(colour, len(list(run))) for colour, run in itertools.groupby(column)]
+            assert [n for colour, n in runs if colour == rule] == [weight, weight], (dark, runs)
+            # the row under the track and over the lettering: the six midnights, one hairline each, and no other rule
+            row = [images[470].pixel(dx, int(20.5 * ratio)) for dx in range(images[470].width())]
+            assert all(row[math.floor(x * ratio + 0.5)] == rule for x in _MIDNIGHTS), dark
+            assert row.count(rule) == len(_MIDNIGHTS) * weight, (dark, row.count(rule))
+
+
+def test_the_time_axis_grows_with_the_text_size_and_its_mark_keeps_its_width():
+    QApplication.instance() or QApplication([])                 # before any widget: a run may begin at this test
+    from core.gui.widgets.time_axis import TimeAxis
+    for factor, height, mark, second in ((1.0, 42, 22, "2 Oct"), (1.25, 53, 28, "3 Oct"), (2.0, 84, 44, "3 Oct")):
+        with text_size(factor):
+            crowded = _axis(_FIT, dt.datetime(2026, 10, 13, 17, 0), None, None)["labels"]
+            assert crowded[1][1] == second          # the room kept between two labels grows too: 8, 10, 16
+            # now on a midnight, at 382: the day names stand between midnights, so the column read
+            # below crosses no lettering; and the tick that falls there must not cut the mark
+            axis = TimeAxis(_FIT, dt.datetime(2026, 10, 4), _DUE_FROM, _DUE_BY)
+            image, accent = _axis_image(axis, 1.0, _AXIS_W), _axis_rgb("accent")
+            assert axis.height() == height
+            assert (axis.minimumHeight(), axis.maximumHeight()) == (height, height)     # fixed: no layout stretches it
+            assert sum(image.pixel(382, dy) == accent for dy in range(height)) == mark      # as tall as its track needs
+            assert sum(image.pixel(dx, 1) == accent for dx in range(_AXIS_W)) == 4          # and no wider
+
+
+def test_the_line_under_the_time_axis_and_its_spoken_name_say_when_the_run_started_and_should_end():
+    QApplication.instance() or QApplication([])                 # before any widget
+    from core.gui.widgets.time_axis import AxisCaption, TimeAxis
+    line, axis = AxisCaption(_FIT, _FIT_NOW, _DUE_FROM, _DUE_BY), TimeAxis(_FIT, _FIT_NOW, _DUE_FROM, _DUE_BY)
+    assert line.started.text() == "Started Thu 1 Oct, 19:02"
+    assert axis.accessibleName() == ("Started Thu 1 Oct, 19:02. "
+                                     "Expected to end between Tue 6 Oct, 19:00 and Wed 7 Oct, 19:00.")
+    waiting = "No end time yet: the first batches are being timed."
+    for times, unknown, words, key, marker in (
+            ((_FIT, _FIT_NOW, _DUE_FROM, _DUE_BY), "", "Expected to end between Tue 6 Oct, 19:00 and Wed 7 Oct, 19:00",
+             True, False),
+            ((_FIT, dt.datetime(2026, 10, 7, 1, 45), _DUE_FROM, _DUE_BY), "", "Expected to end by Wed 7 Oct, 19:00",
+             True, False),                                                       # inside the range
+            ((_FIT, _FIT + _plus(hours=153), _DUE_FROM, _DUE_BY), "",
+             "Later than expected: it was due by Wed 7 Oct, 19:00", False, True),
+            ((_FIT, _FIT_NOW, _FIRM, _FIRM), "", "Expected to end by Fri 9 Oct, 22:00", False, False),  # no range, no key
+            ((_FIT, _FIT_NOW, None, _FIRM), "", "Expected to end by Fri 9 Oct, 22:00", False, False),  # no earliest end
+            ((_FIT, dt.datetime(2026, 10, 7, 1, 45), _DUE_FROM, _DUE_FROM), "",
+             "Later than expected: it was due by Tue 6 Oct, 19:00", False, True),                # late, though firm
+            ((_FIT, _FIT_NOW, None, None), waiting, waiting, False, False),
+            ((_FIT, _FIT_NOW, _EARLIEST, None), "a <b>name</b> & more", "a <b>name</b> & more", False, False),
+            ((_FIT, _FIT_NOW, None, None), "", "", False, False)):
+        line.set_times(*times, unknown=unknown)
+        axis.set_times(*times, unknown=unknown)
+        assert (line.words.text(), not line.key.isHidden(), not line.marker.isHidden()) == (words, key, marker)
+        spoken = "Started Thu 1 Oct, 19:02." + (" " + words.rstrip(".") + "." if words else "")
+        assert axis.accessibleName() == spoken
+    assert line.marker.kind == "warn"
+    assert line.words.textFormat() == Qt.PlainText and line.started.textFormat() == Qt.PlainText   # shown as written
+    line.set_times(_SIM, _FIT_NOW, _DUE_FROM, _DUE_BY)          # another start: the left-hand words follow it
+    assert line.started.text() == "Started Wed 30 Sep, 16:00"
+    asked = []
+    axis.update = lambda *told: asked.append(told)             # on this one widget, in place of the toolkit's own
+    axis.set_times(_FIT, _FIT, _DUE_FROM, _DUE_BY)
+    del axis.update
+    assert asked == [()], "an axis given new times did not ask to be painted again"
+    assert _axis_image(axis, 1.0, _AXIS_W).pixel(3, 1) == _axis_rgb("accent")     # it draws them: the mark at the start
+    # Moments of two kinds (some with a time zone, some without) cannot be compared, and nothing here checks for
+    # them. Each device works its words and one layout out before it builds or keeps anything: the error comes
+    # out of the call that handed the moments in, nothing half-built stands, and a device is left as it was.
+    zone = dt.timezone(_plus(hours=-7))
+    mixed = ((_FIT.replace(tzinfo=zone), _FIT_NOW, _DUE_FROM, _DUE_BY),           # the start alone carries a zone
+             (_FIT, _FIT_NOW, _EARLIEST.replace(tzinfo=zone), None))              # an earliest end no words read
+    for device, times in itertools.product((TimeAxis, AxisCaption), mixed):
+        built = sum(isinstance(widget, device) for widget in QApplication.topLevelWidgets())
+        with pytest.raises(TypeError):
+            device(*times)
+        try:
+            device(*times)
+        except TypeError:                    # while the error is held, whatever was built before it is held with it
+            standing = sum(isinstance(widget, device) for widget in QApplication.topLevelWidgets())
+            assert standing == built, f"{device.__name__} was built before its moments were tried"
+
+    def shown():
+        return (line.started.text(), line.words.text(), line.key.isHidden(), line.marker.isHidden(),
+                axis.accessibleName())
+
+    was = shown()
+    for device, times in itertools.product((axis, line), mixed):
+        with pytest.raises(TypeError):
+            device.set_times(*times, unknown="never shown")
+    assert shown() == was, "a device that refused its moments was changed by them"
+    assert _axis_image(axis, 1.0, _AXIS_W).pixel(3, 1) == _axis_rgb("accent")      # the axis still draws what it had
+
+
+def test_the_key_under_the_time_axis_is_the_hatched_range_in_small():
+    QApplication.instance() or QApplication([])                 # before any widget
+    from core.gui.widgets.time_axis import AxisCaption
+    line = AxisCaption(_FIT, _FIT_NOW, _DUE_FROM, _DUE_BY)            # held in a name: the key goes when its line goes
+    assert (line.key.width(), line.key.height()) == (24, 10)
+    assert (line.key.minimumSize(), line.key.maximumSize()) == (QSize(24, 10), QSize(24, 10))    # fixed as well
+    for dark, ratio in itertools.product((False, True), (1.0, 1.25, 1.5, 2.0)):
+        with theme(dark):
+            image = _axis_image(line.key, ratio)
+            wide, high, paper = image.width(), image.height(), _axis_rgb("paper")
+            edge = ({image.pixel(dx, dy) for dx in range(wide) for dy in (0, high - 1)}
+                    | {image.pixel(dx, dy) for dy in range(high) for dx in (0, wide - 1)})
+            assert edge == {_axis_rgb("rule")}, (dark, ratio)
+            inner = {image.pixel(dx, dy) for dx in range(3, wide - 3) for dy in range(3, high - 3)}
+            assert paper in inner and len(inner) > 1, (dark, ratio)
+
+
+def test_a_time_axis_and_its_key_whose_paint_fails_draw_nothing_end_their_painter_and_report_it(monkeypatch):
+    """What the two paint events answer when a colour fails under their painter: nothing is drawn, nothing
+    comes out of the call that made the widget draw, and the error stands in the record under the paint
+    event's own name. Each has ended its painter by then: the words of the error, which are read while the
+    failed call still stands, say whether its painter still paints. The next paint is a whole one."""
+    QApplication.instance() or QApplication([])                 # before any widget
+    from core.gui.widgets.time_axis import AxisCaption, TimeAxis
+    from core.gui import reported
+    from core.gui.widgets import time_axis
+    axis, line = TimeAxis(_FIT, _FIT_NOW, _DUE_FROM, _DUE_BY), AxisCaption(_FIT, _FIT_NOW, _DUE_FROM, _DUE_BY)
+    axis.resize(_AXIS_W, axis.height())
+    opened = []                                     # each painter a paint event opens, noted and not kept alive
+
+    class Noted(QPainter):
+        def __init__(self, device):
+            super().__init__(device)
+            opened.append(weakref.ref(self))
+
+    class NoColour(Exception):                                  # its words are made when the record reads them
+        def __str__(self):
+            return f"its painter still paints: {opened[-1]().isActive()}"
+
+    def fail(*told, **named):
+        raise NoColour()
+
+    with reported.expected() as caught, monkeypatch.context() as patch:
+        patch.setattr(time_axis, "QPainter", Noted)
+        patch.setattr(design, "colour", fail)                   # each paint fails under its live painter
+        for widget in (axis, line.key):                         # the key through its line: it goes when its line goes
+            assert all(pixel == _BLANK for pixel in _every_pixel(_screen_of(widget, 1.0))), type(widget).__name__
+    module = "core.gui.widgets.time_axis."
+    assert caught == [(module + "TimeAxis.paintEvent", "NoColour: its painter still paints: False"),
+                      (module + "_HatchKey.paintEvent", "NoColour: its painter still paints: False")]
+    assert _at(_screen_of(axis, 1.0), 470, 1) == design.hex_colour("accent")        # and each paints whole again
+    assert _at(_screen_of(line.key, 1.0), 0, 0) == design.hex_colour("rule")
