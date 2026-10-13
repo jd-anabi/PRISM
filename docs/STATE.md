@@ -1,12 +1,14 @@
 # PRISM — state
 
-**Last updated:** 2026-10-12, evening (THE SECOND CHAT OF 12 OCTOBER IS AT WORK, from the owner's pasted prompt of
-12 October: TASK 16, THE PAGE PIECES, IS COMPLETE after one fix round (gate green on `14defc9`: 1375 passed, 3 skipped);
-its review found two things that are the approved sample's own: the focus ring is lost on a control the Tab key scrolls
-into sight, which becomes a small task of its own, 10r, built before Task 18, and a message that names a long path
-cannot wrap, which is a question for the owner at the stage's exit; Task 17 is prepared, its notes run on a stand-in;
-and THE LINE STANDS AT TASK 17; the paragraph "THE SECOND CHAT OF 12 OCTOBER" below is this chat's record. What follows
-in this parenthesis is the head as the first chat of 12 October left it:
+**Last updated:** 2026-10-12, evening (THE BUILD IS HANDED TO A NEW CHAT A FOURTH TIME, which continues from
+`docs/superpowers/prompts/2026-10-12-evening-window-redesign-continue-stage-1.md`, the paragraph "THE SECOND CHAT OF
+12 OCTOBER" below and the ledger: TASK 16, THE PAGE PIECES, AND TASK 17, THE NUMBER FIELDS AND THE DROP-DOWN, ARE
+COMPLETE, each after one fix round (gate green on `0bdc77a`: 1386 passed, 3 skipped); deviation rows 45 and 46 are
+recorded; Task 16's review found two things that are the approved sample's own: the focus ring is lost on a control the
+Tab key scrolls into sight (confirmed on today's forms), which is a small task of its own, 10r, PREPARED, its brief
+written and walked, and a message that names a long path cannot wrap, which is a question for the owner at the stage's
+exit, its three pictures drawn; and THE LINE STANDS AT TASK 10r, then Task 18. What follows in this parenthesis is the
+head as the first chat of 12 October left it:
 THE BUILD IS HANDED TO A NEW CHAT A THIRD TIME, which continues from
 `docs/superpowers/prompts/2026-10-12-window-redesign-continue-stage-1.md`, the paragraph "THE CHAT OF 12 OCTOBER"
 below and the ledger: the owner chose how much to spend ("in between": lean preparation, the review by three
@@ -69,25 +71,59 @@ the skeptic who writes 10r's brief also confirms it and draws the remedy on offe
 **The last gate, at `14defc9`: 1375 passed, 3 skipped, 5 deselected, 203 warnings, 14 min 14 s** (one script-light reader
 beside it, so not a quiet-machine time; the gate at `233d36c` beside two drawing readers took 24 min 30 s); the
 display-marked run 3 passed; the real `Artifacts/` (428 entries) and the real `PRISM.ini` (hash unchanged) are as they
-were. **Task 17 (number fields and the drop-down) is prepared:** the one open point was ruled first (a number field gets
-digits of equal width from each rebuilt page, not from its class: Task 17 sets no font on a field and adds no keyword;
-measured on a stand-in: 80 fields of today's forms equal pixel for pixel before and after); its notes were written
-against the code and run on a stand-in (`stage-1/briefs/task-17-dispatch-notes.md`, 886 lines, walked on a fresh copy:
-ten tests, the tenth holding what the drop-down's guarded paint event answers when it fails; eight one-run faults; the
-drop-down's guard has no fallback, because a fallback paints the box twice, 18 pixels darker; the fields' key handling
-carries no guard, with its measured cost in the ledger); the gate to expect is 1385 passed. **For the owner at the
-stage's exit, new with this task:** the question on a long path; the row with no marker and all its later lines begin
-10 px in, 26 px left of the other rows' sentences, as the brief dictates (one number and one test line if it is to
-stand under them; the sheets are in the ledger's `stage-1/reviews/task-16-review-two-pics/`); the three guards and the
-one `try`/`finally` of this task are differences of form from the sample's drawing code, like the five before.
+were. **Task 17, the number fields and the drop-down** (`d781ed8`, then fix round 1 `9187539`, `67683cd`, `0bdc77a`):
+the two number fields of `core/gui/widgets/labeled_inputs.py` rebuilt without the toolkit's number checks (a whole
+number grouped with commas only where a page asks, which no form of today does; a comma typed into a decimal box kept,
+outlined and refused in words, where it was silently read as a number ten times larger), `save_field` saving the
+ungrouped text, the new `core/gui/widgets/choice.py` (a drop-down that paints its own chevron, its paint event under the
+guard with no fallback; mounted on no screen), eleven tests born. Ruled before its notes: a number field gets digits of
+equal width from each rebuilt page, not from its class, so the task sets no font on a field. Its notes were written
+against the code and run on a stand-in before the build; all eight one-run faults seen red. Its review (three readers)
+found the committed text the dictated text with no difference at all, and TODAY'S FORMS UNTOUCHED AT START (155 number
+fields at all 61 places they are built: no fact, no saved key and no pixel differs), and FIVE things that needed a fix,
+each in what the plan dictated and each confirmed by a skeptic: a grouped field dropped zeros a person did not touch
+(`5,000`, the 5 deleted, `8` typed, gave `80`); a paste of more than 4,300 digits made the reading of a whole-number box
+fail, on today's forms too; a sentence a page sets on a field was lost to a typed comma's; no test ended an edit on a
+whole-number box; and an error raised while typing reached no test. Closed in the fix round (three commits, tests
+first, thirteen one-run faults), re-read clean: a grouped number is grouped as its digits stand (**deviation row 45**:
+`007` is shown `007` and reads 7), no text makes a field's own code fail, a page's sentence outlives the comma's, and the
+ungrouped field that every form of today uses is unchanged (375,686 tries of a model, identical). **Deviation row 46:**
+a whole-number box of today's forms no longer stops at ten digits (the stop was the toolkit's check, which the plan
+takes off; not cured, recorded for the owner). **The last gate, at `0bdc77a`: 1386 passed, 3 skipped, 5 deselected,
+203 warnings, 14 min 22 s** (a script-light reader beside it); the display-marked run 3 passed; the real `Artifacts/`
+(428 entries) and the real `PRISM.ini` are as they were. **Task 10r, the ring on a control scrolled into sight, is
+PREPARED:** its skeptic confirmed the fault in PRISM's real window walked with the Tab key at its smallest size (no ring
+on 4 of 11 stops of the Config tab, 6 of 45 of the FDT page, 4 of 24 of the Prior tab, each on a press that scrolled the
+form), chose a cure of three lines in the follower's method that shows the ring (nothing added to the event filter, its
+cost per event unchanged) and wrote and walked the brief (`stage-1/briefs/task-10r-brief.md`: one commit, four test
+functions, five one-run faults; the gate to expect is 1391). The same skeptic confirmed the long path and measured the
+remedy on offer (a place to break after each backslash, slash, underscore and full stop inside a word of 40 characters
+or more: every real message whole at the run page's 354 px, nothing moved where no word is that long; a run with
+nothing to break at, such as a long hash, not cured) and drew the owner's three pictures (the ledger's
+`questions/q13a` to `q13c`). **For the owner at the stage's exit, new with these two tasks:** the question on a long
+path, asked alone with the three pictures (the recommendation: the break place in the device as a net; the engine's
+wording left alone); the row with no marker and all its later lines begin 10 px in, 26 px left of the other rows'
+sentences, as the brief dictates (one number and one test line if it is to stand under them; the sheets are in the
+ledger's `stage-1/reviews/task-16-review-two-pics/`); a whole-number box no longer stops at ten digits (row 46); with
+`6,5` typed into a decimal box the click now refuses, but on six of nine boxes the refusal's sentence says the box "is
+blank" while it shows `6,5` outlined, the right sentence being in the tool tip alone until the form is rebuilt; the
+Config tab's main button is written with a single ampersand, which the toolkit takes for a shortcut mark (older than
+this stage; a word of today's forms, not changed); on today's forms the Tab key, coming round into a form that stands
+scrolled down, lands on a control out of sight and the form does not move (older than this stage); the guards and
+`try`/`finally` of these tasks are differences of form from the sample's drawing code, like the five before.
 **Carried:** to the plan of the stage that first builds a page from these devices: a page is told it is small after its
 parts are added (or each call that adds a part puts it into the form in force); a middle never begins with a control,
 or keeps room at its top for the ring; no heading or list of rows inside a greyed form; an empty sentence is hidden,
-not emptied; the tabular lettering on a number field is given at build with its alignment and width. To Task 18's
-preparation: the scan of the book face follows neither the function imported under another name nor a class built on
-the sentence. **Engine changes built so far: E12 only.** **Next, in order:** Task 17's dispatch; the skeptic who writes
-and runs 10r's brief (when no pytest is alive: one at a time on the machine); 10r; Task 18 (one preparation pass); the
-stage's last review; Task 19.
+not emptied; the tabular lettering on a number field is given at build with its alignment and width; a listener of a
+field's change of text reads the field, never the argument (where the text is rewritten the change is heard twice);
+the sentence a click's refusal gives for a box that holds a decimal comma. To Task 18's preparation: the scan of the
+book face follows neither the function imported under another name nor a class built on the sentence; the test
+toolkit's typed keys end the interpreter with no word on a character outside its own table. **Engine changes built so
+far: E12 only.** **What this chat cost in background agents:** about 2.2 million tokens for Task 16 (its preparation
+was the chat before's), 3.4 for Task 17 with its preparation, 0.5 for 10r's brief; the weekly bar went from 40 to
+about 48 %. **Next, in order:** task 10r's dispatch (prepared; d = 1 on this head, P `171 passed, 1 skipped`); Task 18
+(its brief and nothing else: one preparation pass); the stage's last review by three readers over everything from
+`24368c7`; Task 19.
 
 **THE CHAT OF 12 OCTOBER (2026-10-12; started from the owner's pasted prompt of 11 October; the ledger's entries from
 "NEW CHAT 2026-10-12" on have every figure and every ruling).** **The owner chose how much to spend**, asked once with
