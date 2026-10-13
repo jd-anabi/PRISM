@@ -3293,6 +3293,8 @@ def test_a_control_the_tab_key_scrolls_into_sight_wears_the_whole_ring(middle):
         for key, reason, control, start in (("Tab", Qt.TabFocusReason, form.controls[2], 0),
                                             ("Shift+Tab", Qt.BacktabFocusReason, form.controls[1],
                                              form.bar.maximum())):
+            # First a click on a button, which gets no ring: the key itself has to start the keyboard's turn.
+            _arrive(form.controls[5], Qt.MouseFocusReason)
             form.bar.setValue(start)
             _settle()
             _arrive(control, reason)                         # the focus first, the control still out of sight;
@@ -3314,8 +3316,24 @@ def test_a_control_given_the_focus_out_of_sight_wears_the_ring_when_it_comes_int
         control = form.controls[4]
         _arrive(control, Qt.ShortcutFocusReason)
         _settle()                                            # whatever was put off until later has happened by now
+        calls, shown = [], form.follows.show_on              # nothing happens now, and the follower has to rest:
+        form.follows.show_on = lambda widget: (calls.append(widget), shown(widget))[1]
+        try:                                                 # every call that shows the focus anywhere is noted
+            _settle()
+        finally:
+            del form.follows.show_on                         # its class's own method again
+        assert calls == [], "the follower goes on working while nothing happens"
         was = _where_in_its_view(form, control)
         form.bar.setValue(control.y() - 100)                 # later, the bar: the control comes into sight
+        _settle()
+        assert (was, _where_in_its_view(form, control), _ring_sides(form.window, control),
+                form.follows.ring() in form.area.viewport().children()) == ("out", "in", ["whole"] * 4, True)
+        form.bar.setValue(0)                                 # out of sight again, and the style changes there,
+        _settle()                                            # as at a change of theme: the toolkit hides the
+        QApplication.sendEvent(control, QEvent(QEvent.StyleChange))      # frame, and the follower is asked to
+        form.follows.refresh()                               # put the ring back
+        was = _where_in_its_view(form, control)
+        form.bar.setValue(control.y() - 100)
         _settle()
         assert (was, _where_in_its_view(form, control), _ring_sides(form.window, control)) == (
             "out", "in", ["whole"] * 4)
@@ -3361,6 +3379,14 @@ def test_under_the_fold_the_ring_shows_only_where_the_rules_show_it():
         assert (_ring_sides(form.window, field), ring.parentWidget() is view, ring.geometry()) == (
             ["whole"] * 4, True, box.adjusted(-4, -4, 4, 4))
         _leave(field, Qt.MouseFocusReason)
+        form.bar.setValue(form.bar.maximum())                # the field goes out of sight, and the window
+        _settle()                                            # comes back to the front: nothing is pressed,
+        _moved_on(field, Qt.ActiveWindowFocusReason)         # and the mouse was last
+        was = _where_in_its_view(form, field)
+        form.bar.setValue(0)
+        _settle()
+        assert (was, _where_in_its_view(form, field), _ring_sides(form.window, field)) == (
+            "out", "in", ["whole"] * 4)
         _arrive(button, Qt.MouseFocusReason)                 # the mouse gives a button the focus: no ring,
         form.area.ensureWidgetVisible(button)                # wherever the form is then scrolled to
         _settle()
