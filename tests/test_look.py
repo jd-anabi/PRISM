@@ -5178,6 +5178,21 @@ def _holder_picture(holder, ratio=1.0):
     return picture
 
 
+def _heard_by_the_hook(monkeypatch):
+    """What the hook of last resort is handed from here to the end of the test: a list that grows, each error as
+    its type and its words. An error raised in a method that hears a signal goes to that hook and nowhere else,
+    so nothing comes back to the call that sent the key. The hook that was found is still called, so nothing it
+    would have printed is lost, and it is put back when the test ends."""
+    heard, found = [], sys.excepthook
+
+    def note(kind, error, trace):
+        heard.append(f"{kind.__name__}: {error}")
+        found(kind, error, trace)
+
+    monkeypatch.setattr(sys, "excepthook", note)
+    return heard
+
+
 def test_typing_20480000_into_a_grouped_whole_number_field_shows_20_480_000():
     QApplication.instance() or QApplication([])
     from core.gui.widgets.labeled_inputs import IntField
@@ -5193,6 +5208,13 @@ def test_typing_20480000_into_a_grouped_whole_number_field_shows_20_480_000():
     plain = IntField()                               # grouping is asked for; it is not the default
     QTest.keyClicks(plain, "20480000")
     assert (plain.text(), plain.value(), plain.isUndoAvailable()) == ("20480000", 20480000, True)
+    for number, meant in ((5000, "8,000"), (20480000, "80,480,000"), (1000000, "8,000,000"), (2048, "8,048")):
+        for caret, key in ((0, Qt.Key_Delete), (1, Qt.Key_Backspace)):       # the first digit taken out, either way,
+            first = IntField(number, grouped=True)
+            first.setCursorPosition(caret)
+            QTest.keyClick(first, key)
+            QTest.keyClicks(first, "8")                                  # and another typed: no zero went with it
+            assert (first.text(), first.cursorPosition()) == (meant, 1), (number, key)
 
 
 def test_a_whole_number_field_takes_digits_and_a_leading_minus_and_nothing_else():
@@ -5203,7 +5225,8 @@ def test_a_whole_number_field_takes_digits_and_a_leading_minus_and_nothing_else(
                 ("-3", "-3", -3), ("-20480000", "-20,480,000" if grouped else "-20480000", -20480000),
                 ("1.5", "15", 15), ("12a4", "124", 124), ("3-", "3", 3), ("+3", "3", 3), (" 12", "12", 12),
                 ("-", "-", None), ("5,000", "5,000" if grouped else "5000", 5000),
-                ("007", "7" if grouped else "007", 7)):
+                ("007", "007", 7), ("-007", "-007", -7),            # a zero typed first stays as typed, and is not read
+                ("0000", "0,000" if grouped else "0000", 0)):
             field = IntField(grouped=grouped)
             QTest.keyClicks(field, keys)
             assert (field.text(), field.value_or_none()) == (shown, value), (keys, grouped)
@@ -5241,7 +5264,7 @@ def test_a_whole_number_set_from_code_is_grouped_and_other_text_is_shown_as_give
 def test_backspace_and_delete_step_over_a_grouping_comma():
     QApplication.instance() or QApplication([])
     from core.gui.widgets.labeled_inputs import IntField
-    for caret, key, first, second in ((2, Qt.Key_Backspace, ("2,048", 1), ("48", 0)),
+    for caret, key, first, second in ((2, Qt.Key_Backspace, ("2,048", 1), ("048", 0)),      # the zero stays
                                       (1, Qt.Key_Delete, ("2,048", 2), ("248", 1))):
         field = IntField(2048, grouped=True)
         field.setCursorPosition(caret)               # just right of the comma, then just left of it
@@ -5249,6 +5272,48 @@ def test_backspace_and_delete_step_over_a_grouping_comma():
         assert (field.text(), field.cursorPosition()) == first, "the caret steps over the comma and no digit goes"
         QTest.keyClick(field, key)
         assert (field.text(), field.cursorPosition()) == second
+
+
+def test_no_text_makes_a_whole_number_field_raise_whether_typed_pasted_set_or_restored(monkeypatch, tmp_path):
+    """A text that is no number, and a number of more digits than Python reads as one, are shown and are read as
+    no number: 0 from value() and nothing from value_or_none(). Nothing raises on the way: not the building of
+    the field, not the setting or the restoring of its text, not a key or a paste after it, not the reading.
+    What a method that hears a key raises reaches the hook of last resort alone, so that hook is listened to."""
+    QApplication.instance() or QApplication([])                 # before any widget
+    from core.gui import settings
+    from core.gui.widgets.labeled_inputs import IntField
+    heard = _heard_by_the_hook(monkeypatch)
+    for stored, grouped, left in (("+5", False, "+"), ("+5", True, "+"), ("1.5", False, "1."), ("1.5", True, "1."),
+                                  ("None", False, "Non"), ("None", True, "Non"),
+                                  ("1,000.5", False, "1000."), ("1,000.5", True, "1,000.")):
+        field = IntField(stored, grouped=grouped)               # set from code, as a restore does; then a key
+        QTest.keyClick(field, Qt.Key_Backspace)
+        seen = (field.text(), field.cursorPosition(), field.value_or_none(), heard)
+        assert seen == (left, len(left), None, []), (stored, grouped)
+    path = str(tmp_path / "long.ini")
+    store = QSettings(path, QSettings.IniFormat)
+    was = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)                            # the most digits Python reads as one number, as it is born
+    try:
+        long = "9" * 4301
+        store.setValue("long", long)
+        store.sync()
+        for grouped in (False, True):
+            field, restored = IntField(grouped=grouped), IntField(grouped=grouped)
+            field.insert(long)                                  # what a paste does,
+            QTest.keyClicks(field, "1")                         # a key after it,
+            settings.restore_field(QSettings(path, QSettings.IniFormat), "long", restored)      # a remembered text,
+            boxes = (field, restored, IntField(long, grouped=grouped))                         # and one built with it
+            read = [(box.value_or_none(), box.value(), box.plain_text() == box.text()) for box in boxes]
+            assert read == [(None, 0, True)] * 3, grouped
+            commas = [box.text().count(",") for box in boxes]  # typed or pasted it is grouped as its digits stand
+            digits = [len(box.text()) - box.text().count(",") for box in boxes]
+            assert (commas, digits, heard) == ([1433 if grouped else 0, 0, 0], [4302, 4301, 4301], []), grouped
+            packed = IntField(grouped=grouped)
+            packed.insert("9" * 30000)                          # more than the box would hold with its commas:
+            assert (len(packed.text()), packed.text().count(","), heard) == (30000, 0, []), grouped     # no digit is cut off
+    finally:
+        sys.set_int_max_str_digits(was)
 
 
 def test_a_decimal_field_reads_a_point_whatever_the_regional_setting():

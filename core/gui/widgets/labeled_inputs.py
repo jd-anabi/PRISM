@@ -25,11 +25,22 @@ _DECIMAL_KEYS = re.compile(r"[+-]?[0-9,]*\.?[0-9,]*(?:[eE][+-]?[0-9]*)?")   # ty
 
 def _whole(text) -> "int | None":
     """The whole number a text reads as, or None when it is not one: digits under an optional leading minus,
-    with a comma only where grouping puts it ("20,480,000" is a number, "1,5" is not), and never a plus."""
+    with a comma only where grouping puts it ("20,480,000" is a number, "1,5" is not), and never a plus. More
+    digits than Python reads as one number are no number either: no text makes this raise."""
     text = text.strip()
     if _WHOLE.fullmatch(text):
-        return int(text.replace(",", ""))
+        try:
+            return int(text.replace(",", ""))
+        except ValueError:                           # more digits than Python reads as one number
+            return None
     return None
+
+
+def _commas(digits) -> str:
+    """Digits with a comma before every third one from the right. Text in and text out: no digit is read as a
+    number on the way, so none is dropped, a zero typed first among them, and no length fails."""
+    head = len(digits) % 3 or 3
+    return ",".join([digits[:head]] + [digits[at:at + 3] for at in range(head, len(digits), 3)])
 
 
 class _WholeKeys(QValidator):
@@ -149,7 +160,9 @@ def number_or_blank(field, key: str):
 class IntField(_NumberField):
     """A whole number: digits under an optional leading minus. With ``grouped`` the thousands are set off by
     commas, as the digits are typed and when a number is set from code; the caret keeps its place among the
-    digits, and what is read and what is remembered is the number without them."""
+    digits, and what is read and what is remembered is the number without them. While it is typed the digits
+    are grouped as they stand: none goes that the person did not take out, so a zero in front stays until it
+    is deleted, and is not read."""
 
     def __init__(self, value=None, parent=None, *, grouped: bool = False):
         # None is an EMPTY box, not the text "None". The line edit is built empty and the text is set
@@ -181,9 +194,12 @@ class IntField(_NumberField):
         kept = text.replace(",", "")
         before = sum(ch != "," for ch in text[:caret])                # the minus counts; a comma does not
         if self._grouped:
+            if not _WHOLE_KEYS.fullmatch(kept):      # no number: a text set from code that the keys have not mended
+                return                               # yet is left as it stands
             sign = "-" if kept.startswith("-") else ""
-            digits = kept[len(sign):]
-            shown = sign + (f"{int(digits):,}" if digits else "")
+            shown = sign + _commas(kept[len(sign):])                  # as the digits stand: a zero typed first stays
+            if len(shown) > self.maxLength():        # more than the box holds with its commas: the toolkit would cut
+                return                               # the end off, so this too is left as it stands
         else:
             shown = kept
         pos = 0
