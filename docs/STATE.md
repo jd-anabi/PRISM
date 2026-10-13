@@ -1,6 +1,11 @@
 # PRISM — state
 
-**Last updated:** 2026-10-12, evening (THE BUILD IS HANDED TO A NEW CHAT A FOURTH TIME, which continues from
+**Last updated:** 2026-10-13 (THE CHAT OF 13 OCTOBER IS AT WORK, started from the owner's pasted prompt of the evening
+of 12 October: TASK 10r, THE FOCUS RING ON A CONTROL SCROLLED INTO SIGHT, IS COMPLETE after one fix round (gate green on
+`3e8391e`: 1391 passed, 3 skipped); Task 18's first notes are written and its ten open points ruled, and its skeptic is
+running them on a stand-in; THE LINE STANDS AT TASK 18; the paragraph "THE CHAT OF 13 OCTOBER" below is this chat's
+record. What follows in this parenthesis is the head as the second chat of 12 October left it:
+THE BUILD IS HANDED TO A NEW CHAT A FOURTH TIME, which continues from
 `docs/superpowers/prompts/2026-10-12-evening-window-redesign-continue-stage-1.md`, the paragraph "THE SECOND CHAT OF
 12 OCTOBER" below and the ledger: TASK 16, THE PAGE PIECES, AND TASK 17, THE NUMBER FIELDS AND THE DROP-DOWN, ARE
 COMPLETE, each after one fix round (gate green on `0bdc77a`: 1386 passed, 3 skipped); deviation rows 45 and 46 are
@@ -43,6 +48,60 @@ the build's state stands in four paragraphs, each as it was written on its date 
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**THE CHAT OF 13 OCTOBER (2026-10-13; started from the owner's pasted prompt of the evening of 12 October; the
+ledger's entries from "NEW CHAT 2026-10-13" on have every figure and every ruling).** The usage card read 48 % of the
+week when the chat began and 50 % with task 10r reviewed; how much to spend is as the owner chose ("in between"), and no
+workflow was run. **The owner asked three things on the way and decided:** whether stages 2 to 9 could be finished this
+week (no: the design sizes them at about 84 tasks, a task takes 3 to 4 hours and 2 to 3.5 million tokens at the care
+chosen, and each stage's plan is the owner's to approve; the owner: "we will keep the pace"); and whether a network
+could be trained meanwhile (not one of real size: a long run needs the card to itself and no edit under `core/`, a fit
+is still all or nothing, and the audit has not ruled on the time-stride finding; the owner: "we won't start then"). A
+small training of a few minutes, or opening PRISM, is fine at a moment the owner names first, so that no gate or reader
+shares the card. **Task 10r, the ring on a control scrolled into sight** (`034d079`, then fix round 1 `3e8391e`): three
+lines under a comment in the focus follower's method that shows the ring (`core/gui/style.py`: where the toolkit has
+hidden the frame it was just given a control for, the frame is raised and shown; nothing added to the event filter) and
+four tests born in `tests/test_look.py` (five items); built from the brief the last chat's skeptic wrote and walked,
+all five one-run faults seen red. Its review (three readers): the commit is the dictated text byte for byte; **in
+PRISM's real window, walked before against after in two copies** (off-screen, on a scratch settings file, an empty
+scratch store and a scratch copy of the inputs; 15 pages and tabs, the Tab key and Shift+Tab twice round each, six
+walks in both themes, at two text sizes and three window sizes) **687 of 5,223 stops in sight had no ring before and 0
+after, and in all 782 of 6,414 pictures that differ the difference is the ring and nothing else**; no fault found in
+the cure (78 wrong builds typed into a copy, the filter entered again from inside itself no deeper than before); and
+ONE Important gap of the dictated tests, confirmed by a skeptic: where the cure runs, no test read whose child the
+frame is, so a build that draws the ring over a page's fixed head and foot passed. Closed in the fix round, tests only
+(26 lines with four of that reader's minors: a field reached out of sight, a change of style while the ringed control
+is scrolled away, Shift+Tab after a click, a follower that does not keep working at rest; five one-run faults),
+re-read clean. **The last gate, at `3e8391e`: 1391 passed, 3 skipped, 5 deselected, 203 warnings, 24 min 0 s** (Task
+18's skeptic ran scripts beside it, so not a quiet-machine time; the gate at `034d079` beside two readers took 23 min
+42 s); the display-marked run 3 passed; the real `Artifacts/` (428 entries) and the real `PRISM.ini` (hash unchanged)
+are as they were. **Ruled by the controller** (each in the ledger with its cost): the fix round's set; the reader of
+the real window builds the whole window only while no pytest is alive; and the ring that now shows in the grid of
+typed bounds on the Prior tab with its bottom side cut on 49 of 76 stops (that grid scrolls a field to the very foot of
+its own view) is NOT mended in this stage: told to the owner at the exit with the picture, carried to the stage that
+rebuilds the page. No deviation row. **Task 18 (the shared question) is being prepared:** its first notes are written
+(`stage-1/briefs/task-18-dispatch-notes.md`; a reader on Sonnet, nothing run: twelve groups of places where the brief
+is out of date; the class as briefed writes no drawing method, so it carries no guard; no dictated test types a key
+through the test toolkit or needs a long word to wrap), its ten open points are ruled (the ledger: "Task 18: Ruling";
+the ones a person would notice: the Tab key's order inside a question is reading order, the focus starting where the
+brief binds it; the form that asks for one line of text is built as the approved plan has it and shown to the owner at
+the exit; one assertion is added, that the question's scrolling list has no frame), and a skeptic on Opus is building
+the task as a stand-in against the REAL devices in a scratch copy (`...\prism-redesign-scratch\q18\`) and will rewrite
+the notes in place. The gate to expect for Task 18: 1402 passed, 4 skipped, 5 deselected (ten tests born in the look's
+suite, one of them the fourth marked for the real screen, and two in the dispatch suite). **For the owner at the
+stage's exit, new with this task:** the picture of the grid of typed bounds with the cut ring; that the ring is now on
+every control the Tab key brings into sight (the pairs before and after are in the ledger,
+`stage-1/reviews/task-10r-review-two-pics/`); the text form of the question, with its picture. **For the stage's last
+review, seen on the walk and older than this task:** on every page with a figure area the Tab key stops on the empty
+figure area's tab bar, a control of no size, and an 8-pixel square of the ring's line shows at its corner; after a
+mouse click on a tab, when the keyboard had the turn before, a ring appears just inside the edge of the next page's
+whole form; a tick box's ring runs through the edge of the help badge beside it; and the minors of the three seats.
+**For the audit's list:** the Config tab's line of the model's units lists them in an order that changes from one
+launch to the next (the order of a set); whether it matters beyond that line was not looked into. **Engine changes
+built so far: E12 only.** **What this chat cost in background agents so far:** about 1.9 million tokens for task 10r
+from its dispatch to its close, 0.5 for Task 18's first notes. **Next, in order:** Task 18's skeptic's report and the
+rulings it asks for; Task 18's dispatch, review and gate; the stage's last review by three readers over everything from
+`24368c7`; Task 19 (the owner is told before the slow set starts).
 
 **THE SECOND CHAT OF 12 OCTOBER (2026-10-12, afternoon and evening; started from the owner's pasted prompt of
 12 October; the ledger's entries from "NEW CHAT 2026-10-12, THE SECOND OF THE DAY" on have every figure and every
