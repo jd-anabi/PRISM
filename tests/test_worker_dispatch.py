@@ -336,9 +336,11 @@ def test_an_unexpected_modal_is_recorded_in_shown_and_returns_zero(monkeypatch):
     assert guard is not None and vars(Ask).get("exec") is guard, \
         "the session guard does not stand on the question class: its exec would open for real"
     question = Ask(None, "Stop training?", "The fit so far will be lost.", "Keep training", "Stop and lose the fit")
+    said = []                                     # a pressed safe answer leaves the result at 0 as well,
+    question.finished.connect(said.append)        # so what the question itself says is heard
     before = len(SHOWN)
     assert question.exec() == 0 == QDialog.DialogCode.Rejected and SHOWN[-1] is question and len(SHOWN) == before + 1
-    assert question.result() == 0 and not question.isVisible(), "the guard showed or answered the question"
+    assert question.result() == 0 and not question.isVisible() and said == [], "the guard showed or answered the question"
     monkeypatch.setattr(Ask, "exec", lambda self: 7)
     assert question.exec() == 7 and len(SHOWN) == before + 1, "a test's own fake must win while installed"
     monkeypatch.undo()
@@ -650,7 +652,7 @@ def test_asked_reads_a_question_of_the_shared_class_into_the_same_record():
     assert ask(None, "Error", "it failed", "OK", marker="err", detail=tb) is False
     assert ask(None, "A run is live", "Wait for it to end.", "OK", marker="info") is False
     assert ask_text(None, "Save as a plan", "Only what differs is written.", "Plan name", "Save this plan",
-                    text="retrain", items=["batches = 5,000"]) is None
+                    text="retrain", items=["batches = 5,000"], beneath=stays) is None
     assert _the_questions_let_go() == (5, 5, 0), "a call kept its dialog after it was answered"
     bare = dict(beneath="", items=(), detail="", loses_work=False)
     told = dict(answers=("OK",), default="OK", safe="OK")
@@ -664,8 +666,13 @@ def test_asked_reads_a_question_of_the_shared_class_into_the_same_record():
         Asked(kind="notice", title="A run is live", marker="info", sentence="Wait for it to end.", **bare, **told),
         Asked(kind="question", title="Save as a plan", marker="info", sentence="Only what differs is written.",
               answers=("Save this plan", "Cancel"), default="Save this plan", safe="Cancel",
-              **{**bare, "items": ("batches = 5,000",)})]
-    assert all_asked()[0].text == "\n".join([*held, stays]) and asked().text == "batches = 5,000"
+              **{**bare, "items": ("batches = 5,000",), "beneath": stays})]
+    assert all_asked()[0].text == "\n".join([*held, stays]) and asked().text.splitlines() == ["batches = 5,000", stays]
+    forget_asked()                                # two more ways of asking, for the rules that tell the kinds apart:
+    ask(None, "Cannot edit model", "It could not be loaded.", "OK")                # a warning that only tells,
+    ask(None, "Error", "it failed", "Close", "Try again", marker="err")            # and a failure that asks
+    assert ([(told.kind, told.marker) for told in all_asked()], _the_questions_let_go()) == (
+        [("notice", "warn"), ("question", "err")], (2, 2, 0)), "a kind was read by the wrong rule, or a dialog was kept"
 
 
 def test_choose_answers_a_question_of_the_shared_class_and_types_its_line_of_text(monkeypatch):
@@ -777,10 +784,10 @@ def test_only_the_dialog_helpers_own_tests_hold_a_raw_message_box():
                'def helper():\n'
                '    """SHOWN and informativeText() in prose are not reads."""\n'
                '    QMessageBox.exec = None\n'
-               '    Ask.exec = None\n')
+               '    Ask.exec = None; setattr(Ask, "exec", None)\n')
     assert [(line, what) for line, _owner, what in _direct_box_reads(snippet)] == [
         (1, "SHOWN"), (3, 'setattr(QMessageBox, "exec")'), (4, "SHOWN"), (4, "informativeText"),
-        (7, "QMessageBox.exec"), (8, "Ask.exec")], _direct_box_reads(snippet)
+        (7, "QMessageBox.exec"), (8, "Ask.exec"), (8, 'setattr(Ask, "exec")')], _direct_box_reads(snippet)
     files = sorted(Path(__file__).resolve().parent.glob("test_*.py"))
     assert len(files) >= 20, f"the scan walked only {len(files)} test files"
     found = [f"{p.name}:{line} {owner}: {what}" for p in files

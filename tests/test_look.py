@@ -5787,6 +5787,17 @@ def _in_question(widget):
     return widget.mapTo(widget.window(), QPoint(0, 0))
 
 
+def _question_walk(dialog, **stops):
+    """Where the Tab key takes the focus in a question, by the toolkit's own rule for the key and with no key
+    sent: from the control the focus is on, on until a control comes a second time. Each control reads as the
+    name it was handed in under, and any other as None."""
+    names = {control: name for name, control in stops.items() if control is not None}
+    walk = [names.get(dialog.focusWidget())]
+    while dialog.focusNextChild() and names.get(dialog.focusWidget()) not in walk:
+        walk.append(names.get(dialog.focusWidget()))
+    return walk
+
+
 def test_a_question_takes_enter_escape_and_its_close_button_as_the_safe_answer():
     QApplication.instance() or QApplication([])
     from core.gui.widgets.ask import Ask
@@ -5796,6 +5807,7 @@ def test_a_question_takes_enter_escape_and_its_close_button_as_the_safe_answer()
             for key in keys:
                 dialog, got = _question_opened(Ask(None, *A_QUESTION, other, loses_work=loses_work))
                 try:
+                    assert dialog.focusWidget() is dialog.safe_button, "the focus does not start on the safe answer"
                     if on_other:
                         _question_focus(dialog.safe_button, dialog.other_button)
                     assert dialog.safe_button.isDefault(), "the default left the safe answer when the focus moved"
@@ -5830,15 +5842,18 @@ def test_a_question_is_a_modal_dialog_set_out_by_the_table_and_grows_with_the_te
                 assert (_in_question(sentence).x(), _in_question(sentence).y()) == (left + mark + gap, top)
                 assert _in_question(sentence).x() + sentence.width() == wide - right
                 assert _in_question(safe).x() + safe.width() == wide - right and _in_question(other).x() == left
+                assert (safe.width(), other.width()) == (safe.sizeHint().width(), other.sizeHint().width()), "an answer is stretched"
                 assert _in_question(safe).y() + safe.height() == dialog.height() - bottom
                 flags = dialog.windowFlags()
                 assert isinstance(dialog, QDialog) and dialog.windowTitle() == "Stop training?" and dialog.isModal()
                 assert flags & Qt.WindowType.WindowTitleHint and flags & Qt.WindowType.WindowCloseButtonHint
                 assert not flags & Qt.WindowType.FramelessWindowHint and dialog.parent() is host
                 assert dialog.windowModality() == Qt.WindowModality.WindowModal
+                assert dialog.minimumSize() == dialog.maximumSize() == dialog.size(), "the question can be pulled to another size"
             finally:
                 _question_closed(dialog)
     assert Ask(None, *A_QUESTION).windowModality() == Qt.WindowModality.ApplicationModal
+    assert Ask(host, *A_QUESTION, "Go on").windowFlags() == QDialog(host).windowFlags(), "the question set a window flag of its own"
     with text_size(1.0):                          # two answers that need more room than a question's usual width has
         dialog, _got = _question_opened(Ask(None, "Delete?", "They cannot be brought back.",
                                             "Keep all of the simulation sets as they are",
@@ -5847,6 +5862,8 @@ def test_a_question_is_a_modal_dialog_set_out_by_the_table_and_grows_with_the_te
         try:
             places = [_in_question(part).x() for part in (dialog.marker, dialog.sentence, dialog.items_area, dialog.beneath)]
             assert (dialog.width() > 448, places) == (True, [20, 58, 58, 58]), "a wider question moved its marker or its text"
+            safe, other = dialog.safe_button, dialog.other_button
+            assert _in_question(safe).x() - (_in_question(other).x() + other.width()) == 12, "the answers are not 12 apart"
         finally:
             _question_closed(dialog)
 
@@ -5862,12 +5879,24 @@ def test_only_an_answer_that_loses_work_is_drawn_as_one():
     assert plain.other_button.property("cls") is None and plain.other_button.icon().isNull()
     assert risky.other_button.property("cls") == "danger" and not risky.other_button.icon().isNull()
     assert risky.other_button.iconSize() == QSize(16 + 4, 16)
+    asked_for = []                                # which glyph an answer is given: no pixel is read for it
+    with pytest.MonkeyPatch.context() as patch:   # the module's own name is put back when the block ends
+        patch.setattr("core.gui.widgets.ask.painted_icon", lambda kind: asked_for.append(kind) or painted_icon(kind))
+        Ask(None, *A_QUESTION, "Stop and lose the fit", loses_work=True)
+        Ask(None, *A_QUESTION, "Go on")
+    assert asked_for == ["stop"], "an answer that loses work is given another glyph than the stop glyph"
     for kind in ("warn", "err", "info"):
         marked = Ask(None, *A_QUESTION, marker=kind)          # held in a name while its marker is read
         assert marked.marker.kind == kind == marked.wording.marker
+    host = QWidget()
     for refused in (dict(marker="done"), dict(label="Plan name")):          # no such marker; a line of text and no answer for it
         with pytest.raises(ValueError):
-            Ask(None, *A_QUESTION, **refused)
+            Ask(host, *A_QUESTION, **refused)
+    assert host.findChildren(QDialog) == [], "a refused call left a dialog, half built, under its parent"
+    there = QApplication.topLevelWidgets()        # held in a name, so that none of them can go between the two readings
+    Ask(None, *A_QUESTION, "Stop and lose the fit", loses_work=True, detail=A_TRACEBACK)      # built, and let go at once
+    Ask(None, "Save as a plan", "Only what differs is written.", "Cancel", "Save this plan", marker="info", label="Plan name")
+    assert len(QApplication.topLevelWidgets()) == len(there), "a question that was only built outlived its last name"
 
 
 def test_nine_items_scroll_inside_the_question_and_none_is_cut():
@@ -5896,9 +5925,12 @@ def test_nine_items_scroll_inside_the_question_and_none_is_cut():
             under_the_sentence = _in_question(dialog.sentence).y() + dialog.sentence.height() + 12
             assert _in_question(area).y() == under_the_sentence, "the list stands 12 under the sentence"
             assert _in_question(dialog.beneath).y() == under_the_sentence + area.height() + 12, "and the closing lines 12 under it"
+            walk = _question_walk(dialog, safe=dialog.safe_button, items=area, other=dialog.other_button)
+            assert walk == ["safe"] + (["items"] if count > 8 else []) + ["other"], "the Tab key's walk through a question"
             if count <= 8:
                 assert area.height() == sum(heights) and bar.maximum() == 0
                 assert area.focusPolicy() == Qt.FocusPolicy.NoFocus
+                assert {row.width() for row in rows} == {area.width()}, "an item is not as wide as its list, which does not scroll"
             else:
                 assert area.height() == 8 * line and bar.maximum() == sum(heights) - area.height()
                 assert area.focusPolicy() == Qt.FocusPolicy.TabFocus and area.property("ring") == "inset"
@@ -5933,6 +5965,7 @@ def test_the_full_error_opens_under_the_answers_in_the_fixed_width_face():
         _question_key(link, Qt.Key.Key_Space)
         assert got == [] and box.isVisible() and not link.isVisible()
         assert dialog.focusWidget() is box, "the focus did not go to the full error when it opened"
+        assert box.focusPolicy() & Qt.FocusPolicy.TabFocus, "the Tab key cannot reach the full error"
         assert dialog.height() > low and dialog.width() == 448 and box.height() == 12 * 20
         assert _in_question(box).y() == _in_question(safe).y() + safe.height() + 16
         _question_key(box, Qt.Key.Key_Return)
@@ -5971,6 +6004,7 @@ def test_a_question_that_asks_for_a_line_of_text_takes_enter_only_once_the_text_
     dialog, got = form()
     try:
         field, save, cancel, wrong = dialog.field, dialog.other_button, dialog.safe_button, dialog.field_message
+        assert dialog.focusWidget() is field, "the focus does not start in the field"
         assert save.isDefault() and save.property("cls") == "primary" and cancel.property("cls") is None
         assert not save.isEnabled() and not wrong.isVisible() and said == []
         assert _in_question(field).y() >= _in_question(dialog.sentence).y() + dialog.sentence.height() + 12
@@ -5987,6 +6021,8 @@ def test_a_question_that_asks_for_a_line_of_text_takes_enter_only_once_the_text_
         assert got == [] and dialog.answer_text is None, "Enter took a line that does not hold"
         field.setText(" retrain 2 ")
         assert save.isEnabled() and field.property("state") != "error" and not wrong.isVisible()
+        walk = _question_walk(dialog, field=field, other=save, safe=cancel)
+        assert walk == ["field", "other", "safe"], "the Tab key's walk through the form that asks for a line"
         _question_key(field, Qt.Key.Key_Return)
         assert got == [1] and dialog.answer_text == "retrain 2"
     finally:
