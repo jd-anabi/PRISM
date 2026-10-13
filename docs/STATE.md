@@ -2,9 +2,10 @@
 
 **Last updated:** 2026-10-13 (THE CHAT OF 13 OCTOBER IS AT WORK, started from the owner's pasted prompt of the evening
 of 12 October: TASK 10r, THE FOCUS RING ON A CONTROL SCROLLED INTO SIGHT, IS COMPLETE after one fix round (gate green on
-`3e8391e`: 1391 passed, 3 skipped); Task 18's first notes are written and its ten open points ruled, and its skeptic is
-running them on a stand-in; THE LINE STANDS AT TASK 18; the paragraph "THE CHAT OF 13 OCTOBER" below is this chat's
-record. What follows in this parenthesis is the head as the second chat of 12 October left it:
+`3e8391e`: 1391 passed, 3 skipped); TASK 18, THE SHARED QUESTION, IS COMPLETE after one fix round (gate green on
+`a3fb251`: 1402 passed, 4 skipped); deviation rows 47 and 48 are recorded; EVERY TASK OF THE STAGE THAT BUILDS IS DONE,
+and THE LINE STANDS AT THE STAGE'S LAST REVIEW, then Task 19, the exit; the paragraph "THE CHAT OF 13 OCTOBER" below is
+this chat's record. What follows in this parenthesis is the head as the second chat of 12 October left it:
 THE BUILD IS HANDED TO A NEW CHAT A FOURTH TIME, which continues from
 `docs/superpowers/prompts/2026-10-12-evening-window-redesign-continue-stage-1.md`, the paragraph "THE SECOND CHAT OF
 12 OCTOBER" below and the ledger: TASK 16, THE PAGE PIECES, AND TASK 17, THE NUMBER FIELDS AND THE DROP-DOWN, ARE
@@ -79,29 +80,71 @@ are as they were. **Ruled by the controller** (each in the ledger with its cost)
 the real window builds the whole window only while no pytest is alive; and the ring that now shows in the grid of
 typed bounds on the Prior tab with its bottom side cut on 49 of 76 stops (that grid scrolls a field to the very foot of
 its own view) is NOT mended in this stage: told to the owner at the exit with the picture, carried to the stage that
-rebuilds the page. No deviation row. **Task 18 (the shared question) is being prepared:** its first notes are written
-(`stage-1/briefs/task-18-dispatch-notes.md`; a reader on Sonnet, nothing run: twelve groups of places where the brief
-is out of date; the class as briefed writes no drawing method, so it carries no guard; no dictated test types a key
-through the test toolkit or needs a long word to wrap), its ten open points are ruled (the ledger: "Task 18: Ruling";
-the ones a person would notice: the Tab key's order inside a question is reading order, the focus starting where the
-brief binds it; the form that asks for one line of text is built as the approved plan has it and shown to the owner at
-the exit; one assertion is added, that the question's scrolling list has no frame), and a skeptic on Opus is building
-the task as a stand-in against the REAL devices in a scratch copy (`...\prism-redesign-scratch\q18\`) and will rewrite
-the notes in place. The gate to expect for Task 18: 1402 passed, 4 skipped, 5 deselected (ten tests born in the look's
-suite, one of them the fourth marked for the real screen, and two in the dispatch suite). **For the owner at the
-stage's exit, new with this task:** the picture of the grid of typed bounds with the cut ring; that the ring is now on
-every control the Tab key brings into sight (the pairs before and after are in the ledger,
-`stage-1/reviews/task-10r-review-two-pics/`); the text form of the question, with its picture. **For the stage's last
+rebuilds the page. No deviation row. **Task 18, the shared question** (`4203520`, then fix round 1 `3610d46` and
+`a3fb251`): the new `core/gui/widgets/ask.py` (one class for every question, notice and refusal the window shows: a
+marker and a sentence, a list held to eight items, closing lines, a full error that opens, one or two answers of which
+one may lose work, and a form that asks for one line of text; the functions `ask` and `ask_text`), mounted on no
+screen; the tests' session guard against modal dialogs, their record of shown boxes and `choose` widened to it
+(`tests/conftest.py`, `tests/_dialogs.py`); ten tests born in `tests/test_look.py`, one of them the FOURTH marked for
+the real screen, and two in `tests/test_worker_dispatch.py`. Prepared in one pass: first notes by a reader on Sonnet
+(nothing run), ten open points ruled, then a skeptic on Opus built the task as a stand-in against the REAL devices and
+walked the notes twice. All twelve dictated tests passed as dictated, and the trial run found five things a person
+would meet that no dictated test saw; **ruled: all five mended in the task**, each with a test line and a one-run
+fault: the full error's box stands in a plain holder (under the window's style sheet the dictated box came out 192 px
+high at every text size, not twelve lines); a full error opened by keyboard takes the focus (as dictated a second
+Space pressed an answer); each list item is held to the column's width (one item that cannot break made every item 861
+wide in a column of 370); the sentence and the closing lines keep their height in a wide question; the main answer of
+the text form is greyed before the caller's check of the line is asked. Built as the notes have it, all six one-run
+faults seen red, the implementer's first run of the real-screen test `1 passed`. Its review (three readers): the four
+test files are the dictated text byte for byte; **beside the approved sample's own question the built one differs in
+0 of 57,344 pixels in light and in dark**; drawn dressed as the window dresses itself in 512 cases, every stated
+length, gap and colour holds in 504 (the 8 are one form at one text size); used by keyboard and mouse in 698 rows, no
+answer given that nobody chose; the guard is sound (no way to a blocking dialog in the suites or the product); and TWO
+Important things in what the brief and the notes dictated, each confirmed by a skeptic: a question whose two answers
+are too long for the designed 448 px grew wider and its marker and text drifted off the left margin (cured by one
+line, a stretch after the text column; at the designed width 0 of 171 pictures differ), and no test held where the
+focus starts (a build that started it on the other answer passed, and a first Space would then take the answer that
+may lose work). Closed in the fix round (two commits: the layout line with its test first; then tests only, with
+eleven of the reader's 22 minors, sixteen one-run faults), re-read clean. **The last gate, at `a3fb251`: 1402 passed,
+4 skipped, 5 deselected, 203 warnings, 23 min 48 s** (not a quiet-machine time: the card-bound tests ran near twice
+their usual length with almost nothing of this build beside them; the gate of record at the exit is the one that
+says; the gate at `4203520` beside the three readers took 20 min 14 s); the display-marked run 4 passed; the real
+`Artifacts/` (428 entries) and the real `PRISM.ini` (hash unchanged) are as they were. **Deviation rows 47 and 48**
+are in the design's section 8, the plan's head and the ledger: (47) a question is wider than the designed 448 px
+when its answers need more room, and three of the design's own pairs of answers do so at every text size ("Keep the
+posterior" with "Load and release the posterior" and with "Build and release the posterior", 8 and 7 px over; "Keep
+measuring" with "Stop and keep what is measured", 42 over): reworded shorter in the stage that mounts each, or the
+owner judges the wider box; (48) the five things the question does that the design does not state. **Ruled by the
+controller on Task 18** (each in the ledger with its cost): the ten points of the first notes (the Tab key's order
+inside a question is reading order, the focus starting on the safe answer or in the field; the form that asks for a
+line of text is built as the approved plan has it and shown to the owner at the exit; a caller's check that fails
+with an error is let through to the window's hook); the five mends; the fix round's set; the stretch and not an
+alignment for the wide question. **EVERY TASK OF THE STAGE THAT BUILDS IS NOW COMPLETE** (Tasks 0 to 18 and the tasks
+the plan did not have: 10g, 10f, 12q, 14q, 10r and the fronts of 13 and 14). **For the owner at the
+stage's exit, new with these two tasks:** the picture of the grid of typed bounds with the cut ring; that the ring is
+now on every control the Tab key brings into sight (the pairs before and after are in the ledger,
+`stage-1/reviews/task-10r-review-two-pics/`); the question's sixteen sheets, made on the real platform, each form in
+light and dark at 100 % and 150 % text (`stage-1/reviews/task-18-review-two-pics/sheets-for-the-owner/`), the form
+that asks for a line of text among them with its choices named; the three pairs of answers that make a question
+wider than designed (row 47); that Enter on "Show the full error" gives the safe answer and does not open the error,
+as the design has it; that above the ordinary text size a very long question is taller than a low screen; and four
+more pictures of a long path cut at the right edge, in a question, for the question on long paths. **For the stage's last
 review, seen on the walk and older than this task:** on every page with a figure area the Tab key stops on the empty
 figure area's tab bar, a control of no size, and an 8-pixel square of the ring's line shows at its corner; after a
 mouse click on a tab, when the keyboard had the turn before, a ring appears just inside the edge of the next page's
 whole form; a tick box's ring runs through the edge of the help badge beside it; and the minors of the three seats.
 **For the audit's list:** the Config tab's line of the model's units lists them in an order that changes from one
 launch to the next (the order of a set); whether it matters beyond that line was not looked into. **Engine changes
-built so far: E12 only.** **What this chat cost in background agents so far:** about 1.9 million tokens for task 10r
-from its dispatch to its close, 0.5 for Task 18's first notes. **Next, in order:** Task 18's skeptic's report and the
-rulings it asks for; Task 18's dispatch, review and gate; the stage's last review by three readers over everything from
-`24368c7`; Task 19 (the owner is told before the slow set starts).
+built so far: E12 only.** **Carried from Task 18** (the ledger has each): to the stage that first asks for a line of
+text through the class, the record of shown boxes gains the label, the line handed in and what is wrong with it; to
+every later task, a test that reads a scrolling list dresses the application (in a helper that puts it back), not its
+own host widget. **What this chat cost in background agents so far:** about 1.9 million tokens for task 10r from its
+dispatch to its close; 1.1 for Task 18's preparation and 2.9 for its build, review and fix round; the weekly bar went
+from 48 % to about 57 %. **Next, in order:** the stage's last review by three readers over everything from `24368c7`
+to `a3fb251` (what only a whole-stage view can see, and the sorting of the 89 deferred lines of the ledger, gathered
+in `stage-1/reviews/stage-1-final-deferred-lines.txt`; the stage's range is listed in
+`stage-1/reviews/stage-1-final-package.txt`), with ONE fix dispatch, one re-read and a gate if it sends anything;
+then Task 19 (the owner is told before the slow set starts).
 
 **THE SECOND CHAT OF 12 OCTOBER (2026-10-12, afternoon and evening; started from the owner's pasted prompt of
 12 October; the ledger's entries from "NEW CHAT 2026-10-12, THE SECOND OF THE DAY" on have every figure and every
