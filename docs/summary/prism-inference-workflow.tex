@@ -1,3 +1,6 @@
+% PRISM: summary of the parameter-inference (SBI) workflow.
+% Build: latexmk -pdf prism-inference-workflow.tex   (pdfLaTeX; needs tikz, tcolorbox, booktabs, longtable, tabularx, hyperref)
+% The numbers are the code's defaults (core/config.py) and the reader guides in docs/guide/.
 \documentclass[10pt,a4paper]{article}
 
 % ---------------------------------------------------------------- packages
@@ -165,6 +168,9 @@ batch at a time; green: learning and calibration; violet: use on an observation.
 \end{keybox}
 
 \subsection{The three observation modes}
+
+The bounds file fixes the mode, and the mode fixes what a recording must contain and how wide the conditioning row is
+(Table~\ref{tab:modes}). A posterior is trained in one mode and loads only in that mode.
 
 \begin{table}[h]
 \centering
@@ -439,7 +445,8 @@ N_k=\lfloor \Tobs^{(k)}/\Delta t_{\exp}\rfloor,\qquad
 n_k=4000+N_k\,m_k ,
 \label{eq:geometry}
 \end{equation}
-where $m_k$ is the integer stride that puts the fine grid on the recording clock, $N_k$ the number of frames and
+where $m_k$ is the integer stride that puts the fine grid on the recording clock (to within the rounding discussed in
+Section~\ref{sec:caveats}), $N_k$ the number of frames and
 $n_k$ the number of fine steps to integrate (transient included). Diversity over geometry comes from the number of
 batches (5000 by default); diversity over parameters comes from the rows inside a batch.
 
@@ -603,10 +610,10 @@ x=\bigl[\ \underbrace{s_1,\dots,s_{41}}_{\text{statistics}}\ \big|\ \underbrace{
   % one slot, enlarged
   \foreach \i/\n in {0/{$u=\log\frac{f}{\Omega_0}$}, 1/{$\log|\hat\chi|$}, 2/{$\cos\arg\hat\chi$},
                      3/{$\sin\arg\hat\chi$}, 4/{$\log(fT_{\mathrm{lock}})$}, 5/{mask}} {
-    \draw[fill=violet!10] ({26+16*\i},-3.9) rectangle ({40+16*\i},-3.1);
-    \node[font=\scriptsize] at ({33+16*\i},-3.5) {\n};
+    \draw[fill=violet!10] ({26+16*\i},-2.6) rectangle ({40+16*\i},-1.8);
+    \node[font=\scriptsize] at ({33+16*\i},-2.2) {\n};
   }
-  \node[font=\scriptsize, anchor=east] at (25,-3.5) {each slot:};
+  \node[font=\scriptsize, anchor=east] at (25,-2.2) {each slot:};
 \end{tikzpicture}
 \caption{Layout of a conditioning row in $\chi$ mode (width $50+72=122$). Group G is all zeros except in forced mode.
 A padded slot is exactly zero in all six channels.}
@@ -1580,7 +1587,7 @@ manifest. The window opens every science knob at these values on every launch.
 \file{core/SBI/chi.py}, \file{core/SBI/chi_probes.py}, \file{core/SBI/chi_encoder.py} & the lock-in estimate and its rows; probe placement; the set encoder of the $\chi$ block\\
 \file{core/SBI/embedded_network.py}, \file{core/SBI/train.py} & the embedding network; training of the flow (built on \texttt{sbi})\\
 \file{core/SBI/decorrelate.py}, \file{core/SBI/reparam.py}, \file{core/SBI/derived.py} & the Fisher rotation; the coordinate chain and the posterior wrapper; the tier-1 derivation\\
-\file{core/SBI/training_checkpoint.py} & checkpoints and resume of a long generation or fit\\
+\file{core/SBI/training_checkpoint.py} & the simulation cache: batch-by-batch commits and resume of a training-data generation\\
 \file{core/SBI/truncate.py} & the truncation regions of a narrowing round\\
 \file{core/SBI/analysis.py}, \file{core/SBI/ppc.py}, \file{core/SBI/overlay.py} & calibration data, SBC and TARP, informativeness; the predictive check; the overlay of a best fit on a recording\\
 \file{core/SBI/observations.py} & building an observation from a recording\\
