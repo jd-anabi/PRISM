@@ -4630,6 +4630,21 @@ def _shown_text(label):
     return document.toPlainText()
 
 
+def _shown_weights(label):
+    """What a rich-text label shows, as the stretches its markup sets alike: each one's words and the weight
+    they are set in."""
+    document = QTextDocument()
+    document.setHtml(label.text())
+    shown, block = [], document.begin()
+    while block.isValid():
+        at = block.begin()
+        while not at.atEnd():
+            shown.append((at.fragment().text(), at.fragment().charFormat().fontWeight()))
+            at += 1
+        block = block.next()
+    return shown
+
+
 def _least(width=0, height=0):
     widget = QWidget()
     widget.setMinimumSize(width, height)
@@ -4655,6 +4670,7 @@ def test_a_sentence_is_a_whole_number_of_lines_of_one_fixed_height():
     assert design.text_scale() == 1.0, "a text factor leaked into this suite"
     label = page.Sentence("One line.")
     assert label.wordWrap() and label.textFormat() == Qt.TextFormat.RichText
+    assert label.alignment() == Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
     size = label.font().pixelSize()
     assert size == fonts.book().pixelSize() == 16, "a sentence is set 16 on 22 in whichever face it gets"
     line = SENTENCE_LINES[size]
@@ -4677,6 +4693,16 @@ def test_a_sentence_writes_bold_at_a_weight_its_face_has():
     label.set_text("The rest.", lead="Lead.")
     weight = page.bold_weight(fonts.book_family(QFontDatabase.families()))
     assert f"font-weight:{weight}" in label.text() and "<b" not in label.text()
+    assert _shown_weights(label) == [("Lead.", weight), (" The rest.", 400)]      # the lead alone is bold,
+    assert label.font().weight() == QFont.Weight.Normal         # and by its markup: the sentence's own font is not
+    with pytest.MonkeyPatch.context() as patch:                 # on a computer that has a book face: the font the
+        faced = fonts.book()                                    # factory hands out is of that face, and the look-up
+        faced.setFamily(design.BOOK_FACES[0])                   # of the faces answers it
+        patch.setattr(fonts, "book", lambda bold=False: QFont(faced))
+        patch.setattr(fonts, "book_family", lambda available: design.BOOK_FACES[0])
+        booked = page.Sentence()
+        booked.set_text("The rest.", lead="Lead.")
+        assert _shown_weights(booked) == [("Lead.", 700), (" The rest.", 400)]
 
 
 def test_a_quiet_sentence_carries_the_second_ink_and_follows_the_theme():
@@ -4707,6 +4733,12 @@ def test_a_message_row_opens_with_its_bold_lead_and_date():
     assert row.sentence.plain_text() == "Attention, Sun 4 Oct, 12:10. No output for 12 minutes."
     assert isinstance(row.sentence, page.Sentence) and "color" not in row.sentence.text()
     assert row.kind == "warn" and row.findChildren(Marker) == [row.marker]
+    weight = page.bold_weight(fonts.book_family(QFontDatabase.families()))
+    assert _shown_weights(row.sentence) == [("Attention, Sun 4 Oct, 12:10.", weight),
+                                            (" No output for 12 minutes.", 400)]      # the opening is bold, and nothing after it is
+    for kind in paint.MARKERS:                                  # and the marker shown is the one of the row's kind
+        shown = message_row.MessageRow(kind, "")
+        assert (shown.kind, shown.marker.kind) == (kind, kind)
     bare = message_row.MessageRow("", "An explanation with no marker.")
     assert bare.marker is None and bare.findChildren(Marker) == [] and "font-weight" not in bare.sentence.text()
     odd = message_row.MessageRow("info", "Set {name} to <b>3 & 4</b>.\nA second line.", lead="Lead & <co>")
@@ -4759,6 +4791,13 @@ def test_an_error_row_has_an_edge_of_whole_pixels_and_no_ground():
                             run += 1
                         assert run == (wanted if kind == "err" else 0), (dark, ratio, kind, y, run)
                         assert image.pixel(round(5 * ratio), y) == ground.rgb(), (dark, ratio, kind, y)
+            for kind in paint.MARKERS + ("",):          # every kind, with no words and its marker put away: nothing but the edge
+                row = message_row.MessageRow(kind, "")
+                if row.marker is not None:
+                    row.marker.hide()
+                row.resize(300, 40)
+                seen = _pixels(_screen_of(row, 1, ground))
+                assert seen == ({err, ground.rgb()} if kind == "err" else {ground.rgb()}), (dark, kind)
 
 
 def test_a_page_head_has_its_title_its_sentence_and_its_actions():
@@ -4779,6 +4818,8 @@ def test_a_page_head_has_its_title_its_sentence_and_its_actions():
     assert head.sentence.y() - (head.title.y() + head.title.height()) == 2
     assert second.x() + second.width() == 900
     assert second.x() - (first.x() + first.width()) == 12 == first.x() - (head.title.x() + head.title.width())
+    assert (first.width(), second.width()) == (first.sizeHint().width(), second.sizeHint().width())     # an action keeps its own width
+    assert head.sentence.width() == head.title.width()         # and the sentence has the words' whole column
     head.set_small(True)
     assert head.sentence.isHidden()
     head.set_small(False)
@@ -4789,6 +4830,14 @@ def test_a_page_head_has_its_title_its_sentence_and_its_actions():
     assert not head.sentence.isHidden() and head.sentence.plain_text() == "Another sentence."
     untold = page.PageHead("Records")          # held in a name: a temporary takes its children with it
     assert untold.sentence.isHidden()
+    untold.set_small(True)
+    untold.set_small(False)
+    assert untold.sentence.isHidden()          # no words: it stays away when the window is high again
+    head.set_small(True)
+    head.set_sentence("A third sentence.")
+    assert head.sentence.isHidden()            # set while the window is low: it waits for the window to be high,
+    head.set_small(False)
+    assert not head.sentence.isHidden() and head.sentence.plain_text() == "A third sentence."       # and is then the one shown
 
 
 def test_a_page_lines_up_what_stays_and_what_scrolls():
@@ -4823,6 +4872,23 @@ def test_a_page_lines_up_what_stays_and_what_scrolls():
     made.grab()
     assert margins(made) == (22 - 4, 20, 20 - 4, 14) and not head.sentence.isHidden()
     assert scroller.y() - (at(head).y() + head.height()) == 22
+    told = []
+    body.set_small = foot.set_small = told.append               # every part that offers it is told, the middle's body too
+    made.set_small(True)
+    assert told == [True, True]
+    del body.set_small, foot.set_small
+    short, top, little = page.Page(), page.PageHead("Records"), _least(height=100)
+    short.add_fixed(top)
+    short.add_gap(22)                                           # a space of one height keeps it in the low window,
+    short.add_gap(22, 0)                                        # and a second height of nothing is a height
+    held = short.add_scrolling(little)
+    short.add_fixed(QVBoxLayout())                              # a part may be a layout
+    short.resize(1000, 600)
+    short.grab()
+    assert (held.y(), held.y() + held.height()) == (20 + 30 + 22 + 22, 600 - 14)     # the middle takes all the room left,
+    assert (little.mapTo(short, QPoint(0, 0)).y(), little.height()) == (held.y(), 100)      # and a short body stands at its top, no taller
+    short.set_small(True)
+    assert [short.box.itemAt(n).widget().height() for n in (1, 2)] == [22, 0]
 
 
 def test_a_scroller_keeps_the_rings_room_and_is_a_tab_stop_only_while_it_scrolls():
@@ -4875,6 +4941,7 @@ def test_two_columns_stack_below_940_or_below_their_own_least_widths():
     left, right = _least(100), _least(100)
     columns = page.Columns(left, right)
     assert not columns.stacked() and columns.box.spacing() == 32
+    assert columns.box.contentsMargins().isNull()               # the blocks line up with what stands above them
     columns.fit(939)
     assert columns.stacked() and columns.box.direction() == QBoxLayout.Direction.TopToBottom
     assert columns.box.spacing() == 20 and columns.box.itemAt(0).widget() is left
@@ -4890,6 +4957,25 @@ def test_two_columns_stack_below_940_or_below_their_own_least_widths():
     assert (own.box.stretch(0), own.box.stretch(1), own.box.spacing()) == (470, 536, 16)
     own.fit(100)
     assert own.box.spacing() == 14
+    class Asks(QWidget):                                        # a control that asks for more width than it needs
+        def sizeHint(self):
+            return QSize(900, 20)
+    def laid(width):                                            # a block whose need comes from what it holds
+        block, control = QWidget(), Asks()
+        control.setMinimumWidth(width)
+        inner = QVBoxLayout(block)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.addWidget(control)
+        return block
+    held = page.Columns(laid(600), laid(500))
+    held.fit(600 + 500 + 32 - 1)
+    assert held.stacked()                                       # what a block's layout needs is its least width,
+    held.fit(600 + 500 + 32)
+    assert not held.stacked()                                   # and what it asks for beyond that is not
+    close = page.Columns(QWidget(), QWidget(), gap=0, gap_stacked=0)
+    assert close.box.spacing() == 0                             # a gap of nothing is a gap, side by side
+    close.fit(10)
+    assert close.stacked() and close.box.spacing() == 0         # and stacked
 
 
 def test_the_page_devices_grow_with_the_text_and_their_line_weights_do_not():
@@ -4902,6 +4988,9 @@ def test_the_page_devices_grow_with_the_text_and_their_line_weights_do_not():
         head = page.PageHead("Records", "One sentence.")
         assert head.title.font().pixelSize() == 30 and head.title.maximumHeight() == 38
         assert head.sentence.font().pixelSize() == 20 and "line-height:28px" in head.sentence.text()
+        assert (head.layout().spacing(), head.layout().itemAt(0).layout().spacing()) == (15, 3)
+        lift = max(0, math.ceil((28 - QFontMetricsF(head.sentence.font()).lineSpacing()) / 2))
+        assert head.sentence.contentsMargins().top() == -lift          # the lift is worked out at the size in force
         columns = page.Columns(_least(height=900), QWidget())
         assert columns.box.spacing() == 40
         scroller = page.Scroller(columns)
@@ -4917,6 +5006,13 @@ def test_the_page_devices_grow_with_the_text_and_their_line_weights_do_not():
         inside = row.layout().contentsMargins()
         assert (inside.left(), inside.top(), inside.right(), inside.bottom()) == (13, 5, 0, 5)
         assert row.layout().spacing() == 13 and row.marker.width() == 20
+        assert row.layout().itemAt(0).layout().contentsMargins().top() == 4          # the marker's drop
+        own = page.Columns(QWidget(), QWidget(), gap=16, gap_stacked=14)      # what a caller hands in is used as given
+        made.add_gap(22, 14)
+        assert (own.box.spacing(), made.box.itemAt(0).widget().height()) == (16, 22)
+        own.fit(10)
+        made.set_small(True)
+        assert (own.box.spacing(), made.box.itemAt(0).widget().height()) == (14, 14)
         row.resize(300, row.heightForWidth(300))
         image, err = _screen_of(row, 1, design.colour("paper")), design.colour("err").rgb()
         assert [image.pixel(x, 0) == err for x in range(4)] == [True, True, False, False]          # the edge is still 2 px
