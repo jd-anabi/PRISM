@@ -216,6 +216,15 @@ class FocusFollower(QObject):
         # Between the two calls: the frame's margin and its mask are asked of its style inside setWidget.
         ring.inset = widget.property("ring") == "inset" or isinstance(widget, QAbstractScrollArea)
         ring.setWidget(widget)
+        if ring.isHidden() and ring.widget() is widget:
+            # The toolkit hides its frame when the control lies outside what the frame stands in, the view
+            # of a scrolling area, and from then on only moves it. But the Tab key gives the focus first and
+            # the area scrolls after, and a shortcut reaches its control wherever that stands. Raised and
+            # shown here, as the toolkit does it for a control in sight, the frame is cut by the view as its
+            # control is and comes into sight with it. A window wears no frame: the toolkit puts none on
+            # one, and the frame stays hidden.
+            ring.raise_()
+            ring.show()
         ring.update()
 
     def refresh(self) -> None:

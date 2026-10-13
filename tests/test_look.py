@@ -3201,6 +3201,182 @@ def test_a_stopped_follower_is_off_the_application_and_hears_nothing_more():
         follows.stop()
 
 
+@contextlib.contextmanager
+def _a_form_that_scrolls(middle=False):
+    """A form too tall for its window: six controls with no words, each under a bare space 150 high, in a
+    scrolling area 420 wide and 300 high, which is a plain one of the toolkit or, with ``middle``, the middle
+    of a page. With the form at its top the first control is in sight and every other lies under the fold.
+    The window is shown where no screen sees it and is never the active one, so that every widget in it is
+    told when it is moved, as on a screen: the ring follows its control by being told. The follower's ring
+    wears its own copy of the small style, and the follower comes off the application before the window goes."""
+    from PySide6.QtWidgets import QScrollArea
+    from core.gui import style
+    from core.gui.widgets import page
+    app = QApplication.instance() or QApplication([])
+    window, body = QWidget(), QWidget()
+    column = QVBoxLayout(body)
+    column.setContentsMargins(12, 12, 12, 12)
+    column.setSpacing(0)
+    controls = [QLineEdit(), QPushButton(), QPushButton(), _OwnSign(), QPushButton(), QPushButton()]
+    for control in controls:
+        space = QWidget()
+        space.setFixedHeight(150)
+        control.setFixedHeight(32)
+        column.addWidget(space)
+        column.addWidget(control)
+    if middle:
+        area = page.Scroller(body)
+    else:
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setWidget(body)
+    outer = QVBoxLayout(window)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.addWidget(area)
+    window.resize(420, 300)
+    window.setAttribute(Qt.WA_DontShowOnScreen, True)
+    window.setAttribute(Qt.WA_ShowWithoutActivating, True)
+    follows = style.FocusFollower(app, style.PrismStyle())
+    try:
+        window.show()
+        _settle()
+        yield SimpleNamespace(window=window, area=area, bar=area.verticalScrollBar(), controls=controls,
+                              follows=follows)
+    finally:
+        follows.stop()                       # first: the ring holds its control by address
+        window.close()
+        _gone(window)
+
+
+def _where_in_its_view(form, control):
+    """Where a control lies, with the room its ring takes, against the view of the form's scrolling area:
+    "in" when all of it is in sight, "out" when none of it is, else "cut"."""
+    view = form.area.viewport()
+    box = QRect(control.mapTo(view, QPoint(0, 0)), control.size()).adjusted(-4, -4, 4, 4)
+    return "in" if view.rect().contains(box) else "cut" if view.rect().intersects(box) else "out"
+
+
+def _ring_sides(window, control, inset=False):
+    """What is seen of the focus ring round ``control`` in a picture of its window, side by side: above,
+    below, left, right. A side is "whole" when both pixels of the ring's line are the focus colour all along
+    it, bar four at each end where the corner turns, "none" when not one is, else "part". The line lies four
+    pixels outside the control or, with ``inset``, just inside its edge. No words stand where it is read."""
+    picture = _image(window.width(), window.height(), 1.0)
+    window.render(picture)
+    focus, corner = design.hex_colour("focus"), control.mapTo(window, QPoint(0, 0))
+    left, top, right, foot = corner.x(), corner.y(), corner.x() + control.width(), corner.y() + control.height()
+    out = 0 if inset else 4                  # how far outside the control's edge the line begins
+    along, down = range(left + 4, right - 4), range(top + 4, foot - 4)
+    sides = ([(x, top - out + n) for x in along for n in (0, 1)],
+             [(x, foot + out - 1 - n) for x in along for n in (0, 1)],
+             [(left - out + n, y) for y in down for n in (0, 1)],
+             [(right + out - 1 - n, y) for y in down for n in (0, 1)])
+    seen = []
+    for side in sides:
+        lit = sum(_at(picture, x, y) == focus for x, y in side
+                  if 0 <= x < window.width() and 0 <= y < window.height())
+        seen.append("whole" if lit == len(side) else "part" if lit else "none")
+    return seen
+
+
+@pytest.mark.parametrize("middle", (False, True), ids=("plain", "middle"))
+def test_a_control_the_tab_key_scrolls_into_sight_wears_the_whole_ring(middle):
+    """The Tab key gives the focus to the next control first, and the scrolling area that holds the control
+    scrolls it into sight after. The toolkit hides its focus frame when the control it is given lies outside
+    the area's view, and from then on only moves the frame with the control: left so, a control that the Tab
+    key brings up from under the fold would hold the keyboard and show no sign of it. So the focus arrives
+    here as the Tab key and Shift+Tab bring it, on a control out of sight below and on one out of sight
+    above, the area then scrolls as the toolkit makes it, and the ring is read in the picture of the window:
+    its line on all four sides of the control, and nothing there once the focus has left."""
+    with theme(False), _a_form_that_scrolls(middle) as form:
+        seen = {}
+        for key, reason, control, start in (("Tab", Qt.TabFocusReason, form.controls[2], 0),
+                                            ("Shift+Tab", Qt.BacktabFocusReason, form.controls[1],
+                                             form.bar.maximum())):
+            form.bar.setValue(start)
+            _settle()
+            _arrive(control, reason)                         # the focus first, the control still out of sight;
+            was = _where_in_its_view(form, control)
+            form.area.ensureWidgetVisible(control)           # then the area scrolls, as the toolkit does it
+            _settle()
+            now, worn = _where_in_its_view(form, control), _ring_sides(form.window, control)
+            _leave(control, reason)
+            seen[key] = (was, now, worn, _ring_sides(form.window, control))
+        assert seen == dict.fromkeys(("Tab", "Shift+Tab"), ("out", "in", ["whole"] * 4, ["none"] * 4))
+
+
+def test_a_control_given_the_focus_out_of_sight_wears_the_ring_when_it_comes_into_sight():
+    """A shortcut gives the focus to its control wherever the control stands, and the toolkit scrolls nothing
+    for it: the control holds the keyboard out of sight until the wheel or the bar brings it up, and the ring
+    must be on it then. Putting the ring back once, after the focus has arrived, would not do it: the frame
+    has to stand on its control all the while, cut by the view as the control is."""
+    with theme(False), _a_form_that_scrolls() as form:
+        control = form.controls[4]
+        _arrive(control, Qt.ShortcutFocusReason)
+        _settle()                                            # whatever was put off until later has happened by now
+        was = _where_in_its_view(form, control)
+        form.bar.setValue(control.y() - 100)                 # later, the bar: the control comes into sight
+        _settle()
+        assert (was, _where_in_its_view(form, control), _ring_sides(form.window, control)) == (
+            "out", "in", ["whole"] * 4)
+
+
+def test_the_ring_just_inside_a_control_shows_over_a_body_the_area_was_given_later():
+    """A control that fills its place has the ring just inside its own edge, where the control itself paints.
+    The ring is seen there only while its frame lies above everything the view holds, and a body that the
+    area is given after the frame came to stand in its view is put above the frame. So the frame is raised
+    whenever it is shown: also where the toolkit, which raises it for a control in sight, has hidden it
+    because its control lay under the fold."""
+    with theme(False), _a_form_that_scrolls() as form:
+        _arrive(form.controls[0], Qt.TabFocusReason)         # the frame comes to stand in the area's view,
+        _leave(form.controls[0], Qt.TabFocusReason)
+        body, row = QWidget(), QPushButton()                 # and then the area is given another body
+        row.setProperty("ring", "inset")
+        row.setFixedHeight(36)
+        column = QVBoxLayout(body)
+        column.addWidget(_least(height=600))
+        column.addWidget(row)
+        form.area.setWidget(body)
+        _settle()
+        _arrive(row, Qt.TabFocusReason)
+        was = _where_in_its_view(form, row)
+        form.area.ensureWidgetVisible(row)
+        _settle()
+        assert (was, _where_in_its_view(form, row), _ring_sides(form.window, row, inset=True)) == (
+            "out", "in", ["whole"] * 4)
+
+
+def test_under_the_fold_the_ring_shows_only_where_the_rules_show_it():
+    """What holds for a control in sight holds for one that is scrolled into sight. A field one types in
+    wears the ring after a click, and its frame is the view's own child, four pixels outside the field, so
+    that the view cuts it where it cuts the field. A button the mouse gave the focus shows none, a control
+    that shows the focus itself is told and gets none, and when the focus goes to something that can wear no
+    ring, a window, the frame is left hidden, on nothing."""
+    with theme(False), _a_form_that_scrolls() as form:
+        view = form.area.viewport()
+        field, button, own = form.controls[0], form.controls[2], form.controls[3]
+        _arrive(field, Qt.MouseFocusReason)                  # a click in a field in sight
+        ring = form.follows.ring()
+        box = QRect(field.mapTo(view, QPoint(0, 0)), field.size())
+        assert (_ring_sides(form.window, field), ring.parentWidget() is view, ring.geometry()) == (
+            ["whole"] * 4, True, box.adjusted(-4, -4, 4, 4))
+        _leave(field, Qt.MouseFocusReason)
+        _arrive(button, Qt.MouseFocusReason)                 # the mouse gives a button the focus: no ring,
+        form.area.ensureWidgetVisible(button)                # wherever the form is then scrolled to
+        _settle()
+        assert (form.follows.target(), _where_in_its_view(form, button), _ring_sides(form.window, button)) == (
+            None, "in", ["none"] * 4)
+        _leave(button, Qt.MouseFocusReason)
+        _arrive(own, Qt.TabFocusReason)                      # the Tab key reaches a control that shows the focus itself
+        form.area.ensureWidgetVisible(own)
+        _settle()
+        assert (own.shown, _where_in_its_view(form, own), _ring_sides(form.window, own)) == (
+            True, "in", ["none"] * 4)
+        _leave(own, Qt.TabFocusReason)
+        _arrive(form.window, Qt.TabFocusReason)              # and the keyboard's focus goes to the window itself
+        assert ring.isHidden() and ring.widget() is None, "a frame that is on nothing is shown"
+
+
 # ── painted devices: markers, glyphs, icons, ruled lines, the hatching ─────────────────────────
 _SCALINGS = (1.0, 1.25, 1.5, 2.0)                    # the display scalings a device is drawn at
 _BLANK = QColor(255, 0, 255)                         # a ground no colour of the look can be taken for
