@@ -1058,7 +1058,7 @@ def test_int_field_value_or_none_tells_a_blank_from_a_zero():
     f = IntField(5)
     assert f.value_or_none() == 5
     for text, want in (("0", 0), (" 12 ", 12), ("-3", -3), ("", None), ("-", None), ("1.5", None)):
-        f.setText(text)                      # setText bypasses the QIntValidator, as a restore does
+        f.setText(text)                      # text set from code passes no key rule, as a restore's does not
         assert f.value_or_none() == want, (text, f.value_or_none())
     f.setText("")
     assert f.value() == 0, "value() still reads a blank as 0 for its remaining callers"

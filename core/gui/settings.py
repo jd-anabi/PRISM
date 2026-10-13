@@ -89,4 +89,5 @@ def restore_field(qs: QSettings, key: str, field) -> None:
 
 def save_field(qs: QSettings, key: str, field) -> None:
     edit = getattr(field, "edit", field)
-    qs.setValue(key, edit.text())
+    plain = getattr(field, "plain_text", None)       # a number field saves its text without a grouping comma
+    qs.setValue(key, plain() if callable(plain) else edit.text())

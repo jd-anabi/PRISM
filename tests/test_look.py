@@ -28,9 +28,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEvent, QItemSelectionModel, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt
-from PySide6.QtGui import (QColor, QFocusEvent, QFont, QFontDatabase, QFontInfo, QFontMetricsF, QGuiApplication,
-                           QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QRegion, QTextDocument, QWheelEvent)
+from PySide6.QtCore import (QCoreApplication, QEvent, QItemSelectionModel, QLocale, QObject, QPoint, QPointF, QRect,
+                            QRectF, QSettings, QSize, Qt)
+from PySide6.QtGui import (QColor, QDoubleValidator, QFocusEvent, QFont, QFontDatabase, QFontInfo, QFontMetricsF,
+                           QGuiApplication, QIcon, QImage, QIntValidator, QKeyEvent, QMouseEvent, QPainter, QPalette,
+                           QRegion, QTextDocument, QWheelEvent)
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QApplication, QBoxLayout, QCheckBox, QComboBox, QFrame, QLineEdit, QMenu,
                                QPlainTextEdit, QPushButton, QRadioButton, QStyle, QStyleFactory, QStyleOptionButton,
@@ -47,7 +49,8 @@ LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.g
                 "core.gui.file_chooser", "core.gui.widgets.labeled_inputs", "core.gui.paint", "core.gui.style",
                 "core.gui.reported", "core.Helpers.plot_colours", "core.gui.widgets.marker", "core.gui.widgets.ruled",
                 "core.gui.widgets.rule_table", "core.gui.widgets.time_axis",
-                "core.gui.widgets.message_row", "core.gui.widgets.page")
+                "core.gui.widgets.message_row", "core.gui.widgets.page",
+                "core.gui.widgets.choice")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
 
@@ -5142,3 +5145,296 @@ def test_an_error_edge_whose_colour_fails_and_a_middle_whose_fit_fails_are_repor
     middle.resize(640, 280)                                     # another height, so the range changes again
     middle.grab()
     assert set(widths) == {640 - 2 * 4 - 8 - 2} and middle.focusPolicy() == Qt.FocusPolicy.TabFocus     # the width, the Tab stop
+
+
+# the number fields and the drop-down
+def _end_editing(field, leave=False):
+    """The two ways editing ends: Enter, or the keyboard focus leaving by Tab."""
+    if leave:
+        QApplication.sendEvent(field, QFocusEvent(QEvent.FocusOut, Qt.TabFocusReason))
+    else:
+        QTest.keyClick(field, Qt.Key_Return)
+
+
+def _held_under_the_sheet(dark, *widgets):
+    """A holder that carries the built sheet itself and is laid out without ever being shown, so the
+    application's own sheet, its active window and its keyboard focus are never touched."""
+    holder = QWidget()
+    holder.setStyleSheet(design.build_qss(dark))
+    column = QVBoxLayout(holder)
+    for widget in widgets:
+        column.addWidget(widget)
+    column.addStretch(1)
+    holder.resize(400, 200)
+    holder.grab()                                    # polishes and lays out; nothing reaches a screen
+    return holder
+
+
+def _holder_picture(holder, ratio=1.0):
+    """The holder painted into a picture at a display scaling, after any layout its widgets have asked
+    for since the last one. No painter is held here: the toolkit makes and ends its own."""
+    picture = _image(holder.width(), holder.height(), ratio)
+    holder.render(picture)
+    return picture
+
+
+def test_typing_20480000_into_a_grouped_whole_number_field_shows_20_480_000():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.labeled_inputs import IntField
+    field, seen = IntField(grouped=True), []
+    for digit in "20480000":
+        QTest.keyClicks(field, digit)
+        seen.append(field.text())
+    assert seen == ["2", "20", "204", "2,048", "20,480", "204,800", "2,048,000", "20,480,000"]
+    assert (field.value(), field.value_or_none(), field.plain_text()) == (20480000, 20480000, "20480000")
+    field.setCursorPosition(2)                       # after the second digit: the caret keeps its place
+    QTest.keyClicks(field, "7")
+    assert (field.text(), field.cursorPosition(), field.value()) == ("207,480,000", 3, 207480000)
+    plain = IntField()                               # grouping is asked for; it is not the default
+    QTest.keyClicks(plain, "20480000")
+    assert (plain.text(), plain.value(), plain.isUndoAvailable()) == ("20480000", 20480000, True)
+
+
+def test_a_whole_number_field_takes_digits_and_a_leading_minus_and_nothing_else():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.labeled_inputs import IntField
+    for grouped in (False, True):
+        for keys, shown, value in (
+                ("-3", "-3", -3), ("-20480000", "-20,480,000" if grouped else "-20480000", -20480000),
+                ("1.5", "15", 15), ("12a4", "124", 124), ("3-", "3", 3), ("+3", "3", 3), (" 12", "12", 12),
+                ("-", "-", None), ("5,000", "5,000" if grouped else "5000", 5000),
+                ("007", "7" if grouped else "007", 7)):
+            field = IntField(grouped=grouped)
+            QTest.keyClicks(field, keys)
+            assert (field.text(), field.value_or_none()) == (shown, value), (keys, grouped)
+        field = IntField(grouped=grouped)
+        field.insert("1.5")                          # what a paste does: refused whole, never thinned to 15
+        assert field.text() == ""
+        field.insert("20,480,000")
+        assert (field.text(), field.value()) == ("20,480,000" if grouped else "20480000", 20480000)
+        assert not isinstance(field.validator(), QIntValidator)
+
+
+def test_a_whole_number_set_from_code_is_grouped_and_other_text_is_shown_as_given():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.labeled_inputs import IntField
+    for grouped in (False, True):
+        for given, shown, value in (
+                (20480000, "20,480,000" if grouped else "20480000", 20480000),
+                ("175000", "175,000" if grouped else "175000", 175000),
+                (999, "999", 999), (0, "0", 0), ("-3", "-3", -3),
+                ("20,480,000", "20,480,000", 20480000),      # a remembered text with its commas reads the same
+                ("1,5", "1,5", None),                        # a comma where grouping never puts one is not 15
+                ("+5", "+5", None),                          # a plus is no part of a whole number here
+                ("1.5", "1.5", None), ("-", "-", None), ("", "", None), (None, "", None)):
+            built = IntField(given, grouped=grouped)
+            assert (built.text(), built.value_or_none()) == (shown, value), (given, grouped)
+            later = IntField(grouped=grouped)
+            later.setText("" if given is None else str(given))
+            assert (later.text(), later.value_or_none()) == (shown, value), (given, grouped)
+    assert IntField(" 12 ").text() == " 12 " and IntField(" 12 ").value_or_none() == 12
+    assert IntField(" 12 ", grouped=True).text() == "12"
+    assert IntField("").value() == 0 and IntField("1,5").value() == 0, "value() keeps its 0 for what does not read"
+    assert IntField("1.5", grouped=True).plain_text() == "1.5" and IntField("007").plain_text() == "007"
+
+
+def test_backspace_and_delete_step_over_a_grouping_comma():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.labeled_inputs import IntField
+    for caret, key, first, second in ((2, Qt.Key_Backspace, ("2,048", 1), ("48", 0)),
+                                      (1, Qt.Key_Delete, ("2,048", 2), ("248", 1))):
+        field = IntField(2048, grouped=True)
+        field.setCursorPosition(caret)               # just right of the comma, then just left of it
+        QTest.keyClick(field, key)
+        assert (field.text(), field.cursorPosition()) == first, "the caret steps over the comma and no digit goes"
+        QTest.keyClick(field, key)
+        assert (field.text(), field.cursorPosition()) == second
+
+
+def test_a_decimal_field_reads_a_point_whatever_the_regional_setting():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.labeled_inputs import FloatField
+    was = QLocale()
+    QLocale.setDefault(QLocale(QLocale.German, QLocale.Germany))      # a comma for the decimal sign
+    try:
+        field = FloatField(None)
+        QTest.keyClicks(field, "0.5")
+        _end_editing(field)
+        assert (field.text(), field.value_or_none()) == ("0.5", 0.5)
+        for keys, shown, value in (("1.5e-3x ", "1.5e-3", 0.0015), ("1.2.3", "1.23", 1.23), ("--5", "-5", -5.0),
+                                   ("1e5e", "1e5", 100000.0), (".5", ".5", 0.5), ("+5", "+5", 5.0),
+                                   ("-", "-", None)):
+            field = FloatField(None)
+            QTest.keyClicks(field, keys)
+            _end_editing(field, leave=True)
+            assert (field.text(), field.value_or_none()) == (shown, value), keys
+    finally:
+        QLocale.setDefault(was)
+    assert not isinstance(FloatField(1.0).validator(), QDoubleValidator)
+    assert [FloatField(v).text() for v in (None, 0.0, 2.5, "0.33")] == ["", "0.0", "2.5", "0.33"]
+    assert (FloatField(None).value(), FloatField(None).value_or_none()) == (0.0, None)
+
+
+def test_a_comma_in_a_decimal_field_shows_is_never_read_and_is_refused_when_editing_ends():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.labeled_inputs import COMMA_SENTENCE, FloatField
+    assert COMMA_SENTENCE == "Use a point as the decimal sign."
+    for leave in (False, True):
+        field, told = FloatField(None), []
+        field.setToolTip("as it was")
+        field.error_changed.connect(told.append)
+        QTest.keyClicks(field, "6,5")
+        assert (field.text(), field.error()) == ("6,5", ""), "the key shows, and nothing is said while typing"
+        _end_editing(field, leave)
+        assert field.text() == "6,5", "never rewritten into another number"
+        assert (field.value_or_none(), field.value()) == (None, 0.0)
+        assert (field.error(), field.property("state"), field.toolTip()) == (COMMA_SENTENCE, "error", COMMA_SENTENCE)
+        assert field.accessibleDescription() == COMMA_SENTENCE and told == [COMMA_SENTENCE]
+        QTest.keyClick(field, Qt.Key_Backspace)
+        QTest.keyClick(field, Qt.Key_Backspace)
+        assert (field.text(), field.error(), field.property("state"), field.toolTip()) == ("6", "", "", "as it was")
+        assert told == [COMMA_SENTENCE, ""]
+    field = FloatField(0.05)
+    field.set_error("A sentence of the page's own.")
+    field.setText("0.06")
+    assert field.error() == "A sentence of the page's own.", "the field takes back only the error it raised itself"
+    field = FloatField(None)
+    QTest.keyClicks(field, "6,5")
+    _end_editing(field)
+    field.set_error("A sentence of the page's own.")
+    field.setText("65")
+    assert field.error() == "A sentence of the page's own.", "nor one that has since taken the place of its own"
+
+
+def test_a_field_in_error_keeps_its_size_and_shows_a_two_pixel_outline():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.labeled_inputs import FloatField, IntField
+    with text_size(1.0):                             # the sizes below are those of the ordinary text size
+        for dark in (False, True):
+            line, inside, err = (design.hex_colour(name, dark) for name in ("field_line", "field", "err"))
+            for kind in (FloatField, IntField):
+                field = kind(5)
+                holder = _held_under_the_sheet(dark, field)
+
+                def seen():                          # the middle of the top edge, where no lettering stands
+                    picture, x = _holder_picture(holder), field.x() + field.width() // 2
+                    rows = [_at(picture, x, field.y() + row) for row in range(3)]
+                    return rows, (field.sizeHint(), field.minimumSizeHint(), field.geometry())
+
+                rows, plain = seen()
+                assert field.height() == design.scaled(design.SIZE["field_h"]) == 32
+                assert rows == [line, inside, inside]
+                field.set_error("Wrong.")
+                rows, outlined = seen()              # the picture first: painting it runs the layout again
+                assert outlined == plain, "the field changed size with its error"
+                assert rows == [err, err, inside]
+                field.set_error("")
+                assert seen() == ([line, inside, inside], plain)
+
+
+def test_the_drop_down_paints_its_own_chevron_eight_inside_its_outline(monkeypatch):
+    QApplication.instance() or QApplication([])
+    from core.gui import paint
+    from core.gui.widgets import choice
+    assert issubclass(choice.Choice, QComboBox) and "chev_down" in paint.GLYPHS
+    calls, real = [], paint.paint_marker
+
+    def recorded(painter, kind, box, disabled=False):
+        calls.append((kind, QRectF(box), disabled))
+        real(painter, kind, box, disabled)
+
+    monkeypatch.setattr(choice, "paint_marker", recorded)
+    for dark, (factor, m, inset) in itertools.product((False, True), ((1.0, 16, 8), (1.25, 20, 10))):
+        with theme(dark), text_size(factor):             # the box and its inset grow with the text
+            assert (design.scaled(design.SIZE["marker"]), design.scaled(design.SIZE["combo_pad"][1])) == (m, inset)
+            ground, ink = (QColor(design.hex_colour(name, dark)).lightness() for name in ("field", "ink"))
+            box, stock = choice.Choice(), QComboBox()
+            holder = _held_under_the_sheet(dark, box, stock)
+            for ratio in (1.0, 1.25, 1.5, 2.0):          # the display scalings a device is drawn at
+                calls.clear()
+                picture = _holder_picture(holder, ratio)
+                # the chevron's place; the 1 is the outline, which never grows with the text
+                where = QRectF(box.width() - 1 - inset - m, (box.height() - m) / 2, m, m)
+                assert calls == [("chev_down", where, False)], (dark, factor, ratio)
+
+                def lift(widget):                        # the most that place stands off the field's ground
+                    left, top = widget.x() + where.x(), widget.y() + 2
+                    return max(abs(QColor(_at(picture, left + i / 2, top + j / 2)).lightness() - ground)
+                               for i in range(2 * m) for j in range(2 * (widget.height() - 4)))
+
+                assert lift(box) > abs(ink - ground) / 2, (dark, factor, ratio, "no chevron in the theme's ink")
+                assert lift(stock) == 0, (dark, factor, ratio, "a stock drop-down shows an arrow under the sheet")
+            box.setEnabled(False)
+            calls.clear()
+            _holder_picture(holder)
+            assert calls == [("chev_down", where, True)], (dark, factor)
+
+
+def test_a_grouped_whole_number_is_saved_without_its_commas_and_comes_back_grouped(tmp_path):
+    QApplication.instance() or QApplication([])
+    from core.gui import settings
+    from core.gui.widgets.labeled_inputs import FloatField, IntField
+    path = str(tmp_path / "fields.ini")
+    store = QSettings(path, QSettings.IniFormat)
+    for name, field in (("batches", IntField(20480000, grouped=True)), ("plain", IntField("5000")),
+                        ("seed", IntField("007")), ("blank", IntField("")), ("decimal", FloatField("0.05"))):
+        settings.save_field(store, name, field)
+    store.sync()
+    again = QSettings(path, QSettings.IniFormat)
+    saved = [again.value(name) for name in ("batches", "plain", "seed", "blank", "decimal")]
+    assert saved == ["20480000", "5000", "007", "", "0.05"]
+    assert settings.get_int(again, "batches", 5000) == 20480000, "a remembered budget is read back, not lost"
+    back = IntField(grouped=True)
+    settings.restore_field(again, "batches", back)
+    assert (back.text(), back.value()) == ("20,480,000", 20480000)
+
+
+def test_a_drop_down_whose_chevron_fails_is_still_drawn_ends_its_painter_and_reports_it(monkeypatch):
+    """What the drop-down's paint event answers when its chevron fails under its painter: the box the toolkit
+    draws stands, drawn once, and the chevron is left out, nothing comes out of the call that made the widget
+    draw, and the error stands in the record under the paint event's own name. The painter has been ended by
+    then: the words of the error, which are read while the failed call still stands, say whether it still
+    paints. A size that fails, before the method has a painter of its own, leaves the same box: the toolkit's
+    painting comes before anything of the method's own that can fail. The next paint is a whole one."""
+    QApplication.instance() or QApplication([])                 # before any widget
+    from core.gui import reported
+    from core.gui.widgets import choice
+    opened = []                                                 # each painter a paint event opens, noted and not kept alive
+
+    class Noted(QPainter):
+        def __init__(self, device):
+            super().__init__(device)
+            opened.append(weakref.ref(self))
+
+    class NoChevron(Exception):                                 # its words are made when the record reads them
+        def __str__(self):
+            return f"its painter still paints: {opened[-1]().isActive()}"
+
+    def no_chevron(*told, **named):
+        raise NoChevron()
+
+    def no_size(*told, **named):
+        raise ValueError("no size")
+
+    def pixels(picture, widget):                                # one widget's part of a picture, pixel by pixel
+        spots = itertools.product(range(widget.height()), range(widget.width()))
+        return [_at(picture, widget.x() + i, widget.y() + j) for j, i in spots]
+
+    name = "core.gui.widgets.choice.Choice.paintEvent"
+    with theme(False), text_size(1.0):                          # the chevron's place is read at the ordinary text size
+        box, stock = choice.Choice(), QComboBox()
+        holder = _held_under_the_sheet(False, box, stock)
+        left, top = box.x() + box.width() - 1 - 8 - 16, box.y() + (box.height() - 16) / 2    # outline, inset, side
+        tip = (left + 8, top + 10.5)                            # the chevron's lowest point: its stroke covers it whole
+        with reported.expected() as caught, monkeypatch.context() as patch:
+            patch.setattr(choice, "QPainter", Noted)
+            patch.setattr(choice, "paint_marker", no_chevron)   # the chevron fails under the live painter
+            failed = _holder_picture(holder)
+        assert caught == [(name, "NoChevron: its painter still paints: False")]
+        assert pixels(failed, box) == pixels(failed, stock), "the box does not stand as the toolkit draws it"
+        with reported.expected() as caught, monkeypatch.context() as patch:
+            patch.setattr(choice, "design", SimpleNamespace(SIZE=design.SIZE, scaled=no_size))      # a size fails
+            failed = _holder_picture(holder)
+        assert caught == [(name, "ValueError: no size")]
+        assert pixels(failed, box) == pixels(failed, stock), "a size that failed took the toolkit's box with it"
+        assert _at(_holder_picture(holder), *tip) == design.hex_colour("ink")       # and the next paint is a whole one

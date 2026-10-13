@@ -1,27 +1,114 @@
 """Small typed input widgets: the numeric fields and file pickers the GUI's forms are built from."""
-from PySide6.QtGui import QDoubleValidator, QIntValidator
+import re
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QValidator
 from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QPushButton, QWidget
 
 from core.refusals import describe, refuse
 
 from ..design import FIELD_MIN_W, PATH_FIELD_MIN_W
 from ..file_chooser import choose_file
+from ..style import set_class
 
-# These classes set a validator and, now, a MINIMUM WIDTH. Qt's default QFormLayout policy on Windows
-# is FieldsStayAtSizeHint, so without a floor a numeric field rendered 3-6 characters wide: typing
-# "0.033333" scrolled inside the box and the value could not be read back without clicking into it.
+COMMA_SENTENCE = "Use a point as the decimal sign."
+_WHOLE = re.compile(r"-?(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)")     # read: digits, or commas where grouping puts them
+_WHOLE_KEYS = re.compile(r"-?[0-9]*")                             # typed, once its commas are taken out
+_DECIMAL_KEYS = re.compile(r"[+-]?[0-9,]*\.?[0-9,]*(?:[eE][+-]?[0-9]*)?")   # typed: a comma shows, a second point does not
+
+# These classes decide for themselves which keys they take: the toolkit's own number checks are not used, because
+# they rewrote a typed text into another number when editing ended. They also set a MINIMUM WIDTH. Qt's default
+# QFormLayout policy on Windows is FieldsStayAtSizeHint, so without a floor a numeric field rendered 3-6 characters
+# wide: typing "0.033333" scrolled inside the box and the value could not be read back without clicking into it.
 # The matching half of the fix is the field-growth policy (see widgets/forms.make_form).
 
 
-class FloatField(QLineEdit):
+def _whole(text) -> "int | None":
+    """The whole number a text reads as, or None when it is not one: digits under an optional leading minus,
+    with a comma only where grouping puts it ("20,480,000" is a number, "1,5" is not), and never a plus."""
+    text = text.strip()
+    if _WHOLE.fullmatch(text):
+        return int(text.replace(",", ""))
+    return None
+
+
+class _WholeKeys(QValidator):
+    """Which texts a whole-number field lets stand while it is typed in: digits under an optional leading
+    minus, once the commas are taken out. The answer is that a text can stand or that it cannot, never that
+    it is half-way, and the text and the caret go back as they came: on a half-way answer the toolkit rewrites
+    the text when editing ends, and the field never says that editing ended."""
+
+    def validate(self, text, pos):
+        fits = _WHOLE_KEYS.fullmatch(text.replace(",", "")) is not None
+        return (QValidator.Acceptable if fits else QValidator.Invalid), text, pos
+
+
+class _DecimalKeys(QValidator):
+    """The same for a decimal field: a sign, digits, one point and an exponent. A comma is let stand, so that
+    the key shows; it is never read as part of a number, and the field says so when editing ends."""
+
+    def validate(self, text, pos):
+        fits = _DECIMAL_KEYS.fullmatch(text) is not None
+        return (QValidator.Acceptable if fits else QValidator.Invalid), text, pos
+
+
+class _NumberField(QLineEdit):
+    """What the two number fields share: the floor under the width, and an error that a page, or the field
+    itself, puts on the box and takes back. In error the box carries the state the style sheet outlines, and
+    the sentence as its tool tip and as its accessible description."""
+
+    error_changed = Signal(str)              # the sentence now in force; "" when the error is taken back
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self._error = ""
+        self._tip = ""                       # the tool tip the field had before it was in error
+        self.setMinimumWidth(FIELD_MIN_W)
+
+    def error(self) -> str:
+        """The error sentence in force, "" for none."""
+        return self._error
+
+    def set_error(self, sentence: str = "") -> None:
+        """Put the field in error under ``sentence``, or take the error back with an empty one. The tool tip
+        the field had comes back with it. Setting the sentence already in force does nothing."""
+        if sentence == self._error:
+            return
+        if not self._error:
+            self._tip = self.toolTip()
+        self._error = sentence
+        set_class(self, state="error" if sentence else "")
+        self.setToolTip(sentence if sentence else self._tip)
+        self.setAccessibleDescription(sentence)
+        self.error_changed.emit(sentence)
+
+    def plain_text(self) -> str:
+        """The text to remember for this field: the text as it stands."""
+        return self.text()
+
+
+class FloatField(_NumberField):
     def __init__(self, default: "float | None" = 0.0, parent=None):
         # None is an EMPTY box, not the text "None": a seeded value nobody typed is a different
         # state from a blank one, and value_or_none() is what tells them apart (a new probe row's
         # frequency box starts blank this way). Several callers hand this a pre-formatted string
         # instead of a float, which str() leaves alone.
         super().__init__("" if default is None else str(default), parent)
-        self.setValidator(QDoubleValidator())
-        self.setMinimumWidth(FIELD_MIN_W)
+        self.setValidator(_DecimalKeys(self))
+        self._comma_told = False             # True from the moment the field itself refuses a comma
+        self.editingFinished.connect(self._editing_ended)
+        self.textChanged.connect(self._text_changed)
+
+    def _editing_ended(self):
+        if "," in self.text():               # the comma showed while it was typed; now it is refused in words
+            self.set_error(COMMA_SENTENCE)
+            self._comma_told = True
+
+    def _text_changed(self, text):
+        if self._comma_told and "," not in text:
+            self._comma_told = False
+            if self.error() == COMMA_SENTENCE:       # an error another caller has set since is not this field's
+                self.set_error("")
 
     def value(self) -> float:
         try:
@@ -47,7 +134,7 @@ def number_or_blank(field, key: str):
     """``field.value_or_none()`` -- except that text which is NOT blank and does not parse is refused
     under ``key`` rather than read as blank.
 
-    A numeric validator lets '-', '1e', '.' and '+' stand in a box as text still being typed, and
+    A number field lets '-', '1e', '.' and '+' stand in a box as text still being typed, and
     value_or_none() reads each as None. For the boxes this serves, None MEANS something -- the middle
     of the range two sweeps share, "draw a seed", "the constant is blank" -- so a half-typed number
     silently became that. Only a truly empty box is blank."""
@@ -59,17 +146,58 @@ def number_or_blank(field, key: str):
     return value
 
 
-class IntField(QLineEdit):
-    def __init__(self, default: int = 0, parent=None):
-        super().__init__(str(default), parent)
-        self.setValidator(QIntValidator())
-        self.setMinimumWidth(FIELD_MIN_W)
+class IntField(_NumberField):
+    """A whole number: digits under an optional leading minus. With ``grouped`` the thousands are set off by
+    commas, as the digits are typed and when a number is set from code; the caret keeps its place among the
+    digits, and what is read and what is remembered is the number without them."""
+
+    def __init__(self, value=None, parent=None, *, grouped: bool = False):
+        # None is an EMPTY box, not the text "None". The line edit is built empty and the text is set
+        # afterwards: the toolkit's own constructor would not come through setText below, where a number
+        # is grouped.
+        super().__init__("", parent)
+        self._grouped = grouped
+        self._forward = False                # True while a Delete key is handled: it takes what is right of the caret
+        self.setValidator(_WholeKeys(self))
+        self.textEdited.connect(self._edited)
+        if value is not None:
+            self.setText(str(value))
+
+    def setText(self, text) -> None:
+        """Text set from code, a restored one among it: a whole number is grouped when the field groups,
+        and any other text is shown as given."""
+        n = _whole(text) if self._grouped else None
+        QLineEdit.setText(self, text if n is None else f"{n:,}")
+
+    def keyPressEvent(self, event):
+        self._forward = event.key() == Qt.Key_Delete
+        try:
+            super().keyPressEvent(event)
+        finally:
+            self._forward = False
+
+    def _edited(self, text):                         # IntField: connected to textEdited (the user's edits only)
+        caret = self.cursorPosition()
+        kept = text.replace(",", "")
+        before = sum(ch != "," for ch in text[:caret])                # the minus counts; a comma does not
+        if self._grouped:
+            sign = "-" if kept.startswith("-") else ""
+            digits = kept[len(sign):]
+            shown = sign + (f"{int(digits):,}" if digits else "")
+        else:
+            shown = kept
+        pos = 0
+        while pos < len(shown) and before > 0:
+            before -= shown[pos] != ","
+            pos += 1
+        if self._forward and shown[caret:caret + 1] == "," and shown[:caret] + shown[caret + 1:] == text:
+            pos = caret + 1                          # Delete took a comma only: step over it, so the next takes a digit
+        if shown != text:
+            QLineEdit.setText(self, shown)           # not self.setText: that one is for text set from code
+        self.setCursorPosition(pos)
 
     def value(self) -> int:
-        try:
-            return int(self.text())
-        except ValueError:
-            return 0
+        return _whole(self.text()) or 0
 
     def value_or_none(self) -> "int | None":
         """The field's value, or None when it does not parse -- the IntField twin of FloatField's.
@@ -80,10 +208,14 @@ class IntField(QLineEdit):
         tabs read every integer box through it at the click, where a blank box is a refusal, never a
         zero.
         """
-        try:
-            return int(self.text().strip())
-        except (TypeError, ValueError):
-            return None
+        return _whole(self.text())
+
+    def plain_text(self) -> str:
+        """The text to remember: the number without its commas when the text is a whole number that carries
+        them, and otherwise the text as it stands."""
+        text = self.text()
+        n = _whole(text) if "," in text else None
+        return text if n is None else str(n)
 
 
 class PathField(QWidget):
