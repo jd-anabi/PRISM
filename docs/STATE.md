@@ -1,6 +1,13 @@
 # PRISM — state
 
-**Last updated:** 2026-10-12 (THE BUILD IS HANDED TO A NEW CHAT A THIRD TIME, which continues from
+**Last updated:** 2026-10-12, evening (THE SECOND CHAT OF 12 OCTOBER IS AT WORK, from the owner's pasted prompt of
+12 October: TASK 16, THE PAGE PIECES, IS COMPLETE after one fix round (gate green on `14defc9`: 1375 passed, 3 skipped);
+its review found two things that are the approved sample's own: the focus ring is lost on a control the Tab key scrolls
+into sight, which becomes a small task of its own, 10r, built before Task 18, and a message that names a long path
+cannot wrap, which is a question for the owner at the stage's exit; Task 17 is prepared, its notes run on a stand-in;
+and THE LINE STANDS AT TASK 17; the paragraph "THE SECOND CHAT OF 12 OCTOBER" below is this chat's record. What follows
+in this parenthesis is the head as the first chat of 12 October left it:
+THE BUILD IS HANDED TO A NEW CHAT A THIRD TIME, which continues from
 `docs/superpowers/prompts/2026-10-12-window-redesign-continue-stage-1.md`, the paragraph "THE CHAT OF 12 OCTOBER"
 below and the ledger: the owner chose how much to spend ("in between": lean preparation, the review by three
 readers kept for every task); TASK 14q, THE OWNER'S TWO ANSWERS ON THE TABLE, AND TASK 15, THE TIME AXIS, ARE
@@ -34,6 +41,53 @@ the build's state stands in four paragraphs, each as it was written on its date 
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**THE SECOND CHAT OF 12 OCTOBER (2026-10-12, afternoon and evening; started from the owner's pasted prompt of
+12 October; the ledger's entries from "NEW CHAT 2026-10-12, THE SECOND OF THE DAY" on have every figure and every
+ruling).** The usage card read 40 % of the week when the chat began and 44 % with Task 16 built and reviewed; how much to
+spend is as the owner chose ("in between"), and no workflow was run. **Task 16, the page pieces** (`233d36c`, then fix
+round 1 `14defc9`): the new `core/gui/widgets/page.py` (the sentence label, the page heading, the scrolling middle, the
+two columns, the page) and `core/gui/widgets/message_row.py` (a marker and one sentence), fifteen tests born, mounted on
+no screen; three methods carry the guard (the middle's resize event, the row's paint event, and the slot that hears the
+scroll bar's range, which no scan knows); built from the plan's brief and the notes, all eight one-run faults seen red;
+the implementer's four pictures on the real platform show the sentences in Cambria. Its review (three readers) found the
+build equal to its instructions (the committed test text is the dictated text in all 389 lines; beside the approved
+sample's own classes no pixel differs in 1,116 pairs a face at six scalings; nothing wrong in either module) and FOUR
+gaps of the dictated tests, each confirmed by a skeptic: no test read which marker a row shows; none held that a row's
+opening is bold and nothing after it; none held where a middle shorter than its room stands; the heading's actions could
+be stretched across it and its sentence's two conditions were never tried together. Closed in the fix round, tests only
+(96 lines with the reader's lines for its minors, one helper born, 27 one-run faults each red at its line), re-read
+clean. **Two findings that are the approved sample's own, ruled by the controller** (each in the ledger with its cost):
+(1) a control the Tab key reaches while it lies under the fold of ANY scrolling area is scrolled into sight with NO
+focus ring (3 of 3 steps, also in a plain scrolling area of the toolkit; the fault is in the focus follower of Task 10,
+so today's forms likely show it): a SMALL TASK OF ITS OWN, **10r**, tests first, with its own review and gate, built in
+this stage before Task 18; its brief is not written yet; (2) a message that names a long path cannot wrap (a Windows
+path has no place to break) and its row is cut at the right with no sign: with this computer's folders the program's own
+messages need 431 to 637 px, against 638 px in the smallest window's page and 354 px on the run page: PARKED FOR THE
+OWNER, asked alone at the stage's exit with pictures and a recommendation, beside the two questions on the time axis;
+the skeptic who writes 10r's brief also confirms it and draws the remedy on offer (a place to break inside a long word).
+**The last gate, at `14defc9`: 1375 passed, 3 skipped, 5 deselected, 203 warnings, 14 min 14 s** (one script-light reader
+beside it, so not a quiet-machine time; the gate at `233d36c` beside two drawing readers took 24 min 30 s); the
+display-marked run 3 passed; the real `Artifacts/` (428 entries) and the real `PRISM.ini` (hash unchanged) are as they
+were. **Task 17 (number fields and the drop-down) is prepared:** the one open point was ruled first (a number field gets
+digits of equal width from each rebuilt page, not from its class: Task 17 sets no font on a field and adds no keyword;
+measured on a stand-in: 80 fields of today's forms equal pixel for pixel before and after); its notes were written
+against the code and run on a stand-in (`stage-1/briefs/task-17-dispatch-notes.md`, 886 lines, walked on a fresh copy:
+ten tests, the tenth holding what the drop-down's guarded paint event answers when it fails; eight one-run faults; the
+drop-down's guard has no fallback, because a fallback paints the box twice, 18 pixels darker; the fields' key handling
+carries no guard, with its measured cost in the ledger); the gate to expect is 1385 passed. **For the owner at the
+stage's exit, new with this task:** the question on a long path; the row with no marker and all its later lines begin
+10 px in, 26 px left of the other rows' sentences, as the brief dictates (one number and one test line if it is to
+stand under them; the sheets are in the ledger's `stage-1/reviews/task-16-review-two-pics/`); the three guards and the
+one `try`/`finally` of this task are differences of form from the sample's drawing code, like the five before.
+**Carried:** to the plan of the stage that first builds a page from these devices: a page is told it is small after its
+parts are added (or each call that adds a part puts it into the form in force); a middle never begins with a control,
+or keeps room at its top for the ring; no heading or list of rows inside a greyed form; an empty sentence is hidden,
+not emptied; the tabular lettering on a number field is given at build with its alignment and width. To Task 18's
+preparation: the scan of the book face follows neither the function imported under another name nor a class built on
+the sentence. **Engine changes built so far: E12 only.** **Next, in order:** Task 17's dispatch; the skeptic who writes
+and runs 10r's brief (when no pytest is alive: one at a time on the machine); 10r; Task 18 (one preparation pass); the
+stage's last review; Task 19.
 
 **THE CHAT OF 12 OCTOBER (2026-10-12; started from the owner's pasted prompt of 11 October; the ledger's entries from
 "NEW CHAT 2026-10-12" on have every figure and every ruling).** **The owner chose how much to spend**, asked once with
