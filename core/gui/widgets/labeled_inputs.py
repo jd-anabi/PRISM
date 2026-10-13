@@ -111,7 +111,9 @@ class FloatField(_NumberField):
         self.textChanged.connect(self._text_changed)
 
     def _editing_ended(self):
-        if "," in self.text():               # the comma showed while it was typed; now it is refused in words
+        # The comma showed while it was typed; now it is refused in words. A sentence another caller has set is
+        # not replaced: it marks the box until that caller takes it back.
+        if "," in self.text() and self.error() in ("", COMMA_SENTENCE):
             self.set_error(COMMA_SENTENCE)
             self._comma_told = True
 

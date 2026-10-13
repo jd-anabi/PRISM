@@ -5369,6 +5369,17 @@ def test_a_comma_in_a_decimal_field_shows_is_never_read_and_is_refused_when_edit
     field.set_error("A sentence of the page's own.")
     field.setText("65")
     assert field.error() == "A sentence of the page's own.", "nor one that has since taken the place of its own"
+    own = "A sentence of the page's own."            # one a page set BEFORE the comma stays through the comma's coming
+    field, told = FloatField(None), []               # and going: the field's own sentence is not raised over it
+    field.setToolTip("as it was")
+    field.error_changed.connect(told.append)
+    field.set_error(own)
+    QTest.keyClicks(field, "6,5")
+    _end_editing(field)
+    stood = field.error()                            # with the comma in the box and the edit ended
+    QTest.keyClick(field, Qt.Key_Backspace)
+    QTest.keyClick(field, Qt.Key_Backspace)
+    assert (stood, field.text(), field.error(), field.toolTip(), told) == (own, "6", own, own, [own])
 
 
 def test_a_field_in_error_keeps_its_size_and_shows_a_two_pixel_outline():
