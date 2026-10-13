@@ -10,26 +10,27 @@ SAME objects whichever of the two modules a test names. ONE import spelling, ``t
 would import this module a second time under another name, with a second, empty SHOWN that the guard
 never touches.
 
-``SHOWN`` holds the boxes themselves, in the order they were opened. Beside it stands one ``Asked``
-per box: the box's words, read by ``record`` at the moment the box is OPENED and never afterwards. A
-widget whose parent a test has since dropped can no longer be read, and the words a test wants are
-the ones the operator would have seen at that moment. A record is words only -- strings, tuples of
-strings and a bool; never the box, a button, an exception or a traceback -- so keeping one keeps
-nothing of a failed run alive. ``CHOOSER_CALLS`` holds one ``ChooserCall`` per file chooser the code
-under test opened.
+``SHOWN`` holds the boxes and questions themselves, in the order they were opened (a box is a
+``QMessageBox``; a question is the window's shared dialog, ``core.gui.widgets.ask.Ask``). Beside it stands
+one ``Asked`` per box or question: its words, read by ``record`` at the moment it is OPENED and never
+afterwards. A widget whose parent a test has since dropped can no longer be read, and the words a test
+wants are the ones the operator would have seen at that moment. A record is words only -- strings,
+tuples of strings and a bool; never the box, a button, an exception or a traceback -- so keeping one
+keeps nothing of a failed run alive. ``CHOOSER_CALLS`` holds one ``ChooserCall`` per file chooser the
+code under test opened.
 
-No name here is ever bound a second time: ``forget_asked()`` empties the two box lists in place. A
-test reads a box through ``asked()`` and ``all_asked()``, starts over with ``forget_asked()`` and
-answers with ``choose()``.
+No name here is ever bound a second time: ``forget_asked()`` empties the two lists in place. A
+test reads a box or a question through ``asked()`` and ``all_asked()``, starts over with
+``forget_asked()`` and answers with ``choose()``.
 """
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import NamedTuple
 
-# Every QMessageBox the code under test opened, in order: the boxes themselves, shown to nobody.
-# tests/conftest.py::_no_modal_dialogs replaces QMessageBox.exec for the session with a call of
-# record() that returns 0, and _clear_shown empties both lists before each test. Nothing but record()
-# appends to either.
+# Every QMessageBox or shared question the code under test opened, in order: the dialogs themselves,
+# shown to nobody. tests/conftest.py::_no_modal_dialogs replaces the exec of each of the two classes
+# for the session with a call of record() that returns 0, and _clear_shown empties both lists before
+# each test. Nothing but record() appends to either.
 SHOWN: list = []
 _ASKED: list = []            # one Asked per entry of SHOWN, read when that box was opened
 
@@ -92,7 +93,8 @@ def _read(box) -> Asked:
     """The words of a box that was never shown. Such a box has no button yet when its code set none
     (the toolkit adds the OK at showing), so no answer button reads as the one answer "OK"."""
     from PySide6.QtWidgets import QMessageBox
-    assert isinstance(box, QMessageBox), f"what was recorded is not a message box: {box!r}"
+    if not isinstance(box, QMessageBox):
+        return _read_question(box)
     buttons = _answer_buttons(box)
     safe = _safe_button(box, buttons)
     if buttons:
@@ -121,6 +123,27 @@ def _read(box) -> Asked:
                  beneath=box.informativeText(), items=(), detail=box.detailedText(), answers=answers,
                  default=default, safe=safe_words,
                  loses_work=any(box.buttonRole(b) == QMessageBox.DestructiveRole for b in buttons))
+
+
+def _read_question(box) -> Asked:
+    """The words of a shared question, read from the plain words it keeps and from nothing else: no widget
+    is asked, so the record is made when the question is opened and outlives it."""
+    from core.gui.widgets.ask import Ask
+    assert isinstance(box, Ask), f"what was recorded is not a message box or a question: {box!r}"
+    said = box.wording
+    if said.other is not None:
+        kind = "question"
+    elif said.marker == "err":
+        kind = "error"
+    elif said.title == "Check your inputs":
+        kind = "refusal"
+    else:
+        kind = "notice"
+    return Asked(kind=kind, title=said.title, marker=said.marker, sentence=said.sentence, beneath=said.beneath,
+                 items=said.items, detail=said.detail,
+                 answers=(said.safe,) if said.other is None else (said.other, said.safe),
+                 default=said.other if said.label is not None else said.safe, safe=said.safe,
+                 loses_work=said.loses_work)
 
 
 def record(box) -> None:
@@ -155,22 +178,24 @@ def forget_asked() -> None:
 
 
 def choose(monkeypatch, *, words: str | None = None, other: bool = False, default: bool = False,
-           during: Callable[[], None] | None = None) -> None:
-    """Answer every box from now until the test ends, or until the next ``choose``, by CLICKING a
-    button of the box itself -- the window reads an answer both from what ``exec`` returns and from
-    the clicked button, and a click sets both.
+           during: Callable[[], None] | None = None, text: str | None = None) -> None:
+    """Answer every box or question from now until the test ends, or until the next ``choose``, by
+    CLICKING a button of the dialog itself -- the window reads an answer both from what ``exec`` returns
+    and from the clicked button, and a click sets both.
 
     ``words``: the answer with these words, as ``Asked.answers`` spells them. ``other=True``: on a
-    box with exactly two answers, the one that is not the safe one. ``default=True``: the default
-    button, as Enter presses it. None of the three: nothing is clicked, which is the session guard
-    again. More than one of them is refused here, when ``choose`` is called: an exception raised
-    inside the fake would be raised under a clicked slot and never reach the test.
+    box with exactly two answers, the one that is not the safe one; on a question, its other answer.
+    ``default=True``: the default button, as Enter presses it. None of the three: nothing is clicked,
+    which is the session guard again. More than one of them is refused here, when ``choose`` is called:
+    an exception raised inside the fake would be raised under a clicked slot and never reach the test.
+    ``text``: for a question that asks for a line of text, typed into its field before the click (a
+    question without one ignores it). It is no answer, so it does not count among the three.
 
-    Every box is recorded first, then ``during`` runs (what happens while the question stands
-    open), then the click. A box that does not offer the chosen answer is left unanswered exactly
-    as the guard leaves it -- ``exec`` returns 0 and no button is clicked -- which every reader in
-    the window takes as its safe branch. Undone with the test's ``monkeypatch``, whose undo puts
-    the session guard back."""
+    Every dialog is recorded first, then ``during`` runs (what happens while the question stands
+    open), then the line is typed and the click made. A dialog that does not offer the chosen answer, or
+    whose answer is greyed, is left unanswered exactly as the guard leaves it -- ``exec`` returns 0 and
+    no button is clicked -- which every reader in the window takes as its safe branch. Undone with the
+    test's ``monkeypatch``, whose undo puts the session guard back."""
     if (words is not None) + bool(other) + bool(default) > 1:
         raise TypeError("choose() takes at most one of words=, other=True and default=True")
 
@@ -195,8 +220,31 @@ def choose(monkeypatch, *, words: str | None = None, other: bool = False, defaul
         target.click()
         return box.result()
 
+    def answer_question(dialog) -> int:
+        record(dialog)
+        if during is not None:
+            during()
+        if text is not None and dialog.field is not None:
+            dialog.field.setText(text)
+        said, target = dialog.wording, None
+        if words is not None:
+            if said.other is not None and words == said.other:
+                target = dialog.other_button
+            elif words == said.safe:
+                target = dialog.safe_button
+        elif other:
+            target = dialog.other_button
+        elif default:
+            target = dialog.safe_button if said.label is None else dialog.other_button
+        if target is None or not target.isEnabled():
+            return 0
+        target.click()
+        return dialog.result()
+
     from PySide6.QtWidgets import QMessageBox
+    from core.gui.widgets.ask import Ask
     monkeypatch.setattr(QMessageBox, "exec", answer)
+    monkeypatch.setattr(Ask, "exec", answer_question)
 
 
 class ChooserCall(NamedTuple):

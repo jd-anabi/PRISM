@@ -313,7 +313,8 @@ def test_an_unexpected_modal_is_recorded_in_shown_and_returns_zero(monkeypatch):
     reads as its ignore branch -- and _clear_shown empties the list before every test, so SHOWN[-1] is
     always the box the code under test just tried to show. A test's own answer, layered with the test's
     monkeypatch the way tests/_dialogs.py's choose() does, wins while it is installed, and the guard is
-    back the moment it is undone."""
+    back the moment it is undone. The question class stands under the same guard, through the same
+    function, so a question nobody answered is recorded and takes its safe answer."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN, qt_app
 
@@ -328,6 +329,20 @@ def test_an_unexpected_modal_is_recorded_in_shown_and_returns_zero(monkeypatch):
     assert QMessageBox().exec() == 7 and SHOWN == [box], "a test's own fake must win while installed"
     monkeypatch.undo()
     assert QMessageBox().exec() == 0 and len(SHOWN) == 2, "the session guard must be back after undo"
+    # the question class stands under the same guard
+    from PySide6.QtWidgets import QDialog
+    from core.gui.widgets.ask import Ask
+    guard = vars(QMessageBox).get("exec")
+    assert guard is not None and vars(Ask).get("exec") is guard, \
+        "the session guard does not stand on the question class: its exec would open for real"
+    question = Ask(None, "Stop training?", "The fit so far will be lost.", "Keep training", "Stop and lose the fit")
+    before = len(SHOWN)
+    assert question.exec() == 0 == QDialog.DialogCode.Rejected and SHOWN[-1] is question and len(SHOWN) == before + 1
+    assert question.result() == 0 and not question.isVisible(), "the guard showed or answered the question"
+    monkeypatch.setattr(Ask, "exec", lambda self: 7)
+    assert question.exec() == 7 and len(SHOWN) == before + 1, "a test's own fake must win while installed"
+    monkeypatch.undo()
+    assert question.exec() == 0 and len(SHOWN) == before + 2, "the session guard must be back after undo"
 
 
 def test_an_unanswered_file_chooser_is_recorded_returns_cancelled_and_fails_the_check(request):
@@ -588,6 +603,122 @@ def test_choose_clicks_the_answer_it_was_given_and_a_box_without_it_takes_its_sa
         "the session guard must be back after the undo"
 
 
+def _the_guard_stands_on_the_question():
+    """Called before anything that could reach the question's ``exec``: a real one opens a dialog that nothing
+    closes, which stalls the run where a failed assertion would only fail it."""
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui.widgets.ask import Ask
+    guard = vars(QMessageBox).get("exec")
+    assert guard is not None and vars(Ask).get("exec") is guard, (
+        "the session guard does not stand on the question class, so its exec would open for real: "
+        "tests/conftest.py::_no_modal_dialogs")
+
+
+def _the_questions_let_go():
+    """Carry out the deletion each question was asked for when it was answered. In the window the next turn
+    of the event loop does it; no loop turns under the suites, so a question would stay, hidden, to the end
+    of the run. Aimed at the dialogs this test opened and at nothing else in the process. Hands back how
+    many there were, how many of them were still there before, and how many are after."""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication
+    from shiboken6 import isValid
+    from tests._fixtures import SHOWN
+    dialogs = list(SHOWN)
+    before = sum(isValid(dialog) for dialog in dialogs)
+    for dialog in dialogs:
+        QApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
+    return len(dialogs), before, sum(isValid(dialog) for dialog in dialogs)
+
+
+def test_asked_reads_a_question_of_the_shared_class_into_the_same_record():
+    """Each way of asking and telling, through the two calls every caller uses, read into the record a
+    message box is read into. The words are kept at opening, so they outlive the dialog; and each call
+    lets go of its dialog once it is answered, which in the window the next turn of the event loop
+    carries out and here a flush aimed at these five dialogs alone."""
+    from core.gui.widgets.ask import ask, ask_text
+    from tests._fixtures import Asked, all_asked, asked, forget_asked
+
+    qt_app()
+    _the_guard_stands_on_the_question()
+    tb = "Traceback (most recent call last):\n  ...\nRuntimeError: it failed"
+    held, stays = ["the prior retrain_prior", "the posterior retrain"], "Each stays in Records and can be loaded again."
+    forget_asked()
+    assert ask(None, "Stop training?", "The fit so far will be lost.", "Keep training", "Stop and lose the fit",
+               loses_work=True, items=held, beneath=stays) is False
+    assert ask(None, "Check your inputs", "Batches must be at least 1.", "OK",
+               beneath="Change it in the Batches field.") is False
+    assert ask(None, "Error", "it failed", "OK", marker="err", detail=tb) is False
+    assert ask(None, "A run is live", "Wait for it to end.", "OK", marker="info") is False
+    assert ask_text(None, "Save as a plan", "Only what differs is written.", "Plan name", "Save this plan",
+                    text="retrain", items=["batches = 5,000"]) is None
+    assert _the_questions_let_go() == (5, 5, 0), "a call kept its dialog after it was answered"
+    bare = dict(beneath="", items=(), detail="", loses_work=False)
+    told = dict(answers=("OK",), default="OK", safe="OK")
+    assert all_asked() == [
+        Asked(kind="question", title="Stop training?", marker="warn", sentence="The fit so far will be lost.",
+              beneath=stays, items=tuple(held), detail="", answers=("Stop and lose the fit", "Keep training"),
+              default="Keep training", safe="Keep training", loses_work=True),
+        Asked(kind="refusal", title="Check your inputs", marker="warn", sentence="Batches must be at least 1.",
+              **{**bare, "beneath": "Change it in the Batches field."}, **told),
+        Asked(kind="error", title="Error", marker="err", sentence="it failed", **{**bare, "detail": tb}, **told),
+        Asked(kind="notice", title="A run is live", marker="info", sentence="Wait for it to end.", **bare, **told),
+        Asked(kind="question", title="Save as a plan", marker="info", sentence="Only what differs is written.",
+              answers=("Save this plan", "Cancel"), default="Save this plan", safe="Cancel",
+              **{**bare, "items": ("batches = 5,000",)})]
+    assert all_asked()[0].text == "\n".join([*held, stays]) and asked().text == "batches = 5,000"
+
+
+def test_choose_answers_a_question_of_the_shared_class_and_types_its_line_of_text(monkeypatch):
+    """An answer is a click on the question's own button; a line of text is typed into its field first.
+    A question that does not offer what was chosen, or whose answer is greyed, is left unanswered. At the
+    end every question these calls opened is gone."""
+    from core.gui.widgets.ask import ask, ask_text
+    from tests._fixtures import all_asked, choose, forget_asked
+
+    qt_app()
+    _the_guard_stands_on_the_question()
+
+    def question():
+        return ask(None, "Stop training?", "The fit so far will be lost.", "Keep training",
+                   "Stop and lose the fit", loses_work=True)
+
+    def telling():
+        return ask(None, "Check your inputs", "Batches must be at least 1.", "OK")
+
+    def line(start=""):
+        return ask_text(None, "Save as a plan", "Only what differs is written.", "Plan name", "Save this plan",
+                        text=start, check=lambda text: "That name is taken." if text == "retrain" else None)
+
+    counts = []
+    forget_asked()
+    choose(monkeypatch, other=True, during=lambda: counts.append(len(all_asked())))
+    assert question() is True and telling() is False, "one answer: there is no other"
+    assert line() is None, "the other answer is greyed while the line is empty"
+    assert line("retrain 2") == "retrain 2" and line("retrain") is None
+    assert counts == [1, 2, 3, 4, 5], "recorded first, then `during`, then the click"
+    choose(monkeypatch, other=True, text="  a new name  ")
+    assert line() == "a new name" and line("old name") == "a new name" and question() is True
+    choose(monkeypatch, other=True, text="retrain")
+    assert line("a free name") is None, "a line that does not hold was handed back"
+    for words, taken in (("Stop and lose the fit", True), ("Keep training", False), ("No such answer", False)):
+        choose(monkeypatch, words=words)
+        assert question() is taken and line("old name") is None, words
+    choose(monkeypatch, words="Cancel", text="a new name")
+    assert line() is None
+    choose(monkeypatch, words="Save this plan", text="a new name")
+    assert line() == "a new name" and question() is False, "a question does not offer the other form's answer"
+    choose(monkeypatch, default=True)                     # Enter
+    assert question() is False and telling() is False and line() is None and line("old name") == "old name"
+    choose(monkeypatch, text="typed and left")            # nothing chosen: the unanswered guard again
+    assert line() is None and question() is False
+    before = len(all_asked())
+    monkeypatch.undo()
+    assert question() is False and line("old name") is None and len(all_asked()) == before + 2, \
+        "the session guard must be back after the undo"
+    opened, there, left = _the_questions_let_go()
+    assert opened == there == len(all_asked()) and left == 0, "a question stayed behind after it was answered"
+
+
 def test_the_dialog_helpers_import_without_torch_or_the_program():
     """A fresh interpreter: the module that holds the record loads neither torch nor the program."""
     import subprocess
@@ -607,13 +738,14 @@ _MAY_HOLD_A_RAW_BOX = frozenset({
     "test_asked_reads_each_shape_of_box_into_one_record",
     "test_asked_fails_in_words_on_nothing_and_forgetting_empties_the_one_list",
     "test_choose_clicks_the_answer_it_was_given_and_a_box_without_it_takes_its_safe_one",
+    "_the_questions_let_go",
 })
 
 
 def _direct_box_reads(source: str) -> list[tuple[int, str, str]]:
     """``(line, top-level definition, what)`` for every place a module names the recorded list, reads
-    an attribute only a message box has, or replaces ``QMessageBox.exec``. Parsed, so a comment or a
-    docstring cannot trip it."""
+    an attribute only a message box has, or replaces the ``exec`` of a class the session guard stands on.
+    Parsed, so a comment or a docstring cannot trip it."""
     import ast
     out = []
     for top in ast.parse(source).body:
@@ -626,12 +758,12 @@ def _direct_box_reads(source: str) -> list[tuple[int, str, str]]:
             elif isinstance(node, ast.Attribute) and node.attr in _RAW_BOX_READS:
                 out.append((node.lineno, owner, node.attr))
             elif (isinstance(node, ast.Attribute) and node.attr == "exec"
-                  and isinstance(node.value, ast.Name) and node.value.id == "QMessageBox"):
-                out.append((node.lineno, owner, "QMessageBox.exec"))
+                  and isinstance(node.value, ast.Name) and node.value.id in ("QMessageBox", "Ask")):
+                out.append((node.lineno, owner, f"{node.value.id}.exec"))
             elif (isinstance(node, ast.Call) and len(node.args) >= 2
-                  and isinstance(node.args[0], ast.Name) and node.args[0].id == "QMessageBox"
+                  and isinstance(node.args[0], ast.Name) and node.args[0].id in ("QMessageBox", "Ask")
                   and isinstance(node.args[1], ast.Constant) and node.args[1].value == "exec"):
-                out.append((node.lineno, owner, 'setattr(QMessageBox, "exec")'))
+                out.append((node.lineno, owner, f'setattr({node.args[0].id}, "exec")'))
     return sorted(set(out))
 
 
@@ -644,10 +776,11 @@ def test_only_the_dialog_helpers_own_tests_hold_a_raw_message_box():
                '    assert SHOWN[-1].informativeText() == ""\n'
                'def helper():\n'
                '    """SHOWN and informativeText() in prose are not reads."""\n'
-               '    QMessageBox.exec = None\n')
+               '    QMessageBox.exec = None\n'
+               '    Ask.exec = None\n')
     assert [(line, what) for line, _owner, what in _direct_box_reads(snippet)] == [
         (1, "SHOWN"), (3, 'setattr(QMessageBox, "exec")'), (4, "SHOWN"), (4, "informativeText"),
-        (7, "QMessageBox.exec")], _direct_box_reads(snippet)
+        (7, "QMessageBox.exec"), (8, "Ask.exec")], _direct_box_reads(snippet)
     files = sorted(Path(__file__).resolve().parent.glob("test_*.py"))
     assert len(files) >= 20, f"the scan walked only {len(files)} test files"
     found = [f"{p.name}:{line} {owner}: {what}" for p in files

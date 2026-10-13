@@ -34,9 +34,9 @@ from PySide6.QtGui import (QColor, QDoubleValidator, QFocusEvent, QFont, QFontDa
                            QGuiApplication, QIcon, QImage, QIntValidator, QKeyEvent, QMouseEvent, QPainter, QPalette,
                            QRegion, QTextDocument, QWheelEvent)
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import (QApplication, QBoxLayout, QCheckBox, QComboBox, QFrame, QLineEdit, QMenu,
-                               QPlainTextEdit, QPushButton, QRadioButton, QStyle, QStyleFactory, QStyleOptionButton,
-                               QStyleOptionFocusRect, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QBoxLayout, QCheckBox, QComboBox, QDialog, QFrame, QLabel, QLineEdit,
+                               QMenu, QPlainTextEdit, QPushButton, QRadioButton, QStyle, QStyleFactory,
+                               QStyleOptionButton, QStyleOptionFocusRect, QVBoxLayout, QWidget)
 
 from core.gui import design, fonts, paint
 from core.gui.widgets.marker import Marker, painted_icon
@@ -50,7 +50,7 @@ LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.g
                 "core.gui.reported", "core.Helpers.plot_colours", "core.gui.widgets.marker", "core.gui.widgets.ruled",
                 "core.gui.widgets.rule_table", "core.gui.widgets.time_axis",
                 "core.gui.widgets.message_row", "core.gui.widgets.page",
-                "core.gui.widgets.choice")
+                "core.gui.widgets.choice", "core.gui.widgets.ask")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
 
@@ -747,7 +747,7 @@ INTER_KINDS = ("small", "body", "strong", "head", "brand", "title")
 CLASSES_WITH_A_FONT = ("QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu", "QMenuBar", "QTipLabel",
                        "QStatusBar")
 CLASSES_WITH_EQUAL_DIGITS = ("QAbstractItemView", "QHeaderView")      # where numbers stand under one another
-FIXED_FACE_CALLERS = {"screens/artifact_screen.py"}       # the record's text; each later caller joins by name
+FIXED_FACE_CALLERS = {"screens/artifact_screen.py", "widgets/ask.py"}   # the record's text, a question's full error; each later caller joins by name
 
 
 def _tabular():
@@ -4824,7 +4824,7 @@ def test_a_time_axis_and_its_key_whose_paint_fails_draw_nothing_end_their_painte
 
 
 # the page devices
-BOOK_FACE_MODULES = ("core/gui/widgets/message_row.py", "core/gui/widgets/page.py")
+BOOK_FACE_MODULES = ("core/gui/widgets/message_row.py", "core/gui/widgets/page.py", "core/gui/widgets/ask.py")
 SENTENCE_LINES = {16: 22}      # a sentence's pixel size and its line height, in a book face or, with none, the lettering's
 
 
@@ -5742,3 +5742,385 @@ def test_a_drop_down_whose_chevron_fails_is_still_drawn_ends_its_painter_and_rep
         assert caught == [(name, "ValueError: no size")]
         assert pixels(failed, box) == pixels(failed, stock), "a size that failed took the toolkit's box with it"
         assert _at(_holder_picture(holder), *tip) == design.hex_colour("ink")       # and the next paint is a whole one
+
+
+# the shared question
+A_QUESTION = ("Stop training?", "The simulations are kept. The fit so far will be lost.", "Keep training")
+A_TRACEBACK = "Traceback (most recent call last):\n  ...\nRuntimeError: it failed"
+
+
+def _question_opened(dialog):
+    """Opened without blocking, without reaching a screen and without being activated, with the list its answer
+    lands in. It is shown, because a dialog hands Enter to its default button only while that button is visible."""
+    dialog.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    dialog.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+    got = []
+    dialog.finished.connect(got.append)
+    dialog.show()
+    QApplication.processEvents()
+    return dialog, got
+
+
+def _question_closed(dialog):
+    """Closed and deleted now. A modal dialog left open, or one only asked to delete itself later, would stay
+    for every test that runs after this one."""
+    dialog.close()
+    _gone(dialog)
+
+
+def _question_key(target, key):
+    for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+        QApplication.sendEvent(target, QKeyEvent(kind, key, Qt.KeyboardModifier.NoModifier,
+                                                 " " if key == Qt.Key.Key_Space else ""))
+    QApplication.processEvents()
+
+
+def _question_focus(old, new):
+    """What the Tab key does to two controls: the focus leaves one and arrives at the other."""
+    QApplication.sendEvent(old, QFocusEvent(QEvent.Type.FocusOut, Qt.FocusReason.TabFocusReason))
+    QApplication.sendEvent(new, QFocusEvent(QEvent.Type.FocusIn, Qt.FocusReason.TabFocusReason))
+    QApplication.processEvents()
+
+
+def _in_question(widget):
+    """Where a control of a question stands, from the question's own top left corner."""
+    return widget.mapTo(widget.window(), QPoint(0, 0))
+
+
+def test_a_question_takes_enter_escape_and_its_close_button_as_the_safe_answer():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.ask import Ask
+    keys = (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Escape, Qt.Key.Key_Space, None)   # None: the frame's close
+    for other, loses_work in (("Stop and lose the fit", True), ("Go on", False), (None, False)):
+        for on_other in ((False, True) if other else (False,)):
+            for key in keys:
+                dialog, got = _question_opened(Ask(None, *A_QUESTION, other, loses_work=loses_work))
+                try:
+                    if on_other:
+                        _question_focus(dialog.safe_button, dialog.other_button)
+                    assert dialog.safe_button.isDefault(), "the default left the safe answer when the focus moved"
+                    if key is None:
+                        dialog.close()
+                    else:
+                        _question_key(dialog.other_button if on_other else dialog.safe_button, key)
+                    pressed_it = on_other and key == Qt.Key.Key_Space      # the space bar presses what has the focus
+                    assert got == [1 if pressed_it else 0], (other, on_other, key, got)
+                finally:
+                    _question_closed(dialog)
+    assert Ask(None, *A_QUESTION).other_button is None, "with no other answer a question tells: one button"
+
+
+def test_a_question_is_a_modal_dialog_set_out_by_the_table_and_grows_with_the_text_size():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.ask import Ask
+    from core.gui.widgets.page import Sentence
+    assert design.DIALOG == {"w": 448, "pad": (20, 16, 20, 18), "gap": 16, "marker": 24, "marker_gap": 14,
+                             "marker_drop": 1}
+    host = QWidget()
+    for factor, wide in ((1.0, 448), (1.25, 560)):
+        with text_size(factor):
+            left, top, right, bottom, mark, gap, drop = (design.scaled(n) for n in (20, 16, 20, 18, 24, 14, 1))
+            dialog, _got = _question_opened(Ask(host, *A_QUESTION, "Go on"))
+            try:
+                marker, sentence, safe, other = dialog.marker, dialog.sentence, dialog.safe_button, dialog.other_button
+                assert dialog.width() == wide == design.scaled(448), (factor, dialog.width())
+                at = _in_question(marker)
+                assert (at.x(), at.y(), marker.width(), marker.height()) == (left, top + drop, mark, mark)
+                assert isinstance(sentence, Sentence) and sentence.plain_text() == A_QUESTION[1]
+                assert (_in_question(sentence).x(), _in_question(sentence).y()) == (left + mark + gap, top)
+                assert _in_question(sentence).x() + sentence.width() == wide - right
+                assert _in_question(safe).x() + safe.width() == wide - right and _in_question(other).x() == left
+                assert _in_question(safe).y() + safe.height() == dialog.height() - bottom
+                flags = dialog.windowFlags()
+                assert isinstance(dialog, QDialog) and dialog.windowTitle() == "Stop training?" and dialog.isModal()
+                assert flags & Qt.WindowType.WindowTitleHint and flags & Qt.WindowType.WindowCloseButtonHint
+                assert not flags & Qt.WindowType.FramelessWindowHint and dialog.parent() is host
+                assert dialog.windowModality() == Qt.WindowModality.WindowModal
+            finally:
+                _question_closed(dialog)
+    assert Ask(None, *A_QUESTION).windowModality() == Qt.WindowModality.ApplicationModal
+
+
+def test_only_an_answer_that_loses_work_is_drawn_as_one():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.ask import Ask
+    assert design.text_scale() == 1.0, "a text factor leaked into this suite"
+    plain, risky = Ask(None, *A_QUESTION, "Go on"), Ask(None, *A_QUESTION, "Stop and lose the fit", loses_work=True)
+    for dialog in (plain, risky):
+        assert dialog.property("cls") == "ask" and dialog.safe_button.property("cls") == "primary"
+        assert not dialog.other_button.autoDefault(), "an answer that takes the default with the focus takes Enter too"
+    assert plain.other_button.property("cls") is None and plain.other_button.icon().isNull()
+    assert risky.other_button.property("cls") == "danger" and not risky.other_button.icon().isNull()
+    assert risky.other_button.iconSize() == QSize(16 + 4, 16)
+    for kind in ("warn", "err", "info"):
+        marked = Ask(None, *A_QUESTION, marker=kind)          # held in a name while its marker is read
+        assert marked.marker.kind == kind == marked.wording.marker
+    for refused in (dict(marker="done"), dict(label="Plan name")):          # no such marker; a line of text and no answer for it
+        with pytest.raises(ValueError):
+            Ask(None, *A_QUESTION, **refused)
+
+
+def test_nine_items_scroll_inside_the_question_and_none_is_cut():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.ask import Ask
+    from core.gui.widgets.page import Sentence
+    assert design.text_scale() == 1.0, "a text factor leaked into this suite"
+    long = "a simulation set whose name goes on for longer than one line of the question can hold, " * 2
+    for count in (1, 8, 9, 14):
+        items = [f"simulation set number {n}" for n in range(count - 1)] + [long]
+        dialog, got = _question_opened(Ask(None, *A_QUESTION, "Go on", items=items, beneath="Each stays in Records."))
+        try:
+            area = dialog.items_area
+            rows, bar, view = area.widget().findChildren(Sentence), area.verticalScrollBar(), area.viewport()
+            assert area.frameShape() == QFrame.Shape.NoFrame, "the list kept the frame it is born with"
+            line = SENTENCE_LINES[rows[0].font().pixelSize()]      # 22, in a book face or in the lettering at its size
+            assert [row.plain_text() for row in rows] == items, "one item to a line, in order, as written"
+            heights = [row.height() for row in rows]
+            assert heights == [row.heightForWidth(row.width()) for row in rows], "an item is cut short"
+            assert all(row.minimumWidth() == row.maximumWidth() == row.width() for row in rows), "an item is not held to its width"
+            assert all(row.x() + row.width() <= view.width() for row in rows), "an item runs under the scroll bar"
+            assert area.horizontalScrollBar().maximum() == 0 and heights[-1] >= 2 * line and set(heights[:-1]) <= {line}
+            assert rows[-1].y() + heights[-1] == area.widget().height() == sum(heights)
+            assert area.width() == dialog.sentence.width() and dialog.width() == 448
+            assert not view.autoFillBackground() and not area.widget().autoFillBackground()
+            under_the_sentence = _in_question(dialog.sentence).y() + dialog.sentence.height() + 12
+            assert _in_question(area).y() == under_the_sentence, "the list stands 12 under the sentence"
+            assert _in_question(dialog.beneath).y() == under_the_sentence + area.height() + 12, "and the closing lines 12 under it"
+            if count <= 8:
+                assert area.height() == sum(heights) and bar.maximum() == 0
+                assert area.focusPolicy() == Qt.FocusPolicy.NoFocus
+            else:
+                assert area.height() == 8 * line and bar.maximum() == sum(heights) - area.height()
+                assert area.focusPolicy() == Qt.FocusPolicy.TabFocus and area.property("ring") == "inset"
+                _question_key(area, Qt.Key.Key_Down)
+                assert got == [], "an arrow key in the list answered the question"
+                _question_key(area, Qt.Key.Key_Return)
+                assert got == [0], "Enter with the list in focus did not mean the safe answer"
+        finally:
+            _question_closed(dialog)
+    assert Ask(None, *A_QUESTION).items_area is None and Ask(None, *A_QUESTION, items=[]).items_area is None
+
+
+def test_the_full_error_opens_under_the_answers_in_the_fixed_width_face():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.ask import Ask
+    assert design.text_scale() == 1.0, "a text factor leaked into this suite"
+    dialog, got = _question_opened(Ask(None, "Error", "The prior could not be built.", "OK", marker="err",
+                                       beneath="Nothing was written.", detail=A_TRACEBACK))
+    try:
+        link, box, safe = dialog.detail_link, dialog.detail_box, dialog.safe_button
+        assert link.text() == "Show the full error" and link.property("cls") == "link"
+        assert not box.isVisible() and box.isReadOnly() and box.toPlainText() == A_TRACEBACK
+        assert box.font().families() == fonts.fixed().families() and box.font().pixelSize() == 14
+        assert box.lineWrapMode() == QPlainTextEdit.LineWrapMode.NoWrap
+        assert dialog.beneath.plain_text() == "Nothing was written."
+        assert design.hex_colour("ink_2") in dialog.beneath.text()
+        for words in (dialog.sentence, dialog.beneath):       # each keeps its height in a question its own words make wider
+            assert words.minimumHeight() == words.heightForWidth(words.width()), "a wider question would cut its words"
+        low = dialog.height()
+        _question_focus(safe, link)
+        assert safe.isDefault() and not link.isDefault(), "the link took the default from the safe answer"
+        _question_key(link, Qt.Key.Key_Space)
+        assert got == [] and box.isVisible() and not link.isVisible()
+        assert dialog.focusWidget() is box, "the focus did not go to the full error when it opened"
+        assert dialog.height() > low and dialog.width() == 448 and box.height() == 12 * 20
+        assert _in_question(box).y() == _in_question(safe).y() + safe.height() + 16
+        _question_key(box, Qt.Key.Key_Return)
+        assert got == [0], "Enter in the full error did not mean the safe answer"
+    finally:
+        _question_closed(dialog)
+    bare = Ask(None, *A_QUESTION, beneath="", detail="")
+    assert (bare.detail_link, bare.detail_box, bare.beneath, bare.field, bare.field_message) == (None,) * 5
+    host = QWidget()                              # under the sheet, which gives a text box a least height of its own
+    host.setStyleSheet(design.build_qss(False))
+    dialog, _got = _question_opened(Ask(host, "Error", "The prior could not be built.", "OK", marker="err", detail=A_TRACEBACK))
+    try:
+        _question_key(dialog.detail_link, Qt.Key.Key_Space)
+        assert dialog.detail_box.height() == 12 * 20, "the sheet took the height of the full error"
+    finally:
+        _question_closed(dialog)
+
+
+def test_a_question_that_asks_for_a_line_of_text_takes_enter_only_once_the_text_holds():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.ask import Ask
+    said, taken = [], "A plan named retrain already exists. Choose another name."
+
+    def check(text):
+        said.append(text)
+        return taken if text == "retrain" else None
+
+    def form(text="", judge=check):
+        return _question_opened(Ask(None, "Save as a plan", "Only the settings that differ from their usual values are written.",
+                                    "Cancel", "Save this plan", marker="info", label="Plan name", text=text, check=judge))
+
+    def enter_on_cancel(asking):
+        _question_focus(asking.field, asking.safe_button)
+        _question_key(asking.safe_button, Qt.Key.Key_Return)
+
+    dialog, got = form()
+    try:
+        field, save, cancel, wrong = dialog.field, dialog.other_button, dialog.safe_button, dialog.field_message
+        assert save.isDefault() and save.property("cls") == "primary" and cancel.property("cls") is None
+        assert not save.isEnabled() and not wrong.isVisible() and said == []
+        assert _in_question(field).y() >= _in_question(dialog.sentence).y() + dialog.sentence.height() + 12
+        assert _in_question(field).x() > _in_question(dialog.sentence).x(), "the label stands to the left of its field"
+        _question_key(field, Qt.Key.Key_Return)
+        assert got == [] and dialog.isVisible(), "Enter threw an empty line away"
+        field.setText("   ")
+        assert not save.isEnabled() and said == [], "a blank line was judged"
+        field.setText(" retrain ")
+        assert said == ["retrain"] and not save.isEnabled() and field.property("state") == "error"
+        assert wrong.isVisible() and wrong.text() == taken and wrong.textFormat() == Qt.TextFormat.PlainText
+        _question_key(field, Qt.Key.Key_Return)
+        _question_key(field, Qt.Key.Key_Enter)
+        assert got == [] and dialog.answer_text is None, "Enter took a line that does not hold"
+        field.setText(" retrain 2 ")
+        assert save.isEnabled() and field.property("state") != "error" and not wrong.isVisible()
+        _question_key(field, Qt.Key.Key_Return)
+        assert got == [1] and dialog.answer_text == "retrain 2"
+    finally:
+        _question_closed(dialog)
+    for leave in (lambda asking: _question_key(asking.field, Qt.Key.Key_Escape), lambda asking: asking.close(),
+                  lambda asking: _question_key(asking.safe_button, Qt.Key.Key_Space), enter_on_cancel):
+        dialog, got = form("old name")
+        try:
+            assert dialog.other_button.isEnabled() and dialog.field.text() == "old name"
+            leave(dialog)
+            assert got == [0] and dialog.answer_text is None
+        finally:
+            _question_closed(dialog)
+    dialog, got = form(judge=None)                                # with nothing to judge it, any line that is not blank holds
+    try:
+        assert not dialog.other_button.isEnabled()
+        dialog.field.setText("anything")
+        _question_key(dialog.field, Qt.Key.Key_Return)
+        assert got == [1] and dialog.answer_text == "anything"
+    finally:
+        _question_closed(dialog)
+
+    def failing(text):                                            # a rule that fails on one line and passes every other
+        if text == "retrain 3":
+            raise ValueError("the rule failed")
+
+    with pytest.MonkeyPatch.context() as patch:                   # the hook that was found is put back when the block ends
+        heard = _heard_by_the_hook(patch)
+        dialog, got = form(judge=failing)
+        try:
+            dialog.field.setText("retrain 2")
+            assert dialog.other_button.isEnabled() and heard == [], "a line that holds did not enable the answer"
+            dialog.field.setText("retrain 3")
+            assert heard == ["ValueError: the rule failed"], "what the rule raised did not reach the hook of last resort"
+            assert not dialog.other_button.isEnabled(), "the answer stayed enabled for a line its rule never passed"
+            _question_key(dialog.field, Qt.Key.Key_Return)
+            assert got == [] and dialog.isVisible() and dialog.answer_text is None, "Enter took a line its rule never passed"
+        finally:
+            _question_closed(dialog)
+
+
+def test_a_question_shows_its_words_as_written():
+    """A record's name may hold a brace, an ampersand or an angle bracket. No text handed to a question is read
+    as markup: three of its places are the sentence label, which shows what it is given; the full error is plain
+    console text; the label of the line of text and what is wrong with the line are plain-text labels. A button,
+    and a label that names a field, read a single ampersand in their words as the mark of an access key: they
+    leave it out and take the key. So the two answers and that label are handed their words with each ampersand
+    doubled, which shows one and takes no key, and the question keeps the words as its caller wrote them."""
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.ask import Ask
+    from core.gui.widgets.page import Sentence
+    odd = 'Set {name} to <b>3 & 4</b>, not {0}; "two  spaces".'
+    telling = Ask(None, "Error", odd, "OK", marker="err", items=[odd, "a second item"], beneath=odd,
+                  detail=odd + "\n  " + odd)
+    for label in (telling.sentence, telling.items_area.widget().findChildren(Sentence)[0], telling.beneath):
+        assert isinstance(label, Sentence) and label.plain_text() == odd, "a text was changed on its way to its label"
+        assert "<b>" not in label.text() and "&lt;b&gt;" in label.text(), "a text was read as markup"
+    assert telling.detail_box.toPlainText() == odd + "\n  " + odd and telling.wording.sentence == odd
+    answers = ("Keep & close", "Stop & lose <it>")
+    asking = Ask(None, "Save as a plan", odd, *answers, marker="info", label=odd, text=odd, check=lambda text: odd)
+    for button, words in zip((asking.safe_button, asking.other_button), answers):
+        assert button.text() == words.replace("&", "&&"), "an answer would be shown without its ampersand"
+        assert button.shortcut().isEmpty(), "an answer took an access key from its words"
+    assert (asking.wording.safe, asking.wording.other, asking.wording.label) == (*answers, odd)
+    named = [label for label in asking.findChildren(QLabel) if label.buddy() is asking.field]
+    assert [label.text() for label in named] == [odd.replace("&", "&&")], "one label names the field, shown as written"
+    assert named[0].textFormat() == Qt.TextFormat.PlainText
+    assert asking.field.text() == odd and asking.field_message.text() == odd
+    assert asking.field_message.textFormat() == Qt.TextFormat.PlainText
+
+
+def test_a_long_sentence_and_a_long_list_keep_the_question_inside_a_low_screen():
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.ask import Ask
+    from core.gui.widgets.page import Sentence
+    assert design.text_scale() == 1.0, "a text factor leaked into this suite"
+    long = "word " * 119 + "word."
+    assert len(long) == 600
+    items = [f"simulation set number {n}" for n in range(200)]
+    dialog, _got = _question_opened(Ask(None, "Delete 200 simulation sets?", long, "Keep them", "Delete them",
+                                        loses_work=True, items=items, beneath="Each stays in Records."))
+    try:
+        sentence, area = dialog.sentence, dialog.items_area
+        line = SENTENCE_LINES[sentence.font().pixelSize()]
+        assert dialog.width() == 448 and sentence.width() == area.width(), "long words widened the question"
+        assert sentence.height() == sentence.heightForWidth(sentence.width()) >= 10 * line, "the sentence is cut short"
+        assert len(area.widget().findChildren(Sentence)) == 200 and area.height() == 8 * line
+        room = 768 - 40 - 40          # a laptop's screen, less its task bar and the frame's own title
+        assert dialog.height() <= room, f"the question is {dialog.height()} high: more than a low screen shows"
+    finally:
+        _question_closed(dialog)
+
+
+def test_the_question_opens_only_through_the_call_the_suites_stand_on():
+    """The suites replace the question class's own ``exec`` for the whole session, because a dialog nobody
+    answers would otherwise open and never close. So the module opens its dialog in exactly two places, each
+    ``dialog.exec()`` looked up on the dialog when it runs; the class defines no opening call of its own; the
+    dialog is never told to delete itself on closing, since its answer is read after it has closed; and the
+    module costs the toolkit and the look's own modules, nothing that names a control or loads the engine."""
+    from core.gui.widgets import ask as module
+    opening, found, imported = ("exec", "exec_", "open"), [], set()
+    for top in ast.parse(Path(module.__file__).read_text(encoding="utf-8")).body:
+        for node in ast.walk(top):
+            if isinstance(node, ast.Attribute) and node.attr in opening + ("WA_DeleteOnClose",):
+                found.append((getattr(top, "name", ""), ast.unparse(node)))
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in opening:
+                found.append((getattr(top, "name", ""), f"def {node.name}"))
+            elif isinstance(node, ast.Import):
+                imported |= {alias.name for alias in node.names}
+            elif isinstance(node, ast.ImportFrom) and not node.level:
+                imported.add(node.module)
+            elif isinstance(node, ast.ImportFrom):
+                base = ("core.gui.widgets", "core.gui")[node.level - 1]
+                imported |= {f"{base}.{node.module}"} if node.module else {f"{base}.{alias.name}" for alias in node.names}
+    assert found == [("ask", "dialog.exec"), ("ask_text", "dialog.exec")], found
+    assert imported <= {"collections.abc", "dataclasses", "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
+                        "core.gui.design", "core.gui.fonts", "core.gui.style", "core.gui.widgets.marker",
+                        "core.gui.widgets.page"}, imported
+    assert (module.CANCEL, module.FULL_ERROR, module.ITEMS_SHOWN, module.DETAIL_LINES, module.ASK_MARKERS) == (
+        "Cancel", "Show the full error", 8, 12, ("warn", "err", "info"))
+
+
+@pytest.mark.display
+def test_the_question_opens_with_the_systems_title_bar_on_a_real_display():
+    """Needs QT_QPA_PLATFORM=windows (the root conftest defaults to offscreen, where this is skipped). Neither
+    window reaches the screen and neither is activated."""
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.ask import Ask
+    if QGuiApplication.platformName() != "windows":
+        pytest.skip(f"needs the real windows platform, got {QGuiApplication.platformName()!r}")
+    host = QWidget()
+    host.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    host.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+    host.show()
+    try:
+        dialog, _got = _question_opened(Ask(host, *A_QUESTION, "Stop and lose the fit", loses_work=True))
+        try:
+            frame = dialog.windowHandle().frameMargins()
+            assert frame.top() > max(frame.left(), frame.bottom()), \
+                f"no title bar round the question: {(frame.left(), frame.top(), frame.right(), frame.bottom())}"
+            assert dialog.windowHandle().transientParent() == host.windowHandle()
+            assert dialog.isModal() and dialog.windowModality() == Qt.WindowModality.WindowModal
+        finally:
+            _question_closed(dialog)
+    finally:
+        host.close()
+        _gone(host)
