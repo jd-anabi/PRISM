@@ -5839,6 +5839,16 @@ def test_a_question_is_a_modal_dialog_set_out_by_the_table_and_grows_with_the_te
             finally:
                 _question_closed(dialog)
     assert Ask(None, *A_QUESTION).windowModality() == Qt.WindowModality.ApplicationModal
+    with text_size(1.0):                          # two answers that need more room than a question's usual width has
+        dialog, _got = _question_opened(Ask(None, "Delete?", "They cannot be brought back.",
+                                            "Keep all of the simulation sets as they are",
+                                            "Delete every one of the simulation sets now", loses_work=True,
+                                            items=["set one"], beneath="Each stays in Records."))
+        try:
+            places = [_in_question(part).x() for part in (dialog.marker, dialog.sentence, dialog.items_area, dialog.beneath)]
+            assert (dialog.width() > 448, places) == (True, [20, 58, 58, 58]), "a wider question moved its marker or its text"
+        finally:
+            _question_closed(dialog)
 
 
 def test_only_an_answer_that_loses_work_is_drawn_as_one():

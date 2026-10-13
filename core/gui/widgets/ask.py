@@ -118,6 +118,7 @@ class Ask(QDialog):
             words.addWidget(self.detail_link, 0, Qt.AlignmentFlag.AlignLeft)
         words.addStretch(1)
         body.addLayout(words)
+        body.addStretch(1)              # a question its answers make wider keeps its marker and its text at the left
         outer.addLayout(body)
 
         answers = QHBoxLayout()
