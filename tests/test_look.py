@@ -5193,9 +5193,10 @@ def _heard_by_the_hook(monkeypatch):
     return heard
 
 
-def test_typing_20480000_into_a_grouped_whole_number_field_shows_20_480_000():
+def test_typing_20480000_into_a_grouped_whole_number_field_shows_20_480_000(monkeypatch):
     QApplication.instance() or QApplication([])
     from core.gui.widgets.labeled_inputs import IntField
+    heard = _heard_by_the_hook(monkeypatch)          # what a method that hears a key raises goes to the hook alone
     field, seen = IntField(grouped=True), []
     for digit in "20480000":
         QTest.keyClicks(field, digit)
@@ -5215,11 +5216,13 @@ def test_typing_20480000_into_a_grouped_whole_number_field_shows_20_480_000():
             QTest.keyClick(first, key)
             QTest.keyClicks(first, "8")                                  # and another typed: no zero went with it
             assert (first.text(), first.cursorPosition()) == (meant, 1), (number, key)
+    assert heard == [], "a method that hears an edit raised"
 
 
-def test_a_whole_number_field_takes_digits_and_a_leading_minus_and_nothing_else():
+def test_a_whole_number_field_takes_digits_and_a_leading_minus_and_nothing_else(monkeypatch):
     QApplication.instance() or QApplication([])
     from core.gui.widgets.labeled_inputs import IntField
+    heard = _heard_by_the_hook(monkeypatch)          # what a method that hears a key raises goes to the hook alone
     for grouped in (False, True):
         for keys, shown, value in (
                 ("-3", "-3", -3), ("-20480000", "-20,480,000" if grouped else "-20480000", -20480000),
@@ -5230,12 +5233,19 @@ def test_a_whole_number_field_takes_digits_and_a_leading_minus_and_nothing_else(
             field = IntField(grouped=grouped)
             QTest.keyClicks(field, keys)
             assert (field.text(), field.value_or_none()) == (shown, value), (keys, grouped)
+            for leave in (True, False):              # the edit ended, by the focus leaving and then by Enter: nothing
+                _end_editing(field, leave)           # is rewritten and nothing is said
+                assert (field.text(), field.value_or_none(), field.error()) == (shown, value, ""), (keys, grouped, leave)
         field = IntField(grouped=grouped)
         field.insert("1.5")                          # what a paste does: refused whole, never thinned to 15
         assert field.text() == ""
         field.insert("20,480,000")
         assert (field.text(), field.value()) == ("20,480,000" if grouped else "20480000", 20480000)
         assert not isinstance(field.validator(), QIntValidator)
+        field.selectAll()                            # a box emptied by a key: nothing is left to group
+        QTest.keyClick(field, Qt.Key_Delete)
+        assert (field.text(), field.value_or_none()) == ("", None), grouped
+    assert heard == [], "a method that hears an edit raised"
 
 
 def test_a_whole_number_set_from_code_is_grouped_and_other_text_is_shown_as_given():
@@ -5252,6 +5262,9 @@ def test_a_whole_number_set_from_code_is_grouped_and_other_text_is_shown_as_give
                 ("1.5", "1.5", None), ("-", "-", None), ("", "", None), (None, "", None)):
             built = IntField(given, grouped=grouped)
             assert (built.text(), built.value_or_none()) == (shown, value), (given, grouped)
+            for leave in (True, False):              # nor does ending an edit rewrite a text set from code
+                _end_editing(built, leave)
+                assert (built.text(), built.value_or_none(), built.error()) == (shown, value, ""), (given, grouped, leave)
             later = IntField(grouped=grouped)
             later.setText("" if given is None else str(given))
             assert (later.text(), later.value_or_none()) == (shown, value), (given, grouped)
@@ -5261,9 +5274,10 @@ def test_a_whole_number_set_from_code_is_grouped_and_other_text_is_shown_as_give
     assert IntField("1.5", grouped=True).plain_text() == "1.5" and IntField("007").plain_text() == "007"
 
 
-def test_backspace_and_delete_step_over_a_grouping_comma():
+def test_backspace_and_delete_step_over_a_grouping_comma(monkeypatch):
     QApplication.instance() or QApplication([])
     from core.gui.widgets.labeled_inputs import IntField
+    heard = _heard_by_the_hook(monkeypatch)          # what a method that hears a key raises goes to the hook alone
     for caret, key, first, second in ((2, Qt.Key_Backspace, ("2,048", 1), ("048", 0)),      # the zero stays
                                       (1, Qt.Key_Delete, ("2,048", 2), ("248", 1))):
         field = IntField(2048, grouped=True)
@@ -5272,6 +5286,7 @@ def test_backspace_and_delete_step_over_a_grouping_comma():
         assert (field.text(), field.cursorPosition()) == first, "the caret steps over the comma and no digit goes"
         QTest.keyClick(field, key)
         assert (field.text(), field.cursorPosition()) == second
+    assert heard == [], "a method that hears an edit raised"
 
 
 def test_no_text_makes_a_whole_number_field_raise_whether_typed_pasted_set_or_restored(monkeypatch, tmp_path):
@@ -5316,9 +5331,10 @@ def test_no_text_makes_a_whole_number_field_raise_whether_typed_pasted_set_or_re
         sys.set_int_max_str_digits(was)
 
 
-def test_a_decimal_field_reads_a_point_whatever_the_regional_setting():
+def test_a_decimal_field_reads_a_point_whatever_the_regional_setting(monkeypatch):
     QApplication.instance() or QApplication([])
     from core.gui.widgets.labeled_inputs import FloatField
+    heard = _heard_by_the_hook(monkeypatch)          # what a method that hears a key raises goes to the hook alone
     was = QLocale()
     QLocale.setDefault(QLocale(QLocale.German, QLocale.Germany))      # a comma for the decimal sign
     try:
@@ -5338,11 +5354,13 @@ def test_a_decimal_field_reads_a_point_whatever_the_regional_setting():
     assert not isinstance(FloatField(1.0).validator(), QDoubleValidator)
     assert [FloatField(v).text() for v in (None, 0.0, 2.5, "0.33")] == ["", "0.0", "2.5", "0.33"]
     assert (FloatField(None).value(), FloatField(None).value_or_none()) == (0.0, None)
+    assert heard == [], "a method that hears an edit raised"
 
 
-def test_a_comma_in_a_decimal_field_shows_is_never_read_and_is_refused_when_editing_ends():
+def test_a_comma_in_a_decimal_field_shows_is_never_read_and_is_refused_when_editing_ends(monkeypatch):
     QApplication.instance() or QApplication([])
     from core.gui.widgets.labeled_inputs import COMMA_SENTENCE, FloatField
+    heard = _heard_by_the_hook(monkeypatch)          # what a method that hears a key raises goes to the hook alone
     assert COMMA_SENTENCE == "Use a point as the decimal sign."
     for leave in (False, True):
         field, told = FloatField(None), []
@@ -5355,9 +5373,13 @@ def test_a_comma_in_a_decimal_field_shows_is_never_read_and_is_refused_when_edit
         assert (field.value_or_none(), field.value()) == (None, 0.0)
         assert (field.error(), field.property("state"), field.toolTip()) == (COMMA_SENTENCE, "error", COMMA_SENTENCE)
         assert field.accessibleDescription() == COMMA_SENTENCE and told == [COMMA_SENTENCE]
+        _end_editing(field)                              # ended once more, by Enter: nothing is said a second time
+        assert told == [COMMA_SENTENCE]
         QTest.keyClick(field, Qt.Key_Backspace)
+        assert (field.text(), field.error()) == ("6,", COMMA_SENTENCE), "the comma still stands"
         QTest.keyClick(field, Qt.Key_Backspace)
         assert (field.text(), field.error(), field.property("state"), field.toolTip()) == ("6", "", "", "as it was")
+        assert field.accessibleDescription() == ""
         assert told == [COMMA_SENTENCE, ""]
     field = FloatField(0.05)
     field.set_error("A sentence of the page's own.")
@@ -5369,6 +5391,8 @@ def test_a_comma_in_a_decimal_field_shows_is_never_read_and_is_refused_when_edit
     field.set_error("A sentence of the page's own.")
     field.setText("65")
     assert field.error() == "A sentence of the page's own.", "nor one that has since taken the place of its own"
+    field.set_error("")                              # the tool tip that comes back is the one from before the first error
+    assert (field.error(), field.toolTip(), field.accessibleDescription()) == ("", "", "")
     own = "A sentence of the page's own."            # one a page set BEFORE the comma stays through the comma's coming
     field, told = FloatField(None), []               # and going: the field's own sentence is not raised over it
     field.setToolTip("as it was")
@@ -5380,6 +5404,7 @@ def test_a_comma_in_a_decimal_field_shows_is_never_read_and_is_refused_when_edit
     QTest.keyClick(field, Qt.Key_Backspace)
     QTest.keyClick(field, Qt.Key_Backspace)
     assert (stood, field.text(), field.error(), field.toolTip(), told) == (own, "6", own, own, [own])
+    assert heard == [], "a method that hears an edit raised"
 
 
 def test_a_field_in_error_keeps_its_size_and_shows_a_two_pixel_outline():
@@ -5420,7 +5445,8 @@ def test_the_drop_down_paints_its_own_chevron_eight_inside_its_outline(monkeypat
         real(painter, kind, box, disabled)
 
     monkeypatch.setattr(choice, "paint_marker", recorded)
-    for dark, (factor, m, inset) in itertools.product((False, True), ((1.0, 16, 8), (1.25, 20, 10))):
+    # three text sizes: at the third a length of 1 scales to 2, which the outline's 1 must not
+    for dark, (factor, m, inset) in itertools.product((False, True), ((1.0, 16, 8), (1.25, 20, 10), (1.5, 24, 12))):
         with theme(dark), text_size(factor):             # the box and its inset grow with the text
             assert (design.scaled(design.SIZE["marker"]), design.scaled(design.SIZE["combo_pad"][1])) == (m, inset)
             ground, ink = (QColor(design.hex_colour(name, dark)).lightness() for name in ("field", "ink"))
