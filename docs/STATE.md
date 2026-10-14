@@ -1,10 +1,12 @@
 # PRISM — state
 
-**Last updated:** 2026-10-14, evening (THE PLAN OF STAGE 2, THE SHELL, IS WRITTEN AND COMMITTED, AWAITING THE OWNER'S
-APPROVAL: `docs/superpowers/plans/2026-10-14-window-redesign-stage-2.md`, ten building tasks and two controller tasks,
+**Last updated:** 2026-10-14, evening (THE PLAN OF STAGE 2, THE SHELL, IS WRITTEN, COMMITTED (`e90832e`) AND APPROVED BY
+THE OWNER the same evening ("The plan is approved. Write the hand-off prompt so the build starts with Task 0 in a new
+chat."): `docs/superpowers/plans/2026-10-14-window-redesign-stage-2.md`, ten building tasks and two controller tasks,
 departures 54 to 78 in the design's section 8 and the plan's table; nothing built; the paragraph "THE PLAN OF STAGE 2"
-below is this session's record. NEXT: the owner's approval (a change asked for is its own commit), then Task 0 and the
-build, then the separate design for saving the fit. What follows in this parenthesis is the head as the chat of 14 October
+below is this session's record. NEXT, IN A NEW CHAT: the build of stage 2 from Task 0, from
+`docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-build.md`; after its exit, the separate design for saving
+the fit. What follows in this parenthesis is the head as the chat of 14 October
 left it: STAGE 1 OF THE WINDOW REDESIGN IS BUILT AND ITS EXIT IS PASSED: `8b2ca92`..`f9c6899`, 100
 commits, then the exit's documents; the fast gate of record on a quiet machine 1407 passed, 4 skipped, 5 deselected in
 16 min 9 s; the display-marked run 4 passed; the slow set 5 passed in 1 h 6 min 5 s; nothing pushed after `d8828f9`; the
@@ -91,7 +93,12 @@ once; 11 the exit. Expected honestly: sixteen to twenty tasks by the end, 35 to 
 allowance in the wrong task, a process-wide value no test put back, one key table doing two jobs, Home not re-read when
 records change, a test that would trip the builders' scan, the Records kind lost when an adapter goes, the look's helpers
 out of reach): all folded in before the plan was handed over, with rows 76 to 78. No engine change in the stage; no slow
-set and no card gate owed; no row for the owner written (row 61).
+set and no card gate owed; no row for the owner written (row 61). **The owner approved the plan** the same evening, nothing
+struck, and asked for the build to start with Task 0 in a new chat; the hand-off prompt is
+`docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-build.md` (checked by one reader on Sonnet: 17 findings, all
+folded, among them that the owner had pushed up to `0747a4c` on 14 October, so only `e90832e` and later are unpushed; the
+ledger's table of deviations now holds rows 54 to 78 too). What this session cost in background agents: about 2.3
+million tokens (the three readers 1.47, the cross-check 0.47, the sketches 0.15, the prompt's check 0.25).
 
 **TASK 19q (2026-10-14, the same chat; the ledger's entries from "Task 19q (the owner's five answers at the exit)" on
 have every figure and ruling).** The owner's five answers at stage 1's exit, built as one small task before stage 2's
