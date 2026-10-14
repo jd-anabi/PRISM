@@ -1,10 +1,12 @@
 # PRISM — state
 
-**Last updated:** 2026-10-13 (THE CHAT OF 13 OCTOBER IS AT WORK, started from the owner's pasted prompt of the evening
-of 12 October: TASK 10r, THE FOCUS RING ON A CONTROL SCROLLED INTO SIGHT, IS COMPLETE after one fix round (gate green on
+**Last updated:** 2026-10-13, evening (THE BUILD IS HANDED TO A NEW CHAT FOR STAGE 1'S EXIT, which continues from
+`docs/superpowers/prompts/2026-10-13-window-redesign-stage-1-exit.md`, the paragraph "THE CHAT OF 13 OCTOBER" below and
+the ledger: TASK 10r, THE FOCUS RING ON A CONTROL SCROLLED INTO SIGHT, IS COMPLETE after one fix round (gate green on
 `3e8391e`: 1391 passed, 3 skipped); TASK 18, THE SHARED QUESTION, IS COMPLETE after one fix round (gate green on
-`a3fb251`: 1402 passed, 4 skipped); deviation rows 47 and 48 are recorded; EVERY TASK OF THE STAGE THAT BUILDS IS DONE,
-and THE LINE STANDS AT THE STAGE'S LAST REVIEW, then Task 19, the exit; the paragraph "THE CHAT OF 13 OCTOBER" below is
+`a3fb251`: 1402 passed, 4 skipped); deviation rows 47 and 48 are recorded; THE STAGE'S LAST REVIEW (three readers) IS
+COMPLETE with its one fix wave (gate green on `f9c6899`: 1407 passed, 4 skipped, 5 deselected); STAGE 1 IS BUILT AND
+REVIEWED, and THE LINE STANDS AT TASK 19, THE EXIT, which needs the owner; the paragraph "THE CHAT OF 13 OCTOBER" below is
 this chat's record. What follows in this parenthesis is the head as the second chat of 12 October left it:
 THE BUILD IS HANDED TO A NEW CHAT A FOURTH TIME, which continues from
 `docs/superpowers/prompts/2026-10-12-evening-window-redesign-continue-stage-1.md`, the paragraph "THE SECOND CHAT OF
@@ -53,8 +55,10 @@ plan's story, and the design's own story is the paragraph that begins "THE REDES
 **THE CHAT OF 13 OCTOBER (2026-10-13; started from the owner's pasted prompt of the evening of 12 October; the
 ledger's entries from "NEW CHAT 2026-10-13" on have every figure and every ruling).** The usage card read 48 % of the
 week when the chat began and 50 % with task 10r reviewed; how much to spend is as the owner chose ("in between"), and no
-workflow was run. **The owner asked three things on the way and decided:** whether stages 2 to 9 could be finished this
-week (no: the design sizes them at about 84 tasks, a task takes 3 to 4 hours and 2 to 3.5 million tokens at the care
+workflow was run. **The owner asked three things on the way and decided:** how far the work had come and how close the
+end was (answered: stage 1 nearly done, about 7 to 8 million tokens left for it; then eight more stages of the
+redesign, the code audit and the retrain); whether stages 2 to 9 could be finished this
+week (no: the design sizes them at about 84 tasks, a task takes 3 to 4 hours and 2 to 4 million tokens at the care
 chosen, and each stage's plan is the owner's to approve; the owner: "we will keep the pace"); and whether a network
 could be trained meanwhile (not one of real size: a long run needs the card to itself and no edit under `core/`, a fit
 is still all or nothing, and the audit has not ruled on the time-stride finding; the owner: "we won't start then"). A
@@ -74,8 +78,8 @@ frame is, so a build that draws the ring over a page's fixed head and foot passe
 (26 lines with four of that reader's minors: a field reached out of sight, a change of style while the ringed control
 is scrolled away, Shift+Tab after a click, a follower that does not keep working at rest; five one-run faults),
 re-read clean. **The last gate, at `3e8391e`: 1391 passed, 3 skipped, 5 deselected, 203 warnings, 24 min 0 s** (Task
-18's skeptic ran scripts beside it, so not a quiet-machine time; the gate at `034d079` beside two readers took 23 min
-42 s); the display-marked run 3 passed; the real `Artifacts/` (428 entries) and the real `PRISM.ini` (hash unchanged)
+18's skeptic ran scripts beside it, so not a quiet-machine time; the gate at `034d079` beside the three readers and a
+reader of Task 18's brief took 23 min 42 s); the display-marked run 3 passed; the real `Artifacts/` (428 entries) and the real `PRISM.ini` (hash unchanged)
 are as they were. **Ruled by the controller** (each in the ledger with its cost): the fix round's set; the reader of
 the real window builds the whole window only while no pytest is alive; and the ring that now shows in the grid of
 typed bounds on the Prior tab with its bottom side cut on 49 of 76 stops (that grid scrolls a field to the very foot of
@@ -129,7 +133,8 @@ that asks for a line of text among them with its choices named; the three pairs 
 wider than designed (row 47); that Enter on "Show the full error" gives the safe answer and does not open the error,
 as the design has it; that above the ordinary text size a very long question is taller than a low screen; and four
 more pictures of a long path cut at the right edge, in a question, for the question on long paths. **For the stage's last
-review, seen on the walk and older than this task:** on every page with a figure area the Tab key stops on the empty
+review, seen on the walk and older than this task** (the last review's fix wave cured the first two; the third
+stands, to tell the owner): on every page with a figure area the Tab key stops on the empty
 figure area's tab bar, a control of no size, and an 8-pixel square of the ring's line shows at its corner; after a
 mouse click on a tab, when the keyboard had the turn before, a ring appears just inside the edge of the next page's
 whole form; a tick box's ring runs through the edge of the help badge beside it; and the minors of the three seats.
@@ -139,12 +144,45 @@ built so far: E12 only.** **Carried from Task 18** (the ledger has each): to the
 text through the class, the record of shown boxes gains the label, the line handed in and what is wrong with it; to
 every later task, a test that reads a scrolling list dresses the application (in a helper that puts it back), not its
 own host widget. **What this chat cost in background agents so far:** about 1.9 million tokens for task 10r from its
-dispatch to its close; 1.1 for Task 18's preparation and 2.9 for its build, review and fix round; the weekly bar went
-from 48 % to about 57 %. **Next, in order:** the stage's last review by three readers over everything from `24368c7`
-to `a3fb251` (what only a whole-stage view can see, and the sorting of the 89 deferred lines of the ledger, gathered
-in `stage-1/reviews/stage-1-final-deferred-lines.txt`; the stage's range is listed in
-`stage-1/reviews/stage-1-final-package.txt`), with ONE fix dispatch, one re-read and a gate if it sends anything;
-then Task 19 (the owner is told before the slow set starts).
+dispatch to its close; 1.1 for Task 18's preparation and 2.9 for its build, review and fix round; 2.8 for the stage's
+last review and its fix wave; the weekly bar went from 48 % to about 61 % (the usage card read 50 % at 10:16 and 61 %
+at 20:25). **The stage's last review** (three readers over
+everything from `24368c7`, 94 commits; reports in the ledger's `stage-1/reviews/stage-1-final-review-*.md`): the
+product as one piece (Opus): THE STAGE MAY EXIT; the devices agree where it matters (colours read at paint, fonts given
+at build, lengths scaled by their readers, every drawing method guarded: 38 overrides of methods the toolkit calls,
+25 guarded, 2 excused by the scan's own tables, 11 of kinds the guard does not cover); THE FENCE IS KEPT (outside the
+window's code only the eight colour files changed, and only in their colours; `core/config.py`, the refusals, the
+field tables and the launchers untouched); one Important finding in today's window, the ring where the stage's own
+rule says it must not show (an 8-pixel square on the empty figure area's tab bar; a ring round a whole form after a
+mouse click on a tab). The tests as one piece (Opus): a fault injected at each of the 1,091 assert sites of the
+look's suite leaves nothing on the one process; 113 faults typed against the older tests of Tasks 6 to 12, 40 unseen;
+four Important findings (the style sheet's values barely held; the tick box's and radio dot's shapes held at two or
+three points; the builder scan passing any class a later stage adds; which colour each plotting call takes held by no
+test, CARRIED). The sorting (Sonnet): the 89 deferred lines hold 284 things: 196 stand, 32 cured since, 26 settled,
+27 past; proposed: drop 198, carry 62 (by stage in its table), tell the owner 14, the audit's list 4, cure now 4.
+**The one fix wave** (`c5cf86b` to `f9c6899`; written and walked by one skeptic, built by one fresh implementer,
+re-read clean): the ring paints nothing round a control of no size; a press of the mouse ends the keyboard's turn (so
+after a click that gave the focus to nothing a window coming back shows no ring on a button, and a list opened by
+keyboard and answered with the mouse gives the focus back without one: to tell the owner); a lettering file that
+does not load is named in a warning; every rule of the style sheet held by a digest (its value depends only on the
+look's tables and templates); the indicators' shapes; the builder scan's list closed; three smaller standing checks;
+seven comments. **The last gate, at `f9c6899`: 1407 passed, 4 skipped, 5 deselected, 203 warnings, 23 min 17 s**
+(the machine was busy all evening: the card-bound tests ran near twice their quiet times with almost nothing of the
+build beside them, so the exit's gate of record must be taken when the owner says the computer is quiet); the
+display-marked run 4 passed; the real `Artifacts/` (428 entries) and the real `PRISM.ini` (hash unchanged) are as they
+were. **Ruled by the controller on the last review** (each in the ledger with its cost): one fix wave and no second;
+its set; the ring's condition in the frame's painting (measured better than in the method that shows the ring); the
+stall guard as a scan alone, the session guard's two lines carried to stage 2's first task. **Carried from the last
+review:** to stage 2's plan, the sorting's 8 rows for it, the product seat's three (a page tells only what it was
+handed; a handed-in length scaled by some devices and not by others; the scan of drawing methods knows no hide event,
+change event or layout geometry), the window suites leaving every window alive, and the guard's two lines; to the
+stage that first edits a plotting file and to the audit's list, which colour each plotting call takes; to the exit,
+the sorting's 6 rows (working documents out of date, such as the design's line 200) and its 14 sentences for the
+owner. **Next, in a new chat:** Task 19, the exit (the gate of record on a quiet machine, the real-screen run, the
+three sets of pictures and the ones no set has yet, the slow set after telling the owner, the deviations brought into
+line, STATE, the two sentences of `CLAUDE.md` put to the owner; the owner's three questions with pictures and the rest
+to tell; every ruling made without the owner, in plain words with its cost); then the plan of stage 2, for the owner's
+approval.
 
 **THE SECOND CHAT OF 12 OCTOBER (2026-10-12, afternoon and evening; started from the owner's pasted prompt of
 12 October; the ledger's entries from "NEW CHAT 2026-10-12, THE SECOND OF THE DAY" on have every figure and every
