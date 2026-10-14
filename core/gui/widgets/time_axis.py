@@ -23,7 +23,7 @@ def axis_layout(start, now, end_from, end_by, width: int, text_width: Callable[[
     """Where everything on the time axis goes, as plain numbers: no painter and no widget, so it is
     tested without a screen. `end_by` None: no end is known. `end_from` None, or equal to `end_by`:
     the end is firm. Given moments of one kind (all with a time zone, or all without) it does not raise,
-    whatever their order, unless one lies within a day of the last moment the calendar holds, where a date
+    whatever their order, unless one lies within two days of the last moment the calendar holds, where a date
     cannot be reckoned further; and the axis is never shorter than 30 s.
     Keys: late, inside, axis_end, x_done, x_now, x_from, x_by, step, ticks, labels (pairs of x and text)."""
     day = datetime.timedelta(days=1)
@@ -34,8 +34,10 @@ def axis_layout(start, now, end_from, end_by, width: int, text_width: Callable[[
         if end_from is None:                           # an end with no earliest end is a firm one
             end_from = end_by
         late, inside = now > end_by, end_from <= now <= end_by
-        # a run that has passed its range gets an axis as many whole days longer as it needs
-        axis_end = end_by + day * max(1, math.ceil((now - end_by) / day)) if late else end_by
+        # a run that has passed its range gets an axis longer by as many steps as it needs, each a quarter of
+        # the run's planned length, 30 s at the least and a day at the most
+        grow = min(day, max(datetime.timedelta(seconds=30), (end_by - start) / 4))
+        axis_end = end_by + grow * max(1, math.ceil((now - end_by) / grow)) if late else end_by
     axis_end = max(axis_end, start + datetime.timedelta(seconds=30))       # before the span is taken: it is never zero
     span = (axis_end - start).total_seconds()
 
@@ -55,15 +57,19 @@ def axis_layout(start, now, end_from, end_by, width: int, text_width: Callable[[
     out = {"late": late, "inside": inside, "axis_end": axis_end, "x_done": x_done,
            "x_now": min(max(x_done, half), width - half), "x_from": x_from, "x_by": x_by}
     # a tick every 30 s on an axis under 5 minutes, every 15 minutes under 2 hours, every 6 hours under 2 days,
-    # and beyond that at each midnight
-    step = next(seconds for limit, seconds in ((300, 30), (7200, 900), (172800, 21600), (math.inf, 86400))
-                if span < limit)
+    # and beyond that at each midnight; where no tick of that spacing falls on the axis, the next finer one is
+    # taken, as often as it takes, down to 30 s
+    spacings = ((300, 30), (7200, 900), (172800, 21600), (math.inf, 86400))
+    first = next(n for n, (limit, _) in enumerate(spacings) if span < limit)
     midnight = start.replace(hour=0, minute=0, second=0, microsecond=0)    # the ticks are counted on the clock
-    k = math.floor((start - midnight).total_seconds() / step) + 1          # the first tick after the start
-    times = []
-    while midnight + datetime.timedelta(seconds=k * step) < axis_end:
-        times.append(midnight + datetime.timedelta(seconds=k * step))
-        k += 1
+    for _, step in spacings[first::-1]:
+        k = math.floor((start - midnight).total_seconds() / step) + 1      # the first tick after the start
+        times = []
+        while midnight + datetime.timedelta(seconds=k * step) < axis_end:
+            times.append(midnight + datetime.timedelta(seconds=k * step))
+            k += 1
+        if times:
+            break
     out["step"], out["ticks"] = step, [rnd(at(t)) for t in times]
     labels, right, gap = [], -1e9, design.scaled(design.AXIS["label_gap"])
 

@@ -4678,6 +4678,47 @@ def test_the_time_axis_layout_takes_odd_times_without_raising_or_leaving_the_axi
     assert (aware["x_done"], aware["ticks"]) == (470, _MIDNIGHTS)
 
 
+def test_where_no_tick_of_its_spacing_falls_on_a_time_axis_it_takes_the_next_finer_spacing():
+    """The spacing is chosen by the axis's length and the ticks are counted on the clock, so a short axis can lie
+    between two ticks of its spacing and show no tick and no time at all: a run of nine minutes begun at 16:02
+    lies between two quarter hours, a run of three hours begun at 13:00 between 12:00 and 18:00. Such an axis
+    takes the next finer spacing, as often as it takes, down to 30 s. An axis on which a tick of its own spacing
+    falls keeps that spacing, however few its ticks."""
+    nine = _axis(_SIM + _plus(minutes=2), _SIM + _plus(minutes=5), _SIM + _plus(minutes=10), _SIM + _plus(minutes=11))
+    three = _axis(_SIM - _plus(hours=3), _SIM - _plus(hours=2), _SIM, _SIM)
+    assert [(got["step"], got["ticks"], [text for _, text in got["labels"]]) for got in (nine, three)] == [
+        (30, [58, 115, 173, 231, 288, 346, 404, 461, 519, 577, 634, 692, 750, 807, 865, 923, 980],
+         ["16:02:30", "16:03:30", "16:04:30", "16:05:30", "16:06:30", "16:07:30", "16:08:30", "16:09:30", "16:10:30"]),
+        (900, [87, 173, 260, 346, 433, 519, 606, 692, 779, 865, 952],
+         ["13:15", "13:30", "13:45", "14:00", "14:15", "14:30", "14:45", "15:00", "15:15", "15:30", "15:45"])], (
+        "an axis was left with no tick")
+    one = _axis(_SIM + _plus(minutes=10), _SIM + _plus(minutes=12), _SIM + _plus(minutes=18), _SIM + _plus(minutes=19))
+    assert (one["step"], one["ticks"], [text for _, text in one["labels"]]) == (900, [577], ["16:15"]), (
+        "an axis with a tick of its own spacing took a finer one")
+
+
+def test_a_late_time_axis_grows_by_a_quarter_of_its_planned_length_at_a_time_from_30_seconds_to_a_day():
+    """A run that has passed its end gets an axis longer by as many steps as it needs, each a quarter of the
+    length planned from its start to its end, 30 s at the least and a day at the most: a run of 40 minutes one
+    second late keeps 831 of the axis's 1038 pixels as its bar, where a whole day added left it 28. A run of four
+    minutes late by 20 s then has an axis of five minutes, on which no quarter hour falls, so it is ticked every
+    30 s. A run planned for four days or more grows by whole days, as before; an end before the start grows by
+    the least step, and its axis is the least length an axis has."""
+    forty = [_axis(_SIM, _SIM + late, _SIM + _plus(minutes=34), _SIM + _plus(minutes=40))
+             for late in (_plus(minutes=40, seconds=1), _plus(minutes=52))]
+    four = _axis(_SIM, _SIM + _plus(minutes=4, seconds=20), _SIM + _plus(minutes=3, seconds=30), _SIM + _plus(minutes=4))
+    assert [(got["late"], got["axis_end"], got["x_done"], got["step"], len(got["ticks"])) for got in forty + [four]] == [
+        (True, _SIM + _plus(minutes=50), 831, 900, 3), (True, _SIM + _plus(hours=1), 900, 900, 3),
+        (True, _SIM + _plus(minutes=5), 900, 30, 9)], "a short run that turned late lost its bar"
+    grown = [_axis(_SIM, _SIM + planned + late, None, _SIM + planned)["axis_end"] - (_SIM + planned)
+             for planned, late in ((_plus(minutes=1), _plus(seconds=1)), (_plus(days=3), _plus(seconds=1)),
+                                   (_plus(days=4), _plus(seconds=1)), (_plus(days=10), _plus(days=2.5)))]
+    before = _axis(_FIT, _FIT + _plus(seconds=10), None, _FIT - _plus(hours=1))          # an end before the start
+    assert (grown, before["axis_end"], before["x_done"]) == (
+        [_plus(seconds=30), _plus(hours=18), _plus(days=1), _plus(days=3)], _FIT + _plus(seconds=30), 346), (
+        "a late axis grew by another step")
+
+
 def test_a_time_axis_tick_label_is_short_and_english_and_is_left_out_sooner_than_printed_over_its_neighbour():
     for number, name in enumerate("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(), 1):
         start = dt.datetime(2026, number, 2, 6, 0)
