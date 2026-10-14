@@ -1,6 +1,13 @@
 # PRISM — state
 
-**Last updated:** 2026-10-13, evening (THE BUILD IS HANDED TO A NEW CHAT FOR STAGE 1'S EXIT, which continues from
+**Last updated:** 2026-10-14 (STAGE 1 OF THE WINDOW REDESIGN IS BUILT AND ITS EXIT IS PASSED: `8b2ca92`..`f9c6899`, 100
+commits, then the exit's documents; the fast gate of record on a quiet machine 1407 passed, 4 skipped, 5 deselected in
+16 min 9 s; the display-marked run 4 passed; the slow set 5 passed in 1 h 6 min 5 s; nothing pushed after `d8828f9`; the
+paragraph "STAGE 1 OF THE WINDOW REDESIGN IS BUILT" below is this chat's record. NEXT: task 19q, the owner's five
+answers at the exit, prepared in this chat; then the plan of stage 2, the shell, to be approved by the owner before it
+is built; the separate design for saving the fit is owed between stages 2 and 3. What follows in this parenthesis is the
+head as the chat of 13 October left it:
+2026-10-13, evening (THE BUILD IS HANDED TO A NEW CHAT FOR STAGE 1'S EXIT, which continues from
 `docs/superpowers/prompts/2026-10-13-window-redesign-stage-1-exit.md`, the paragraph "THE CHAT OF 13 OCTOBER" below and
 the ledger: TASK 10r, THE FOCUS RING ON A CONTROL SCROLLED INTO SIGHT, IS COMPLETE after one fix round (gate green on
 `3e8391e`: 1391 passed, 3 skipped); TASK 18, THE SHARED QUESTION, IS COMPLETE after one fix round (gate green on
@@ -51,6 +58,90 @@ the build's state stands in four paragraphs, each as it was written on its date 
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**STAGE 1 OF THE WINDOW REDESIGN IS BUILT (2026-10-14; Task 19, the exit, run in the chat of 14 October from the owner's
+pasted prompt of 13 October; the ledger's entries from "NEW CHAT 2026-10-14" on have every figure and every ruling).**
+The plan the owner approved on 2026-10-07 (`docs/superpowers/plans/2026-10-06-window-redesign-stage-1.md`, added at
+`8b2ca92`) is built: `8b2ca92`..`f9c6899`, 100 commits (code head `f9c6899`), then the exit's documents; two commits on
+`main` not pushed (the `CLAUDE.md` commit `f7e3abd` and this one), above `origin/main`, which the owner had moved to
+`d8828f9`. **What landed:** today's layout in the new colours and lettering (one table of named colours, type and sizes
+in `core/gui/design.py`; Inter bundled, a book face for sentences, Cascadia Mono then Consolas then Courier New for
+console text; one style sheet, one palette, a small style over Fusion; painted tick boxes and radio buttons; a blue
+focus ring that follows what was pressed last); three appearance choices ("Follow Windows", "Light", "Dark"; the two
+ticks and "Auto (time of day)" gone); the text size following Windows' own text-size setting, read once at start, up to
+225 % (the owner's test of 2026-10-07 showed Windows reports the number set and enlarges its own text by it); every
+figure the engine draws on a white page with seven named line colours; one file-chooser function; the number boxes no
+longer turning a typed comma into another number; the window's repaints no longer waiting on a figure (a method of the
+main window, with a reporting guard on every method the toolkit calls while drawing, a standing scan and a per-test
+check); built and tested but mounted on no screen: the painted markers and icons, the ruled block, the three-rule table,
+the time axis, the page pieces (sentence, heading, scrolling middle, two columns, message row), the grouped number field
+and the drop-down, the shared question; the tests moved onto shared helpers (the four window builders, one record of
+every box and file chooser, the file-chooser guard), `tests/test_look.py` as the twenty-third suite (167 test
+functions), and the carried-over list (`.superpowers/sdd/2026-10-06-window-redesign/carried-over.md`: 358 rows for the
+nine window suites, 8 closed at this exit, the rest open for the stages that reach them; an appendix of 183 rows for the
+tests outside them). **Engine changes landed: E12 only** (`d23aa84`, Task 12: the plotting code's line colours from one
+new module, `core/Helpers/plot_colours.py`, in the eight files of Step 2; it changes the named colours from BOTH front
+ends, the white page and the unnamed lines in the window only); nothing in `core/config.py`, no refusal key (109), no
+identity and nothing a simulated row holds changed (the exit's Step 2: the eight engine files and no ninth). **What the
+window remembers:** the two appearance ticks are no longer read, a stored "auto" reads as "Follow Windows", a whole
+number stored with commas by an older build is read as that number and saved without them; nothing else. **Deviations
+from the design:** 48 rows, the same under the same numbers in the design's section 8, the plan's head and the ledger: 1
+seven line colours (owner); 2 the stage's order; 3 no figure the window draws itself; 4 commas page by page (owner); 5 a
+second figure face; 6 the wheel over a closed drop-down; 7 an icon's copy keeps its engine; 8 five devices not built; 9
+interim sheet rules as named exceptions; 10 the box record's fields; 11 the slow set's reason; 12 a greyed marker; 13
+the ring's rules; 14 one kind of picture set; 15 console faces (owner); 16 the toolkit's validators off; 17 sizes scaled
+by their readers; 18 the text factor; 19 the book face's fall-back; 20 the axis's late growth, 30 s floor, firm end (the
+late growth changed by the owner's answer at the exit, to be built in 19q); 21 no walkthrough row; 22 the book face's
+places; 23 the task count; 24 the accent rule held where it can be; 25 no raised button in a question; 26 icon imports
+kept; 27 one keyword renamed in E12; 28 the chooser guard on two statics; 29 a fourth builder and two scans; 30 the
+whole program puts back what it sets; 31 the thresholds scaled; 32 plain words in the question's answers; added during
+the build: 33 the look built before the text-size test (closed); 34 the hint colour named in the sheet; 35 the ring
+always on an old box's button; 36 the main window's event method and the drawing guard; 37 digits of equal width only
+where numbers line up; 38 four sheet rules from the first pictures; 39 the old tabs' words and pointer ground (owner);
+40 "e.g. x, y" (owner); 41 the greyed old main button not bold (owner); 42 room after a table's last column (owner, its
+form the controller's); 43 an ellipsis in a number (owner, its form the controller's); 44 crossed ends read firm; 45 a
+grouped number keeps its zeros; 46 no ten-digit stop; 47 a question wider than 448 when its answers need it; 48 five
+things the question does. **Gates run:** the baseline (`24368c7`, 2026-10-07: 1188 passed, 1 skipped, 5 deselected, 15
+min 56 s, quiet); a fast gate after every task and fix round (each green on its head; the ledger's "Gates"); THE FAST
+GATE OF RECORD at the exit (`d8828f9`, code `f9c6899`, 2026-10-14, the owner said the machine was quiet, nothing beside
+it: 1407 passed, 4 skipped (the four display-marked tests), 5 deselected, 203 warnings, 16 min 9 s, exit 0: 9 s over the
+16-minute target with 219 more tests than the baseline; the gates of 13 October took 23 to 24 minutes on a busy
+machine); the collection (1416, 222 over the baseline's 1194; 23 suites; the seven gone tests each closed by its row,
+205 born, every one with a row); the display-marked run (first three after Tasks 8 and 10, then after every gate from
+Task 18 with four; at the exit 4 passed, no skip); the slow set at the exit (`f7e3abd`, alone on the card: 5 passed,
+1411 deselected, 151 warnings, 1 h 6 min 5 s; each test inside the spread of its last two runs). **Gates not run:** the
+card smoke gate and the diagnostic card, not owed (E12 moves no tensor; the one card run of the redesign is owed at the
+end of stage 3). **The pictures:** three moments, each on a scratch settings file and an empty scratch store with the
+real settings file and the real `Artifacts/` verified untouched: the window as it was (2026-10-07,
+`stage-1/pictures/before/`), the new look after Task 10 (2026-10-07; the owner's three answers on 2026-10-11 were built
+as Task 12q), and the exit (2026-10-14: `exit-plain/`, `exit-text150/`, `exit-scale150/`, 47 each, and
+`compare-before-exit.html`; since the owner last looked nothing differs but the hour's greeting and the units line's
+order; the scaled set, new, read clean), with 51 extra pictures no set had (records, two message boxes with the ring, an
+opened list, the old progress bar, a tool tip, the ring after real Tab keys, figures in a dark window, the pop-out, the
+heat map, the posterior corner, mixed faces, the FDT repeats figure; `exit-extras/`; in the first of its runs one
+message box was on the real screen for about 0.3 s, a throwaway window's, nothing clicked or written, told to the owner
+at once). **Rows now the owner's to run on a real screen: none** (departure 21: the two rows that check what stage 1
+built name places stages 2 and 3 build, and are written and run after stage 3). **Left stale on purpose, for the stage
+that rewrites the guide:** `docs/guide/window.md:28-29` (the appearance choices as they were),
+`docs/guide/architecture.md:216` (the modes) and `:219` (figure settings follow the theme),
+`docs/guide/rules-and-traps.md:263-266` (the window rewrites matplotlib's settings on every appearance change),
+`docs/guide/testing.md:82-93` (the session guards without the file choosers' and the drawing code's); no guide line
+cites a test this stage retired. `CLAUDE.md`'s two counts were corrected with the owner's yes (`f7e3abd`). **The owner's
+answers at the exit (2026-10-14), each asked alone with pictures and a recommendation, each the recommendation:** a long
+word in a wrapped sentence may break after a backslash, slash, underscore or full stop (a message naming a long path
+stays whole); a time axis with no tick takes the next finer spacing; a late axis grows by a quarter of the planned
+length, 30 s to a day; a message row with no marker starts its words under the other rows'; the FDT repeats figure's
+repeats skip the mean's blue; and the two sentences of `CLAUDE.md`. **Ruled at the exit** (each in the ledger with its
+cost): the four answers on the look, and the fifth on the FDT figure (one colour line in one of the eight plotting files
+E12 touched), are built as ONE small task, 19q, before stage 2's plan is written; the stage's paragraph stands here at
+the top, where a new chat reads, and not below "THE REDESIGN CHAT HAS STARTED" as the brief has it; the 168 born tests
+outside the nine window suites get rows in the carried-over list's appendix. **Told to the owner at the exit:** the rest
+of the sorting's list and the earlier prompts' lists, grouped (the ledger has it); every decision made without the
+owner, 161 in 48 entries, in `stage-1/exit/rulings-for-the-owner.md`. **Open with the owner:** the replacement wording
+for `CLAUDE.md`'s rule on what is remembered and for its launch line (when stages 3 and 4 land); the separate design for
+saving the fit, made between stages 2 and 3; bundling Cascadia Mono (not asked). **Next:** task 19q (the owner's five
+answers); then the plan of stage 2, the shell (the design's parts 3 and 13 as they stand), for the owner's approval
+before it is built; after stage 2 the build pauses for the design for saving the fit.
 
 **THE CHAT OF 13 OCTOBER (2026-10-13; started from the owner's pasted prompt of the evening of 12 October; the
 ledger's entries from "NEW CHAT 2026-10-13" on have every figure and every ruling).** The usage card read 48 % of the
@@ -1735,6 +1826,9 @@ Piece 3
    questions, none a decision of the owner's); the owner's own wishes for the look, the layout and the flow, and whether
    the redesign closes those gaps or leaves some to the audit or the command line, are asked for in its brainstorming
    and are not recorded anywhere yet.
+   **Stage 1 (the look's foundation) DONE 2026-10-14**: `8b2ca92`..`f9c6899` and the exit's documents (the paragraph
+   "STAGE 1 OF THE WINDOW REDESIGN IS BUILT" at the top). Owed in order: task 19q (the owner's five answers at the
+   exit); stage 2, the shell (its plan first, approved by the owner); the design for saving the fit; stages 3 to 9.
 10. **The code audit, of the math too**, in another chat after the redesign
     (`docs/superpowers/prompts/2026-10-05-code-audit.md`). The owner supplies a PDF of the models and the audit checks
     that the code implements them correctly, starting from
@@ -1845,6 +1939,13 @@ Piece 3
 | **slow set on sbi 0.26.1**, `pytest -m slow -q --durations=5` | 2026-10-01 at `771a460`, quiet, straight after the fast gate: **5 passed**, 1189 deselected, 147 warnings, **1 h 4 min 15 s**, exit 0. `test_chi_mode_full_sbi_pipeline` 1840 s (2618 s at `067eddc`); `test_smoke_runs_every_stage_on_the_tier1_box` 1176 s (828 s; its prior's census now runs the full duration and its stochastic stages vary); `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` 527 s; `test_fdt_and_crossval_run_at_tiny_size` 301 s; `test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin` 6 s |
 | **GPU card check on sbi 0.26.1 and the new prior** (the five command lines of `CLAUDE.md`, run 4's resume, and `probes mask --prior smoke_prior`, at `d5072d6` — code `771a460`) | 2026-10-01, Claude at the owner's request, one logged background job, card idle but for the desktop (2.9 of 16.3 GiB in use before and after): **run 1** chi `master_spont`: prior 118 s, posterior 139 s, validate 23 s, infer 56 s, exit 0, training masked probes 230 of 704 (32.7 %); **run 2** the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 7 s; **run 2b** exit 1 in 5 s, "differs only in n_runs: this run 2, that cache 4" ending `(--new-run)`, no `[fisher]` line, `simulations/` unchanged; **run 3** forced `master_weak`: 117/41/10/21 s, exit 0; **run 4** tier-1, 256 × 10: 117/227/28/65 s, exit 0, both `[tier1]` lines, `rescale order: ['x_scale', 't_scale', 'T']`, masked 227 of 704 (32.2 %), `T` in `transform.param_keys`, the `config.tier1` block, 13 eigenvalues, `env.sbi` 0.26.1; **run 4's resume** "the stored rotation's eigenvalues come with it" and `resuming at batch 4/4`, exit 0 in 7 s. The new prior (identical in the three builds: smoke seeds it): `[prior] stability sweep: kept 101779 of 102400 candidates over 40000 steps`, `[prior] fill: kept 73939 new sets from 74752 steps (680 outside the box, 133 unstable); 175718 sets in all`, `Found 2 clusters`, `gmm.n_components` 2 — as the CPU emulation predicted. **probes mask** over it: 831 of 2,144 (38.8 %), the cycle floor the only cause (35.5 % too slow, 3.2 % shortened), invariants hold, the cross-check confirms all 12 row ranges, per-batch sd 11.8 points (the old construction read 35.1 % on 29 September). No OOM line, no Traceback; warnings only the expected classes (masking notices, the ground-truth PreflightWarning, sbi's SBC and TARP sample-count warnings at n_cal 40, run 3's constant-column report, one pathological trajectory in run 4). Timings: the prior stage is ~25 s longer (the full-length census; clustering a smooth cloud); the posterior stage is mostly the Fisher step (run 4: 209 of 227 s; run 1: 119 of 139), whose cost follows its operating points, draws from the prior. testing.md's table now holds these. Scratch stores deleted |
 | **The console retrain (STOPPED 2026-10-05 during the fit; no posterior)** | Generation 2026-10-01 15:52 → 2026-10-02 18:46, three processes, the second and third started by hand (an out-of-memory death at batch 237 with no ceiling; 8 GiB to batch 500; 6 GiB to the end, 9,500 batches with no failure). **Gate 3 PASS**: 57,703,562 of 143,831,040 probes masked (40.1 %) against P = 37.9 %, D = 2.2 points; per batch 16.5–92.9 %, median 37.8 %. `[patho]` 30,847 of 20,480,000 (0.151 %), summed over the processes. `[winsor]` 0.083 %. Peak reserved at the longest batch: 14.80 GiB under 8 GiB, 11.81 under 6. Fit: 62 epochs finished (the capture's last count is 61, one behind) at 61–63 minutes, stopped by the owner. Gates 1, 2 and 4 never read. |
+| **baseline before the window redesign**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-10-07 at `24368c7`, quiet: **1188 passed, 1 skipped**, 5 deselected, 203 warnings, **15 min 56 s**, exit 0 (the redesign's Task 0). |
+| **`pytest --collect-only -q` after stage 1 of the window redesign** | 2026-10-14 at `f7e3abd`: **1416 collected** (1194 at the baseline: 222 more), twenty-three suites; the 7 test functions gone each closed by its row in the carried-over list; the 205 born each with a row. |
+| **fast gate of record, stage 1 of the window redesign**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-10-14 at `d8828f9` (code `f9c6899`), quiet (the owner said so; nothing beside it): **1407 passed, 4 skipped** (the display-marked tests: the window class icon, the three faces, the whole program's look given back, the question's title bar), 5 deselected, **203 warnings** (unchanged), **16 min 9 s**, exit 0; tree clean, the real `Artifacts/` unchanged (428), no `sbi-logs/`, `Resources/Models` the two files. 13 s over the baseline with 219 more tests; 9 s over the 16-minute target. Slowest: `test_train_and_validate_without_a_loaded_cell` 139 s, `test_calibration_theta_star_lies_inside_the_region_when_one_is_given` 82 s, `test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch` 41 s. |
+| **display-marked run, stage 1**, `QT_QPA_PLATFORM=windows pytest -m display -q` | 2026-10-14 at `f7e3abd`: **4 passed**, 1412 deselected, no skip, 10 s: the three above and the shared question's; the first three also passed after the gates of Tasks 8 and 10, and four after every gate from Task 18. |
+| **slow set, stage 1**, `pytest -m slow -q --durations=5` | 2026-10-14 at `f7e3abd`, alone on the card (the owner told first): **5 passed**, 1411 deselected, 151 warnings, **1 h 6 min 5 s**, exit 0. `test_chi_mode_full_sbi_pipeline` 2159 s (1840 on 1 October; 2618 before); `test_smoke_runs_every_stage_on_the_tier1_box` 882 s (1176; 828); `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` 664 s (527; 619); `test_fdt_and_crossval_run_at_tiny_size` 243 s (301; 452); `test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin` 9 s (6; 7). The real `Artifacts/` and `PRISM.ini` unchanged after it. |
+| **GPU card run, stage 1** | Not owed: the stage's one engine change, E12, changes colour arguments in eight plotting files and moves no tensor (the exit's Step 2: no ninth engine file). The card run of the redesign is owed at the end of stage 3. |
+| **pictures, stage 1** (not a gate) | Three moments on a scratch settings file and an empty scratch store, the real settings file and `Artifacts/` verified untouched each time: the window as it was (2026-10-07); the new look after Task 10 (2026-10-07; again after Tasks 10g and 12q); the exit (2026-10-14: 47 each at the ordinary size, 150 % text and 150 % display scaling, and 51 extra pictures with records and figures; the ledger's `stage-1/pictures/exit-*`). One message box of a throwaway window was on the real screen for about 0.3 s in the extras' first run. |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
 copied verbatim; keep the copies identical (the documents review compares them). Run it from the
@@ -2302,3 +2403,17 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
   the time-stride lead; because it bore on everything simulated so far, Claude reproduced it at once with the program's
   own functions on the CPU (a scratch script, no source touched) rather than hand an unverified alarm to the owner. What
   the model at a given time scale is meant to be, and any fix, are the owner's to decide in the audit.
+- **2026-10-06 to 2026-10-14, stage 1 of the window redesign** — the owner's answers, each asked with a picture and a
+recommendation: a figure's line colours number seven (2026-10-06); the design for saving the fit is made between stages
+2 and 3 (2026-10-06); whole numbers are grouped page by page as each form is rebuilt (2026-10-06); console text in
+Cascadia Mono, then Consolas, then Courier New (2026-10-06); the plan approved (2026-10-07); the text-size test
+(2026-10-07: Windows reports the number set and enlarges its own text by it; nothing redone); on the pictures after Task
+10 (2026-10-11): open tabs' words in the full text colour, the hint "e.g. x, y", a greyed old main button not bold, and
+the old forms at 150 % left to the stages that rebuild them; on the table (2026-10-11): room after a last column's
+words, and a number too long for its column shown cut with an ellipsis; "in between" for spending (2026-10-12); the pace
+kept and no training meanwhile (2026-10-13); at the exit (2026-10-14): the gate of record started on the owner's word
+that the machine was quiet; a long word breaks after a backslash, slash, underscore or full stop; a time axis with no
+tick takes the next finer spacing; a late axis grows by a quarter of its planned length, a day at most; a message row
+with no marker starts its words under the other rows'; the FDT repeats figure's repeats skip the mean's blue; and
+`CLAUDE.md`'s two counts corrected (`f7e3abd`). What was decided without the owner is listed, with its cost, in the
+ledger's `stage-1/exit/rulings-for-the-owner.md`.
