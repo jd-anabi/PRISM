@@ -7,8 +7,9 @@ save it under another. The lengths do not grow with the text size: a stored figu
 on the computer that drew it.
 
 The engine's plotting code imports nothing of the window. It reads matplotlib's settings, which are
-these in the window and matplotlib's own on the command line. A figure already on screen is a
-picture and is not drawn again.
+these in the window and matplotlib's own on the command line. A figure shown in a page is a picture
+and is not drawn again. Popped out, a figure that came with its stored form is built again from it
+and drawn by matplotlib in a window of its own; any other is shown there as its picture.
 """
 import matplotlib
 

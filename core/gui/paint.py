@@ -208,7 +208,9 @@ def fill_px(painter, rect: QRectF, colour: QColor, *, top: int = 0, bottom: int 
 def paint_hatch(painter, rect: QRectF, colour: QColor) -> None:
     """Slanting strokes 1 px thick inside ``rect`` and nowhere else, in the colour handed in: one at every
     hatch step of the look's table, measured across the strokes. A rectangle with no width or no height is
-    left alone. The painter is left as it was found, also when the drawing fails part-way."""
+    left alone. The strokes are laid one by one along the whole width of ``rect``, in sight or not, so the caller
+    hands in a rectangle no wider than what it shows. The painter is left as it was found, also when the drawing
+    fails part-way."""
     if rect.width() <= 0 or rect.height() <= 0:
         return
     painter.save()

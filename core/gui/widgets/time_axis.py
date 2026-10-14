@@ -22,8 +22,9 @@ def _tick_day(when) -> str:
 def axis_layout(start, now, end_from, end_by, width: int, text_width: Callable[[str], float]) -> dict:
     """Where everything on the time axis goes, as plain numbers: no painter and no widget, so it is
     tested without a screen. `end_by` None: no end is known. `end_from` None, or equal to `end_by`:
-    the end is firm. Given moments of one kind (all with a time zone, or all without) it never raises,
-    whatever their order, and the axis is never shorter than 30 s.
+    the end is firm. Given moments of one kind (all with a time zone, or all without) it does not raise,
+    whatever their order, unless one lies within a day of the last moment the calendar holds, where a date
+    cannot be reckoned further; and the axis is never shorter than 30 s.
     Keys: late, inside, axis_end, x_done, x_now, x_from, x_by, step, ticks, labels (pairs of x and text)."""
     day = datetime.timedelta(days=1)
     if end_by is None:                                 # no end is known: nothing is late and nothing is hatched

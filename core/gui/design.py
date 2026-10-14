@@ -181,7 +181,8 @@ def set_text_scale(factor: float) -> None:
 
 
 def scaled(n: int) -> int:
-    """A length of the table, in pixels, at the text size in force. A half rounds up at every factor."""
+    """A length of the table, in pixels, at the text size in force. A half rounds up, as far as floating point
+    holds the product: at a few factors (1.13 is one) a product that is an exact half comes out a pixel lower."""
     return math.floor(n * text_scale() + 0.5)
 
 
@@ -373,7 +374,8 @@ def build_palette(dark: bool) -> QPalette:
 # since a line's weight does not grow with the text. No comment stands inside a template: it would reach the
 # built text.
 #
-# The rules that stay. A sheet gives colours, borders and padding: a face and its features are set in code,
+# The rules that stay. A sheet gives colours, borders, padding and least heights, and to a class the size and
+# the weight of its lettering: a face and its features are set in code,
 # and the accent comes from a class, never from the default button, which follows the keyboard focus from
 # button to button. No rule marks keyboard focus: the focus ring is its one sign, so a tick box and a radio
 # button give up their outline, the style's own mark of it. No rule names their indicator: one would take the
@@ -466,7 +468,8 @@ QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 # text colour and a locked one in the greyed colour: in the secondary text colour an open tab stood too near a
 # locked one to be told from it. The word of an open tab then has no stronger colour left to answer the pointer
 # with, so the tab takes the ground an ordinary button takes there; the sheet's rule for the pointer is never
-# given to a greyed tab, so a locked one keeps its look. The tab in front keeps its ground: it leads nowhere.
+# given to a greyed tab, so a locked one keeps its look. The tab in front keeps its ground, for it leads
+# nowhere: its rule names that ground again and stands after the pointer's, and holds only in that order.
 # The greyed main button names the ordinary weight, the one rule with a state that names a weight at all: bold
 # words on a greyed button read as a button one may press. A state otherwise names no weight because a control
 # is measured once, at the weight of its plain rule, and wider words would be cut; here the plain rule is the
