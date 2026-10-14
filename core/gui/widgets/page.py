@@ -1,6 +1,7 @@
 """The devices every page is built from: the sentence set in the book face, the heading, the page with a middle that scrolls, and two columns that become one."""
 import html
 import math
+import re
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontDatabase, QFontMetricsF
@@ -9,6 +10,18 @@ from PySide6.QtWidgets import (QAbstractButton, QBoxLayout, QFrame, QHBoxLayout,
 
 from .. import design, fonts
 from ..reported import reported
+
+# A word this long, a path most often, cannot wrap, and a label cuts it at its edge with no sign: it may break
+# after a backslash, a slash, an underscore or a full stop that has more of the word after it.
+_LONG_WORD = re.compile(r"\S{40,}")
+_BREAK_AFTER = re.compile(r"(?<=[\\/_.])(?=\S)")
+_BREAK = chr(0x200B)                 # a place where a line may break, of no width: the zero-width space
+
+
+def _breakable(words: str) -> str:
+    """``words`` with a place to break after each backslash, slash, underscore and full stop inside a word of
+    40 characters or more that has more of the word after it. A shorter word is left as it is."""
+    return _LONG_WORD.sub(lambda word: _BREAK_AFTER.sub(_BREAK, word.group()), words)
 
 
 def _ring_room() -> int:
@@ -24,7 +37,8 @@ def bold_weight(family: str) -> int:
 
 class Sentence(QLabel):
     """One sentence in the book face, set at a fixed line height. Its text is shown as written: nothing in it
-    is read as markup. The opening words may be bold; a quiet sentence is set in the second ink."""
+    is read as markup, and a word of 40 characters or more may break after a backslash, a slash, an underscore
+    or a full stop. The opening words may be bold; a quiet sentence is set in the second ink."""
 
     def __init__(self, text: str = "", *, quiet: bool = False) -> None:
         super().__init__()
@@ -47,8 +61,10 @@ class Sentence(QLabel):
         self.set_text(text)
 
     def set_text(self, text: str, *, lead: str | None = None) -> None:
-        """Show ``text`` after ``lead``, its bold opening words; no lead, or an empty one, drops them."""
+        """Show ``text`` after ``lead``, its bold opening words; no lead, or an empty one, drops them. The words
+        as handed in are the label's accessible name: what it shows may hold places to break."""
         self._text, self._lead = text, lead or None
+        self.setAccessibleName(self.plain_text())
         self.retheme()
 
     def plain_text(self) -> str:
@@ -60,8 +76,9 @@ class Sentence(QLabel):
         self.setText(self._markup())
 
     def _markup(self) -> str:
-        """The one place where a caller's words meet markup: both strings are escaped, and the paragraph keeps
-        its spaces and its line breaks. Nothing is written for no words: an empty paragraph has a height."""
+        """The one place where a caller's words meet markup: both strings are given their places to break, then
+        escaped, and the paragraph keeps its spaces and its line breaks. Nothing is written for no words: an
+        empty paragraph has a height."""
         if not self._text and not self._lead:
             return ""
         style = f"line-height:{self._line}px; white-space:pre-wrap"
@@ -72,8 +89,8 @@ class Sentence(QLabel):
             lead_style = f"font-weight:{self._bold}"
             if self._quiet:
                 lead_style += f"; color:{design.hex_colour('ink')}"
-            lead = f"<span style='{lead_style}'>{html.escape(self._lead, quote=False)}</span>"
-        body = html.escape(self._text, quote=False)
+            lead = f"<span style='{lead_style}'>{html.escape(_breakable(self._lead), quote=False)}</span>"
+        body = html.escape(_breakable(self._text), quote=False)
         return f"<p style='{style}'>{lead}{' ' if lead and body else ''}{body}</p>"
 
 

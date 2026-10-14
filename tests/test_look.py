@@ -5101,6 +5101,54 @@ def test_a_quiet_sentence_carries_the_second_ink_and_follows_the_theme():
             assert design.hex_colour("ink_2", False) not in quiet.text()
 
 
+def test_a_word_of_forty_characters_or_more_may_break_after_a_backslash_a_slash_an_underscore_or_a_full_stop():
+    """A word that cannot break, a path most often, would be cut at the label's edge with no sign. Inside a word
+    of 40 characters or more a place to break, of no width, follows each backslash, slash, underscore and full
+    stop that has more of the word after it, in the bold opening as in the rest. The length is counted in the
+    words as handed in, before any of them is written as markup. A shorter word is left as it is, so a sentence
+    with no long word is written as it always was."""
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import page
+    gap = chr(0x200B)                                     # a place to break, of no width
+    folder = r"C:\Users\J\PycharmProjects\PRISM\Artifacts\simulations"
+    name = "retrain_2026_10_05_narrowing_round_of_the_larger_network"
+    label = page.Sentence()
+    label.set_text(f"Not directly under {folder}; removed by name.", lead=name)
+    broken = (name.replace("_", "_" + gap) + " Not directly under "
+              + r"C:\ Users\ J\ PycharmProjects\ PRISM\ Artifacts\ simulations".replace(" ", gap) + "; removed by name.")
+    assert _shown_text(label) == broken, "a long word has no place to break"
+    odd = r"one\two/three_four.five-six:seven,eight(nine)ten=end."
+    places = r"one\ two/ three_ four. five-six:seven,eight(nine)ten=end.".replace(" ", gap)
+    assert _shown_text(page.Sentence(odd + " More.")) == places + " More.", (
+        "a long word breaks after another character, or at its end")
+    short = "a/" * 19 + "b"                               # 39 characters
+    marked = "a/" * 17 + "a<b>&"                          # 39 characters, three of them written longer as markup
+    plain = "See core/gui/widgets/page.py, e.g. the name_of_a_thing."
+    assert [gap in page.Sentence(words).text() for words in (short, marked, plain, short + "c")] == [
+        False, False, False, True], "a word of another length was given places to break"
+
+
+def test_a_long_path_stays_whole_in_a_message_row_and_in_a_question_and_its_words_stay_as_handed_in():
+    """A path in a sentence, as the program's messages name one. A message row needs no more width than a page
+    gives a message (354 px), and in a question at its designed width the sentence, an item and the closing
+    lines each need no more than they have: the path is taken whole, in more lines. What each sentence answers
+    as its words, and the name a screen reader is given for it, are the words as handed in, without the places
+    to break that its text holds."""
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import message_row
+    from core.gui.widgets.ask import Ask
+    from core.gui.widgets.page import Sentence
+    folder = r"C:\Users\J\PycharmProjects\PRISM\Artifacts\simulations"
+    said = f"'notes.txt' is not the name of a file directly under {folder}; a loose file is removed by its own name"
+    row = message_row.MessageRow("err", said, lead="Error")
+    asked = Ask(None, "Error", said, "OK", marker="err", items=[folder, "a second item"], beneath=said)
+    held = [asked.sentence, asked.items_area.widget().findChildren(Sentence)[0], asked.beneath]
+    assert [(label.plain_text(), label.accessibleName()) for label in [row.sentence] + held] == [
+        ("Error. " + said,) * 2, (said, said), (folder, folder), (said, said)], "a sentence's words are not as handed in"
+    past = [row.minimumSizeHint().width() - 354] + [label.minimumSizeHint().width() - label.width() for label in held]
+    assert [max(0, width) for width in past] == [0, 0, 0, 0], "a path runs past the edge of its place in a row or a question"
+
+
 def test_a_message_row_opens_with_its_bold_lead_and_date():
     QApplication.instance() or QApplication([])
     from core.gui.widgets import message_row, page
