@@ -3,10 +3,12 @@
 **Last updated:** 2026-10-14 (STAGE 1 OF THE WINDOW REDESIGN IS BUILT AND ITS EXIT IS PASSED: `8b2ca92`..`f9c6899`, 100
 commits, then the exit's documents; the fast gate of record on a quiet machine 1407 passed, 4 skipped, 5 deselected in
 16 min 9 s; the display-marked run 4 passed; the slow set 5 passed in 1 h 6 min 5 s; nothing pushed after `d8828f9`; the
-paragraph "STAGE 1 OF THE WINDOW REDESIGN IS BUILT" below is this chat's record. NEXT: task 19q, the owner's five
-answers at the exit, prepared in this chat; then the plan of stage 2, the shell, to be approved by the owner before it
-is built; the separate design for saving the fit is owed between stages 2 and 3. What follows in this parenthesis is the
-head as the chat of 13 October left it:
+paragraphs "TASK 19q" and "STAGE 1 OF THE WINDOW REDESIGN IS BUILT" below are this chat's record. TASK 19q, THE
+OWNER'S FIVE ANSWERS AT THE EXIT, IS COMPLETE (`80249b6`..`066b55c`; review clean in three seats; gate green on
+`066b55c`: 1413 passed, 4 skipped, 5 deselected; deviation rows 49 to 53). NEXT, IN A NEW CHAT: the plan of stage 2,
+the shell, from `docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-plan.md`, to be approved by the owner
+before it is built; the separate design for saving the fit is owed between stages 2 and 3. What follows in this
+parenthesis is the head as the chat of 13 October left it:
 2026-10-13, evening (THE BUILD IS HANDED TO A NEW CHAT FOR STAGE 1'S EXIT, which continues from
 `docs/superpowers/prompts/2026-10-13-window-redesign-stage-1-exit.md`, the paragraph "THE CHAT OF 13 OCTOBER" below and
 the ledger: TASK 10r, THE FOCUS RING ON A CONTROL SCROLLED INTO SIGHT, IS COMPLETE after one fix round (gate green on
@@ -58,6 +60,26 @@ the build's state stands in four paragraphs, each as it was written on its date 
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**TASK 19q (2026-10-14, the same chat; the ledger's entries from "Task 19q (the owner's five answers at the exit)" on
+have every figure and ruling).** The owner's five answers at stage 1's exit, built as one small task before stage 2's
+plan, as Task 19's brief has it for a change the owner asks for there: a time axis on which no tick falls takes the
+next finer spacing, down to 30 s; a late axis grows by a quarter of the run's planned length, 30 s to a day (it grew by
+whole days; deviation row 20 changed); a word of 40 characters or more in the sentence label may break after a
+backslash, slash, underscore or full stop, so a message naming a long path stays whole (in rows and in the shared
+question alike; every sentence's accessible name is its words as handed in); a message row with no marker starts its
+words where a marked row does; in the figure that compares an FDT ratio across repeats the repeats skip the mean's blue
+(one colour change in `core/FDT/compare.py`, a plotting file E12 had touched for its colours; nothing else in it
+moves; from the command line matplotlib's own cycle stands, its first colour near the mean's blue: the audit's list).
+Prepared by one skeptic that wrote, ran and walked the brief (230 checks with pytest, none otherwise); built by one
+implementer in four commits, tests first (`80249b6`, `75b9833`, `3d00cbe`, `066b55c`); reviewed by three readers, all
+clean (the blobs equal the brief's blocks byte for byte; drawn before against after, nothing that should stay still
+moved: 7,428 wordings byte-identical, some 16,000 rows and sentences pixel-identical, 32,562 unchanged axes equal; 86
+faults typed against the tests, every one a person would meet seen but four, whose test lines are written and run);
+gate green on `066b55c`: 1413 passed, 4 skipped, 5 deselected, 22 min 41 s beside the readers; the display-marked run 4
+passed. Deviation rows 49 to 53 recorded in the design's section 8, the plan's head and the ledger. No fix round;
+CARRIED to stage 2's first task as a tests-and-words front: the four test gaps and two words; to the stage that builds
+the records part: a selectable path copies its words as handed in (the break places are invisible characters).
 
 **STAGE 1 OF THE WINDOW REDESIGN IS BUILT (2026-10-14; Task 19, the exit, run in the chat of 14 October from the owner's
 pasted prompt of 13 October; the ledger's entries from "NEW CHAT 2026-10-14" on have every figure and every ruling).**
@@ -1827,8 +1849,10 @@ Piece 3
    the redesign closes those gaps or leaves some to the audit or the command line, are asked for in its brainstorming
    and are not recorded anywhere yet.
    **Stage 1 (the look's foundation) DONE 2026-10-14**: `8b2ca92`..`f9c6899` and the exit's documents (the paragraph
-   "STAGE 1 OF THE WINDOW REDESIGN IS BUILT" at the top). Owed in order: task 19q (the owner's five answers at the
-   exit); stage 2, the shell (its plan first, approved by the owner); the design for saving the fit; stages 3 to 9.
+   "STAGE 1 OF THE WINDOW REDESIGN IS BUILT" at the top). Task 19q (the owner's five answers at the
+   exit) DONE the same day (`80249b6`..`066b55c`). Owed in order: stage 2, the shell (its plan first, in a new chat from
+   `docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-plan.md`, approved by the owner); the design for saving
+   the fit; stages 3 to 9.
 10. **The code audit, of the math too**, in another chat after the redesign
     (`docs/superpowers/prompts/2026-10-05-code-audit.md`). The owner supplies a PDF of the models and the audit checks
     that the code implements them correctly, starting from
