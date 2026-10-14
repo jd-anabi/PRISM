@@ -78,8 +78,8 @@ class FocusRing(QFocusFrame):
     @reported()
     def paintEvent(self, _event):
         target = self.widget()
-        if target is None:
-            return
+        if target is None or target.size().isEmpty():
+            return                                   # round a control of no size the line would be a square on nothing
         painter = QPainter(self)
         try:                                         # a raise below must not leave a live painter on the frame
             painter.setRenderHint(QPainter.Antialiasing, True)

@@ -3403,6 +3403,48 @@ def test_under_the_fold_the_ring_shows_only_where_the_rules_show_it():
         assert ring.isHidden() and ring.widget() is None, "a frame that is on nothing is shown"
 
 
+def test_round_a_control_of_no_size_the_ring_paints_nothing_and_is_whole_once_the_control_has_a_size():
+    """A figure area with no figure in it keeps its bar of tabs, which then has no size and is still a stop of
+    the Tab key. The frame round a control of no size is the ring's own room and nothing else, eight pixels
+    square, and the ring's line drawn in it is a dark square at the area's corner, round nothing. So round a
+    control of no size the frame paints nothing. It is not taken off the control: the control still holds the
+    keyboard, and the frame has to be on it when it is given a size. So the focus arrives here on the bar of an
+    area with no tab, as the Tab key brings it; a tab is added, as when the first figure comes, and the ring is
+    read in the picture of the window, whole on all four sides, with nothing asked of the follower in between;
+    then the tab is closed under the ring, and the frame paints nothing again."""
+    from PySide6.QtWidgets import QTabWidget
+    from core.gui import style
+    app = QApplication.instance() or QApplication([])
+    holder, area = QWidget(), QTabWidget()
+    column = QVBoxLayout(holder)
+    column.setContentsMargins(20, 20, 20, 20)            # room for the ring's line on every side of the bar
+    column.addWidget(area)
+    bar = area.tabBar()
+
+    def paints(ring):                        # whether the frame, where it is shown, paints a single pixel
+        if ring is None or ring.isHidden():
+            return False
+        picture = _image(ring.width(), ring.height(), 1.0)
+        ring.render(picture, QPoint(0, 0), QRegion(), QWidget.RenderFlag.DrawChildren)
+        return picture != _image(ring.width(), ring.height(), 1.0)
+
+    with theme(False), _on_a_page(holder) as page:
+        follows = style.FocusFollower(app, style.PrismStyle())
+        try:
+            _arrive(bar, Qt.TabFocusReason)
+            bare = (bar.size().isEmpty(), paints(follows.ring()))
+            area.addTab(QWidget(), "one")                # the bar is given a size while it holds the keyboard
+            _settle()
+            sized = (bar.size().isEmpty(), _ring_sides(page, bar))
+            area.removeTab(0)                            # and loses it again under the ring
+            _settle()
+            bare_again = (bar.size().isEmpty(), paints(follows.ring()))
+        finally:
+            follows.stop()                   # first: the ring holds its control by address
+    assert sized == (False, ["whole"] * 4), "no ring round a control that was given a size while it held the keyboard"
+    assert (bare, bare_again) == ((True, False), (True, False)), "the ring painted round a control of no size"
+
+
 # ── painted devices: markers, glyphs, icons, ruled lines, the hatching ─────────────────────────
 _SCALINGS = (1.0, 1.25, 1.5, 2.0)                    # the display scalings a device is drawn at
 _BLANK = QColor(255, 0, 255)                         # a ground no colour of the look can be taken for
