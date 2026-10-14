@@ -734,6 +734,47 @@ def test_repeats_that_share_a_seed_are_named_as_one_run_drawn_twice(tmp_path, ca
     assert rec.body["results"]["seeds"] == [0, 1]
 
 
+def test_the_repeats_skip_the_means_blue_and_each_takes_a_colour_of_its_own(tmp_path):
+    """The band and the mean of the repeats are drawn in the engine's blue, and each repeat takes the next
+    of the line colours in force. Under the window's figure settings the second of those is that same blue,
+    so the second repeat was drawn in the mean's colour and could not be told from it. The repeats now skip
+    the mean's blue, however the settings write it (a capital letter or a small one), so each curve has a
+    colour of its own; under matplotlib's own settings, which hold no such blue, they take its colours as
+    before. Read off the lines and the band, never off pixels."""
+    from matplotlib import colors, cycler, rc_context, rcdefaults, rcParams
+    from core.gui import mpl_theme
+    from core.Helpers import plot_colours
+    store = _store(tmp_path)
+    ids = [build_fdt_record(store, name=f"rep{i}", seed=i, omegas=(1.0, 2.0, 4.0), ratio=r)
+           for i, r in enumerate([(1.0, 3.0, 1.0), (1.2, 5.0, 1.1), (0.8, 4.0, 0.9)])]
+
+    def drawn(settings):
+        """The band's colour, the mean's and each repeat's in turn, with ``settings`` written over
+        matplotlib's own; every setting is put back when the figure is drawn."""
+        seen = {}
+
+        def sink(_title, fig):
+            from matplotlib import pyplot as plt
+            ax = fig.axes[0]
+            seen["band"] = colors.to_hex(ax.collections[0].get_facecolor()[0])
+            seen["lines"] = {line.get_label(): colors.to_hex(line.get_color()) for line in ax.get_lines()}
+            plt.close(fig)
+        with rc_context():
+            rcdefaults()
+            rcParams.update(settings)
+            cmp.compare("repeats", ids, fig_sink=sink, store=store)
+        return seen["band"], seen["lines"]["mean of the repeats"], [seen["lines"][f"rep{i}"] for i in range(3)]
+
+    blue, window = colors.to_hex(plot_colours.BLUE), mpl_theme._rc()
+    small = dict(window, **{"axes.prop_cycle": cycler(color=[colour.lower() for colour in
+                                                              window["axes.prop_cycle"].by_key()["color"]])})
+    read = [drawn(window), drawn(small)]
+    assert [(band, mean, blue in repeats) for band, mean, repeats in read] == [(blue, blue, False)] * 2, (
+        "a repeat is drawn in the mean's blue")
+    assert [len(set(repeats)) for _band, _mean, repeats in read] == [3, 3], "two repeats share a colour"
+    assert drawn({})[2] == ["#1f77b4", "#ff7f0e", "#2ca02c"], "under matplotlib's own settings the repeats moved"
+
+
 def test_a_renormalised_blank_is_described_without_an_interpolation_it_never_did(tmp_path):
     """The blank notice every mode shares speaks of "the common grid" and of blanks "never
     interpolated across", and renormalise draws the record on its OWN grid and interpolates nothing

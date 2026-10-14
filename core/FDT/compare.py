@@ -605,6 +605,13 @@ def draw_repeats(w, records, *, sink):
     # measured point with a blank on each side.
     ax.plot(grid, mean, color=plot_colours.BLUE, linewidth=1.4, marker="o", markersize=4,
             label="mean of the repeats")
+    # The repeats take the line colours in force in turn, less the mean's blue, so that no repeat is drawn
+    # in the mean's colour. matplotlib's own colours hold no such blue, and are then left as they are.
+    from matplotlib import colors, rcParams
+    cycle = rcParams["axes.prop_cycle"].by_key().get("color", [])
+    others = [colour for colour in cycle if not colors.same_color(colour, plot_colours.BLUE)]
+    if others and len(others) < len(cycle):
+        ax.set_prop_cycle(color=others)
     for curve, vals in zip(curves, values):
         ax.plot(grid, vals, linewidth=0.6, alpha=0.7, marker="o", markersize=3, label=curve.label)
     ax.legend()
