@@ -156,7 +156,8 @@ class FocusFollower(QObject):
         elif kind == _KEY_PRESS:
             self._key_last = True            # a key was the last thing pressed
         elif kind == _MOUSE_PRESS:
-            self._key_last = False           # a mouse button was
+            self._key_last = False           # a mouse button was,
+            self._keyboard = False           # and the press ends the keyboard's turn, wherever it lands
         elif (kind == _FOCUS_OUT or kind == _HIDE) and obj is self._target:
             self.show_on(None)               # also when its page goes: before the control can be deleted
         return False

@@ -3445,6 +3445,35 @@ def test_round_a_control_of_no_size_the_ring_paints_nothing_and_is_whole_once_th
     assert (bare, bare_again) == ((True, False), (True, False)), "the ring painted round a control of no size"
 
 
+def test_a_press_of_the_mouse_ends_the_keyboards_turn_also_where_it_gives_the_focus_to_nothing(ring_room):
+    """A click on a tab gives the bar of tabs no focus. The page behind the tab changes, and the toolkit moves the
+    focus on to the new page's form by itself, for a reason that is neither the keyboard's nor the mouse's. If
+    the keyboard's turn ended only when the focus ARRIVED by the mouse, it would outlast that click, and a ring
+    would stand just inside the whole form of a page a person reached with the mouse. So the press itself ends
+    the turn, wherever it lands. Here the keyboard has the turn, and a focus the toolkit moves on shows the ring.
+    Then a mouse button goes down on something that takes no focus: the same move shows no ring, the window
+    coming back to the front shows none, a field one types in still shows it, and Shift+Tab starts the
+    keyboard's turn again."""
+    r = ring_room
+
+    def moved(widget, reason):               # the focus is moved on with no press of its own; is the ring there?
+        _moved_on(widget, reason)
+        shown = _ringed(r, widget)
+        _leave(widget, reason)
+        return shown
+
+    _arrive(r.button, Qt.TabFocusReason)                 # the Tab key: the keyboard has the turn
+    _leave(r.button, Qt.TabFocusReason)
+    before = moved(r.box, Qt.OtherFocusReason)
+    QApplication.sendEvent(QObject(), QMouseEvent(QEvent.MouseButtonPress, QPointF(1, 1), QPointF(1, 1),
+                                                  Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    after = [moved(r.box, Qt.OtherFocusReason), moved(r.button, Qt.ActiveWindowFocusReason),
+             moved(r.field, Qt.OtherFocusReason)]
+    _arrive(r.button, Qt.BacktabFocusReason)
+    assert (before, after, _ringed(r, r.button)) == (True, [False, False, True], True), (
+        "a press of the mouse that gave the focus to nothing did not end the keyboard's turn")
+
+
 # ── painted devices: markers, glyphs, icons, ruled lines, the hatching ─────────────────────────
 _SCALINGS = (1.0, 1.25, 1.5, 2.0)                    # the display scalings a device is drawn at
 _BLANK = QColor(255, 0, 255)                         # a ground no colour of the look can be taken for
