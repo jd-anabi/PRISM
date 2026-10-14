@@ -21,7 +21,8 @@ def opening(lead: str | None, when: datetime | None, now: datetime | None = None
 
 
 class MessageRow(QWidget):
-    """A marker and one sentence in the book face whose opening words are bold. An error has an edge at its left."""
+    """A marker and one sentence in the book face whose opening words are bold; a row with no marker keeps the
+    marker's room. An error has an edge at its left."""
 
     def __init__(self, kind: str, sentence: str, *, lead: str | None = None,
                  when: datetime | None = None, now: datetime | None = None) -> None:
@@ -39,6 +40,10 @@ class MessageRow(QWidget):
             column.addWidget(self.marker)
             column.addStretch(1)
             row.addLayout(column)
+        else:
+            # the marker's room and the gap after it, so that the words start where a marked row's do; a layout
+            # puts none of its spacing beside a space, so the space holds the gap as well
+            row.addSpacing(design.scaled(design.SIZE["marker"]) + design.scaled(design.GAP["message_marker"]))
         self.sentence = Sentence()
         self.sentence.set_text(sentence, lead=opening(lead, when, now) or None)
         row.addWidget(self.sentence, 1)

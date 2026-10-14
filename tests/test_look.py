@@ -5201,7 +5201,26 @@ def test_a_message_row_sets_its_marker_and_sentence_by_the_table():
     bare = message_row.MessageRow("", "An explanation.")
     bare.resize(300, bare.heightForWidth(300))
     bare.layout().activate()
-    assert bare.sentence.x() == 10
+    assert bare.sentence.x() == 10 + 16 + 10                    # its words start where a marked row's do
+
+
+def test_a_message_row_with_no_marker_starts_its_words_where_a_marked_row_does_at_every_text_size():
+    """A row with no marker keeps the marker's room and the gap after it, so that down a page every row's words
+    start at one place and end at one place, at each text size from 100 to 225 %."""
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import message_row
+    apart = []
+    for percent in range(100, 226):
+        with text_size(percent / 100):
+            ends = []
+            for kind in ("info", ""):
+                row = message_row.MessageRow(kind, "A sentence.")
+                row.resize(400, row.heightForWidth(400))
+                row.layout().activate()
+                ends.append((row.sentence.x(), row.sentence.x() + row.sentence.width()))
+        if ends[0] != ends[1]:
+            apart.append((percent, *ends))
+    assert apart == [], "a row with no marker starts or ends its words elsewhere"
 
 
 def test_an_error_row_has_an_edge_of_whole_pixels_and_no_ground():
