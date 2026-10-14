@@ -899,6 +899,28 @@ def test_inter_is_handed_to_matplotlib_once():
         assert Path(found).name == name, (weight, found)
 
 
+def test_a_lettering_file_that_does_not_load_is_named_in_a_warning(monkeypatch, tmp_path, caplog):
+    """A bundled file that will not load is no error: the program starts, in whatever face is found. But it may
+    not happen in silence, for the window is then set in a face nobody chose. A file the toolkit refuses is
+    named in a warning, and one it takes is not; and when the figure library cannot read the files, a warning
+    says that a figure keeps that library's own face. The toolkit here is a stand-in that refuses the first
+    file and takes the second, and the figure library is sent to a folder with no file in it: nothing is
+    handed to either, and what the module remembers of both is put back when the test ends."""
+    QApplication.instance() or QApplication([])
+    answers = dict(zip(fonts._FILES, (-1, 0)))
+    monkeypatch.setattr(fonts, "QFontDatabase",
+                        SimpleNamespace(addApplicationFont=lambda path: answers[Path(path).name]))
+    monkeypatch.setattr(fonts, "_registered", False)
+    monkeypatch.setattr(fonts, "_FONT_DIR", tmp_path)
+    monkeypatch.setattr(fonts, "_with_matplotlib", None)
+    caplog.set_level("WARNING", logger="core.gui.fonts")
+    fonts.register_fonts()
+    reached = fonts.register_with_matplotlib()
+    said = [record.getMessage().split(";")[0] for record in caplog.records if record.name == "core.gui.fonts"]
+    assert (reached, said) == (False, ["The lettering file Inter-Regular.ttf did not load",
+                                       "The lettering files did not reach the figure library"])
+
+
 def test_the_font_factories_can_be_called_before_the_application_exists():
     code = textwrap.dedent('''
         import sys

@@ -9,12 +9,15 @@ by a little), and a compound word then reads as if it were spaced. Sizes come fr
 scaled by the text factor. The two bundled Inter files are handed to the toolkit the first time a font
 is asked for, so a painted device has its face in a test as well, where no application font is loaded.
 """
+import logging
 from pathlib import Path
 
 from PySide6.QtGui import QFont, QFontDatabase, QFontInfo, QGuiApplication
 from PySide6.QtWidgets import QApplication
 
 from . import design
+
+log = logging.getLogger(__name__)
 
 _FONT_DIR = Path(__file__).resolve().parent / "assets" / "fonts"
 _FILES = ("Inter-Regular.ttf", "Inter-SemiBold.ttf")      # the two weights the look uses: 400 and 600
@@ -38,12 +41,15 @@ def _toolkit_is_up() -> bool:
 def register_fonts() -> None:
     """Hand the two bundled files to the toolkit, once per process. Before the application exists this
     does nothing and remembers nothing, so the first call after it does the work. A file that will not
-    load is not an error: the program still starts, in whatever face the toolkit finds."""
+    load is not an error: the program still starts, in whatever face the toolkit finds, and a warning
+    names the file."""
     global _registered
     if _registered or not _toolkit_is_up():
         return
     for name in _FILES:
-        QFontDatabase.addApplicationFont(str(_FONT_DIR / name))
+        if QFontDatabase.addApplicationFont(str(_FONT_DIR / name)) < 0:      # the toolkit's answer for a refusal
+            log.warning("The lettering file %s did not load; the window is set in whatever face the toolkit finds.",
+                        name)
     _registered = True
 
 
@@ -114,8 +120,9 @@ def fixed() -> QFont:
 
 def register_with_matplotlib() -> bool:
     """Hand the two bundled files to the figure library as well, so that a figure can name the lettering
-    face. Tried once per process and the outcome kept: True when both files went in. Never raises. The
-    figure library is imported here and not at the top, so building a font does not load it."""
+    face. Tried once per process and the outcome kept: True when both files went in. Never raises: a
+    failure is said in a warning. The figure library is imported here and not at the top, so building a
+    font does not load it."""
     global _with_matplotlib
     if _with_matplotlib is None:
         _with_matplotlib = False
@@ -124,8 +131,9 @@ def register_with_matplotlib() -> bool:
             for name in _FILES:
                 font_manager.fontManager.addfont(str(_FONT_DIR / name))
             _with_matplotlib = True
-        except Exception:                                   # noqa: BLE001 -- a figure then keeps its own face
-            pass
+        except Exception as error:                          # noqa: BLE001 -- a figure then keeps its own face
+            log.warning("The lettering files did not reach the figure library; a figure keeps that library's "
+                        "own face (%s: %s).", type(error).__name__, error)
     return _with_matplotlib
 
 
