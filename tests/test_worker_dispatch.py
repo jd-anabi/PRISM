@@ -378,6 +378,28 @@ def test_an_unanswered_file_chooser_is_recorded_returns_cancelled_and_fails_the_
             check_choosers_answered()
         for needle in ("save 'Save a thing'", "open 'Pick a thing'", "answer_chooser"):
             assert needle in str(failed.value), str(failed.value)
+        # That the check is made at the end of every test is the per-test fixture's doing, so the function the
+        # fixture was made from is driven here as the test runner drives it: what stands before its ``yield``,
+        # a test, then the rest. Once round a test that leaves a chooser unanswered, once round one that opens
+        # none. tests/ is no package, so pytest holds its conftest under a name of its own.
+        here = Path(__file__).resolve().with_name("conftest.py")
+        guards = next(plugin for plugin in request.config.pluginmanager.get_plugins()
+                      if getattr(plugin, "__file__", None) and Path(plugin.__file__).resolve() == here)
+        around_a_test, seen = guards._every_file_chooser_is_answered.__wrapped__, []
+        for leaves_one_open in (True, False):
+            run = around_a_test()
+            next(run)
+            seen.append(len(CHOOSER_CALLS))              # before the test: the record is emptied
+            if leaves_one_open:
+                QFileDialog.getOpenFileName(None, "Left open", "", "")
+            try:
+                next(run)
+            except AssertionError as failed_at_the_end:
+                seen.append("open 'Left open'" in str(failed_at_the_end))
+            except StopIteration:
+                seen.append("ended")
+            seen.append(len(CHOOSER_CALLS))              # after it: emptied again, whether the check failed or not
+        assert seen == [0, True, 0, 0, "ended", 0], seen
     finally:
         CHOOSER_CALLS.clear()            # opened on purpose: this test's own teardown must find none
 

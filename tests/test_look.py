@@ -414,6 +414,18 @@ def test_the_look_and_this_file_load_without_the_engine():
         elif isinstance(node, ast.ImportFrom):
             named |= {node.module or ""} | {f"{node.module}.{alias.name}" for alias in node.names}
     assert not _reaching(named) and not [name for name in named if name.endswith("_fixtures")], sorted(named)
+    # The fresh interpreter loads each module of the look and calls nothing in it, so an import that stands
+    # inside a function is never made there. So every import of every module is read as well, wherever it stands.
+    for module in LOOK_MODULES:
+        package, inside = module.rpartition(".")[0].split("."), set()
+        for node in ast.walk(ast.parse((REPO / (module.replace(".", "/") + ".py")).read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                inside |= {alias.name for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                base = package[:len(package) - node.level + 1] if node.level else []
+                source = ".".join(base + ([node.module] if node.module else []))
+                inside |= {source} | {f"{source}.{alias.name}" for alias in node.names}
+        assert not _reaching(inside), f"{module} imports {_reaching(inside)}, in a function or at its head"
     r = subprocess.run([sys.executable, "-c", _FRESH, __file__, ",".join(LOOK_MODULES)],
                        cwd=str(REPO), capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -1093,6 +1105,26 @@ def test_the_sheets_lengths_follow_the_text_factor_and_its_line_weights_do_not()
         assert built[("QScrollBar::handle:horizontal",)]["min-width"] == "28px"
 
 
+SHEET_DIGEST = "160894f6162ff8dd36e69f12c123feaeff7dfb74888cffe403743f592e704b5f"
+
+
+def test_every_rule_of_both_sheets_is_the_recorded_one():
+    """The tests round this one read a few rules each. Every other declaration of the sheet (what a button does
+    under the pointer, how a greyed field looks, the ground of a tool tip, a menu's chosen row, the handle of a
+    scroll bar) is held here, as the size tables are held by their digest: both themes, at the ordinary text
+    size and at twice it, each rule as its selectors and its declarations. The rules are taken in the sheet's
+    order and a rule's declarations in the rule's own, because the toolkit reads a short form that follows a
+    long one otherwise than one that goes before it. How a rule is laid out in the template does not enter."""
+    built = {}
+    for factor in (1.0, 2.0):
+        with text_size(factor):
+            for dark in (False, True):
+                built[f"{'dark' if dark else 'light'} at {factor}"] = _rules(design.build_qss(dark))
+    text = json.dumps(built, separators=(",", ":"))          # as built, nothing sorted: the order is held too
+    assert hashlib.sha256(text.encode("utf-8")).hexdigest() == SHEET_DIGEST, (
+        "a rule of the style sheet changed: if it is meant, say which one and record the new digest here")
+
+
 def _help_badge_rule(dark):
     """What the built sheet declares for the small round help button."""
     rules = {tuple(selectors): declarations for selectors, declarations in _rules(design.build_qss(dark))}
@@ -1458,11 +1490,11 @@ def _at(picture, x, y):
 def test_the_tick_box_and_the_radio_dot_are_painted_from_the_table():
     from core.gui import design, paint
 
-    def drawn(kind, on, enabled, ratio):
-        picture = _image(18, 18, ratio)
+    def drawn(kind, on, enabled, ratio, side=18):
+        picture = _image(side, side, ratio)
         painter = QPainter(picture)
         try:
-            paint.paint_indicator(painter, kind, QRectF(0, 0, 18, 18), on=on, enabled=enabled)
+            paint.paint_indicator(painter, kind, QRectF(0, 0, side, side), on=on, enabled=enabled)
         finally:
             painter.end()                    # a raise under a live painter would end the run, not this test
         return picture
@@ -1488,6 +1520,15 @@ def test_the_tick_box_and_the_radio_dot_are_painted_from_the_table():
                 off = drawn("radio", True, False, ratio)
                 assert (_at(off, 9, 2.5), _at(off, 9, 9)) == (name("disabled_fill"), name("disabled_ink")), where
                 assert drawn("neither", True, True, ratio) == _image(18, 18, ratio), "an unknown kind painted"
+                # The shapes, beside the colours. A set box is square out to its corner and a set radio is round,
+                # so its corner is bare. The dot reaches four units from the middle, of the nine to the edge. In
+                # a box twice the size every mark is twice the size. And the line of an empty box is one pixel
+                # wide, with the ground next to it.
+                assert (_at(ticked, 1.5, 1.5), _at(dot, 1.5, 1.5)) == (name("accent"), "#000000"), where
+                assert _at(dot, 9, 6.0) == name("on_accent"), where
+                assert _at(drawn("radio", True, True, ratio, side=36), 18, 12) == name("on_accent"), where
+                if ratio == 1.0:
+                    assert _at(empty, 1.5, 9) == name("field"), where
 
 
 def test_the_small_style_sizes_the_indicators_and_paints_them_itself():
@@ -1520,6 +1561,8 @@ def test_the_small_style_sizes_the_indicators_and_paints_them_itself():
                                 (QRadioButton, QStyle.SE_RadioButtonIndicator, 9, 2.5)):
             sheets = ("", design.build_qss(False), design.build_qss(True))     # none, and the whole sheet twice
             assert [fill(s, cls, part, x, y) for s in sheets] == [design.hex_colour("accent")] * 3, cls.__name__
+            corner = fill("", cls, part, 1.5, 1.5)       # a set box is square out to its corner; a set radio is round
+            assert (corner == design.hex_colour("accent")) is (cls is QCheckBox), (cls.__name__, corner)
             assert [fill(s, cls, part, x, y, enabled=False) for s in sheets] == [
                 design.hex_colour("disabled_fill")] * 3, cls.__name__          # greyed: set, and no accent
             spoiled = cls.__name__ + "::indicator { border: 1px solid red; }"

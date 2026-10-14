@@ -980,6 +980,60 @@ def test_no_static_message_box_is_called_anywhere_under_core():
                        "the window may not open one:\n" + "\n".join(found))
 
 
+_UNGUARDED_DIALOGS = ("QDialog", "QInputDialog", "QColorDialog", "QFontDialog", "QProgressDialog", "QErrorMessage",
+                      "QWizard")
+_QUESTION_MODULE = "core/gui/widgets/ask.py"
+
+
+def _unguarded_dialog_uses(tree) -> list:
+    """``(lineno, what)`` for a class built on one of the toolkit's dialog classes, an instance made of one, and
+    a call of ``exec_``, the binding's older spelling of ``exec``."""
+    def last(node):
+        return node.attr if isinstance(node, ast.Attribute) else getattr(node, "id", None)
+
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            out += [(node.lineno, f"class {node.name}({last(base)})") for base in node.bases
+                    if last(base) in _UNGUARDED_DIALOGS]
+        elif isinstance(node, ast.Call) and last(node.func) in _UNGUARDED_DIALOGS:
+            out.append((node.lineno, f"{last(node.func)}(...)"))
+        elif isinstance(node, ast.Call) and last(node.func) == "exec_":
+            out.append((node.lineno, "exec_()"))
+    return sorted(out)
+
+
+def test_no_dialog_is_built_under_core_but_the_message_box_and_the_shared_question():
+    """The session's guard stands on the ``exec`` of two classes, the message box and the shared question, and
+    on nothing else: a dialog of any other class that is opened with ``exec`` offscreen never returns, and
+    neither does one of those two opened through ``exec_``, so either STALLS the suite instead of failing it.
+    So under the code roots no class is built on one of the toolkit's dialog classes and no instance of one is
+    made, outside the one module of the shared question, which holds the one class built on the plain dialog;
+    and nothing calls ``exec_``. The file chooser is not this scan's: the scan below holds it to its one
+    module. The scanner is checked on a SNIPPET first, so that the walk cannot pass by reading nothing."""
+    from tests._fixtures import CODE_FILES, CODE_ROOTS
+    snippet = ast.parse("\n".join([
+        'class Options(QDialog): pass',                          # 1: a dialog class of the program's own
+        'class Wide(QtWidgets.QWizard): pass',                   # 2: through the module
+        'box = QMessageBox(self)',                               # a guarded class: what is wanted
+        'box.exec()',
+        'asked = QInputDialog(self)',                            # 5: an instance nothing guards
+        'box.exec_()',                                           # 6: the older spelling
+        'note = "QDialog in a string is no dialog"']))
+    assert _unguarded_dialog_uses(snippet) == [
+        (1, "class Options(QDialog)"), (2, "class Wide(QWizard)"), (5, "QInputDialog(...)"), (6, "exec_()")]
+    files = [py for sub in CODE_ROOTS for py in sorted((REPO / sub).rglob("*.py"))]
+    files += [REPO / name for name in CODE_FILES]
+    found = {}
+    for py in files:
+        uses = _unguarded_dialog_uses(ast.parse(py.read_text(encoding="utf-8")))
+        if uses:
+            found[py.relative_to(REPO).as_posix()] = [what for _line, what in uses]
+    assert found == {_QUESTION_MODULE: ["class Ask(QDialog)"]}, (
+        "a dialog the session's guard does not stand on: opened with exec offscreen it never returns, and the "
+        f"run stalls instead of failing. Ask through core.gui.widgets.ask instead: {found}")
+
+
 _CHOOSER_MODULE = "core/gui/file_chooser.py"
 
 
