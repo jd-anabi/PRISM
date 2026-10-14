@@ -1,6 +1,11 @@
 # PRISM — state
 
-**Last updated:** 2026-10-14 (STAGE 1 OF THE WINDOW REDESIGN IS BUILT AND ITS EXIT IS PASSED: `8b2ca92`..`f9c6899`, 100
+**Last updated:** 2026-10-14, evening (THE PLAN OF STAGE 2, THE SHELL, IS WRITTEN AND COMMITTED, AWAITING THE OWNER'S
+APPROVAL: `docs/superpowers/plans/2026-10-14-window-redesign-stage-2.md`, ten building tasks and two controller tasks,
+departures 54 to 78 in the design's section 8 and the plan's table; nothing built; the paragraph "THE PLAN OF STAGE 2"
+below is this session's record. NEXT: the owner's approval (a change asked for is its own commit), then Task 0 and the
+build, then the separate design for saving the fit. What follows in this parenthesis is the head as the chat of 14 October
+left it: STAGE 1 OF THE WINDOW REDESIGN IS BUILT AND ITS EXIT IS PASSED: `8b2ca92`..`f9c6899`, 100
 commits, then the exit's documents; the fast gate of record on a quiet machine 1407 passed, 4 skipped, 5 deselected in
 16 min 9 s; the display-marked run 4 passed; the slow set 5 passed in 1 h 6 min 5 s; nothing pushed after `d8828f9`; the
 paragraphs "TASK 19q" and "STAGE 1 OF THE WINDOW REDESIGN IS BUILT" below are this chat's record. TASK 19q, THE
@@ -60,6 +65,33 @@ the build's state stands in four paragraphs, each as it was written on its date 
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**THE PLAN OF STAGE 2 (2026-10-14, evening; a session started from the chat of 14 October with the owner's pasted prompt
+`docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-plan.md`; the ledger's section "Stage 2 — the shell (plan)"
+and its folder `stage-2/plan-drafts/` have every figure and ruling).** At the start: the tree clean at `0747a4c`, no python
+alive, the card free; the usage card's weekly bar at 66 % (68 % when the plan was handed over). Read by three readers on
+sonnet against the code at the head (the shell's code, the tests that hold it, the look and the parts; about 1.5 million
+tokens): the appearance choices and the scaled smallest window are already stage 1's; the run state carries only the
+running panel; only Parameter inference reads the card when first built; a part built during a run comes up unlocked
+today; the builders' closed list of window classes, the sheet's interim rules and the drawing scan move with the shell;
+the session guard's two lines against an older spelling of a dialog's blocking call were never applied. **The one-PRISM
+lock settled by running** (the three scratch tests the design asks first; PySide6 only, no window): while the holder
+lives a second lock fails at once and the file cannot be removed; after a kill the next attempt takes the lock at once;
+a busy holder accepts a connection at once but may lose a word written to it, so the open PRISM acts on the connection.
+**The owner answered two questions**, each alone with sketches and a recommendation, both the recommendation: Effective
+temperature chooses its page by a row of names ("One cell", "Sweep study") built now, where the design builds it in stage
+7; the list of your own models and the help text move out of Settings now, into the rail's "Your own models" and "Help".
+**The plan:** 0 workspace and baseline; 1 the front (19q's test gaps and two words, the guard's older spelling, the hide
+event in the drawing scan, the builders' windows let go, the real settings folder guarded, the look's helpers within reach
+of the window suites); 2 the places, the keys and the steps' states as rules with no widget; 3 the rail's devices and the
+row of page names; 4 a page's small form and Home; 5 the rail mounted; 6 every place without a tab bar; 7 each part built
+when first opened; 8 the places in the refusals; 9 the keys; 10 one PRISM at a time, the last-resort error, the fonts
+once; 11 the exit. Expected honestly: sixteen to twenty tasks by the end, 35 to 50 million tokens. One cross-check reader
+(sonnet) found no blocker and eight Important hazards (an import the old header's removal would break, the F1 and F6
+allowance in the wrong task, a process-wide value no test put back, one key table doing two jobs, Home not re-read when
+records change, a test that would trip the builders' scan, the Records kind lost when an adapter goes, the look's helpers
+out of reach): all folded in before the plan was handed over, with rows 76 to 78. No engine change in the stage; no slow
+set and no card gate owed; no row for the owner written (row 61).
 
 **TASK 19q (2026-10-14, the same chat; the ledger's entries from "Task 19q (the owner's five answers at the exit)" on
 have every figure and ruling).** The owner's five answers at stage 1's exit, built as one small task before stage 2's
