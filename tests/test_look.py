@@ -4,7 +4,8 @@ Nothing here imports torch, so the look can be tested without the engine;
 ``test_the_look_and_this_file_load_without_the_engine`` proves it in a fresh interpreter, which runs this whole file:
 its module level holds imports, constants and definitions only. One application object serves every suite of a run,
 so the theme and the text factor are changed here only inside a helper or a fixture that puts back what it found:
-``theme`` and ``text_size`` are the two helpers for it.
+``theme`` and ``text_size`` are the two helpers for it. They, and the helpers for drawing into a picture, for moving the
+focus and for letting a widget go, live in tests/_look_helpers.py, where the window's suites can use them too.
 """
 import ast
 import builtins
@@ -28,8 +29,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import (QCoreApplication, QEvent, QItemSelectionModel, QLocale, QObject, QPoint, QPointF, QRect,
-                            QRectF, QSettings, QSize, Qt)
+from PySide6.QtCore import (QEvent, QItemSelectionModel, QLocale, QObject, QPoint, QPointF, QRect, QRectF, QSettings,
+                            QSize, Qt)
 from PySide6.QtGui import (QColor, QDoubleValidator, QFocusEvent, QFont, QFontDatabase, QFontInfo, QFontMetricsF,
                            QGuiApplication, QIcon, QImage, QIntValidator, QKeyEvent, QMouseEvent, QPainter, QPalette,
                            QRegion, QTextDocument, QWheelEvent)
@@ -41,6 +42,8 @@ from PySide6.QtWidgets import (QApplication, QBoxLayout, QCheckBox, QComboBox, Q
 from core.gui import design, fonts, paint
 from core.gui.widgets.marker import Marker, painted_icon
 from core.gui.widgets.ruled import Ruled, SectionHead
+from tests._look_helpers import (_BLANK, _arrive, _at, _gone, _image, _moved_on, _screen, _screen_of, _settle,
+                                 _the_look, text_size, theme)
 
 REPO = Path(__file__).resolve().parents[1]
 # every module of the look that exists; a new one joins this tuple in the commit that adds it, and the
@@ -53,28 +56,6 @@ LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.g
                 "core.gui.widgets.choice", "core.gui.widgets.ask")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
-
-
-@contextlib.contextmanager
-def theme(dark):
-    """The theme in force inside the block; what was in force before is put back."""
-    was = design.is_dark()
-    design.set_dark(dark)
-    try:
-        yield
-    finally:
-        design.set_dark(was)
-
-
-@contextlib.contextmanager
-def text_size(factor):
-    """The text factor in force inside the block; what was in force before is put back."""
-    was = design.text_scale()
-    design.set_text_scale(factor)
-    try:
-        yield
-    finally:
-        design.set_text_scale(was)
 
 
 # name: (light, dark). Typed a second time on purpose, so that a changed colour fails here by name.
@@ -415,8 +396,9 @@ def test_the_look_and_this_file_load_without_the_engine():
             named |= {node.module or ""} | {f"{node.module}.{alias.name}" for alias in node.names}
     assert not _reaching(named) and not [name for name in named if name.endswith("_fixtures")], sorted(named)
     # The fresh interpreter loads each module of the look and calls nothing in it, so an import that stands
-    # inside a function is never made there. So every import of every module is read as well, wherever it stands.
-    for module in LOOK_MODULES:
+    # inside a function is never made there. So every import of every module is read as well, wherever it stands,
+    # and every import of the helpers this file shares with the window's suites.
+    for module in LOOK_MODULES + ("tests._look_helpers",):
         package, inside = module.rpartition(".")[0].split("."), set()
         for node in ast.walk(ast.parse((REPO / (module.replace(".", "/") + ".py")).read_text(encoding="utf-8"))):
             if isinstance(node, ast.Import):
@@ -1473,20 +1455,6 @@ def test_colours_are_written_in_the_looks_table_alone_and_a_sheet_is_set_by_the_
 
 
 # ── the small style: the indicators it paints, the focus ring and where the ring shows ───────────
-def _image(width, height, ratio):
-    """A clear picture of that many logical pixels at a display scaling, its size rounded up."""
-    picture = QImage(math.ceil(width * ratio), math.ceil(height * ratio), QImage.Format_ARGB32_Premultiplied)
-    picture.setDevicePixelRatio(ratio)
-    picture.fill(Qt.transparent)
-    return picture
-
-
-def _at(picture, x, y):
-    """The colour, as the look's table writes it, of the device pixel under a logical point."""
-    ratio = picture.devicePixelRatio()
-    return picture.pixelColor(int(x * ratio), int(y * ratio)).name().upper()
-
-
 def test_the_tick_box_and_the_radio_dot_are_painted_from_the_table():
     from core.gui import design, paint
 
@@ -1675,22 +1643,6 @@ def ring_room():
         yield SimpleNamespace(window=window, button=button, field=field, row=row, box=box, follows=follows)
     finally:
         follows.stop()                       # first: the ring holds its control by address
-
-
-def _moved_on(widget, reason):
-    """The focus arrives with no press of its own, as when the toolkit moves it on from a greyed control."""
-    QApplication.sendEvent(widget, QFocusEvent(QEvent.FocusIn, reason))
-
-
-def _arrive(widget, reason):
-    """The focus arrives as a person moves it: first the press, which the application alone hears (a key for
-    the keyboard's three reasons, a mouse button for a click), then the focus itself."""
-    if reason in (Qt.TabFocusReason, Qt.BacktabFocusReason, Qt.ShortcutFocusReason):
-        QApplication.sendEvent(QObject(), QKeyEvent(QEvent.KeyPress, Qt.Key_Tab, Qt.NoModifier))
-    elif reason == Qt.MouseFocusReason:
-        QApplication.sendEvent(QObject(), QMouseEvent(QEvent.MouseButtonPress, QPointF(1, 1), QPointF(1, 1),
-                                                      Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
-    _moved_on(widget, reason)
 
 
 def _leave(widget, reason):
@@ -3542,8 +3494,7 @@ def test_a_press_of_the_mouse_ends_the_keyboards_turn_also_where_it_gives_the_fo
 
 # ── painted devices: markers, glyphs, icons, ruled lines, the hatching ─────────────────────────
 _SCALINGS = (1.0, 1.25, 1.5, 2.0)                    # the display scalings a device is drawn at
-_BLANK = QColor(255, 0, 255)                         # a ground no colour of the look can be taken for
-_BARE = _BLANK.name().upper()                        # that ground, as the colour of a pixel is named
+_BARE = _BLANK.name().upper()                        # the blank ground, as the colour of a pixel is named
 _HEAVY_RULE = {1.0: 2, 1.25: 2, 1.5: 3, 2.0: 4}      # a 2 px rule in device pixels at each scaling
 _HAIR_RULE = {1.0: 1, 1.25: 1, 1.5: 1, 2.0: 2}       # a 1 px rule
 # Where each shape shows which colour, and where it leaves the ground bare, in the 16-unit box a
@@ -3565,28 +3516,6 @@ _MARK_BARE = {
     "chev_up": ((8, 10.5),), "help": ((3.5, 8),), "stop": ((1.5, 8),),
 }
 _MARK_INNER = ("paper", "on_err", "warn_mark")       # the marks that stand ON a filled shape
-
-
-def _screen(width, height, ratio, ground=_BLANK, draw=None):
-    """A picture standing in for a screen at one scaling, on a ground of one colour, with
-    ``draw(painter)`` painted into it. The painter is ended whatever ``draw`` does: a picture that
-    goes while a painter still paints on it ends the whole run, where the test should only fail."""
-    image = _image(width, height, ratio)             # its size is rounded UP there: rounded down, a last row is cut
-    image.fill(ground)
-    if draw is not None:
-        painter = QPainter(image)
-        try:
-            draw(painter)
-        finally:
-            painter.end()
-    return image
-
-
-def _screen_of(widget, ratio, ground=_BLANK):
-    """A widget painted into such a picture, with no ground of its own under it."""
-    image = _screen(widget.width(), widget.height(), ratio, ground)
-    widget.render(image, QPoint(0, 0), QRegion(), QWidget.RenderFlag.DrawChildren)
-    return image
 
 
 def _every_pixel(image):
@@ -3987,36 +3916,6 @@ def _rt():
     QApplication.instance() or QApplication([])    # a widget needs the application, whichever test runs first
     from core.gui.widgets import rule_table        # inside each test: until the module exists only these fail
     return rule_table
-
-
-def _settle():
-    for _ in range(4):
-        QApplication.sendPostedEvents()
-        QApplication.processEvents()
-
-
-@contextlib.contextmanager
-def _the_look(dark, sheet=True):
-    """One theme in force, its palette on the application and its sheet too unless that is left out; all three
-    put back, whatever the block does."""
-    app = QApplication.instance() or QApplication([])
-    was_sheet, was_palette = app.styleSheet(), QPalette(app.palette())
-    with theme(dark):
-        try:
-            app.setPalette(design.build_palette(dark))
-            if sheet:
-                app.setStyleSheet(design.build_qss(dark))
-            yield
-        finally:
-            app.setStyleSheet(was_sheet)
-            app.setPalette(was_palette)
-
-
-def _gone(widget):
-    """Delete a widget now. Asked only to delete itself later it would stay to the end of the run: no event
-    loop turns between two tests. This widget's own request is delivered, and nobody else's."""
-    widget.deleteLater()
-    QCoreApplication.sendPostedEvents(widget, QEvent.DeferredDelete)
 
 
 @contextlib.contextmanager
