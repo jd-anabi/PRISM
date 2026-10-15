@@ -9,7 +9,7 @@ record imports them inside itself.
 import ast
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -182,6 +182,7 @@ def test_the_window_shortcuts_are_the_places_keys_and_three_more():
     prints, in their order and words."""
     from PySide6.QtGui import QKeySequence
     sequences = [sequence for sequence, _ in keys.BINDINGS]
+    assert len(set(sequences)) == len(sequences), "a key is bound twice"
     portable = QKeySequence.SequenceFormat.PortableText
     assert [QKeySequence.fromString(s, portable).toString(portable) for s in sequences] == sequences
     assert keys.BINDINGS == (
@@ -219,7 +220,7 @@ def test_a_place_is_written_as_the_window_names_it():
     assert keys.places_words(("help",)) == "Help"
     assert keys.places_words(("model", "infer", "live")) == (
         "step 1, Model and options, or step 5, Inference, or Live simulation")
-    for unknown in ("training/sweep", "temperature/compare", "records/prior", "nowhere"):
+    for unknown in ("training/sweep", "temperature/compare", "records/prior", "nowhere", "inference/home"):
         with pytest.raises(KeyError):
             keys.place_words(unknown)
 
@@ -264,6 +265,13 @@ _RULE_TABLE = {
     "any step, a live run elsewhere changes nothing": (
         _WITH_PRIOR, {"live": "temperature"}, "training",
         ("now", "Now", "Setting up", "Now: setting up", True, False), "Step 3, Training. Now: setting up"),
+    "any step, its run live before its needs are met": (
+        _MODEL, {"live": "training"}, "training",
+        ("now", "Now", "Running", "Now: running", False, False), "Step 3, Training. Now: running"),
+    "any step, a change not applied before its needs are met": (
+        _EMPTY, {"pending": frozenset({"prior"})}, "prior",
+        ("warn", "Attention", "Changed, not applied", "Changed, not applied", False, False),
+        "Step 2, Prior. Attention: changed, not applied"),
     "step 1, a built-in model": (
         _MODEL, {}, "model",
         ("done", "Done", "Nadrowski", "Done: Nadrowski", True, True), "Step 1, Model and options. Done: Nadrowski"),
@@ -300,6 +308,9 @@ _RULE_TABLE = {
     "step 3, a posterior before a training that ended early": (
         _TRAINED, {"ended": 4}, "training",
         ("done", "Done", "retrain", "Done: retrain", True, True), "Step 3, Training. Done: retrain"),
+    "step 3, a posterior with no prior in use": (
+        {"draft": _DRAFT, "posterior": _POSTERIOR}, {}, "training",
+        ("done", "Done", "retrain", "Done: retrain", False, True), "Step 3, Training. Done: retrain"),
     "step 3, no prior": (
         _MODEL, {}, "training",
         ("later", "To come", "Needs a prior", "Needs a prior", False, False),
@@ -381,8 +392,10 @@ def test_each_step_reads_as_the_rule_table_says(held, options, step, expected, s
 
 def test_the_rule_never_raises_on_what_a_session_may_hold():
     """Every session field a bare object, every field None, every field missing, no session at all, each with
-    and without the record words naming what is held: six states come back, each with a marker the look draws
-    and the word that marker is read with, and Home finds its next step."""
+    and without the record words naming what is held: six states come back, as a tuple of states that cannot
+    change, each with a marker the look draws and the word that marker is read with, and Home finds its next
+    step. A name that is not text reads as unnamed, and a record's body or moment that is not what a record
+    holds is passed over."""
     from core.gui import paint
     words = {"done": "Done", "now": "Now", "later": "To come", "warn": "Attention", "err": "Error",
              "half": "Unfinished"}
@@ -399,8 +412,17 @@ def test_the_rule_never_raises_on_what_a_session_may_hold():
             assert isinstance(chain.next_step(session, states), chain.Next)
             assert chain.first_time(has_records=False, has_runs=False, session=session) in (True, False)
     every = chain.step_states(sessions[0])
+    assert isinstance(every, tuple) and hash(every) == hash(chain.step_states(sessions[0])), (
+        "the states are not a tuple of states that cannot change")
     assert [s.rail_words for s in every] == ["Done: unnamed", "Done: unnamed", "Done: unnamed", "To come",
                                              "Done: unnamed", "Needs an observation"]
+    odd = _session(draft=SimpleNamespace(model=7), inf_prior=SimpleNamespace(name=7),
+                   posterior=SimpleNamespace(name=["retrain"], posterior=None), observation=SimpleNamespace(name=b"x"))
+    states = chain.step_states(odd, observation_on_offer=True)
+    assert [states[n].detail for n in (0, 1, 2, 4)] == ["unnamed"] * 4, "a name that is not text was kept"
+    made = SimpleNamespace(created=12345)
+    assert record_words.label_of(SimpleNamespace(kind="fdt", name="", manifest=made, body=["sweep"])) == (
+        "Unnamed effective-temperature measurement")
 
 
 def test_the_step_in_hand_is_the_first_open_step_and_never_the_narrowing_round():
@@ -421,6 +443,12 @@ def test_the_step_in_hand_is_the_first_open_step_and_never_the_narrowing_round()
     assert chain.step_in_hand(states) == "training"
     states = chain.step_states(_session(**_WITH_PRIOR), ended=4)
     assert chain.step_in_hand(states) == "training" and states[2].marker == "half"
+    states = chain.step_states(_session(**_MODEL), pending=frozenset({"model"}))
+    assert [s.marker for s in states[:2]] == ["warn", "later"] and chain.step_in_hand(states) == "model", (
+        "a step whose change was not applied was passed over for the step in hand")
+    blocked = (chain.StepState("model", 1, "later", "To come", "Needs a model", "Needs a model", False, False),
+               chain.StepState("prior", 2, "later", "To come", "", "To come", True, False))
+    assert chain.step_in_hand(blocked) == "prior", "a step that cannot start was taken for the step in hand"
 
 
 def test_the_built_in_models_are_written_as_the_window_names_them():
@@ -494,7 +522,7 @@ def test_the_first_time_holds_only_with_nothing_on_disk_and_nothing_loaded():
 def test_a_record_is_called_by_its_name_or_by_its_kind_and_date(tmp_path):
     """A name when it has one; with none, its kind and when it was made, or for a simulation set the prior it
     was simulated for. A record the session holds is labelled from its manifest, its moment turned from the
-    store's time into local time, and the chain names it so."""
+    store's time into local time, and the chain names it so. A record made today still carries its year."""
     from core.artifacts import ArtifactStore
     at = datetime(2026, 10, 3, 14, 2, 11)
     assert record_words.record_label("calibration", "", at) == "Unnamed calibration, 3 Oct 2026, 14:02"
@@ -523,6 +551,17 @@ def test_a_record_is_called_by_its_name_or_by_its_kind_and_date(tmp_path):
     states = chain.step_states(_session(draft=_DRAFT, inf_prior=held), label=record_words.label_of)
     assert states[1].rail_words == "Done: Unnamed calibration, 3 Oct 2026, 14:02"
     assert states[1].spoken == "Step 2, Prior. Done: Unnamed calibration, 3 Oct 2026, 14:02"
+    # a record made today still carries its year, never its weekday
+    recent = datetime.now().replace(second=0, microsecond=0)
+    said = record_words.record_label("calibration", "", recent)
+    assert said.startswith(f"Unnamed calibration, {recent.day} ") and said.endswith(
+        f" {recent.year}, {recent:%H:%M}"), said
+    # a record made five hours from this computer's zone is written in this computer's time, whatever its zone
+    here = datetime(2026, 10, 3, 14, 2).astimezone().utcoffset()
+    away = timezone(here + timedelta(hours=5) if here <= timedelta(hours=8) else here - timedelta(hours=5))
+    moment = datetime(2026, 10, 3, 14, 2, 11, tzinfo=away)
+    made = SimpleNamespace(kind="calibration", name="", manifest=SimpleNamespace(created=moment.isoformat()))
+    assert record_words.label_of(made) == f"Unnamed calibration, 3 Oct 2026, {moment.astimezone():%H:%M}"
 
 
 def test_each_store_kind_has_one_word():

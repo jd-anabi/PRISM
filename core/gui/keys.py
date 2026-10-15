@@ -98,7 +98,7 @@ def place_words(place: str) -> str:
     these."""
     if "/" in place:
         whole, page = place.split("/", 1)
-        if whole == "inference":
+        if whole == "inference" and any(named.key == page for named in STEPS):
             return place_words(page)
         for named in PAGES.get(whole, ()):
             if named.key == page:
