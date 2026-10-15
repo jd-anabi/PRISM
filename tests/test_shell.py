@@ -226,8 +226,9 @@ def test_home_mid_project_states_the_one_next_step_and_where_each_step_stands(mo
 def test_a_row_of_home_opens_its_place_on_a_click_enter_or_space():
     """A row of each of Home's three tables opens its place: a step of parameter inference, a part, or the records
     of a record's kind. It opens on one click, on Enter and on Space, the pointer is a pointing hand over the
-    rows, and the row is not left selected behind it. A key with no row under the keyboard opens nothing. The main
-    button opens the next step's place, the link all records, and each of the first opening's buttons its own."""
+    rows and not over their titles, and the row is not left selected behind it. A key with no row under the
+    keyboard opens nothing, and the keys that move along a table still move along it. The main button opens the
+    next step's place, the link all records, and each of the first opening's buttons its own."""
     home = _home(_facts(_under_way(), _records()))
     _laid_out(home)
     heard = []
@@ -256,6 +257,13 @@ def test_a_row_of_home_opens_its_place_on_a_click_enter_or_space():
     assert heard == [("inference", "training"), ("records", None)]
     assert link.cursor().shape() == Qt.PointingHandCursor
     heard.clear()
+    for table in (home.steps_table, home.parts_table, home.records_table):
+        view = table.view
+        view.setCurrentIndex(view.model().index(0, 0))
+        QTest.keyClick(view, Qt.Key_Down)
+        QTest.keyClick(view, Qt.Key_Down)
+        assert (view.currentIndex().row(), heard) == (2, []), "a key that moves along a table was taken by Home"
+        assert view.horizontalHeader().cursor().shape() != Qt.PointingHandCursor, "a hand over the titles"
     first = _home(_facts())
     first.navigate.connect(lambda part, page: heard.append((part, page)))
     for button in first.choices:
@@ -329,7 +337,8 @@ def test_homes_columns_stack_on_a_narrow_page():
     page's width first."""
     home = _home(_facts(_under_way(), _records()))
     columns = home.findChild(Columns)
-    edge = (22 - 4) + (20 - 4) + 2 * 4 + 8 + 2
+    left, _top, right, _bottom = design.SIZE["page_pad"]     # the ring's room comes off the padding and is kept
+    edge = design.scaled(left) + design.scaled(right) + design.SIZE["scroll_bar"] + design.SIZE["scroll_gap"]
     _laid_out(home, 940 + edge, 800)
     assert not columns.stacked()
     left = home.steps_table.mapTo(home, home.steps_table.rect().topLeft())
@@ -340,8 +349,17 @@ def test_homes_columns_stack_on_a_narrow_page():
     left = home.steps_table.mapTo(home, home.steps_table.rect().topLeft())
     right = home.parts_table.mapTo(home, home.parts_table.rect().topLeft())
     assert left.x() == right.x() and left.y() < right.y(), "the steps are not above the parts"
-    _laid_out(home, 900 - 220, 600)
-    assert columns.stacked()
+
+
+def test_home_takes_the_form_of_a_low_window_and_gives_it_back():
+    """Told that the window is low, Home takes the page's small form and its head drops its sentence; told that it
+    is not, Home takes its usual form again."""
+    home = _home(_facts(_under_way(), _records()))
+    head = home.findChild(PageHead)
+    home.set_small(True)
+    assert home.page.is_small() and head.sentence.isHidden(), "Home kept its usual form in a low window"
+    home.set_small(False)
+    assert not home.page.is_small() and not head.sentence.isHidden()
 
 
 def test_home_keeps_one_main_button_and_its_access_key():
@@ -428,12 +446,40 @@ def test_a_simulation_set_for_an_unnamed_prior_names_it_in_small_letters():
                                             "Simulation set for Retrain_prior")
 
 
+def test_homes_records_name_an_unnamed_record_in_local_time_and_leave_out_what_cannot_be_read():
+    """The window lists for Home what it can read of the store in use, and nothing it cannot read keeps the window
+    from opening: an unnamed record is labelled with the moment it was made in local time, as the Made column
+    writes it, whatever zone its manifest was written in; a moment that cannot be read leaves the date out; a kind
+    whose folder cannot be listed is left out. Home lists a record whose moment is not known last, with no date."""
+    from core.artifacts import StoreError
+    from core.gui import main_window
+    dated = _summary("calibration", "c1", "", "2026-10-03T14:02:00+05:45")
+    made = datetime.fromisoformat(dated.created).astimezone()
+    named = ("c1", f"Unnamed calibration, {design.date_text(made)}", made)
+    rows = main_window._home_records(_stand_in_store({"calibration": [dated]}))
+    assert [(row.id, row.label, row.made) for row in rows] == [named], "an unnamed record dated in another zone"
+
+    def listed(kind):
+        if kind == "posterior":
+            raise PermissionError("Access is denied")
+        if kind == "prior":
+            raise StoreError("unreadable")
+        return {"calibration": [dated, _summary("calibration", "c2", "", "not a date")]}.get(kind, [])
+
+    rows = main_window._home_records(SimpleNamespace(list=listed))
+    assert [(row.id, row.label, row.made) for row in rows] == [named, ("c2", "Unnamed calibration", None)]
+    home = _home(_facts(_under_way(), [RecordRow("calibration", "c2", "Unnamed calibration", "calibration", None),
+                                       _records()[0]]))
+    assert _cells(home.records_table) == [["retrain_prior", "Prior", "1 Mar 2025, 15:29"],
+                                          ["Unnamed calibration", "Calibration", ""]]
+
+
 def test_home_opens_todays_place_for_every_part_step_and_kind(tmp_path):
     """Each place Home asks for opens in the window: a part its screen (Help the screen its words are on today,
     Your own models the model builder), a page of Effective temperature its tab, a step its tab when the step's
     tab can be opened (a greyed tab leaves the tab shown), and a record's kind the records screen at that kind.
-    Home reads again each time it is opened after another screen was shown, and while it is shown, when a run
-    starts or ends."""
+    Home reads again each time it is opened after another screen was shown, so that it states what changed while
+    it was away, and while it is shown, when a run starts or ends."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.session import SbiSession
@@ -478,12 +524,58 @@ def test_home_opens_todays_place_for_every_part_step_and_kind(tmp_path):
             home.navigate.emit("live", None)
             home.navigate.emit("home", None)
             assert not home.is_first_time() and home.next_heading.label.text() == "Next: build or load a prior"
+            home.navigate.emit("live", None)
+            window.inference_screen.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"),
+                                                         inf_prior=SimpleNamespace(name="p"))
+            home.navigate.emit("home", None)
+            assert home.next_heading.label.text() == "Next: start a training", (
+                "Home stated what it read when it was left")
             panel = window.panel(CrossValPanel)
             panel._set_busy(True)
             try:
                 assert home.next_heading.label.text() == "Next: nothing until the run ends"
             finally:
                 panel._set_busy(False)
-            assert home.next_heading.label.text() == "Next: build or load a prior"
+            assert home.next_heading.label.text() == "Next: start a training"
+        finally:
+            window.hide()
+
+
+def test_in_the_window_home_reads_nothing_while_another_place_is_shown(tmp_path, monkeypatch):
+    """In the window Home reads nothing while the window is not shown, nothing as another place is opened, nothing
+    while another place is shown and a run starts or ends, and nothing at a move between two other places; opened
+    again, it reads once."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import main_window
+    from core.gui.panels.crossval_panel import CrossValPanel
+    qt_app()
+    reads, read = [], main_window._home_records
+    monkeypatch.setattr(main_window, "_home_records", lambda store: (reads.append(store), read(store))[1])
+
+    def run_starts_and_ends():
+        """The number of readings as a run starts, and when it has ended."""
+        panel._set_busy(True)
+        try:
+            started = len(reads)
+        finally:
+            panel._set_busy(False)
+        return started, len(reads)
+
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        window = build_window()
+        home, panel = window.home_screen, window.panel(CrossValPanel)
+        assert len(reads) == 1, "Home did not read as it was built"
+        assert run_starts_and_ends() == (1, 1), "Home read while the window was not shown"
+        window.setAttribute(Qt.WA_DontShowOnScreen)
+        try:
+            window.show()
+            assert len(reads) == 2, "Home marked to read again did not read when it was shown"
+            home.navigate.emit("live", None)
+            assert len(reads) == 2, "Home read as another place was opened"
+            assert run_starts_and_ends() == (2, 2), "Home read while another place was shown"
+            home.navigate.emit("reduction", None)
+            assert len(reads) == 2, "Home read at a move between two other places"
+            home.navigate.emit("home", None)
+            assert len(reads) == 3, "Home opened again did not read once"
         finally:
             window.hide()
