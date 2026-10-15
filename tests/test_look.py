@@ -6730,8 +6730,7 @@ def test_the_small_rail_shortens_its_rows_and_keeps_two_steps_whole(monkeypatch)
     """In a low window the name and the rows are shorter, and a step keeps its second line only when it is the
     step in hand, the first that cannot start or the open one; back in a high window everything is as before.
     With every part's row and the six steps showing and the step in hand open, the rail needs 756 pixels in the
-    usual layout and 654 in the low one at the ordinary text size, as the window's sizes were worked out; a step
-    of one line writes no words."""
+    usual layout and 654 in the low one at the ordinary text size; a step of one line writes no words."""
     with _railed() as held:
         rail, kit = held.rail, held.kit
 
@@ -6920,8 +6919,10 @@ def test_the_foot_reads_nothing_is_running_and_is_no_control_then(monkeypatch):
             foot.set_state("tick", "Nothing is running")
     with text_size(1.25):
         tall = kit.rail.RunFoot()
-        assert tall.height() == 1 + 15 + 25 + 2 * 20 + 18
-        _gone(tall)
+        try:
+            assert tall.height() == 1 + 15 + 25 + 2 * 20 + 18
+        finally:
+            _gone(tall)
 
 
 def test_the_foot_is_one_button_while_a_run_is_shown_and_its_title_may_wrap(monkeypatch):
@@ -7153,3 +7154,45 @@ def test_a_part_row_wears_the_ring_inside_its_edge_and_leaves_its_bar_whole(monk
             assert given[-1] is models and _ring_sides(window, models, inset=True) == ["whole"] * 4
         finally:
             follows.stop()                   # first: the ring holds its row by address
+
+
+def test_the_foot_gives_up_the_keyboard_when_the_run_ends():
+    """A foot that held the keyboard while it was a button holds it no more once it is no control again, also in a
+    window that is not in front (the windows of a test never are)."""
+    kit = _rail_kit()
+    foot = kit.rail.RunFoot()
+    with _standing(foot, 220, 160) as window:
+        foot.set_state("now", "Running: Training", "0:12 so far. Settings are locked.", button=True)
+        foot.setFocus(Qt.TabFocusReason)
+        held = [window.focusWidget() is foot]
+        foot.set_state("none", "Nothing is running", "Only one run at a time.")
+        assert held + [window.focusWidget() is foot] == [True, False]
+
+
+def test_the_rail_keeps_a_tab_stop_after_a_place_it_does_not_list():
+    """The arrows left on a step, then a place the rail does not list: the chain folds, and the first row is the
+    list's one stop of the Tab key."""
+    with _railed(fields=True) as held:
+        rail, window = held.rail, held.window
+        rail.set_place("inference", "training")
+        _settle()
+        QTest.keyClick(rail.row("training"), Qt.Key_Down)
+        rail.set_place("nowhere")
+        _settle()
+        assert _tab_stops(window) == [held.before, rail.row("home"), held.after]
+
+
+def test_a_key_held_down_opens_a_row_and_presses_the_foot_once():
+    """Enter held down on a row of the rail opens it once, and Enter or Space held down on the foot presses it once:
+    the presses the keyboard repeats while a key is held down do nothing."""
+    with _railed() as held:
+        rail = held.rail
+        opened, pressed = [], []
+        rail.opened.connect(lambda part, step: opened.append((part, step)))
+        rail.foot.clicked.connect(lambda: pressed.append(True))
+        rail.foot.set_state("now", "Running: Training", "0:12 so far. Settings are locked.", button=True)
+        for widget, key in ((rail.row("records"), Qt.Key_Return), (rail.foot, Qt.Key_Return),
+                            (rail.foot, Qt.Key_Space)):
+            for repeated in (False, True, True):
+                QApplication.sendEvent(widget, QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier, "", repeated))
+        assert (opened, pressed) == ([("records", None)], [True, True])

@@ -129,7 +129,7 @@ class StepRow(QAbstractButton):
         self.setAccessibleName(spoken)
         self.setToolTip(_tool_tip(spoken, self._place))
 
-    def set_state(self, state) -> None:
+    def set_state(self, state: chain.StepState | None) -> None:
         """Show where the step stands: a ``StepState`` of the chain, or None for nothing known yet."""
         self._state = state
         self._name_it()
@@ -279,7 +279,7 @@ class RunFoot(QWidget):
             raise ValueError(f"not a marker: {marker!r}")
         self._marker, self._title, self._words, self._button = marker, title, words, bool(button)
         self.setFocusPolicy(Qt.TabFocus if self._button else Qt.NoFocus)
-        if not self._button and self.hasFocus():
+        if not self._button and self.window().focusWidget() is self:     # the window in front or not
             self.clearFocus()
         title_lines, word_lines = self._laid_out()
         _left, top, _right, bottom = (design.scaled(n) for n in design.SIZE["run_line"])
@@ -300,7 +300,8 @@ class RunFoot(QWidget):
 
     def keyPressEvent(self, event):
         if self._button and event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
-            self.clicked.emit()
+            if not event.isAutoRepeat():             # a key held down presses the foot once
+                self.clicked.emit()
             return
         super().keyPressEvent(event)
 
@@ -464,6 +465,8 @@ class Rail(QWidget):
         current = self._current_row()
         if current is not None:
             self._rove(current)
+        elif self._roving.isHidden():                # the stop stood on a step of the folded chain
+            self._rove(self._parts["home"])
         self._fit_steps()
         if current is not None:
             self._scroll.ensureWidgetVisible(current, 0, 0)
@@ -548,7 +551,8 @@ class Rail(QWidget):
             self.left.emit()
             return True
         if key in (Qt.Key_Return, Qt.Key_Enter):
-            row.click()
+            if not event.isAutoRepeat():             # a key held down opens the row once
+                row.click()
             return True
         if key in (Qt.Key_Left, Qt.Key_Right):
             return True
