@@ -72,13 +72,19 @@ _FACES = {
     "second": ("small", None, True),          # a value's second line
     "title": ("small", 600, False),           # the words over a column
 }
+# A font's mask of the properties it sets, with every one of them set: a painter then fills in none of them.
+_EVERY_PROPERTY = 0xFFFFFFFF
 
 
 def _face(part: str):
     """The font one lettered part of a table is set in, at the text size in force. It is asked where the part
-    is painted and where it is measured, so the two agree; no font is kept."""
+    is painted and where it is measured, so the two agree; no font is kept. Every property of it counts as set,
+    so a painter takes it whole and fills nothing in from the font of the widget it paints on, which each change
+    of appearance dresses again (a table's with the digits of equal width)."""
     kind, weight, equal_digits = _FACES[part]
-    return fonts.inter(kind, weight, tabular=equal_digits)
+    font = fonts.inter(kind, weight, tabular=equal_digits)
+    font.setResolveMask(_EVERY_PROPERTY)
+    return font
 
 
 def _pads(column: int, count: int) -> tuple[int, int]:

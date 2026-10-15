@@ -7303,3 +7303,26 @@ def test_the_layout_room_is_put_back_after_every_test(turn):
     with text_size(1.5):
         assert (design.small_below(), design.two_columns_from()) == (design.scaled(700), design.scaled(940)) == (
             1050, 1410), "the room an earlier test set is still in force"
+
+
+def test_a_table_draws_its_words_in_the_fonts_it_measured_them_in_whatever_font_it_wears(monkeypatch):
+    """A change of appearance gives lists and tables, and their headers, a font with the digits of equal width,
+    which also widens a hyphen; a painter fills in what its font leaves open from the widget it paints on. A ruled
+    table draws every part in exactly the font it measured it in: after the class fonts are applied, as each change
+    of appearance applies them, every word the table writes fits the box it is written in (a date in a fitted
+    column among them, which would otherwise lose its last figure), and only a value's figure is written in the
+    digits of equal width."""
+    rt = _rt()
+    app = QApplication.instance()
+    table = rt.RuleTable([rt.Column("Name"), rt.Column("Made", "fit"), rt.Column("Size", "fit", right=True)],
+                         [[rt.TextCell("retrain-prior"), rt.TextCell("1 Oct 2026, 09:31"), rt.ValueCell("1,234", "MB")]])
+    with _on_a_page(table), font_and_style_put_back(app):
+        fonts.apply_class_fonts(app)
+        _settle()
+        written = _written_with_fonts(monkeypatch, table)
+    over = [(text, QFontMetricsF(font).horizontalAdvance(text), box.width()) for box, text, font in written
+            if QFontMetricsF(font).horizontalAdvance(text) > box.width()]
+    equal = sorted(text for _box, text, font in written
+                   if font.isFeatureSet(_tabular()) and font.featureValue(_tabular()))
+    assert (sorted(text for _box, text, _font in written), over, equal) == (
+        [" MB", "1 Oct 2026, 09:31", "1,234", "Made", "Name", "Size", "retrain-prior"], [], ["1,234"])
