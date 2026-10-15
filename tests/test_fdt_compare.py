@@ -773,6 +773,11 @@ def test_the_repeats_skip_the_means_blue_and_each_takes_a_colour_of_its_own(tmp_
         "a repeat is drawn in the mean's blue")
     assert [len(set(repeats)) for _band, _mean, repeats in read] == [3, 3], "two repeats share a colour"
     assert drawn({})[2] == ["#1f77b4", "#ff7f0e", "#2ca02c"], "under matplotlib's own settings the repeats moved"
+    cycle = [colors.to_hex(colour) for colour in window["axes.prop_cycle"].by_key()["color"]]
+    assert cycle[1] == blue and [repeats for _band, _mean, repeats in read] == [[cycle[0]] + cycle[2:4]] * 2, (
+        "the repeats do not take the window's colours in turn, less the mean's blue")
+    numbers = dict(window, **{"axes.prop_cycle": cycler(color=[colors.to_rgb(colour) for colour in cycle])})
+    assert drawn(numbers)[2] == read[0][2], "the mean's blue written as numbers was not skipped"
 
 
 def test_a_renormalised_blank_is_described_without_an_interpolation_it_never_did(tmp_path):

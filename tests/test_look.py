@@ -5126,11 +5126,19 @@ def test_a_word_of_forty_characters_or_more_may_break_after_a_backslash_a_slash_
     plain = "See core/gui/widgets/page.py, e.g. the name_of_a_thing."
     assert [gap in page.Sentence(words).text() for words in (short, marked, plain, short + "c")] == [
         False, False, False, True], "a word of another length was given places to break"
+    beside = page.Sentence(f"See e.g. notes.txt\n{folder}.")
+    assert "See e.g. notes.txt\n" in beside.text() and beside.text().count(gap) == 6, (
+        "a word shorter than 40 characters beside a long one was given places to break")
+    others = "".join(chr(n) for n in range(33, 127) if chr(n) not in r"\/_.")
+    assert gap not in page.Sentence(others).text(), "a long word breaks after a character not of the four"
+    label.set_text("A second sentence.", lead="Then")
+    assert label.accessibleName() == "Then A second sentence." == label.plain_text(), (
+        "a sentence's name kept the words it had before")
 
 
 def test_a_long_path_stays_whole_in_a_message_row_and_in_a_question_and_its_words_stay_as_handed_in():
     """A path in a sentence, as the program's messages name one. A message row needs no more width than a page
-    gives a message (354 px), and in a question at its designed width the sentence, an item and the closing
+    gives a message (354 px), and in a question at its width the sentence, an item and the closing
     lines each need no more than they have: the path is taken whole, in more lines. What each sentence answers
     as its words, and the name a screen reader is given for it, are the words as handed in, without the places
     to break that its text holds."""

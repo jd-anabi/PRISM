@@ -62,6 +62,10 @@ def axis_layout(start, now, end_from, end_by, width: int, text_width: Callable[[
     spacings = ((300, 30), (7200, 900), (172800, 21600), (math.inf, 86400))
     first = next(n for n, (limit, _) in enumerate(spacings) if span < limit)
     midnight = start.replace(hour=0, minute=0, second=0, microsecond=0)    # the ticks are counted on the clock
+    # spacings pairs the length in seconds an axis stays under with the spacing of its ticks in seconds, finest
+    # first, and first is the pair the axis's length chooses; the loop tries that spacing and then each finer one,
+    # so step and times, read after it, are those of the first spacing under which a tick falls (30 s and no tick
+    # when none has one)
     for _, step in spacings[first::-1]:
         k = math.floor((start - midnight).total_seconds() / step) + 1      # the first tick after the start
         times = []
