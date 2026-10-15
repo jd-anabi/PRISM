@@ -4902,7 +4902,8 @@ def test_a_time_axis_and_its_key_whose_paint_fails_draw_nothing_end_their_painte
 
 
 # the page devices
-BOOK_FACE_MODULES = ("core/gui/widgets/message_row.py", "core/gui/widgets/page.py", "core/gui/widgets/ask.py")
+BOOK_FACE_MODULES = ("core/gui/widgets/message_row.py", "core/gui/widgets/page.py", "core/gui/widgets/ask.py",
+                     "core/gui/screens/home_screen.py")
 SENTENCE_LINES = {16: 22}      # a sentence's pixel size and its line height, in a book face or, with none, the lettering's
 
 

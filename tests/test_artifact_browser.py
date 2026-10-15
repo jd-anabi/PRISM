@@ -135,24 +135,22 @@ def test_a_kind_with_nothing_in_it_is_not_a_root_that_cannot_be_read(tmp_path):
     assert "PermissionError" in screen.status.text() and "Access is denied" in screen.status.text()
 
 
-def test_the_artifacts_tile_opens_the_browser_and_the_window_saves_its_state():
-    """The screen's five registration points, in one real window.
+def test_homes_records_row_opens_the_browser_and_the_window_saves_its_state():
+    """The screen's registration points, in one real window.
 
-    The tile is on Home and live; the screen sits AFTER the four sections and BEFORE Settings, so the
-    back-arrow slide direction stays monotone with the tile order; the name maps to its stack index;
-    and _save_state calls the screen's save_settings BY NAME. It is NOT a BasePanel and NOT in
+    Home's table of the parts opens it from its row "Records", with one click; the screen sits AFTER the
+    four sections and BEFORE Settings in the window's stack; the name maps to its stack index; and
+    _save_state calls the screen's save_settings BY NAME. It is NOT a BasePanel and NOT in
     _all_panels(), which is what keeps it out of both the app-wide control lock and
     _refresh_model_combos.
     """
-    from PySide6.QtWidgets import QPushButton
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
     from core.gui import settings as st
     from core.gui.panels.base_panel import BasePanel
     from core.gui.screens.artifact_screen import ArtifactScreen
-    from core.gui.screens.home_screen import SECTIONS
 
     qt_app()
-    assert SECTIONS[-1] == "Artifacts", SECTIONS
-
     w = build_window()
     assert isinstance(w.artifact_screen, ArtifactScreen)
     idx = w._section_index["Artifacts"]
@@ -164,9 +162,13 @@ def test_the_artifacts_tile_opens_the_browser_and_the_window_saves_its_state():
     assert w.artifact_screen not in w._all_panels()
 
     home = w.nav.stack.widget(0)
-    btn = next(b for b in home.findChildren(QPushButton) if b.text() == "Artifacts")
-    assert btn.property("accent") is True, "a live tile is accent-styled; a dead one is not"
-    btn.click()
+    assert home is w.home_screen
+    home.resize(1080, 820)
+    home.grab()
+    parts = home.parts_table.view
+    rows = [parts.model().index(row, 0) for row in range(parts.model().rowCount())]
+    records, = [index for index in rows if index.data() == "Records"]
+    QTest.mouseClick(parts.viewport(), Qt.LeftButton, Qt.NoModifier, parts.visualRect(records).center())
     assert w.nav.stack.currentIndex() == idx
 
     w.artifact_screen.kind_combo.setCurrentIndex(KINDS.index("posterior"))

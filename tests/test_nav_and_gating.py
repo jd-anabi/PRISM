@@ -257,15 +257,6 @@ def test_dispatch_watches_every_directory_it_is_given(tmp_path):
                                            "fdt3d_vs_T_20260922_130000.png"], seen
 
 # ── PRISM navigation redesign ────────────────────────────────────────────────────────────────────
-def test_greeting_maps_hours_to_time_of_day():
-    from core.gui.screens.home_screen import greeting
-    assert greeting(5) == greeting(11) == "Good morning"
-    assert greeting(8) == "Good morning"
-    assert greeting(12) == greeting(16) == "Good afternoon"
-    assert greeting(14) == "Good afternoon"
-    assert greeting(17) == greeting(23) == "Good evening"
-    assert greeting(0) == greeting(4) == "Good evening"
-
 def test_nav_shell_back_arrow_tracks_the_screen():
     from PySide6.QtWidgets import QWidget
     from core.gui.screens.nav_shell import NavShell
@@ -4330,39 +4321,44 @@ def test_clicking_the_run_slot_opens_the_running_panel_and_an_unknown_one_goes_n
         orphan._set_busy(False)
 
 
-def test_the_running_section_tile_and_tab_carry_a_marker_and_nothing_is_disabled():
-    """The run markers. The running section's Home tile takes a suffix and the running tab a leading
-    mark, both cleared the moment the run ends -- and both rewritten from the labels the screens were
-    BUILT with, so marking is idempotent and a cleared label is byte-identical to the original (the
-    tab titles are read back verbatim by test_every_field_key_has_a_window_control..., which asserts
-    ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]).
+def test_the_running_tab_carries_a_marker_home_none_and_nothing_is_disabled():
+    """The run markers. The running tab takes a leading mark, cleared the moment the run ends -- and
+    rewritten from the labels the screens were BUILT with, so marking is idempotent and a cleared label
+    is byte-identical to the original (the tab titles are read back verbatim by
+    test_every_field_key_has_a_window_control..., which asserts
+    ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]). Home carries no mark of a run: no
+    word on it holds the mark while a run is live.
 
-    And nothing is disabled: the app-wide controls lock stands on its own, the Home tiles stay live,
-    every tab stays selectable, and the marker survives refresh_gates -- which rewrites tab tooltips
-    and enabled states after every stage, and would be running while a marked run is live. You must
-    be able to look at another tab while a twenty-minute train runs."""
+    And nothing is disabled: the app-wide controls lock stands on its own, every tab stays selectable,
+    and the marker survives refresh_gates -- which rewrites tab tooltips and enabled states after every
+    step's run, and would be running while a marked run is live. You must be able to look at another tab
+    while a twenty-minute train runs."""
+    from PySide6.QtWidgets import QLabel, QPushButton
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.screens.nav_shell import RUNNING_MARK
     from tests._fixtures import qt_app
+
+    def marked_on_home():
+        home = w.home_screen
+        return [words for words in [button.text() for button in home.findChildren(QPushButton)]
+                + [label.text() for label in home.findChildren(QLabel)] if RUNNING_MARK in words]
 
     qt_app()
     w = build_window()
     fdt, inf = w.fdt_screen.tabs, w.inference_screen.tabs
     assert [fdt.tabText(i) for i in range(fdt.count())] == \
         ["FDT analysis", "Sweep study cross-validation"]
-    assert w.home_screen.tiles["FDT Analysis"].text() == "FDT Analysis"
 
     panel = w.panel(CrossValPanel)
     panel._set_busy(True)
     try:
         assert fdt.tabText(1) == f"{RUNNING_MARK} Sweep study cross-validation"
         assert fdt.tabText(0) == "FDT analysis", "only the running tab is marked"
-        assert w.home_screen.tiles["FDT Analysis"].text() == f"FDT Analysis  {RUNNING_MARK}"
-        assert w.home_screen.tiles["Simulate"].text() == "Simulate"
+        assert marked_on_home() == [], "Home carries a mark of the run"
         assert [inf.tabText(i) for i in range(inf.count())] == \
             ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]
         # nothing is disabled and navigation stays free
-        assert fdt.isTabEnabled(0) and w.home_screen.tiles["Simulate"].isEnabled()
+        assert fdt.isTabEnabled(0)
         w.nav.go_to(w._section_index["Simulate"])
         assert w.nav.stack.currentIndex() == w._section_index["Simulate"]
         fdt.setCurrentIndex(0)
@@ -4370,15 +4366,13 @@ def test_the_running_section_tile_and_tab_carry_a_marker_and_nothing_is_disabled
     finally:
         panel._set_busy(False)
     assert fdt.tabText(1) == "Sweep study cross-validation"
-    assert w.home_screen.tiles["FDT Analysis"].text() == "FDT Analysis"
 
     # an inference tab, and the marker survives the gate refresh that follows every stage
     post = w.inference_screen.posterior_panel
     post._set_busy(True)
     try:
         assert inf.tabText(2) == f"{RUNNING_MARK} Posterior"
-        assert w.home_screen.tiles["Parameter Inference"].text() == \
-            f"Parameter Inference  {RUNNING_MARK}"
+        assert marked_on_home() == [], "Home carries a mark of the run"
         assert fdt.tabText(1) == "Sweep study cross-validation", "another section keeps no mark"
         w.inference_screen.refresh_gates()
         assert inf.tabText(2) == f"{RUNNING_MARK} Posterior", "refresh_gates wiped the marker"
@@ -4391,7 +4385,7 @@ def test_the_running_section_tile_and_tab_carry_a_marker_and_nothing_is_disabled
     orphan = build_run_host()
     orphan._set_busy(True)
     try:
-        assert all(btn.text() == name for name, btn in w.home_screen.tiles.items())
+        assert marked_on_home() == []
         assert fdt.tabText(1) == "Sweep study cross-validation"
     finally:
         orphan._set_busy(False)
