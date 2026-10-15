@@ -24,8 +24,14 @@ _RULES_FORBIDDEN = ("PySide6", "torch", "core.config")
 _WORDS_FORBIDDEN = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager")
 
 _FRESH_RULES = """
+import importlib
 import sys
 from types import SimpleNamespace as held
+for name in sys.argv[2].split(","):
+    try:
+        importlib.import_module(name)
+    except ImportError:
+        pass
 from core.gui import chain, keys
 some = held(draft=held(model="NADROWSKI"), cfg=None, inf_prior=None, posterior=None, observation=None)
 every = held(draft=held(model="SHM"), cfg=None, inf_prior=held(name="p"), observation=held(name="o"),
@@ -37,20 +43,39 @@ for session, options in ((some, dict(live="prior", ended=3, pending=frozenset({"
     chain.next_step(session, states, live_place=("temperature", "sweep"))
     chain.first_time(has_records=False, has_runs=False, session=session)
 said = [chain.model_label("HOPF"), keys.places_words(("training", "narrowing")), keys.place_words("inference/infer")]
+early = held(draft=held(model=""), cfg=None, inf_prior=held(name="p"), posterior=None, observation=None)
+chain.step_states(early, ended=9500, label=str)
+whole = held(draft=held(model="BP"), cfg=None, inf_prior=held(name="p"), observation=held(name="o"),
+             posterior=held(name="q", posterior=None))
+chain.next_step(whole, chain.step_states(whole, observation_on_offer=True))
+said += [keys.place_words("records")]
+for lookup, place in ((keys.place_words, "nowhere"), (keys.place_words, "records/prior"), (keys.step_number, "home")):
+    try:
+        lookup(place)
+    except KeyError:
+        pass
 roots = sys.argv[1].split(",")
 bad = sorted(name for name in sys.modules if any(name == root or name.startswith(root + ".") for root in roots))
 sys.exit(repr(bad) if bad else 0)
 """
 
 _FRESH_WORDS = """
+import importlib
 import sys
 from datetime import datetime
 from types import SimpleNamespace as held
+for name in sys.argv[2].split(","):
+    try:
+        importlib.import_module(name)
+    except ImportError:
+        pass
 from core.gui import record_words
 record_words.record_label("simulation", "", None, prior_label="p")
 record_words.record_label("calibration", "", datetime(2026, 10, 3, 14, 2))
+record_words.record_label("prior", "p", None)
 made = held(created="2026-10-03T21:02:11+00:00")
 record_words.label_of(held(kind="fdt", name="", manifest=made, body={"study": "sweep"}))
+record_words.label_of(held(kind="prior", name="", manifest=held(created="not a moment")))
 roots = sys.argv[1].split(",")
 bad = sorted(name for name in sys.modules if any(name == root or name.startswith(root + ".") for root in roots))
 sys.exit(repr(bad) if bad else 0)
@@ -58,16 +83,38 @@ sys.exit(repr(bad) if bad else 0)
 
 
 def _imports(module: str) -> set:
-    """Every module an import statement of ``module`` names, wherever it stands in the file."""
-    package = module.rpartition(".")[0].split(".")
-    named = set()
-    for node in ast.walk(ast.parse((REPO / (module.replace(".", "/") + ".py")).read_text(encoding="utf-8"))):
-        if isinstance(node, ast.Import):
-            named |= {alias.name for alias in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            base = package[:len(package) - node.level + 1] if node.level else []
-            source = ".".join(base + ([node.module] if node.module else []))
-            named |= {source} | {f"{source}.{alias.name}" for alias in node.names}
+    """Every module an import statement names, in ``module`` and in every module of this repository it reaches
+    that way, wherever each statement stands; a call to ``__import__`` or ``import_module`` with a written name
+    counts as a statement."""
+    named, seen, todo = set(), set(), [module]
+    while todo:
+        current = todo.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        path = REPO / (current.replace(".", "/") + ".py")
+        package = current.rpartition(".")[0].split(".")
+        if not path.is_file():
+            path, package = REPO / current.replace(".", "/") / "__init__.py", current.split(".")
+        if not path.is_file():
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            found = set()
+            if isinstance(node, ast.Import):
+                found = {alias.name for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                base = package[:len(package) - node.level + 1] if node.level else []
+                source = ".".join(base + ([node.module] if node.module else []))
+                found = {source} | {f"{source}.{alias.name}" for alias in node.names}
+            elif (isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant)
+                  and isinstance(node.args[0].value, str)
+                  and ast.unparse(node.func).rpartition(".")[2] in ("__import__", "import_module")):
+                found = {node.args[0].value}
+            named |= found
+            for name in found:
+                parts = name.split(".")
+                if parts[0] == "core":
+                    todo += [".".join(parts[:n]) for n in range(1, len(parts) + 1)]
     return named
 
 
@@ -77,16 +124,20 @@ def _reaching(names, forbidden) -> list:
 
 def test_the_rules_and_tables_import_no_toolkit_and_no_engine():
     """The places, the keys and the steps' rules load neither the toolkit nor the engine, and the record words
-    load no engine (they write a date as the look does). In a pytest process both are loaded already, so the
-    proof is a fresh interpreter for each, which also calls the rules; and every import statement of each module
-    is read, wherever it stands, since a call can miss an import inside a branch it does not take."""
+    load no engine (they write a date as the look does). Every import statement of each module is read, wherever
+    it stands, and so is every statement of each module of this repository it imports, since a call can miss an
+    import inside a branch it does not take. In a pytest process both are loaded already, so the proof is a
+    fresh interpreter for each, which imports every module those statements name, from this repository or not,
+    and calls the rules down every branch."""
     for module, forbidden in (("core.gui.keys", _RULES_FORBIDDEN), ("core.gui.chain", _RULES_FORBIDDEN),
                               ("core.gui.record_words", _WORDS_FORBIDDEN)):
         found = _reaching(_imports(module), forbidden)
-        assert not found, f"{module} imports {found}, in a function or at its head"
-    for code, forbidden in ((_FRESH_RULES, _RULES_FORBIDDEN), (_FRESH_WORDS, _WORDS_FORBIDDEN)):
-        r = subprocess.run([sys.executable, "-c", code, ",".join(forbidden)], cwd=str(REPO), capture_output=True,
-                           text=True, timeout=120)
+        assert not found, f"{module} imports {found}, itself or through a module of this repository it imports"
+    rules = _imports("core.gui.keys") | _imports("core.gui.chain")
+    for code, named, forbidden in ((_FRESH_RULES, rules, _RULES_FORBIDDEN),
+                                   (_FRESH_WORDS, _imports("core.gui.record_words"), _WORDS_FORBIDDEN)):
+        r = subprocess.run([sys.executable, "-c", code, ",".join(forbidden), ",".join(sorted(named))],
+                           cwd=str(REPO), capture_output=True, text=True, timeout=120)
         assert r.returncode == 0, r.stdout + r.stderr
 
 
