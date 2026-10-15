@@ -936,6 +936,46 @@ def test_no_suite_points_the_settings_back_at_the_real_ini():
     assert offenders == [], f"these suites redirect the settings to the real PRISM.ini: {offenders}"
 
 
+def test_the_check_of_the_real_settings_folder_sees_a_path_come_or_go_at_any_depth(tmp_path):
+    """The session fixture of tests/conftest.py (_settings_home) lists the folder that holds the real settings
+    file as the run begins and checks it as the run ends, through the two functions of tests/_settings_folder.py:
+    whatever the window writes beside its settings file goes beside the test's own during a test, and one left
+    beside the real file would be read by the next launch. Tried on a folder of this test's own: unchanged, it
+    passes; a file left beside the settings file, one left in a folder beside it, the file itself taken away,
+    and a folder made where there was none each fail it. And the fixture lists the real file's own folder at
+    both ends with those two functions, which only the reading of its source can show."""
+    import ast
+    from tests import _settings_folder
+
+    folder = tmp_path / "PRISM"
+    (folder / "runs").mkdir(parents=True)
+    (folder / "PRISM.ini").write_text("", encoding="utf-8")
+    held = _settings_folder.listing(folder)
+    _settings_folder.check_kept(folder, held)
+    for left in (folder / "PRISM.lock", folder / "runs" / "one.log"):
+        left.write_text("", encoding="utf-8")
+        with pytest.raises(AssertionError, match="the suite changed what the real settings folder") as failed:
+            _settings_folder.check_kept(folder, held)
+        assert repr(str(left)) in str(failed.value), f"the check did not name {left}: {failed.value}"
+        left.unlink()
+    (folder / "PRISM.ini").unlink()
+    with pytest.raises(AssertionError, match="the suite changed what the real settings folder") as failed:
+        _settings_folder.check_kept(folder, held)
+    assert repr(str(folder / "PRISM.ini")) in str(failed.value), f"the check did not name the file: {failed.value}"
+    none = tmp_path / "none"
+    _settings_folder.check_kept(none, _settings_folder.listing(none))
+    none.mkdir()
+    with pytest.raises(AssertionError, match="the suite changed what the real settings folder"):
+        _settings_folder.check_kept(none, None)
+
+    tree = ast.parse((Path(__file__).parent / "conftest.py").read_text(encoding="utf-8"))
+    home, = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_settings_home"]
+    said = {ast.unparse(node) for node in ast.walk(home) if isinstance(node, (ast.Assign, ast.Call))}
+    assert {"folder = real.parent", "held = _settings_folder.listing(folder)",
+            "_settings_folder.check_kept(folder, held)"} <= said, (
+        "the session no longer lists the real settings file's folder as it begins and checks it as it ends")
+
+
 def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypatch):
     """The suites reach a window, a part, the inference screen and a bare run host through four
     plain functions of tests/_fixtures.py, so a constructor's arguments are written once. Three

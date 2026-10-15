@@ -143,22 +143,22 @@ def _settings_home(tmp_path_factory):
 
     The folder that holds the real file must hold at the end exactly what it held at the start, read
     as a listing of every path under it: whatever the window writes beside its settings file goes
-    beside the test's own, and a file it left beside the real one would be read by the next launch.
+    beside the test's own, and a file it left beside the real one would be read by the next launch. The
+    listing and its check are tests/_settings_folder.py's, which a test tries on a folder of its own.
     """
     from PySide6.QtCore import QSettings
     from core.gui import settings
+    from tests import _settings_folder
     real = Path(QSettings(QSettings.IniFormat, QSettings.UserScope, settings.ORG, settings.APP).fileName())
     folder = real.parent
     before = real.read_bytes() if real.exists() else None
-    held = sorted(str(path) for path in folder.rglob("*")) if folder.exists() else None
+    held = _settings_folder.listing(folder)
     settings.use_ini_file(str(tmp_path_factory.mktemp("settings") / "prism.ini"))
     yield
     settings.use_ini_file(None)
     after = real.read_bytes() if real.exists() else None
     assert after == before, f"the suite wrote into the real settings file {real}"
-    holds = sorted(str(path) for path in folder.rglob("*")) if folder.exists() else None
-    assert holds == held, (f"the suite changed what the real settings folder {folder} holds: "
-                           f"{sorted(set(holds or ()) ^ set(held or ()))[:5]}")
+    _settings_folder.check_kept(folder, held)
 
 
 @pytest.fixture(autouse=True)
