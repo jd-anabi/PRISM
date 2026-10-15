@@ -110,6 +110,8 @@ def _home_records(store) -> tuple:
             prior = priors.get(summary.parents.get("prior")) if kind == "simulation" else None
             prior_label = (None if prior is None else
                            record_words.record_label("prior", prior.name, _local(prior.created)))
+            if prior is not None and not prior.name:        # words inside another record's label: a small letter
+                prior_label = prior_label[:1].lower() + prior_label[1:]
             made = _local(summary.created)
             rows.append(RecordRow(kind, summary.id,
                                   record_words.record_label(kind, summary.name, made, prior_label=prior_label,

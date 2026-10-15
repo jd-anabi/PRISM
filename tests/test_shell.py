@@ -109,6 +109,17 @@ def _drawn_lines(monkeypatch, table):
     return drawn
 
 
+def _summary(kind, ident, name, created, parents=None):
+    """One record as the store's listing gives it, with what the window reads of it."""
+    return SimpleNamespace(kind=kind, id=ident, name=name, created=created, reason=None, parents=parents or {},
+                           study=None)
+
+
+def _stand_in_store(listed):
+    """A store whose listing gives the records handed in for each kind, and none of any other kind."""
+    return SimpleNamespace(list=lambda kind: list(listed.get(kind, ())))
+
+
 def test_home_with_nothing_on_disk_opens_on_what_do_you_want_to_do():
     """On a computer where nothing has been made yet (no record, no run, no model chosen) Home opens on what a
     person may do first. Its head asks the question and says what PRISM is; four buttons stand in their order,
@@ -204,6 +215,12 @@ def test_home_mid_project_states_the_one_next_step_and_where_each_step_stands(mo
     assert _cells(home.steps_table)[1][2] == long_name, "a step's detail is not in full"
     assert len(laid) > 1 and widest <= view.columnWidth(2) and view.rowHeight(1) > view.rowHeight(0), (
         "a step's detail is cut where it is drawn", laid, widest, view.columnWidth(2))
+    measured = _home(_facts(_under_way(), [RecordRow("fdt", "f2", "cell7_fdt", "effective-temperature measurement",
+                                                     datetime(2025, 3, 3, 11, 2, tzinfo=timezone.utc))]))
+    _laid_out(measured)
+    drawn = _drawn_lines(monkeypatch, measured.records_table)
+    assert ([lines for lines, _widest in drawn], measured.records_table.view.rowHeight(0)) == (
+        [["Effective-temperature ", "measurement"]], 50), "a record's kind word is cut"
 
 
 def test_a_row_of_home_opens_its_place_on_a_click_enter_or_space():
@@ -393,6 +410,22 @@ def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_s
         finally:
             posterior._set_busy(False)
         assert window._home_facts().live_place is None
+
+
+def test_a_simulation_set_for_an_unnamed_prior_names_it_in_small_letters():
+    """A simulation set is called by the prior it was simulated for. A prior with no name is called by its kind and
+    the moment it was made, and inside the set's label those words begin with a small letter; a prior's name is
+    kept as it was written."""
+    from core.gui import main_window
+    priors = [_summary("prior", "p1", "", "2026-10-03T14:02:00+05:45"),
+              _summary("prior", "p2", "Retrain_prior", "2026-10-03T14:02:00+05:45")]
+    made = datetime.fromisoformat(priors[0].created).astimezone()
+    rows = main_window._home_records(_stand_in_store({"prior": priors, "simulation": [
+        _summary("simulation", "s1", "", "2026-10-03T15:00:00+05:45", {"prior": "p1"}),
+        _summary("simulation", "s2", "", "2026-10-03T15:00:00+05:45", {"prior": "p2"})]}))
+    labels = {row.id: row.label for row in rows}
+    assert (labels["s1"], labels["s2"]) == (f"Simulation set for unnamed prior, {design.date_text(made)}",
+                                            "Simulation set for Retrain_prior")
 
 
 def test_home_opens_todays_place_for_every_part_step_and_kind(tmp_path):

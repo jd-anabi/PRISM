@@ -279,7 +279,7 @@ class HomeScreen(QWidget):
                        [("inference", state.key) for state in facts.states])
         newest = _newest(facts.records)[:LATEST]
         self._set_rows(self.records_table,
-                       [[TextCell(row.label, elide="middle"), TextCell(_capital(row.kind_word)),
+                       [[TextCell(row.label, elide="middle"), TextCell(_capital(row.kind_word), wrap=True),
                          TextCell(_made_words(row.made))] for row in newest],
                        [("records", row.kind) for row in newest])
         self.records_table.setVisible(bool(newest))
