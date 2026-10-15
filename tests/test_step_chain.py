@@ -268,11 +268,15 @@ _RULE_TABLE = {
         {"inf_prior": _PRIOR}, {}, "training",
         ("later", "To come", "", "To come", True, False), "Step 3, Training. To come"),
     "step 4, no prior": (
-        _MODEL, {"checks": None}, "checks",
+        _MODEL, {"checks": object()}, "checks",
         ("later", "To come", "Needs a prior", "Needs a prior", False, False), "Step 4, Checks. To come: needs a prior"),
-    "step 4, a prior and no count": (
-        _WITH_PRIOR, {"checks": None}, "checks",
-        ("later", "To come", "", "To come", True, False), "Step 4, Checks. To come"),
+    "step 4, a posterior and no prior in use": (
+        {"draft": _DRAFT, "posterior": _POSTERIOR}, {}, "checks",
+        ("later", "To come", "Needs a prior", "Needs a prior", False, False), "Step 4, Checks. To come: needs a prior"),
+    "step 4, a prior and no posterior": (
+        _WITH_PRIOR, {"checks": object()}, "checks",
+        ("later", "To come", "Needs a posterior", "Needs a posterior", False, False),
+        "Step 4, Checks. To come: needs a posterior"),
     "step 4, never in hand": (
         _TRAINED, {}, "checks",
         ("later", "To come", "", "To come", True, False), "Step 4, Checks. To come"),
@@ -315,7 +319,8 @@ _RULE_TABLE = {
 @pytest.mark.parametrize("held, options, step, expected, spoken", list(_RULE_TABLE.values()), ids=list(_RULE_TABLE))
 def test_each_step_reads_as_the_rule_table_says(held, options, step, expected, spoken):
     """One case for each rule of a step's state, the first rule that holds deciding; Checks reads "Needs a
-    prior" with no prior in use and "To come" otherwise, with no count, while the checks are not counted."""
+    prior" with no prior in use, then "Needs a posterior" with no posterior, and "To come" otherwise, with no
+    count, while the checks are not counted."""
     states = chain.step_states(_session(**held), **options)
     assert [s.key for s in states] == [s.key for s in keys.STEPS] and [s.number for s in states] == [1, 2, 3, 4, 5, 6]
     state = states[keys.step_number(step) - 1]

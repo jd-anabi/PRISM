@@ -5,8 +5,9 @@ Pure and import-safe: each rule reads the session it is handed through ``getattr
 field holds (a test puts a bare ``object()`` on every field), and nothing here imports the toolkit or the
 engine, so the rail, Home and the refusal tables can share it without a window.
 
-The checks are not counted yet: until they are, Checks reads "Needs a prior" while no prior is in use and "To
-come" otherwise, and it is never the step in hand, so after a training Home points to Inference.
+The checks are not counted yet: until they are, Checks reads "Needs a prior" while no prior is in use, "Needs a
+posterior" while no posterior is, and "To come" otherwise (a calibration needs a posterior and the prior it was
+trained against), and it is never the step in hand, so after a training Home points to Inference.
 """
 from dataclasses import dataclass
 from typing import Callable
@@ -111,7 +112,7 @@ def step_states(session, *, live: str | None = None, stopping: bool = False, end
         "model": None,
         "prior": None if draft is not None else "Needs a model",
         "training": None if prior is not None else "Needs a prior",
-        "checks": None if prior is not None else "Needs a prior",
+        "checks": "Needs a prior" if prior is None else "Needs a posterior" if posterior is None else None,
         "infer": None if posterior is not None else "Needs a posterior",
         "narrowing": ("Needs a posterior" if posterior is None else "Needs a prior" if prior is None
                       else None if observation_on_offer else "Needs an observation"),
