@@ -7,13 +7,13 @@ Python code the toolkit calls from inside that handling raises, and the toolkit 
 written in Python before the handling returns, the binding drops the error without a word, where it used
 to reach ``sys.excepthook`` and the window's "Unhandled error" box. An error of the last such method the
 handling enters is still reported, under a longer first line. In practice the loss is what happens to
-whatever is raised while the window is painted, and to a page's ``showEvent`` when the window comes back
-from minimised. So the methods this program writes that the toolkit calls while a window is drawn, laid
-out or shown carry ``reported``: a ``paintEvent``, an override of the style, the event filter that hears
-every paint, a ``resizeEvent``, a page's ``showEvent``, and likewise a delegate's or an icon engine's
-``paint`` and what a model answers in every repaint (``data``, ``headerData``, ``flags``, ``rowCount``,
-``columnCount``) when the program has one. Each hands its own error to the hook, and answers with a
-fallback so that the drawing goes on.
+whatever is raised while the window is painted, and to a page's ``showEvent`` or ``hideEvent`` when the
+window comes back from minimised or goes there. So the methods this program writes that the toolkit calls
+while a window is drawn, laid out, shown or hidden carry ``reported``: a ``paintEvent``, an override of the
+style, the event filter that hears every paint, a ``resizeEvent``, a page's ``showEvent`` and ``hideEvent``,
+and likewise a delegate's or an icon engine's ``paint`` and what a model answers in every repaint (``data``,
+``headerData``, ``flags``, ``rowCount``, ``columnCount``) when the program has one. Each hands its own error
+to the hook, and answers with a fallback so that the drawing goes on.
 
 Not guarded is a drawing library's own code inside the main window, which this program cannot decorate:
 today what the live simulation's plotting widget (core/gui/widgets/live_hair_bundle.py) inherits from its
