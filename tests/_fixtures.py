@@ -851,6 +851,9 @@ def process_state(app) -> dict:
         "palette set by hand": app.testAttribute(Qt.AA_SetPalette),
         "font": app.font().toString(),
         "text factor": design.text_scale(),
+        # The room the screen offers the window, which the look's two layout thresholds are held to: every
+        # window hands it over as it sizes itself.
+        "layout room": design._room,
         "theme flag": design.is_dark(),
         "class fonts": tuple(QApplication.font(name).toString() for name in (
             "QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu", "QMenuBar", "QTipLabel", "QStatusBar")),
@@ -902,7 +905,8 @@ def whole_program():
              "names": (app.organizationName(), app.applicationName()),
              "appearance": theming.active_appearance(), "hook": sys.excepthook,
              "quiet": config.QUIET_SEGMENT_BAR, "handler": logging_root.installed(),
-             "store": default_store(), "factor": design.text_scale(), "dark": design.is_dark()}
+             "store": default_store(), "factor": design.text_scale(), "dark": design.is_dark(),
+             "room": design._room}
     with matplotlib.rc_context():                     # the figure settings, exactly as found
         built = None
         try:
@@ -910,14 +914,15 @@ def whole_program():
             yield built
         finally:
             sys.excepthook = found["hook"]            # first: a slip below must not open a box
-            # Then the four that cannot fail, so that a slip in the toolkit's lines below cannot
-            # leave a temporary folder as the process's store, a handler on the root logger or a
-            # text factor that sizes every later test's widgets.
+            # Then the five that cannot fail, so that a slip in the toolkit's lines below cannot
+            # leave a temporary folder as the process's store, a handler on the root logger, or a
+            # text factor or a room that sizes every later test's widgets.
             set_default_store(found["store"])
             if not found["handler"]:
                 logging_root.remove()
             config.QUIET_SEGMENT_BAR = found["quiet"]
             design.set_text_scale(found["factor"])
+            design.set_room(found["room"])
             small_style.uninstall(app)                # the follower off the application before its style goes
             made = theming.active_appearance()
             theming._ACTIVE = found["appearance"]

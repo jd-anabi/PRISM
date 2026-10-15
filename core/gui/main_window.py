@@ -90,8 +90,11 @@ class MainWindow(QMainWindow):
         # The opening size and the smallest size both come from the look's table, grow with Windows'
         # text size and are then held to what the screen can show: the table's opening height is more
         # than a 1366x768 laptop can show, and more than 1920x1080 at 150% scaling, where the action
-        # buttons used to start below the fold.
-        opening, smallest = design.window_sizes(_room_on_screen())
+        # buttons used to start below the fold. The look's two layout thresholds are held to the same room:
+        # at a large text size a window as large as the screen keeps the usual layout.
+        room = _room_on_screen()
+        design.set_room(room)
+        opening, smallest = design.window_sizes(room)
         self.resize(*opening)
         # Without a smallest size Qt lets the user (or a restored geometry) shrink the shell until
         # the controls column is unusable. It is held to the screen too, so that it never asks for

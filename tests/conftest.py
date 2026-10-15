@@ -282,17 +282,30 @@ def _drawing_code_raises_nothing():
 
 
 @pytest.fixture(autouse=True)
-def _built_widgets_let_go(_isolated_settings, _drawing_code_raises_nothing):
+def _layout_room_put_back():
+    """The room the screen offers the window, which the look's two layout thresholds are held to, is put back to
+    none after every test. Every window a test builds hands the look its room as it sizes itself, and a room left
+    in force would hold the thresholds of every later test. The look is read where its module is kept, and loaded
+    by nothing here: a test that never loads it pays nothing."""
+    import sys
+    yield
+    design = sys.modules.get("core.gui.design")
+    if design is not None:
+        design.set_room(None)
+
+
+@pytest.fixture(autouse=True)
+def _built_widgets_let_go(_isolated_settings, _drawing_code_raises_nothing, _layout_room_put_back):
     """Every window, part, inference screen and bare run host the builders of tests/_fixtures.py made during
     a test is deleted when the test ends (tests/_built.py), so that none outlives it. Left alive, each would
     be dressed again by every later change of sheet, style or font on the one application, and an error of
     one of its guarded methods would be charged to whichever later test made that change. Each goes by its
     own deferred delete, the newest first, and is never closed, because closing a window writes settings.
-    The two fixtures it names are set up before it and torn down after it, so the widgets go while this
-    test's own settings file is in force and before the drawing record is read. What a fixture of wider
-    scope built was made before this test was set up, so it is left alone. A test that ends with a run still
-    live fails here, and its run is asked to stop and waited for before anything goes, so that no panel is
-    deleted under its run (tests/_built.py's end_of_test says how long, and why)."""
+    The three fixtures it names are set up before it and torn down after it, so the widgets go while this
+    test's own settings file and its room are in force and before the drawing record is read. What a
+    fixture of wider scope built was made before this test was set up, so it is left alone. A test that ends
+    with a run still live fails here, and its run is asked to stop and waited for before anything goes, so
+    that no panel is deleted under its run (tests/_built.py's end_of_test says how long, and why)."""
     from tests import _built
     at_start = _built.noted()
     yield

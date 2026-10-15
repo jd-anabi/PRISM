@@ -4740,11 +4740,14 @@ def test_the_main_window_takes_its_opening_and_smallest_size_from_the_look(monke
         return (1111, 777), (555, 444)
 
     monkeypatch.setattr(design, "window_sizes", sizes)
+    handed, hand = [], design.set_room
+    monkeypatch.setattr(design, "set_room", lambda room: (handed.append(room), hand(room))[1])
     window = build_window()
     assert (window.width(), window.height()) == (1111, 777)
     assert (window.minimumWidth(), window.minimumHeight()) == (555, 444)
     screen = QGuiApplication.primaryScreen().availableGeometry()
     assert set(asked) == {main_window._room_on_screen()} == {(screen.width() - 40, screen.height() - 60)}
+    assert handed == [main_window._room_on_screen()], "the window held the layout's thresholds to another room"
     # a saved geometry that cannot be restored: the window opens at the look's size again
     remembered = settings.settings()
     remembered.setValue("window/geometry", QByteArray(b"not a saved geometry"))

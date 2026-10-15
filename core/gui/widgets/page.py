@@ -4,7 +4,7 @@ import math
 import re
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFontDatabase, QFontMetricsF
+from PySide6.QtGui import QFontMetricsF
 from PySide6.QtWidgets import (QAbstractButton, QBoxLayout, QFrame, QHBoxLayout, QLabel, QLayout, QScrollArea,
                                QVBoxLayout, QWidget)
 
@@ -35,10 +35,30 @@ def bold_weight(family: str) -> int:
     return 600 if family == design.LETTERING else 700
 
 
+def _tell(part, small: bool) -> None:
+    """Tell ``part`` the page's form when it offers ``set_small``. A layout is looked into when it is told, so that
+    every widget in it, or in a layout inside it, that offers ``set_small`` is told, one put there after the
+    layout was handed in among them."""
+    if isinstance(part, QLayout):
+        for index in range(part.count()):
+            item = part.itemAt(index)
+            widget, inner = item.widget(), item.layout()
+            if widget is not None:
+                _tell(widget, small)
+            elif inner is not None:
+                _tell(inner, small)
+        return
+    tell = getattr(part, "set_small", None)
+    if tell is not None:
+        tell(small)
+
+
 class Sentence(QLabel):
     """One sentence in the book face, set at a fixed line height. Its text is shown as written: nothing in it
     is read as markup, and a word of 40 characters or more may break after a backslash, a slash, an underscore
-    or a full stop. The opening words may be bold; a quiet sentence is set in the second ink."""
+    or a full stop. The opening words may be bold; a quiet sentence is set in the second ink. Its words are
+    changed by ``set_text`` and never by the toolkit's own ``setText``, which reads them as markup and whose
+    words the next change of theme writes over with the old ones."""
 
     def __init__(self, text: str = "", *, quiet: bool = False) -> None:
         super().__init__()
@@ -56,8 +76,9 @@ class Sentence(QLabel):
         # and given back at the foot, so the letters stand in the middle of their line.
         lift = max(0, math.ceil((self._line - QFontMetricsF(face).lineSpacing()) / 2))
         self.setContentsMargins(0, -lift, 0, lift)
-        # A bare bold asks for 700, which the lettering face's two files do not hold.
-        self._bold = bold_weight(fonts.book_family(QFontDatabase.families()))
+        # A bare bold asks for 700, which the lettering face's two files do not hold. The weight is read off the
+        # font just built, whose face is the one found, so the toolkit's list of every family is not asked for.
+        self._bold = bold_weight(face.family())
         self.set_text(text)
 
     def set_text(self, text: str, *, lead: str | None = None) -> None:
@@ -95,7 +116,9 @@ class Sentence(QLabel):
 
 
 class PageHead(QWidget):
-    """A page's heading: its title, one sentence under it in the book face, its actions at the right."""
+    """A page's heading: its title, one sentence under it in the book face, its actions at the right. The
+    sentence is changed by ``set_sentence``, never by the toolkit's own ``setText`` nor by the sentence's own
+    ``set_text``: only ``set_sentence`` hides a sentence left with no words, and shows it again."""
 
     def __init__(self, title: str, sentence: str = "") -> None:
         super().__init__()
@@ -200,12 +223,12 @@ class Columns(QWidget):
 
     def fit(self, width: int) -> None:
         """Set the two blocks side by side when ``width`` has room for both, else one above the other. Both
-        need the width the look names, which grows with the text, and their own least widths with the gap
-        between them."""
+        need the width the look names, which grows with the text as far as the screen offers, and their own
+        least widths with the gap between them."""
         # a widget with no layout answers no least size of its own, whatever least width it was given
         least = (max(block.minimumSizeHint().width(), block.minimumWidth(), 0) for block in self._blocks)
         need = sum(least) + self._gaps[0]
-        wide = width >= max(design.scaled(design.SIZE["two_columns_from"]), need)
+        wide = width >= max(design.two_columns_from(), need)
         want = QBoxLayout.LeftToRight if wide else QBoxLayout.TopToBottom
         if self.box.direction() != want:
             self.box.setDirection(want)
@@ -238,7 +261,8 @@ class Page(QWidget):
 
     def add_fixed(self, part: QWidget | QLayout) -> None:
         """Add a part that stays where it is. It is set in from the page's sides by the room the middle
-        keeps for a focus ring, so that the two line up."""
+        keeps for a focus ring, so that the two line up. It is told the form the page is in now, and every
+        later change of form."""
         row = QHBoxLayout()
         room = _ring_room()
         row.setContentsMargins(room, 0, room, 0)
@@ -248,33 +272,37 @@ class Page(QWidget):
             row.addWidget(part)
         self.box.addLayout(row)
         self._told.append(part)
+        _tell(part, self._small)
 
     def add_gap(self, usual: int, small: int | None = None) -> None:
         """Add a space ``usual`` pixels high, which the low window makes ``small`` pixels high when that is
-        handed in. The heights are used as given, so a caller scales them."""
+        handed in; it is added at the height of the form the page is in now. The heights are used as given,
+        so a caller scales them."""
         gap = QWidget()
-        gap.setFixedHeight(usual)
+        low = usual if small is None else small
+        gap.setFixedHeight(low if self._small else usual)
         self.box.addWidget(gap)
-        self._gaps.append((gap, usual, usual if small is None else small))
+        self._gaps.append((gap, usual, low))
 
     def add_scrolling(self, body: QWidget) -> Scroller:
-        """Add the middle: ``body`` in a scroller that takes the room the other parts leave. Returns the scroller."""
+        """Add the middle: ``body`` in a scroller that takes the room the other parts leave, told the form the
+        page is in now. Returns the scroller."""
         scroller = Scroller(body)
         self.box.addWidget(scroller, 1)
         self._told.append(body)
+        _tell(body, self._small)
         return scroller
 
     def set_small(self, small: bool) -> None:
         """The low window, or the ordinary one again: the padding and the spaces take their other size, and
-        every part handed in that offers ``set_small`` is told."""
+        every part handed in that offers ``set_small`` is told, and every such widget inside a layout handed
+        in."""
         self._small = bool(small)
         self._pad()
         for gap, usual, low in self._gaps:
             gap.setFixedHeight(low if self._small else usual)
         for part in self._told:
-            tell = getattr(part, "set_small", None)
-            if tell is not None:
-                tell(self._small)
+            _tell(part, self._small)
 
     def is_small(self) -> bool:
         """Whether the page is in the form of the low window."""

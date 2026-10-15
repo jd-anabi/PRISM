@@ -1066,17 +1066,17 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
     test of the run, finds them deleted, and none of the panels among them left in the set of panels a run
     locks, though this module's list still holds them, as a run's own signals hold a panel that ran something.
     They go by their own deferred delete and never by a close, which writes settings, so the first turn's
-    settings file was never written. They go while that file is still the one in force and before the turn's
-    drawing record is read, which one part notes as it goes: the fixture's place in the teardown order comes
-    from the two fixtures it names, and nothing else holds it. The record holds what was built weakly, so a part
-    the test itself dropped is gone at once. The panel a fixture of this module built is no test's own, and it
-    is still there, still in the set. The two turns run together, in this order, in one process: the second
-    alone always fails."""
+    settings file was never written. They go while that file, and the room the turn left for the window's
+    layout, are still in force and before the turn's drawing record is read, which one part notes as it goes:
+    the fixture's place in the teardown order comes from the three fixtures it names, and nothing else holds
+    it. The record holds what was built weakly, so a part the test itself dropped is gone at once. The panel a
+    fixture of this module built is no test's own, and it is still there, still in the set. The two turns run
+    together, in this order, in one process: the second alone always fails."""
     import shiboken6
     import weakref
     from PySide6.QtCore import QCoreApplication, QEvent
     from PySide6.QtWidgets import QWidget
-    from core.gui import reported
+    from core.gui import design, reported
     from core.gui import settings as st
     from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.reduction_panel import ReductionPanel
@@ -1092,11 +1092,12 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
         watched = build_part(QWidget)
         reported.COUNTS["unread"] = 0        # a mark the drawing check takes away once it has read the record
         watched.destroyed.connect(lambda *_: _SEEN_AS_IT_WENT.extend(
-            [st._override_path, "unread" in reported.COUNTS]))
+            [st._override_path, "unread" in reported.COUNTS, design._room]))
         _MADE_IN_THE_FIRST_TURN[:] = [build_window(), build_part(ReductionPanel), build_inference(),
                                       build_run_host(), build_run_host(BasePanel), watched, gone,
                                       st._override_path]
         assert [shiboken6.isValid(widget) for widget in _MADE_IN_THE_FIRST_TURN[:7]] == [True] * 6 + [False]
+        design.set_room((1366, 728))         # the room this turn leaves in force, as a window it built would
         return
     assert len(_MADE_IN_THE_FIRST_TURN) == 8, (
         "the first turn did not run before this one: the two turns run together, in this order, in one process")
@@ -1108,8 +1109,9 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
         "a widget a builder made outlived the test that built it")
     assert [panel for panel in BasePanel._instances if not shiboken6.isValid(panel)] == [], (
         "a deleted panel is still among the panels a run locks")
-    assert seen == [written, True], (
-        "what the builders made went after the test's own settings file was put back or its drawing record read")
+    assert seen == [written, True, (1366, 728)], (
+        "what the builders made went after the test's own settings file or room was put back, or after its "
+        "drawing record was read")
     assert not Path(written).exists(), "a window was closed, or a widget's deletion wrote settings, when its test ended"
     assert shiboken6.isValid(module_panel), "the end of a test deleted what a fixture of wider scope built"
     assert module_panel in BasePanel._instances, "the end of a test took a living panel out of the set a run locks"

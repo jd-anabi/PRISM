@@ -196,6 +196,36 @@ def window_sizes(screen: tuple[int, int]) -> tuple[tuple[int, int], tuple[int, i
     return fitted(SIZE["window"]), fitted(SIZE["window_min"])
 
 
+_room: tuple[int, int] | None = None     # what the screen offers the window, (width, height): none until told
+
+
+def set_room(room: tuple[int, int] | None) -> None:
+    """Say what the screen offers the window, (width, height), as the window works it out when it sizes itself;
+    None forgets it. The two layout thresholds are held to it from then on, so that at a large text size a window
+    as large as the screen keeps the usual layout and sets two columns where they fit."""
+    global _room
+    _room = None if room is None else (int(room[0]), int(room[1]))
+
+
+def _held(length: int, room: int | None) -> int:
+    """A threshold of the table at the text size in force, held to ``room``, what the screen offers on that side:
+    a larger text size raises it only as far as the screen offers, and the table's own number, the threshold at
+    the ordinary text size, stands whatever the screen. With no room told, the scaled number."""
+    return scaled(length) if room is None else max(length, min(scaled(length), room))
+
+
+def small_below() -> int:
+    """The height below which a window gets the small layout: 700 at the ordinary text size, raised with the
+    text no further than the screen's height."""
+    return _held(SIZE["small_below"], None if _room is None else _room[1])
+
+
+def two_columns_from() -> int:
+    """The width from which a page sets two columns side by side: 940 at the ordinary text size, raised with the
+    text no further than the screen's width."""
+    return _held(SIZE["two_columns_from"], None if _room is None else _room[0])
+
+
 def system_text_scale() -> float:
     """The factor of Windows' own text-size setting, 1.0 to 2.25; 1.0 off Windows and whenever it cannot be read.
 

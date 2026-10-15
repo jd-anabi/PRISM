@@ -4979,13 +4979,15 @@ def test_a_sentence_writes_bold_at_a_weight_its_face_has():
     assert _shown_weights(label) == [("Lead.", weight), (" The rest.", 400)]      # the lead alone is bold,
     assert label.font().weight() == QFont.Weight.Normal         # and by its markup: the sentence's own font is not
     with pytest.MonkeyPatch.context() as patch:                 # on a computer that has a book face: the font the
-        faced = fonts.book()                                    # factory hands out is of that face, and the look-up
-        faced.setFamily(design.BOOK_FACES[0])                   # of the faces answers it
-        patch.setattr(fonts, "book", lambda bold=False: QFont(faced))
-        patch.setattr(fonts, "book_family", lambda available: design.BOOK_FACES[0])
+        faced = fonts.book()                                    # factory hands out is of that face, and the weight
+        faced.setFamily(design.BOOK_FACES[0])                   # is read off that font: the toolkit's list of every
+        patch.setattr(fonts, "book", lambda bold=False: QFont(faced))       # family is not asked for again
+        asked = []
+        patch.setattr(QFontDatabase, "families", lambda *told: asked.append(told) or [])
         booked = page.Sentence()
         booked.set_text("The rest.", lead="Lead.")
         assert _shown_weights(booked) == [("Lead.", 700), (" The rest.", 400)]
+        assert asked == [], "a sentence asked the toolkit for every family when it was built"
 
 
 def test_a_quiet_sentence_carries_the_second_ink_and_follows_the_theme():
@@ -7196,3 +7198,107 @@ def test_a_key_held_down_opens_a_row_and_presses_the_foot_once():
             for repeated in (False, True, True):
                 QApplication.sendEvent(widget, QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier, "", repeated))
         assert (opened, pressed) == ([("records", None)], [True, True])
+
+
+def test_a_page_gives_what_is_added_to_it_the_form_in_force():
+    """A part added to a page that is already in the form of the low window takes that form as it is added: a
+    space its low height, a heading its low form (no sentence), a part that offers to be told and the middle's
+    body are told. A heading handed in inside a layout, or inside a layout inside that one, is told too, then and
+    at every later change; the page looks into a layout when it tells it, so a heading put into it afterwards is
+    told as well. A part added to a page in the ordinary form is told that form, and keeps it."""
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import page
+
+    class Told(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.told = []
+
+        def set_small(self, small):
+            self.told.append(small)
+
+    low = page.Page()
+    low.set_small(True)
+    low.add_gap(22, 14)
+    low.add_gap(22)
+    head = page.PageHead("Records", "A sentence under the title.")
+    low.add_fixed(head)
+    inside, deeper = page.PageHead("Inside", "Its sentence."), page.PageHead("Deeper", "Its sentence.")
+    row, column = QBoxLayout(QBoxLayout.Direction.LeftToRight), QVBoxLayout()
+    row.addWidget(inside)
+    row.addLayout(column)
+    column.addWidget(deeper)
+    low.add_fixed(row)
+    fixed, body = Told(), Told()
+    low.add_fixed(fixed)
+    low.add_scrolling(body)
+    assert [low.box.itemAt(n).widget().height() for n in (0, 1)] == [14, 22], "a space added kept its usual height"
+    assert [head.sentence.isHidden(), inside.sentence.isHidden(), deeper.sentence.isHidden()] == [True] * 3
+    assert (fixed.told, body.told) == ([True], [True]), "a part added was not told the page's form"
+    later = page.PageHead("Later", "Put into the layout afterwards.")
+    column.addWidget(later)
+    low.set_small(False)
+    assert [low.box.itemAt(n).widget().height() for n in (0, 1)] == [22, 22]
+    assert [one.sentence.isHidden() for one in (head, inside, deeper, later)] == [False] * 4
+    assert (fixed.told, body.told) == ([True, False], [True, False])
+    low.set_small(True)
+    assert [one.sentence.isHidden() for one in (head, inside, deeper, later)] == [True] * 4
+    usual, plain, still = page.Page(), Told(), page.PageHead("Usual", "Its sentence.")
+    usual.add_fixed(plain)
+    usual.add_fixed(still)
+    usual.add_gap(22, 14)
+    assert plain.told == [False] and not still.sentence.isHidden() and usual.box.itemAt(2).widget().height() == 22
+
+
+def test_two_columns_stack_below_the_threshold_held_to_the_room():
+    """The two thresholds of a page's layout grow with the text and are held to the room the screen offers the
+    window. At a text size of 150 % on a screen whose room is 1366 by 728 a page sets two columns side by side
+    from 1366 and the window takes the small layout below 728, where the text alone would ask 1410 and 1050; a
+    roomier screen leaves the scaled numbers. The ordinary numbers, 940 and 700, are never lowered by a small
+    screen, and with no room told the thresholds are the scaled numbers. Two columns read the held threshold."""
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets import page
+    try:
+        assert (design.two_columns_from(), design.small_below()) == (940, 700)
+        with text_size(1.5):
+            assert (design.two_columns_from(), design.small_below()) == (1410, 1050)
+            design.set_room((1366, 728))
+            assert (design.two_columns_from(), design.small_below()) == (1366, 728)
+            columns = page.Columns(_least(10), _least(10))
+            columns.fit(1366)
+            assert not columns.stacked()
+            columns.fit(1365)
+            assert columns.stacked()
+            design.set_room((3000, 2000))
+            assert (design.two_columns_from(), design.small_below()) == (1410, 1050)
+        design.set_room((760, 540))
+        assert (design.two_columns_from(), design.small_below()) == (940, 700)
+        design.set_room(None)
+        with text_size(1.25):
+            assert (design.two_columns_from(), design.small_below()) == (1175, 875)
+    finally:
+        design.set_room(None)
+
+
+_ROOM_LEFT_BY_THE_FIRST_TURN: list = []
+
+
+@pytest.mark.parametrize("turn", ["sets", "after"])
+def test_the_layout_room_is_put_back_after_every_test(turn):
+    """Every window a test builds hands the look the room its screen offers as it sizes itself, and the suites
+    build windows by the dozen: a room left in force would hold the thresholds of every later test. So the room is
+    put back after every test (tests/conftest.py). The first turn sets a room and leaves it; the second, the next
+    test of the run, finds none: at a text size of 150 % the small layout starts at the scaled 1050 again, and two
+    columns at 1410. The two turns run together, in this order, in one process: the second alone always fails."""
+    if turn == "sets":
+        design.set_room((1366, 728))
+        with text_size(1.5):
+            assert design.small_below() == 728
+        _ROOM_LEFT_BY_THE_FIRST_TURN[:] = [True]
+        return
+    assert _ROOM_LEFT_BY_THE_FIRST_TURN == [True], (
+        "the first turn did not run before this one: the two turns run together, in this order, in one process")
+    _ROOM_LEFT_BY_THE_FIRST_TURN.clear()
+    with text_size(1.5):
+        assert (design.small_below(), design.two_columns_from()) == (design.scaled(700), design.scaled(940)) == (
+            1050, 1410), "the room an earlier test set is still in force"
