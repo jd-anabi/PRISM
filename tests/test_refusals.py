@@ -1004,13 +1004,14 @@ def _unguarded_dialog_uses(tree) -> list:
 
 
 def test_no_dialog_is_built_under_core_but_the_message_box_and_the_shared_question():
-    """The session's guard stands on the ``exec`` of two classes, the message box and the shared question, and
-    on nothing else: a dialog of any other class that is opened with ``exec`` offscreen never returns, and
-    neither does one of those two opened through ``exec_``, so either STALLS the suite instead of failing it.
+    """The session's guard stands on the blocking call of two classes, the message box and the shared question
+    (``exec``, and ``exec_``, the binding's older spelling of it), and on nothing else: a dialog of any other
+    class that is opened offscreen never returns, so it STALLS the suite instead of failing it.
     So under the code roots no class is built on one of the toolkit's dialog classes and no instance of one is
     made, outside the one module of the shared question, which holds the one class built on the plain dialog;
-    and nothing calls ``exec_``. The file chooser is not this scan's: the scan below holds it to its one
-    module. The scanner is checked on a SNIPPET first, so that the walk cannot pass by reading nothing."""
+    and nothing calls ``exec_``, which the binding says it will drop. The file chooser is not this scan's: the
+    scan below holds it to its one module. The scanner is checked on a SNIPPET first, so that the walk cannot
+    pass by reading nothing."""
     from tests._fixtures import CODE_FILES, CODE_ROOTS
     snippet = ast.parse("\n".join([
         'class Options(QDialog): pass',                          # 1: a dialog class of the program's own

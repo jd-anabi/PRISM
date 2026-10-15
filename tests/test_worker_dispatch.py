@@ -347,6 +347,32 @@ def test_an_unexpected_modal_is_recorded_in_shown_and_returns_zero(monkeypatch):
     assert question.exec() == 0 and len(SHOWN) == before + 2, "the session guard must be back after undo"
 
 
+def test_the_guard_also_stands_on_the_older_spelling_of_the_blocking_call():
+    """The binding still offers ``exec_``, the older spelling of a dialog's blocking call. Today it hands that
+    call on to ``exec`` and so to the session guard, but through a lookup of its own that it keeps for each
+    dialog; so the guard (tests/conftest.py::_no_modal_dialogs) stands on the older name as well, on both
+    classes, and a box or a question opened that way is recorded and takes its safe answer at once, whatever the
+    binding does. The guard is read by name first, so that the two openings below can never open for real and
+    stall the run."""
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui.widgets.ask import Ask
+    from tests._fixtures import all_asked, qt_app
+
+    qt_app()
+    guard = vars(QMessageBox).get("exec")
+    assert guard is not None and vars(QMessageBox).get("exec_") is guard and vars(Ask).get("exec_") is guard, (
+        "the session guard does not stand on exec_, the older spelling of exec: a box or a question opened "
+        "through it would open for real")
+    box = QMessageBox()
+    box.setText("An unexpected box, opened the older way.")
+    question = Ask(None, "Stop training?", "The fit so far will be lost.", "Keep training", "Stop and lose the fit")
+    assert (box.exec_(), question.exec_(), question.isVisible()) == (0, 0, False), (
+        "an opening through exec_ did not take the safe answer at once")
+    assert [(said.sentence, said.safe) for said in all_asked()] == [
+        ("An unexpected box, opened the older way.", "OK"), ("The fit so far will be lost.", "Keep training")], (
+        "an opening through exec_ was not recorded")
+
+
 def test_an_unanswered_file_chooser_is_recorded_returns_cancelled_and_fails_the_check(request):
     """A file chooser is the second thing that stalls an offscreen run: QFileDialog's statics spin a
     nested event loop of their own, and a patched ``exec`` does not reach them. The session guard

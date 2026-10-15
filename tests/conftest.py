@@ -191,6 +191,8 @@ def _no_modal_dialogs():
     mp = pytest.MonkeyPatch()
     mp.setattr(QMessageBox, "exec", guard)
     mp.setattr(Ask, "exec", guard)
+    mp.setattr(QMessageBox, "exec_", guard)      # the binding's older spelling of the same call
+    mp.setattr(Ask, "exec_", guard)
     yield
     mp.undo()
 
