@@ -140,16 +140,25 @@ def _settings_home(tmp_path_factory):
     the mechanism that cost a ~5-day run on 2026-08-19 (the retired chi band), and a test that wrote
     one would arm it for the next real launch. The real path is resolved the way settings() resolves
     it with no override; constructing that QSettings neither creates nor rewrites the file.
+
+    The folder that holds the real file must hold at the end exactly what it held at the start, read
+    as a listing of every path under it: whatever the window writes beside its settings file goes
+    beside the test's own, and a file it left beside the real one would be read by the next launch.
     """
     from PySide6.QtCore import QSettings
     from core.gui import settings
     real = Path(QSettings(QSettings.IniFormat, QSettings.UserScope, settings.ORG, settings.APP).fileName())
+    folder = real.parent
     before = real.read_bytes() if real.exists() else None
+    held = sorted(str(path) for path in folder.rglob("*")) if folder.exists() else None
     settings.use_ini_file(str(tmp_path_factory.mktemp("settings") / "prism.ini"))
     yield
     settings.use_ini_file(None)
     after = real.read_bytes() if real.exists() else None
     assert after == before, f"the suite wrote into the real settings file {real}"
+    holds = sorted(str(path) for path in folder.rglob("*")) if folder.exists() else None
+    assert holds == held, (f"the suite changed what the real settings folder {folder} holds: "
+                           f"{sorted(set(holds or ()) ^ set(held or ()))[:5]}")
 
 
 @pytest.fixture(autouse=True)
