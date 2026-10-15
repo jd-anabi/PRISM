@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QKeySequence, QTextLayout
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QPushButton
 
@@ -92,6 +92,23 @@ def _laid_out(home, width=1080, height=820):
     home.grab()
 
 
+def _drawn_lines(monkeypatch, table):
+    """What a table draws in lines, read from its painting: for each cell set in lines, the words of each of its
+    lines as they were handed in, and the widest line's width."""
+    drawn, kept = [], QTextLayout.draw
+
+    def draw(layout, painter, *told):
+        laid, found = layout.text(), [layout.lineAt(n) for n in range(layout.lineCount())]
+        drawn.append(([laid[line.textStart():line.textStart() + line.textLength()].replace(chr(0x200B), "")
+                       for line in found], max(line.naturalTextWidth() for line in found)))
+        return kept(layout, painter, *told)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(QTextLayout, "draw", draw)
+        table.grab()
+    return drawn
+
+
 def test_home_with_nothing_on_disk_opens_on_what_do_you_want_to_do():
     """On a computer where nothing has been made yet (no record, no run, no model chosen) Home opens on what a
     person may do first. Its head asks the question and says what PRISM is; four buttons stand in their order,
@@ -125,7 +142,7 @@ def test_home_with_nothing_on_disk_opens_on_what_do_you_want_to_do():
     assert not _shown(home, home.steps_table) and not _shown(home, home.next_heading)
 
 
-def test_home_mid_project_states_the_one_next_step_and_where_each_step_stands():
+def test_home_mid_project_states_the_one_next_step_and_where_each_step_stands(monkeypatch):
     """With work under way Home states, under its head, the one next step: its heading, its sentence when it has
     one, and the main button that opens it. The table of the six steps gives each step's number and name, its
     marker and state word, and what it holds or waits for, in full. The parts are listed as on the first opening,
@@ -178,10 +195,15 @@ def test_home_mid_project_states_the_one_next_step_and_where_each_step_stands():
     assert ("A run is going in Effective temperature, Sweep study, and no other run can start until it ends. You can "
             "still move around and read results. Keep PRISM open; you can minimise it.") in sentences
     assert home.next_button.text() == "&Go to the run"
-    long_name = "a_prior_with_a_name_long_enough_to_be_set_in_more_than_one_line_of_its_column"
+    long_name = "nadrowski_master_tier1_prior_2026_10_05"           # a record's name: one word, however long
     home = _home(_facts(_session(draft=SimpleNamespace(model="BP"), inf_prior=SimpleNamespace(name=long_name))))
-    _laid_out(home, 680, 600)
+    _laid_out(home)
+    view = home.steps_table.view
+    (laid, widest), = [(lines, widest) for lines, widest in _drawn_lines(monkeypatch, home.steps_table)
+                       if "".join(lines) == long_name]
     assert _cells(home.steps_table)[1][2] == long_name, "a step's detail is not in full"
+    assert len(laid) > 1 and widest <= view.columnWidth(2) and view.rowHeight(1) > view.rowHeight(0), (
+        "a step's detail is cut where it is drawn", laid, widest, view.columnWidth(2))
 
 
 def test_a_row_of_home_opens_its_place_on_a_click_enter_or_space():

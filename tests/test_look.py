@@ -7326,3 +7326,34 @@ def test_a_table_draws_its_words_in_the_fonts_it_measured_them_in_whatever_font_
                    if font.isFeatureSet(_tabular()) and font.featureValue(_tabular()))
     assert (sorted(text for _box, text, _font in written), over, equal) == (
         [" MB", "1 Oct 2026, 09:31", "1,234", "Made", "Name", "Size", "retrain-prior"], [], ["1,234"])
+
+
+def test_a_word_wider_than_its_column_is_broken_after_a_mark_or_anywhere_and_never_cut():
+    """A cell set in lines draws a word wider than its column whole, over as many lines as it needs: a record's
+    name breaks after an underscore, a path after a slash, a file's name after a full stop, and a word with none of
+    them anywhere. Words that fit their column break only between them, as they always did, though one of them
+    holds an underscore. The cell keeps its words as they were handed in, and its row is as tall as its lines."""
+    rt = _rt()
+    face = rt._face("text")
+    wide = QFontMetricsF(face).horizontalAdvance
+
+    def lines(words, room):
+        """The lines ``words`` are drawn in, in a place ``room`` wide, and the widest line's width."""
+        layout, count = rt._wrapped(words, face, room, 20)
+        laid, found = layout.text(), [layout.lineAt(n) for n in range(count)]
+        return ([laid[line.textStart():line.textStart() + line.textLength()].replace(chr(0x200B), "").strip()
+                 for line in found], max(line.naturalTextWidth() for line in found))
+
+    for words, mark in (("nadrowski_master_tier1_prior_2026_10_05", "_"), ("C:/Users/J/Artifacts/priors/retrain", "/"),
+                        ("retrain.prior.2026.10.05.full.size", "."), ("averyverylongwordwithnomarkinitatall", None)):
+        laid, widest = lines(words, 128)
+        assert "".join(laid) == words and len(laid) > 1 and widest <= 128, (words, laid, widest)
+        assert mark is None or all(line.endswith(mark) for line in laid[:-1]), (words, laid)
+    fits = "Done: retrain_prior_two"
+    room = math.ceil(wide("retrain_prior_two"))
+    assert wide("Done: retrain_") < room < wide(fits) and lines(fits, room)[0] == ["Done:", "retrain_prior_two"]
+    name = "nadrowski_master_tier1_prior_2026_10_05"
+    table = rt.RuleTable([rt.Column("", 60), rt.Column("")], [[rt.TextCell(""), rt.TextCell(name, wrap=True)]])
+    with _on_a_page(table, width=60 + 128 + 6):
+        view = table.view
+        assert (view.model().index(0, 1).data(), view.rowHeight(0)) == (name, 10 + 20 * len(lines(name, 128)[0]))

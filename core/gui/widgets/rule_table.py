@@ -21,13 +21,14 @@ from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QSizePoli
 
 from .. import design, fonts, paint
 from ..reported import reported
+from .page import _BREAK, _BREAK_AFTER
 from .ruled import Ruled
 
 
 @dataclass(frozen=True)
 class TextCell:
     """Words in a cell, at its left. Too long for its column they are cut, or set in as many lines as they
-    need when ``wrap`` is set."""
+    need when ``wrap`` is set; a word wider than its column is then broken, never cut."""
     text: str
     quiet: bool = False       # secondary lettering
     elide: str = "end"        # "end" for a note, "middle" for a name
@@ -102,10 +103,16 @@ def _pads(column: int, count: int) -> tuple[int, int]:
 
 def _wrapped(text: str, font, width: float, height: int):
     """Words laid out in lines no wider than ``width``, each ``height`` high: the layout, ready to be drawn
-    from the top left of its place, and the number of its lines."""
-    layout = QTextLayout(text, font)
+    from the top left of its place, and the number of its lines. A word wider than ``width``, a record's name
+    most often, breaks after a backslash, a slash, an underscore or a full stop that has more of the word after
+    it, and anywhere else where it is still too wide, so that it is drawn whole; words that fit break only
+    between them. The words as handed in are not changed."""
+    metrics = QFontMetricsF(font)
+    laid = " ".join(_BREAK_AFTER.sub(_BREAK, word) if metrics.horizontalAdvance(word) > width else word
+                    for word in text.split(" "))
+    layout = QTextLayout(laid, font)
     option = QTextOption()
-    option.setWrapMode(QTextOption.WordWrap)
+    option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
     layout.setTextOption(option)
     layout.beginLayout()
     count = 0
