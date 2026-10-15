@@ -1,7 +1,12 @@
 # PRISM — state
 
-**Last updated:** 2026-10-14, evening (THE PLAN OF STAGE 2, THE SHELL, IS WRITTEN, COMMITTED (`e90832e`) AND APPROVED BY
-THE OWNER the same evening ("The plan is approved. Write the hand-off prompt so the build starts with Task 0 in a new
+**Last updated:** 2026-10-15, early morning (THE BUILD OF STAGE 2, THE SHELL, IS UNDER WAY in a session started from the
+chat of 14 October with the owner's pasted prompt `docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-build.md`:
+TASKS 0, 1 AND 2 ARE COMPLETE (`0db3980`..`27fd4bf`, each task's review clean after one fix round, each gate green; the
+last gate, on `27fd4bf`: 1466 passed, 4 skipped, 5 deselected); departure 79 added and departure 55 amended; Task 3 (the
+rail's devices) is being prepared; the paragraph "THE BUILD OF STAGE 2" below is this session's record. What follows in
+this parenthesis is the head as the evening of 14 October left it: THE PLAN OF STAGE 2, THE SHELL, IS WRITTEN, COMMITTED
+(`e90832e`) AND APPROVED BY THE OWNER the same evening ("The plan is approved. Write the hand-off prompt so the build starts with Task 0 in a new
 chat."): `docs/superpowers/plans/2026-10-14-window-redesign-stage-2.md`, ten building tasks and two controller tasks,
 departures 54 to 78 in the design's section 8 and the plan's table; nothing built; the paragraph "THE PLAN OF STAGE 2"
 below is this session's record. NEXT, IN A NEW CHAT: the build of stage 2 from Task 0, from
@@ -67,6 +72,42 @@ the build's state stands in four paragraphs, each as it was written on its date 
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**THE BUILD OF STAGE 2 (2026-10-14, late afternoon, to 2026-10-15; a session started from the chat of 14 October with
+the owner's pasted prompt `docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-build.md`; the ledger's entries
+from "NEW CHAT 2026-10-14 (late afternoon), THE BUILD OF STAGE 2 BEGINS" on have every figure and ruling).** At the start:
+the tree clean at `0db3980`, no python alive, the card at the desktop's share; the usage card's weekly bar at 69 %
+(77 % after Task 2; the week resets on the evening of 17 October), told to the owner with the note that at the plan's
+estimate the bar fills before the reset. How much to spend as the owner chose ("in between"); no workflow; the execution
+skill's own scripts not run (the ledger is the workspace; stage 2's folder `stage-2/`). **Task 0** (no commit): `gate.sh`
+and `ground.ps1` write into `stage-2/gates/` (the ground now lists the real settings folder too); the real `Artifacts/`
+listed (428 entries); the collection 1422; the carried-over list's 65 stage-2 rows given their task. **Task 1, the
+front** (`3e19149`..`8ff9318`, six commits, then fix round 1 `c25f0b2`..`8b4c3da`, tests only): four test gaps of task
+19q, a docstring word and the axis's comment; the session guard also on the older spelling of a dialog's blocking call;
+the hide event in the drawing scan; every window and part a test builder makes is deleted when its test ends (a record of
+weak references in the new `tests/_built.py`, an autouse fixture; 368 top-level widgets alive after the settings suite
+before, 7 after; the fast gate went from about 16 to about 14.5 minutes); the real settings folder must hold what it held
+(`tests/_settings_folder.py`); the look's test helpers in the new torch-free `tests/_look_helpers.py`; the fix round (the
+review's three Important findings, each confirmed by a skeptic by running): a test that ends with its run live is failed
+by name and its run stopped before its panel goes, the let-go's place in the teardown order held, the folder check tried
+on a folder of its own. No behaviour of the product changed (two product files changed by a comment and a docstring).
+**Task 2, the rules with no widget** (`3624262`, then fix round 1 `7e8179f`..`27fd4bf`): `core/gui/keys.py` (the nine parts,
+the six steps, their keys, the place words), `core/gui/chain.py` (each step's state and words, Home's next step, the
+first-time test), `core/gui/record_words.py` (a record's label and kind word), the new suite `tests/test_step_chain.py`
+(48 items), "F1" and "F6" allowed by the reference scan; mounted on no screen yet. The review found, by driving today's
+panels through 16 states, that step 4 read "To come" with a prior and no posterior while today's calibration button is
+greyed: step 4 now reads "Needs a posterior" there (departure 55 amended, `f31fc20`); and that the standing import check
+missed late imports (now read three ways). **Departure 79** (`a91a7cb`): Help's F1 and Escape rows and Records' line on
+Home worded for what stage 2 holds, as row 71 does. **Gates:** green on `8ff9318` (1416 passed, 14 min 39 s), `8b4c3da`
+(1418, 14:31), `3624262` (1462, 14:35), `27fd4bf` (1466, 17:44), each with 4 skipped and 5 deselected, none a
+quiet-machine time; the real-screen run after Task 1 and its fix round: 4 passed each; the real `Artifacts/` (428) and the
+real `PRISM.ini` unchanged after every gate. **Carried** (the ledger has each): to Task 4 (the room fixture after the
+let-go; two simulation sets of one prior read alike on Home), Task 5 (the Save boxes of today's Prior and Posterior panels
+refresh no gate, so the rail would keep an old name; a listener on the run state is a bound method; the foot's timer has a
+parent in the window), Task 7 (a deleted or half-built panel stays in the panel set and breaks the next run's start:
+latent today, met once parts are built and rebuilt), Task 10 (the lock and the listener released explicitly by the test
+builder of the whole program, their names redirected by the tests). **Cost so far in background agents:** about 6.4
+million tokens (Task 1 about 3.3, Task 2 about 2.8, Task 0's reader 0.27).
 
 **THE PLAN OF STAGE 2 (2026-10-14, evening; a session started from the chat of 14 October with the owner's pasted prompt
 `docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-plan.md`; the ledger's section "Stage 2 — the shell (plan)"
