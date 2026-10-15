@@ -237,6 +237,60 @@ def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
         time.sleep(0.005)
     assert later == ["SECOND OK"], f"a run after a cancel did not complete: {later}"
 
+def test_the_end_of_a_test_stops_a_run_it_left_live_before_its_panel_goes_and_fails_it(tmp_path):
+    """A test that ends with a run still live fails at its end (tests/_built.py's end_of_test, which the
+    let-go fixture of tests/conftest.py calls), and the run is first asked to stop and waited for. Deleted
+    under its run, a panel that watches a figure folder raises at the run's end before the flag that says a
+    run is live is put back, and every later run is refused. Three ends, each held to what was noted just
+    before this test built its host, as the fixture notes it when a test is set up: a run that stops at its
+    next line once asked has its end handled on its own panel, the panel then goes, and a later run takes;
+    a run that cannot stop in time keeps its panel alive, so that its end still finds it; and at the end of
+    the next test, that run is an earlier test's: it is not waited for again, and what that test built goes."""
+    import pytest
+    import shiboken6
+    from tests import _built
+
+    app = qt_app()
+
+    def turn_until(done, limit):
+        t0 = time.monotonic()
+        while not done() and time.monotonic() - t0 < limit:
+            app.processEvents()
+            time.sleep(0.01)
+
+    def ticking():
+        for i in range(3000):                 # thirty seconds at most, if the ask to stop never landed
+            print(f"tick {i}")
+            time.sleep(0.01)
+
+    at_start = _built.noted()
+    host, ended = build_run_host(), []
+    host.dispatch(ticking, watch_dir=tmp_path, on_finished=lambda: ended.append("its end"))
+    with pytest.raises(AssertionError, match="ended with a run still live; it was asked to stop, and its end"):
+        _built.end_of_test(at_start)
+    assert ended == ["its end"] and not BasePanel._running and BasePanel._active_cancel is None, (
+        "a run left live was not stopped, or its end not handled, before its panel went")
+    assert not shiboken6.isValid(host), "a panel whose run had stopped was not let go"
+    later, got = build_run_host(), []
+    later.dispatch(lambda: "ok", on_result=got.append)
+    turn_until(lambda: got and not later._busy, 10)
+    assert got == ["ok"], f"a later run was refused: {later.log_pane.toPlainText()!r}"
+
+    at_start = _built.noted()
+    slow = build_run_host()
+    slow.dispatch(lambda: time.sleep(2), on_finished=lambda: ended.append("its end"))   # no line to stop at
+    with pytest.raises(AssertionError, match="had not stopped 0.2 s later"):
+        _built.end_of_test(at_start, within=0.2)
+    at_start = _built.noted()
+    beside = build_run_host()
+    _built.end_of_test(at_start)
+    assert not shiboken6.isValid(beside) and BasePanel._running, (
+        "the end of the next test waited for a run an earlier test left live, or kept what that test built")
+    turn_until(lambda: not BasePanel._running, 10)
+    assert shiboken6.isValid(slow) and ended == ["its end"] * 2 and BasePanel._active_cancel is None, (
+        "a panel was deleted under a run that had not stopped, or that run's end did not find it")
+    _built.keep(slow)                         # let go when this test ends, as the fixture lets go any host
+
 def test_cancel_is_not_consumed_by_a_non_worker_thread():
     """tqdm's TMonitor daemon force-refreshes a quiet bar, writing to our stream from ITS thread. If
     that write consumed the cancel latch, it would raise where nobody catches it and leave the worker

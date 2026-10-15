@@ -290,18 +290,10 @@ def _built_widgets_let_go(_isolated_settings, _drawing_code_raises_nothing):
     own deferred delete, the newest first, and is never closed, because closing a window writes settings.
     The two fixtures it names are set up before it and torn down after it, so the widgets go while this
     test's own settings file is in force and before the drawing record is read. What a fixture of wider
-    scope built was made before this test was set up, so it is left alone."""
-    import sys
+    scope built was made before this test was set up, so it is left alone. A test that ends with a run still
+    live fails here, and its run is asked to stop and waited for before anything goes, so that no panel is
+    deleted under its run (tests/_built.py's end_of_test says how long, and why)."""
     from tests import _built
-    since = len(_built.BUILT)
+    at_start = _built.noted()
     yield
-    _built.let_go(since)
-    # A panel that ran something is still held in Python once it is deleted (its run's signals hold it), and
-    # so stays in the weak set every panel enrols in, which the next run walks to lock every panel's
-    # controls: a deleted panel leaves that set here.
-    panels = sys.modules.get("core.gui.panels.base_panel")
-    if panels is not None:
-        import shiboken6
-        for panel in list(panels.BasePanel._instances):
-            if not shiboken6.isValid(panel):
-                panels.BasePanel._instances.discard(panel)
+    _built.end_of_test(at_start)
