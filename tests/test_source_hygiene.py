@@ -60,7 +60,7 @@ TEST_NAME_PATTERN = re.compile(
 # The summary features' short ids, allowed only in the two files that define and compute them.
 FEATURE_IDS = frozenset(label.split("_", 1)[0] for label in FEATURE_LABELS)
 
-ALLOW_TOKENS = frozenset({"F0", "D0", "L2"})  # a force amplitude, a diffusion constant, a norm
+ALLOW_TOKENS = frozenset({"F0", "D0", "L2", "F1", "F6"})  # a force amplitude, a diffusion constant, a norm, two keys
 ALLOW_PER_FILE: dict[str, frozenset[str]] = {
     "core/SBI/statistics.py": FEATURE_IDS,
     "core/SBI/summaries.py": FEATURE_IDS,
