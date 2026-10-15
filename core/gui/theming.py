@@ -32,7 +32,7 @@ from PySide6.QtWidgets import QWidget
 
 from . import design, fonts, style
 
-# (mode key, human label), in display order -- shared by the gear popover and the Settings screen.
+# (mode key, human label), in display order, as the Settings screen offers them.
 MODE_LABELS = (("system", "Follow Windows"), ("light", "Light"), ("dark", "Dark"))
 MODES = tuple(mode for mode, _ in MODE_LABELS)
 

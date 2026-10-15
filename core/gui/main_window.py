@@ -1,34 +1,34 @@
-"""The PRISM main window: a NavShell (persistent "PRISM" title + back arrow) over Home,
-four section screens, the Artifacts browser, and two Settings-reached screens (the Settings/Help screen
-and the user-defined model builder). Replaces the old flat four-tab layout; the section panels are
-reused unchanged in behaviour -- only where they are mounted changes. Cross-validation now lives inside
-the FDT Analysis section, and the SBI panel is split into the Parameter Inference section's gated
-tabs."""
+"""The PRISM main window: the rail down its left edge and, beside it, the page of the part in sight -- Home,
+Parameter inference (the six steps over one session, on their tabs), Effective temperature (one cell, or a
+sweep study), Live simulation, Reduction map, Records, Your own models (the model builder), Settings and Help.
+Every part is built with the window, and the panels inside them are reused unchanged in behaviour. ``go_to`` is
+the one way to move between the parts; the run's state stands at the rail's foot."""
 import time
 from datetime import datetime
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QActionGroup
-from PySide6.QtWidgets import QMainWindow, QMenu, QMessageBox
+from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QMainWindow, QMessageBox, QPlainTextEdit,
+                               QPushButton, QTabBar, QTextEdit, QToolButton, QWidget)
 
 from core import registry
 from core.artifacts import KIND_DIRS, StoreError, default_store
 from core.config import VALID_MODELS
 from core.Helpers import model_store
 
-from . import chain, design, keys, record_words, settings, theming
+from . import chain, design, keys, record_words, settings
 from .panels.base_panel import RUN_STATE, BasePanel
 from .panels.crossval_panel import CrossValPanel
 from .panels.fdt_panel import FdtPanel
 from .panels.reduction_panel import ReductionPanel
 from .panels.simulate_panel import SimulatePanel
 from .screens.artifact_screen import ArtifactScreen
+from .screens.help_screen import HelpScreen
 from .screens.home_screen import HomeFacts, HomeScreen, RecordRow
 from .screens.inference_screen import InferenceScreen
 from .screens.model_builder_screen import ModelBuilderScreen
-from .screens.nav_shell import NavShell, running_banner
 from .screens.section_screen import SectionScreen
 from .screens.settings_screen import SettingsScreen
+from .screens.shell import Shell, clock_words
 from .widgets.artifact_picker import StorePicker
 
 
@@ -50,6 +50,15 @@ def _room_on_screen() -> tuple[int, int]:
     if rect is None:
         return 16_777_215, 16_777_215
     return rect.width() - 40, rect.height() - 60
+
+
+def _page_room(room: tuple[int, int]) -> tuple[int, int]:
+    """What the screen offers a page's columns, (width, height), at the text size in force: the width of the
+    middle of a page in a window as wide as ``room`` -- less the rail, the page's own sides and the room its
+    scroll bar keeps -- and the height of ``room``."""
+    left, _top, right, _bottom = (design.scaled(n) for n in design.SIZE["page_pad"])
+    beside = design.scaled(design.SIZE["rail"]) + left + right + design.SIZE["scroll_bar"] + design.SIZE["scroll_gap"]
+    return room[0] - beside, room[1]
 
 
 def _on_a_visible_screen(widget) -> bool:
@@ -75,14 +84,35 @@ def _centre_on_primary(widget) -> None:
     widget.move(frame.topLeft())
 
 
-# Home's places in the stack the window holds today: the stack's name of the screen each part opens. Help's words
-# stand on the Settings screen, and a model of your own is made in the model builder; Home is the stack's first.
-_HOME_PLACES = {"home": None, "reduction": "Reduction Map", "temperature": "FDT Analysis",
-                "inference": "Parameter Inference", "live": "Simulate", "records": "Artifacts",
-                "settings": "Settings", "help": "Settings", "models": "Model builder"}
 # a part's pages that are tabs of its screen today, in the order of the tabs
 _TABBED = {"temperature": tuple(place.key for place in keys.PAGES["temperature"]),
            "inference": tuple(place.key for place in keys.STEPS)}
+
+
+def _is_setting(widget: QWidget) -> bool:
+    """Whether ``widget`` is something a person sets: not a button that does something when pressed, nor a tab
+    bar (a row of such buttons), nor an area that only shows or scrolls what stands in it -- a scrolling area, a
+    plot's view, a text that can only be read. A list and a text one types in are settings."""
+    if isinstance(widget, (QPushButton, QToolButton, QTabBar)):
+        return False
+    if isinstance(widget, QAbstractScrollArea):
+        typed_in = isinstance(widget, (QPlainTextEdit, QTextEdit)) and not widget.isReadOnly()
+        return typed_in or isinstance(widget, QAbstractItemView)
+    return True
+
+
+def _first_control(part: QWidget) -> QWidget | None:
+    """The first setting of ``part`` in the order the Tab key takes, shown and able to take the keyboard: where a
+    part names no control to start at, the keyboard starts there. None when the part has none."""
+    widget = part.nextInFocusChain()
+    for _ in range(10_000):                  # the chain is a ring through the window: it comes back to the part
+        if widget is None or widget is part:
+            return None
+        if (part.isAncestorOf(widget) and widget.isVisibleTo(part) and widget.isEnabled()
+                and widget.focusPolicy() & Qt.TabFocus and widget.focusProxy() is None and _is_setting(widget)):
+            return widget
+        widget = widget.nextInFocusChain()
+    return None
 
 
 def _local(created):
@@ -121,15 +151,17 @@ def _home_records(store) -> tuple:
 
 
 class MainWindow(QMainWindow):
-    """The application shell: a NavShell over Home plus the five section screens.
+    """The application's window: the rail and, beside it, the parts (``Shell``).
 
-    Always opens on Home -- the last screen is deliberately not restored. Owns the QSettings write
-    that runs at quit (``_save_state``, reached from closeEvent): panel selections, and the Artifacts
-    screen's own (called by name, because _all_panels() is panel-typed and that screen is not). Two
-    other write sites exist on purpose: BasePanel._persist_layout writes a splitter position on a
-    1500 ms debounce (save-on-clean-quit lost the drag -- see base_panel.py), and appearance settings
+    Always opens on Home -- the last place is deliberately not restored. ``place_changed`` gives the part
+    and the page in sight after every move. Owns the QSettings write that runs at quit (``_save_state``,
+    reached from closeEvent): panel selections, and the Artifacts screen's own (called by name, because
+    _all_panels() is panel-typed and that screen is not). Two other write sites exist on purpose: a
+    panel's splitter position is written as it is dragged (see base_panel.py), and appearance settings
     are written eagerly, as they are applied immediately.
     """
+    place_changed = Signal(str, object)
+
     def __init__(self, appearance=None):
         super().__init__()
         self.appearance = appearance         # theming.Appearance or None (tests build without one)
@@ -137,10 +169,11 @@ class MainWindow(QMainWindow):
         # The opening size and the smallest size both come from the look's table, grow with Windows'
         # text size and are then held to what the screen can show: the table's opening height is more
         # than a 1366x768 laptop can show, and more than 1920x1080 at 150% scaling, where the action
-        # buttons used to start below the fold. The look's two layout thresholds are held to the same room:
-        # at a large text size a window as large as the screen keeps the usual layout.
+        # buttons used to start below the fold. The look's two layout thresholds are held to what the same
+        # room offers: at a large text size a window as large as the screen keeps the usual layout, and a page as
+        # wide as such a window allows sets its two columns side by side.
         room = _room_on_screen()
-        design.set_room(room)
+        design.set_room(_page_room(room))
         opening, smallest = design.window_sizes(room)
         self.resize(*opening)
         # Without a smallest size Qt lets the user (or a restored geometry) shrink the shell until
@@ -148,8 +181,8 @@ class MainWindow(QMainWindow):
         # more than the screen can show.
         self.setMinimumSize(*smallest)
 
-        self.nav = NavShell()
-        self.setCentralWidget(self.nav)
+        self.shell = Shell()
+        self.setCentralWidget(self.shell)
 
         # Section screens (built once; their panels are the existing ones, reused verbatim).
         self.reduction_screen = SectionScreen(
@@ -161,77 +194,69 @@ class MainWindow(QMainWindow):
         self.simulate_screen = SectionScreen(
             "Simulate", [("Live simulation", SimulatePanel())])
 
-        # Home reads what it states as it is built, the run slot's panel among it: none, at launch.
+        # Where each panel lives: its part, and its page or step. The foot names a running panel's place
+        # from this and goes there, and Home reads where a run is live. A panel that is not here (the bare
+        # run host a test builds) is named by no place and leads nowhere.
+        self._places = {self.reduction_screen.panels()[0]: ("reduction", None),
+                        self.simulate_screen.panels()[0]: ("live", None)}
+        for part, screen in (("temperature", self.fdt_screen), ("inference", self.inference_screen)):
+            for panel, page in zip(screen.panels(), _TABBED[part]):
+                self._places[panel] = (part, page)
+
+        # Home reads what it states as it is built, the running panel among it: none, at launch.
         self._running_panel = None
         self.home_screen = HomeScreen(self._home_facts)
-        self.nav.add_screen(self.home_screen)                        # index 0 -- Home
-        idx_red = self.nav.add_screen(self.reduction_screen)
-        idx_fdt = self.nav.add_screen(self.fdt_screen)
-        idx_inf = self.nav.add_screen(self.inference_screen)
-        idx_sim = self.nav.add_screen(self.simulate_screen)
-
-        # The artifact browser: AFTER the four sections and BEFORE the Settings screen, so the
-        # back-arrow slide direction stays monotone with the order of the sections. A plain QWidget, not a
-        # BasePanel -- a run anywhere must not grey out the log you are reading.
+        # The artifact browser. A plain QWidget, not a BasePanel -- a run anywhere must not grey out the
+        # log you are reading.
         self.artifact_screen = ArtifactScreen()
-        idx_artifacts = self.nav.add_screen(self.artifact_screen)
-        self.artifact_screen.store_changed.connect(self._refresh_store_pickers)
-
-        # The Settings/Help screen: reached from the gear popover's "Full settings…" and from Home's rows
-        # for Settings and Help; the back arrow returns Home.
         current_mode = (appearance.mode() if appearance is not None
                         else settings.get_appearance(settings.settings()))
         self.settings_screen = SettingsScreen(self.set_appearance_mode, current_mode,
                                               on_open_builder=self._open_model_builder,
                                               on_edit_model=self._edit_user_model,
                                               on_delete_model=self._delete_user_model)
-        idx_settings = self.nav.add_screen(self.settings_screen)
+        # The model builder: reached from the rail's row Your own models and from the Settings
+        # "User-defined models" group; its own Back button returns to Settings.
+        self.model_builder_screen = ModelBuilderScreen(on_saved=self._on_user_models_changed,
+                                                       on_back=self._back_from_builder)
+        self.help_screen = HelpScreen()
+        parts = {"home": self.home_screen, "inference": self.inference_screen, "temperature": self.fdt_screen,
+                 "live": self.simulate_screen, "reduction": self.reduction_screen, "records": self.artifact_screen,
+                 "models": self.model_builder_screen, "settings": self.settings_screen, "help": self.help_screen}
+        for place in keys.PARTS:                                     # in the rail's order
+            self.shell.add_part(place.key, parts[place.key])
 
-        # The model builder: reached from the Settings "User-defined models" group and from Home's row for
-        # your own models; its own Back button returns to Settings, the nav back arrow still returns Home.
-        self.model_builder_screen = ModelBuilderScreen(
-            on_saved=self._on_user_models_changed,
-            on_back=lambda: self.nav.go_to(self._section_index["Settings"]))
-        idx_builder = self.nav.add_screen(self.model_builder_screen)
+        # Every way to move is go_to: a row of the rail, Home's buttons and rows, the run's foot. Each handler
+        # is a bound method of this window, so that nothing holds the window once it is deleted.
+        self._moving = False                     # a move under way says itself once, when it is done
+        self._inference_opened = False           # Parameter inference opens at the step in hand the first time
+        self.home_screen.navigate.connect(self.go_to)
+        self.shell.rail.opened.connect(self._rail_opened)
+        self.shell.rail.left.connect(self._rail_left)
+        self.shell.rail.foot.clicked.connect(self.go_to_run)
+        # Until the steps and the two temperature pages stand on pages of their own, their tab bars are a
+        # second way between them: a change of tab there is said as a move.
+        self.inference_screen.tabs.currentChanged.connect(self._tab_changed)
+        self.fdt_screen.tabs.currentChanged.connect(self._tab_changed)
+        # The six steps' states go to the rail and to Home each time they are worked out again; a change of
+        # the store works out the gates and the states again, after the pickers have listed it.
+        self.inference_screen.states_changed.connect(self._states_changed)
+        self.artifact_screen.store_changed.connect(self._store_changed)
 
-        self._section_index = {"Reduction Map": idx_red, "FDT Analysis": idx_fdt,
-                               "Parameter Inference": idx_inf, "Simulate": idx_sim,
-                               "Artifacts": idx_artifacts,
-                               "Settings": idx_settings, "Model builder": idx_builder}
-        # Home asks for a place by its part and page, which today's stack and tabs stand for. Home is read
-        # again at its next opening once another screen has been shown.
-        self.home_screen.navigate.connect(self._go_from_home)
-        self.nav.stack.currentChanged.connect(self._on_screen_changed)
-
-        # Where each panel LIVES. A BasePanel carries no title of its own, so this is what lets the
-        # header's run slot say "Posterior" and jump there. Built ONCE, off the screens' own tab
-        # widgets -- the same QTabWidgets the screens were built from, and the only thing MainWindow
-        # already has that pairs a panel with a label -- so a renamed tab cannot leave the banner
-        # naming a tab that is gone. Both screen kinds expose `.tabs` and `panels()` in tab order, so
-        # one loop covers the generic sections and the inference screen alike. A panel that is NOT in
-        # the map (the model builder, which is not a BasePanel, or a future screen) gets the banner
-        # with no destination rather than a KeyError inside a signal handler.
-        self._tab_screens = [(name, self.nav.stack.widget(self._section_index[name]))
-                             for name in ("Reduction Map", "FDT Analysis", "Parameter Inference",
-                                          "Simulate")]
-        self._panel_home = {}
-        for name, screen in self._tab_screens:
-            for tab_index in range(screen.tabs.count()):
-                self._panel_home[screen.tabs.widget(tab_index)] = (
-                    name, screen.tabs.tabText(tab_index), self._section_index[name], tab_index)
-
-        # The run slot, EMPTY at launch: the timer is constructed here but never started, and an
+        # The run's clock, STOPPED at launch: the timer is constructed here but never started, and an
         # unstarted QTimer registers nothing with the OS, so nothing on the launch path ticks.
-        self._run_title = ""
+        self._run_title = self._run_place_words = ""
         self._run_started = 0.0
         self._run_timer = QTimer(self)
         self._run_timer.setInterval(1000)
         self._run_timer.timeout.connect(self._tick_running)
-        self.nav.btn_running.clicked.connect(self._go_to_running)
         RUN_STATE.changed.connect(self._on_run_state)
 
-        self._build_settings_menu(current_mode)
-        self.nav.go_home()                                          # ALWAYS open on Home
+        # ALWAYS open on Home, its row marked and the steps' states in the rail. Home has read what it states
+        # as it was built, and reads nothing more at its first show.
+        self.shell.show_part("home")
+        self.shell.rail.set_step_states(self.inference_screen.step_states())
+        self.shell.rail.set_place("home")
 
         # Restore geometry only. Each panel restored its own selections in its __init__; we deliberately
         # do NOT restore the last screen -- the app always opens on Home.
@@ -246,45 +271,28 @@ class MainWindow(QMainWindow):
                 self.resize(*opening)
                 _centre_on_primary(self)
 
-    def _build_settings_menu(self, current_mode):
-        """Attach the gear's appearance popover: the three exclusive choices + 'Full settings…'."""
-        menu = QMenu(self)
-        group = QActionGroup(self)
-        group.setExclusive(True)
-        self._appearance_actions = {}
-        for mode, label in theming.MODE_LABELS:
-            act = menu.addAction(label)
-            act.setCheckable(True)
-            act.setChecked(mode == current_mode)         # setChecked emits toggled, not triggered
-            group.addAction(act)
-            act.triggered.connect(lambda _checked=False, m=mode: self.set_appearance_mode(m))
-            self._appearance_actions[mode] = act
-        menu.addSeparator()
-        full = menu.addAction("Full settings…")
-        full.triggered.connect(lambda: self.nav.go_to(self._section_index["Settings"]))
-        self.nav.btn_settings.setMenu(menu)
-
     def set_appearance_mode(self, mode):
-        """Apply + persist an appearance mode, and keep the gear menu and Settings screen in sync.
+        """Apply + persist an appearance mode, and show it on the Settings screen when that is built.
 
-        Safe to call from either entry point (gear action or Settings radio): the reflected updates use
-        setChecked (which emits `toggled`, not `triggered`) and the Settings radio blocks its own signal,
-        so there is no feedback loop.
+        Safe to call from the Settings radio itself: the radio blocks its own signal when it is set, so there
+        is no feedback loop.
         """
         qs = settings.settings()
         settings.set_appearance(qs, mode)
         qs.sync()
         if self.appearance is not None:
             self.appearance.set_mode(mode)
-        act = self._appearance_actions.get(mode)
-        if act is not None and not act.isChecked():
-            act.setChecked(True)
-        self.settings_screen.set_mode(mode)
+        shown = self.shell.part_widget("settings")
+        if shown is not None:
+            shown.set_mode(mode)
 
     # ── user-defined models (Settings group + builder screen) ─────────────────
     def _open_model_builder(self):
         self.model_builder_screen.reset()
-        self.nav.go_to(self._section_index["Model builder"])
+        self.go_to("models")
+
+    def _back_from_builder(self):
+        self.go_to("settings")
 
     def _tell(self, title: str, text: str, icon) -> None:
         """One plain box with an Ok button: an INSTANCE dialog shown with .exec().
@@ -308,7 +316,7 @@ class MainWindow(QMainWindow):
         except Exception as e:                       # noqa: BLE001 -- a corrupt file must not crash
             self._tell("Cannot edit model", f"Could not load '{name}':\n{e}", QMessageBox.Warning)
             return
-        self.nav.go_to(self._section_index["Model builder"])
+        self.go_to("models")
 
     def _delete_user_model(self, name: str):
         if BasePanel._running:
@@ -359,6 +367,12 @@ class MainWindow(QMainWindow):
                 if handler is not None:
                     handler(combo.currentText())
 
+    def _store_changed(self):
+        """The records screen changed the store: every picker lists it again, then the gates and the steps'
+        states are worked out again, so that the rail and Home follow a record written or deleted."""
+        self._refresh_store_pickers()
+        self.inference_screen.refresh_gates()
+
     def _refresh_store_pickers(self):
         """Re-list every artifact picker after the browser changed the store -- the twin of
         _refresh_model_combos, which a saved or deleted user model already drives.
@@ -380,110 +394,156 @@ class MainWindow(QMainWindow):
 
     # ── Home ──────────────────────────────────────────────────────────────────
     def _home_facts(self) -> HomeFacts:
-        """What Home states, read now: the inference screen's session and its six steps, the part and page a
-        live run is in, and every record of the store in use. The narrowing round has an observation to
-        choose when its panel's own list holds one."""
-        session = self.inference_screen.session
-        live_place = self._run_place(self._running_panel)
-        live = live_place[1] if live_place is not None and live_place[0] == "inference" else None
-        offered = self.inference_screen.tsnpe_panel.obs_picker.has_entries()
-        states = chain.step_states(session, live=live, observation_on_offer=offered, label=record_words.label_of)
-        return HomeFacts(session, states, live_place, _home_records(default_store()))
+        """What Home states, read now: the inference screen's session and its six steps as last worked out,
+        the part and page a live run is in, and every record of the store in use."""
+        return HomeFacts(self.inference_screen.session, self.inference_screen.step_states(),
+                         self._run_place(self._running_panel), _home_records(default_store()))
 
     def _run_place(self, panel):
-        """The part and page a panel's run is in: None for no panel, or for one with no known home."""
-        where = self._panel_home.get(panel) if panel is not None else None
-        if where is None:
-            return None
-        part = next(name for name, screen in _HOME_PLACES.items() if screen == where[0])
-        pages = _TABBED.get(part, ())
-        return part, (pages[where[3]] if pages else None)
+        """The part and page a panel's run is in: None for no panel, or for one with no place in the window."""
+        return self._places.get(panel) if panel is not None else None
 
-    def _go_from_home(self, part: str, page) -> None:
-        """Open the place Home asks for: a part's screen; a page of Effective temperature, or a step, at its
-        tab when that tab can be opened (a greyed one leaves the tab shown); the records screen at a kind. A
-        place the window does not hold opens nothing."""
-        if part not in _HOME_PLACES:
-            return
+    def _states_changed(self, states) -> None:
+        """The six steps' states were worked out again: the rail shows them, and Home reads now while it is
+        shown, else at its next opening."""
+        self.shell.rail.set_step_states(states)
+        self.home_screen.refresh()
+
+    # ── moving between the parts ──────────────────────────────────────────────
+    def part(self, name: str) -> QWidget:
+        """The top widget of the part ``name``; KeyError for a part the window does not have."""
+        widget = self.shell.part_widget(name)
+        if widget is None:
+            raise KeyError(f"not a part of the window: {name!r}")
+        return widget
+
+    def current_place(self) -> tuple[str, str | None]:
+        """The part in sight, and the page or step it shows (None for a part of one page)."""
+        shown = self.shell.stack.currentWidget()
+        part = next(place.key for place in keys.PARTS if self.shell.part_widget(place.key) is shown)
+        pages = _TABBED.get(part)
+        return part, (pages[shown.tabs.currentIndex()] if pages else None)
+
+    def go_to(self, part: str, page: str | None = None) -> None:
+        """Show the part ``part`` and, when one is named, its page: a step of Parameter inference, a page of
+        Effective temperature, or for Records the kind of record it lists. Then mark the rail, give the page
+        the keyboard and say where the window is, all before returning. Parameter inference opened with no
+        step shows the step in hand the first time and the step last shown after that; a step that cannot be
+        opened yet leaves the step shown. Home is read again each time it is opened. A part the window does
+        not have raises KeyError."""
+        self._move(part, page, keyboard=True)
+
+    def go_to_run(self) -> None:
+        """Go to the place of the live run. Nothing when no run is live, or its panel has no place."""
+        place = self._run_place(self._running_panel)
+        if place is not None:
+            self.go_to(*place)
+
+    def _move(self, part: str, page, *, keyboard: bool) -> None:
+        if not self.shell.has_part(part):
+            raise KeyError(f"not a part of the window: {part!r}")
+        widget = self.shell.part_widget(part)
+        if part == "inference":
+            if page is None and not self._inference_opened:
+                page = chain.step_in_hand(self.inference_screen.step_states())
+            self._inference_opened = True
         if part == "records" and page is not None:
             found = self.artifact_screen.kind_combo.findData(page)
             if found >= 0:
                 self.artifact_screen.kind_combo.setCurrentIndex(found)
-        screen = _HOME_PLACES[part]
-        self.nav.go_to(0 if screen is None else self._section_index[screen])
-        pages = _TABBED.get(part, ())
-        if page in pages:
-            tabs = (self.inference_screen if part == "inference" else self.fdt_screen).tabs
-            if tabs.isTabEnabled(pages.index(page)):
-                tabs.setCurrentIndex(pages.index(page))
+        if part == "home":
+            if self.shell.stack.currentWidget() is widget:
+                self.home_screen.refresh()           # in sight already: read now (nothing while the window is hidden)
+            else:
+                self.home_screen.mark_stale()        # read as it is shown
+        self._moving = True
+        try:
+            self.shell.show_part(part)
+            pages = _TABBED.get(part, ())
+            if page is not None and pages:
+                index = pages.index(page)
+                if widget.tabs.isTabEnabled(index):
+                    widget.tabs.setCurrentIndex(index)
+        finally:
+            self._moving = False
+        now, shown = self.current_place()
+        self.shell.rail.set_place(now, shown if now == "inference" else None)
+        if keyboard:
+            self._give_keyboard(widget, Qt.OtherFocusReason)
+        self.place_changed.emit(now, shown)
 
-    def _on_screen_changed(self, index: int) -> None:
-        """A screen other than Home is shown: Home is read again at its next opening, since what it states
-        may change while it is away."""
-        if self.nav.stack.widget(index) is not self.home_screen:
-            self.home_screen.mark_stale()
+    def _give_keyboard(self, widget: QWidget, reason) -> None:
+        """Put the keyboard on the control the part names to start at, or else on its first control that is not a
+        button."""
+        first = getattr(widget, "first_focus", None)
+        target = first() if callable(first) else None
+        if target is None:
+            target = _first_control(widget)
+        if target is not None:
+            target.setFocus(reason)
 
-    # ── the live run, visible app-wide ────────────────────────────────────────
+    def _rail_opened(self, part: str, step) -> None:
+        """A row of the rail was pressed. By Enter or Space on the row that has the keyboard: the page takes the
+        keyboard. By a click: the keyboard is taken off the page in sight and given to nothing, so that no
+        control of the page the click opens wears the focus ring, a field one types in among them."""
+        held = self.focusWidget()
+        by_key = self.shell.rail.isAncestorOf(held)
+        if not by_key and held is not None and self.shell.stack.currentWidget().isAncestorOf(held):
+            held.clearFocus()
+        self._move(part, step, keyboard=by_key)
+
+    def _rail_left(self) -> None:
+        """Escape in the rail: the page in sight takes the keyboard."""
+        self._give_keyboard(self.shell.stack.currentWidget(), Qt.ShortcutFocusReason)
+
+    def _tab_changed(self, _index: int) -> None:
+        """A tab of Parameter inference or of Effective temperature changed by its own bar, or by the gates
+        that take the steps back to the first: while that part is in sight the rail marks what shows and the
+        move is said, as go_to says one. Inside go_to the move is said once, at its end."""
+        if self._moving:
+            return
+        part, page = self.current_place()
+        if getattr(self.shell.part_widget(part), "tabs", None) is not self.sender():
+            return
+        self.shell.rail.set_place(part, page if part == "inference" else None)
+        self.place_changed.emit(part, page)
+
+    # ── the live run, at the foot of the rail ─────────────────────────────────
     def _on_run_state(self, panel) -> None:
-        """A run started (``panel``) or ended (None): fill or clear the shell's run slot.
+        """A run started (``panel``) or ended (None): the steps' states are worked out again, which shows the
+        live step in the rail and has Home read, and the foot says what is running and for how long.
 
-        Connected to the module-level RUN_STATE in base_panel.py, which _set_busy publishes on.
-        EVERY window constructed in the process receives EVERY run-state signal -- including one a
-        test has discarded: such a window is never destroyed (PySide holds the lambda slots that
-        capture ``self``, which Python's collector cannot reach), so Qt never drops its connection
-        and its handler runs, and its timer ticks, on every later run. This handler must therefore
-        touch ONLY its own window's widgets and be safe to run on a window nobody is looking at.
-        The title is looked up ONCE per run, not per tick.
+        Connected to the module-level RUN_STATE in base_panel.py, which every window built in the process
+        hears until it is deleted: this handler touches only its own window's widgets, and is safe to run on
+        a window nobody is looking at. The run's place is looked up ONCE per run, not per tick.
         """
         self._running_panel = panel
-        self._mark_running_section(panel)
-        self.home_screen.refresh()                 # read now while Home is shown, else at its next opening
+        self.inference_screen.recompute_states()
+        foot = self.shell.rail.foot
         if panel is None:
             self._run_timer.stop()
-            self.nav.set_running(None)
+            foot.set_state("none", "Nothing is running", "Only one run at a time.")
             return
-        where = self._panel_home.get(panel)
-        self._run_title = where[1] if where is not None else ""
+        place = self._run_place(panel)
+        if place is None:
+            self._run_title = self._run_place_words = "Running: a task"
+        else:
+            part, page = place
+            self._run_title = f"Running: {keys.step(page).name if part == 'inference' else keys.part(part).name}"
+            words = keys.place_words(page if part == "inference" else f"{part}/{page}" if page else part)
+            self._run_place_words = f"Running: {words}"
         self._run_started = time.monotonic()
-        self._tick_running()                       # paint immediately, not a second from now
-        self.nav.btn_running.setToolTip(
-            f"{where[0]} → {where[1]}: go to it" if where is not None else "")
+        self._tick_running()                       # shown at once, not a second from now
         self._run_timer.start()
 
     def _tick_running(self) -> None:
-        """Re-render the elapsed time. One second's work: a divmod and a setText."""
-        self.nav.set_running(
-            running_banner(self._run_title, int(time.monotonic() - self._run_started)))
-
-    def _go_to_running(self) -> None:
-        """Click the run slot: show the panel that is running -- its screen AND its tab, since a run
-        on a section's second tab is not found by arriving at the first. A panel with no known home
-        does nothing: the banner still says what is running, it just has nowhere to send you."""
-        where = self._panel_home.get(self._running_panel)
-        if where is None:
-            return
-        _name, _label, screen_index, tab_index = where
-        self.nav.go_to(screen_index)
-        tabs = getattr(self.nav.stack.widget(screen_index), "tabs", None)
-        if tabs is not None:
-            tabs.setCurrentIndex(tab_index)
-
-    def _mark_running_section(self, panel) -> None:
-        """Put the running marker on the running section's tab, and clear every other one. ``panel``
-        None -- or a panel with no known home -- clears the lot, so a marker can never outlive the run
-        that set it. Home carries no marker.
-
-        Every screen is rewritten on every change rather than remembering what was marked: four
-        screens is nothing, and the bookkeeping version is what leaves a stale marker behind when a
-        run ends on a window that was navigated in between. Nothing is DISABLED here: the app-wide
-        control lock (BasePanel._set_busy) already stands and navigation stays free -- you must be
-        able to look at another tab while a twenty-minute train runs.
-        """
-        where = self._panel_home.get(panel)
-        name = where[0] if where is not None else None
-        tab_index = where[3] if where is not None else None
-        for section, screen in self._tab_screens:
-            screen.set_running_tab(tab_index if section == name else None)
+        """Write the elapsed time again: a divmod and the foot's words, once a second."""
+        words = f"{clock_words(int(time.monotonic() - self._run_started))} so far. Settings are locked."
+        foot = self.shell.rail.foot
+        foot.set_state("now", self._run_title, words, button=self._run_place(self._running_panel) is not None)
+        whole = f"{self._run_place_words}. {words}"   # the place in full: the title names only its part or step
+        foot.setAccessibleName(whole)
+        foot.setToolTip(whole)
 
     def panel(self, cls):
         """The first panel of type ``cls`` across all screens (convenience for callers + tests)."""

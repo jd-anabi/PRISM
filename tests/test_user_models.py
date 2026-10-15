@@ -1103,17 +1103,13 @@ def test_apply_icon_never_blank():
 
 
 def test_migrated_glyph_buttons_render():
-    """The migrated buttons (nav back/settings, picker refresh, help badge, chi probe remove) never
-    render blank."""
+    """The migrated buttons (picker refresh, help badge, chi probe remove) never render blank."""
     import tempfile
     from PySide6.QtWidgets import QPushButton
-    from core.gui.screens.nav_shell import NavShell
     from core.gui.panels.inference_tabs import _ChiProbeRow
     from core.gui.widgets.artifact_picker import ArtifactPicker
     from core.gui.widgets.help_badge import HelpBadge
     qt_app()
-    ns = NavShell()
-    assert ns.btn_back.text() and ns.btn_settings.text()
     ap = ArtifactPicker(tempfile.mkdtemp())
     refresh = ap.findChild(QPushButton, "iconButton")
     assert refresh is not None and refresh.text()

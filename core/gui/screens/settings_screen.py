@@ -1,14 +1,14 @@
-"""The Settings + Help screen (reached from the bottom-left gear's "Full settings…").
+"""The Settings screen, reached from the rail's row Settings.
 
-Two parts: an Appearance chooser (Follow Windows / Light / Dark) that calls back to MainWindow to
-apply + persist the mode, and a per-section Help reference assembled from the user-facing panel module
-docstrings and their per-control ``HELP`` dicts -- filling the gap where the app had no section-level
-"what is this for" text. Reached only from the gear; the back arrow still returns Home.
+Three parts: an Appearance chooser (Follow Windows / Light / Dark) that calls back to MainWindow to
+apply + persist the mode, the list of the user-defined models, and a per-section Help reference assembled
+from the user-facing panel module docstrings and their per-control ``HELP`` dicts -- filling the gap where
+the app had no section-level "what is this for" text. ``help_text`` builds that reference, for this screen
+and for the Help screen alike.
 """
 import html
 import importlib
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QButtonGroup, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QRadioButton, QScrollArea, QTextBrowser, QVBoxLayout, QWidget)
 
@@ -36,6 +36,28 @@ def _first_paragraph(doc: str) -> str:
             break
         out.append(line.strip())
     return " ".join(out)
+
+
+def help_text() -> str:
+    """The help reference as rich text: for each user-facing section, its title, the first paragraph of its
+    module's docstring and its per-control ``HELP`` entries. A module that cannot be imported is left out."""
+    parts = []
+    for modpath, title in _HELP_SECTIONS:
+        try:
+            mod = importlib.import_module(modpath)     # already imported by MainWindow -> cache hit
+        except Exception:                              # noqa: BLE001 -- Help is best-effort
+            continue
+        parts.append(f"<h3>{html.escape(title)}</h3>")
+        summary = _first_paragraph(mod.__doc__ or "")
+        if summary:
+            parts.append(f"<p>{html.escape(summary)}</p>")
+        help_dict = getattr(mod, "HELP", None)
+        if isinstance(help_dict, dict) and help_dict:
+            items = "".join(
+                f"<li><b>{html.escape(str(k))}</b>: {html.escape(str(v))}</li>"
+                for k, v in help_dict.items())
+            parts.append(f"<ul>{items}</ul>")
+    return "".join(parts)
 
 
 class SettingsScreen(QWidget):
@@ -72,7 +94,7 @@ class SettingsScreen(QWidget):
             self._radios[mode] = rb
             av.addWidget(rb)
         # Select the current mode BEFORE connecting, so construction never fires on_mode (which would
-        # re-enter MainWindow before it has finished wiring the gear menu + this screen).
+        # re-enter MainWindow before it has finished wiring this screen).
         self._radios.get(current_mode, self._radios["system"]).setChecked(True)
         for mode, rb in self._radios.items():
             rb.toggled.connect(lambda checked, m=mode: checked and self._on_mode(m))
@@ -89,14 +111,13 @@ class SettingsScreen(QWidget):
 
         help_box = QGroupBox("Help — what each section does")
         hv = QVBoxLayout(help_box)
-        help_label = self._build_help()
         # A word-wrapped QLabel does not propagate heightForWidth through the intervening layouts of a
         # setWidgetResizable QScrollArea, so this blob (five module docstrings plus every HELP dict,
         # several thousand characters) got a height computed for the wrong width and the BOTTOM WAS
         # UNREACHABLE. A QTextBrowser lays out its own rich text and scrolls itself, which sidesteps
         # the propagation problem entirely -- and it makes the help selectable, which a QLabel is not.
         viewer = QTextBrowser()
-        viewer.setHtml(help_label.text())
+        viewer.setHtml(help_text())
         viewer.setOpenExternalLinks(True)
         viewer.setMinimumHeight(HELP_VIEWER_MIN_H)
         hv.addWidget(viewer)
@@ -118,7 +139,7 @@ class SettingsScreen(QWidget):
         layout.addWidget(scroll)
 
     def set_mode(self, mode: str) -> None:
-        """Reflect a mode change that came from the gear popover (without re-firing ``on_mode``)."""
+        """Reflect a mode change made elsewhere (without re-firing ``on_mode``)."""
         rb = self._radios.get(mode)
         if rb is not None and not rb.isChecked():
             rb.blockSignals(True)
@@ -157,25 +178,3 @@ class SettingsScreen(QWidget):
             err.setWordWrap(True)
             self._models_list.addWidget(err)
 
-    def _build_help(self) -> QLabel:
-        parts = []
-        for modpath, title in _HELP_SECTIONS:
-            try:
-                mod = importlib.import_module(modpath)     # already imported by MainWindow -> cache hit
-            except Exception:                              # noqa: BLE001 -- Help is best-effort
-                continue
-            parts.append(f"<h3>{html.escape(title)}</h3>")
-            summary = _first_paragraph(mod.__doc__ or "")
-            if summary:
-                parts.append(f"<p>{html.escape(summary)}</p>")
-            help_dict = getattr(mod, "HELP", None)
-            if isinstance(help_dict, dict) and help_dict:
-                items = "".join(
-                    f"<li><b>{html.escape(str(k))}</b>: {html.escape(str(v))}</li>"
-                    for k, v in help_dict.items())
-                parts.append(f"<ul>{items}</ul>")
-        label = QLabel("".join(parts))
-        label.setTextFormat(Qt.RichText)
-        label.setWordWrap(True)
-        label.setAlignment(Qt.AlignTop)
-        return label

@@ -364,6 +364,18 @@ class _List(QWidget):
             painter.end()
 
 
+class _Scroll(QScrollArea):
+    """The list's scrolling area. Each time its height changes -- a lower window, the small layout, a foot whose
+    title takes a second line -- the current row is brought into view again."""
+
+    @reported(QScrollArea.resizeEvent)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)                   # first: the list takes the area's new size
+        rail = self.parentWidget()
+        if isinstance(rail, Rail):
+            rail._keep_in_view()
+
+
 class Rail(QWidget):
     """The rail: PRISM's name, the list of the parts with the chain of steps under parameter inference, and
     the run's state at its foot. ``opened`` is emitted with a part's key and None, or with "inference" and a
@@ -423,7 +435,7 @@ class Rail(QWidget):
                     self._steps[step.key] = step_row
             rows.addWidget(block)
 
-        self._scroll = QScrollArea()
+        self._scroll = _Scroll()
         # The frame is switched off here, at build: the sheet gives a line to a scrolling area that still has
         # the frame it is born with.
         self._scroll.setFrameShape(QFrame.NoFrame)
@@ -500,6 +512,7 @@ class Rail(QWidget):
         for key, row in self._steps.items():
             row.set_one_line(self._small and key not in kept)
         self._fit()
+        self._keep_in_view()
 
     def _fit(self) -> None:
         """Lay the list out now and size it as its scrolling area will, so that a row can be brought into view
@@ -507,6 +520,12 @@ class Rail(QWidget):
         self._list.layout().activate()
         view = self._scroll.viewport().size()
         self._list.resize(view.width(), max(view.height(), self._list.minimumSizeHint().height()))
+
+    def _keep_in_view(self) -> None:
+        """Bring the current row into view again, after the rows or the room for them changed."""
+        current = self._current_row()
+        if current is not None and not current.isHidden():
+            self._scroll.ensureWidgetVisible(current, 0, 0)
 
     # what other parts ask of it
     def row(self, name: str):

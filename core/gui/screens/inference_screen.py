@@ -10,14 +10,18 @@ and the choice of bounds is also what selects the observation mode (a Forcing se
 The screen owns the session (the single source of truth); tabs read it through their ``_screen``
 back-reference and never cache it. ``refresh_gates`` is the truth table that greys tabs via
 setTabEnabled after every stage.
+
+After the gates the screen works out where each of the six steps stands, which the rail and Home show, and
+says so through ``states_changed``.
 """
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
 
+from .. import chain, keys, record_words
 from ..panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel,
                                      TSNPEPanel, ValidatePanel)
 from ..session import SbiSession
 from ..widgets.anim import crossfade_tab
-from .nav_shell import mark_tabs
 
 
 def _held_ref(wrapper) -> str:
@@ -41,12 +45,15 @@ class InferenceScreen(QWidget):
 
     Drives the Config -> Prior -> Posterior -> Validate -> Infer -> TSNPE workflow and owns the
     cross-tab gating (refresh_gates' setTabEnabled truth table, re-run after every stage). Persists
-    nothing itself -- each panel saves its own settings group.
+    nothing itself -- each panel saves its own settings group. ``states_changed`` carries the six steps'
+    states each time they are worked out again.
     """
+    states_changed = Signal(object)
 
     def __init__(self, title="Parameter Inference", parent=None):
         super().__init__(parent)
         self.session = SbiSession()
+        self._states = ()
 
         heading = QLabel(title)
         heading.setProperty("type", "heading")     # Fluent type ramp (global QSS)
@@ -65,12 +72,10 @@ class InferenceScreen(QWidget):
         # TSNPE sits AFTER Infer, and the order is the workflow: a round needs an observation, and
         # the Infer tab is what records one (an amortized posterior has none at save time).
         self.tsnpe_panel = TSNPEPanel(self)
-        self._tab_labels: list = []        # the labels as built; mark_tabs rewrites from these
         for label, panel in (("Config", self.config_panel), ("Prior", self.prior_panel),
                              ("Posterior", self.posterior_panel), ("Validate", self.validate_panel),
                              ("Infer", self.infer_panel), ("TSNPE", self.tsnpe_panel)):
             self.tabs.addTab(panel, label)
-            self._tab_labels.append(label)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -138,12 +143,6 @@ class InferenceScreen(QWidget):
         if s.observation is not None:
             held.append(f"the observation {_held_ref(s.observation)}")
         return held
-
-    def set_running_tab(self, index: "int | None") -> None:
-        """Mark the tab at ``index`` as the one with a live run; None clears every mark. Tab
-        TEXT only: refresh_gates owns each tab's enabled state and tooltip and runs after every
-        stage, so a marker written there would be wiped seconds later."""
-        mark_tabs(self.tabs, self._tab_labels, index)
 
     def new_draft(self, draft):
         """Config applied: replace the WHOLE session (a different model or unit system invalidates
@@ -221,3 +220,20 @@ class InferenceScreen(QWidget):
         # jump to an arbitrary neighbour; make it deterministic -- fall back to Config.
         if not self.tabs.isTabEnabled(self.tabs.currentIndex()):
             self.tabs.setCurrentIndex(0)
+        # The steps' states come after the panels' own gates: the narrowing round's list of observations,
+        # which its state reads, is refreshed by its gate.
+        self.recompute_states()
+
+    def recompute_states(self) -> None:
+        """Work out again where each of the six steps stands, from the session, the step whose panel has a
+        run live and whether the narrowing round has an observation to choose, and say so through
+        ``states_changed``. No panel's gate is run: ``refresh_gates`` runs them first."""
+        live = next((place.key for place, panel in zip(keys.STEPS, self.panels()) if panel._busy), None)
+        self._states = chain.step_states(self.session, live=live,
+                                         observation_on_offer=self.tsnpe_panel.obs_picker.has_entries(),
+                                         label=record_words.label_of)
+        self.states_changed.emit(self._states)
+
+    def step_states(self) -> tuple:
+        """The six steps' states as last worked out, in the steps' order."""
+        return self._states

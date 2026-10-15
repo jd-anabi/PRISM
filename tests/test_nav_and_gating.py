@@ -257,36 +257,12 @@ def test_dispatch_watches_every_directory_it_is_given(tmp_path):
                                            "fdt3d_vs_T_20260922_130000.png"], seen
 
 # ── PRISM navigation redesign ────────────────────────────────────────────────────────────────────
-def test_nav_shell_back_arrow_tracks_the_screen():
-    from PySide6.QtWidgets import QWidget
-    from core.gui.screens.nav_shell import NavShell
-
-    qt_app()
-    nav = NavShell()
-    for _ in range(3):
-        nav.add_screen(QWidget())
-    nav.go_home()
-    assert nav.btn_back.isHidden(), "back arrow should be hidden on home"
-    nav.go_to(2)
-    assert not nav.btn_back.isHidden(), "back arrow should show on a section"
-    nav.go_home()
-    assert nav.btn_back.isHidden(), "back arrow should hide again on home"
-
-def test_main_window_always_opens_on_home():
-    from core.gui import settings as st
-    qt_app()
-    qs = st.settings()
-    qs.setValue("window/tab", 2)          # a stale key from the old flat-tab layout
-    qs.sync()
-    w = build_window()
-    assert w.nav.stack.currentIndex() == 0, "the app must always open on the home screen"
-
 def test_the_window_offers_three_appearance_choices_and_no_ticks():
-    """Both places that offer the appearance, the gear's menu and the Settings screen, show Follow
-    Windows, Light and Dark and nothing else: no time-of-day mode, no accent tick, no font tick and
-    no note under it. A settings file an older build left opens on Follow Windows in both places
+    """The one place that offers the appearance, the Settings screen, shows Follow Windows, Light and
+    Dark and nothing else: no time-of-day mode, no accent tick, no font tick and no note under it, and
+    the window holds no menu of its own. A settings file an older build left opens on Follow Windows
     with nothing rewritten; the next choice rewrites the mode and leaves the two old keys alone."""
-    from PySide6.QtWidgets import QCheckBox, QLabel, QRadioButton
+    from PySide6.QtWidgets import QCheckBox, QLabel, QMenu, QRadioButton
     from core.gui import settings as st
     from core.gui.screens.settings_screen import SettingsScreen
 
@@ -298,10 +274,7 @@ def test_the_window_offers_three_appearance_choices_and_no_ticks():
     qs.sync()
     window = build_window()
     three = ["Follow Windows", "Light", "Dark"]
-    actions = window.nav.btn_settings.menu().actions()
-    offered = [a for a in actions if a.isCheckable()]
-    assert [a.text() for a in offered] == three
-    assert [a.text() for a in actions if not a.isCheckable() and not a.isSeparator()] == ["Full settings…"]
+    assert window.findChildren(QMenu) == [], "the window holds a menu"
     radios = window.settings_screen.findChildren(QRadioButton)
     assert [r.text() for r in radios] == three
     assert window.settings_screen.findChildren(QCheckBox) == []
@@ -310,11 +283,9 @@ def test_the_window_offers_three_appearance_choices_and_no_ticks():
         assert gone not in inspect.signature(SettingsScreen.__init__).parameters, gone
     for gone in ("_set_system_accent", "_set_force_inter"):
         assert not hasattr(window, gone), gone
-    assert [a.text() for a in offered if a.isChecked()] == ["Follow Windows"]
     assert [r.text() for r in radios if r.isChecked()] == ["Follow Windows"]
     assert st.settings().value("appearance/mode") == "auto", "opening the window rewrote the stored mode"
     window.set_appearance_mode("dark")
-    assert [a.text() for a in offered if a.isChecked()] == ["Dark"]
     assert [r.text() for r in radios if r.isChecked()] == ["Dark"]
     after = st.settings()
     assert after.value("appearance/mode") == "dark"
@@ -4161,234 +4132,15 @@ def test_run_state_publishes_the_running_panel_and_none_on_idle():
     assert not BasePanel._running
 
 
-def test_the_running_banner_is_a_pure_clock():
-    """The header's text comes from a PURE helper, so this asserts every shape without waiting a
-    second: m:ss under an hour, h:mm:ss from an hour, 0:00 at the start, and "a task" for a panel
-    the window's destination map does not know (it still says something is running). A negative age
-    -- a wall-clock jump -- reads as 0 rather than as a minus sign."""
-    from core.gui.screens.nav_shell import running_banner
+def test_the_foots_clock_reads_minutes_and_seconds_and_hours_from_an_hour():
+    """The foot's time comes from a PURE helper, so this asserts every shape without waiting a
+    second: m:ss under an hour, h:mm:ss from an hour, 0:00 at the start. A negative age -- a
+    wall-clock jump -- reads as 0 rather than as a minus sign."""
+    from core.gui.screens.shell import clock_words
 
-    assert running_banner("Posterior", 0) == "Running: Posterior — 0:00"
-    assert running_banner("Posterior", 59) == "Running: Posterior — 0:59"
-    assert running_banner("Posterior", 60) == "Running: Posterior — 1:00"
-    assert running_banner("Posterior", 247) == "Running: Posterior — 4:07"
-    assert running_banner("Posterior", 3599) == "Running: Posterior — 59:59"
-    assert running_banner("Posterior", 3600) == "Running: Posterior — 1:00:00"
-    assert running_banner("Posterior", 3725) == "Running: Posterior — 1:02:05"
-    assert running_banner("Sweep study cross-validation", 5) == \
-        "Running: Sweep study cross-validation — 0:05"
-    assert running_banner("", 12) == "Running: a task — 0:12"
-    assert running_banner("   ", 12) == "Running: a task — 0:12"
-    assert running_banner("Posterior", -5) == "Running: Posterior — 0:00"
-
-
-def test_the_shells_run_slot_starts_empty_and_is_the_only_styled_writer():
-    """The slot is built EMPTY and hidden: no icon load, no timer, no store read. The 2026-09-11
-    taskbar-icon incident was ~150 ms of layout between the native show and the first idle turn, and
-    this button sits on that path. `set_running` is the only writer: a string shows it, None hides
-    and clears it. The objectName is what the global QSS keys on, so the two are pinned against each
-    other here -- a renamed button would otherwise silently lose its styling."""
-    from core.gui import design
-    from core.gui.screens.nav_shell import NavShell
-    from tests._fixtures import code_only, qt_app
-
-    qt_app()
-    nav = NavShell()
-    assert nav.btn_running.objectName() == "navRunning"
-    assert "QToolButton#navRunning" in design.build_qss(False)
-    assert "QToolButton#navRunning" in design.build_qss(True)
-    assert nav.btn_running.isHidden(), "the run slot must be hidden until something runs"
-    assert nav.btn_running.text() == ""
-    assert nav.btn_running.autoRaise(), "a flat tool button, like the other two nav glyphs"
-    # no icon font is touched for this button: NavShell loads exactly the two glyphs it always did
-    assert code_only(NavShell.__init__).count("apply_icon") == 2
-
-    nav.set_running("Running: Posterior — 0:03")
-    assert not nav.btn_running.isHidden() and nav.btn_running.text() == "Running: Posterior — 0:03"
-    nav.btn_running.setToolTip("somewhere")
-    nav.set_running(None)
-    assert nav.btn_running.isHidden()
-    assert nav.btn_running.text() == "" and nav.btn_running.toolTip() == ""
-
-
-def test_the_window_fills_the_run_slot_while_a_panel_runs_and_clears_it_after():
-    """The window's half of the run banner: the header says what is running and for how long, and
-    stops saying it the moment the run ends. And LAUNCH IS QUIET -- the slot is empty, no clock is
-    ticking and no panel is named until something actually runs. The QTimer is constructed in
-    __init__ and never started there: an unstarted QTimer registers nothing with the OS, which is
-    what keeps the 150 ms of layout the 2026-09-11 taskbar-icon incident was made of off the launch
-    path."""
-    from core.gui.panels.crossval_panel import CrossValPanel
-    from core.gui.screens.nav_shell import running_banner
-    from tests._fixtures import qt_app
-
-    qt_app()
-    w = build_window()
-    assert w.nav.btn_running.isHidden() and w.nav.btn_running.text() == ""
-    assert not w._run_timer.isActive(), "a clock is ticking before anything has run"
-    assert w._running_panel is None
-
-    label = "Sweep study cross-validation"
-    panel = w.panel(CrossValPanel)
-    panel._set_busy(True)
-    try:
-        assert not w.nav.btn_running.isHidden()
-        # tolerant by one tick: this is real elapsed time, not a stub
-        assert w.nav.btn_running.text() in (running_banner(label, 0), running_banner(label, 1)), \
-            w.nav.btn_running.text()
-        assert w.nav.btn_running.toolTip() == f"FDT Analysis → {label}: go to it"
-        assert w._running_panel is panel
-        assert w._run_timer.isActive() and w._run_timer.interval() == 1000
-    finally:
-        panel._set_busy(False)
-    assert w.nav.btn_running.isHidden() and w.nav.btn_running.text() == ""
-    assert w.nav.btn_running.toolTip() == "" and w._running_panel is None
-    assert not w._run_timer.isActive(), "the clock must stop when the run does"
-
-
-def test_the_run_slot_keeps_its_width_as_its_clock_ticks():
-    """The slot is rewritten every second while a run is live, and it is an outlined button, so its
-    width is seen. In the application's font a 1 is narrower than a 0: the slot would be wider at 4:07
-    than at 4:11 and its edge would move with the clock. Its own font is the small lettering with the
-    digits of equal width, so the two are one width. The widths are those of the banner's words in the
-    button's own font; without the feature the same font gives two widths."""
-    from PySide6.QtGui import QFont, QFontMetricsF
-    from core.gui import fonts
-    from core.gui.screens.nav_shell import running_banner
-
-    qt_app()
-    w = build_window()
-    font, equal, small = w.nav.btn_running.font(), QFont.Tag.fromString("tnum"), fonts.inter("small")
-    assert font.isFeatureSet(equal), "the run slot shows its clock in digits of unequal width"
-    assert (font.family(), font.pixelSize(), font.weight()) == (small.family(), small.pixelSize(), small.weight())
-
-    def widths(of, *seconds):
-        return [QFontMetricsF(of).horizontalAdvance(running_banner("Posterior", s)) for s in seconds]
-
-    for pair in ((247, 251), (600, 671), (36000, 40271)):          # 4:07 and 4:11, and so on by the hour
-        one, other = widths(font, *pair)
-        assert one == other, (pair, one, other)
-    without = QFont(font)
-    without.unsetFeature(equal)
-    one, other = widths(without, 247, 251)
-    assert one != other, "the digits have one width without the feature as well: the lines above prove nothing"
-
-
-def test_clicking_the_run_slot_opens_the_running_panel_and_an_unknown_one_goes_nowhere():
-    """The banner is clickable and lands on the panel that is running -- the section screen AND its
-    tab, because a run on the second tab of a section is not found by arriving at the first.
-
-    The destination map is built ONCE, in __init__, off the screens' own QTabWidgets, so a renamed
-    tab cannot leave the banner naming a tab that is gone. A panel the map does not know -- the model
-    builder is not a BasePanel, a future screen might not be mounted in a tab -- shows the banner with
-    no destination rather than raising a KeyError inside a signal handler."""
-    from core.gui.panels.crossval_panel import CrossValPanel
-    from tests._fixtures import qt_app
-
-    qt_app()
-    w = build_window()
-    panel = w.panel(CrossValPanel)
-    assert w._panel_home[panel] == ("FDT Analysis", "Sweep study cross-validation",
-                                    w._section_index["FDT Analysis"], 1)
-    assert w._panel_home[w.inference_screen.posterior_panel] == (
-        "Parameter Inference", "Posterior", w._section_index["Parameter Inference"], 2)
-
-    w.nav.go_home()
-    w.fdt_screen.tabs.setCurrentIndex(0)
-    panel._set_busy(True)
-    try:
-        w.nav.btn_running.click()
-        assert w.nav.stack.currentIndex() == w._section_index["FDT Analysis"]
-        assert w.fdt_screen.tabs.currentIndex() == 1, "the click must land on the running TAB"
-    finally:
-        panel._set_busy(False)
-
-    orphan = build_run_host()
-    assert orphan not in w._panel_home
-    # Start on a section that is NOT Home, so "stays where it is" is distinguishable from a wrong
-    # fallback that navigates Home.
-    start = w._section_index["Simulate"]
-    assert start != 0
-    w.nav.go_to(start)
-    orphan._set_busy(True)
-    try:
-        assert not w.nav.btn_running.isHidden()
-        assert w.nav.btn_running.text().startswith("Running: a task — ")
-        assert w.nav.btn_running.toolTip() == ""
-        w.nav.btn_running.click()
-        assert w.nav.stack.currentIndex() == start, "an unknown panel must not navigate anywhere"
-    finally:
-        orphan._set_busy(False)
-
-
-def test_the_running_tab_carries_a_marker_home_none_and_nothing_is_disabled():
-    """The run markers. The running tab takes a leading mark, cleared the moment the run ends -- and
-    rewritten from the labels the screens were BUILT with, so marking is idempotent and a cleared label
-    is byte-identical to the original (the tab titles are read back verbatim by
-    test_every_field_key_has_a_window_control..., which asserts
-    ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]). Home carries no mark of a run: no
-    word on it holds the mark while a run is live.
-
-    And nothing is disabled: the app-wide controls lock stands on its own, every tab stays selectable,
-    and the marker survives refresh_gates -- which rewrites tab tooltips and enabled states after every
-    step's run, and would be running while a marked run is live. You must be able to look at another tab
-    while a twenty-minute train runs."""
-    from PySide6.QtWidgets import QLabel, QPushButton
-    from core.gui.panels.crossval_panel import CrossValPanel
-    from core.gui.screens.nav_shell import RUNNING_MARK
-    from tests._fixtures import qt_app
-
-    def marked_on_home():
-        home = w.home_screen
-        return [words for words in [button.text() for button in home.findChildren(QPushButton)]
-                + [label.text() for label in home.findChildren(QLabel)] if RUNNING_MARK in words]
-
-    qt_app()
-    w = build_window()
-    fdt, inf = w.fdt_screen.tabs, w.inference_screen.tabs
-    assert [fdt.tabText(i) for i in range(fdt.count())] == \
-        ["FDT analysis", "Sweep study cross-validation"]
-
-    panel = w.panel(CrossValPanel)
-    panel._set_busy(True)
-    try:
-        assert fdt.tabText(1) == f"{RUNNING_MARK} Sweep study cross-validation"
-        assert fdt.tabText(0) == "FDT analysis", "only the running tab is marked"
-        assert marked_on_home() == [], "Home carries a mark of the run"
-        assert [inf.tabText(i) for i in range(inf.count())] == \
-            ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]
-        # nothing is disabled and navigation stays free
-        assert fdt.isTabEnabled(0)
-        w.nav.go_to(w._section_index["Simulate"])
-        assert w.nav.stack.currentIndex() == w._section_index["Simulate"]
-        fdt.setCurrentIndex(0)
-        assert fdt.currentIndex() == 0, "a marked section's other tab must stay selectable"
-    finally:
-        panel._set_busy(False)
-    assert fdt.tabText(1) == "Sweep study cross-validation"
-
-    # an inference tab, and the marker survives the gate refresh that follows every stage
-    post = w.inference_screen.posterior_panel
-    post._set_busy(True)
-    try:
-        assert inf.tabText(2) == f"{RUNNING_MARK} Posterior"
-        assert marked_on_home() == [], "Home carries a mark of the run"
-        assert fdt.tabText(1) == "Sweep study cross-validation", "another section keeps no mark"
-        w.inference_screen.refresh_gates()
-        assert inf.tabText(2) == f"{RUNNING_MARK} Posterior", "refresh_gates wiped the marker"
-    finally:
-        post._set_busy(False)
-    assert [inf.tabText(i) for i in range(inf.count())] == \
-        ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]
-
-    # a panel with no known home marks nothing, and clears whatever was marked
-    orphan = build_run_host()
-    orphan._set_busy(True)
-    try:
-        assert marked_on_home() == []
-        assert fdt.tabText(1) == "Sweep study cross-validation"
-    finally:
-        orphan._set_busy(False)
+    assert [clock_words(s) for s in (0, 59, 60, 247, 3599)] == ["0:00", "0:59", "1:00", "4:07", "59:59"]
+    assert [clock_words(s) for s in (3600, 3725, 36000)] == ["1:00:00", "1:02:05", "10:00:00"]
+    assert clock_words(-5) == "0:00"
 
 
 def test_the_config_tab_says_what_the_session_holds():
@@ -4705,22 +4457,6 @@ def test_the_panel_docstrings_no_longer_count_nine_panels_or_five_tabs():
     assert "the six inference tabs" in inf_src
 
 
-def test_main_window_stops_claiming_it_owns_the_only_settings_write():
-    """The class docstring said _save_state is "the only QSettings WRITE site ... so panel selections
-    and layouts persist from here". Layouts do not: BasePanel._persist_layout writes and sync()s the
-    splitter state on a 1500 ms debounce off splitterMoved, deliberately, because save-on-clean-quit
-    lost the drag (base_panel.py own comment says so). Appearance is the third write site.
-
-    Whitespace-NORMALISED, for the same reason as the test above: the claim is wrapped as "the only
-    QSettings / WRITE site" in the file, so against raw source this first assertion could never fail
-    and would pass before and after the rewrite."""
-    from core.gui import main_window as mw
-
-    src = " ".join(inspect.getsource(mw.MainWindow).split())
-    assert "the only QSettings WRITE site" not in src
-    assert "_persist_layout" in src and "1500" in src
-
-
 def test_the_main_window_takes_its_opening_and_smallest_size_from_the_look(monkeypatch):
     from PySide6.QtCore import QByteArray
     from PySide6.QtGui import QGuiApplication
@@ -4741,7 +4477,10 @@ def test_the_main_window_takes_its_opening_and_smallest_size_from_the_look(monke
     assert (window.minimumWidth(), window.minimumHeight()) == (555, 444)
     screen = QGuiApplication.primaryScreen().availableGeometry()
     assert set(asked) == {main_window._room_on_screen()} == {(screen.width() - 40, screen.height() - 60)}
-    assert handed == [main_window._room_on_screen()], "the window held the layout's thresholds to another room"
+    # the thresholds are held to the widest page such a window gives: less the rail, the page's two sides and
+    # the room of its scroll bar, at the ordinary text size 220, 22 and 20, and 8 and 2
+    assert handed == [(screen.width() - 40 - 272, screen.height() - 60)], (
+        "the window held the layout's thresholds to another room")
     # a saved geometry that cannot be restored: the window opens at the look's size again
     remembered = settings.settings()
     remembered.setValue("window/geometry", QByteArray(b"not a saved geometry"))

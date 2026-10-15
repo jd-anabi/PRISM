@@ -138,9 +138,8 @@ def test_a_kind_with_nothing_in_it_is_not_a_root_that_cannot_be_read(tmp_path):
 def test_homes_records_row_opens_the_browser_and_the_window_saves_its_state():
     """The screen's registration points, in one real window.
 
-    Home's table of the parts opens it from its row "Records", with one click; the screen sits AFTER the
-    four sections and BEFORE Settings in the window's stack; the name maps to its stack index; and
-    _save_state calls the screen's save_settings BY NAME. It is NOT a BasePanel and NOT in
+    Home's table of the parts opens it from its row "Records", with one click; the window holds it as
+    its part Records; and _save_state calls the screen's save_settings BY NAME. It is NOT a BasePanel and NOT in
     _all_panels(), which is what keeps it out of both the app-wide control lock and
     _refresh_model_combos.
     """
@@ -153,15 +152,13 @@ def test_homes_records_row_opens_the_browser_and_the_window_saves_its_state():
     qt_app()
     w = build_window()
     assert isinstance(w.artifact_screen, ArtifactScreen)
-    idx = w._section_index["Artifacts"]
-    assert w._section_index["Simulate"] < idx < w._section_index["Settings"]
-    assert w.nav.stack.widget(idx) is w.artifact_screen
+    assert w.part("records") is w.artifact_screen
 
     assert not isinstance(w.artifact_screen, BasePanel), \
         "a BasePanel enrols in _instances, so every run anywhere would grey the browser out"
     assert w.artifact_screen not in w._all_panels()
 
-    home = w.nav.stack.widget(0)
+    home = w.part("home")
     assert home is w.home_screen
     home.resize(1080, 820)
     home.grab()
@@ -169,7 +166,7 @@ def test_homes_records_row_opens_the_browser_and_the_window_saves_its_state():
     rows = [parts.model().index(row, 0) for row in range(parts.model().rowCount())]
     records, = [index for index in rows if index.data() == "Records"]
     QTest.mouseClick(parts.viewport(), Qt.LeftButton, Qt.NoModifier, parts.visualRect(records).center())
-    assert w.nav.stack.currentIndex() == idx
+    assert w.current_place() == ("records", None)
 
     w.artifact_screen.kind_combo.setCurrentIndex(KINDS.index("posterior"))
     w._save_state()
@@ -262,7 +259,9 @@ def test_a_store_change_in_the_browser_re_lists_every_artifact_picker():
     by naming prior_picker / post_picker / obs_picker, so a fourth one added to a tab is covered by
     construction -- which is why what is asserted is EVERY picker the window holds, not a count. A
     count would make a later change that adds a picker break this test instead of being covered by it.
-    The three kinds today are asserted as a SUBSET for the same reason."""
+    The three kinds today are asserted as a SUBSET for the same reason. After the pickers the window works
+    out the steps' gates again, and a gate may list its own picker once more: what is compared is the
+    pickers' refreshes up to there."""
     from core.gui.widgets.artifact_picker import StorePicker
 
     qt_app()
@@ -275,7 +274,7 @@ def test_a_store_change_in_the_browser_re_lists_every_artifact_picker():
     for p in pickers:
         p.refresh = lambda _p=p: seen.append(_p)
     w.artifact_screen.store_changed.emit()
-    assert [id(p) for p in seen] == [id(p) for p in pickers], \
+    assert [id(p) for p in seen[:len(pickers)]] == [id(p) for p in pickers], \
         f"refreshed {[p.kind for p in seen]}, but the window holds {[p.kind for p in pickers]}"
 
 

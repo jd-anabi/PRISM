@@ -314,6 +314,7 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         lp.name = name
         self.post_picker.refresh()
         self.post_picker.restore_key(lp.id)
+        self._screen.recompute_states()                # the step's row names the posterior by its new name
         self.log_pane.append_line(f"Posterior named '{name}'.")
 
     def _sync_post_line(self) -> None:

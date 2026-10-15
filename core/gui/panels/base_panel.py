@@ -80,7 +80,7 @@ class _RunState(QObject):
 
 
 # The one broadcaster. BasePanel._set_busy publishes here and nothing else may; core/gui/main_window.py
-# listens and fills the shell's run slot, so the live run is shown app-wide.
+# listens and fills the run's state at the foot of the rail, so the live run is shown app-wide.
 RUN_STATE = _RunState()
 
 
@@ -316,7 +316,7 @@ class BasePanel(QWidget):
         for panel in list(BasePanel._instances):
             panel.set_controls_enabled(not busy)
         # Publish app-wide, LAST: every panel's controls are in their final state before anything
-        # listening can look at them. The shell's run slot is filled from this, and it is the only
+        # listening can look at them. The foot of the rail is filled from this, and it is the only
         # thing that knows WHICH panel -- _running is a bare bool.
         RUN_STATE.changed.emit(self if busy else None)
 

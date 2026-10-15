@@ -1129,12 +1129,12 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
     built = {"MainWindow", "InferenceScreen", "FdtPanel", "CrossValPanel", "SimulatePanel",
              "ReductionPanel", "ModelBuilderScreen", "ArtifactScreen", "ConfigPanel", "PriorPanel",
              "PosteriorPanel", "ValidatePanel", "InferPanel", "TSNPEPanel", "BasePanel",
-             "HomeScreen", "SettingsScreen", "SectionScreen", "RecordViewer"}
+             "HomeScreen", "SettingsScreen", "SectionScreen", "RecordViewer", "Shell", "HelpScreen"}
     # The list is kept closed over the program. Every class with a base that a file of the window, of its
     # screens or of its panels defines under a public name is named above, or here among those a suite still
     # builds itself. So a class a later change adds, or a folder it adds beside the window's, fails here
     # until it is placed.
-    by_hand_still = {"NavShell"}             # built in three places of two suites
+    by_hand_still = set()                    # none today
     gui = Path(__file__).resolve().parents[1] / "core" / "gui"
     folders = sorted(p.name for p in gui.iterdir() if p.is_dir() and p.name != "__pycache__")
     defined = {node.name for path in (gui / "main_window.py", *sorted((gui / "screens").rglob("*.py")),

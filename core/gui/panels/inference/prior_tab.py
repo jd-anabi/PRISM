@@ -335,6 +335,7 @@ class PriorPanel(_StagePanel):
         lp.name = name
         self.prior_picker.refresh()
         self.prior_picker.restore_key(lp.id)
+        self._screen.recompute_states()                # the step's row names the prior by its new name
         self.log_pane.append_line(f"Prior named '{name}'.")
 
     def _sync_prior_line(self) -> None:

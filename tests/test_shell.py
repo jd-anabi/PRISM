@@ -1,23 +1,25 @@
-"""The window's places, and Home.
+"""The window's places -- the rail, ``go_to`` and the run's foot -- and Home.
 
 Home is built as the window builds it, through the builders of tests/_fixtures.py, and handed what it states by a
 function each test makes: a session is a plain namespace of the five fields the window's session holds, and the
 steps' states are the rules' own. The window's reading of its session, its run and the record store in use, and
 what each of Home's places opens in the window, are tested on a whole window.
 """
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from PySide6.QtCore import Qt
+import pytest
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QKeySequence, QTextLayout
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from core.gui import chain, design, keys, record_words
 from core.gui.screens.home_screen import HomeFacts, HomeScreen, RecordRow
 from core.gui.widgets.page import Columns, PageHead, Sentence
 from core.gui.widgets.rule_table import StateCell, TextCell
-from tests._fixtures import build_part, build_window, qt_app
+from tests._fixtures import build_part, build_run_host, build_window, qt_app
 
 HEAD = ("Home", "What to do next, where your work stands, and what each part is for.")
 FIRST_HEAD = ("What do you want to do?",
@@ -474,44 +476,38 @@ def test_homes_records_name_an_unnamed_record_in_local_time_and_leave_out_what_c
                                           ["Unnamed calibration", "Calibration", ""]]
 
 
-def test_home_opens_todays_place_for_every_part_step_and_kind(tmp_path):
-    """Each place Home asks for opens in the window: a part its screen (Help the screen its words are on today,
-    Your own models the model builder), a page of Effective temperature its tab, a step its tab when the step's
-    tab can be opened (a greyed tab leaves the tab shown), and a record's kind the records screen at that kind.
-    Home reads again each time it is opened after another screen was shown, so that it states what changed while
-    it was away, and while it is shown, when a run starts or ends."""
+def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
+    """Each place Home asks for is opened by ``go_to``: a part its own page (Help the help, Your own models the
+    model builder), a page of Effective temperature its tab, a step its tab when the step's tab can be opened (a
+    greyed tab leaves the tab shown), and a record's kind the records at that kind. Home reads again each time it
+    is opened, and while it is shown when the steps' states are worked out again and when a run starts or ends;
+    never on its own."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.session import SbiSession
     qt_app()
     with use_store(ArtifactStore(tmp_path / "Artifacts")):
         window = build_window()
-        home, stack, index = window.home_screen, window.nav.stack, window._section_index
-        temperature, steps = window.fdt_screen.tabs, window.inference_screen.tabs
-        for (part, page), screen in ((("reduction", None), "Reduction Map"), (("temperature", None), "FDT Analysis"),
-                                     (("inference", None), "Parameter Inference"), (("live", None), "Simulate"),
-                                     (("records", None), "Artifacts"), (("settings", None), "Settings"),
-                                     (("help", None), "Settings"), (("models", None), "Model builder")):
-            home.navigate.emit(part, page)
-            assert stack.currentIndex() == index[screen], (part, screen)
+        home, stack = window.home_screen, window.shell.stack
+        for part in ("reduction", "temperature", "inference", "live", "records", "settings", "help", "models"):
+            home.navigate.emit(part, None)
+            assert stack.currentWidget() is window.part(part), part
             home.navigate.emit("home", None)
-            assert stack.currentIndex() == 0
+            assert stack.currentWidget() is home
+        assert (window.part("help"), window.part("models")) == (window.help_screen, window.model_builder_screen)
         for page, tab in (("sweep", 1), ("one_cell", 0)):
             home.navigate.emit("temperature", page)
-            assert (stack.currentIndex(), temperature.currentIndex()) == (index["FDT Analysis"], tab)
+            assert (window.current_place(), window.fdt_screen.tabs.currentIndex()) == (("temperature", page), tab)
         home.navigate.emit("records", "posterior")
-        assert (stack.currentIndex(), window.artifact_screen.kind()) == (index["Artifacts"], "posterior")
+        assert (window.current_place(), window.artifact_screen.kind()) == (("records", None), "posterior")
         home.navigate.emit("inference", "infer")
-        assert (stack.currentIndex(), steps.currentIndex()) == (index["Parameter Inference"], 0), (
-            "a greyed step's tab was opened")
+        assert window.current_place() == ("inference", "model"), "a greyed step's tab was opened"
         window.inference_screen.session = SbiSession(draft=object(), cfg=object(), inf_prior=object(),
                                                      posterior=object())
         window.inference_screen.refresh_gates()
-        for number, step in enumerate(keys.STEPS):
+        for step in keys.STEPS:
             home.navigate.emit("inference", step.key)
-            assert steps.currentIndex() == number, step.key
-        home.navigate.emit("nowhere", None)
-        assert stack.currentIndex() == index["Parameter Inference"], "a place that is none of the window's opened"
+            assert window.current_place() == ("inference", step.key)
         window.inference_screen.session = SbiSession()
         window.inference_screen.refresh_gates()
         home.navigate.emit("home", None)
@@ -521,12 +517,13 @@ def test_home_opens_todays_place_for_every_part_step_and_kind(tmp_path):
             assert home.is_first_time()
             window.inference_screen.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"))
             assert home.is_first_time(), "Home read while it was shown and nothing told it to"
-            home.navigate.emit("live", None)
-            home.navigate.emit("home", None)
+            window.inference_screen.refresh_gates()
             assert not home.is_first_time() and home.next_heading.label.text() == "Next: build or load a prior"
             home.navigate.emit("live", None)
             window.inference_screen.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"),
                                                          inf_prior=SimpleNamespace(name="p"))
+            window.inference_screen.refresh_gates()
+            assert home.next_heading.label.text() == "Next: build or load a prior", "Home read while hidden"
             home.navigate.emit("home", None)
             assert home.next_heading.label.text() == "Next: start a training", (
                 "Home stated what it read when it was left")
@@ -579,3 +576,564 @@ def test_in_the_window_home_reads_nothing_while_another_place_is_shown(tmp_path,
             assert len(reads) == 3, "Home opened again did not read once"
         finally:
             window.hide()
+
+
+def _marked(rail):
+    """The keys of the rail's rows that carry the mark of the place in sight: a row marked keeps its focus ring
+    clear of the bar it then wears."""
+    return [key for key in [place.key for place in keys.PARTS] + [step.key for step in keys.STEPS]
+            if rail.row(key).property("ring_left")]
+
+
+def _shown_off_screen(window, width=None, height=None):
+    """Show ``window`` where no screen shows it, at a size when one is handed, and let its layouts settle."""
+    window.setAttribute(Qt.WA_DontShowOnScreen)
+    if width is not None:
+        window.resize(width, height)
+    window.show()
+    QApplication.processEvents()
+
+
+def _in_view(rail, row):
+    """Whether ``row`` stands whole inside the part of the rail's list that is in sight."""
+    view = rail._scroll.viewport()
+    top = row.mapTo(view, QPoint(0, 0)).y()
+    return row.isVisible() and top >= 0 and top + row.height() <= view.height()
+
+
+def test_the_rails_places_are_the_parts_in_order_read_off_the_built_window():
+    """The rail lists the window's nine parts in their order, each by its name, and the stack holds each part's
+    own page in that order; a click on a row shows that page, and ``part`` gives the same page by the same key.
+    The six steps are rows of Parameter inference, in sight only while it is open."""
+    from core.gui.widgets.rail import PartRow, StepRow
+    qt_app()
+    window = build_window()
+    rail, stack = window.shell.rail, window.shell.stack
+    pages = [window.home_screen, window.inference_screen, window.fdt_screen, window.simulate_screen,
+             window.reduction_screen, window.artifact_screen, window.model_builder_screen, window.settings_screen,
+             window.help_screen]
+    assert [row.place.key for row in rail.visible_rows() if isinstance(row, PartRow)] == [
+        place.key for place in keys.PARTS]
+    assert [rail.row(place.key).text() for place in keys.PARTS] == [place.name for place in keys.PARTS]
+    assert [stack.widget(n) for n in range(stack.count())] == pages
+    assert [window.part(place.key) for place in keys.PARTS] == pages
+    for place, page in zip(keys.PARTS, pages):
+        rail.row(place.key).click()
+        assert stack.currentWidget() is page and window.current_place()[0] == place.key, place.key
+        steps = [row for row in rail.visible_rows() if isinstance(row, StepRow)]
+        assert steps == ([rail.row(step.key) for step in keys.STEPS] if place.key == "inference" else []), place.key
+    with pytest.raises(KeyError):
+        window.part("nowhere")
+
+
+def test_the_window_opens_on_home_whatever_was_open():
+    """The window opens on Home, its row marked in the rail, whatever an older build left in the settings file."""
+    from core.gui import settings as st
+    qt_app()
+    remembered = st.settings()
+    remembered.setValue("window/tab", 2)          # a stale key from the old flat-tab layout
+    remembered.sync()
+    window = build_window()
+    assert window.shell.stack.currentWidget() is window.home_screen
+    assert window.current_place() == ("home", None) and _marked(window.shell.rail) == ["home"]
+
+
+def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
+    """``go_to`` shows the part and its page, marks the row of what is shown and says where the window is, all
+    before it returns, once a call, the same place too. Parameter inference opened with no step shows the step in
+    hand the first time and the step last shown after that; a step whose tab cannot open yet leaves the step
+    shown, which the rail marks. A part the window does not have is a mistake of the caller's. While the steps
+    and the two temperature pages are tabs, a change of tab in the part in sight is marked and said as a move;
+    a change in a part out of sight is not."""
+    from core.gui.session import SbiSession
+    qt_app()
+    window = build_window()
+    rail, inference = window.shell.rail, window.inference_screen
+    said = []
+    window.place_changed.connect(
+        lambda part, page: said.append((part, page, window.shell.stack.currentWidget() is window.part(part),
+                                        _marked(rail))))
+    inference.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"))
+    inference.refresh_gates()
+    window.go_to("inference")
+    assert said == [("inference", "prior", True, ["prior"])], "the first opening is not at the step in hand"
+    window.go_to("inference", "model")
+    window.go_to("live")
+    window.go_to("inference")
+    assert said[1:] == [("inference", "model", True, ["model"]), ("live", None, True, ["live"]),
+                        ("inference", "model", True, ["model"])], "a later opening is not at the step last shown"
+    window.go_to("inference", "infer")
+    assert said[-1] == ("inference", "model", True, ["model"]), "a greyed step's tab was opened"
+    window.go_to("temperature", "sweep")
+    window.go_to("temperature", "sweep")
+    assert said[-2:] == [("temperature", "sweep", True, ["temperature"])] * 2
+    assert window.fdt_screen.tabs.currentIndex() == 1 and len(said) == 7
+    with pytest.raises(KeyError):
+        window.go_to("nowhere")
+    window.fdt_screen.tabs.setCurrentIndex(0)                     # its own tab bar, while it is in sight
+    assert said[-1] == ("temperature", "one_cell", True, ["temperature"]) and len(said) == 8
+    window.go_to("inference", "prior")
+    inference.session = SbiSession()
+    inference.refresh_gates()                                     # the gates take the steps back to the first
+    assert said[-1] == ("inference", "model", True, ["model"]) and len(said) == 10
+    window.go_to("records")
+    window.fdt_screen.tabs.setCurrentIndex(1)                     # out of sight: nothing is said or marked
+    assert len(said) == 11 and _marked(rail) == ["records"]
+
+
+def test_go_to_gives_the_page_the_keyboard_and_escape_in_the_rail_gives_it_back():
+    """After a move the keyboard is on the page's first setting: the control a page names to start at (Home's
+    main button, Help's text), or else its first control that is not a button that does something, nor a tab
+    bar, nor an area that only shows or scrolls (each step and section's first setting, the records' kind, the
+    model's name, the first appearance). Escape in the rail, and Enter on a row of the rail, give the page the
+    keyboard the same way."""
+    from PySide6.QtWidgets import QComboBox
+    qt_app()
+    window = build_window()
+    rail = window.shell.rail
+    first = {"home": window.home_screen.first_focus(), "inference": window.inference_screen.config_panel.model_combo,
+             "temperature": window.fdt_screen.panels()[0].model_combo,
+             "live": window.simulate_screen.panels()[0].model_combo, "records": window.artifact_screen.kind_combo,
+             "models": window.model_builder_screen.name_edit, "settings": window.settings_screen._radios["system"],
+             "help": window.help_screen.viewer}
+    for place in keys.PARTS:
+        window.go_to(place.key)
+        held = window.focusWidget()
+        if place.key == "reduction":
+            controls = window.reduction_screen.panels()[0].controls
+            assert isinstance(held, QComboBox) and controls.isAncestorOf(held), held
+        else:
+            assert held is first[place.key], (place.key, held)
+    window.go_to("records")
+    rail.take_keyboard()
+    assert rail.isAncestorOf(window.focusWidget())
+    QTest.keyClick(window.focusWidget(), Qt.Key_Escape)
+    assert window.focusWidget() is first["records"], "Escape in the rail did not give the page the keyboard"
+    rail.take_keyboard()
+    QTest.keyClick(window.focusWidget(), Qt.Key_Down)                 # to Your own models, the next row
+    QTest.keyClick(window.focusWidget(), Qt.Key_Return)
+    assert window.current_place() == ("models", None) and window.focusWidget() is first["models"]
+
+
+def test_a_mouse_click_on_a_rail_row_puts_no_ring_on_the_page():
+    """With the keyboard's turn on a page's first setting, a click on another part's row takes the keyboard off
+    the page it leaves and gives it to nothing: no control of the page it opens wears the focus ring, not even the
+    field one types in that the page held the keyboard in before. The window is not shown on a screen, so the
+    focus that would arrive there is handed to the ring's follower as the screen would hand it."""
+    from core.gui import style
+    from tests._look_helpers import _arrive, _moved_on
+    app = qt_app()
+    follower = style.FocusFollower(app)
+    window = build_window()
+    try:
+        _shown_off_screen(window)
+        for start, target in (("live", "models"), ("models", "live"), ("records", "settings"), ("models", "inference")):
+            window.go_to(start)
+            field = window.focusWidget()
+            _arrive(field, Qt.TabFocusReason)                         # a press of Tab, then the focus
+            assert follower.target() is field, start
+            row = window.shell.rail.row(target)
+            QTest.mouseClick(row, Qt.LeftButton, Qt.NoModifier, row.rect().center())
+            held = window.focusWidget()
+            if held is not None:
+                _moved_on(held, Qt.OtherFocusReason)                  # what the screen would deliver
+            assert window.current_place()[0] == target, target
+            assert follower.target() is None, (start, target, follower.target())
+            assert held is None or not window.part(target).isAncestorOf(held), (target, held)
+    finally:
+        window.hide()
+        follower.stop()
+
+
+def test_the_chain_follows_the_session_and_the_run(tmp_path):
+    """The rail's six step rows read what the rules give for the session in use, with the narrowing round's
+    observation on offer when its list holds one and each held record by its label: at the window's start, after
+    a config is installed, after a prior with no name is held, after a posterior is held (the narrowing round can
+    then start, the store holding an observation), while a step's run is live (that step reads Now) and after it
+    ends. ``step_states`` is what was last worked out, and the rail shows it."""
+    from core import config
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.session import SbiSession
+    from tests._fixtures import build_browse_store
+    qt_app()
+    build_browse_store(tmp_path / "Artifacts")
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        window = build_window()
+        inference, rail = window.inference_screen, window.shell.rail
+        offered = inference.tsnpe_panel.obs_picker.has_entries()
+        assert offered, "the store's observation is not on offer"
+
+        def rules(live=None):
+            return chain.step_states(inference.session, live=live, observation_on_offer=offered,
+                                     label=record_words.label_of)
+
+        def spoken():
+            return [rail.row(step.key).accessibleName() for step in keys.STEPS]
+
+        assert inference.step_states() == rules() and spoken() == [state.spoken for state in rules()]
+        inference.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"))
+        inference.install_config(SimpleNamespace(model="NADROWSKI", params_dict={}, rescale_params={},
+                                                  force_params_dict={}, has_forcing=False, chi_mode=False,
+                                                  chi_k_pad=config.CHI_K_PAD, observation_mode="spontaneous"))
+        assert inference.step_states() == rules() and spoken() == [state.spoken for state in rules()]
+        prior = SimpleNamespace(kind="prior", id="p1", name="",
+                                manifest=SimpleNamespace(created="2026-10-03T14:02:00+00:00"))
+        inference.session.inf_prior = prior
+        inference.refresh_gates()
+        made = datetime.fromisoformat(prior.manifest.created).astimezone()
+        assert rules()[1].detail == f"Unnamed prior, {design.date_text(made)}"
+        assert spoken() == [state.spoken for state in rules()]
+        inference.session.posterior = SimpleNamespace(kind="posterior", id="q1", name="retrain", manifest=prior.manifest,
+                                                      posterior=SimpleNamespace(truncation=None))
+        inference.refresh_gates()
+        assert spoken()[5] == "Step 6, Narrowing round. To come" and spoken() == [state.spoken for state in rules()]
+        panel = inference.posterior_panel
+        panel._set_busy(True)
+        try:
+            assert inference.step_states() == rules(live="training")
+            assert spoken()[2] == "Step 3, Training. Now: running"
+        finally:
+            panel._set_busy(False)
+        assert inference.step_states() == rules() and spoken() == [state.spoken for state in rules()]
+
+
+def test_a_step_names_a_held_record_by_the_name_its_save_box_gave_it(monkeypatch):
+    """Naming the held prior, or the held posterior, in its Save box renames the record, and the step's row in
+    the rail then names it by its new name."""
+    from core.gui.panels.inference import posterior_tab, prior_tab
+    from core.gui.session import SbiSession
+    qt_app()
+    window = build_window()
+    inference, rail = window.inference_screen, window.shell.rail
+    made = SimpleNamespace(created="2026-10-03T14:02:00+00:00")
+    held = {kind: SimpleNamespace(kind=kind, id=f"{kind[0]}1", name="", manifest=made)
+            for kind in ("prior", "posterior")}
+    inference.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"), cfg=object(), inf_prior=held["prior"],
+                                   posterior=held["posterior"])
+    inference.refresh_gates()
+    assert rail.row("prior").accessibleName().startswith("Step 2, Prior. Done: Unnamed prior, ")
+    for module in (prior_tab, posterior_tab):
+        monkeypatch.setattr(module, "default_store", lambda: SimpleNamespace(rename=lambda kind, ref, name: made))
+    inference.prior_panel.prior_name.setText("retrain_prior")
+    inference.prior_panel._save_prior()
+    assert rail.row("prior").accessibleName() == "Step 2, Prior. Done: retrain_prior"
+    inference.posterior_panel.post_name.setText("retrain")
+    inference.posterior_panel._save_posterior()
+    assert rail.row("training").accessibleName() == "Step 3, Training. Done: retrain"
+
+
+def test_the_foot_reads_nothing_is_running_at_start_and_names_the_running_place():
+    """At the window's start the foot says nothing is running, is no control and no clock is ticking. While a
+    panel's run is live it names the place by its part ("Running: Effective temperature") or, for a step, by the
+    step, with the time it has gone on and that settings are locked; its tool tip and its accessible name name the
+    place in full, its page too. It is a button then, and the clock ticks once a second. When the run ends the
+    foot says nothing is running again and the clock stops."""
+    from core.gui.panels.crossval_panel import CrossValPanel
+    qt_app()
+    window = build_window()
+    foot = window.shell.rail.foot
+    idle = ("none", "Nothing is running", "Only one run at a time.", False)
+    assert (foot._marker, foot._title, foot._words, foot.is_button()) == idle
+    assert not window._run_timer.isActive(), "a clock is ticking before anything has run"
+    for panel, title, whole in ((window.panel(CrossValPanel), "Running: Effective temperature",
+                                 "Running: Effective temperature, Sweep study"),
+                                (window.inference_screen.posterior_panel, "Running: Training",
+                                 "Running: step 3, Training")):
+        panel._set_busy(True)
+        try:
+            assert (foot._marker, foot._title, foot.is_button()) == ("now", title, True)
+            # tolerant by one tick: this is real elapsed time, not a stub
+            assert foot._words in ("0:00 so far. Settings are locked.", "0:01 so far. Settings are locked.")
+            assert foot.toolTip() == foot.accessibleName() == f"{whole}. {foot._words}"
+            assert window._run_timer.isActive() and window._run_timer.interval() == 1000
+            assert window._run_timer.parent() is window
+        finally:
+            panel._set_busy(False)
+        assert (foot._marker, foot._title, foot._words, foot.is_button()) == idle
+        assert not window._run_timer.isActive(), "the clock must stop when the run does"
+
+
+def test_the_foots_time_keeps_its_width_as_it_ticks(monkeypatch):
+    """The foot is written again every second while a run is live. Its words are laid out in the small lettering
+    with digits of equal width, so the time keeps its width as it ticks: 4:07 and 4:11 are one width, and so on
+    by the hour. Without the feature the same font gives two widths."""
+    from PySide6.QtGui import QFont, QFontMetricsF
+    from core.gui import fonts
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.screens import shell
+    qt_app()
+    window = build_window()
+    foot, panel = window.shell.rail.foot, window.panel(CrossValPanel)
+    laid_out = []
+    kept = shell.clock_words
+    panel._set_busy(True)
+    try:
+        for seconds in (247, 251, 600, 671, 36000, 40271):
+            monkeypatch.setattr(window, "_run_started", time.monotonic() - seconds)
+            window._tick_running()
+            laid_out.append(foot._words)
+    finally:
+        panel._set_busy(False)
+    assert laid_out[:2] == ["4:07 so far. Settings are locked.", "4:11 so far. Settings are locked."]
+    assert kept(36000) == "10:00:00"
+    font, equal, small = fonts.inter("small", tabular=True), QFont.Tag.fromString("tnum"), fonts.inter("small")
+    assert font.isFeatureSet(equal)
+    assert (font.family(), font.pixelSize(), font.weight()) == (small.family(), small.pixelSize(), small.weight())
+    widths = [QFontMetricsF(font).horizontalAdvance(words) for words in laid_out]
+    assert widths[0] == widths[1] and widths[2] == widths[3] and widths[4] == widths[5], widths
+    without = QFont(font)
+    without.unsetFeature(equal)
+    one, other = (QFontMetricsF(without).horizontalAdvance(words) for words in laid_out[:2])
+    assert one != other, "the digits have one width without the feature as well: the lines above prove nothing"
+
+
+def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowhere():
+    """While a run is live the foot is a button that goes to the run's place, its page or step too, as
+    ``go_to_run`` does. A panel the window has no place for -- the bare run host a test builds -- is named
+    "a task", the foot is no button and the window stays where it is."""
+    from core.gui.panels.crossval_panel import CrossValPanel
+    qt_app()
+    window = build_window()
+    foot = window.shell.rail.foot
+    for panel, place in ((window.panel(CrossValPanel), ("temperature", "sweep")),
+                         (window.inference_screen.validate_panel, ("inference", "model"))):
+        window.go_to("home")
+        window.fdt_screen.tabs.setCurrentIndex(0)
+        panel._set_busy(True)
+        try:
+            QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
+            assert window.current_place() == place
+        finally:
+            panel._set_busy(False)
+    orphan = build_run_host()
+    window.go_to("live")
+    orphan._set_busy(True)
+    try:
+        assert (foot._title, foot.is_button()) == ("Running: a task", False)
+        QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
+        window.go_to_run()
+        assert window.current_place() == ("live", None), "a panel with no place moved the window"
+    finally:
+        orphan._set_busy(False)
+
+
+def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
+    """A live run is said at the foot alone: no row of the rail, no tab and no row of Home's three tables carries
+    a mark of it, and the tabs keep their words. Nothing is disabled by it: every part still opens, and a
+    section's other tab can still be chosen."""
+    from core.gui.panels.crossval_panel import CrossValPanel
+    qt_app()
+    window = build_window()
+    rail, home = window.shell.rail, window.home_screen
+    fdt, steps = window.fdt_screen.tabs, window.inference_screen.tabs
+    tab_words = ([fdt.tabText(n) for n in range(fdt.count())], [steps.tabText(n) for n in range(steps.count())])
+    rows = [place.key for place in keys.PARTS] + [step.key for step in keys.STEPS]
+
+    def seen():
+        return ([rail.row(key).text() for key in rows],
+                [_cells(table) for table in (home.parts_table, home.records_table)],
+                [row[0] for row in _cells(home.steps_table)])
+
+    before = seen()
+    for panel in (window.panel(CrossValPanel), window.inference_screen.posterior_panel):
+        panel._set_busy(True)
+        try:
+            assert seen() == before, "a row carries a mark of the run"
+            assert ([fdt.tabText(n) for n in range(fdt.count())], [steps.tabText(n) for n in range(steps.count())]) \
+                == tab_words
+            for place in keys.PARTS:
+                window.go_to(place.key)
+                assert window.current_place()[0] == place.key and rail.row(place.key).isEnabled()
+            window.go_to("temperature", "one_cell")
+            assert fdt.isTabEnabled(0) and fdt.currentIndex() == 0
+        finally:
+            panel._set_busy(False)
+
+
+def test_go_to_records_with_a_kind_opens_records_at_that_kind():
+    """A record's kind opens Records listing that kind; Records opened with no kind keeps the kind last chosen."""
+    qt_app()
+    window = build_window()
+    window.go_to("records", "posterior")
+    assert window.current_place() == ("records", None) and window.artifact_screen.kind() == "posterior"
+    window.go_to("home")
+    window.go_to("records")
+    assert window.artifact_screen.kind() == "posterior"
+    window.go_to("records", "calibration")
+    assert window.artifact_screen.kind() == "calibration"
+
+
+def test_home_is_read_again_when_opened_and_when_the_store_changes(tmp_path, monkeypatch):
+    """Home reads once while the window is built and nothing more at its first show. A record deleted in
+    Records is listed no more when Home is next opened, and is not read for while another place is shown; while
+    Home is shown a change of the store reads it at once; opened while it is shown, it reads again."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import main_window
+    from tests._fixtures import build_browse_store
+    qt_app()
+    ids = build_browse_store(tmp_path / "Artifacts")
+    store = ArtifactStore(tmp_path / "Artifacts")
+    reads, read = [], main_window._home_records
+    monkeypatch.setattr(main_window, "_home_records", lambda used: (reads.append(used), read(used))[1])
+    with use_store(store):
+        window = build_window()
+        home = window.home_screen
+        try:
+            _shown_off_screen(window)
+            assert len(reads) == 1, "Home read again at its first show"
+            first, second = [label for label in (row[0] for row in _cells(home.records_table))
+                             if label.startswith("browse_")][:2]
+            window.go_to("records")
+            store.delete(first[len("browse_"):], ids[first[len("browse_"):]], force=True)
+            window.artifact_screen.store_changed.emit()
+            assert len(reads) == 1, "Home read while another place was shown"
+            window.go_to("home")
+            assert len(reads) == 2 and first not in [row[0] for row in _cells(home.records_table)]
+            store.delete(second[len("browse_"):], ids[second[len("browse_"):]], force=True)
+            window.artifact_screen.store_changed.emit()
+            assert len(reads) == 3, "a change of the store did not read Home while it was shown"
+            assert second not in [row[0] for row in _cells(home.records_table)]
+            window.go_to("home")
+            assert len(reads) == 4, "Home opened while it was shown did not read again"
+        finally:
+            window.hide()
+
+
+def test_a_maximised_window_at_a_large_text_size_keeps_the_usual_layout(monkeypatch):
+    """At 150 % text on a 1920 by 1080 screen (its taskbar below) the small layout begins under the screen's room,
+    not under 1.5 times 700, so a window that fills the screen keeps the usual layout; one lower than that takes
+    the small layout, and the rail and Home are told. Two columns are held to the widest page such a window gives
+    them, so Home sets its two side by side there, and on a 1366 by 768 screen too, where a window that fills the
+    screen is lower than 700 and takes the small layout. At the ordinary text size the threshold stays 700."""
+    from PySide6.QtWidgets import QApplication
+    from core.gui import main_window
+    from tests._look_helpers import text_size
+    qt_app()
+    monkeypatch.setattr(main_window, "_room_on_screen", lambda: (1920 - 40, 1032 - 60))
+    with text_size(1.5):
+        window = build_window()
+        try:
+            assert (design.small_below(), design.two_columns_from()) == (972, 1410)
+            _shown_off_screen(window, 1920, 1001)
+            assert not window.shell._small and not window.home_screen.page._small
+            assert not window.home_screen._columns.stacked(), "a page as wide as the screen allows set one column"
+            window.resize(1920, 971)
+            QApplication.processEvents()
+            assert window.shell._small and window.home_screen.page._small
+            assert window.shell.rail.row("home").height() == design.scaled(design.SIZE["nav_h_small"])
+        finally:
+            window.hide()
+    monkeypatch.setattr(main_window, "_room_on_screen", lambda: (1366 - 40, 720 - 60))
+    with text_size(1.5):
+        window = build_window()
+        try:
+            assert (design.small_below(), design.two_columns_from()) == (700, 940)
+            _shown_off_screen(window, 1366, 689)
+            assert window.shell._small and not window.home_screen._columns.stacked()
+        finally:
+            window.hide()
+    monkeypatch.undo()
+    with text_size(1.0):
+        window = build_window()
+        try:
+            assert design.small_below() == 700
+            _shown_off_screen(window, 760, 700)
+            assert not window.shell._small
+            window.resize(760, 699)
+            QApplication.processEvents()
+            assert window.shell._small and window.home_screen.page._small
+        finally:
+            window.hide()
+
+
+def test_the_current_row_stays_in_view_when_the_rail_has_less_room():
+    """At 150 % text the rail's list scrolls, and the current row stays in view when the list has less room: after
+    the foot's title takes a second line, and after the window is made lower and takes the small layout."""
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.session import SbiSession
+    from tests._look_helpers import text_size
+    qt_app()
+    with text_size(1.5):
+        window = build_window()
+        rail, panel = window.shell.rail, window.panel(CrossValPanel)
+        try:
+            window.inference_screen.session = SbiSession(draft=object(), cfg=object(), inf_prior=object(),
+                                                         posterior=object())
+            window.inference_screen.refresh_gates()          # every step can be opened: the last is the lowest row
+            window.setMinimumSize(1, 1)
+            _shown_off_screen(window, 760, 740)
+            window.go_to("inference", "narrowing")
+            assert window.current_place() == ("inference", "narrowing")
+            assert not window.shell._small and _in_view(rail, rail.row("narrowing"))
+            usual = rail.foot.height()
+            panel._set_busy(True)                              # a title of two lines: the foot grows
+            try:
+                QApplication.processEvents()
+                assert rail.foot.height() > usual
+                assert _in_view(rail, rail.row("narrowing")), "the foot grew over the current row"
+            finally:
+                panel._set_busy(False)
+            window.go_to("help")
+            window.resize(760, 600)                            # a lower window, in the small layout
+            QApplication.processEvents()
+            assert window.shell._small and _in_view(rail, rail.row("help")), "a lower window hid the current row"
+        finally:
+            window.hide()
+
+
+def test_the_mounted_rail_marks_one_row_for_every_place():
+    """In the window, whatever place is open, the accent's bar stands in one row of the rail: the row of the
+    step open while Parameter inference is open, or else of the part open, down that whole row and nowhere
+    else."""
+    from tests._look_helpers import _image
+    qt_app()
+    window = build_window()
+    rail = window.shell.rail
+    accent = design.colour("accent").rgb()
+    places = [(place.key, None) for place in keys.PARTS] + [("inference", step.key) for step in keys.STEPS]
+    try:
+        _shown_off_screen(window, 760, 740)
+        for part, step in places:
+            window.go_to(part, step)
+            image = _image(rail.width(), rail.height(), 1.0)
+            rail.render(image)
+            marked = [y for y in range(image.height()) if image.pixel(0, y) == accent]
+            shown, page = window.current_place()
+            row = rail.row(page if shown == "inference" else shown)
+            top = row.mapTo(rail, QPoint(0, 0)).y()
+            assert marked == list(range(top, top + row.height())), (part, step)
+    finally:
+        window.hide()
+
+
+def test_home_is_told_the_small_layout_through_the_shell():
+    """The shell tells Home the window's layout: in the small one its head keeps no sentence, in the usual one
+    the sentence is back."""
+    qt_app()
+    window = build_window()
+    home = window.home_screen
+    window.shell.set_small(True)
+    assert home._head.sentence.isHidden()
+    window.shell.set_small(False)
+    assert not home._head.sentence.isHidden()
+
+
+def test_a_window_restored_off_every_screen_opens_at_its_opening_size_on_the_primary_screen(monkeypatch):
+    """A saved geometry that restores where no screen shows it (saved on a screen no longer attached) is set aside:
+    the window opens at its opening size, in the middle of the primary screen."""
+    from PySide6.QtCore import QByteArray
+    from PySide6.QtGui import QGuiApplication
+    from core.gui import main_window, settings as st
+    qt_app()
+    placed = build_window()
+    placed.move(40, 30)
+    remembered = st.settings()
+    remembered.setValue("window/geometry", placed.saveGeometry())
+    remembered.sync()
+    monkeypatch.setattr(main_window, "_on_a_visible_screen", lambda widget: False)
+    window = build_window()
+    opening, _smallest = design.window_sizes(main_window._room_on_screen())
+    assert (window.width(), window.height()) == opening
+    centre = QGuiApplication.primaryScreen().availableGeometry().center()
+    assert (window.frameGeometry().center() - centre).manhattanLength() <= 1
+    assert isinstance(remembered.value("window/geometry"), QByteArray)

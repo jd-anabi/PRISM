@@ -204,16 +204,16 @@ def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
     assert "Run cancelled." in panel.log_pane.toPlainText()
 
 def test_simulate_panel_is_wired_and_navigable():
-    """The 4th home button is live: the Simulate section is registered, navigable, and its panel is in
-    the persistence sweep."""
+    """Live simulation is a part of the window: it opens, it holds the Simulate panel, and its panel is
+    in the persistence sweep."""
     from core.gui.panels.simulate_panel import SimulatePanel
 
     qt_app()
     w = build_window()
     assert w.panel(SimulatePanel) is not None
-    assert "Simulate" in w._section_index
-    w.nav.go_to(w._section_index["Simulate"])
-    assert w.nav.stack.currentIndex() == w._section_index["Simulate"]
+    w.go_to("live")
+    assert w.current_place() == ("live", None)
+    assert w.part("live").panels() == [w.panel(SimulatePanel)]
     assert any(isinstance(p, SimulatePanel) for p in w._all_panels())
 
 def test_simulate_settings_round_trip():
