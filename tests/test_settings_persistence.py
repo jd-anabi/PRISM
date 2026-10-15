@@ -941,8 +941,10 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
     plain functions of tests/_fixtures.py, so a constructor's arguments are written once. Three
     things make them safe under tests that build twice to stand for a relaunch, or build after a
     patch, after a settings write or inside ``use_store``: each call builds anew, at the moment of
-    the call; the helpers keep nothing they built; and the inference builder does what it is handed
-    and no more -- it assigns the session, installs the configuration, and refreshes no gate."""
+    the call; the helpers keep nothing they built, but for a weak reference in the record of
+    tests/_built.py, from which a fixture lets each go when its test ends (the test below); and the
+    inference builder does what it is handed and no more -- it assigns the session, installs the
+    configuration, and refreshes no gate."""
     from core.gui.main_window import MainWindow
     from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.inference.config_tab import ConfigPanel
@@ -1005,6 +1007,50 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
 
     for widget in (first, second, step, plain, held, built, host, other, window, again):
         assert kept(widget) == [], f"tests/_fixtures.py keeps what it built: {kept(widget)}"
+
+
+# What the first turn of the test below made, kept for its second turn as a test that wanted its window to
+# outlive it would keep one.
+_MADE_IN_THE_FIRST_TURN: list = []
+
+
+@pytest.mark.parametrize("turn", ["builds", "after"])
+def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_module_scope):
+    """A window, a part, the inference screen and a bare run host, of either kind, that a test made through the
+    builders are deleted when that test ends, though something still holds them
+    (tests/conftest.py::_built_widgets_let_go): left alive, each would be dressed again by every later change of
+    sheet, style or font on the one application. The first turn builds one of each and keeps them in this
+    module's list, beside a part it deletes itself, which the fixture must pass over; the second turn, the next
+    test of the run, finds the five deleted, and none of the panels among them left in the set of panels a run
+    locks, though this module's list still holds them, as a run's own signals hold a panel that ran something.
+    They go by their own deferred delete and never by a close, which writes settings, so the first turn's
+    settings file was never written. The panel a fixture of this module built is no test's own, and it is
+    still there."""
+    import shiboken6
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from core.gui import settings as st
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._fixtures import build_window
+
+    module_panel = _panel_built_at_module_scope[0]
+    if turn == "builds":
+        gone = build_part(ReductionPanel)
+        gone.deleteLater()
+        QCoreApplication.sendPostedEvents(gone, QEvent.DeferredDelete)
+        _MADE_IN_THE_FIRST_TURN[:] = [build_window(), build_part(ReductionPanel), build_inference(),
+                                      build_run_host(), build_run_host(BasePanel), gone, st._override_path]
+        assert [shiboken6.isValid(widget) for widget in _MADE_IN_THE_FIRST_TURN[:6]] == [True] * 5 + [False]
+        return
+    assert len(_MADE_IN_THE_FIRST_TURN) == 7, "the first turn did not run before this one"
+    *made, _deleted_by_the_test, written = _MADE_IN_THE_FIRST_TURN
+    assert [shiboken6.isValid(widget) for widget in made] == [False] * 5, (
+        "a widget a builder made outlived the test that built it")
+    assert [panel for panel in BasePanel._instances if not shiboken6.isValid(panel)] == [], (
+        "a deleted panel is still among the panels a run locks")
+    _MADE_IN_THE_FIRST_TURN.clear()
+    assert not Path(written).exists(), "a window was closed when its test ended, and closing it wrote settings"
+    assert shiboken6.isValid(module_panel), "the end of a test deleted what a fixture of wider scope built"
 
 
 def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():

@@ -39,6 +39,9 @@ from core.artifacts import manifest as mf
 from tests._dialogs import (CHOOSER_CALLS, SHOWN, Asked, ChooserCall, all_asked,  # noqa: F401
                             answer_chooser, asked, check_choosers_answered, choose, chooser_guard,
                             forget_asked, record)
+# The record of what the builders below made, which tests/conftest.py lets go at each test's end. Reached
+# through its module, never re-exported: a container of widgets here is what the builders' own test refuses.
+from tests import _built
 
 # The top-level repository directories that hold PRODUCT code, and therefore the ones the source
 # scans walk: among them the literal-path scan (tests/test_artifact_store.py), the rotation-reader
@@ -755,34 +758,37 @@ def compare_preflight_refusals(store) -> list:
 
 # The builders: every window, part, inference screen and bare run host a suite needs is made by one
 # of these four, so a constructor's arguments are written in one place. Plain functions, never
-# fixtures: a module-scoped fixture builds before any function-scoped one is set up.
+# fixtures: a module-scoped fixture builds before any function-scoped one is set up. Each hands what
+# it made to the record in tests/_built.py, and tests/conftest.py's _built_widgets_let_go deletes it
+# when the test that built it ends; what a fixture of wider scope built is left alone.
 def build_window():
-    """The whole window, a ``MainWindow``, built anew at every call. It is not shown, not closed and
-    not kept: a test that wants its window closed closes it itself, because closing one writes
-    settings."""
+    """The whole window, a ``MainWindow``, built anew at every call. It is not shown and not closed, and
+    it is let go when the test that built it ends: deleted by its own deferred delete, never closed,
+    because closing one writes settings. A test that wants its window closed closes it itself; one that
+    needs a window beyond its own end builds it in a fixture of wider scope."""
     qt_app()
     from core.gui.main_window import MainWindow
-    return MainWindow()
+    return _built.keep(MainWindow())
 
 
 def build_part(cls, **kwargs):
     """One part of the window -- a panel, a screen, a step of the inference screen -- as
-    ``cls(**kwargs)``, built anew at every call and kept nowhere. The class is the caller's: the
-    caller's own import of it says where the class lives, and moving a class fails only the tests
-    that use it."""
+    ``cls(**kwargs)``, built anew at every call and let go when the test that built it ends. The class
+    is the caller's: the caller's own import of it says where the class lives, and moving a class
+    fails only the tests that use it."""
     qt_app()
-    return cls(**kwargs)
+    return _built.keep(cls(**kwargs))
 
 
 def build_inference(*, session=None, cfg=None):
-    """The inference SCREEN, built anew at every call and kept nowhere; its steps are reached from
-    it, and a dropped screen takes them with it. ``session`` is assigned when given, then ``cfg`` is
+    """The inference SCREEN, built anew at every call and let go when the test that built it ends; its
+    steps are reached from it, and they go with it. ``session`` is assigned when given, then ``cfg`` is
     installed when given, and that is all: the gates are refreshed only as the constructor and
     ``install_config`` refresh them themselves, so a test that writes to the session afterwards
     refreshes them on its own line."""
     qt_app()
     from core.gui.screens.inference_screen import InferenceScreen
-    screen = InferenceScreen()
+    screen = _built.keep(InferenceScreen())
     if session is not None:
         screen.session = session
     if cfg is not None:
@@ -795,22 +801,24 @@ def build_run_host(cls=None):
     argument it is an instance of a new, empty subclass of ``BasePanel`` made at this call; with a
     class, an instance of that class. The made class is always named ``P``: a panel stores its
     layout under its class's name, and one test saves the layout with one host and restores it with
-    a second, so two hosts must share that name. Nothing is kept."""
+    a second, so two hosts must share that name. It is let go when the test that built it ends."""
     qt_app()
     from core.gui.panels.base_panel import BasePanel
     if cls is not None:
-        return cls()
+        return _built.keep(cls())
 
     class P(BasePanel):
         pass
 
-    return P()
+    return _built.keep(P())
 
 
 def process_state(app) -> dict:
     """What the whole program sets on the process, read as values that compare. The whole-program
     test reads it before, during and after; whatever ``whole_program`` learns to put back gets a
-    key here in the same change, so that test fails on the key until it does."""
+    key here in the same change, so that test fails on the key until it does. It runs the collector
+    first, so that a widget an earlier test dropped is not counted at one reading and gone at the next."""
+    import gc
     import sys
     import matplotlib
     from PySide6.QtCore import Qt
@@ -820,6 +828,7 @@ def process_state(app) -> dict:
     from core.artifacts import default_store
     from core.gui import design, theming
     from core.gui import style as small_style
+    gc.collect()
     palette = app.palette()
     style = app.style()
     return {
@@ -853,6 +862,9 @@ def process_state(app) -> dict:
         # application, listening for a change of colour scheme, until it is deleted.
         "appearance objects": len(app.findChildren(theming.Appearance,
                                                    options=Qt.FindDirectChildrenOnly)),
+        # Every window and every other widget with no parent: one left alive is dressed again by every
+        # later change of sheet, style or font on the one application.
+        "top-level widgets": len(app.topLevelWidgets()),
         "error hook": sys.excepthook,
         "figure settings": {key: repr(value) for key, value in matplotlib.rcParams.items()},
         "quiet segment bar": config.QUIET_SEGMENT_BAR,
@@ -865,11 +877,13 @@ def process_state(app) -> dict:
 def whole_program():
     """The whole program, built by ``core.gui.app.build_app`` and handed over as ``(app, window)``;
     on the way out, everything build_app set on the process is as it was found (``process_state``
-    lists it). The one application serves every later test, so a test that builds the whole
-    program does it through here. PRISM_ARTIFACTS must name a temporary folder first: build_app
-    makes the folder it names and installs it as the process's store."""
+    lists it), and the window is deleted. What its parts hold in Python (the menus of its plots among
+    them) goes when the caller's last name of the window goes. The one application serves every later
+    test, so a test that builds the whole program does it through here. PRISM_ARTIFACTS must name a
+    temporary folder first: build_app makes the folder it names and installs it as the process's store."""
     import sys
     import matplotlib
+    import shiboken6
     from PySide6.QtCore import QCoreApplication, QEvent, Qt
     from PySide6.QtGui import QFont, QPalette
     from core import config, logging_root
@@ -890,8 +904,10 @@ def whole_program():
              "quiet": config.QUIET_SEGMENT_BAR, "handler": logging_root.installed(),
              "store": default_store(), "factor": design.text_scale(), "dark": design.is_dark()}
     with matplotlib.rc_context():                     # the figure settings, exactly as found
+        built = None
         try:
-            yield gui_app.build_app([])
+            built = gui_app.build_app([])
+            yield built
         finally:
             sys.excepthook = found["hook"]            # first: a slip below must not open a box
             # Then the four that cannot fail, so that a slip in the toolkit's lines below cannot
@@ -911,6 +927,14 @@ def whole_program():
                 # the next change of scheme. Its own deferred delete only, never every receiver's.
                 made.deleteLater()
                 QCoreApplication.sendPostedEvents(made, QEvent.DeferredDelete)
+            # The window goes before the look is put back, by its own deferred delete and never by a
+            # close, which writes settings: alive, it would be dressed again by every line below.
+            window = None if built is None else built[1]
+            built = None
+            if window is not None and shiboken6.isValid(window):
+                window.deleteLater()
+                QCoreApplication.sendPostedEvents(window, QEvent.DeferredDelete)
+            window = None
             app.styleHints().setColorScheme(Qt.ColorScheme.Unknown)
             app.setStyleSheet(found["sheet"])
             if found["style"]:

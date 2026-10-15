@@ -2,7 +2,8 @@
 
 `qapp` is the one QApplication a process may hold; ``tests/_fixtures.qt_app()`` is the same
 expression as a plain call, which is what the GUI suites use. The settings, dialog and drawing-code
-fixtures at the end are autouse at session and function scope and are never requested by name.
+fixtures at the end, and the one that lets go what the builders made, are autouse at session and
+function scope, and no test requests them by name.
 """
 from pathlib import Path
 
@@ -269,3 +270,29 @@ def _drawing_code_raises_nothing():
         check_drawing_code_raised_nothing(list(reported.ERRORS), dict(reported.COUNTS))
     finally:
         reported.forget()
+
+
+@pytest.fixture(autouse=True)
+def _built_widgets_let_go(_isolated_settings, _drawing_code_raises_nothing):
+    """Every window, part, inference screen and bare run host the builders of tests/_fixtures.py made during
+    a test is deleted when the test ends (tests/_built.py), so that none outlives it. Left alive, each would
+    be dressed again by every later change of sheet, style or font on the one application, and an error of
+    one of its guarded methods would be charged to whichever later test made that change. Each goes by its
+    own deferred delete, the newest first, and is never closed, because closing a window writes settings.
+    The two fixtures it names are set up before it and torn down after it, so the widgets go while this
+    test's own settings file is in force and before the drawing record is read. What a fixture of wider
+    scope built was made before this test was set up, so it is left alone."""
+    import sys
+    from tests import _built
+    since = len(_built.BUILT)
+    yield
+    _built.let_go(since)
+    # A panel that ran something is still held in Python once it is deleted (its run's signals hold it), and
+    # so stays in the weak set every panel enrols in, which the next run walks to lock every panel's
+    # controls: a deleted panel leaves that set here.
+    panels = sys.modules.get("core.gui.panels.base_panel")
+    if panels is not None:
+        import shiboken6
+        for panel in list(panels.BasePanel._instances):
+            if not shiboken6.isValid(panel):
+                panels.BasePanel._instances.discard(panel)

@@ -1328,8 +1328,12 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     changed = {key for key in found if during[key] != found[key]}
     assert {"sheet", "palette", "font", "figure settings", "error hook", "appearance",
             "appearance objects", "default store", "root log handler", "text factor",
-            "class fonts", "theme flag", "small style", "focus follower", "follower objects"} <= changed, \
+            "class fonts", "theme flag", "small style", "focus follower", "follower objects",
+            "top-level widgets"} <= changed, \
         f"the whole program changed only {sorted(changed)}: the comparison below would prove nothing"
+    # The window itself is deleted, but a name of it keeps alive what its parts hold in Python, the menus of its
+    # plots among them: this test's own, and the one in the error hook the program set, which ``during`` holds.
+    del window, during
     after = process_state(app)
     left = sorted(key for key in found if after[key] != found[key])
     assert left == [], f"the whole program left these as it set them: {left}"
