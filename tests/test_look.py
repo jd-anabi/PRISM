@@ -7095,3 +7095,61 @@ def test_the_step_names_stand_in_one_column(monkeypatch):
                     assert (number, name) == (str(kit.keys.step_number(place.key)), place.name), (number, name)
                     columns.add((box.x() + QFontMetricsF(digits).horizontalAdvance(number), start.x()))
                 assert len(columns) == 1, (factor, current, sorted(columns))
+
+
+def test_the_rail_draws_the_chains_lines_from_the_states():
+    """The rail draws each step's lines from the states it is shown: the line leaving a step that is done solid in
+    the rule's colour, every other leaving line dotted in the third ink and none leaving the last step; the line
+    arriving at a step solid when the step above is done and dotted otherwise. Read down the line's column at four
+    scalings in both themes, with a model and a prior in use, so that the first two steps are done."""
+    with _railed() as held:
+        rail, kit = held.rail, held.kit
+        rail.set_step_states(kit.chain.step_states(_rail_session(draft=SimpleNamespace(model="NADROWSKI"),
+                                                                 inf_prior=SimpleNamespace(name="retrain_prior"))))
+        rail.set_place("inference", None)
+        _settle()
+        for dark, ratio in itertools.product((False, True), _SCALINGS):
+            with _the_look(dark):
+                image = _rendered(rail, ratio)
+                rule, dots, x = design.colour("rule").rgb(), design.colour("ink_3").rgb(), _device_edge(29 * ratio)
+
+                def line(top, bottom):
+                    """What runs down the line's column between two logical heights: "solid", "dotted" or None."""
+                    seen = {image.pixel(x, y) for y in range(_device_edge(top * ratio), _device_edge(bottom * ratio))}
+                    return ("solid" if seen == {rule} else "dotted" if dots in seen and rule not in seen
+                            else None if not seen & {rule, dots} else seen)
+
+                tops = [rail.row(place.key).mapTo(rail, QPoint(0, 0)).y() for place in kit.keys.STEPS]
+                arriving, leaving = [line(top, top + 4) for top in tops], [line(top + 26, top + 46) for top in tops]
+                assert (arriving, leaving) == ([None, "solid", "solid", "dotted", "dotted", "dotted"],
+                                               ["solid", "solid", "dotted", "dotted", "dotted", None]), (dark, ratio)
+
+
+def test_a_part_row_wears_the_ring_inside_its_edge_and_leaves_its_bar_whole(monkeypatch):
+    """The ring on a part's row, as on a step's: just inside the row's edge, and on the current row clear of the
+    accent's bar, which stays whole, read at four scalings in both themes; on a row that is not current the ring is
+    whole on all four sides."""
+    from core.gui import style
+    app = QApplication.instance() or QApplication([])
+    with _railed(fields=True) as held, theme(False), _focus_as_on_a_screen(monkeypatch) as given:
+        rail, window = held.rail, held.window
+        rail.set_place("records")
+        _settle()
+        follows = style.FocusFollower(app, style.PrismStyle())
+        try:
+            rail.take_keyboard()
+            records, ring = rail.row("records"), follows.ring()
+            assert (given[-1] is records, ring.inset, records.property("ring_left"), ring.geometry()) == (
+                True, True, 4, QRect(records.mapTo(rail._scroll.viewport(), QPoint(0, 0)), records.size()))
+            middle = records.mapTo(window, QPoint(0, 0)).y() + records.height() // 2
+            x = records.mapTo(window, QPoint(0, 0)).x()
+            for dark, ratio in itertools.product((False, True), _SCALINGS):
+                with theme(dark):
+                    image = _rendered(window, ratio)
+                    assert (_at(image, x + 0.5, middle), _at(image, x + 4.5, middle)) == (
+                        design.hex_colour("accent"), design.hex_colour("focus")), (dark, ratio)
+            QTest.keyClick(records, Qt.Key_Down)
+            models = rail.row("models")
+            assert given[-1] is models and _ring_sides(window, models, inset=True) == ["whole"] * 4
+        finally:
+            follows.stop()                   # first: the ring holds its row by address
