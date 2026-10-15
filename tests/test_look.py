@@ -7041,3 +7041,57 @@ def test_the_rail_ignores_a_place_it_does_not_list():
         first, last = _device_rows(rail.row("inference"), rail, 1.0)
         tint = _spots(_rendered(rail, 1.0), "accent_tint")[1]
         assert (tint.top(), tint.bottom()) == (first, last) and len(rail.visible_rows()) == 15
+
+
+def _written_with_fonts(monkeypatch, widget):
+    """What a painted device writes when it paints, read from its painter: each text with the box it is written in
+    and the font it is written in, in the order written."""
+    written, kept = [], QPainter.drawText
+
+    def write(painter, *told):
+        written.append((QRectF(told[0]), told[-1], QFont(painter.font())))
+        return kept(painter, *told)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(QPainter, "drawText", write)
+        _rendered(widget, 1.0)
+    return written
+
+
+def test_the_foots_words_keep_their_lines_and_their_width_as_its_clock_ticks(monkeypatch):
+    """The foot's words are laid out and written in digits of equal width, so a clock among them, rewritten every
+    second while a run is live, keeps its lines and the first line its width: through a minute at four minutes, at
+    ten hours and at a hundred hours the words break at one place, and the first line, measured in the font it is
+    written in, is one width. In digits of unequal width the first line's end would move each second, and past a
+    hundred hours a word would jump between the two lines."""
+    kit = _rail_kit()
+    foot = kit.rail.RunFoot()
+    with _standing(foot, 220, 160):
+        for hours, minutes in ((0, 4), (10, 0), (100, 0)):
+            seen = set()
+            for second in range(60):
+                clock = f"{hours}:{minutes:02}:{second:02}" if hours else f"{minutes}:{second:02}"
+                foot.set_state("now", "Running: Training", f"{clock} so far. Settings are locked.", button=True)
+                words = [(text, font) for _box, text, font in _written_with_fonts(monkeypatch, foot)
+                         if font.weight().value == 400]
+                (first, font), rest = words[0], tuple(text for text, _font in words[1:])
+                seen.add((rest, QFontMetricsF(font).horizontalAdvance(first)))
+            assert len(seen) == 1, (hours, minutes, sorted(seen))
+
+
+def test_the_step_names_stand_in_one_column(monkeypatch):
+    """Whatever its number, every step's name starts at one x, at rest and current, at two text sizes: the number is
+    measured in the digits of equal width it is written in, and the name stands a gap after it."""
+    kit = _rail_kit()
+    for factor in (1.0, 1.5):
+        with text_size(factor):
+            for current in (False, True):
+                columns = set()
+                for place in kit.keys.STEPS:
+                    row = kit.rail.StepRow(place)
+                    row.set_current(current)
+                    with _standing(row, design.scaled(220), design.scaled(46)):
+                        (box, number, digits), (start, name, _font) = _written_with_fonts(monkeypatch, row)[:2]
+                    assert (number, name) == (str(kit.keys.step_number(place.key)), place.name), (number, name)
+                    columns.add((box.x() + QFontMetricsF(digits).horizontalAdvance(number), start.x()))
+                assert len(columns) == 1, (factor, current, sorted(columns))

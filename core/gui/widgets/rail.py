@@ -105,7 +105,8 @@ class StepRow(QAbstractButton):
     """One step of the chain: its marker, its number and name, its state in words on a second line, and the
     line that runs on to the next step. Words too long for the row are cut at their end with an ellipsis; its
     tool tip and its accessible name carry them whole. A step that has not started has its name in the second
-    ink, unless it is the current row."""
+    ink, unless it is the current row. The number is written in digits of equal width, so that every step's
+    name starts at one x."""
 
     def __init__(self, place: keys.Place):
         super().__init__()
@@ -193,17 +194,19 @@ class StepRow(QAbstractButton):
             x, y = (design.scaled(n) for n in design.STEP["marker_one" if self._one_line else "marker"])
             side = _px("marker")
             paint.paint_marker(painter, marker, QRectF(x, y, side, side))
-            font = fonts.inter("strong" if self._current else "body")
+            kind = "strong" if self._current else "body"
+            font, digits = fonts.inter(kind), fonts.inter(kind, tabular=True)
             metrics = QFontMetricsF(font)
-            painter.setFont(font)
+            painter.setFont(digits)
             top = step["name_y_one" if self._one_line else "name_y"]
             line = design.scaled(design.TYPE["body"][1])
             number = str(self._number)
             painter.setPen(design.colour("ink_2"))
             painter.drawText(QRectF(step["text_x"], top, width - step["text_x"], line),
                              Qt.AlignLeft | Qt.AlignVCenter, number)
-            x = step["text_x"] + metrics.horizontalAdvance(number) + step["number_gap"]
+            x = step["text_x"] + QFontMetricsF(digits).horizontalAdvance(number) + step["number_gap"]
             room = max(0.0, width - x - step["pad_right"])
+            painter.setFont(font)
             painter.setPen(design.colour("ink_2" if (marker == "later" and not self._current) else "ink"))
             painter.drawText(QRectF(x, top, room, line), Qt.AlignLeft | Qt.AlignVCenter,
                              metrics.elidedText(self._place.name, Qt.ElideRight, room))
@@ -245,9 +248,10 @@ def _lines(text: str, font: QFont, width: float, most: int) -> list[str]:
 class RunFoot(QWidget):
     """The run's state at the foot of the rail: a hairline, a marker, a semibold title of one or two lines and
     up to two lines of words, each cut at its end with an ellipsis after its second line. Room is always kept
-    for two lines of words, so the foot changes its height only when its title takes a second line. While a
-    run is shown it is one button, which the Tab key reaches and Enter, Space and a click press; otherwise it
-    is no control at all."""
+    for two lines of words, so the foot changes its height only when its title takes a second line. The words
+    are laid out and written in digits of equal width, so that a clock among them keeps its lines and its width
+    as it ticks. While a run is shown it is one button, which the Tab key reaches and Enter, Space and a click
+    press; otherwise it is no control at all."""
     clicked = Signal()
 
     def __init__(self):
@@ -265,7 +269,7 @@ class RunFoot(QWidget):
     def _laid_out(self) -> tuple[list[str], list[str]]:
         room = self._room()
         title = _lines(self._title, fonts.inter("strong"), room, 2) if self._title else []
-        words = _lines(self._words, fonts.inter("small"), room, 2) if self._words else []
+        words = _lines(self._words, fonts.inter("small", tabular=True), room, 2) if self._words else []
         return title, words
 
     def set_state(self, marker: str, title: str, words: str = "", *, button: bool = False) -> None:
@@ -322,7 +326,7 @@ class RunFoot(QWidget):
             x, room = left + side + _px("run_line_gap"), self._room()
             title_lines, word_lines = self._laid_out()
             for kind, ink, lines in (("strong", "ink", title_lines), ("small", "ink_2", word_lines)):
-                painter.setFont(fonts.inter(kind))
+                painter.setFont(fonts.inter(kind, tabular=kind == "small"))
                 painter.setPen(design.colour(ink))
                 line = design.scaled(design.TYPE[kind][1])
                 for text in lines:
