@@ -1,10 +1,13 @@
 # PRISM — state
 
-**Last updated:** 2026-10-15, early morning (THE BUILD OF STAGE 2, THE SHELL, IS UNDER WAY in a session started from the
-chat of 14 October with the owner's pasted prompt `docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-build.md`:
-TASKS 0, 1 AND 2 ARE COMPLETE (`0db3980`..`27fd4bf`, each task's review clean after one fix round, each gate green; the
-last gate, on `27fd4bf`: 1466 passed, 4 skipped, 5 deselected); departure 79 added and departure 55 amended; Task 3 (the
-rail's devices) is being prepared; the paragraph "THE BUILD OF STAGE 2" below is this session's record. What follows in
+**Last updated:** 2026-10-15, early morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 3 AND IS HANDED TO A NEW
+CHAT; it ran in a session started from the chat of 14 October with the owner's pasted prompt
+`docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-build.md`: TASK 0 (no commit) AND TASKS 1, 2 AND 3 ARE
+COMPLETE (`0db3980`..`b9efe89`, each building task's review clean after one fix round and its gate green; the last gate,
+on `b9efe89`: 1485 passed, 4 skipped, 5 deselected); departures 79, 80 and 81 added and 55 amended; the weekly bar at
+82 %. NEXT, IN A NEW CHAT: Task 4 (a page's small form, and Home), from
+`docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-4.md`; the paragraph "THE BUILD OF STAGE 2" below
+is this session's record. What follows in
 this parenthesis is the head as the evening of 14 October left it: THE PLAN OF STAGE 2, THE SHELL, IS WRITTEN, COMMITTED
 (`e90832e`) AND APPROVED BY THE OWNER the same evening ("The plan is approved. Write the hand-off prompt so the build starts with Task 0 in a new
 chat."): `docs/superpowers/plans/2026-10-14-window-redesign-stage-2.md`, ten building tasks and two controller tasks,
@@ -98,16 +101,34 @@ first-time test), `core/gui/record_words.py` (a record's label and kind word), t
 panels through 16 states, that step 4 read "To come" with a prior and no posterior while today's calibration button is
 greyed: step 4 now reads "Needs a posterior" there (departure 55 amended, `f31fc20`); and that the standing import check
 missed late imports (now read three ways). **Departure 79** (`a91a7cb`): Help's F1 and Escape rows and Records' line on
-Home worded for what stage 2 holds, as row 71 does. **Gates:** green on `8ff9318` (1416 passed, 14 min 39 s), `8b4c3da`
-(1418, 14:31), `3624262` (1462, 14:35), `27fd4bf` (1466, 17:44), each with 4 skipped and 5 deselected, none a
-quiet-machine time; the real-screen run after Task 1 and its fix round: 4 passed each; the real `Artifacts/` (428) and the
+Home worded for what stage 2 holds, as row 71 does. **Task 3, the rail's devices and the row of page names** (`b759c64`,
+then fix round 1 `089b1c3`..`b9efe89`): `core/gui/widgets/rail.py` (the rail's part rows, step rows with their markers
+and the chain's lines, the foot with the run's state, the rail itself: one Tab stop with the arrows inside it, the ring
+inset on the row that has the keyboard, the list scrolling under a fixed name and above a fixed foot) and
+`core/gui/widgets/page_names.py` ("One cell" / "Sweep study"), 19 tests in the look's suite; mounted on no screen yet.
+Seat two drew them against the approved sample's rail: equal to the device pixel but the step numbers; the review found
+that the foot's clock would shift every second and, past 100 hours of a run, jump a word between lines: the foot's words
+and the step numbers now take digits of equal width. **Departures 80 and 81** (`2acd3c7`): in a low window the open step
+keeps its second line too; the rail's list shows the look's scroll bar while it scrolls. **For the owner at the exit,
+new:** the scroll bar in a low rail (row 81), the open step's words (row 80), the page names spaced 16 px where the
+chosen sketch drew about 24, the rows of row 79; each with its picture in the ledger's `stage-2/pictures/`. **Gates:**
+green on `8ff9318` (1416 passed, 14 min 39 s), `8b4c3da` (1418, 14:31), `3624262` (1462, 14:35), `27fd4bf` (1466, 17:44),
+`b759c64` (1478, 14:55), `b9efe89` (1485, 17:42), each with 4 skipped and 5 deselected, none a quiet-machine time; the real-screen run after Task 1 and its fix round: 4 passed each; the real `Artifacts/` (428) and the
 real `PRISM.ini` unchanged after every gate. **Carried** (the ledger has each): to Task 4 (the room fixture after the
 let-go; two simulation sets of one prior read alike on Home), Task 5 (the Save boxes of today's Prior and Posterior panels
 refresh no gate, so the rail would keep an old name; a listener on the run state is a bound method; the foot's timer has a
 parent in the window), Task 7 (a deleted or half-built panel stays in the panel set and breaks the next run's start:
 latent today, met once parts are built and rebuilt), Task 10 (the lock and the listener released explicitly by the test
-builder of the whole program, their names redirected by the tests). **Cost so far in background agents:** about 6.4
-million tokens (Task 1 about 3.3, Task 2 about 2.8, Task 0's reader 0.27).
+builder of the whole program, their names redirected by the tests); and from Task 3 to Task 5: the current row kept in
+view after the rail is made smaller or lower or the foot grows, the arrows' tests on the mounted rail, the one-mark
+check read on the mounted rail, the long title of a place with a page ("Running: Effective temperature, Sweep study")
+cut in the foot (not the whole list: the ledger's stage-2 lines that say "CARRIED", "carried to Task" or "Noticed for
+later tasks" are). **Cost in background agents:** about 8 million tokens by the parts the ledger lists (Task 1 about 2.8
+with Task 0's reader, Task 2 about 2.3, Task 3 about 2.7, the hand-over's check 0.24; the totals written at each task's
+close over-added); the weekly bar, the measured figure, went from 69 % to 82 % over the four tasks. **HANDED TO A NEW
+CHAT** after Task 3, by the rule of the prompt of 14 October (about three tasks, or two thirds of the room; this chat
+stood at 44 %), from `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-4.md`, checked by one reader
+on sonnet (22 findings, all folded); nothing running at the hand-over.
 
 **THE PLAN OF STAGE 2 (2026-10-14, evening; a session started from the chat of 14 October with the owner's pasted prompt
 `docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-plan.md`; the ledger's section "Stage 2 — the shell (plan)"
