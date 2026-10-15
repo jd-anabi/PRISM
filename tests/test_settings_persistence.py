@@ -1010,8 +1010,10 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
 
 
 # What the first turn of the test below made, kept for its second turn as a test that wanted its window to
-# outlive it would keep one.
+# outlive it would keep one; and what one part of it saw as it went: the settings file in force, and whether
+# that turn's drawing record was still unread.
 _MADE_IN_THE_FIRST_TURN: list = []
+_SEEN_AS_IT_WENT: list = []
 
 
 @pytest.mark.parametrize("turn", ["builds", "after"])
@@ -1021,13 +1023,20 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
     (tests/conftest.py::_built_widgets_let_go): left alive, each would be dressed again by every later change of
     sheet, style or font on the one application. The first turn builds one of each and keeps them in this
     module's list, beside a part it deletes itself, which the fixture must pass over; the second turn, the next
-    test of the run, finds the five deleted, and none of the panels among them left in the set of panels a run
+    test of the run, finds them deleted, and none of the panels among them left in the set of panels a run
     locks, though this module's list still holds them, as a run's own signals hold a panel that ran something.
     They go by their own deferred delete and never by a close, which writes settings, so the first turn's
-    settings file was never written. The panel a fixture of this module built is no test's own, and it is
-    still there."""
+    settings file was never written. They go while that file is still the one in force and before the turn's
+    drawing record is read, which one part notes as it goes: the fixture's place in the teardown order comes
+    from the two fixtures it names, and nothing else holds it. The record holds what was built weakly, so a part
+    the test itself dropped is gone at once. The panel a fixture of this module built is no test's own, and it
+    is still there, still in the set. The two turns run together, in this order, in one process: the second
+    alone always fails."""
     import shiboken6
+    import weakref
     from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QWidget
+    from core.gui import reported
     from core.gui import settings as st
     from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.reduction_panel import ReductionPanel
@@ -1038,19 +1047,32 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
         gone = build_part(ReductionPanel)
         gone.deleteLater()
         QCoreApplication.sendPostedEvents(gone, QEvent.DeferredDelete)
+        alone = weakref.ref(build_part(QWidget))
+        assert alone() is None, "the record keeps alive a part its test let go"
+        watched = build_part(QWidget)
+        reported.COUNTS["unread"] = 0        # a mark the drawing check takes away once it has read the record
+        watched.destroyed.connect(lambda *_: _SEEN_AS_IT_WENT.extend(
+            [st._override_path, "unread" in reported.COUNTS]))
         _MADE_IN_THE_FIRST_TURN[:] = [build_window(), build_part(ReductionPanel), build_inference(),
-                                      build_run_host(), build_run_host(BasePanel), gone, st._override_path]
-        assert [shiboken6.isValid(widget) for widget in _MADE_IN_THE_FIRST_TURN[:6]] == [True] * 5 + [False]
+                                      build_run_host(), build_run_host(BasePanel), watched, gone,
+                                      st._override_path]
+        assert [shiboken6.isValid(widget) for widget in _MADE_IN_THE_FIRST_TURN[:7]] == [True] * 6 + [False]
         return
-    assert len(_MADE_IN_THE_FIRST_TURN) == 7, "the first turn did not run before this one"
+    assert len(_MADE_IN_THE_FIRST_TURN) == 8, (
+        "the first turn did not run before this one: the two turns run together, in this order, in one process")
     *made, _deleted_by_the_test, written = _MADE_IN_THE_FIRST_TURN
-    assert [shiboken6.isValid(widget) for widget in made] == [False] * 5, (
+    seen = list(_SEEN_AS_IT_WENT)
+    _MADE_IN_THE_FIRST_TURN.clear()
+    _SEEN_AS_IT_WENT.clear()
+    assert [shiboken6.isValid(widget) for widget in made] == [False] * 6, (
         "a widget a builder made outlived the test that built it")
     assert [panel for panel in BasePanel._instances if not shiboken6.isValid(panel)] == [], (
         "a deleted panel is still among the panels a run locks")
-    _MADE_IN_THE_FIRST_TURN.clear()
-    assert not Path(written).exists(), "a window was closed when its test ended, and closing it wrote settings"
+    assert seen == [written, True], (
+        "what the builders made went after the test's own settings file was put back or its drawing record read")
+    assert not Path(written).exists(), "a window was closed, or a widget's deletion wrote settings, when its test ended"
     assert shiboken6.isValid(module_panel), "the end of a test deleted what a fixture of wider scope built"
+    assert module_panel in BasePanel._instances, "the end of a test took a living panel out of the set a run locks"
 
 
 def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
