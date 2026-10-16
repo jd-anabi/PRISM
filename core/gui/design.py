@@ -569,22 +569,11 @@ QProgressBar::chunk { border-radius: 3px; background: $accent; }
 QToolButton { border: none; background: transparent; border-radius: ${px_radius}px; color: $ink; }
 QToolButton:hover   { background: $hover_fill; }
 QToolButton:pressed { background: $press_fill; }
-QToolButton#navBack, QToolButton#navSettings { font-size: ${px_i_nav}px; padding: 2px 6px; }
-QToolButton#navRunning {
-    font-size: ${px_t_small}px; padding: 2px 8px; color: $ink_2;
-    border: 1px solid $field_line; border-radius: ${px_radius}px;
-}
-QToolButton#navRunning:hover { color: $ink; border-color: $accent; }
 QToolButton#helpBadge {
     border: 1px solid $rule_light; border-radius: ${px_badge_r}px; color: $ink_2;
     font-size: ${px_i_badge}px; padding: 0px; background: transparent;
 }
 QToolButton#helpBadge:hover { border-color: $accent; color: $accent; }
-
-QMenu { background: $raised; border: 1px solid $field_line; border-radius: ${px_radius}px; padding: 4px; }
-QMenu::item { padding: 6px 24px 6px 12px; border-radius: ${px_radius}px; color: $ink; }
-QMenu::item:selected { background: $accent; color: $on_accent; }
-QMenu::separator { height: 1px; background: $rule_light; margin: 4px 8px; }
 """)
 
 # These rules serve the widgets of the old layout, and each leaves with its widget: every single selector of
@@ -600,9 +589,8 @@ INTERIM_SELECTORS = (
     "QHeaderView::section", "QHeaderView::section:hover", "QHeaderView::section:last",
     "QHeaderView::section:only-one", "QGroupBox", "QGroupBox::title", "QTabWidget::pane", "QTabBar",
     "QTabBar::tab", "QTabBar::tab:hover", "QTabBar::tab:selected", "QTabBar::tab:disabled", "QProgressBar",
-    "QProgressBar::chunk", "QToolButton", "QToolButton:hover", "QToolButton:pressed", "QToolButton#navBack",
-    "QToolButton#navSettings", "QToolButton#navRunning", "QToolButton#navRunning:hover", "QToolButton#helpBadge",
-    "QToolButton#helpBadge:hover", "QMenu", "QMenu::item", "QMenu::item:selected", "QMenu::separator")
+    "QProgressBar::chunk", "QToolButton", "QToolButton:hover", "QToolButton:pressed", "QToolButton#helpBadge",
+    "QToolButton#helpBadge:hover")
 
 # the icon font's glyph sizes at the ordinary text size; only rules of the old layout read them
 _GLYPH_PX = {"px_i_icon": 18, "px_i_nav": 20, "px_i_badge": 13}

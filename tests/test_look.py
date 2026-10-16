@@ -1038,7 +1038,7 @@ def test_the_sheet_keeps_its_rules_and_only_the_named_interim_selectors_break_th
         for banned in ("$", "url(", "font-family", "letter-spacing", ":default", "::indicator", "*"):
             assert banned not in qss, (dark, banned)
         rules = _rules(qss)
-        assert len(rules) == 87, len(rules)
+        assert len(rules) == 80, len(rules)
         first = next(i for i, (selectors, _) in enumerate(rules) if selectors[0] in design.INTERIM_SELECTORS)
         final, interim = rules[:first], rules[first:]
         assert [s for selectors, _ in interim for s in selectors] == list(design.INTERIM_SELECTORS)
@@ -1049,7 +1049,7 @@ def test_the_sheet_keeps_its_rules_and_only_the_named_interim_selectors_break_th
             assert not [name for name in declarations if name.startswith("qproperty-")], selectors
         for selectors, _ in interim:                     # an old widget's rule still names a class of its own
             assert not [s for s in selectors if "QWidget" in _classes(s)], selectors
-    assert len(set(design.INTERIM_SELECTORS)) == len(design.INTERIM_SELECTORS) == 46
+    assert len(set(design.INTERIM_SELECTORS)) == len(design.INTERIM_SELECTORS) == 38
 
 
 def test_no_pseudo_state_sets_a_weight_or_a_size_and_words_take_lettering_colours():
@@ -1088,7 +1088,7 @@ def test_the_sheets_lengths_follow_the_text_factor_and_its_line_weights_do_not()
         assert built[("QScrollBar::handle:horizontal",)]["min-width"] == "28px"
 
 
-SHEET_DIGEST = "160894f6162ff8dd36e69f12c123feaeff7dfb74888cffe403743f592e704b5f"
+SHEET_DIGEST = "8a5af65db489c30fabaf85de89398afa2f1765370b95478785bf31a9c046097f"
 
 
 def test_every_rule_of_both_sheets_is_the_recorded_one():
