@@ -1504,7 +1504,7 @@ def test_an_incomplete_row_shows_its_directory_name_and_its_reason():
 
 def test_the_table_is_flat_read_only_and_selects_whole_rows():
     """A QTreeWidget used FLAT, not a hand-built grid of QLabels: the chi probe table's and
-    SettingsScreen.refresh_models' row-building idiom neither sorts nor scales, and the store can hold
+    ModelsScreen.refresh_models' row-building idiom neither sorts nor scales, and the store can hold
     hundreds of rows. No expander column in front of "Name", no in-place editing (a note is edited in
     its own box, so a double-click must not turn a cell into a line edit), one row at a time because
     delete is one artifact at a time."""

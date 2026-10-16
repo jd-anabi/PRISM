@@ -182,15 +182,15 @@ def _no_modal_dialogs():
     test did not expect is a STALL past the ten-minute tool-call limit (no timeout plugin is
     installed), not a failure. For the whole session the dialog is handed to tests/_dialogs.record, which
     keeps it in SHOWN with its words, and exec returns 0 -- no clicked button, which the consent
-    dialogs read as Cancel and MainWindow._delete_user_model's confirmation as the safe branch. A test
+    dialogs read as Cancel and ModelsScreen._delete_user_model's confirmation as the safe branch. A test
     that wants an answer calls tests/_dialogs.choose, which layers a fake that clicks on top with the
     test's own monkeypatch; the undo puts this guard back, because a MonkeyPatch on a class records the
     __dict__ entry, which here is one guard function set on both classes, so that a test can tell the
     guard stands on each. exec belongs to neither class but to their base, QDialog, so each class has to
     be given the attribute; a dialog class added later is not covered until it is named here. Same
     MonkeyPatch shape as _checkpointing_off_unless_asked. Nothing
-    under core/ calls the statics any more: main_window.py's last three now go through
-    MainWindow._tell, so this guard covers every box the GUI shows and a test reads one with
+    under core/ calls the statics any more: the last three, now Your own models', go through
+    ModelsScreen._tell, so this guard covers every box the GUI shows and a test reads one with
     tests/_dialogs.asked() -- and that is a FACT WITH A PIN, not a claim: tests/test_refusals.py::
     test_no_static_message_box_is_called_anywhere_under_core scans CODE_ROOTS + CODE_FILES for one,
     because a static added here would HANG this suite rather than fail it."""

@@ -1119,8 +1119,8 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
 
 
 def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatch):
-    """The window's last three boxes are INSTANCE dialogs, so every box the GUI shows lands in
-    SHOWN. main_window.py showed these three with the C++ statics (QMessageBox.warning in
+    """The window's last three boxes, now Your own models', are INSTANCE dialogs, so every box the GUI
+    shows lands in SHOWN. The window showed these three with the C++ statics (QMessageBox.warning in
     _edit_user_model and after a failed delete_user_model, QMessageBox.information in
     _delete_user_model's run guard), which escape tests/conftest.py::_no_modal_dialogs -- it
     patches QMessageBox.exec, the instance method. Offscreen a static spins a nested event loop
@@ -1142,18 +1142,19 @@ def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatc
         raise RuntimeError("corrupt definition")
 
     w = build_window()
+    models = w.models_screen
     try:
         forget_asked()                      # this test is about the three sites, not construction
-        monkeypatch.setattr(w.model_builder_screen, "load_existing", boom)
-        w._edit_user_model("BROKEN")        # site 1 -- a definition that will not load
+        monkeypatch.setattr(models.builder, "load_existing", boom)
+        models._edit_user_model("BROKEN")   # site 1 -- a definition that will not load
         monkeypatch.setattr(model_store, "delete_user_model", boom)
         BasePanel._running = True
         try:
-            w._delete_user_model("BROKEN")  # site 2 -- refused while a run is live, nothing asked
+            models._delete_user_model("BROKEN")  # site 2 -- refused while a run is live, nothing asked
         finally:
             BasePanel._running = False
         choose(monkeypatch, other=True)
-        w._delete_user_model("BROKEN")      # the confirmation, then site 3 -- the delete fails
+        models._delete_user_model("BROKEN")  # the confirmation, then site 3 -- the delete fails
     finally:
         w.close()
     assert statics == [], f"the window still shows a box with a C++ static: {statics}"

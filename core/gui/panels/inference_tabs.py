@@ -12,7 +12,7 @@ never run concurrently. The screen owns the SbiSession and holds the tabs as pag
 reads/writes the session through ``self._screen`` and calls ``self._screen.refresh_gates()`` after a
 stage completes.
 """
-# THE IMPORT SURFACE, kept deliberately: settings_screen reads this module's HELP and docstring BY
+# THE IMPORT SURFACE, kept deliberately: help_screen reads this module's HELP and docstring BY
 # STRING PATH ("core.gui.panels.inference_tabs"), inference_screen imports the six panels from here,
 # and the test suites reach _ChiProbeRow and _nvidia_smi_free_gib through it. The GUI runners are
 # gone: each tab dispatches an orchestrator composition directly.

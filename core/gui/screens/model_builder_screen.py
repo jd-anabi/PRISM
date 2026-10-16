@@ -1,4 +1,4 @@
-"""The user-defined model builder (reached from Settings -> "User-defined models").
+"""The user-defined model builder (reached from the list under Your own models).
 
 Declare state variables, then per variable type the deterministic RHS of dx/dt, the white-noise
 strength D (the solver diffusion is g = sqrt(2*D); parameters and numbers give additive noise, a state
@@ -239,8 +239,8 @@ class ModelBuilderScreen(QWidget):
     """
 
     def __init__(self, on_saved=None, on_back=None, parent=None):
-        """``on_saved(name)`` fires after a successful save (MainWindow refreshes the model combos);
-        ``on_back()`` returns to the Settings screen."""
+        """``on_saved(name)`` fires after a successful save (the list of your own models names it and MainWindow
+        refreshes the model combos); ``on_back()`` returns to that list."""
         super().__init__(parent)
         self._on_saved = on_saved
         self._on_back = on_back
@@ -291,7 +291,7 @@ class ModelBuilderScreen(QWidget):
         self.btn_save = QPushButton("Save model")
         self.btn_save.setProperty("accent", True)              # primary CTA (Fluent accent)
         self.btn_save.clicked.connect(self._save)
-        btn_back = QPushButton("Back to settings")
+        btn_back = QPushButton("Back to your models")
         btn_back.clicked.connect(lambda: self._on_back and self._on_back())
         btns = QHBoxLayout()
         btns.addWidget(btn_validate)
@@ -519,7 +519,7 @@ class ModelBuilderScreen(QWidget):
             return
         json_path = config.MODELS_PATH / f"{doc['name']}.json"
         if doc["name"] != self._editing_name and json_path.exists():
-            self._set_status(f"A model named '{doc['name']}' already exists -- edit it from Settings "
+            self._set_status(f"A model named '{doc['name']}' already exists -- edit it from Your own models "
                              "or pick another name.", error=True)
             return
         try:
@@ -535,7 +535,7 @@ class ModelBuilderScreen(QWidget):
 
     # ── edit / reset ─────────────────────────────────────────────────────────
     def load_existing(self, name: str) -> None:
-        """Populate the form from a saved model (the Settings 'Edit' flow). Renaming saves a copy."""
+        """Populate the form from a saved model (the list's 'Edit'). Renaming saves a copy."""
         doc = model_store.load_user_model(config.MODELS_PATH / f"{str(name).upper()}.json")
         self._editing_name = doc["name"]
         self.name_edit.setText(doc["name"])
@@ -554,7 +554,7 @@ class ModelBuilderScreen(QWidget):
         self._set_status(f"Editing '{doc['name']}'. Renaming saves a copy under the new name.")
 
     def reset(self) -> None:
-        """Blank the form (the Settings 'Open model builder' flow)."""
+        """Blank the form (the list's 'Open model builder')."""
         self._editing_name = None
         self.name_edit.clear()
         self.vars_edit.clear()

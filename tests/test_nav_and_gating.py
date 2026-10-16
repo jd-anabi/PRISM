@@ -1509,7 +1509,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
               "Prior": ("inference", "prior"), "Posterior": ("inference", "training"),
               "Validate": ("inference", "checks"), "Infer": ("inference", "infer"),
               "TSNPE": ("inference", "narrowing"), "Live simulation": ("live", None)}
-    screens = {"Artifacts": ("records", None), "Model Builder": ("models", None)}
+    screens = {"Artifacts": ("records", None), "Model Builder": ("models", "builder")}
     for title, (part, page) in {**titles, **screens}.items():
         window.go_to(part, page)
         assert (window.current_place(), window.shell.rail.row(part).place) == ((part, page), keys.part(part)), title

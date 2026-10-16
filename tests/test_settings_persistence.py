@@ -1129,7 +1129,8 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
     built = {"MainWindow", "InferenceScreen", "FdtPanel", "CrossValPanel", "SimulatePanel",
              "ReductionPanel", "ModelBuilderScreen", "ArtifactScreen", "ConfigPanel", "PriorPanel",
              "PosteriorPanel", "ValidatePanel", "InferPanel", "TSNPEPanel", "BasePanel",
-             "HomeScreen", "SettingsScreen", "TemperatureScreen", "RecordViewer", "Shell", "HelpScreen"}
+             "HomeScreen", "SettingsScreen", "TemperatureScreen", "RecordViewer", "Shell", "HelpScreen",
+             "ModelsScreen"}
     # The list is kept closed over the program. Every class with a base that a file of the window, of its
     # screens or of its panels defines under a public name is named above, or here among those a suite still
     # builds itself. So a class a later change adds, or a folder it adds beside the window's, fails here

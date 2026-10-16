@@ -477,8 +477,8 @@ def test_homes_records_name_an_unnamed_record_in_local_time_and_leave_out_what_c
 
 
 def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
-    """Each place Home asks for is opened by ``go_to``: a part its own page (Help the help, Your own models the
-    model builder), a page of Effective temperature its page with its name marked, a step its page, one that
+    """Each place Home asks for is opened by ``go_to``: a part its own page (Help the help, Your own models their
+    list), a page of Effective temperature its page with its name marked, a step its page, one that
     cannot start yet too, and a record's kind the records at that kind. Home reads again each time it is opened,
     and while it is shown when the steps' states are worked out again and when a run starts or ends; never on its
     own."""
@@ -494,7 +494,8 @@ def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
             assert stack.currentWidget() is window.part(part), part
             home.navigate.emit("home", None)
             assert stack.currentWidget() is home
-        assert (window.part("help"), window.part("models")) == (window.help_screen, window.model_builder_screen)
+        assert (window.part("help"), window.part("models")) == (window.help_screen, window.models_screen)
+        assert window.models_screen.current_page() == "list"
         for page, panel in (("sweep", 1), ("one_cell", 0)):
             home.navigate.emit("temperature", page)
             screen = window.fdt_screen
@@ -593,6 +594,11 @@ def _name(screen, page):
     return next(name for name in screen.names.findChildren(QAbstractButton) if name.place.key == page)
 
 
+def _button(widget, words):
+    """The push button of ``widget`` that reads ``words``."""
+    return next(button for button in widget.findChildren(QPushButton) if button.text() == words)
+
+
 def _shown_off_screen(window, width=None, height=None):
     """Show ``window`` where no screen shows it, at a size when one is handed, and let its layouts settle."""
     window.setAttribute(Qt.WA_DontShowOnScreen)
@@ -618,7 +624,7 @@ def test_the_rails_places_are_the_parts_in_order_read_off_the_built_window():
     window = build_window()
     rail, stack = window.shell.rail, window.shell.stack
     pages = [window.home_screen, window.inference_screen, window.fdt_screen, window.simulate_screen,
-             window.reduction_screen, window.artifact_screen, window.model_builder_screen, window.settings_screen,
+             window.reduction_screen, window.artifact_screen, window.models_screen, window.settings_screen,
              window.help_screen]
     assert [row.place.key for row in rail.visible_rows() if isinstance(row, PartRow)] == [
         place.key for place in keys.PARTS]
@@ -691,7 +697,7 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     window.go_to("records")
     window.fdt_screen.show_page("sweep")                          # out of sight: nothing is said or marked
     assert len(said) == 10 and _marked(rail) == ["records"]
-    for part in ("inference", "temperature"):
+    for part in ("inference", "temperature", "models"):
         with pytest.raises(KeyError):
             window.go_to(part, "nowhere")
     assert (window.current_place(), _marked(rail), len(said)) == (("records", None), ["records"], 10), (
@@ -700,10 +706,11 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
 
 def test_go_to_gives_the_page_the_keyboard_and_escape_in_the_rail_gives_it_back():
     """After a move the keyboard is on the page's first setting: the control a page names to start at (Home's
-    main button, Help's text), or else its first control that is not a button that does something, nor a tab
-    bar or a row of page names, nor an area that only shows or scrolls (each step and each page's first setting,
-    the records' kind, the model's name, the first appearance). Escape in the rail, and Enter on a row of the
-    rail, give the page the keyboard the same way."""
+    main button, Help's text, the button of Your own models' list that opens the builder, which has no setting),
+    or else its first control that is not a button that does something, nor a tab bar or a row of page names,
+    nor an area that only shows or scrolls (each step and each page's first setting, the records' kind, the
+    first appearance). Escape in the rail, and Enter on a row of the rail, give the page the keyboard the same
+    way."""
     from PySide6.QtWidgets import QComboBox
     qt_app()
     window = build_window()
@@ -711,8 +718,8 @@ def test_go_to_gives_the_page_the_keyboard_and_escape_in_the_rail_gives_it_back(
     first = {"home": window.home_screen.first_focus(), "inference": window.inference_screen.config_panel.model_combo,
              "temperature": window.fdt_screen.panels()[0].model_combo,
              "live": window.simulate_screen.model_combo, "records": window.artifact_screen.kind_combo,
-             "models": window.model_builder_screen.name_edit, "settings": window.settings_screen._radios["system"],
-             "help": window.help_screen.viewer}
+             "models": _button(window.models_screen, "Open model builder"),
+             "settings": window.settings_screen._radios["system"], "help": window.help_screen.viewer}
     for place in keys.PARTS:
         window.go_to(place.key)
         held = window.focusWidget()
@@ -729,7 +736,7 @@ def test_go_to_gives_the_page_the_keyboard_and_escape_in_the_rail_gives_it_back(
     rail.take_keyboard()
     QTest.keyClick(window.focusWidget(), Qt.Key_Down)                 # to Your own models, the next row
     QTest.keyClick(window.focusWidget(), Qt.Key_Return)
-    assert window.current_place() == ("models", None) and window.focusWidget() is first["models"]
+    assert window.current_place() == ("models", "list") and window.focusWidget() is first["models"]
 
 
 def test_a_mouse_click_on_a_rail_row_puts_no_ring_on_the_page():
@@ -744,8 +751,9 @@ def test_a_mouse_click_on_a_rail_row_puts_no_ring_on_the_page():
     window = build_window()
     try:
         _shown_off_screen(window)
-        for start, target in (("live", "models"), ("models", "live"), ("records", "settings"), ("models", "inference")):
-            window.go_to(start)
+        for (start, page), target in ((("live", None), "models"), (("models", "builder"), "live"),
+                                      (("records", None), "settings"), (("models", "builder"), "inference")):
+            window.go_to(start, page)
             field = window.focusWidget()
             _arrive(field, Qt.TabFocusReason)                         # a press of Tab, then the focus
             assert follower.target() is field, start
@@ -848,11 +856,11 @@ def test_go_to_gives_the_keyboard_as_a_move_does(monkeypatch):
     for place in ("live", "models", "help", "home"):
         window.go_to(place)
     assert [reason for _widget, reason in given] == [(Qt.OtherFocusReason,)] * 4, given
-    window.go_to("models")
+    window.go_to("models", "builder")
     window.shell.rail.take_keyboard()
     given.clear()
     QTest.keyClick(window.focusWidget(), Qt.Key_Escape)
-    assert given == [(window.model_builder_screen.name_edit, (Qt.ShortcutFocusReason,))], given
+    assert given == [(window.models_screen.builder.name_edit, (Qt.ShortcutFocusReason,))], given
 
 
 def test_a_greyed_control_is_passed_over_for_the_next_setting():
@@ -1363,18 +1371,122 @@ def test_a_part_added_to_a_low_window_is_told_so_at_once():
         shell.add_part("low", QWidget())
 
 
-def test_help_shows_the_help_text_settings_shows():
-    """Help shows its heading, "Help", over the help text the Settings screen shows: every section's title."""
-    from PySide6.QtWidgets import QLabel, QTextBrowser
-    from core.gui.screens import settings_screen
+def test_help_shows_the_help_text_that_settings_held():
+    """Help shows its heading, "Help", over the help text Settings used to hold, built here now: every section's
+    title, and every word of the help text, in a viewer at least as tall as the look asks."""
+    from PySide6.QtGui import QTextDocument
+    from PySide6.QtWidgets import QLabel
+    from core.gui.screens import help_screen, settings_screen
     qt_app()
     window = build_window()
-    shown = window.help_screen.viewer.toPlainText()
-    titles = [title for _module, title in settings_screen._HELP_SECTIONS]
+    viewer = window.help_screen.viewer
+    shown = viewer.toPlainText()
+    titles = [title for _module, title in help_screen._HELP_SECTIONS]
     assert titles and all(title in shown for title in titles), shown[:200]
-    viewer, = window.settings_screen.findChildren(QTextBrowser)
-    assert viewer.toPlainText() == shown
+    written = QTextDocument()
+    written.setHtml(help_screen.help_text())
+    assert shown == written.toPlainText()
+    assert viewer.minimumHeight() == design.HELP_VIEWER_MIN_H and viewer.isReadOnly()
     assert [label.text() for label in window.help_screen.findChildren(QLabel)] == ["Help"]
+    assert not hasattr(settings_screen, "help_text"), "the help text is built in two places"
+
+
+def test_settings_keeps_the_appearance_choices_alone():
+    """Settings holds its heading over the appearance choices, Follow Windows, Light and Dark, and nothing else: no
+    help text, no list of models and no button that opens the model builder."""
+    from PySide6.QtWidgets import QAbstractButton, QGroupBox, QLabel, QRadioButton, QTextBrowser
+    qt_app()
+    window = build_window()
+    settings = window.settings_screen
+    assert [box.title() for box in settings.findChildren(QGroupBox)] == ["Appearance"]
+    buttons = settings.findChildren(QAbstractButton)
+    assert all(isinstance(button, QRadioButton) for button in buttons)
+    assert [button.text() for button in buttons] == ["Follow Windows", "Light", "Dark"]
+    assert settings.findChildren(QTextBrowser) == []
+    assert [label.text() for label in settings.findChildren(QLabel)] == ["Settings"]
+
+
+def test_your_own_models_lists_the_models_and_opens_the_builder_and_back(monkeypatch):
+    """Your own models opens on the list of the models you defined, each with Edit and Delete. "Open model builder"
+    opens the builder on a blank form; "Back to your models" returns to the list and keeps what the form holds;
+    Edit opens the builder on the model. The keyboard follows each move to the page's first stop. A model saved in
+    the builder, or deleted, is named in the list again and every list of models in the panels is judged again;
+    Delete asks first, and a question answered as the guard answers deletes nothing. Opened again in the launch
+    the part shows the page last shown; the next launch opens on the list."""
+    from PySide6.QtWidgets import QGroupBox, QLabel, QWidget
+    from core import registry
+    from core.Helpers import model_store
+    from tests._fixtures import all_asked, choose, forget_asked
+    qt_app()
+    names = ["SHM", "SHM2"]                                       # the two shipped with PRISM
+    monkeypatch.setattr(registry, "user_model_names", lambda: list(names))
+    monkeypatch.setattr(registry, "load_errors", [])
+    window = build_window()
+    models = window.models_screen
+    builder = models.builder
+    window.go_to("models")
+    assert window.current_place() == ("models", "list")
+    listed, = [box for box in models.findChildren(QGroupBox) if box.title() == "User-defined models"]
+
+    def rows():
+        return [([label.text() for label in row.findChildren(QLabel)],
+                 [button.text() for button in row.findChildren(QPushButton)])
+                for row in listed.findChildren(QWidget, "", Qt.FindDirectChildrenOnly) if row.findChildren(QPushButton)]
+
+    assert rows() == [([name], ["Edit", "Delete"]) for name in names]
+    builder.name_edit.setText("DRAFT")
+    _button(models, "Open model builder").click()
+    assert (window.current_place(), builder.name_edit.text()) == (("models", "builder"), "")
+    assert window.focusWidget() is builder.name_edit
+    builder.name_edit.setText("DRAFT")
+    _button(builder, "Back to your models").click()
+    assert (window.current_place(), builder.name_edit.text()) == (("models", "list"), "DRAFT")
+    assert window.focusWidget() is _button(models, "Open model builder")
+    window.go_to("live")
+    window.go_to("models")
+    assert window.current_place() == ("models", "list"), "a later opening is not at the page last shown"
+    _button(listed, "Edit").click()                               # the first row's: the first model's
+    assert (window.current_place(), builder.name_edit.text()) == (("models", "builder"), names[0])
+    window.go_to("home")
+    window.go_to("models")
+    assert window.current_place() == ("models", "builder"), "a later opening is not at the page last shown"
+    judged, deleted = [], []
+    monkeypatch.setattr(window, "_refresh_model_combos", lambda: judged.append(len(rows())))
+    names.append("DUFFING")
+    builder._on_saved("DUFFING")                                  # what the builder's Save calls once it has written
+    assert judged == [3] and rows()[-1] == (["DUFFING"], ["Edit", "Delete"]), "a saved model is not named"
+    monkeypatch.setattr(model_store, "delete_user_model", deleted.append)
+    forget_asked()
+    models._delete_user_model("DUFFING")
+    assert [box.title for box in all_asked()] == ["Delete model"] and (deleted, judged) == ([], [3])
+    choose(monkeypatch, other=True)
+    monkeypatch.setattr(registry, "unregister", lambda name: names.remove(name))
+    models._delete_user_model("DUFFING")
+    assert (deleted, judged) == (["DUFFING"], [3, 2]), "a deleted model is still named"
+    again = build_window()
+    again.go_to("models")
+    assert again.current_place() == ("models", "list"), "the page shown was kept for the next launch"
+
+
+def test_the_builder_sends_a_taken_name_back_to_your_own_models(monkeypatch):
+    """A new model saved under the name of one that exists is refused before anything is written, and the sentence
+    sends the person to Your own models, where the list of models stands."""
+    from core.Helpers import model_store
+    from core.gui.screens.model_builder_screen import ModelBuilderScreen
+    qt_app()
+    saved = []
+    monkeypatch.setattr(model_store, "save_user_model", saved.append)
+    builder = build_part(ModelBuilderScreen)
+    builder.vars_edit.setText("x")
+    builder._set_variables()
+    builder._var_rows[0].drift.setText("-k*x")
+    builder._var_rows[0].noise.setText("d0")
+    builder.name_edit.setText("SHM")                              # a model shipped with PRISM
+    builder._detect_params()
+    builder._save()
+    assert saved == [], "a taken name was written over"
+    said = builder.status.text()
+    assert said.endswith("A model named 'SHM' already exists -- edit it from Your own models or pick another name."), said
 
 
 def test_a_window_restored_off_every_screen_opens_at_its_opening_size_on_the_primary_screen(monkeypatch):

@@ -1,8 +1,8 @@
 """The PRISM main window: the rail down its left edge and, beside it, the page of the part in sight -- Home,
 Parameter inference (the six steps over one session, each a page of its own), Effective temperature (one cell,
-or a sweep study), Live simulation, Reduction map, Records, Your own models (the model builder), Settings and
-Help. Every part is built with the window, and the panels inside them are reused unchanged in behaviour.
-``go_to`` is the one way to move between the parts; the run's state stands at the rail's foot."""
+or a sweep study), Live simulation, Reduction map, Records, Your own models (their list and the model builder),
+Settings and Help. Every part is built with the window, and the panels inside them are reused unchanged in
+behaviour. ``go_to`` is the one way to move between the parts; the run's state stands at the rail's foot."""
 import time
 from datetime import datetime
 
@@ -10,10 +10,8 @@ from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QMainWindow, QMessageBox, QPlainTextEdit,
                                QPushButton, QTabBar, QTextEdit, QToolButton, QWidget)
 
-from core import registry
 from core.artifacts import KIND_DIRS, StoreError, default_store
 from core.config import VALID_MODELS
-from core.Helpers import model_store
 
 from . import chain, design, keys, record_words, settings
 from .panels.base_panel import RUN_STATE, BasePanel
@@ -23,7 +21,7 @@ from .screens.artifact_screen import ArtifactScreen
 from .screens.help_screen import HelpScreen
 from .screens.home_screen import HomeFacts, HomeScreen, RecordRow
 from .screens.inference_screen import InferenceScreen
-from .screens.model_builder_screen import ModelBuilderScreen
+from .screens.models_screen import ModelsScreen
 from .screens.settings_screen import SettingsScreen
 from .screens.shell import Shell, clock_words
 from .screens.temperature_screen import TemperatureScreen
@@ -76,7 +74,7 @@ def _centre_on_primary(widget) -> None:
 
 # the keys of the pages of each part that has several, in their order: a page another key names is refused
 _PAGES = {"temperature": tuple(place.key for place in keys.PAGES["temperature"]),
-          "inference": tuple(place.key for place in keys.STEPS)}
+          "inference": tuple(place.key for place in keys.STEPS), "models": ("list", "builder")}
 
 # Every place but Home stands the same distance in from the rail, from the window's right edge, from its top and
 # from its bottom, to its first frame or its first line: this many pixels at the ordinary text size, scaled with
@@ -208,18 +206,15 @@ class MainWindow(QMainWindow):
         self.artifact_screen = ArtifactScreen()
         current_mode = (appearance.mode() if appearance is not None
                         else settings.get_appearance(settings.settings()))
-        self.settings_screen = SettingsScreen(self.set_appearance_mode, current_mode,
-                                              on_open_builder=self._open_model_builder,
-                                              on_edit_model=self._edit_user_model,
-                                              on_delete_model=self._delete_user_model)
-        # The model builder: reached from the rail's row Your own models and from the Settings
-        # "User-defined models" group; its own Back button returns to Settings.
-        self.model_builder_screen = ModelBuilderScreen(on_saved=self._on_user_models_changed,
-                                                       on_back=self._back_from_builder)
+        self.settings_screen = SettingsScreen(self.set_appearance_mode, current_mode)
+        # Your own models: their list and the model builder, which a saved or deleted model has every list of
+        # models in the panels judge again.
+        self.models_screen = ModelsScreen(self._on_user_models_changed)
+        self.model_builder_screen = self.models_screen.builder
         self.help_screen = HelpScreen()
         parts = {"home": self.home_screen, "inference": self.inference_screen, "temperature": self.fdt_screen,
                  "live": self.simulate_screen, "reduction": self.reduction_screen, "records": self.artifact_screen,
-                 "models": self.model_builder_screen, "settings": self.settings_screen, "help": self.help_screen}
+                 "models": self.models_screen, "settings": self.settings_screen, "help": self.help_screen}
         for place in keys.PARTS:                                     # in the rail's order
             widget = parts[place.key]
             if place.key in _OWN_INSET:                              # the place's margin, less what it stands in
@@ -285,65 +280,11 @@ class MainWindow(QMainWindow):
         if shown is not None:
             shown.set_mode(mode)
 
-    # ── user-defined models (Settings group + builder screen) ─────────────────
-    def _open_model_builder(self):
-        self.model_builder_screen.reset()
-        self.go_to("models")
-
-    def _back_from_builder(self):
-        self.go_to("settings")
-
-    def _tell(self, title: str, text: str, icon) -> None:
-        """One plain box with an Ok button: an INSTANCE dialog shown with .exec().
-
-        Never QMessageBox.warning/information. Those are C++ statics, and the suite's session guard
-        patches the instance method only (tests/conftest.py::_no_modal_dialogs): offscreen a static
-        spins a nested event loop nothing closes, so a test that reaches one stalls instead of
-        failing. Every box in this window now goes through here or is built inline like the
-        confirmation below and the one in closeEvent.
-        """
-        box = QMessageBox(self)
-        box.setIcon(icon)
-        box.setWindowTitle(title)
-        box.setText(text)
-        box.setStandardButtons(QMessageBox.Ok)
-        box.exec()
-
-    def _edit_user_model(self, name: str):
-        try:
-            self.model_builder_screen.load_existing(name)
-        except Exception as e:                       # noqa: BLE001 -- a corrupt file must not crash
-            self._tell("Cannot edit model", f"Could not load '{name}':\n{e}", QMessageBox.Warning)
-            return
-        self.go_to("models")
-
-    def _delete_user_model(self, name: str):
-        if BasePanel._running:
-            self._tell("A task is running",
-                       "Wait for the running task to finish before deleting a model.",
-                       QMessageBox.Information)
-            return
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("Delete model")
-        box.setText(f"Delete the user-defined model '{name}'?")
-        box.setInformativeText("This removes its definition and its generated Bounds/Cells/Units files.")
-        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        box.setDefaultButton(QMessageBox.No)
-        if box.exec() != QMessageBox.Yes:
-            return
-        try:
-            model_store.delete_user_model(name)
-        except Exception as e:                       # noqa: BLE001
-            self._tell("Delete failed", str(e), QMessageBox.Warning)
-            return
-        registry.unregister(name)
-        self._on_user_models_changed()
-
+    # ── models of your own ────────────────────────────────────────────────────
     def _on_user_models_changed(self, _name: str = ""):
-        """After a save/delete: re-sync every model combo + the Settings list."""
+        """After a model of your own was saved or deleted: re-sync every model combo (the list of Your own models
+        has named it already)."""
         self._refresh_model_combos()
-        self.settings_screen.refresh_models()
 
     def _refresh_model_combos(self):
         """Reload every panel's model combo from the live VALID_MODELS list, keeping the selection
