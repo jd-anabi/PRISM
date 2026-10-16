@@ -25,7 +25,7 @@ from ..widgets.adaptive_stack import AdaptiveStack
 
 def _held_ref(wrapper) -> str:
     """How ``session_contents`` names one held artifact: its name in quotes, or ``(unnamed, id
-    <id>)`` -- the wording the Prior, Posterior and Infer tabs' own "ready" lines already use, so the
+    <id>)`` -- the wording the Prior, Training and Inference steps' own "ready" lines already use, so the
     log and the line agree.
 
     ``(unidentified)`` for a stand-in carrying neither. That branch is not defensive padding: the
@@ -107,10 +107,10 @@ class InferenceScreen(QWidget):
 
         NOTHING HERE MAY RAISE. Every field is read through ``getattr``: the gate tests put a bare
         ``object()`` on ``cfg``, ``inf_prior`` and ``posterior``, and this feeds a derived status line
-        on the Config tab, which must never be able to take a tab down through ``refresh_gates()``
+        on the first step, which must never be able to take a step down through ``refresh_gates()``
         (the rule ``_TrainingBudgetMixin._sync_budget`` states for its own three lines).
 
-        The phrases carry no code identifiers and name no control: the Config tab's line and the
+        The phrases carry no code identifiers and name no control: the first step's line and the
         confirmation both quote them verbatim, and each front end says where to look for itself.
         """
         s = self.session
@@ -130,10 +130,10 @@ class InferenceScreen(QWidget):
 
     def new_draft(self, draft):
         """Config applied: replace the WHOLE session (a different model or unit system invalidates
-        every artifact) and repoint the Prior tab's bounds picker at the new model's folder.
+        every artifact) and repoint the Prior step's bounds picker at the new model's folder.
 
         THE DESTRUCTIVE ONE OF THE SCREEN'S TWO ENTRY POINTS, AND THE CONFIRMATION IS NOW THE GUARD.
-        The Config tab asks before it calls here whenever ``session_contents()`` is non-empty,
+        The first step asks before it calls here whenever ``session_contents()`` is non-empty,
         defaulting to keeping the session, so a mis-aimed Apply can no longer drop a prior, a
         posterior and a recorded observation in silence -- which is the half of mixing up replacing
         the session's configuration and installing into it that an operator could not defend
@@ -149,7 +149,7 @@ class InferenceScreen(QWidget):
 
     def install_config(self, cfg):
         """Prior stage: bounds chosen, so the SimConfig now exists. Set it IN PLACE and fan out to
-        the tabs whose pickers/fields depend on it.
+        the steps whose pickers/fields depend on it.
 
         THE IN-PLACE ONE OF THE TWO ENTRY POINTS, and in place BECAUSE OF WHEN IT IS CALLED: the
         Prior stage installs the config as the first step of building the prior, so a new session
@@ -157,7 +157,7 @@ class InferenceScreen(QWidget):
         store -- mid-stage, with nothing to confirm against, because the operator pressed a button
         that promised to build a prior and not to start over. That asymmetry is the difference
         between replacing the session's configuration and installing into it: its destructive twin
-        ``new_draft`` is the one the Config tab confirms, and this one is never confirmed at all.
+        ``new_draft`` is the one the first step confirms, and this one is never confirmed at all.
         """
         self.session.cfg = cfg
         self.infer_panel.on_config_built(cfg)

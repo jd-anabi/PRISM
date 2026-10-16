@@ -1,6 +1,6 @@
 """The inference tabs' "?"-badge help copy, keyed by field. Shared: several keys serve two or
 three tabs (tobs, num_runs, run_size), so there is one table rather than one per tab. Also
-surfaced in Settings -> Help via the inference_tabs module path."""
+listed in Help, through the inference_tabs module path."""
 
 
 # Help text shown by the "?" badge next to each option. Drafted from the code/science; user reviews.

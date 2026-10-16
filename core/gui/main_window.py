@@ -318,7 +318,7 @@ class MainWindow(QMainWindow):
         _refresh_model_combos, which a saved or deleted user model already drives.
 
         Found by TYPE rather than by naming the three attributes (prior_picker, post_picker,
-        obs_picker), so a fourth picker added to a tab is covered by construction.
+        obs_picker), so a fourth picker added to a page is covered by construction.
         StorePicker.refresh re-reads its kind and re-applies its own current key, so a selection that
         still exists survives and one that was just deleted falls back to whatever is current --
         which is the point: restore_key silently does nothing when the saved id has vanished, and that

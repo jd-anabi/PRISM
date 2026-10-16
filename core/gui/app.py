@@ -72,7 +72,7 @@ def build_app(argv=None):
     config.QUIET_SEGMENT_BAR = True
 
     # Register saved user-defined models BEFORE MainWindow: the model combos read VALID_MODELS at
-    # construction. Per-file failures land in registry.load_errors (shown on the Settings screen).
+    # construction. Per-file failures land in registry.load_errors (listed under Your own models).
     registry.load_user_models()
 
     # The artifact store, resolved once: a root that cannot be created fails HERE, at launch, not at
