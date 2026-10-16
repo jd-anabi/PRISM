@@ -478,9 +478,10 @@ def test_homes_records_name_an_unnamed_record_in_local_time_and_leave_out_what_c
 
 def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
     """Each place Home asks for is opened by ``go_to``: a part its own page (Help the help, Your own models the
-    model builder), a page of Effective temperature its tab, a step its page, one that cannot start yet too, and
-    a record's kind the records at that kind. Home reads again each time it is opened, and while it is shown when
-    the steps' states are worked out again and when a run starts or ends; never on its own."""
+    model builder), a page of Effective temperature its page with its name marked, a step its page, one that
+    cannot start yet too, and a record's kind the records at that kind. Home reads again each time it is opened,
+    and while it is shown when the steps' states are worked out again and when a run starts or ends; never on its
+    own."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.session import SbiSession
@@ -494,9 +495,11 @@ def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
             home.navigate.emit("home", None)
             assert stack.currentWidget() is home
         assert (window.part("help"), window.part("models")) == (window.help_screen, window.model_builder_screen)
-        for page, tab in (("sweep", 1), ("one_cell", 0)):
+        for page, panel in (("sweep", 1), ("one_cell", 0)):
             home.navigate.emit("temperature", page)
-            assert (window.current_place(), window.fdt_screen.tabs.currentIndex()) == (("temperature", page), tab)
+            screen = window.fdt_screen
+            assert (window.current_place(), screen.names.current()) == (("temperature", page), page)
+            assert screen.panels()[panel].isVisibleTo(screen) and not screen.panels()[1 - panel].isVisibleTo(screen)
         home.navigate.emit("records", "posterior")
         assert (window.current_place(), window.artifact_screen.kind()) == (("records", None), "posterior")
         home.navigate.emit("inference", "infer")
@@ -584,6 +587,12 @@ def _marked(rail):
             if rail.row(key).property("ring_left")]
 
 
+def _name(screen, page):
+    """The name of the page ``page`` in the row of names over ``screen``'s pages."""
+    from PySide6.QtWidgets import QAbstractButton
+    return next(name for name in screen.names.findChildren(QAbstractButton) if name.place.key == page)
+
+
 def _shown_off_screen(window, width=None, height=None):
     """Show ``window`` where no screen shows it, at a size when one is handed, and let its layouts settle."""
     window.setAttribute(Qt.WA_DontShowOnScreen)
@@ -642,9 +651,9 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     before it returns, once a call, the same place too. Parameter inference opened with no step shows the step in
     hand the first time and the step last shown after that; a step that cannot start yet opens too, and the rail
     marks it. A part the window does not have, or a page its part does not have, is a mistake of the caller's,
-    refused before anything moves. The gates move no step and say nothing. While the two temperature pages are
-    tabs, a change of tab in the part in sight is marked and said as a move; a change in a part out of sight is
-    not."""
+    refused before anything moves. The gates move no step and say nothing. A page of Effective temperature a
+    person chooses by its name is said as a move, the part's row marked; a page shown out of sight by anything
+    but ``go_to`` is not said."""
     from core.gui.session import SbiSession
     qt_app()
     window = build_window()
@@ -667,14 +676,12 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     window.go_to("temperature", "sweep")
     window.go_to("temperature", "sweep")
     assert said[-2:] == [("temperature", "sweep", True, ["temperature"])] * 2
-    assert window.fdt_screen.tabs.currentIndex() == 1 and len(said) == 7
+    assert window.fdt_screen.current_page() == "sweep" and len(said) == 7
     with pytest.raises(KeyError):
         window.go_to("nowhere")
-    with pytest.raises(KeyError):
-        window.go_to("inference", "nowhere")
     assert (window.current_place(), _marked(rail), len(said)) == (("temperature", "sweep"), ["temperature"], 7), (
-        "a page its part does not have moved the window")
-    window.fdt_screen.tabs.setCurrentIndex(0)                     # its own tab bar, while it is in sight
+        "a part the window does not have moved the window")
+    _name(window.fdt_screen, "one_cell").click()                  # its own row of names, while it is in sight
     assert said[-1] == ("temperature", "one_cell", True, ["temperature"]) and len(said) == 8
     window.go_to("inference", "prior")
     inference.session = SbiSession()
@@ -682,30 +689,35 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     assert (said[-1], len(said), window.current_place()) == (("inference", "prior", True, ["prior"]), 9,
                                                              ("inference", "prior"))
     window.go_to("records")
-    window.fdt_screen.tabs.setCurrentIndex(1)                     # out of sight: nothing is said or marked
+    window.fdt_screen.show_page("sweep")                          # out of sight: nothing is said or marked
     assert len(said) == 10 and _marked(rail) == ["records"]
+    for part in ("inference", "temperature"):
+        with pytest.raises(KeyError):
+            window.go_to(part, "nowhere")
+    assert (window.current_place(), _marked(rail), len(said)) == (("records", None), ["records"], 10), (
+        "a page its part does not have moved the window")
 
 
 def test_go_to_gives_the_page_the_keyboard_and_escape_in_the_rail_gives_it_back():
     """After a move the keyboard is on the page's first setting: the control a page names to start at (Home's
     main button, Help's text), or else its first control that is not a button that does something, nor a tab
-    bar, nor an area that only shows or scrolls (each step and section's first setting, the records' kind, the
-    model's name, the first appearance). Escape in the rail, and Enter on a row of the rail, give the page the
-    keyboard the same way."""
+    bar or a row of page names, nor an area that only shows or scrolls (each step and each page's first setting,
+    the records' kind, the model's name, the first appearance). Escape in the rail, and Enter on a row of the
+    rail, give the page the keyboard the same way."""
     from PySide6.QtWidgets import QComboBox
     qt_app()
     window = build_window()
     rail = window.shell.rail
     first = {"home": window.home_screen.first_focus(), "inference": window.inference_screen.config_panel.model_combo,
              "temperature": window.fdt_screen.panels()[0].model_combo,
-             "live": window.simulate_screen.panels()[0].model_combo, "records": window.artifact_screen.kind_combo,
+             "live": window.simulate_screen.model_combo, "records": window.artifact_screen.kind_combo,
              "models": window.model_builder_screen.name_edit, "settings": window.settings_screen._radios["system"],
              "help": window.help_screen.viewer}
     for place in keys.PARTS:
         window.go_to(place.key)
         held = window.focusWidget()
         if place.key == "reduction":
-            controls = window.reduction_screen.panels()[0].controls
+            controls = window.reduction_screen.controls
             assert isinstance(held, QComboBox) and controls.isAncestorOf(held), held
         else:
             assert held is first[place.key], (place.key, held)
@@ -790,7 +802,7 @@ def test_a_click_on_a_rail_row_gives_the_page_no_keyboard_whatever_held_it_and_a
         marked = click("live")
         assert (window.focusWidget(), follower.target()) == (marked, None), "a ring was left in the rail"
         QTest.keyClick(window.focusWidget(), Qt.Key_Return)
-        first = window.simulate_screen.panels()[0].model_combo
+        first = window.simulate_screen.model_combo
         assert (window.current_place(), window.focusWidget(), follower.target()) == (("live", None), first, first)
         rail.take_keyboard()
         marked = click("records")
@@ -847,7 +859,7 @@ def test_a_greyed_control_is_passed_over_for_the_next_setting():
     """A page whose first setting is greyed gives the keyboard to its next setting, not to nothing."""
     qt_app()
     window = build_window()
-    panel = window.simulate_screen.panels()[0]
+    panel = window.simulate_screen
     panel.model_combo.setEnabled(False)
     window.go_to("live")
     held = window.focusWidget()
@@ -1054,7 +1066,7 @@ def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowh
     for panel, place in ((window.panel(CrossValPanel), ("temperature", "sweep")),
                          (window.inference_screen.validate_panel, ("inference", "checks"))):
         window.go_to("home")
-        window.fdt_screen.tabs.setCurrentIndex(0)
+        window.fdt_screen.show_page("one_cell")
         panel._set_busy(True)
         try:
             QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
@@ -1075,16 +1087,17 @@ def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowh
 
 
 def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
-    """A live run is said at the foot alone: no row of the rail is marked for it or carries a mark of it, no tab
-    does, and no row of Home's three tables, which Home reads in sight as the run starts; the tabs keep their
-    words. Nothing is disabled by it: every part and every step still opens, and a section's other tab can still
-    be chosen."""
+    """A live run is said at the foot alone: no row of the rail is marked for it or carries a mark of it, no page
+    name does, and no row of Home's three tables, which Home reads in sight as the run starts; the page names keep
+    their words. Nothing is disabled by it: every part and every step still opens, and Effective temperature's
+    other page can still be chosen by its name."""
+    from PySide6.QtWidgets import QAbstractButton
     from core.gui.panels.crossval_panel import CrossValPanel
     qt_app()
     window = build_window()
     rail, home = window.shell.rail, window.home_screen
-    fdt = window.fdt_screen.tabs
-    tab_words = [fdt.tabText(n) for n in range(fdt.count())]
+    names = window.fdt_screen.names.findChildren(QAbstractButton)
+    page_words = [name.text() for name in names]
     rows = [place.key for place in keys.PARTS] + [step.key for step in keys.STEPS]
 
     def seen():
@@ -1099,7 +1112,7 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
         try:
             assert home.next_heading.label.text() == "Next: nothing until the run ends", "Home did not read"
             assert seen() == before, "a row carries a mark of the run"
-            assert [fdt.tabText(n) for n in range(fdt.count())] == tab_words
+            assert [name.text() for name in names] == page_words
             for place in keys.PARTS:
                 window.go_to(place.key)
                 assert window.current_place()[0] == place.key and rail.row(place.key).isEnabled()
@@ -1107,7 +1120,8 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
                 window.go_to("inference", step.key)
                 assert window.current_place() == ("inference", step.key) and rail.row(step.key).isEnabled()
             window.go_to("temperature", "one_cell")
-            assert fdt.isTabEnabled(0) and fdt.currentIndex() == 0
+            _name(window.fdt_screen, "sweep").click()
+            assert window.current_place() == ("temperature", "sweep") and all(name.isEnabled() for name in names)
         finally:
             panel._set_busy(False)
 
@@ -1382,3 +1396,80 @@ def test_a_window_restored_off_every_screen_opens_at_its_opening_size_on_the_pri
     centre = QGuiApplication.primaryScreen().availableGeometry().center()
     assert (window.frameGeometry().center() - centre).manhattanLength() <= 1
     assert isinstance(remembered.value("window/geometry"), QByteArray)
+
+
+def test_effective_temperature_opens_on_one_cell_and_its_names_choose_the_page():
+    """Effective temperature opens on One cell, its name marked in the row over the page. A click on Sweep study
+    shows that page, Left on the row shows One cell again and Right Sweep study, each said as a move. Opened again
+    in the launch, the part shows the page last shown; the page shown is not kept, so the next launch opens on One
+    cell again."""
+    qt_app()
+    window = build_window()
+    screen = window.fdt_screen
+    said = []
+    window.place_changed.connect(lambda part, page: said.append((part, page)))
+    window.go_to("temperature")
+    assert (window.current_place(), screen.names.current()) == (("temperature", "one_cell"), "one_cell")
+    assert screen.panels()[0].isVisibleTo(screen) and not screen.panels()[1].isVisibleTo(screen)
+    _name(screen, "sweep").click()
+    assert (window.current_place(), screen.names.current(), said[-1]) == (
+        ("temperature", "sweep"), "sweep", ("temperature", "sweep"))
+    assert screen.panels()[1].isVisibleTo(screen) and not screen.panels()[0].isVisibleTo(screen)
+    QTest.keyClick(_name(screen, "sweep"), Qt.Key_Left)
+    assert (window.current_place(), said[-1]) == (("temperature", "one_cell"), ("temperature", "one_cell"))
+    QTest.keyClick(_name(screen, "one_cell"), Qt.Key_Right)
+    assert (window.current_place(), said[-1]) == (("temperature", "sweep"), ("temperature", "sweep"))
+    window.go_to("live")
+    window.go_to("temperature")
+    assert window.current_place() == ("temperature", "sweep"), "a later opening is not at the page last shown"
+    window.close()                                                # closing writes what the window keeps
+    again = build_window()
+    again.go_to("temperature")
+    assert again.current_place() == ("temperature", "one_cell"), "the page shown was kept for the next launch"
+
+
+def _inside(widget, part):
+    """What ``widget``'s own layout holds, its items' rectangles taken together, in the part's coordinates."""
+    from PySide6.QtCore import QRect
+    layout, rect = widget.layout(), QRect()
+    for number in range(layout.count()):
+        item = layout.itemAt(number)
+        if not item.isEmpty():
+            rect = rect.united(item.geometry())
+    return QRect(widget.mapTo(part, rect.topLeft()), rect.size())
+
+
+def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windows_edges():
+    """Every place but Home stands its first frame or its first line twelve pixels in from the rail, from the
+    window's right edge, from its top and from its bottom, at the ordinary text size, and as much more as a larger
+    text size scales it: a step and a panel by the frame their own layout holds, Effective temperature's row of
+    page names too, lined up with the frame under it, and every other place by what its own layout holds. Home
+    keeps the look's page margin, and the window gives it none."""
+    from PySide6.QtCore import QMargins, QRect
+    from tests._look_helpers import text_size
+    qt_app()
+
+    def margins(window, part):
+        page = window.part(part)
+        if part == "inference":
+            found = [_inside(page.pages.currentWidget(), page)]
+        elif part == "temperature":
+            found = [QRect(page.names.mapTo(page, QPoint(0, 0)), page.names.size()), _inside(page.panels()[0], page)]
+        else:
+            found = [_inside(page, page)]
+        return (min(rect.left() for rect in found), min(rect.top() for rect in found),
+                page.width() - max(rect.right() + 1 for rect in found),
+                page.height() - max(rect.bottom() + 1 for rect in found))
+
+    for factor in (1.0, 1.5):
+        with text_size(factor):
+            window = build_window()
+            try:
+                _shown_off_screen(window, 1300, 820)
+                for place in keys.PARTS[1:]:
+                    window.go_to(place.key)
+                    QApplication.processEvents()
+                    assert margins(window, place.key) == (design.scaled(12),) * 4, (factor, place.key)
+                assert window.home_screen.contentsMargins() == QMargins(0, 0, 0, 0)
+            finally:
+                window.hide()

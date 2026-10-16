@@ -17,8 +17,6 @@ from core.Helpers import model_store
 
 from . import chain, design, keys, record_words, settings
 from .panels.base_panel import RUN_STATE, BasePanel
-from .panels.crossval_panel import CrossValPanel
-from .panels.fdt_panel import FdtPanel
 from .panels.reduction_panel import ReductionPanel
 from .panels.simulate_panel import SimulatePanel
 from .screens.artifact_screen import ArtifactScreen
@@ -26,10 +24,11 @@ from .screens.help_screen import HelpScreen
 from .screens.home_screen import HomeFacts, HomeScreen, RecordRow
 from .screens.inference_screen import InferenceScreen
 from .screens.model_builder_screen import ModelBuilderScreen
-from .screens.section_screen import SectionScreen
 from .screens.settings_screen import SettingsScreen
 from .screens.shell import Shell, clock_words
+from .screens.temperature_screen import TemperatureScreen
 from .widgets.artifact_picker import StorePicker
+from .widgets.page_names import PageNames
 
 
 # ── screen-geometry guards ────────────────────────────────────────────────────
@@ -79,12 +78,23 @@ def _centre_on_primary(widget) -> None:
 _PAGES = {"temperature": tuple(place.key for place in keys.PAGES["temperature"]),
           "inference": tuple(place.key for place in keys.STEPS)}
 
+# Every place but Home stands the same distance in from the rail, from the window's right edge, from its top and
+# from its bottom, to its first frame or its first line: this many pixels at the ordinary text size, scaled with
+# it. Home keeps the look's own page margin.
+_PLACE_MARGIN = 12
+# how far in a part's own first frame or first line stands already, at every text size: a panel's frame 6, the
+# toolkit's own margin round a layout that sets none 9, a frame at the part's very edge 0. The window gives each
+# part the rest of the place's margin.
+_OWN_INSET = {"inference": 6, "temperature": 6, "live": 6, "reduction": 6, "records": 9, "models": 0, "settings": 0,
+              "help": 9}
+
 
 def _is_setting(widget: QWidget) -> bool:
     """Whether ``widget`` is something a person sets: not a button that does something when pressed, nor a tab
-    bar (a row of such buttons), nor an area that only shows or scrolls what stands in it -- a scrolling area, a
-    plot's view, a text that can only be read. A list and a text one types in are settings."""
-    if isinstance(widget, (QPushButton, QToolButton, QTabBar)):
+    bar or a row of page names (a row of such buttons), nor an area that only shows or scrolls what stands in it
+    -- a scrolling area, a plot's view, a text that can only be read. A list and a text one types in are
+    settings."""
+    if isinstance(widget, (QPushButton, QToolButton, QTabBar)) or isinstance(widget.parentWidget(), PageNames):
         return False
     if isinstance(widget, QAbstractScrollArea):
         typed_in = isinstance(widget, (QPlainTextEdit, QTextEdit)) and not widget.isReadOnly()
@@ -174,21 +184,18 @@ class MainWindow(QMainWindow):
         self.shell = Shell()
         self.setCentralWidget(self.shell)
 
-        # Section screens (built once; their panels are the existing ones, reused verbatim).
-        self.reduction_screen = SectionScreen(
-            "Reduction Map", [("NWK → Hopf reduction map", ReductionPanel())])
-        self.fdt_screen = SectionScreen(
-            "FDT Analysis",
-            [("FDT analysis", FdtPanel()), ("Sweep study cross-validation", CrossValPanel())])
+        # The parts that hold today's panels, reused verbatim: the Reduction map and Live simulation are their
+        # panels themselves, Effective temperature chooses between its two by name, and Parameter inference
+        # holds its six steps.
+        self.reduction_screen = ReductionPanel()
+        self.fdt_screen = TemperatureScreen()
         self.inference_screen = InferenceScreen()
-        self.simulate_screen = SectionScreen(
-            "Simulate", [("Live simulation", SimulatePanel())])
+        self.simulate_screen = SimulatePanel()
 
         # Where each panel lives: its part, and its page or step. The foot names a running panel's place
         # from this and goes there, and Home reads where a run is live. A panel that is not here (the bare
         # run host a test builds) is named by no place and leads nowhere.
-        self._places = {self.reduction_screen.panels()[0]: ("reduction", None),
-                        self.simulate_screen.panels()[0]: ("live", None)}
+        self._places = {self.reduction_screen: ("reduction", None), self.simulate_screen: ("live", None)}
         for part, screen in (("temperature", self.fdt_screen), ("inference", self.inference_screen)):
             for panel, page in zip(screen.panels(), _PAGES[part]):
                 self._places[panel] = (part, page)
@@ -214,19 +221,22 @@ class MainWindow(QMainWindow):
                  "live": self.simulate_screen, "reduction": self.reduction_screen, "records": self.artifact_screen,
                  "models": self.model_builder_screen, "settings": self.settings_screen, "help": self.help_screen}
         for place in keys.PARTS:                                     # in the rail's order
-            self.shell.add_part(place.key, parts[place.key])
+            widget = parts[place.key]
+            if place.key in _OWN_INSET:                              # the place's margin, less what it stands in
+                margin = design.scaled(_PLACE_MARGIN) - _OWN_INSET[place.key]
+                widget.setContentsMargins(margin, margin, margin, margin)
+            self.shell.add_part(place.key, widget)
 
         # Every way to move is go_to: a row of the rail, Home's buttons and rows, the run's foot. Each handler
         # is a bound method of this window, so that nothing holds the window once it is deleted.
-        self._moving = False                     # a move under way says itself once, when it is done
         self._inference_opened = False           # Parameter inference opens at the step in hand the first time
         self.home_screen.navigate.connect(self.go_to)
         self.shell.rail.opened.connect(self._rail_opened)
         self.shell.rail.left.connect(self._rail_left)
         self.shell.rail.foot.clicked.connect(self.go_to_run)
-        # Until the two temperature pages stand on pages of their own, their tab bar is a second way between
-        # them: a change of tab there is said as a move.
-        self.fdt_screen.tabs.currentChanged.connect(self._tab_changed)
+        # A page of Effective temperature chosen by its name is said as a move: connected after the part's own
+        # handler, which shows the page.
+        self.fdt_screen.names.chosen.connect(self._page_chosen)
         # The six steps' states go to the rail and to Home each time they are worked out again; a change of
         # the store works out the gates and the states again, after the pickers have listed it.
         self.inference_screen.states_changed.connect(self._states_changed)
@@ -378,8 +388,8 @@ class MainWindow(QMainWindow):
                 picker.refresh()
 
     def _all_panels(self):
-        return (self.reduction_screen.panels() + self.fdt_screen.panels()
-                + self.inference_screen.panels() + self.simulate_screen.panels())
+        return ([self.reduction_screen] + self.fdt_screen.panels() + self.inference_screen.panels()
+                + [self.simulate_screen])
 
     # ── Home ──────────────────────────────────────────────────────────────────
     def _home_facts(self) -> HomeFacts:
@@ -411,10 +421,7 @@ class MainWindow(QMainWindow):
         shown = self.shell.stack.currentWidget()
         part = next(place.key for place in keys.PARTS if self.shell.part_widget(place.key) is shown)
         current = getattr(shown, "current_page", None)
-        if callable(current):
-            return part, current()
-        pages = _PAGES.get(part)                    # the temperature pages, tabs of their screen until they are pages
-        return part, (pages[shown.tabs.currentIndex()] if pages else None)
+        return part, (current() if callable(current) else None)
 
     def go_to(self, part: str, page: str | None = None) -> None:
         """Show the part ``part`` and, when one is named, its page: a step of Parameter inference, a page of
@@ -453,17 +460,10 @@ class MainWindow(QMainWindow):
                 self.home_screen.refresh()           # in sight already: read now (nothing while the window is hidden)
             else:
                 self.home_screen.mark_stale()        # read as it is shown
-        self._moving = True
-        try:
-            self.shell.show_part(part)
-            if page is not None:
-                show = getattr(widget, "show_page", None)
-                if callable(show):
-                    show(page)
-                elif pages:                         # the temperature pages, tabs of their screen until they are pages
-                    widget.tabs.setCurrentIndex(pages.index(page))
-        finally:
-            self._moving = False
+        self.shell.show_part(part)
+        show = getattr(widget, "show_page", None)
+        if page is not None and callable(show):
+            show(page)
         now, shown = self.current_place()
         self.shell.rail.set_place(now, shown if now == "inference" else None)
         if keyboard is not None:
@@ -501,16 +501,10 @@ class MainWindow(QMainWindow):
         """Escape in the rail: the page in sight takes the keyboard."""
         self._give_keyboard(self.shell.stack.currentWidget(), Qt.ShortcutFocusReason)
 
-    def _tab_changed(self, _index: int) -> None:
-        """A tab of Effective temperature changed by its own bar: while that part is in sight the rail marks it
-        and the move is said, as go_to says one. Inside go_to the move is said once, at its end."""
-        if self._moving:
-            return
-        part, page = self.current_place()
-        if getattr(self.shell.part_widget(part), "tabs", None) is not self.sender():
-            return
-        self.shell.rail.set_place(part)
-        self.place_changed.emit(part, page)
+    def _page_chosen(self, page: str) -> None:
+        """A person chose a page of Effective temperature by its name, which only a part in sight offers: the move
+        is said, as go_to says one, and the rail keeps the part marked."""
+        self.place_changed.emit("temperature", page)
 
     # ── the live run, at the foot of the rail ─────────────────────────────────
     def _on_run_state(self, panel) -> None:

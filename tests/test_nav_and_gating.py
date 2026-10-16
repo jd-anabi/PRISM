@@ -198,7 +198,7 @@ def test_an_unparseable_cell_does_not_brick_the_gui():
         # to the alphabetically-first entry (the probe), regardless of the machine's state.
         from core.gui.panels.crossval_panel import CrossValPanel
         window = build_window()                  # must not raise
-        xval = window.panel(CrossValPanel)       # CrossVal now lives inside the FDT Analysis section
+        xval = window.panel(CrossValPanel)       # CrossVal is Effective temperature's page Sweep study
         assert "could not read cell" in xval.cell_values.text().lower(), \
             f"the bad cell should degrade the prefill label, got: {xval.cell_values.text()!r}"
     finally:
