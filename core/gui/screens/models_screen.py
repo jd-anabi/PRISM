@@ -134,6 +134,9 @@ class ModelsScreen(QWidget):
             return
         registry.unregister(name)
         self.refresh_models()
+        # The row whose Delete was pressed is gone with the keyboard it held: the list's first stop takes it, as
+        # after a move of this part, rather than whatever the toolkit finds next.
+        self.first_focus().setFocus(Qt.OtherFocusReason)
         self._on_saved("")
 
     def refresh_models(self) -> None:

@@ -1507,6 +1507,38 @@ def test_the_builder_sends_a_taken_name_back_to_your_own_models(monkeypatch):
     assert said.endswith("A model named 'SHM' already exists -- edit it from Your own models or pick another name."), said
 
 
+def test_a_delete_leaves_the_keyboard_on_the_lists_first_stop(monkeypatch):
+    """A model deleted from the list takes its row away, and with it the Delete that was pressed and held the
+    keyboard: the keyboard goes to the list's first stop, the button that opens the builder, given as a move of
+    the part gives it."""
+    from PySide6.QtWidgets import QWidget
+    from core import registry
+    from core.Helpers import model_store
+    from tests._fixtures import choose
+    qt_app()
+    names = ["SHM", "SHM2"]                                       # the two shipped with PRISM
+    monkeypatch.setattr(registry, "user_model_names", lambda: list(names))
+    monkeypatch.setattr(registry, "load_errors", [])
+    monkeypatch.setattr(model_store, "delete_user_model", lambda name: None)
+    monkeypatch.setattr(registry, "unregister", names.remove)
+    window = build_window()
+    window.go_to("models")
+    opener = _button(window.models_screen, "Open model builder")
+    pressed = _button(window.models_screen, "Delete")             # the first row's: SHM's
+    given, kept = [], QWidget.setFocus
+
+    def set_focus(widget, *reason):
+        given.append((widget, reason))
+        return kept(widget, *reason)
+
+    monkeypatch.setattr(QWidget, "setFocus", set_focus)
+    pressed.setFocus(Qt.OtherFocusReason)                         # a click on it gives it the keyboard
+    choose(monkeypatch, other=True)
+    pressed.click()
+    assert (names, given[-1], window.focusWidget()) == (["SHM2"], (opener, (Qt.OtherFocusReason,)), opener), (
+        "the keyboard did not go to the list's first stop after a delete")
+
+
 def test_a_window_restored_off_every_screen_opens_at_its_opening_size_on_the_primary_screen(monkeypatch):
     """A saved geometry that restores where no screen shows it (saved on a screen no longer attached) is set aside:
     the window opens at its opening size, in the middle of the primary screen."""
