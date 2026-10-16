@@ -1,6 +1,15 @@
 # PRISM — state
 
-**Last updated:** 2026-10-15, early morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 3 AND IS HANDED TO A NEW
+**Last updated:** 2026-10-15, evening (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 5 AND IS HANDED TO A NEW
+CHAT AT THE OWNER'S WORD; it ran in a session started from the owner's pasted prompt
+`docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-4.md`: TASKS 4 AND 5 ARE COMPLETE
+(`c66fde9`..`827ff3d`, each after one fix round, its review clean and its gate green; the last gate, on `827ff3d`:
+1522 passed, 4 skipped, 5 deselected); departure 82 added, 63 amended, 74 amended and put back; the weekly bar at
+96 % (the owner: "I can buy more credits if the usage limit is hit"). NEXT, IN A NEW CHAT THE OWNER STARTS WHEN
+THEY CHOOSE: Task 6 (every place without a tab bar), from
+`docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-6.md`; the paragraph "THE BUILD OF STAGE 2,
+TASKS 4 AND 5" below is this session's record. What follows in this parenthesis is the head as the early morning
+of 15 October left it: 2026-10-15, early morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 3 AND IS HANDED TO A NEW
 CHAT; it ran in a session started from the chat of 14 October with the owner's pasted prompt
 `docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-build.md`: TASK 0 (no commit) AND TASKS 1, 2 AND 3 ARE
 COMPLETE (`0db3980`..`b9efe89`, each building task's review clean after one fix round and its gate green; the last gate,
@@ -75,6 +84,67 @@ the build's state stands in four paragraphs, each as it was written on its date 
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**THE BUILD OF STAGE 2, TASKS 4 AND 5 (2026-10-15; a session started from the owner's pasted prompt
+`docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-4.md`; the ledger's entries from "NEW CHAT
+2026-10-15 (morning)" on have every figure and ruling).** At the start (09:42): the tree clean at `3a1944c`, no python
+alive, the card at the desktop's share; the usage card's weekly bar at 82 % (89 % after Task 4, 96 % at the
+hand-over; the week resets on the evening of 17 October). The owner, asked in the afternoon: "I can buy more credits if
+the usage limit is hit, do not worry about that", and, asked whether to stop at 95 % after Task 5: "You give me the
+prompt and update all the documentation for task 6 and I can begin it in another chat if I decide to work over the
+weekend". **Task 4, a page's small form and Home** (`c66fde9`, `c4fd4bd`, then fix round 1 `6482b9d`..`ffe1780`): the
+two layout thresholds held to the screen (`design.set_room`, `small_below`, `two_columns_from`; the window hands the
+look its room when it sizes itself; the room put back after every test and by `whole_program()`, the let-go fixture
+naming the room's so the windows go under the test's own room); a page's adders give what they add the form in force;
+Home REWRITTEN as the status page (the next step with one main button, the steps table, the parts of PRISM, the five
+newest records; on a computer where nothing exists "What do you want to do?" with four choices), mapped onto today's
+stack by a one-task adapter; the greeting and the tiles gone; the new suite `tests/test_shell.py`. Prepared by one
+skeptic (113 faults; the copy's gate 1497); its six points ruled (the room fixture's order the reverse of the carried
+words; two simulation sets of one prior reading alike carried to Records; the records below the window's foot built as
+the design has it and kept for the owner; **departure 82**: the first opening's sentence beside "Read what each part is
+for" reads "A short section per part." until the glossary). The review: seat one clean; seat two (every other place
+pixel-identical, 78 of 78) found that after a change of appearance the ruled table painted in a font it had not measured
+(the Made column lost its last digit) and that a long record name was cut mid-letter; seat three, four test gaps
+(when Home reads in the window, the tables' keys, the records' guards). Fix round: the table paints in the fonts it
+measured; a word wider than its column breaks after an underscore, slash, backslash or full stop, else anywhere, drawn
+whole; a measurement's kind word on two lines; "Simulation set for unnamed prior, …"; the tests. **Task 5, the rail
+mounted** (`0aa9fd7`, `ef630f5`, then fix round 1 `062ff4c`..`827ff3d`): `core/gui/screens/shell.py` (`Shell`, `clock_words`),
+`core/gui/screens/help_screen.py`; `MainWindow.go_to` the one way to move (it shows the part, its page, marks the rail,
+says so, places the keyboard on the page's first setting); the chain in the rail from `InferenceScreen.states_changed`
+(the gates first, then the states; a rename by a Save box and a store change recompute them); the foot: "Nothing is
+running", or "Running: <part or step>" with "m:ss so far. Settings are locked." ticking while a run is live; the old
+header, back arrow, gear, menu and run slot gone (`nav_shell.py` deleted); the sheet 87 rules to 80, interim selectors
+46 to 38. Prepared by a reader (sixteen open points, ruled by the controller in `stage-2/briefs/task-05-rulings.md`) and
+a skeptic (44 faults; the copy's gate 1513; at the smallest window no control cut that today's window does not cut);
+**departure 63 amended** (the keyboard's fallback is a page's first SETTING, not its log pane); departure 74 amended and
+PUT BACK the same day (the controller's ruling to hold the two-column threshold to the page's middle set Home in two
+columns too narrow for its words at 150 % on a small screen; seat two found it by drawing). The review: all three seats
+found that a click on a rail row was taken for a key press (the window read where the keyboard was, not what pressed the
+row: at launch the first click gave the page the keyboard and a ring); seat three, a step pushed out of view in a low rail
+at 150 % and seven test gaps. Fix round: the rail says how a row was opened (`Rail.opened_by_key()`, a registry
+addition); the threshold back to the screen's width; each row laid out before the list; an unknown page refused before
+anything moves; the tests. **Gates:** green on `c4fd4bd` (1497, 15:00), `ffe1780` (1503, 14:54), `ef630f5` (1513,
+25:14, three readers beside it), `827ff3d` (1522, 25:24, near twice the quiet times with almost nothing beside it), each with 4 skipped and 5 deselected, none a quiet-machine time; the
+real-screen run after Task 4: 4 passed; the real `Artifacts/` (428) unchanged after every gate; the real `PRISM.ini`
+the same bytes throughout, but written at 09:41:57 on 15 October before the session's first command, while nothing of
+the build ran, thirteen seconds after the owner's push of `3a1944c` (09:41:44; not explained; told to the owner); the
+owner had pushed up to `3a1944c`, so the sixteen commits `65e94d3`..`827ff3d` are unpushed. **For the owner at the exit, new:** Home's records
+below the window's foot on a small screen or at a large text size, against the records under the steps (pictures
+`stage-2/pictures/task-04-prep/`); row 82's sentence; a measurement's kind word on two lines; the small letters of
+"unnamed prior"; "All records" opening the last kind chosen; Enter not pressing Home's buttons; a mouse press on Home's
+buttons or the foot ringing a typed field; at the smallest window Live simulation and Reduction map scrolling sideways
+as today, the live view's title and Records' Created column cut beside the rail; a page whose settings are all locked
+during a run giving the keyboard to nothing (unless Task 7 cures it). **Carried** (the ledger has each, gathered at
+Task 5's close in one line "CARRIED to Task 6"): to Task 6, today's headings and tab bars flush against the rail (the
+old header's 10 px frame gone), Your own models opening the builder still editing the last model, until the tab bars
+go the tab change that marks the rail (replaced by `show_step`), the unknown page's test leg kept in the rewrite of
+`_move`, the Help test's line that compares with Settings' viewer, the minors each fix skeptic left; to Task 7, the
+locked page's keyboard and, as before, a deleted or half-built panel leaving the panel set; to Task 8, a new branch of the rule modules extends the import check's fresh scripts; to Task 10, the lock and the listener released by `whole_program()`. **Cost in background agents:** Task 4 about 3.1 million tokens, Task 5 about
+4.0 million; the weekly bar went from 82 % to 96 %. **HANDED TO A NEW CHAT** after Task 5, at the owner's word,
+from `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-6.md` (checked by one reader on sonnet,
+13 findings, all folded: `stage-2/exit/handover-2026-10-15-evening-check.md`); the prompt adds, as this session's
+reading and not the plan's, the stage's last review (three readers, one fix wave) before the exit, since the reviews
+deferred minors to it; nothing running at the hand-over.
 
 **THE BUILD OF STAGE 2 (2026-10-14, late afternoon, to 2026-10-15; a session started from the chat of 14 October with
 the owner's pasted prompt `docs/superpowers/prompts/2026-10-14-window-redesign-stage-2-build.md`; the ledger's entries
