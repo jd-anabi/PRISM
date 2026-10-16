@@ -14,6 +14,7 @@ from core.refusals import Refusal
 from .. import fields as gui_fields
 from ..design import CONTROLS_MIN_W, DEFAULT_RESULTS_SPLIT, DEFAULT_SPLIT
 from ..plot_watcher import NewPngWatcher
+from ..reported import reported
 from ..streams import CancelToken
 from ..widgets.figure_stack import FigureStack
 from ..widgets.log_pane import LogPane
@@ -84,6 +85,24 @@ class _RunState(QObject):
 RUN_STATE = _RunState()
 
 
+class _Column(QVBoxLayout):
+    """The column of a panel's controls, laid from its top.
+
+    A layout held to its top is laid out no taller than its size hint, and the hint of a line that wraps is
+    worked out for a width other than the column's: a column holding such a line was given less height than
+    its words take at its width, and its lines were drawn over one another. The hint asked for here is never
+    less than the column's height at its narrowest, the most its lines can take, so the column is laid at its
+    height for the width it has. A column holding something that grows is laid over all its room, as before.
+    """
+
+    @reported(QVBoxLayout.sizeHint)
+    def sizeHint(self):
+        hint = super().sizeHint()
+        if self.hasHeightForWidth():
+            hint.setHeight(max(hint.height(), self.heightForWidth(self.minimumSize().width())))
+        return hint
+
+
 class BasePanel(QWidget):
     """Shared scaffolding for every run-a-thing panel: a controls column, a results column, and
     ``dispatch()`` to run work on a background thread with its output wired to both.
@@ -126,7 +145,7 @@ class BasePanel(QWidget):
 
         # Left: subclasses fill self.controls (inside a scroll area so long forms stay usable).
         self.controls = QWidget()
-        self.controls_layout = QVBoxLayout(self.controls)
+        self.controls_layout = _Column(self.controls)
         self.controls_layout.setAlignment(Qt.AlignTop)
         # Kept on self so save_layout/restore_layout can reach them (both used to be locals, which is
         # why nothing could persist or even inspect the splitter).

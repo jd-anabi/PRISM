@@ -1585,3 +1585,60 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
                 assert window.home_screen.contentsMargins() == QMargins(0, 0, 0, 0)
             finally:
                 window.hide()
+
+
+def test_a_panels_column_lays_each_item_at_its_height_for_the_columns_width():
+    """In the column of a panel's controls -- each of the six steps, Effective temperature's two pages, Live
+    simulation and the Reduction map -- no line that wraps is drawn shorter than its words take at its width, on
+    an empty session and with a configuration made from the shipped Nadrowski bounds; and in a column where
+    nothing grows, each item stands at its own height for the column's width, what the column has to spare left
+    under its last item."""
+    from PySide6.QtWidgets import QLabel
+    from core import config
+    qt_app()
+    window = build_window()
+    inference = window.inference_screen
+    panels = [("inference", step.key, panel) for step, panel in zip(keys.STEPS, inference.panels())]
+    panels += [("temperature", page.key, panel)
+               for page, panel in zip(keys.PAGES["temperature"], window.fdt_screen.panels())]
+    panels += [("live", None, window.simulate_screen), ("reduction", None, window.reduction_screen)]
+
+    def named(widget):
+        """A group's title, or the kind of a widget that has none."""
+        title = getattr(widget, "title", None)
+        return title() if callable(title) else type(widget).__name__
+
+    def wrong(panel):
+        """The wrapped lines of the column drawn shorter than their words take, and the items of a column where
+        nothing grows that stand at another height than their own for the column's width."""
+        column = panel.controls_layout
+        short = [label.text()[:30] for label in panel.controls.findChildren(QLabel)
+                 if label.isVisibleTo(panel) and label.wordWrap() and label.text()
+                 and label.height() < label.heightForWidth(label.width())]
+        loose = []
+        if not column.expandingDirections() & Qt.Vertical:
+            for item in (column.itemAt(number) for number in range(column.count())):
+                width, height = item.geometry().width(), item.geometry().height()
+                own = item.heightForWidth(width) if item.hasHeightForWidth() else item.sizeHint().height()
+                if not item.isEmpty() and height != own:
+                    loose.append(named(item.widget()))
+        return short, loose
+
+    try:
+        _shown_off_screen(window, 1300, 820)
+        found = {}
+        for session in ("empty", "configuration"):
+            if session == "configuration":
+                inference.config_panel.model_combo.setCurrentText("NADROWSKI")
+                inference.config_panel.btn_config.click()          # the first step's own button: a model
+                bounds = config.BOUNDS_PATH / "nadrowski" / "master.txt"
+                inference.install_config(inference.session.draft.make_config(bounds_path=str(bounds)))
+            for part, page, panel in panels:
+                window.go_to(part, page)
+                QApplication.processEvents()
+                short, loose = wrong(panel)
+                if short or loose:
+                    found[(session, part, page)] = (short, loose)
+        assert found == {}, found
+    finally:
+        window.hide()
