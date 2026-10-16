@@ -478,10 +478,9 @@ def test_homes_records_name_an_unnamed_record_in_local_time_and_leave_out_what_c
 
 def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
     """Each place Home asks for is opened by ``go_to``: a part its own page (Help the help, Your own models the
-    model builder), a page of Effective temperature its tab, a step its tab when the step's tab can be opened (a
-    greyed tab leaves the tab shown), and a record's kind the records at that kind. Home reads again each time it
-    is opened, and while it is shown when the steps' states are worked out again and when a run starts or ends;
-    never on its own."""
+    model builder), a page of Effective temperature its tab, a step its page, one that cannot start yet too, and
+    a record's kind the records at that kind. Home reads again each time it is opened, and while it is shown when
+    the steps' states are worked out again and when a run starts or ends; never on its own."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.session import SbiSession
@@ -501,7 +500,7 @@ def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
         home.navigate.emit("records", "posterior")
         assert (window.current_place(), window.artifact_screen.kind()) == (("records", None), "posterior")
         home.navigate.emit("inference", "infer")
-        assert window.current_place() == ("inference", "model"), "a greyed step's tab was opened"
+        assert window.current_place() == ("inference", "infer"), "a step that cannot start yet did not open"
         window.inference_screen.session = SbiSession(draft=object(), cfg=object(), inf_prior=object(),
                                                      posterior=object())
         window.inference_screen.refresh_gates()
@@ -641,10 +640,11 @@ def test_the_window_opens_on_home_whatever_was_open():
 def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     """``go_to`` shows the part and its page, marks the row of what is shown and says where the window is, all
     before it returns, once a call, the same place too. Parameter inference opened with no step shows the step in
-    hand the first time and the step last shown after that; a step whose tab cannot open yet leaves the step
-    shown, which the rail marks. A part the window does not have, or a page its part does not have, is a mistake
-    of the caller's, refused before anything moves. While the steps and the two temperature pages are tabs, a
-    change of tab in the part in sight is marked and said as a move; a change in a part out of sight is not."""
+    hand the first time and the step last shown after that; a step that cannot start yet opens too, and the rail
+    marks it. A part the window does not have, or a page its part does not have, is a mistake of the caller's,
+    refused before anything moves. The gates move no step and say nothing. While the two temperature pages are
+    tabs, a change of tab in the part in sight is marked and said as a move; a change in a part out of sight is
+    not."""
     from core.gui.session import SbiSession
     qt_app()
     window = build_window()
@@ -663,7 +663,7 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     assert said[1:] == [("inference", "model", True, ["model"]), ("live", None, True, ["live"]),
                         ("inference", "model", True, ["model"])], "a later opening is not at the step last shown"
     window.go_to("inference", "infer")
-    assert said[-1] == ("inference", "model", True, ["model"]), "a greyed step's tab was opened"
+    assert said[-1] == ("inference", "infer", True, ["infer"]), "a step that cannot start yet did not open"
     window.go_to("temperature", "sweep")
     window.go_to("temperature", "sweep")
     assert said[-2:] == [("temperature", "sweep", True, ["temperature"])] * 2
@@ -678,11 +678,12 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     assert said[-1] == ("temperature", "one_cell", True, ["temperature"]) and len(said) == 8
     window.go_to("inference", "prior")
     inference.session = SbiSession()
-    inference.refresh_gates()                                     # the gates take the steps back to the first
-    assert said[-1] == ("inference", "model", True, ["model"]) and len(said) == 10
+    inference.refresh_gates()                                     # the step can no longer start: it stays shown
+    assert (said[-1], len(said), window.current_place()) == (("inference", "prior", True, ["prior"]), 9,
+                                                             ("inference", "prior"))
     window.go_to("records")
     window.fdt_screen.tabs.setCurrentIndex(1)                     # out of sight: nothing is said or marked
-    assert len(said) == 11 and _marked(rail) == ["records"]
+    assert len(said) == 10 and _marked(rail) == ["records"]
 
 
 def test_go_to_gives_the_page_the_keyboard_and_escape_in_the_rail_gives_it_back():
@@ -804,8 +805,7 @@ def test_a_click_on_a_rail_row_gives_the_page_no_keyboard_whatever_held_it_and_a
 
 def test_a_page_named_by_go_to_takes_the_keyboard_on_its_own_first_setting():
     """A move to a page of a part that has several -- Effective temperature's sweep study, a step of Parameter
-    inference whose tab can be opened -- puts the keyboard on a setting of that page, never on one of a page
-    not shown."""
+    inference -- puts the keyboard on a setting of that page, never on one of a page not shown."""
     from core.gui.session import SbiSession
     qt_app()
     window = build_window()
@@ -1044,15 +1044,15 @@ def test_the_foots_time_keeps_its_width_as_it_ticks(monkeypatch):
 
 def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowhere():
     """While a run is live the foot is a button that goes to the run's place, its page or step too, as
-    ``go_to_run`` does. A panel the window has no place for -- the bare run host a test builds -- is named
-    "a task", in the foot's title, tool tip and accessible name; the foot is no button and the window stays where
-    it is."""
+    ``go_to_run`` does, a step that cannot start among them. A panel the window has no place for -- the bare run
+    host a test builds -- is named "a task", in the foot's title, tool tip and accessible name; the foot is no
+    button and the window stays where it is."""
     from core.gui.panels.crossval_panel import CrossValPanel
     qt_app()
     window = build_window()
     foot = window.shell.rail.foot
     for panel, place in ((window.panel(CrossValPanel), ("temperature", "sweep")),
-                         (window.inference_screen.validate_panel, ("inference", "model"))):
+                         (window.inference_screen.validate_panel, ("inference", "checks"))):
         window.go_to("home")
         window.fdt_screen.tabs.setCurrentIndex(0)
         panel._set_busy(True)
@@ -1077,13 +1077,14 @@ def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowh
 def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
     """A live run is said at the foot alone: no row of the rail is marked for it or carries a mark of it, no tab
     does, and no row of Home's three tables, which Home reads in sight as the run starts; the tabs keep their
-    words. Nothing is disabled by it: every part still opens, and a section's other tab can still be chosen."""
+    words. Nothing is disabled by it: every part and every step still opens, and a section's other tab can still
+    be chosen."""
     from core.gui.panels.crossval_panel import CrossValPanel
     qt_app()
     window = build_window()
     rail, home = window.shell.rail, window.home_screen
-    fdt, steps = window.fdt_screen.tabs, window.inference_screen.tabs
-    tab_words = ([fdt.tabText(n) for n in range(fdt.count())], [steps.tabText(n) for n in range(steps.count())])
+    fdt = window.fdt_screen.tabs
+    tab_words = [fdt.tabText(n) for n in range(fdt.count())]
     rows = [place.key for place in keys.PARTS] + [step.key for step in keys.STEPS]
 
     def seen():
@@ -1098,11 +1099,13 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
         try:
             assert home.next_heading.label.text() == "Next: nothing until the run ends", "Home did not read"
             assert seen() == before, "a row carries a mark of the run"
-            assert ([fdt.tabText(n) for n in range(fdt.count())], [steps.tabText(n) for n in range(steps.count())]) \
-                == tab_words
+            assert [fdt.tabText(n) for n in range(fdt.count())] == tab_words
             for place in keys.PARTS:
                 window.go_to(place.key)
                 assert window.current_place()[0] == place.key and rail.row(place.key).isEnabled()
+            for step in keys.STEPS:
+                window.go_to("inference", step.key)
+                assert window.current_place() == ("inference", step.key) and rail.row(step.key).isEnabled()
             window.go_to("temperature", "one_cell")
             assert fdt.isTabEnabled(0) and fdt.currentIndex() == 0
         finally:

@@ -1,27 +1,26 @@
-"""The Parameter Inference section: six tabs over ONE shared SbiSession, with cross-tab gating.
+"""Parameter inference: its six steps over ONE shared SbiSession, each step a page of its own.
 
-    Config -> Prior -> Posterior -> Validate -> Infer -> TSNPE
+    Model and options -> Prior -> Training -> Checks -> Inference -> Narrowing round
 
-Config records the MODEL-level choices (model, units, chi/rotation knobs) as a ConfigDraft. The Prior tab
-picks the BOUNDS file and turns that draft into the SimConfig, because the bounds file is what declares
+The first step records the MODEL-level choices (model, units, chi/rotation knobs) as a ConfigDraft. The Prior
+step picks the BOUNDS file and turns that draft into the SimConfig, because the bounds file is what declares
 which parameters are inferred, in what order and over what range -- a SimConfig cannot exist without it,
 and the choice of bounds is also what selects the observation mode (a Forcing section or not).
 
-The screen owns the session (the single source of truth); tabs read it through their ``_screen``
-back-reference and never cache it. ``refresh_gates`` is the truth table that greys tabs via
-setTabEnabled after every stage.
-
-After the gates the screen works out where each of the six steps stands, which the rail and Home show, and
-says so through ``states_changed``.
+The screen owns the session (the single source of truth); the steps read it through their ``_screen``
+back-reference and never cache it. No step is ever disabled: one that cannot start yet still opens and can be
+read, its buttons greyed by its own gate. ``refresh_gates`` runs every step's own gate after every run of a
+step, then works out where each of the six steps stands, which the rail and Home show, and says so through
+``states_changed``.
 """
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from .. import chain, keys, record_words
 from ..panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel,
                                      TSNPEPanel, ValidatePanel)
 from ..session import SbiSession
-from ..widgets.anim import crossfade_tab
+from ..widgets.adaptive_stack import AdaptiveStack
 
 
 def _held_ref(wrapper) -> str:
@@ -41,74 +40,59 @@ def _held_ref(wrapper) -> str:
 
 
 class InferenceScreen(QWidget):
-    """The Parameter Inference section: six stage tabs over one shared SbiSession.
+    """Parameter inference: its six steps as pages over one shared SbiSession.
 
-    Drives the Config -> Prior -> Posterior -> Validate -> Infer -> TSNPE workflow and owns the
-    cross-tab gating (refresh_gates' setTabEnabled truth table, re-run after every stage). Persists
-    nothing itself -- each panel saves its own settings group. ``states_changed`` carries the six steps'
-    states each time they are worked out again.
+    Drives the workflow from a model to a narrowing round and owns its gating: ``refresh_gates`` runs every
+    step's own gate after every run of a step, then the steps' states. Persists nothing itself -- each panel saves its
+    own settings group. ``states_changed`` carries the six steps' states each time they are worked out again.
+    ``pages`` holds the six steps in their order, its height following the step shown; ``show_step`` shows one
+    (``show_page`` is the same) and ``current_step`` (or ``current_page``) names the one shown.
     """
     states_changed = Signal(object)
 
-    def __init__(self, title="Parameter Inference", parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
         self.session = SbiSession()
         self._states = ()
 
-        heading = QLabel(title)
-        heading.setProperty("type", "heading")     # Fluent type ramp (global QSS)
-
-        self.tabs = QTabWidget()
-        # Size to the CURRENT tab. The six pages differ wildly -- Validate is one label and one
-        # button, Infer in chi mode is 10-25 rows -- and QTabWidget's default is to size to the
-        # largest, so switching tabs visibly reflowed the whole results column and the short pages
-        # carried a large dead gap.
-        self.tabs.currentChanged.connect(self._size_to_current_tab)
         self.config_panel = ConfigPanel(self)
         self.prior_panel = PriorPanel(self)
         self.posterior_panel = PosteriorPanel(self)
         self.validate_panel = ValidatePanel(self)
         self.infer_panel = InferPanel(self)
-        # TSNPE sits AFTER Infer, and the order is the workflow: a round needs an observation, and
-        # the Infer tab is what records one (an amortized posterior has none at save time).
+        # The narrowing round sits AFTER Infer, and the order is the workflow: a round needs an observation,
+        # and the Infer step is what records one (an amortized posterior has none at save time).
         self.tsnpe_panel = TSNPEPanel(self)
-        for label, panel in (("Config", self.config_panel), ("Prior", self.prior_panel),
-                             ("Posterior", self.posterior_panel), ("Validate", self.validate_panel),
-                             ("Infer", self.infer_panel), ("TSNPE", self.tsnpe_panel)):
-            self.tabs.addTab(panel, label)
+        # The six steps as pages, in their order and with no tab bar: the rail is the way between them. The
+        # stack's height follows the step shown, because the six pages differ wildly -- Validate is one label
+        # and one button, Infer in chi mode is 10-25 rows -- and a stack sized to the largest left the short
+        # pages a large dead gap.
+        self.pages = AdaptiveStack()
+        for panel in self.panels():
+            self.pages.addWidget(panel)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(heading)
-        layout.addWidget(self.tabs, 1)
+        layout.addWidget(self.pages, 1)
 
         self.refresh_gates()
-        # Track the outgoing page + connect AFTER refresh_gates: its programmatic setCurrentIndex(0) fires
-        # currentChanged, and the handler dereferences _prev_tab (which must exist by then).
-        self._prev_tab = self.tabs.currentWidget()
-        self.tabs.currentChanged.connect(self._on_tab_changed)
-
-    def _on_tab_changed(self, _index):
-        crossfade_tab(self.tabs, self._prev_tab)          # no-op under offscreen / not-yet-visible
-        self._prev_tab = self.tabs.currentWidget()
-
-    def _size_to_current_tab(self, index: int) -> None:
-        """Let only the visible tab contribute to the QTabWidget's size hint (see __init__)."""
-        from PySide6.QtWidgets import QSizePolicy
-        for i in range(self.tabs.count()):
-            page = self.tabs.widget(i)
-            if page is None:
-                continue
-            policy = page.sizePolicy()
-            policy.setVerticalPolicy(QSizePolicy.Preferred if i == index else QSizePolicy.Ignored)
-            page.setSizePolicy(policy)
-        current = self.tabs.widget(index)
-        if current is not None:
-            current.updateGeometry()
 
     def panels(self):
         return [self.config_panel, self.prior_panel, self.posterior_panel,
                 self.validate_panel, self.infer_panel, self.tsnpe_panel]
+
+    def show_step(self, name: str) -> None:
+        """Show the step whose key is ``name``, whether or not it can start; KeyError, naming it, for a key that
+        is no step's."""
+        self.pages.setCurrentIndex(keys.step_number(name) - 1)
+
+    show_page = show_step
+
+    def current_step(self) -> str:
+        """The key of the step shown: the first, Model and options, until another is shown."""
+        return keys.STEPS[self.pages.currentIndex()].key
+
+    current_page = current_step
 
     def session_contents(self) -> list[str]:
         """Plain phrases for what the session holds -- the config, the prior, the posterior and the
@@ -180,48 +164,11 @@ class InferenceScreen(QWidget):
         self.refresh_gates()
 
     def refresh_gates(self):
-        s = self.session
-        has_draft = s.draft is not None
-        has_cfg = s.cfg is not None
-        # NOT force_prior: build_forcing_prior returns None for any config whose bounds file has no
-        # Forcing section, chi mode included (spontaneous / BP / no-forcing user models; the chi toggle
-        # neither adds nor drops that section), so requiring it made Validate permanently
-        # unreachable for exactly the models validate_calibration handles fine. The inferred prior is the one
-        # validate_calibration actually consumes; force_prior is passed through and may legitimately be None.
-        can_validate = s.posterior is not None and s.inf_prior is not None
-        can_infer = s.posterior is not None                        # infer_and_visualize needs no prior
-
-        self.tabs.setTabEnabled(1, has_draft)        # Prior      (picks bounds -> builds the config)
-        self.tabs.setTabEnabled(2, has_cfg)          # Posterior
-        self.tabs.setTabEnabled(3, can_validate)     # Validate
-        self.tabs.setTabEnabled(4, can_infer)        # Infer
-        # TSNPE needs what Validate needs, PLUS a recorded observation -- and the observation gate
-        # is the panel's own (refresh_local_gates), because it depends on what the artifact store
-        # holds (the observation picker lists `observations/`), not on the session. Enabling the TAB
-        # on the session alone keeps the tooltip useful: "no observation yet" is a different message
-        # from "no posterior yet".
-        self.tabs.setTabEnabled(5, can_validate)     # TSNPE
-
-        self.tabs.setTabToolTip(1, "" if has_draft else "Apply a model in Config first.")
-        self.tabs.setTabToolTip(2, "" if has_cfg else
-                                "Choose a bounds file and build/load a prior first — that is what builds "
-                                "the config.")
-        self.tabs.setTabToolTip(3, "" if can_validate else
-                                "Needs a posterior AND its prior — build/load a prior, then a posterior.")
-        self.tabs.setTabToolTip(4, "" if can_infer else "Train or load a posterior first.")
-        self.tabs.setTabToolTip(5, "" if can_validate else
-                                "Needs a posterior AND its prior. It also needs an observation, "
-                                "which the Infer tab records when it runs.")
-
+        """Run every step's own gate, which greys the buttons of a step that cannot start yet (no step is ever
+        disabled as a whole), then work out the six steps' states again. The states come after the gates: the
+        narrowing round's list of observations, which its state reads, is refreshed by its gate."""
         for panel in self.panels():
             panel.refresh_local_gates()
-
-        # If the visible tab just got disabled (e.g. re-running the prior greys Validate/Infer), Qt would
-        # jump to an arbitrary neighbour; make it deterministic -- fall back to Config.
-        if not self.tabs.isTabEnabled(self.tabs.currentIndex()):
-            self.tabs.setCurrentIndex(0)
-        # The steps' states come after the panels' own gates: the narrowing round's list of observations,
-        # which its state reads, is refreshed by its gate.
         self.recompute_states()
 
     def recompute_states(self) -> None:

@@ -337,7 +337,7 @@ class BasePanel(QWidget):
     def refresh_local_gates(self) -> None:
         """Re-apply widget-level gating within this panel (which buttons/options are enabled). Base is a
         no-op; the inference sub-panels override it, and an owning screen may call it after a stage
-        completes. Distinct from the tab-level greying an InferenceScreen does via setTabEnabled."""
+        completes. It is the only greying a step of parameter inference has: no step is disabled as a whole."""
 
     # ── persistence (subclasses override; keys are namespaced under group() by MainWindow) ──────────
     def insert_result_widget(self, index: int, widget, stretch: int = 1) -> None:

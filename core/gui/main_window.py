@@ -1,8 +1,8 @@
 """The PRISM main window: the rail down its left edge and, beside it, the page of the part in sight -- Home,
-Parameter inference (the six steps over one session, on their tabs), Effective temperature (one cell, or a
-sweep study), Live simulation, Reduction map, Records, Your own models (the model builder), Settings and Help.
-Every part is built with the window, and the panels inside them are reused unchanged in behaviour. ``go_to`` is
-the one way to move between the parts; the run's state stands at the rail's foot."""
+Parameter inference (the six steps over one session, each a page of its own), Effective temperature (one cell,
+or a sweep study), Live simulation, Reduction map, Records, Your own models (the model builder), Settings and
+Help. Every part is built with the window, and the panels inside them are reused unchanged in behaviour.
+``go_to`` is the one way to move between the parts; the run's state stands at the rail's foot."""
 import time
 from datetime import datetime
 
@@ -75,9 +75,9 @@ def _centre_on_primary(widget) -> None:
     widget.move(frame.topLeft())
 
 
-# a part's pages that are tabs of its screen today, in the order of the tabs
-_TABBED = {"temperature": tuple(place.key for place in keys.PAGES["temperature"]),
-           "inference": tuple(place.key for place in keys.STEPS)}
+# the keys of the pages of each part that has several, in their order: a page another key names is refused
+_PAGES = {"temperature": tuple(place.key for place in keys.PAGES["temperature"]),
+          "inference": tuple(place.key for place in keys.STEPS)}
 
 
 def _is_setting(widget: QWidget) -> bool:
@@ -180,7 +180,7 @@ class MainWindow(QMainWindow):
         self.fdt_screen = SectionScreen(
             "FDT Analysis",
             [("FDT analysis", FdtPanel()), ("Sweep study cross-validation", CrossValPanel())])
-        self.inference_screen = InferenceScreen("Parameter Inference")
+        self.inference_screen = InferenceScreen()
         self.simulate_screen = SectionScreen(
             "Simulate", [("Live simulation", SimulatePanel())])
 
@@ -190,7 +190,7 @@ class MainWindow(QMainWindow):
         self._places = {self.reduction_screen.panels()[0]: ("reduction", None),
                         self.simulate_screen.panels()[0]: ("live", None)}
         for part, screen in (("temperature", self.fdt_screen), ("inference", self.inference_screen)):
-            for panel, page in zip(screen.panels(), _TABBED[part]):
+            for panel, page in zip(screen.panels(), _PAGES[part]):
                 self._places[panel] = (part, page)
 
         # Home reads what it states as it is built, the running panel among it: none, at launch.
@@ -224,9 +224,8 @@ class MainWindow(QMainWindow):
         self.shell.rail.opened.connect(self._rail_opened)
         self.shell.rail.left.connect(self._rail_left)
         self.shell.rail.foot.clicked.connect(self.go_to_run)
-        # Until the steps and the two temperature pages stand on pages of their own, their tab bars are a
-        # second way between them: a change of tab there is said as a move.
-        self.inference_screen.tabs.currentChanged.connect(self._tab_changed)
+        # Until the two temperature pages stand on pages of their own, their tab bar is a second way between
+        # them: a change of tab there is said as a move.
         self.fdt_screen.tabs.currentChanged.connect(self._tab_changed)
         # The six steps' states go to the rail and to Home each time they are worked out again; a change of
         # the store works out the gates and the states again, after the pickers have listed it.
@@ -411,16 +410,19 @@ class MainWindow(QMainWindow):
         """The part in sight, and the page or step it shows (None for a part of one page)."""
         shown = self.shell.stack.currentWidget()
         part = next(place.key for place in keys.PARTS if self.shell.part_widget(place.key) is shown)
-        pages = _TABBED.get(part)
+        current = getattr(shown, "current_page", None)
+        if callable(current):
+            return part, current()
+        pages = _PAGES.get(part)                    # the temperature pages, tabs of their screen until they are pages
         return part, (pages[shown.tabs.currentIndex()] if pages else None)
 
     def go_to(self, part: str, page: str | None = None) -> None:
         """Show the part ``part`` and, when one is named, its page: a step of Parameter inference, a page of
         Effective temperature, or for Records the kind of record it lists. Then mark the rail, give the page
         the keyboard and say where the window is, all before returning. Parameter inference opened with no
-        step shows the step in hand the first time and the step last shown after that; a step that cannot be
-        opened yet leaves the step shown. Home is read again each time it is opened. A part the window does
-        not have, or a page its part does not have, raises KeyError before anything moves."""
+        step shows the step in hand the first time and the step last shown after that; every step opens, one
+        that cannot start yet too. Home is read again each time it is opened. A part the window does not have,
+        or a page its part does not have, raises KeyError before anything moves."""
         self._move(part, page, keyboard=Qt.OtherFocusReason)
 
     def go_to_run(self) -> None:
@@ -434,7 +436,7 @@ class MainWindow(QMainWindow):
         that gives the page no keyboard."""
         if not self.shell.has_part(part):
             raise KeyError(f"not a part of the window: {part!r}")
-        pages = _TABBED.get(part, ())
+        pages = _PAGES.get(part, ())
         if page is not None and pages and page not in pages:
             raise KeyError(f"not a page of {part!r}: {page!r}")
         widget = self.shell.part_widget(part)
@@ -454,10 +456,12 @@ class MainWindow(QMainWindow):
         self._moving = True
         try:
             self.shell.show_part(part)
-            if page is not None and pages:
-                index = pages.index(page)
-                if widget.tabs.isTabEnabled(index):
-                    widget.tabs.setCurrentIndex(index)
+            if page is not None:
+                show = getattr(widget, "show_page", None)
+                if callable(show):
+                    show(page)
+                elif pages:                         # the temperature pages, tabs of their screen until they are pages
+                    widget.tabs.setCurrentIndex(pages.index(page))
         finally:
             self._moving = False
         now, shown = self.current_place()
@@ -498,15 +502,14 @@ class MainWindow(QMainWindow):
         self._give_keyboard(self.shell.stack.currentWidget(), Qt.ShortcutFocusReason)
 
     def _tab_changed(self, _index: int) -> None:
-        """A tab of Parameter inference or of Effective temperature changed by its own bar, or by the gates
-        that take the steps back to the first: while that part is in sight the rail marks what shows and the
-        move is said, as go_to says one. Inside go_to the move is said once, at its end."""
+        """A tab of Effective temperature changed by its own bar: while that part is in sight the rail marks it
+        and the move is said, as go_to says one. Inside go_to the move is said once, at its end."""
         if self._moving:
             return
         part, page = self.current_place()
         if getattr(self.shell.part_widget(part), "tabs", None) is not self.sender():
             return
-        self.shell.rail.set_place(part, page if part == "inference" else None)
+        self.shell.rail.set_place(part)
         self.place_changed.emit(part, page)
 
     # ── the live run, at the foot of the rail ─────────────────────────────────

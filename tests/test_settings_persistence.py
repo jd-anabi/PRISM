@@ -68,7 +68,7 @@ def _budget_panel(cfg=None, prior=None):
     inf.session.cfg = cfg
     inf.session.inf_prior = prior
     inf.refresh_gates()
-    return inf, inf.tabs.widget(2)          # Config Prior Posterior Validate Infer
+    return inf, inf.posterior_panel         # the training step's page
 
 
 def test_the_training_budget_shows_the_simulation_count_and_the_cap_trade():

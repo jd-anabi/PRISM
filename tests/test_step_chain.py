@@ -1,10 +1,10 @@
 """The rules and tables with no widget: the window's places and keys, the six steps' states, Home's one next step
-and first-time test, and what a record is called.
+and first-time test, and what a record is called; and the six steps as the built window holds them.
 
 Torch-free at its module level: the modules under test load neither the toolkit (the record words aside) nor the
 engine, and a fresh interpreter proves it, since this process already holds both. A session is a plain
 namespace of the five fields the window's session holds. A test that reads the store's own tables or writes a
-record imports them inside itself.
+record imports them inside itself, and so does a test that builds the window.
 """
 import ast
 import subprocess
@@ -578,3 +578,155 @@ def test_each_store_kind_has_one_word():
         "effective-temperature measurement", "sweep", "comparison", "effective-temperature measurement"]
     assert record_words.kind_word("prior", "sweep") == "prior"
     assert record_words.kind_word("crossval") == "record"
+
+
+# the main button of each step's page, by the step
+_MAIN = {"model": "btn_config", "prior": "btn_prior", "training": "btn_post", "checks": "btn_validate",
+         "infer": "btn_infer", "narrowing": "btn_round"}
+
+
+def _pressable(panel) -> list:
+    """The buttons of a step's page that a person can press now: shown, not greyed, and not a help mark, which
+    only shows its words."""
+    from PySide6.QtWidgets import QAbstractButton, QPushButton, QToolButton
+    return [button for button in panel.findChildren(QAbstractButton)
+            if isinstance(button, (QPushButton, QToolButton)) and button.isVisibleTo(panel) and button.isEnabled()
+            and button.objectName() != "helpBadge"]
+
+
+def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_run, monkeypatch):
+    """No step is disabled. On four sessions -- an empty one; a model chosen, by the first step's own button; a
+    configuration and a prior; and a posterior with them, the tiny run's -- each of the six steps opens as the
+    page shown and the rail marks it, and its main button is greyed exactly when the step cannot start. On a step
+    that cannot start, each button that can be pressed is pressed, with every question answered by the guard and
+    every file chooser cancelled, and the session built again before each press: no run is started, nothing is
+    raised, no drawing error is caught and nothing is shown but a question or a notice."""
+    from core.gui import reported
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.session import SbiSession
+    from tests._fixtures import all_asked, answer_chooser, build_window, forget_asked, qt_app
+    qt_app()
+    started, raised = [], []
+    monkeypatch.setattr(BasePanel, "dispatch", lambda panel, *args, **kwargs: started.append(type(panel).__name__))
+    monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: raised.append(repr(error)))
+    answer_chooser(monkeypatch, "")
+    window = build_window()
+    inference = window.inference_screen
+    first = inference.config_panel
+    first.model_combo.setCurrentText("SBITEST")
+    window.go_to("inference", "model")
+    first.btn_config.click()
+    draft = inference.session.draft
+    assert getattr(draft, "model", None) == "SBITEST", "the first step's button chose no model"
+    cfg = tiny_run.cfg.copy_for_run()
+    cfg.clear_ground_truth()
+
+    def hold(session):
+        """The session ``session`` names, built again: 0 empty, 1 a model, 2 with a prior, 3 with a posterior."""
+        if session == 0:
+            inference.session = SbiSession()
+            inference.refresh_gates()
+            return
+        inference.new_draft(draft)
+        if session >= 2:
+            inference.install_config(cfg)
+            inference.session.inf_prior = tiny_run.prior
+            if session == 3:
+                inference.session.posterior = tiny_run.posterior
+            inference.refresh_gates()
+
+    pressed = []
+    for session in range(4):
+        for step, panel in zip(keys.STEPS, inference.panels()):
+            hold(session)
+            window.go_to("inference", step.key)
+            state = inference.step_states()[keys.step_number(step.key) - 1]
+            assert (window.current_place(), inference.pages.currentWidget()) == (("inference", step.key), panel), (
+                session, step.key)
+            assert window.shell.rail.row(step.key).property("ring_left"), (session, step.key)
+            assert getattr(panel, _MAIN[step.key]).isEnabled() == state.can_start, (session, step.key)
+            if state.can_start:
+                continue
+            for number in range(len(_pressable(panel))):
+                hold(session)
+                window.go_to("inference", step.key)
+                button = _pressable(panel)[number]
+                forget_asked()
+                button.click()
+                asked = [(box.kind, box.title) for box in all_asked()]
+                assert (started, raised, list(reported.ERRORS)) == ([], [], []), (session, step.key, button.text())
+                assert all(kind in ("question", "notice") for kind, _title in asked), (session, step.key, asked)
+                pressed.append((session, step.key, button.text()))
+    assert pressed, "no button of a step that cannot start was pressed"
+
+
+def test_refresh_gates_says_the_new_states_once_and_the_rail_and_home_hear_them(monkeypatch):
+    """One run of the gates runs every step's own gate first, in the steps' order, and then says the six steps'
+    states once: the rules' own for the session, with the narrowing round's observation on offer as its list
+    says. The rail's rows read them, and Home, in sight, reads its next step from them at once."""
+    from PySide6.QtCore import Qt
+    from core.gui.session import SbiSession
+    from tests._fixtures import build_window, qt_app
+    qt_app()
+    window = build_window()
+    inference, rail = window.inference_screen, window.shell.rail
+    heard = []
+    for step, panel in zip(keys.STEPS, inference.panels()):
+        monkeypatch.setattr(panel, "refresh_local_gates",
+                            lambda kept=panel.refresh_local_gates, key=step.key: (heard.append(key), kept())[1])
+    inference.states_changed.connect(heard.append)
+    window.setAttribute(Qt.WA_DontShowOnScreen)
+    try:
+        window.show()
+        inference.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"))
+        heard.clear()
+        inference.refresh_gates()
+        states = chain.step_states(inference.session, label=record_words.label_of,
+                                   observation_on_offer=inference.tsnpe_panel.obs_picker.has_entries())
+        assert heard == [step.key for step in keys.STEPS] + [states], heard
+        assert inference.step_states() == states
+        assert [rail.row(step.key).accessibleName() for step in keys.STEPS] == [state.spoken for state in states]
+        assert window.home_screen.next_heading.label.text() == "Next: build or load a prior"
+    finally:
+        window.hide()
+
+
+def test_parameter_inference_opens_the_step_in_hand_then_the_step_last_shown():
+    """Parameter inference opened with no step shows the step in hand at its first opening in a launch and the step
+    last shown at every later one, a step that cannot start yet among them; a first opening at a named step counts
+    as the first. With no step in hand the first opening shows the first step. The rail marks the step shown."""
+    from core.gui.session import SbiSession
+    from tests._fixtures import build_window, qt_app
+    qt_app()
+    draft = SimpleNamespace(model="NADROWSKI")
+    made = SimpleNamespace(created="2026-10-03T14:02:00+00:00")
+
+    def held(kind):
+        return SimpleNamespace(kind=kind, id=f"{kind[0]}1", name=kind, manifest=made,
+                               posterior=SimpleNamespace(truncation=None))
+
+    def window_holding(session):
+        window = build_window()
+        window.inference_screen.session = session
+        window.inference_screen.refresh_gates()
+        return window
+
+    def opened(window, *moves):
+        for move in moves:
+            window.go_to(*move)
+        return window.current_place(), window.inference_screen.current_step()
+
+    window = window_holding(SbiSession(draft=draft))
+    assert opened(window, ("inference",)) == (("inference", "prior"), "prior"), (
+        "the first opening is not at the step in hand")
+    assert opened(window, ("inference", "infer"), ("live",), ("inference",)) == (("inference", "infer"), "infer"), (
+        "a later opening is not at the step last shown")
+    assert window.shell.rail.row("infer").property("ring_left"), "the rail does not mark the step shown"
+    named = window_holding(SbiSession(draft=draft))
+    assert opened(named, ("inference", "checks"), ("home",), ("inference",)) == (("inference", "checks"), "checks"), (
+        "a first opening at a named step did not count as the first")
+    done = window_holding(SbiSession(draft=draft, cfg=object(), inf_prior=held("prior"), posterior=held("posterior"),
+                                     observation=held("observation")))
+    assert chain.step_in_hand(done.inference_screen.step_states()) is None
+    assert opened(done, ("inference",)) == (("inference", "model"), "model"), (
+        "with no step in hand the first opening is not at the first step")

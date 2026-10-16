@@ -291,32 +291,46 @@ def test_the_window_offers_three_appearance_choices_and_no_ticks():
     assert after.value("appearance/mode") == "dark"
     assert after.value("appearance/system_accent") == "1" and after.value("appearance/force_inter") == "1"
 
-def test_inference_tab_gates_follow_the_session():
+def test_every_step_opens_and_its_state_follows_the_session(store):
+    """No step is ever disabled: whatever the session holds, each of the six steps opens as the page shown. The
+    states the screen works out are the rules' own for that session, and which steps can start follows it: a
+    model lets the prior start, a prior the training, a posterior the inference, and the checks need the prior
+    with the posterior. A store with no observation keeps the narrowing round waiting for one."""
+    from core.gui import chain, keys, record_words
     from core.gui.session import SbiSession
 
     qt_app()
     inf = build_inference()
+    assert not inf.tsnpe_panel.obs_picker.has_entries()
 
-    def enabled():
-        return [inf.tabs.isTabEnabled(i) for i in range(5)]   # Config Prior Posterior Validate Infer
+    def opened():
+        shown = []
+        for step in keys.STEPS:
+            inf.show_step(step.key)
+            shown.append((inf.current_step(), inf.pages.currentWidget()))
+        return shown
 
-    inf.session = SbiSession(); inf.refresh_gates()
-    assert enabled() == [True, False, False, False, False]
-    # A DRAFT (model applied) unlocks Prior -- which is where the bounds file builds the config.
-    inf.session.draft = object(); inf.refresh_gates()
-    assert enabled() == [True, True, False, False, False]
-    inf.session.cfg = object(); inf.refresh_gates()
-    assert enabled() == [True, True, True, False, False]
-    inf.session.posterior = object(); inf.refresh_gates()
-    assert enabled() == [True, True, True, False, True], "Infer needs only a posterior; Validate needs a prior"
-    # force_prior stays None on purpose: it is None for every no-forcing model, and requiring it used to
-    # make Validate permanently unreachable for them.
-    inf.session.inf_prior = object(); inf.refresh_gates()
-    assert enabled() == [True, True, True, True, True]
+    pages = list(zip([step.key for step in keys.STEPS], inf.panels()))
+    inf.session = SbiSession()
+    for held, can_start in (((), [True, False, False, False, False, False]),
+                            # a DRAFT (model applied) lets the Prior start -- where the bounds file builds the config
+                            (("draft",), [True, True, False, False, False, False]),
+                            (("cfg",), [True, True, False, False, False, False]),
+                            (("posterior",), [True, True, False, False, True, False]),
+                            # force_prior stays None on purpose: it is None for every no-forcing model, and
+                            # requiring it used to make the checks permanently unreachable for them
+                            (("inf_prior",), [True, True, True, True, True, False])):
+        for name in held:
+            setattr(inf.session, name, object())
+        inf.refresh_gates()
+        assert opened() == pages, held
+        assert inf.step_states() == chain.step_states(inf.session, observation_on_offer=False,
+                                                      label=record_words.label_of), held
+        assert [state.can_start for state in inf.step_states()] == can_start, held
 
 def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
-    """The TSNPE tab needs a posterior, its prior AND an observation on disk -- and its round must go
-    through orchestrator.build_posterior with a TRUNCATION, never by fitting the posterior.
+    """The narrowing round (the TSNPE panel) needs a posterior, its prior AND an observation on disk -- and its
+    round must go through orchestrator.build_posterior with a TRUNCATION, never by fitting the posterior.
 
     The second half is the one worth a test: proposing from the posterior instead of the truncated
     prior is TEMPERING, it contracts credible intervals with no new information, and SBC comes out
@@ -328,12 +342,14 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
 
     qt_app()
     inf = build_inference()
-    assert inf.tabs.count() == 6 and inf.tabs.tabText(5) == "TSNPE"
+    inf.show_step("narrowing")
+    assert inf.pages.currentWidget() is inf.tsnpe_panel is inf.panels()[5]
 
     inf.session = SbiSession(cfg=object(), posterior=object()); inf.refresh_gates()
-    assert not inf.tabs.isTabEnabled(5), "TSNPE must not open on a posterior alone"
+    assert inf.step_states()[5].rail_words == "Needs a prior", "the narrowing round must not start on a posterior alone"
     inf.session.inf_prior = object(); inf.refresh_gates()
-    assert inf.tabs.isTabEnabled(5), "TSNPE opens once a posterior and its prior exist"
+    assert inf.step_states()[5].rail_words in ("Needs an observation", "To come"), (
+        "once a posterior and its prior exist the narrowing round waits for an observation alone")
 
     # The observation gate, driven through the picker's own accessor rather than through the store's
     # `observations/` listing. Clearing the combo does NOT work: refresh_local_gates calls
@@ -1455,8 +1471,9 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
 
     (a) the table knows every registry key and no other -- an unmapped key would show a refusal
         with no way out, and an entry nobody raises is a sentence that can go stale unseen;
-    (b) every tuple names a place: a tab title of any section, read off the built window, or one of
-        SCREENS, a non-empty label, and renders the box sentence; a sentence entry is
+    (b) every tuple names a place: one of the ten titles the refusals name today, each held here with the
+        place of the window it stands for, or one of SCREENS; every such place is read off the built window;
+        a tuple has a non-empty label and renders the box sentence; a sentence entry is
         returned verbatim and has no label; a None entry says nothing and has no label; and none
         of the three ever raises from fix_sentence, which runs while a refusal is being shown;
     (c) the T_obs and direction-count sentences a user reads on the real screen, and the consents,
@@ -1479,21 +1496,26 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         f"only in CONTROL: {sorted(set(gui_fields.CONTROL) - set(FIELDS))}; "
         f"only in FIELDS: {sorted(set(FIELDS) - set(gui_fields.CONTROL))}")
 
-    # (b) the three shapes, against the tab titles of EVERY section plus the two screens.
-    # Read off the built window, not off a list written here: a renamed tab must fail this, and an
-    # entry that names the FDT analysis tab is as real as one that names the Infer tab.
+    # (b) the three shapes, against the ten titles the refusals name today plus the two screens. The
+    # window has no tab bar to read them from, so each is held here with the place of the window it
+    # stands for -- a part of the rail and, for a part with pages, the page -- and every one of those
+    # places is read off the built window: the rail has the part's row, and asked for the page the part
+    # shows it. The titles go from here when the refusals name the rail's places instead.
+    from core.gui import keys
     qt_app()
     window = build_window()
-    tabs = []
-    for section in (window.reduction_screen, window.fdt_screen, window.inference_screen,
-                    window.simulate_screen):
-        tabs += [section.tabs.tabText(i) for i in range(section.tabs.count())]
-    assert tabs == ["NWK → Hopf reduction map", "FDT analysis", "Sweep study cross-validation",
-                    "Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE",
-                    "Live simulation"]
-    assert gui_fields.SCREENS == frozenset({"Artifacts", "Model Builder"}), \
-        "a place is a tab title or one of these two screens, which host no tab widget"
-    places = set(tabs) | set(gui_fields.SCREENS)
+    titles = {"NWK → Hopf reduction map": ("reduction", None), "FDT analysis": ("temperature", "one_cell"),
+              "Sweep study cross-validation": ("temperature", "sweep"), "Config": ("inference", "model"),
+              "Prior": ("inference", "prior"), "Posterior": ("inference", "training"),
+              "Validate": ("inference", "checks"), "Infer": ("inference", "infer"),
+              "TSNPE": ("inference", "narrowing"), "Live simulation": ("live", None)}
+    screens = {"Artifacts": ("records", None), "Model Builder": ("models", None)}
+    for title, (part, page) in {**titles, **screens}.items():
+        window.go_to(part, page)
+        assert (window.current_place(), window.shell.rail.row(part).place) == ((part, page), keys.part(part)), title
+    assert gui_fields.SCREENS == frozenset(screens), \
+        "a place is one of the ten titles or one of these two screens"
+    places = set(titles) | set(gui_fields.SCREENS)
     for key, entry in gui_fields.CONTROL.items():
         if isinstance(entry, tuple):
             tab, text = entry
@@ -3920,9 +3942,9 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     row added without help text, compared against labels.pretty_gui(label), which is what the holder
     was given. The Infer tab is read after install_config with a FORCED stub config so its three
     drive rows exist; a chi config would build none (no force_params_dict) and the drive entries
-    would pass vacuously. The places are every section's tabs and the two screens, read off a built
-    MainWindow -- the model builder with one variable declared and its parameter detected, because
-    four of the boxes it names exist only then.
+    would pass vacuously. The places are the panels behind the ten titles the refusals name and the two
+    screens, read off a built MainWindow -- the model builder with one variable declared and its
+    parameter detected, because four of the boxes it names exist only then.
 
     The second half: the Infer tab's registered rows are built from label(key), not from a literal
     that happens to match today."""
@@ -3951,12 +3973,16 @@ def test_the_gui_control_table_matches_the_tabs_labels():
                     out.append(lab.text())
         return out
 
-    # A place may be any section's tab or one of the two screens, so read them all back off a built
-    # window rather than the six inference tabs alone.
+    # A place may be the panel of any of the ten titles or one of the two screens, so read them all back
+    # off a built window rather than the six inference panels alone: each of the other four by its kind.
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.fdt_panel import FdtPanel
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.simulate_panel import SimulatePanel
     window = build_window()
-    for section in (window.reduction_screen, window.fdt_screen, window.simulate_screen):
-        for i in range(section.tabs.count()):
-            tabs[section.tabs.tabText(i)] = section.tabs.widget(i)
+    for title, kind in (("NWK → Hopf reduction map", ReductionPanel), ("FDT analysis", FdtPanel),
+                        ("Sweep study cross-validation", CrossValPanel), ("Live simulation", SimulatePanel)):
+        tabs[title] = window.panel(kind)
     tabs["Artifacts"] = window.artifact_screen
     tabs["Model Builder"] = window.model_builder_screen
     # The model builder's init row exists once per declared variable and its value/min/max boxes once
