@@ -1055,9 +1055,10 @@ def test_home_is_read_again_when_opened_and_when_the_store_changes(tmp_path, mon
 def test_a_maximised_window_at_a_large_text_size_keeps_the_usual_layout(monkeypatch):
     """At 150 % text on a 1920 by 1080 screen (its taskbar below) the small layout begins under the screen's room,
     not under 1.5 times 700, so a window that fills the screen keeps the usual layout; one lower than that takes
-    the small layout, and the rail and Home are told. Two columns are held to the widest page such a window gives
-    them, so Home sets its two side by side there, and on a 1366 by 768 screen too, where a window that fills the
-    screen is lower than 700 and takes the small layout. At the ordinary text size the threshold stays 700."""
+    the small layout, and the rail and Home are told. Two columns are held to the screen's width, so Home sets its
+    two side by side in a window that fills that screen. On a 1366 by 768 screen a window that fills the screen is
+    lower than 700 and takes the small layout, and Home sets its two columns one above the other: beside the rail,
+    side by side, they would be too narrow for their words. At the ordinary text size the threshold stays 700."""
     from PySide6.QtWidgets import QApplication
     from core.gui import main_window
     from tests._look_helpers import text_size
@@ -1080,9 +1081,9 @@ def test_a_maximised_window_at_a_large_text_size_keeps_the_usual_layout(monkeypa
     with text_size(1.5):
         window = build_window()
         try:
-            assert (design.small_below(), design.two_columns_from()) == (700, 940)
+            assert (design.small_below(), design.two_columns_from()) == (700, 1326)
             _shown_off_screen(window, 1366, 689)
-            assert window.shell._small and not window.home_screen._columns.stacked()
+            assert window.shell._small and window.home_screen._columns.stacked()
         finally:
             window.hide()
     monkeypatch.undo()

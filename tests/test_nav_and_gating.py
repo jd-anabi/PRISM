@@ -4477,10 +4477,7 @@ def test_the_main_window_takes_its_opening_and_smallest_size_from_the_look(monke
     assert (window.minimumWidth(), window.minimumHeight()) == (555, 444)
     screen = QGuiApplication.primaryScreen().availableGeometry()
     assert set(asked) == {main_window._room_on_screen()} == {(screen.width() - 40, screen.height() - 60)}
-    # the thresholds are held to the widest page such a window gives: less the rail, the page's two sides and
-    # the room of its scroll bar, at the ordinary text size 220, 22 and 20, and 8 and 2
-    assert handed == [(screen.width() - 40 - 272, screen.height() - 60)], (
-        "the window held the layout's thresholds to another room")
+    assert handed == [main_window._room_on_screen()], "the window held the layout's thresholds to another room"
     # a saved geometry that cannot be restored: the window opens at the look's size again
     remembered = settings.settings()
     remembered.setValue("window/geometry", QByteArray(b"not a saved geometry"))

@@ -52,15 +52,6 @@ def _room_on_screen() -> tuple[int, int]:
     return rect.width() - 40, rect.height() - 60
 
 
-def _page_room(room: tuple[int, int]) -> tuple[int, int]:
-    """What the screen offers a page's columns, (width, height), at the text size in force: the width of the
-    middle of a page in a window as wide as ``room`` -- less the rail, the page's own sides and the room its
-    scroll bar keeps -- and the height of ``room``."""
-    left, _top, right, _bottom = (design.scaled(n) for n in design.SIZE["page_pad"])
-    beside = design.scaled(design.SIZE["rail"]) + left + right + design.SIZE["scroll_bar"] + design.SIZE["scroll_gap"]
-    return room[0] - beside, room[1]
-
-
 def _on_a_visible_screen(widget) -> bool:
     """True when the window's frame actually intersects some attached screen.
 
@@ -169,11 +160,10 @@ class MainWindow(QMainWindow):
         # The opening size and the smallest size both come from the look's table, grow with Windows'
         # text size and are then held to what the screen can show: the table's opening height is more
         # than a 1366x768 laptop can show, and more than 1920x1080 at 150% scaling, where the action
-        # buttons used to start below the fold. The look's two layout thresholds are held to what the same
-        # room offers: at a large text size a window as large as the screen keeps the usual layout, and a page as
-        # wide as such a window allows sets its two columns side by side.
+        # buttons used to start below the fold. The look's two layout thresholds are held to the same room:
+        # at a large text size a window as large as the screen keeps the usual layout.
         room = _room_on_screen()
-        design.set_room(_page_room(room))
+        design.set_room(room)
         opening, smallest = design.window_sizes(room)
         self.resize(*opening)
         # Without a smallest size Qt lets the user (or a restored geometry) shrink the shell until
