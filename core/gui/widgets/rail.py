@@ -518,7 +518,10 @@ class Rail(QWidget):
 
     def _fit(self) -> None:
         """Lay the list out now and size it as its scrolling area will, so that a row can be brought into view
-        before the event loop turns again."""
+        before the event loop turns again. Each part's rows are laid out first: a step that takes its second line,
+        or gives it up, changes the height of its part's block, which the list's own layout reads."""
+        for block in self._blocks.values():
+            block.layout().activate()
         self._list.layout().activate()
         view = self._scroll.viewport().size()
         self._list.resize(view.width(), max(view.height(), self._list.minimumSizeHint().height()))

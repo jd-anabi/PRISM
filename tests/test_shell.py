@@ -1135,6 +1135,46 @@ def test_the_current_row_stays_in_view_when_the_rail_has_less_room():
             window.hide()
 
 
+def test_the_current_row_stays_in_view_when_a_step_above_it_takes_a_second_line(tmp_path):
+    """In a low window at 150 % text the open step, the last of the chain, stays in view when a step above it takes
+    its second line again (the inference step becomes the step in hand once the session holds no observation): the
+    list grows while the room it has stays as it was."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.session import SbiSession
+    from tests._fixtures import build_browse_store
+    from tests._look_helpers import text_size
+    qt_app()
+    build_browse_store(tmp_path / "Artifacts")
+    made = SimpleNamespace(created="2026-10-03T14:02:00+00:00")
+
+    def held(kind, ident):
+        return SimpleNamespace(kind=kind, id=ident, name=kind, manifest=made,
+                               posterior=SimpleNamespace(truncation=None))
+
+    with use_store(ArtifactStore(tmp_path / "Artifacts")), text_size(1.5):
+        window = build_window()
+        rail, inference = window.shell.rail, window.inference_screen
+        try:
+            inference.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"), cfg=object(),
+                                           inf_prior=held("prior", "p1"), posterior=held("posterior", "q1"),
+                                           observation=held("observation", "o1"))
+            inference.refresh_gates()
+            window.setMinimumSize(1, 1)
+            _shown_off_screen(window, 760, 600)
+            window.go_to("inference", "narrowing")
+            one_line = rail.row("infer").height()
+            assert window.shell._small and window.current_place() == ("inference", "narrowing") and _in_view(
+                rail, rail.row("narrowing"))
+            inference.session.observation = None
+            inference.refresh_gates()
+            QApplication.processEvents()                        # the rows' own layouts settle
+            assert rail.row("infer").height() > one_line, "the inference step kept one line"
+            assert window.current_place() == ("inference", "narrowing")
+            assert _in_view(rail, rail.row("narrowing")), "a step above the open one grew over it"
+        finally:
+            window.hide()
+
+
 def test_the_mounted_rail_marks_one_row_for_every_place():
     """In the window, whatever place is open, the accent's bar stands in one row of the rail: the row of the
     step open while Parameter inference is open, or else of the part open, down that whole row and nowhere
