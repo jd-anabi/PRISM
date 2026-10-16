@@ -148,7 +148,7 @@ class MainWindow(QMainWindow):
     and the page in sight after every move. Owns the QSettings write that runs at quit (``_save_state``,
     reached from closeEvent): panel selections, and the Artifacts screen's own (called by name, because
     _all_panels() is panel-typed and that screen is not). Two other write sites exist on purpose: a
-    panel's splitter position is written as it is dragged (see base_panel.py), and appearance settings
+    panel's splitter position is written 1.5 s after it was last dragged (see base_panel.py), and appearance settings
     are written eagerly, as they are applied immediately.
     """
     place_changed = Signal(str, object)
@@ -420,7 +420,7 @@ class MainWindow(QMainWindow):
         the keyboard and say where the window is, all before returning. Parameter inference opened with no
         step shows the step in hand the first time and the step last shown after that; a step that cannot be
         opened yet leaves the step shown. Home is read again each time it is opened. A part the window does
-        not have raises KeyError."""
+        not have, or a page its part does not have, raises KeyError before anything moves."""
         self._move(part, page, keyboard=Qt.OtherFocusReason)
 
     def go_to_run(self) -> None:
@@ -434,6 +434,9 @@ class MainWindow(QMainWindow):
         that gives the page no keyboard."""
         if not self.shell.has_part(part):
             raise KeyError(f"not a part of the window: {part!r}")
+        pages = _TABBED.get(part, ())
+        if page is not None and pages and page not in pages:
+            raise KeyError(f"not a page of {part!r}: {page!r}")
         widget = self.shell.part_widget(part)
         if part == "inference":
             if page is None and not self._inference_opened:
@@ -451,7 +454,6 @@ class MainWindow(QMainWindow):
         self._moving = True
         try:
             self.shell.show_part(part)
-            pages = _TABBED.get(part, ())
             if page is not None and pages:
                 index = pages.index(page)
                 if widget.tabs.isTabEnabled(index):
@@ -510,18 +512,23 @@ class MainWindow(QMainWindow):
     # ── the live run, at the foot of the rail ─────────────────────────────────
     def _on_run_state(self, panel) -> None:
         """A run started (``panel``) or ended (None): the steps' states are worked out again, which shows the
-        live step in the rail and has Home read, and the foot says what is running and for how long.
+        live step in the rail and has Home read, and the foot says what is running and for how long. When the
+        run ends with the keyboard on the foot, which is then no control, the rail takes the keyboard.
 
         Connected to the module-level RUN_STATE in base_panel.py, which every window built in the process
         hears until it is deleted: this handler touches only its own window's widgets, and is safe to run on
-        a window nobody is looking at. The run's place is looked up ONCE per run, not per tick.
+        a window nobody is looking at. The run's title and the words of its place are worked out ONCE per run,
+        not per tick.
         """
         self._running_panel = panel
         self.inference_screen.recompute_states()
         foot = self.shell.rail.foot
         if panel is None:
             self._run_timer.stop()
+            held = self.focusWidget() is foot
             foot.set_state("none", "Nothing is running", "Only one run at a time.")
+            if held:
+                self.shell.rail.take_keyboard()
             return
         place = self._run_place(panel)
         if place is None:

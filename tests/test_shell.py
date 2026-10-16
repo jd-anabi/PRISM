@@ -642,9 +642,9 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     """``go_to`` shows the part and its page, marks the row of what is shown and says where the window is, all
     before it returns, once a call, the same place too. Parameter inference opened with no step shows the step in
     hand the first time and the step last shown after that; a step whose tab cannot open yet leaves the step
-    shown, which the rail marks. A part the window does not have is a mistake of the caller's. While the steps
-    and the two temperature pages are tabs, a change of tab in the part in sight is marked and said as a move;
-    a change in a part out of sight is not."""
+    shown, which the rail marks. A part the window does not have, or a page its part does not have, is a mistake
+    of the caller's, refused before anything moves. While the steps and the two temperature pages are tabs, a
+    change of tab in the part in sight is marked and said as a move; a change in a part out of sight is not."""
     from core.gui.session import SbiSession
     qt_app()
     window = build_window()
@@ -670,6 +670,10 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     assert window.fdt_screen.tabs.currentIndex() == 1 and len(said) == 7
     with pytest.raises(KeyError):
         window.go_to("nowhere")
+    with pytest.raises(KeyError):
+        window.go_to("inference", "nowhere")
+    assert (window.current_place(), _marked(rail), len(said)) == (("temperature", "sweep"), ["temperature"], 7), (
+        "a page its part does not have moved the window")
     window.fdt_screen.tabs.setCurrentIndex(0)                     # its own tab bar, while it is in sight
     assert said[-1] == ("temperature", "one_cell", True, ["temperature"]) and len(said) == 8
     window.go_to("inference", "prior")
@@ -880,7 +884,7 @@ def test_the_foot_reads_nothing_is_running_at_start_and_names_the_running_place(
     panel's run is live it names the place by its part ("Running: Effective temperature") or, for a step, by the
     step, with the time it has gone on and that settings are locked; its tool tip and its accessible name name the
     place in full, its page too. It is a button then, and the clock ticks once a second. When the run ends the
-    foot says nothing is running again and the clock stops."""
+    foot says nothing is running again and the clock stops; a foot that held the keyboard hands it to the rail."""
     from core.gui.panels.crossval_panel import CrossValPanel
     qt_app()
     window = build_window()
@@ -904,6 +908,12 @@ def test_the_foot_reads_nothing_is_running_at_start_and_names_the_running_place(
             panel._set_busy(False)
         assert (foot._marker, foot._title, foot._words, foot.is_button()) == idle
         assert not window._run_timer.isActive(), "the clock must stop when the run does"
+    panel._set_busy(True)
+    try:
+        foot.setFocus(Qt.TabFocusReason)
+    finally:
+        panel._set_busy(False)
+    assert window.focusWidget() is window.shell.rail.row("home"), "the run ended and the keyboard went nowhere"
 
 
 def test_the_foots_time_keeps_its_width_as_it_ticks(monkeypatch):
