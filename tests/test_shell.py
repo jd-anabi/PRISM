@@ -659,7 +659,7 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     marks it. A part the window does not have, or a page its part does not have, is a mistake of the caller's,
     refused before anything moves. The gates move no step and say nothing. A page of Effective temperature a
     person chooses by its name is said as a move, the part's row marked; a page shown out of sight by anything
-    but ``go_to`` is not said."""
+    but ``go_to`` is not said. A click on the rail's row of a step that cannot start opens that step too."""
     from core.gui.session import SbiSession
     qt_app()
     window = build_window()
@@ -702,6 +702,10 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
             window.go_to(part, "nowhere")
     assert (window.current_place(), _marked(rail), len(said)) == (("records", None), ["records"], 10), (
         "a page its part does not have moved the window")
+    window.go_to("inference", "model")
+    rail.row("infer").click()                                     # the session is empty: Inference cannot start
+    assert (window.current_place(), _marked(rail), inference.step_states()[4].can_start) == (
+        ("inference", "infer"), ["infer"], False), "a click on the row of a step that cannot start did not open it"
 
 
 def test_go_to_gives_the_page_the_keyboard_and_escape_in_the_rail_gives_it_back():
@@ -1372,8 +1376,8 @@ def test_a_part_added_to_a_low_window_is_told_so_at_once():
 
 
 def test_help_shows_the_help_text_that_settings_held():
-    """Help shows its heading, "Help", over the help text Settings used to hold, built here now: every section's
-    title, and every word of the help text, in a viewer at least as tall as the look asks."""
+    """Help shows its heading, "Help", over the help text Settings used to hold, built here now: the titles of its
+    five sections, and every word of the help text, in a viewer at least as tall as the look asks."""
     from PySide6.QtGui import QTextDocument
     from PySide6.QtWidgets import QLabel
     from core.gui.screens import help_screen, settings_screen
@@ -1381,8 +1385,9 @@ def test_help_shows_the_help_text_that_settings_held():
     window = build_window()
     viewer = window.help_screen.viewer
     shown = viewer.toPlainText()
-    titles = [title for _module, title in help_screen._HELP_SECTIONS]
-    assert titles and all(title in shown for title in titles), shown[:200]
+    titles = ["Reduction Map", "FDT Analysis", "Cross-validation (sweep study)", "Parameter Inference", "Simulate"]
+    assert [title for _module, title in help_screen._HELP_SECTIONS] == titles, "Help lost or gained a section"
+    assert all(title in shown for title in titles), shown[:200]
     written = QTextDocument()
     written.setHtml(help_screen.help_text())
     assert shown == written.toPlainText()
@@ -1409,10 +1414,11 @@ def test_settings_keeps_the_appearance_choices_alone():
 def test_your_own_models_lists_the_models_and_opens_the_builder_and_back(monkeypatch):
     """Your own models opens on the list of the models you defined, each with Edit and Delete. "Open model builder"
     opens the builder on a blank form; "Back to your models" returns to the list and keeps what the form holds;
-    Edit opens the builder on the model. The keyboard follows each move to the page's first stop. A model saved in
-    the builder, or deleted, is named in the list again and every list of models in the panels is judged again;
-    Delete asks first, and a question answered as the guard answers deletes nothing. Opened again in the launch
-    the part shows the page last shown; the next launch opens on the list."""
+    Edit opens the builder on the model. The keyboard follows each move to the page's first stop, given as a move
+    gives it, not as a key. A model saved in the builder, or deleted, is named in the list again and every list of
+    models in the panels is judged again; Delete asks first, and a question answered as the guard answers deletes
+    nothing. Opened again in the launch the part shows the page last shown, a form left half filled as it was left;
+    after the window is closed, the next launch opens on the list."""
     from PySide6.QtWidgets import QGroupBox, QLabel, QWidget
     from core import registry
     from core.Helpers import model_store
@@ -1434,6 +1440,14 @@ def test_your_own_models_lists_the_models_and_opens_the_builder_and_back(monkeyp
                 for row in listed.findChildren(QWidget, "", Qt.FindDirectChildrenOnly) if row.findChildren(QPushButton)]
 
     assert rows() == [([name], ["Edit", "Delete"]) for name in names]
+    opener = _button(models, "Open model builder")
+    given, kept = [], QWidget.setFocus
+
+    def set_focus(widget, *reason):
+        given.append((widget, reason))
+        return kept(widget, *reason)
+
+    monkeypatch.setattr(QWidget, "setFocus", set_focus)
     builder.name_edit.setText("DRAFT")
     _button(models, "Open model builder").click()
     assert (window.current_place(), builder.name_edit.text()) == (("models", "builder"), "")
@@ -1441,7 +1455,9 @@ def test_your_own_models_lists_the_models_and_opens_the_builder_and_back(monkeyp
     builder.name_edit.setText("DRAFT")
     _button(builder, "Back to your models").click()
     assert (window.current_place(), builder.name_edit.text()) == (("models", "list"), "DRAFT")
-    assert window.focusWidget() is _button(models, "Open model builder")
+    assert window.focusWidget() is opener
+    assert given == [(builder.name_edit, (Qt.OtherFocusReason,)), (opener, (Qt.OtherFocusReason,))], (
+        "a button of the part gave the keyboard as a key gives it")
     window.go_to("live")
     window.go_to("models")
     assert window.current_place() == ("models", "list"), "a later opening is not at the page last shown"
@@ -1449,7 +1465,8 @@ def test_your_own_models_lists_the_models_and_opens_the_builder_and_back(monkeyp
     assert (window.current_place(), builder.name_edit.text()) == (("models", "builder"), names[0])
     window.go_to("home")
     window.go_to("models")
-    assert window.current_place() == ("models", "builder"), "a later opening is not at the page last shown"
+    assert (window.current_place(), builder.name_edit.text()) == (("models", "builder"), names[0]), (
+        "a later opening is not at the page last shown, as it was left")
     judged, deleted = [], []
     monkeypatch.setattr(window, "_refresh_model_combos", lambda: judged.append(len(rows())))
     names.append("DUFFING")
@@ -1463,6 +1480,7 @@ def test_your_own_models_lists_the_models_and_opens_the_builder_and_back(monkeyp
     monkeypatch.setattr(registry, "unregister", lambda name: names.remove(name))
     models._delete_user_model("DUFFING")
     assert (deleted, judged) == (["DUFFING"], [3, 2]), "a deleted model is still named"
+    window.close()                                                # closing writes what the window keeps
     again = build_window()
     again.go_to("models")
     assert again.current_place() == ("models", "list"), "the page shown was kept for the next launch"
@@ -1555,9 +1573,10 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
     """Every place but Home stands its first frame or its first line twelve pixels in from the rail, from the
     window's right edge, from its top and from its bottom, at the ordinary text size, and as much more as a larger
     text size scales it: a step and a panel by the frame their own layout holds, Effective temperature's row of
-    page names too, lined up with the frame under it, and every other place by what its own layout holds. Home
-    keeps the look's page margin, and the window gives it none."""
+    page names too, lined up with the frame under it, and every other place by what its own layout holds, the list
+    of Your own models by its group too. Home keeps the look's page margin, and the window gives it none."""
     from PySide6.QtCore import QMargins, QRect
+    from PySide6.QtWidgets import QGroupBox
     from tests._look_helpers import text_size
     qt_app()
 
@@ -1582,6 +1601,10 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
                     window.go_to(place.key)
                     QApplication.processEvents()
                     assert margins(window, place.key) == (design.scaled(12),) * 4, (factor, place.key)
+                listed = window.models_screen
+                group, = [box for box in listed.findChildren(QGroupBox) if box.title() == "User-defined models"]
+                at = group.mapTo(listed, QPoint(0, 0))
+                assert (at.x(), at.y(), listed.width() - at.x() - group.width()) == (design.scaled(12),) * 3, factor
                 assert window.home_screen.contentsMargins() == QMargins(0, 0, 0, 0)
             finally:
                 window.hide()

@@ -1472,7 +1472,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     (a) the table knows every registry key and no other -- an unmapped key would show a refusal
         with no way out, and an entry nobody raises is a sentence that can go stale unseen;
     (b) every tuple names a place: one of the ten titles the refusals name today, each held here with the
-        place of the window it stands for, or one of SCREENS; every such place is read off the built window;
+        place of the window it stands for until the refusals name the rail's places instead, or one of
+        SCREENS; every such place is read off the built window;
         a tuple has a non-empty label and renders the box sentence; a sentence entry is
         returned verbatim and has no label; a None entry says nothing and has no label; and none
         of the three ever raises from fix_sentence, which runs while a refusal is being shown;
@@ -3944,7 +3945,8 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     drive rows exist; a chi config would build none (no force_params_dict) and the drive entries
     would pass vacuously. The places are the panels behind the ten titles the refusals name and the two
     screens, read off a built MainWindow -- the model builder with one variable declared and its
-    parameter detected, because four of the boxes it names exist only then.
+    parameter detected, because four of the boxes it names exist only then. The ten titles are held here, each
+    with its panel, until the refusals name the rail's places instead.
 
     The second half: the Infer tab's registered rows are built from label(key), not from a literal
     that happens to match today."""

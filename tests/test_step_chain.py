@@ -597,7 +597,8 @@ def _pressable(panel) -> list:
 def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_run, monkeypatch):
     """No step is disabled. On four sessions -- an empty one; a model chosen, by the first step's own button; a
     configuration and a prior; and a posterior with them, the tiny run's -- each of the six steps opens as the
-    page shown and the rail marks it, and its main button is greyed exactly when the step cannot start. On a step
+    page shown, neither it nor the stack of the pages disabled, and the rail marks it; its main button is greyed
+    exactly when the step cannot start. On a step
     that cannot start, each button that can be pressed is pressed, with every question answered by the guard and
     every file chooser cancelled, and the session built again before each press: no run is started, nothing is
     raised, no drawing error is caught and nothing is shown but a question or a notice."""
@@ -645,6 +646,7 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
                 session, step.key)
             assert window.shell.rail.row(step.key).property("ring_left"), (session, step.key)
             assert getattr(panel, _MAIN[step.key]).isEnabled() == state.can_start, (session, step.key)
+            assert panel.isEnabled() and inference.pages.isEnabled(), (session, step.key)
             if state.can_start:
                 continue
             for number in range(len(_pressable(panel))):
@@ -694,7 +696,8 @@ def test_refresh_gates_says_the_new_states_once_and_the_rail_and_home_hear_them(
 def test_parameter_inference_opens_the_step_in_hand_then_the_step_last_shown():
     """Parameter inference opened with no step shows the step in hand at its first opening in a launch and the step
     last shown at every later one, a step that cannot start yet among them; a first opening at a named step counts
-    as the first. With no step in hand the first opening shows the first step. The rail marks the step shown."""
+    as the first, and a step that is none, refused, counts as no opening. With no step in hand the first opening
+    shows the first step. The rail marks the step shown."""
     from core.gui.session import SbiSession
     from tests._fixtures import build_window, qt_app
     qt_app()
@@ -717,6 +720,8 @@ def test_parameter_inference_opens_the_step_in_hand_then_the_step_last_shown():
         return window.current_place(), window.inference_screen.current_step()
 
     window = window_holding(SbiSession(draft=draft))
+    with pytest.raises(KeyError):
+        window.go_to("inference", "nowhere")
     assert opened(window, ("inference",)) == (("inference", "prior"), "prior"), (
         "the first opening is not at the step in hand")
     assert opened(window, ("inference", "infer"), ("live",), ("inference",)) == (("inference", "infer"), "infer"), (

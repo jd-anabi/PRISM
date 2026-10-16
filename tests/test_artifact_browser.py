@@ -1147,6 +1147,7 @@ def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatc
         forget_asked()                      # this test is about the three sites, not construction
         monkeypatch.setattr(models.builder, "load_existing", boom)
         models._edit_user_model("BROKEN")   # site 1 -- a definition that will not load
+        assert models.current_page() == "list", "a definition that will not load opened the builder"
         monkeypatch.setattr(model_store, "delete_user_model", boom)
         BasePanel._running = True
         try:
