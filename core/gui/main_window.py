@@ -431,7 +431,7 @@ class MainWindow(QMainWindow):
         step shows the step in hand the first time and the step last shown after that; a step that cannot be
         opened yet leaves the step shown. Home is read again each time it is opened. A part the window does
         not have raises KeyError."""
-        self._move(part, page, keyboard=True)
+        self._move(part, page, keyboard=Qt.OtherFocusReason)
 
     def go_to_run(self) -> None:
         """Go to the place of the live run. Nothing when no run is live, or its panel has no place."""
@@ -439,7 +439,9 @@ class MainWindow(QMainWindow):
         if place is not None:
             self.go_to(*place)
 
-    def _move(self, part: str, page, *, keyboard: bool) -> None:
+    def _move(self, part: str, page, *, keyboard) -> None:
+        """The move ``go_to`` makes. ``keyboard`` is the reason the page takes the keyboard for, or None for a move
+        that gives the page no keyboard."""
         if not self.shell.has_part(part):
             raise KeyError(f"not a part of the window: {part!r}")
         widget = self.shell.part_widget(part)
@@ -468,8 +470,8 @@ class MainWindow(QMainWindow):
             self._moving = False
         now, shown = self.current_place()
         self.shell.rail.set_place(now, shown if now == "inference" else None)
-        if keyboard:
-            self._give_keyboard(widget, Qt.OtherFocusReason)
+        if keyboard is not None:
+            self._give_keyboard(widget, keyboard)
         self.place_changed.emit(now, shown)
 
     def _give_keyboard(self, widget: QWidget, reason) -> None:
@@ -483,14 +485,21 @@ class MainWindow(QMainWindow):
             target.setFocus(reason)
 
     def _rail_opened(self, part: str, step) -> None:
-        """A row of the rail was pressed. By Enter or Space on the row that has the keyboard: the page takes the
-        keyboard. By a click: the keyboard is taken off the page in sight and given to nothing, so that no
-        control of the page the click opens wears the focus ring, a field one types in among them."""
+        """A row of the rail was pressed. By Enter or Space in the rail: the page takes the keyboard, as after a
+        key. By a click: the page takes none, whatever held the keyboard. A page that held it lets it go to
+        nothing; a rail that held it keeps it, on the row the click marked. So no control of the page the click
+        opens wears the focus ring, a field one types in among them, and no ring is left on another row."""
+        rail = self.shell.rail
+        if rail.opened_by_key():
+            self._move(part, step, keyboard=Qt.ShortcutFocusReason)
+            return
         held = self.focusWidget()
-        by_key = self.shell.rail.isAncestorOf(held)
-        if not by_key and held is not None and self.shell.stack.currentWidget().isAncestorOf(held):
+        if held is not None and self.shell.stack.currentWidget().isAncestorOf(held):
             held.clearFocus()
-        self._move(part, step, keyboard=by_key)
+        self._move(part, step, keyboard=None)
+        if held is not None and rail.isAncestorOf(held):
+            now, shown = self.current_place()
+            rail.row(shown if now == "inference" else now).setFocus(Qt.OtherFocusReason)
 
     def _rail_left(self) -> None:
         """Escape in the rail: the page in sight takes the keyboard."""

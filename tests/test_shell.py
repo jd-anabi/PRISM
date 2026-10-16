@@ -745,6 +745,59 @@ def test_a_mouse_click_on_a_rail_row_puts_no_ring_on_the_page():
         follower.stop()
 
 
+def test_a_click_on_a_rail_row_gives_the_page_no_keyboard_whatever_held_it_and_a_key_does(monkeypatch):
+    """With the keyboard in the rail -- on its first row, as the window coming to the front leaves it, or brought
+    there by a key -- a click on a part's row opens the part and gives its page neither the keyboard nor the ring:
+    the keyboard stays in the rail, on the row the click marked, and no ring shows, not even on a field one types
+    in. Enter and Space on a row give the page its first setting, ringed as after a key. The window is not shown
+    on a screen, so each focus the window gives is handed to the ring's follower as the screen would hand it."""
+    from PySide6.QtWidgets import QWidget
+    from core.gui import style
+    app = qt_app()
+    follower = style.FocusFollower(app)
+    kept = QWidget.setFocus
+
+    def set_focus(widget, reason=Qt.OtherFocusReason):
+        kept(widget, reason)
+        follower.arrived(widget, reason)
+
+    monkeypatch.setattr(QWidget, "setFocus", set_focus)
+    window = build_window()
+    rail = window.shell.rail
+
+    def click(key):
+        """A click on the row of the part ``key``; the row the rail marks then."""
+        row = rail.row(key)
+        QTest.mouseClick(row, Qt.LeftButton, Qt.NoModifier, row.rect().center())
+        part, page = window.current_place()
+        assert part == key, key
+        return rail.row(page if part == "inference" else part)
+
+    try:
+        _shown_off_screen(window)
+        rail.row("home").setFocus(Qt.ActiveWindowFocusReason)          # the window comes to the front
+        for key in ("models", "inference", "temperature", "live", "reduction", "records", "settings", "help", "home"):
+            click(key)
+            held = window.focusWidget()
+            assert rail.isAncestorOf(held) and follower.target() is None, (key, held, follower.target())
+        rail.take_keyboard()                                             # a key brings it there: the ring shows
+        assert follower.target() is rail.row("home")
+        marked = click("live")
+        assert (window.focusWidget(), follower.target()) == (marked, None), "a ring was left in the rail"
+        QTest.keyClick(window.focusWidget(), Qt.Key_Return)
+        first = window.simulate_screen.panels()[0].model_combo
+        assert (window.current_place(), window.focusWidget(), follower.target()) == (("live", None), first, first)
+        rail.take_keyboard()
+        marked = click("records")
+        assert (window.focusWidget(), follower.target()) == (marked, None), "a key's opening outlived its key"
+        QTest.keyClick(window.focusWidget(), Qt.Key_Space)
+        first = window.artifact_screen.kind_combo
+        assert (window.current_place(), window.focusWidget(), follower.target()) == (("records", None), first, first)
+    finally:
+        window.hide()
+        follower.stop()
+
+
 def test_the_chain_follows_the_session_and_the_run(tmp_path):
     """The rail's six step rows read what the rules give for the session in use, with the narrowing round's
     observation on offer when its list holds one and each held record by its label: at the window's start, after

@@ -381,7 +381,8 @@ class Rail(QWidget):
     the run's state at its foot. ``opened`` is emitted with a part's key and None, or with "inference" and a
     step's key, when a row is pressed; ``left`` when Escape is pressed in the rail, for the page to take the
     keyboard. Up, Down, Home and End move between the rows in sight, in their order; Enter and Space open the
-    row that has the keyboard."""
+    row that has the keyboard. While ``opened`` is said, ``opened_by_key`` tells a row opened by Enter or Space
+    from one opened by a click."""
     opened = Signal(str, object)
     left = Signal()
 
@@ -391,6 +392,7 @@ class Rail(QWidget):
         self._part = self._step = None
         self._small = False
         self._states = ()
+        self._by_key = False                 # True only while a row that Enter or Space opened is said
         column = QVBoxLayout(self)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
@@ -550,6 +552,10 @@ class Rail(QWidget):
         self._scroll.ensureWidgetVisible(row, 0, 0)
         row.setFocus(Qt.ShortcutFocusReason)
 
+    def opened_by_key(self) -> bool:
+        """While ``opened`` is said: True when Enter or Space in the rail opened the row, False when a click did."""
+        return self._by_key
+
     # the keyboard inside the rail
     def _current_row(self):
         if self._step is not None:
@@ -569,9 +575,13 @@ class Rail(QWidget):
         if key == Qt.Key_Escape:
             self.left.emit()
             return True
-        if key in (Qt.Key_Return, Qt.Key_Enter):
+        if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             if not event.isAutoRepeat():             # a key held down opens the row once
-                row.click()
+                self._by_key = True
+                try:
+                    row.click()
+                finally:
+                    self._by_key = False
             return True
         if key in (Qt.Key_Left, Qt.Key_Right):
             return True
