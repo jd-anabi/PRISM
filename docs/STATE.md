@@ -1,6 +1,6 @@
 # PRISM — state
 
-**Last updated:** 2026-10-15, evening (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 5 AND IS HANDED TO A NEW
+**Last updated:** 2026-10-16, morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 6 AND STOPS AT A CLEAN STATE AT THE OWNER'S WORD ("Try to also finish things up at a clean state when usage limits are near their max, I won't buy anymore credits"); it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-6.md`: TASK 6 IS COMPLETE (`22b8827`..`c1628d0`, after one fix round, its review clean and its gate green; the last gate, on `c1628d0`: 1532 passed, 4 skipped, 5 deselected); departure 70 amended; Task 7's preparation was begun and STOPPED (nothing of it in the repository); the weekly bar at 100 % (resets on the evening of 17 October). NEXT, IN A NEW CHAT THE OWNER STARTS WHEN THEY CHOOSE: Task 7 (each part built when first opened), its preparation afresh, from `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md`; the paragraph "THE BUILD OF STAGE 2, TASK 6" below is this session's record. What follows in this parenthesis is the head as the evening of 15 October left it: 2026-10-15, evening (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 5 AND IS HANDED TO A NEW
 CHAT AT THE OWNER'S WORD; it ran in a session started from the owner's pasted prompt
 `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-4.md`: TASKS 4 AND 5 ARE COMPLETE
 (`c66fde9`..`827ff3d`, each after one fix round, its review clean and its gate green; the last gate, on `827ff3d`:
@@ -84,6 +84,53 @@ the build's state stands in four paragraphs, each as it was written on its date 
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**THE BUILD OF STAGE 2, TASK 6 (2026-10-15, evening, to 2026-10-16, morning; a session started from the owner's pasted
+prompt `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-6.md`; the ledger's entries from "NEW CHAT
+2026-10-15 (evening)" on have every figure and ruling).** At the start (20:55): the tree clean at `e532c48`, no python
+alive, the card at the desktop's share; the usage card's weekly bar at 96 % (100 % by Task 6's fix round), extra usage
+on ($353.52 spent at the start, $506.76 at the stop). **Task 6, every place without a tab bar** (`edae985`, `1215b9b`,
+`81055cc`, then fix round 1 `b85ca70`..`c1628d0`): the six steps are pages of one stack with no tab bar and no heading,
+and every step opens (one that cannot start shows today's panel with its main button greyed; its reason in the rail);
+`go_to` asks each part for `show_page` and `current_page` (Task 5's tab interim gone); Parameter inference opens the
+step in hand at its first opening, the step last shown afterwards; Effective temperature chooses "One cell" or
+"Sweep study" by the row of page names, opens on One cell in every launch and keeps the page last shown in that
+launch, never stored; Live simulation and the Reduction map are their panels themselves; `SectionScreen` and
+`widgets/anim.py` deleted; Your own models (`core/gui/screens/models_screen.py`) opens on today's list of your own
+models in every launch, "Open model builder" resets the builder as today's Settings button did, "Back to your models"
+keeps a half-filled form, the edit and delete handlers moved out of the window; the builder's "edit it from Settings"
+reads "edit it from Your own models" (**departure 70 amended**, `22b8827`, with three registry names: `current_page` on
+both screens, `ModelsScreen.first_focus()`); Help holds the help text (`help_text()` moved there); Settings keeps the
+appearance alone; every place but Home stands 12 px from the rail and the window's edges, scaled with the text size
+(18 at 150 %). Prepared by a first reader (22 open points, ruled by the controller in `stage-2/briefs/task-06-rulings.md`,
+25 rulings) and a skeptic (53 faults; the copy's gate 1530; nine points brought back, all accepted). The review: seat one
+clean; seat two approved (every place measured; Home pixel-identical in 32 pairs; nothing cut at the smallest window
+that was not cut before), with one minor that mattered: the Training step's and the narrowing round's wrapped budget
+lines drawn shorter than their words and overlapping, old once a configuration exists but now in sight from the first
+launch, since every step opens; seat three, five Important test gaps (no step page held never disabled; no step opened
+by its rail row; the half-filled form; the next launch read without closing; the focus reason of the models' own
+moves). Fix round: a panel's column lays each item at its height for its width (a size hint never below its height at
+its narrowest; every other panel pixel-identical in 476 pictures, where the stretch the controller had named first
+moved 90; costs a step change 14.5 to 19.6 ms median, the longest 44 to 82 ms); the tests; after a delete the keyboard
+goes to the list's first stop; docstrings. **Gates:** green on `81055cc` (1530, 15:31) and `c1628d0` (1532, 15:19), each
+with 4 skipped, 5 deselected and 205 warnings (two new, the tiny run's, which the rules' file now builds), none a
+quiet-machine time; the real `Artifacts/` (428) unchanged after each; THE REAL `PRISM.ini` WAS REWRITTEN at 20:54:18 on
+15 October, before this session's first command (20:55:02), while nothing of the build ran: 3,301 bytes, sha256
+FF1B0FDB…39D5, where it stood at 3,292 bytes all of 15 October (most likely the owner's own PRISM opened and closed; told
+to the owner); unchanged since. **For the owner at the exit, new:** Effective temperature on One cell in every launch
+("every time" read as every launch); Your own models on its list in every launch; the 12 px margin against the sketch,
+Settings' group 22 px in because its frame is kept; Help still printing "split into six tabs" until it is rewritten;
+the cost in milliseconds of the column that mends the cut budget lines. **Carried** (the ledger's line "CARRIED to Task
+7" has each): to Task 7, a deleted or half-built panel leaving the panel set, the error page keeping the error's text,
+the locked page's keyboard, the margins and the pages' memory moving into the build at the first opening, closing
+writing built parts only; to Task 8, the control-table tests' literal of today's titles; to Task 9, the row of page
+names in the Tab order and the list's Tab order; to Task 10, the lock and the listener. **Cost in background agents:**
+Task 6 about 4.2 million tokens (the bar 96 % to 100 %, then extra usage). **Task 7's preparation** was dispatched at
+04:27, cut off by the usage limit near 05:45, resumed at the owner's "Try again" at 07:33, and STOPPED by the
+controller at 07:35 at the owner's word quoted in the head: no brief, no report, nothing in the repository; its
+scratch (`...\s2\t07*\`) kept and not walked, and its dispatch kept for reuse (`stage-2/briefs/task-07-prep-dispatch.md`).
+**HANDED TO A NEW CHAT** from `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md` (not checked by
+a reader, to save the owner's usage); nothing running at the hand-over; unpushed `65e94d3`..the hand-over's commit.
 
 **THE BUILD OF STAGE 2, TASKS 4 AND 5 (2026-10-15; a session started from the owner's pasted prompt
 `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-4.md`; the ledger's entries from "NEW CHAT
