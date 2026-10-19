@@ -151,24 +151,22 @@ def test_homes_records_row_opens_the_browser_and_the_window_saves_its_state():
 
     qt_app()
     w = build_window()
-    assert isinstance(w.artifact_screen, ArtifactScreen)
-    assert w.part("records") is w.artifact_screen
-
-    assert not isinstance(w.artifact_screen, BasePanel), \
-        "a BasePanel enrols in _instances, so every run anywhere would grey the browser out"
-    assert w.artifact_screen not in w._all_panels()
-
     home = w.part("home")
-    assert home is w.home_screen
     home.resize(1080, 820)
     home.grab()
     parts = home.parts_table.view
     rows = [parts.model().index(row, 0) for row in range(parts.model().rowCount())]
     records, = [index for index in rows if index.data() == "Records"]
     QTest.mouseClick(parts.viewport(), Qt.LeftButton, Qt.NoModifier, parts.visualRect(records).center())
-    assert w.current_place() == ("records", None)
+    screen = w.part("records")
+    assert w.current_place() == ("records", None) and w.shell.stack.currentWidget() is screen
+    assert isinstance(screen, ArtifactScreen)
 
-    w.artifact_screen.kind_combo.setCurrentIndex(KINDS.index("posterior"))
+    assert not isinstance(screen, BasePanel), \
+        "a BasePanel enrols in _instances, so every run anywhere would grey the browser out"
+    assert screen not in w._all_panels()
+
+    screen.kind_combo.setCurrentIndex(KINDS.index("posterior"))
     w._save_state()
     qs = st.settings()
     qs.beginGroup("artifacts")
@@ -273,7 +271,7 @@ def test_a_store_change_in_the_browser_re_lists_every_artifact_picker():
     seen = []
     for p in pickers:
         p.refresh = lambda _p=p: seen.append(_p)
-    w.artifact_screen.store_changed.emit()
+    w.part("records").store_changed.emit()
     assert [id(p) for p in seen[:len(pickers)]] == [id(p) for p in pickers], \
         f"refreshed {[p.kind for p in seen]}, but the window holds {[p.kind for p in pickers]}"
 
@@ -1091,11 +1089,11 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
     doomed = _prior_artifact(store, cfg, name="doomed", seed=3)
     w = build_window()
     try:
-        picker = w.inference_screen.prior_panel.prior_picker
+        picker = w.part("inference").prior_panel.prior_picker
         picker.refresh()
         picker.restore_key(doomed.id)
         assert picker.key() == doomed.id
-        scr = w.artifact_screen
+        scr = w.part("records")
         _show_kind(scr, "prior")
         _select_ref(scr.table, doomed.id)
         choose(monkeypatch, other=True)
@@ -1142,7 +1140,7 @@ def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatc
         raise RuntimeError("corrupt definition")
 
     w = build_window()
-    models = w.models_screen
+    models = w.part("models")
     try:
         forget_asked()                      # this test is about the three sites, not construction
         monkeypatch.setattr(models.builder, "load_existing", boom)

@@ -391,7 +391,7 @@ def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_s
     from tests._fixtures import build_browse_store
     qt_app()
     with use_store(ArtifactStore(tmp_path / "empty")):
-        assert build_window().home_screen.is_first_time()
+        assert build_window().part("home").is_first_time()
     ids = build_browse_store(tmp_path / "Artifacts")
     store = ArtifactStore(tmp_path / "Artifacts")
     identity = {"format": "training-rows/2", "prior_fingerprint": "e" * 16, "n_runs": 2, "truncation": None}
@@ -400,8 +400,8 @@ def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_s
     with use_store(store):
         window = build_window()
         facts = window._home_facts()
-        assert facts.session is window.inference_screen.session and facts.live_place is None
-        assert facts.states == chain.step_states(window.inference_screen.session) and not facts.has_runs
+        assert facts.session is window.part("inference").session and facts.live_place is None
+        assert facts.states == chain.step_states(window.part("inference").session) and not facts.has_runs
         rows = {(row.kind, row.id): row for row in facts.records}
         wanted = {(kind, ids[kind]) for kind in KIND_DIRS} | {("simulation", held.id)}
         assert set(rows) == wanted and len(facts.records) == len(wanted)
@@ -414,14 +414,14 @@ def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_s
                 label, record_words.kind_word(kind, summary.study), made, made.utcoffset())
         assert rows[("simulation", held.id)].label == "Simulation set for browse_prior"
         assert rows[("fdt", ids["fdt"])].kind_word == "sweep"
-        assert not window.home_screen.is_first_time()
+        assert not window.part("home").is_first_time()
         panel = window.panel(CrossValPanel)
         panel._set_busy(True)
         try:
             assert window._home_facts().live_place == ("temperature", "sweep")
         finally:
             panel._set_busy(False)
-        posterior = window.inference_screen.posterior_panel
+        posterior = window.part("inference").posterior_panel
         posterior._set_busy(True)
         try:
             live = window._home_facts()
@@ -488,44 +488,43 @@ def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
     qt_app()
     with use_store(ArtifactStore(tmp_path / "Artifacts")):
         window = build_window()
-        home, stack = window.home_screen, window.shell.stack
+        home, stack = window.part("home"), window.shell.stack
         for part in ("reduction", "temperature", "inference", "live", "records", "settings", "help", "models"):
             home.navigate.emit(part, None)
             assert stack.currentWidget() is window.part(part), part
             home.navigate.emit("home", None)
             assert stack.currentWidget() is home
-        assert (window.part("help"), window.part("models")) == (window.help_screen, window.models_screen)
-        assert window.models_screen.current_page() == "list"
+        assert window.part("models").current_page() == "list"
         for page, panel in (("sweep", 1), ("one_cell", 0)):
             home.navigate.emit("temperature", page)
-            screen = window.fdt_screen
+            screen = window.part("temperature")
             assert (window.current_place(), screen.names.current()) == (("temperature", page), page)
             assert screen.panels()[panel].isVisibleTo(screen) and not screen.panels()[1 - panel].isVisibleTo(screen)
         home.navigate.emit("records", "posterior")
-        assert (window.current_place(), window.artifact_screen.kind()) == (("records", None), "posterior")
+        assert (window.current_place(), window.part("records").kind()) == (("records", None), "posterior")
         home.navigate.emit("inference", "infer")
         assert window.current_place() == ("inference", "infer"), "a step that cannot start yet did not open"
-        window.inference_screen.session = SbiSession(draft=object(), cfg=object(), inf_prior=object(),
+        window.part("inference").session = SbiSession(draft=object(), cfg=object(), inf_prior=object(),
                                                      posterior=object())
-        window.inference_screen.refresh_gates()
+        window.part("inference").refresh_gates()
         for step in keys.STEPS:
             home.navigate.emit("inference", step.key)
             assert window.current_place() == ("inference", step.key)
-        window.inference_screen.session = SbiSession()
-        window.inference_screen.refresh_gates()
+        window.part("inference").session = SbiSession()
+        window.part("inference").refresh_gates()
         home.navigate.emit("home", None)
         window.setAttribute(Qt.WA_DontShowOnScreen)
         try:
             window.show()
             assert home.is_first_time()
-            window.inference_screen.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"))
+            window.part("inference").session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"))
             assert home.is_first_time(), "Home read while it was shown and nothing told it to"
-            window.inference_screen.refresh_gates()
+            window.part("inference").refresh_gates()
             assert not home.is_first_time() and home.next_heading.label.text() == "Next: build or load a prior"
             home.navigate.emit("live", None)
-            window.inference_screen.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"),
+            window.part("inference").session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"),
                                                          inf_prior=SimpleNamespace(name="p"))
-            window.inference_screen.refresh_gates()
+            window.part("inference").refresh_gates()
             assert home.next_heading.label.text() == "Next: build or load a prior", "Home read while hidden"
             home.navigate.emit("home", None)
             assert home.next_heading.label.text() == "Next: start a training", (
@@ -563,7 +562,7 @@ def test_in_the_window_home_reads_nothing_while_another_place_is_shown(tmp_path,
 
     with use_store(ArtifactStore(tmp_path / "Artifacts")):
         window = build_window()
-        home, panel = window.home_screen, window.panel(CrossValPanel)
+        home, panel = window.part("home"), window.panel(CrossValPanel)
         assert len(reads) == 1, "Home did not read as it was built"
         assert run_starts_and_ends() == (1, 1), "Home read while the window was not shown"
         window.setAttribute(Qt.WA_DontShowOnScreen)
@@ -623,13 +622,10 @@ def test_the_rails_places_are_the_parts_in_order_read_off_the_built_window():
     qt_app()
     window = build_window()
     rail, stack = window.shell.rail, window.shell.stack
-    pages = [window.home_screen, window.inference_screen, window.fdt_screen, window.simulate_screen,
-             window.reduction_screen, window.artifact_screen, window.models_screen, window.settings_screen,
-             window.help_screen]
+    pages = [stack.widget(n) for n in range(stack.count())]
     assert [row.place.key for row in rail.visible_rows() if isinstance(row, PartRow)] == [
         place.key for place in keys.PARTS]
     assert [rail.row(place.key).text() for place in keys.PARTS] == [place.name for place in keys.PARTS]
-    assert [stack.widget(n) for n in range(stack.count())] == pages
     assert [window.part(place.key) for place in keys.PARTS] == pages
     for place, page in zip(keys.PARTS, pages):
         rail.row(place.key).click()
@@ -648,7 +644,7 @@ def test_the_window_opens_on_home_whatever_was_open():
     remembered.setValue("window/tab", 2)          # a stale key from the old flat-tab layout
     remembered.sync()
     window = build_window()
-    assert window.shell.stack.currentWidget() is window.home_screen
+    assert window.shell.stack.currentWidget() is window.part("home")
     assert window.current_place() == ("home", None) and _marked(window.shell.rail) == ["home"]
 
 
@@ -663,7 +659,7 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     from core.gui.session import SbiSession
     qt_app()
     window = build_window()
-    rail, inference = window.shell.rail, window.inference_screen
+    rail, inference = window.shell.rail, window.part("inference")
     said = []
     window.place_changed.connect(
         lambda part, page: said.append((part, page, window.shell.stack.currentWidget() is window.part(part),
@@ -682,12 +678,12 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     window.go_to("temperature", "sweep")
     window.go_to("temperature", "sweep")
     assert said[-2:] == [("temperature", "sweep", True, ["temperature"])] * 2
-    assert window.fdt_screen.current_page() == "sweep" and len(said) == 7
+    assert window.part("temperature").current_page() == "sweep" and len(said) == 7
     with pytest.raises(KeyError):
         window.go_to("nowhere")
     assert (window.current_place(), _marked(rail), len(said)) == (("temperature", "sweep"), ["temperature"], 7), (
         "a part the window does not have moved the window")
-    _name(window.fdt_screen, "one_cell").click()                  # its own row of names, while it is in sight
+    _name(window.part("temperature"), "one_cell").click()         # its own row of names, while it is in sight
     assert said[-1] == ("temperature", "one_cell", True, ["temperature"]) and len(said) == 8
     window.go_to("inference", "prior")
     inference.session = SbiSession()
@@ -695,7 +691,7 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     assert (said[-1], len(said), window.current_place()) == (("inference", "prior", True, ["prior"]), 9,
                                                              ("inference", "prior"))
     window.go_to("records")
-    window.fdt_screen.show_page("sweep")                          # out of sight: nothing is said or marked
+    window.part("temperature").show_page("sweep")                 # out of sight: nothing is said or marked
     assert len(said) == 10 and _marked(rail) == ["records"]
     for part in ("inference", "temperature", "models"):
         with pytest.raises(KeyError):
@@ -719,16 +715,16 @@ def test_go_to_gives_the_page_the_keyboard_and_escape_in_the_rail_gives_it_back(
     qt_app()
     window = build_window()
     rail = window.shell.rail
-    first = {"home": window.home_screen.first_focus(), "inference": window.inference_screen.config_panel.model_combo,
-             "temperature": window.fdt_screen.panels()[0].model_combo,
-             "live": window.simulate_screen.model_combo, "records": window.artifact_screen.kind_combo,
-             "models": _button(window.models_screen, "Open model builder"),
-             "settings": window.settings_screen._radios["system"], "help": window.help_screen.viewer}
+    first = {"home": window.part("home").first_focus(), "inference": window.part("inference").config_panel.model_combo,
+             "temperature": window.part("temperature").panels()[0].model_combo,
+             "live": window.part("live").model_combo, "records": window.part("records").kind_combo,
+             "models": _button(window.part("models"), "Open model builder"),
+             "settings": window.part("settings")._radios["system"], "help": window.part("help").viewer}
     for place in keys.PARTS:
         window.go_to(place.key)
         held = window.focusWidget()
         if place.key == "reduction":
-            controls = window.reduction_screen.controls
+            controls = window.part("reduction").controls
             assert isinstance(held, QComboBox) and controls.isAncestorOf(held), held
         else:
             assert held is first[place.key], (place.key, held)
@@ -814,13 +810,13 @@ def test_a_click_on_a_rail_row_gives_the_page_no_keyboard_whatever_held_it_and_a
         marked = click("live")
         assert (window.focusWidget(), follower.target()) == (marked, None), "a ring was left in the rail"
         QTest.keyClick(window.focusWidget(), Qt.Key_Return)
-        first = window.simulate_screen.model_combo
+        first = window.part("live").model_combo
         assert (window.current_place(), window.focusWidget(), follower.target()) == (("live", None), first, first)
         rail.take_keyboard()
         marked = click("records")
         assert (window.focusWidget(), follower.target()) == (marked, None), "a key's opening outlived its key"
         QTest.keyClick(window.focusWidget(), Qt.Key_Space)
-        first = window.artifact_screen.kind_combo
+        first = window.part("records").kind_combo
         assert (window.current_place(), window.focusWidget(), follower.target()) == (("records", None), first, first)
     finally:
         window.hide()
@@ -833,11 +829,11 @@ def test_a_page_named_by_go_to_takes_the_keyboard_on_its_own_first_setting():
     from core.gui.session import SbiSession
     qt_app()
     window = build_window()
-    window.inference_screen.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"))
-    window.inference_screen.refresh_gates()
+    window.part("inference").session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"))
+    window.part("inference").refresh_gates()
     held = {}
-    for part, page, panel in (("temperature", "sweep", window.fdt_screen.panels()[1]),
-                              ("inference", "prior", window.inference_screen.prior_panel)):
+    for part, page, panel in (("temperature", "sweep", window.part("temperature").panels()[1]),
+                              ("inference", "prior", window.part("inference").prior_panel)):
         window.go_to(part, page)
         held[page] = (window.current_place(), panel.isAncestorOf(window.focusWidget()))
     assert held == {"sweep": (("temperature", "sweep"), True), "prior": (("inference", "prior"), True)}, held
@@ -864,14 +860,14 @@ def test_go_to_gives_the_keyboard_as_a_move_does(monkeypatch):
     window.shell.rail.take_keyboard()
     given.clear()
     QTest.keyClick(window.focusWidget(), Qt.Key_Escape)
-    assert given == [(window.models_screen.builder.name_edit, (Qt.ShortcutFocusReason,))], given
+    assert given == [(window.part("models").builder.name_edit, (Qt.ShortcutFocusReason,))], given
 
 
 def test_a_greyed_control_is_passed_over_for_the_next_setting():
     """A page whose first setting is greyed gives the keyboard to its next setting, not to nothing."""
     qt_app()
     window = build_window()
-    panel = window.simulate_screen
+    panel = window.part("live")
     panel.model_combo.setEnabled(False)
     window.go_to("live")
     held = window.focusWidget()
@@ -885,7 +881,7 @@ def test_a_part_with_no_setting_keeps_the_keyboard_inside_it():
     window = build_window()
     try:
         _shown_off_screen(window)             # shown: a hidden window hides the walk's way out of the part
-        assert main_window._first_control(window.help_screen) is None
+        assert main_window._first_control(window.part("help")) is None
     finally:
         window.hide()
 
@@ -904,7 +900,7 @@ def test_the_chain_follows_the_session_and_the_run(tmp_path):
     build_browse_store(tmp_path / "Artifacts")
     with use_store(ArtifactStore(tmp_path / "Artifacts")):
         window = build_window()
-        inference, rail = window.inference_screen, window.shell.rail
+        inference, rail = window.part("inference"), window.shell.rail
         offered = inference.tsnpe_panel.obs_picker.has_entries()
         assert offered, "the store's observation is not on offer"
 
@@ -962,11 +958,11 @@ def test_the_narrowing_round_reads_an_observation_written_after_the_window_opene
 
     with use_store(ArtifactStore(tmp_path / "empty")):
         window = build_window()
-        window.inference_screen.session = session
-        window.inference_screen.refresh_gates()
+        window.part("inference").session = session
+        window.part("inference").refresh_gates()
         assert window.shell.rail.row("narrowing").accessibleName() == spoken(False)
     with use_store(ArtifactStore(tmp_path / "full")):
-        window.inference_screen.refresh_gates()
+        window.part("inference").refresh_gates()
         assert window.shell.rail.row("narrowing").accessibleName() == spoken(True) != spoken(False)
 
 
@@ -977,7 +973,7 @@ def test_a_step_names_a_held_record_by_the_name_its_save_box_gave_it(monkeypatch
     from core.gui.session import SbiSession
     qt_app()
     window = build_window()
-    inference, rail = window.inference_screen, window.shell.rail
+    inference, rail = window.part("inference"), window.shell.rail
     made = SimpleNamespace(created="2026-10-03T14:02:00+00:00")
     held = {kind: SimpleNamespace(kind=kind, id=f"{kind[0]}1", name="", manifest=made)
             for kind in ("prior", "posterior")}
@@ -1010,7 +1006,7 @@ def test_the_foot_reads_nothing_is_running_at_start_and_names_the_running_place(
     assert not window._run_timer.isActive(), "a clock is ticking before anything has run"
     for panel, title, whole in ((window.panel(CrossValPanel), "Running: Effective temperature",
                                  "Running: Effective temperature, Sweep study"),
-                                (window.inference_screen.posterior_panel, "Running: Training",
+                                (window.part("inference").posterior_panel, "Running: Training",
                                  "Running: step 3, Training")):
         panel._set_busy(True)
         try:
@@ -1076,9 +1072,9 @@ def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowh
     window = build_window()
     foot = window.shell.rail.foot
     for panel, place in ((window.panel(CrossValPanel), ("temperature", "sweep")),
-                         (window.inference_screen.validate_panel, ("inference", "checks"))):
+                         (window.part("inference").validate_panel, ("inference", "checks"))):
         window.go_to("home")
-        window.fdt_screen.show_page("one_cell")
+        window.part("temperature").show_page("one_cell")
         panel._set_busy(True)
         try:
             QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
@@ -1107,8 +1103,8 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
     from core.gui.panels.crossval_panel import CrossValPanel
     qt_app()
     window = build_window()
-    rail, home = window.shell.rail, window.home_screen
-    names = window.fdt_screen.names.findChildren(QAbstractButton)
+    rail, home = window.shell.rail, window.part("home")
+    names = window.part("temperature").names.findChildren(QAbstractButton)
     page_words = [name.text() for name in names]
     rows = [place.key for place in keys.PARTS] + [step.key for step in keys.STEPS]
 
@@ -1132,7 +1128,7 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
                 window.go_to("inference", step.key)
                 assert window.current_place() == ("inference", step.key) and rail.row(step.key).isEnabled()
             window.go_to("temperature", "one_cell")
-            _name(window.fdt_screen, "sweep").click()
+            _name(window.part("temperature"), "sweep").click()
             assert window.current_place() == ("temperature", "sweep") and all(name.isEnabled() for name in names)
         finally:
             panel._set_busy(False)
@@ -1140,7 +1136,7 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
     try:
         _shown_off_screen(window)
         before = seen()
-        for panel in (window.panel(CrossValPanel), window.inference_screen.posterior_panel):
+        for panel in (window.panel(CrossValPanel), window.part("inference").posterior_panel):
             during(panel)
     finally:
         window.hide()
@@ -1151,12 +1147,12 @@ def test_go_to_records_with_a_kind_opens_records_at_that_kind():
     qt_app()
     window = build_window()
     window.go_to("records", "posterior")
-    assert window.current_place() == ("records", None) and window.artifact_screen.kind() == "posterior"
+    assert window.current_place() == ("records", None) and window.part("records").kind() == "posterior"
     window.go_to("home")
     window.go_to("records")
-    assert window.artifact_screen.kind() == "posterior"
+    assert window.part("records").kind() == "posterior"
     window.go_to("records", "calibration")
-    assert window.artifact_screen.kind() == "calibration"
+    assert window.part("records").kind() == "calibration"
 
 
 def test_home_is_read_again_when_opened_and_when_the_store_changes(tmp_path, monkeypatch):
@@ -1173,7 +1169,7 @@ def test_home_is_read_again_when_opened_and_when_the_store_changes(tmp_path, mon
     monkeypatch.setattr(main_window, "_home_records", lambda used: (reads.append(used), read(used))[1])
     with use_store(store):
         window = build_window()
-        home = window.home_screen
+        home = window.part("home")
         try:
             _shown_off_screen(window)
             assert len(reads) == 1, "Home read again at its first show"
@@ -1181,12 +1177,12 @@ def test_home_is_read_again_when_opened_and_when_the_store_changes(tmp_path, mon
                              if label.startswith("browse_")][:2]
             window.go_to("records")
             store.delete(first[len("browse_"):], ids[first[len("browse_"):]], force=True)
-            window.artifact_screen.store_changed.emit()
+            window.part("records").store_changed.emit()
             assert len(reads) == 1, "Home read while another place was shown"
             window.go_to("home")
             assert len(reads) == 2 and first not in [row[0] for row in _cells(home.records_table)]
             store.delete(second[len("browse_"):], ids[second[len("browse_"):]], force=True)
-            window.artifact_screen.store_changed.emit()
+            window.part("records").store_changed.emit()
             assert len(reads) == 3, "a change of the store did not read Home while it was shown"
             assert second not in [row[0] for row in _cells(home.records_table)]
             window.go_to("home")
@@ -1212,11 +1208,11 @@ def test_a_maximised_window_at_a_large_text_size_keeps_the_usual_layout(monkeypa
         try:
             assert (design.small_below(), design.two_columns_from()) == (972, 1410)
             _shown_off_screen(window, 1920, 1001)
-            assert not window.shell._small and not window.home_screen.page._small
-            assert not window.home_screen._columns.stacked(), "a page as wide as the screen allows set one column"
+            assert not window.shell._small and not window.part("home").page._small
+            assert not window.part("home")._columns.stacked(), "a page as wide as the screen allows set one column"
             window.resize(1920, 971)
             QApplication.processEvents()
-            assert window.shell._small and window.home_screen.page._small
+            assert window.shell._small and window.part("home").page._small
             assert window.shell.rail.row("home").height() == design.scaled(design.SIZE["nav_h_small"])
         finally:
             window.hide()
@@ -1226,7 +1222,7 @@ def test_a_maximised_window_at_a_large_text_size_keeps_the_usual_layout(monkeypa
         try:
             assert (design.small_below(), design.two_columns_from()) == (700, 1326)
             _shown_off_screen(window, 1366, 689)
-            assert window.shell._small and window.home_screen._columns.stacked()
+            assert window.shell._small and window.part("home")._columns.stacked()
         finally:
             window.hide()
     monkeypatch.undo()
@@ -1238,7 +1234,7 @@ def test_a_maximised_window_at_a_large_text_size_keeps_the_usual_layout(monkeypa
             assert not window.shell._small
             window.resize(760, 699)
             QApplication.processEvents()
-            assert window.shell._small and window.home_screen.page._small
+            assert window.shell._small and window.part("home").page._small
         finally:
             window.hide()
 
@@ -1254,9 +1250,9 @@ def test_the_current_row_stays_in_view_when_the_rail_has_less_room():
         window = build_window()
         rail, panel = window.shell.rail, window.panel(CrossValPanel)
         try:
-            window.inference_screen.session = SbiSession(draft=object(), cfg=object(), inf_prior=object(),
+            window.part("inference").session = SbiSession(draft=object(), cfg=object(), inf_prior=object(),
                                                          posterior=object())
-            window.inference_screen.refresh_gates()          # every step can be opened: the last is the lowest row
+            window.part("inference").refresh_gates()          # every step can be opened: the last is the lowest row
             window.setMinimumSize(1, 1)
             _shown_off_screen(window, 760, 740)
             window.go_to("inference", "narrowing")
@@ -1296,7 +1292,7 @@ def test_the_current_row_stays_in_view_when_a_step_above_it_takes_a_second_line(
 
     with use_store(ArtifactStore(tmp_path / "Artifacts")), text_size(1.5):
         window = build_window()
-        rail, inference = window.shell.rail, window.inference_screen
+        rail, inference = window.shell.rail, window.part("inference")
         try:
             inference.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"), cfg=object(),
                                            inf_prior=held("prior", "p1"), posterior=held("posterior", "q1"),
@@ -1348,7 +1344,7 @@ def test_home_is_told_the_small_layout_through_the_shell():
     the sentence is back."""
     qt_app()
     window = build_window()
-    home = window.home_screen
+    home = window.part("home")
     window.shell.set_small(True)
     assert home._head.sentence.isHidden()
     window.shell.set_small(False)
@@ -1383,7 +1379,7 @@ def test_help_shows_the_help_text_that_settings_held():
     from core.gui.screens import help_screen, settings_screen
     qt_app()
     window = build_window()
-    viewer = window.help_screen.viewer
+    viewer = window.part("help").viewer
     shown = viewer.toPlainText()
     titles = ["Reduction Map", "FDT Analysis", "Cross-validation (sweep study)", "Parameter Inference", "Simulate"]
     assert [title for _module, title in help_screen._HELP_SECTIONS] == titles, "Help lost or gained a section"
@@ -1392,7 +1388,7 @@ def test_help_shows_the_help_text_that_settings_held():
     written.setHtml(help_screen.help_text())
     assert shown == written.toPlainText()
     assert viewer.minimumHeight() == design.HELP_VIEWER_MIN_H and viewer.isReadOnly()
-    assert [label.text() for label in window.help_screen.findChildren(QLabel)] == ["Help"]
+    assert [label.text() for label in window.part("help").findChildren(QLabel)] == ["Help"]
     assert not hasattr(settings_screen, "help_text"), "the help text is built in two places"
 
 
@@ -1402,7 +1398,7 @@ def test_settings_keeps_the_appearance_choices_alone():
     from PySide6.QtWidgets import QAbstractButton, QGroupBox, QLabel, QRadioButton, QTextBrowser
     qt_app()
     window = build_window()
-    settings = window.settings_screen
+    settings = window.part("settings")
     assert [box.title() for box in settings.findChildren(QGroupBox)] == ["Appearance"]
     buttons = settings.findChildren(QAbstractButton)
     assert all(isinstance(button, QRadioButton) for button in buttons)
@@ -1428,7 +1424,7 @@ def test_your_own_models_lists_the_models_and_opens_the_builder_and_back(monkeyp
     monkeypatch.setattr(registry, "user_model_names", lambda: list(names))
     monkeypatch.setattr(registry, "load_errors", [])
     window = build_window()
-    models = window.models_screen
+    models = window.part("models")
     builder = models.builder
     window.go_to("models")
     assert window.current_place() == ("models", "list")
@@ -1523,8 +1519,8 @@ def test_a_delete_leaves_the_keyboard_on_the_lists_first_stop(monkeypatch):
     monkeypatch.setattr(registry, "unregister", names.remove)
     window = build_window()
     window.go_to("models")
-    opener = _button(window.models_screen, "Open model builder")
-    pressed = _button(window.models_screen, "Delete")             # the first row's: SHM's
+    opener = _button(window.part("models"), "Open model builder")
+    pressed = _button(window.part("models"), "Delete")             # the first row's: SHM's
     given, kept = [], QWidget.setFocus
 
     def set_focus(widget, *reason):
@@ -1567,7 +1563,7 @@ def test_effective_temperature_opens_on_one_cell_and_its_names_choose_the_page()
     cell again."""
     qt_app()
     window = build_window()
-    screen = window.fdt_screen
+    screen = window.part("temperature")
     said = []
     window.place_changed.connect(lambda part, page: said.append((part, page)))
     window.go_to("temperature")
@@ -1633,11 +1629,11 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
                     window.go_to(place.key)
                     QApplication.processEvents()
                     assert margins(window, place.key) == (design.scaled(12),) * 4, (factor, place.key)
-                listed = window.models_screen
+                listed = window.part("models")
                 group, = [box for box in listed.findChildren(QGroupBox) if box.title() == "User-defined models"]
                 at = group.mapTo(listed, QPoint(0, 0))
                 assert (at.x(), at.y(), listed.width() - at.x() - group.width()) == (design.scaled(12),) * 3, factor
-                assert window.home_screen.contentsMargins() == QMargins(0, 0, 0, 0)
+                assert window.part("home").contentsMargins() == QMargins(0, 0, 0, 0)
             finally:
                 window.hide()
 
@@ -1652,11 +1648,11 @@ def test_a_panels_column_lays_each_item_at_its_height_for_the_columns_width():
     from core import config
     qt_app()
     window = build_window()
-    inference = window.inference_screen
+    inference = window.part("inference")
     panels = [("inference", step.key, panel) for step, panel in zip(keys.STEPS, inference.panels())]
     panels += [("temperature", page.key, panel)
-               for page, panel in zip(keys.PAGES["temperature"], window.fdt_screen.panels())]
-    panels += [("live", None, window.simulate_screen), ("reduction", None, window.reduction_screen)]
+               for page, panel in zip(keys.PAGES["temperature"], window.part("temperature").panels())]
+    panels += [("live", None, window.part("live")), ("reduction", None, window.part("reduction"))]
 
     def named(widget):
         """A group's title, or the kind of a widget that has none."""

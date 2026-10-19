@@ -275,10 +275,10 @@ def test_the_window_offers_three_appearance_choices_and_no_ticks():
     window = build_window()
     three = ["Follow Windows", "Light", "Dark"]
     assert window.findChildren(QMenu) == [], "the window holds a menu"
-    radios = window.settings_screen.findChildren(QRadioButton)
+    radios = window.part("settings").findChildren(QRadioButton)
     assert [r.text() for r in radios] == three
-    assert window.settings_screen.findChildren(QCheckBox) == []
-    assert not [w for w in window.settings_screen.findChildren(QLabel) if "Font changes" in w.text()]
+    assert window.part("settings").findChildren(QCheckBox) == []
+    assert not [w for w in window.part("settings").findChildren(QLabel) if "Font changes" in w.text()]
     for gone in ("on_system_accent", "system_accent", "on_force_inter", "force_inter"):
         assert gone not in inspect.signature(SettingsScreen.__init__).parameters, gone
     for gone in ("_set_system_accent", "_set_force_inter"):
@@ -2835,7 +2835,7 @@ def test_a_picker_refresh_reopens_no_figure_and_moves_no_tab(tmp_path, how):
 
         store.set_note("fdt", other, "an unrelated note")
         if how == "store_changed":
-            w.artifact_screen.store_changed.emit()
+            w.part("records").store_changed.emit()
         else:
             panel.record_picker.findChild(QPushButton).click()
         _settle(app)
@@ -2876,7 +2876,7 @@ def test_a_relaunch_opens_no_figure_even_after_an_unrelated_note_is_set(tmp_path
         assert f"seed {seeds[second]}" in panel.record_line.text(), panel.record_line.text()
 
         store.set_note("fdt", first, "an unrelated note")
-        w.artifact_screen.store_changed.emit()
+        w.part("records").store_changed.emit()
         _settle(app)
         assert _tabs(panel) == [], f"a note set on another record opened figures: {_tabs(panel)}"
         assert panel.record_picker.key() == second
@@ -3985,14 +3985,14 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     for title, kind in (("NWK → Hopf reduction map", ReductionPanel), ("FDT analysis", FdtPanel),
                         ("Sweep study cross-validation", CrossValPanel), ("Live simulation", SimulatePanel)):
         tabs[title] = window.panel(kind)
-    tabs["Artifacts"] = window.artifact_screen
-    tabs["Model Builder"] = window.model_builder_screen
+    tabs["Artifacts"] = window.part("records")
+    tabs["Model Builder"] = window.part("models").builder
     # The model builder's init row exists once per declared variable and its value/min/max boxes once
     # per detected parameter (the control table names all four), so a freshly built screen shows
     # none of them: declare one variable and detect its parameter before reading the screen back. The
     # parameter row's boxes are captioned inside a LabeledFieldRow, not a form row, so read those
     # captions too.
-    mb = window.model_builder_screen
+    mb = window.part("models").builder
     mb.vars_edit.setText("x")
     mb._set_variables()
     mb._var_rows[0].drift.setText("-k*x")

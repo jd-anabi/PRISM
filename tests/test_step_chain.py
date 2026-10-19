@@ -612,7 +612,7 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
     monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: raised.append(repr(error)))
     answer_chooser(monkeypatch, "")
     window = build_window()
-    inference = window.inference_screen
+    inference = window.part("inference")
     first = inference.config_panel
     first.model_combo.setCurrentText("SBITEST")
     window.go_to("inference", "model")
@@ -671,7 +671,7 @@ def test_refresh_gates_says_the_new_states_once_and_the_rail_and_home_hear_them(
     from tests._fixtures import build_window, qt_app
     qt_app()
     window = build_window()
-    inference, rail = window.inference_screen, window.shell.rail
+    inference, rail = window.part("inference"), window.shell.rail
     heard = []
     for step, panel in zip(keys.STEPS, inference.panels()):
         monkeypatch.setattr(panel, "refresh_local_gates",
@@ -688,7 +688,7 @@ def test_refresh_gates_says_the_new_states_once_and_the_rail_and_home_hear_them(
         assert heard == [step.key for step in keys.STEPS] + [states], heard
         assert inference.step_states() == states
         assert [rail.row(step.key).accessibleName() for step in keys.STEPS] == [state.spoken for state in states]
-        assert window.home_screen.next_heading.label.text() == "Next: build or load a prior"
+        assert window.part("home").next_heading.label.text() == "Next: build or load a prior"
     finally:
         window.hide()
 
@@ -710,14 +710,14 @@ def test_parameter_inference_opens_the_step_in_hand_then_the_step_last_shown():
 
     def window_holding(session):
         window = build_window()
-        window.inference_screen.session = session
-        window.inference_screen.refresh_gates()
+        window.part("inference").session = session
+        window.part("inference").refresh_gates()
         return window
 
     def opened(window, *moves):
         for move in moves:
             window.go_to(*move)
-        return window.current_place(), window.inference_screen.current_step()
+        return window.current_place(), window.part("inference").current_step()
 
     window = window_holding(SbiSession(draft=draft))
     with pytest.raises(KeyError):
@@ -732,6 +732,6 @@ def test_parameter_inference_opens_the_step_in_hand_then_the_step_last_shown():
         "a first opening at a named step did not count as the first")
     done = window_holding(SbiSession(draft=draft, cfg=object(), inf_prior=held("prior"), posterior=held("posterior"),
                                      observation=held("observation")))
-    assert chain.step_in_hand(done.inference_screen.step_states()) is None
+    assert chain.step_in_hand(done.part("inference").step_states()) is None
     assert opened(done, ("inference",)) == (("inference", "model"), "model"), (
         "with no step in hand the first opening is not at the first step")
