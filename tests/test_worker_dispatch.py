@@ -291,6 +291,36 @@ def test_the_end_of_a_test_stops_a_run_it_left_live_before_its_panel_goes_and_fa
         "a panel was deleted under a run that had not stopped, or that run's end did not find it")
     _built.keep(slow)                         # let go when this test ends, as the fixture lets go any host
 
+def test_a_deleted_panel_leaves_the_set_a_run_locks_and_a_later_run_starts():
+    """A run locks the controls of every panel in the set each panel enrols in, and a panel that ran something is
+    still held in Python once it is deleted, by its run's own signals (and here by this test's name of it). So a
+    deleted panel leaves the set as its object goes: a second host's run then starts, locks and frees the panels
+    that live, and completes with nothing raised, and no panel of the set is gone."""
+    import shiboken6
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    app = qt_app()
+
+    def run(host):
+        """Run a short function on ``host``, turn the event loop until its run has ended, and say what it gave."""
+        got = []
+        host.dispatch(lambda: "done", on_result=got.append)
+        t0 = time.monotonic()
+        while (host._busy or not got) and time.monotonic() - t0 < 10:
+            app.processEvents()
+            time.sleep(0.005)
+        return got
+
+    first = build_run_host()
+    assert run(first) == ["done"] and first in BasePanel._instances
+    first.deleteLater()
+    QCoreApplication.sendPostedEvents(first, QEvent.DeferredDelete)
+    assert not shiboken6.isValid(first), "the host was not deleted"
+    assert [panel for panel in BasePanel._instances if not shiboken6.isValid(panel)] == [], (
+        "a deleted panel is still among the panels a run locks")
+    second = build_run_host()
+    assert run(second) == ["done"] and not BasePanel._running, "a run after a deleted panel did not complete"
+
 def test_cancel_is_not_consumed_by_a_non_worker_thread():
     """tqdm's TMonitor daemon force-refreshes a quiet bar, writing to our stream from ITS thread. If
     that write consumed the cancel latch, it would raise where nobody catches it and leave the worker

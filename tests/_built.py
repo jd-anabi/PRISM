@@ -69,9 +69,8 @@ def end_of_test(at_start: tuple, within: float = STOPS_WITHIN) -> None:
     seconds at most: the run's end, come after its panel was deleted, would raise on the panel before it put back
     the flag that says a run is live, and every later run would be refused. If it has not stopped by then, what
     the test made is taken out of the record and kept alive, not deleted, so that the run's end still finds its
-    panel. A deleted panel then leaves the set every panel enrols in, which the next run walks to lock every
-    panel's controls: a panel that ran something is still held in Python once deleted, by its run's signals.
-    A run that was live already when the test was set up is an earlier test's, and is not waited for again."""
+    panel. A run that was live already when the test was set up is an earlier test's, and is not waited for
+    again."""
     since, live_before = at_start
     left_live = a_run_is_live() and not live_before
     waited = 0.0
@@ -84,18 +83,10 @@ def end_of_test(at_start: tuple, within: float = STOPS_WITHIN) -> None:
             time.sleep(0.01)
         waited = time.monotonic() - began
     stopped = not (left_live and a_run_is_live())
-    try:
-        if stopped:
-            let_go(since)
-        else:
-            del BUILT[since:]
-    finally:
-        panels = sys.modules.get("core.gui.panels.base_panel")
-        if panels is not None:
-            import shiboken6
-            for panel in list(panels.BasePanel._instances):
-                if not shiboken6.isValid(panel):
-                    panels.BasePanel._instances.discard(panel)
+    if stopped:
+        let_go(since)
+    else:
+        del BUILT[since:]
     if left_live:
         raise AssertionError(
             "the test ended with a run still live; it was asked to stop, and "

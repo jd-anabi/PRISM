@@ -127,7 +127,7 @@ class BasePanel(QWidget):
     # reaches it through request_cancel_all() to stop a run before quitting.
     _active_cancel: "CancelToken | None" = None
     # Every live panel, so a run in ANY panel can lock the controls of ALL of them (see _set_busy).
-    # A WeakSet so panels torn down in tests (or a future dynamic UI) drop out without bookkeeping.
+    # Weak, and a panel leaves it as its object goes, though Python may hold the panel longer (see __init__).
     _instances: "weakref.WeakSet" = weakref.WeakSet()
 
     @classmethod
@@ -139,6 +139,11 @@ class BasePanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         BasePanel._instances.add(self)
+        # It leaves the set as its object goes. A panel that ran something is still held in Python once it is
+        # deleted, by its run's own signals, and the next run locks every panel of the set: handed an object
+        # that is gone, that lock would raise, and no run could start again.
+        held, enrolled = weakref.ref(self), BasePanel._instances
+        self.destroyed.connect(lambda *_: enrolled.discard(held()) if held() is not None else None)
         self._busy = False
         self._cancel: "CancelToken | None" = None
         self._workers = set()   # keep workers alive until 'finished' (else Qt purges its queued signals)
