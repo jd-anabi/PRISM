@@ -15,8 +15,8 @@ from core.Helpers import model_store
 from ..panels.base_panel import BasePanel
 from .model_builder_screen import ModelBuilderScreen
 
-# the keys of the two pages, the list's first
-_PAGES = ("list", "builder")
+# the keys of the two pages, the list's first: the window refuses any other page by them, before the part is built
+PAGES = ("list", "builder")
 
 
 class ModelsScreen(QWidget):
@@ -60,13 +60,13 @@ class ModelsScreen(QWidget):
     def show_page(self, name: str) -> None:
         """Show the list ("list") or the builder ("builder"); KeyError for any other name, before anything
         moves."""
-        if name not in _PAGES:
+        if name not in PAGES:
             raise KeyError(f"not a page of Your own models: {name!r}")
-        self._pages.setCurrentIndex(_PAGES.index(name))
+        self._pages.setCurrentIndex(PAGES.index(name))
 
     def current_page(self) -> str:
         """The key of the page shown: the list's until another is shown."""
-        return _PAGES[self._pages.currentIndex()]
+        return PAGES[self._pages.currentIndex()]
 
     def first_focus(self) -> QWidget:
         """Where the keyboard starts: on the builder its first setting, the model's name; on the list, which has

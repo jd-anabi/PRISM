@@ -380,8 +380,9 @@ def test_home_keeps_one_main_button_and_its_access_key():
 
 
 def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_store_in_use(tmp_path):
-    """What the window hands Home: the inference screen's session and its six steps, the part and page a live run
-    is in (the step whose run it is then reads "Now"), and every record of the store in use that has a manifest,
+    """What the window hands Home: the inference screen's session and its six steps, once the screen is built, the
+    part and page a live run is in (the step whose run it is then reads "Now"), and every record of the store in
+    use that has a manifest,
     of every kind, each with its label, the word for its kind and the moment it was made, in local time. A
     simulation set is called by the prior it was simulated for, or said to have lost it. A folder with no manifest
     is no record. A store with no record and nothing chosen opens Home on its first opening."""
@@ -399,9 +400,10 @@ def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_s
                                      parents={"prior": ids["prior"]}, batches_done=1)
     with use_store(store):
         window = build_window()
+        inference = window.part("inference")
         facts = window._home_facts()
-        assert facts.session is window.part("inference").session and facts.live_place is None
-        assert facts.states == chain.step_states(window.part("inference").session) and not facts.has_runs
+        assert facts.session is inference.session and facts.live_place is None
+        assert facts.states == chain.step_states(inference.session) and not facts.has_runs
         rows = {(row.kind, row.id): row for row in facts.records}
         wanted = {(kind, ids[kind]) for kind in KIND_DIRS} | {("simulation", held.id)}
         assert set(rows) == wanted and len(facts.records) == len(wanted)
@@ -615,23 +617,24 @@ def _in_view(rail, row):
 
 
 def test_the_rails_places_are_the_parts_in_order_read_off_the_built_window():
-    """The rail lists the window's nine parts in their order, each by its name, and the stack holds each part's
-    own page in that order; a click on a row shows that page, and ``part`` gives the same page by the same key.
-    The six steps are rows of Parameter inference, in sight only while it is open."""
+    """The rail lists the window's nine parts in their order, each by its name; a click on a row shows that part's
+    own page, built at its first opening, and ``part`` gives the same page by the same key, so that the parts
+    opened in the rail's order stand in the stack in that order. The six steps are rows of Parameter inference, in
+    sight only while it is open."""
     from core.gui.widgets.rail import PartRow, StepRow
     qt_app()
     window = build_window()
     rail, stack = window.shell.rail, window.shell.stack
-    pages = [stack.widget(n) for n in range(stack.count())]
     assert [row.place.key for row in rail.visible_rows() if isinstance(row, PartRow)] == [
         place.key for place in keys.PARTS]
     assert [rail.row(place.key).text() for place in keys.PARTS] == [place.name for place in keys.PARTS]
-    assert [window.part(place.key) for place in keys.PARTS] == pages
-    for place, page in zip(keys.PARTS, pages):
+    for place in keys.PARTS:
         rail.row(place.key).click()
+        page = window.part(place.key)
         assert stack.currentWidget() is page and window.current_place()[0] == place.key, place.key
         steps = [row for row in rail.visible_rows() if isinstance(row, StepRow)]
         assert steps == ([rail.row(step.key) for step in keys.STEPS] if place.key == "inference" else []), place.key
+    assert [stack.widget(n) for n in range(stack.count())] == [window.part(place.key) for place in keys.PARTS]
     with pytest.raises(KeyError):
         window.part("nowhere")
 
@@ -875,7 +878,8 @@ def test_a_greyed_control_is_passed_over_for_the_next_setting():
 
 
 def test_a_part_with_no_setting_keeps_the_keyboard_inside_it():
-    """A part with no setting of its own gives the keyboard to nothing outside it."""
+    """The search for a part's first setting stays inside the part: for a part with no setting of its own it finds
+    nothing, never a control outside it."""
     from core.gui import main_window
     qt_app()
     window = build_window()
@@ -1371,6 +1375,29 @@ def test_a_part_added_to_a_low_window_is_told_so_at_once():
         shell.add_part("low", QWidget())
 
 
+def test_a_part_held_in_the_place_of_another_stands_where_it_stood():
+    """A part the shell holds in place of another stands where that one stood in the stack, in sight when that one
+    was, and is told the small layout at once while the window is low; the part it replaces is handed back, out of
+    the stack. A name the shell does not hold is refused."""
+    from PySide6.QtWidgets import QWidget
+    from core.gui.screens.shell import Shell
+    qt_app()
+    shell = build_part(Shell)
+    first, second, third, told = QWidget(), QWidget(), QWidget(), []
+    for name, widget in (("first", first), ("second", second), ("third", third)):
+        shell.add_part(name, widget)
+    shell.show_part("second")
+    shell.set_small(True)
+    again = QWidget()
+    again.set_small = told.append
+    assert shell.replace_part("second", again) is second
+    assert [shell.stack.widget(n) for n in range(shell.stack.count())] == [first, again, third]
+    assert (shell.part_widget("second"), shell.stack.currentWidget(), told) == (again, again, [True])
+    assert shell.replace_part("third", QWidget()) is third and shell.stack.currentWidget() is again
+    with pytest.raises(KeyError):
+        shell.replace_part("nowhere", QWidget())
+
+
 def test_help_shows_the_help_text_that_settings_held():
     """Help shows its heading, "Help", over the help text Settings used to hold, built here now: the titles of its
     five sections, and every word of the help text, in a viewer at least as tall as the look asks."""
@@ -1597,45 +1624,54 @@ def _inside(widget, part):
     return QRect(widget.mapTo(part, rect.topLeft()), rect.size())
 
 
+def _margins(window, part):
+    """How far in the place ``part`` stands its first frame or first line from the rail, the window's right edge,
+    its top and its bottom: a step by the frame of the step shown, Effective temperature by its row of names and
+    the frame of One cell, every other place by what its own layout holds."""
+    from PySide6.QtCore import QRect
+    page = window.part(part)
+    if part == "inference":
+        found = [_inside(page.pages.currentWidget(), page)]
+    elif part == "temperature":
+        found = [QRect(page.names.mapTo(page, QPoint(0, 0)), page.names.size()), _inside(page.panels()[0], page)]
+    else:
+        found = [_inside(page, page)]
+    return (min(rect.left() for rect in found), min(rect.top() for rect in found),
+            page.width() - max(rect.right() + 1 for rect in found),
+            page.height() - max(rect.bottom() + 1 for rect in found))
+
+
 def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windows_edges():
     """Every place but Home stands its first frame or its first line twelve pixels in from the rail, from the
     window's right edge, from its top and from its bottom, at the ordinary text size, and as much more as a larger
-    text size scales it: a step and a panel by the frame their own layout holds, Effective temperature's row of
-    page names too, lined up with the frame under it, and every other place by what its own layout holds, the list
-    of Your own models by its group too. Home keeps the look's page margin, and the window gives it none."""
-    from PySide6.QtCore import QMargins, QRect
+    text size scales it, opened first in the usual layout and in the small one: a step and a panel by the frame
+    their own layout holds, Effective temperature's row of page names too, lined up with the frame under it, and
+    every other place by what its own layout holds, the list of Your own models by its group too. Home keeps the
+    look's page margin, and the window gives it none."""
+    from PySide6.QtCore import QMargins
     from PySide6.QtWidgets import QGroupBox
     from tests._look_helpers import text_size
     qt_app()
-
-    def margins(window, part):
-        page = window.part(part)
-        if part == "inference":
-            found = [_inside(page.pages.currentWidget(), page)]
-        elif part == "temperature":
-            found = [QRect(page.names.mapTo(page, QPoint(0, 0)), page.names.size()), _inside(page.panels()[0], page)]
-        else:
-            found = [_inside(page, page)]
-        return (min(rect.left() for rect in found), min(rect.top() for rect in found),
-                page.width() - max(rect.right() + 1 for rect in found),
-                page.height() - max(rect.bottom() + 1 for rect in found))
-
     for factor in (1.0, 1.5):
-        with text_size(factor):
-            window = build_window()
-            try:
-                _shown_off_screen(window, 1300, 820)
-                for place in keys.PARTS[1:]:
-                    window.go_to(place.key)
-                    QApplication.processEvents()
-                    assert margins(window, place.key) == (design.scaled(12),) * 4, (factor, place.key)
-                listed = window.part("models")
-                group, = [box for box in listed.findChildren(QGroupBox) if box.title() == "User-defined models"]
-                at = group.mapTo(listed, QPoint(0, 0))
-                assert (at.x(), at.y(), listed.width() - at.x() - group.width()) == (design.scaled(12),) * 3, factor
-                assert window.part("home").contentsMargins() == QMargins(0, 0, 0, 0)
-            finally:
-                window.hide()
+        for low in (False, True):
+            with text_size(factor):
+                window = build_window()
+                try:
+                    window.setMinimumSize(1, 1)
+                    _shown_off_screen(window, 1300, design.small_below() - 1 if low else 820)
+                    assert window.shell._small == low, (factor, low)
+                    for place in keys.PARTS[1:]:
+                        window.go_to(place.key)
+                        QApplication.processEvents()
+                        assert _margins(window, place.key) == (design.scaled(12),) * 4, (factor, low, place.key)
+                    listed = window.part("models")
+                    group, = [box for box in listed.findChildren(QGroupBox) if box.title() == "User-defined models"]
+                    at = group.mapTo(listed, QPoint(0, 0))
+                    assert (at.x(), at.y(), listed.width() - at.x() - group.width()) == (design.scaled(12),) * 3, (
+                        factor, low)
+                    assert window.part("home").contentsMargins() == QMargins(0, 0, 0, 0)
+                finally:
+                    window.hide()
 
 
 def test_a_panels_column_lays_each_item_at_its_height_for_the_columns_width():
@@ -1693,3 +1729,409 @@ def test_a_panels_column_lays_each_item_at_its_height_for_the_columns_width():
         assert found == {}, found
     finally:
         window.hide()
+
+
+class _CannotBeBuilt(Exception):
+    """An error of a kind no part of the window raises: its name is looked for in what the window shows."""
+
+
+def _card_and_programs(monkeypatch) -> list:
+    """Every question put to the graphics card and every program started, from now to the test's end, each named in
+    the list handed back: a program run (by the program's name), whether there is a card, the card's free memory,
+    the memory the card holds for the program and the memory it uses, and the device check. Each stand-in records
+    its call and answers as a card with room to spare would, so that the code behind it goes on as it goes on a
+    computer with one, whatever an earlier test woke on the card; nothing reaches a card."""
+    import subprocess
+    import torch
+    from core import config
+    calls = []
+    card = config.DeviceConfig(device=torch.device("cuda"), dtype=torch.float32, batch_size=2 ** 11)
+
+    def recorded(words, answer):
+        def stand_in(*args, **kwargs):
+            calls.append(words(*args, **kwargs) if callable(words) else words)
+            return answer
+        return stand_in
+
+    def program(command=(), *_args, **_kwargs):
+        """The program a run was asked for, by its name: the first word of its command."""
+        words = list(command) if isinstance(command, (list, tuple)) else str(command).split()
+        return "the program " + (str(words[0]) if words else "")
+
+    monkeypatch.setattr(subprocess, "run", recorded(program, subprocess.CompletedProcess((), 1, "", "")))
+    monkeypatch.setattr(torch.cuda, "is_available", recorded("whether there is a card", True))
+    monkeypatch.setattr(torch.cuda, "mem_get_info", recorded("the card's free memory", (8 * 2 ** 30, 16 * 2 ** 30)))
+    monkeypatch.setattr(torch.cuda, "memory_reserved", recorded("the card's memory held", 0))
+    monkeypatch.setattr(torch.cuda, "memory_allocated", recorded("the card's memory in use", 0))
+    monkeypatch.setattr(config, "detect_device", recorded("the device check", card))
+    return calls
+
+
+# What the first opening of a part asks of the card or starts, by name and how often: Parameter inference's six
+# steps are built together, four of them read the card as they are built, and their gates read it again. The list
+# may only shrink: a page that reads the card reads it at a moment of its own, never as it is built.
+_READ_AT_FIRST_OPENING = {"inference": {"the program nvidia-smi": 1, "the device check": 3, "the card's free memory": 4,
+                                        "the card's memory held": 4, "the card's memory in use": 4}}
+
+
+def test_opening_prism_touches_no_card_and_starts_no_program(monkeypatch):
+    """From the window's build to its first idle turn with Home shown, nothing asks the graphics card anything and
+    no other program is started: a program run, whether there is a card, its free memory and the device check are
+    each recorded (not refused by raising: the callers swallow what is raised, so a stand-in that raised would prove
+    nothing), and none is recorded. Nothing ticks then either: no timer of the window or of the application runs."""
+    from PySide6.QtCore import QTimer
+    app = qt_app()
+    calls = _card_and_programs(monkeypatch)
+    window = build_window()
+    try:
+        _shown_off_screen(window)                                 # Home shown, then one idle turn
+        assert window.current_place() == ("home", None)
+        assert calls == [], f"opening PRISM asked the card or started a program: {calls}"
+        ticking = [timer for timer in app.findChildren(QTimer) + window.findChildren(QTimer) if timer.isActive()]
+        assert ticking == [], f"a timer runs at launch: {ticking}"
+    finally:
+        window.hide()
+
+
+def test_only_the_known_pages_read_the_card_when_first_opened(monkeypatch):
+    """Each part opened for the first time, in the rail's order, asks the graphics card nothing and starts no
+    program, but Parameter inference, whose six steps are built together at its first opening: what it asks is
+    what is listed, so many times each, and nothing else."""
+    from collections import Counter
+    qt_app()
+    calls = _card_and_programs(monkeypatch)
+    window = build_window()
+    found = {}
+    for place in keys.PARTS:
+        calls.clear()
+        window.go_to(place.key)
+        found[place.key] = dict(Counter(calls))
+    assert found == {place.key: _READ_AT_FIRST_OPENING.get(place.key, {}) for place in keys.PARTS}, found
+
+
+def test_a_part_is_built_at_its_first_opening_and_once():
+    """The window is built with Home alone, and the stack holds Home alone. Every other part is built the first
+    time it is asked for -- opened by ``go_to``, handed by ``part``, or holding the panel ``panel`` is asked for --
+    and once: the part handed later is the one built. A part the window does not have, or a page its part does not
+    have, is refused before anything is built."""
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.fdt_panel import FdtPanel
+    from core.gui.screens.temperature_screen import TemperatureScreen
+    qt_app()
+    window = build_window()
+    stack = window.shell.stack
+    assert window.built_parts() == ("home",)
+    assert [stack.widget(n) for n in range(stack.count())] == [window.part("home")]
+    for part, page in (("nowhere", None), ("inference", "nowhere"), ("temperature", "nowhere"), ("models", "nowhere")):
+        with pytest.raises(KeyError):
+            window.go_to(part, page)
+    assert (window.built_parts(), window.current_place(), stack.count()) == (("home",), ("home", None), 1), (
+        "a move refused built a part or moved the window")
+    window.go_to("live")
+    live = window.part("live")
+    window.go_to("home")
+    window.go_to("live")
+    assert window.part("live") is live and stack.currentWidget() is live
+    assert window.built_parts() == ("home", "live")
+    help_page = window.part("help")                               # handed, built, not shown
+    assert window.built_parts() == ("home", "live", "help") and stack.currentWidget() is live
+    fdt = window.panel(FdtPanel)
+    assert window.built_parts() == ("home", "temperature", "live", "help")
+    temperature = window.part("temperature")
+    assert isinstance(temperature, TemperatureScreen) and fdt is temperature.fdt_panel
+    assert window.panel(FdtPanel) is fdt and window.panel(CrossValPanel) is temperature.crossval_panel
+    assert window.part("help") is help_page and stack.count() == 4, "a part was built twice"
+
+
+def _shown_words(page):
+    """Every text in sight on ``page``: each label's and sentence's words, each button's, and a text box's."""
+    from PySide6.QtWidgets import QAbstractButton, QLabel, QPlainTextEdit, QWidget
+    from core.gui.widgets.page import Sentence
+    words = []
+    for widget in page.findChildren(QWidget):
+        if not widget.isVisibleTo(page):
+            continue
+        if isinstance(widget, Sentence):
+            words.append(widget.plain_text())
+        elif isinstance(widget, (QLabel, QAbstractButton)):
+            words.append(widget.text())
+        elif isinstance(widget, QPlainTextEdit):
+            words.append(widget.toPlainText())
+    return words
+
+
+def test_a_part_that_fails_to_build_shows_its_error_page_and_the_rest_works(monkeypatch, caplog):
+    """A part whose construction raises -- here once its two panels were built -- shows its error page in its place,
+    in the look of a page, and its row of the rail is marked: the Error marker beside "Effective temperature could
+    not be opened." and the error's message, "The rest of PRISM still works.", "Try again" and "Show the full
+    error". The error's kind is in no text the page shows until "Show the full error" opens it, with its trace, in
+    a read-only box in the fixed-width face, which takes the keyboard; the sentence, the kind and the trace went to
+    the log. Opened again, the part shows its error page again, and every other part opens. "Try again", the
+    construction mended, builds the part in that place and opens it as a move does, at the place's own margin, and
+    the error page goes."""
+    import logging
+    from core.gui import fonts, main_window
+    from core.gui.screens.shell import PartError
+    from core.gui.screens.temperature_screen import TemperatureScreen
+    qt_app()
+
+    def half_built():
+        build_part(TemperatureScreen)                             # its two panels are built, then it fails
+        raise _CannotBeBuilt("the cell file could not be read")
+
+    monkeypatch.setattr(main_window, "TemperatureScreen", half_built)
+    window = build_window()
+    rail, said = window.shell.rail, []
+    window.place_changed.connect(lambda part, page: said.append((part, page)))
+    try:
+        _shown_off_screen(window, 1300, 820)
+        with caplog.at_level(logging.ERROR, logger="core.gui.main_window"):
+            window.go_to("temperature")
+        page = window.part("temperature")
+        assert isinstance(page, PartError) and window.shell.stack.currentWidget() is page
+        assert (window.current_place(), _marked(rail), window.built_parts()) == (
+            ("temperature", None), ["temperature"], ("home",))
+        assert page.message.kind == "err" and page.message.marker is not None, "no Error marker"
+        words = _shown_words(page)
+        assert "Effective temperature could not be opened. the cell file could not be read" in words, words
+        assert {"The rest of PRISM still works.", "Try again", "Show the full error"} <= set(words), words
+        assert not [text for text in words if "_CannotBeBuilt" in text], "the error's kind is shown before it is asked"
+        logged, = [record.getMessage() for record in caplog.records if record.name == "core.gui.main_window"]
+        assert logged.startswith("Effective temperature could not be opened. the cell file could not be read\n")
+        assert "Traceback" in logged and "_CannotBeBuilt: the cell file could not be read" in logged, logged
+        _button(page, "Show the full error").click()
+        shown = [text for text in _shown_words(page) if "_CannotBeBuilt" in text]
+        assert len(shown) == 1 and shown[0].startswith("Traceback") and page.full_error.isReadOnly(), shown
+        assert page.full_error.font().family() == fonts.fixed().family()
+        assert window.focusWidget() is page.full_error and "Show the full error" not in _shown_words(page)
+        window.go_to("live")
+        window.go_to("temperature")
+        assert window.shell.stack.currentWidget() is page, "the part was built again without being asked"
+        for place in keys.PARTS:
+            if place.key != "temperature":
+                window.go_to(place.key)
+                assert window.current_place()[0] == place.key and place.key in window.built_parts(), place.key
+        monkeypatch.setattr(main_window, "TemperatureScreen", TemperatureScreen)
+        window.go_to("temperature")
+        _button(page, "Try again").click()
+        built = window.part("temperature")
+        assert isinstance(built, TemperatureScreen) and window.shell.stack.currentWidget() is built
+        assert (window.current_place(), _marked(rail), said[-1]) == (
+            ("temperature", "one_cell"), ["temperature"], ("temperature", "one_cell"))
+        assert window.focusWidget() is built.fdt_panel.model_combo, "the part built again took no keyboard"
+        assert window.built_parts() == tuple(place.key for place in keys.PARTS)
+        assert window.shell.stack.indexOf(page) == -1, "the error page stays in the stack"
+        QApplication.processEvents()
+        assert _margins(window, "temperature") == (design.scaled(12),) * 4, "a part built again has no margin"
+    finally:
+        window.hide()
+
+
+def test_the_rail_marks_a_part_before_it_is_built_and_the_pointer_waits_while_it_is(monkeypatch):
+    """While a part is built at its first opening its row of the rail is marked already, and was drawn so, and the
+    pointer shows the wait cursor; once the part is built the pointer is the window's own again, and so it is when
+    the construction raised, the part's row then marked over its error page. A part handed by ``part`` is built
+    under the wait cursor too, the rail left as it was."""
+    from core.gui import main_window
+    from core.gui.panels.simulate_panel import SimulatePanel
+    from core.gui.screens.help_screen import HelpScreen
+    from core.gui.screens.shell import PartError
+    from core.gui.widgets.rail import PartRow
+    app = qt_app()
+    painted, seen = [], []
+    kept = PartRow.paintEvent
+    monkeypatch.setattr(PartRow, "paintEvent",
+                        lambda row, event: (painted.append((row.place.key, row._current)), kept(row, event))[1])
+
+    def watched(name, cls=None):
+        """A construction of the part ``name`` that notes what the rail and the pointer show while it runs, then
+        builds ``cls``, or raises when there is none."""
+        def build():
+            cursor = app.overrideCursor()
+            seen.append((name, _marked(window.shell.rail), (name, True) in painted,
+                         None if cursor is None else cursor.shape()))
+            if cls is None:
+                raise _CannotBeBuilt("the cell file could not be read")
+            return build_part(cls)
+        return build
+
+    monkeypatch.setattr(main_window, "ReductionPanel", watched("reduction"))
+    monkeypatch.setattr(main_window, "SimulatePanel", watched("live", SimulatePanel))
+    monkeypatch.setattr(main_window, "HelpScreen", watched("help", HelpScreen))
+    window = build_window()
+    try:
+        _shown_off_screen(window)
+        for name, handed, marked in (("reduction", False, True), ("live", False, True), ("help", True, False)):
+            painted.clear()
+            if handed:
+                window.part(name)
+            else:
+                window.go_to(name)
+            assert seen[-1] == (name, [name] if marked else ["live"], marked, Qt.WaitCursor), seen[-1]
+            assert app.overrideCursor() is None, f"the wait cursor outlived the build of {name}"
+            assert _marked(window.shell.rail) == ([name] if marked else ["live"]), name
+        assert isinstance(window.part("reduction"), PartError) and window.built_parts() == ("home", "live", "help")
+    finally:
+        window.hide()
+
+
+def test_a_part_first_opened_during_a_run_comes_up_locked_and_is_freed_at_its_end():
+    """A part first opened while a run is live comes up locked as the parts built already are: the controls of
+    each of its panels are greyed, those of the six steps of Parameter inference among them, while the rail still
+    opens every part, and the keyboard, which no locked setting can take, goes to the place's row of the rail
+    instead of staying on the page the move left. When the run ends the panels are freed with the rest, and a move
+    gives a page's first setting the keyboard again. The run here is the Reduction map's."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    qt_app()
+    window = build_window()
+    rail, runner = window.shell.rail, window.panel(ReductionPanel)
+    assert window.built_parts() == ("home", "reduction")
+    runner._set_busy(True)
+    try:
+        for name, row in (("inference", "model"), ("temperature", "temperature"), ("live", "live")):
+            window.go_to("home")                                  # the keyboard on Home's main button
+            window.go_to(name)
+            panels = window._panels_of(name, window.part(name))
+            assert [panel.controls.isEnabled() for panel in panels] == [False] * len(panels), (
+                f"{name}, first opened during a run, is not locked")
+            assert (window.current_place()[0], window.focusWidget()) == (name, rail.row(row)), name
+        assert len(window._all_panels()) == 10 and not runner.controls.isEnabled()
+    finally:
+        runner._set_busy(False)
+    assert [panel.controls.isEnabled() for panel in window._all_panels()] == [True] * 10, "the run's end freed none"
+    window.go_to("home")
+    window.go_to("live")
+    assert window.focusWidget() is window.part("live").model_combo
+
+
+def test_a_part_never_opened_keeps_what_it_remembered_when_the_window_closes(tmp_path):
+    """Closing the window writes what the parts opened in that launch remember and nothing for a part never
+    opened: every value stored for one is as it was stored, the layout of each splitter among them, though such a
+    part, built and closed, writes values of its own in their place. Here Live simulation alone is opened."""
+    from PySide6.QtCore import QByteArray
+    from core.gui import settings as st
+    qt_app()
+    every = build_window()                    # what each part writes as the window closes, off one that opened all
+    for place in keys.PARTS:
+        every.go_to(place.key)
+    every.close()
+    written = st.settings()
+    remembered = {key: "kept from the last launch" for key in written.allKeys()
+                  if key.split("/")[0] not in ("window", "simulate")}
+    remembered.update({f"layout/{panel.layout_key()}/{splitter}": QByteArray(b"kept from the last launch")
+                       for panel in every._all_panels() for splitter in ("splitter", "results")})
+    groups = {key.split("/")[0] for key in remembered}
+    assert groups == {"artifacts", "crossval", "fdt", "inference_config", "inference_infer", "inference_posterior",
+                      "inference_prior", "inference_tsnpe", "layout", "reduction"}, groups
+    st.use_ini_file(str(tmp_path / "kept.ini"))
+    kept = st.settings()
+    for key, value in remembered.items():
+        kept.setValue(key, value)
+    kept.sync()
+    window = build_window()
+    window.go_to("live")
+    window.close()
+    after = st.settings()
+    assert {key: after.value(key) for key in remembered} == remembered, "a part never opened wrote at the close"
+    assert [key for key in after.allKeys() if key.startswith("simulate/")], "the part opened wrote nothing"
+
+
+def test_the_memory_limit_in_force_does_not_wait_for_parameter_inference_to_be_opened(monkeypatch):
+    """The memory limit a run's planner reads -- the environment's when the variable is set, else the
+    configuration's ceiling -- is the same before Parameter inference is first opened as once it has been, with
+    the variable set and unset: opening the part, whose field writes the ceiling it shows, changes nothing a run
+    started before it would plan with."""
+    from core import config
+    from core.SBI import pipeline
+    qt_app()
+    monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", config.SIM_VRAM_CEILING_GIB)    # put back at the end
+    for ceiling in (None, "6"):
+        if ceiling is None:
+            monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+        else:
+            monkeypatch.setenv(pipeline.VRAM_CEILING_ENV, ceiling)
+        window = build_window()
+        before = pipeline.vram_ceiling_gib()
+        assert "inference" not in window.built_parts(), ceiling
+        window.go_to("inference")
+        shown = window.part("inference").config_panel.vram_ceiling.value()
+        assert pipeline.vram_ceiling_gib() == before == shown, (ceiling, before, shown)
+    assert before == 6.0
+
+
+def test_a_store_change_reaches_only_the_built_parts_and_a_part_built_later_lists_the_store_as_it_is(
+        tmp_path, monkeypatch):
+    """A change of the store in Records has every artifact picker of the parts built list the store again, before
+    the steps' states are worked out again. The pickers are found by type, so that a picker added to a page is
+    covered by construction: what is held is every one of them, in the order the parts' panels are read, the kinds
+    of today among them, never a count, which a picker added later would break. A part not built yet has no
+    picker to tell; built later, its pickers list the store as it is then."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.widgets.artifact_picker import StorePicker
+    from tests._fixtures import build_fdt_record
+    qt_app()
+    with use_store(ArtifactStore(tmp_path / "Artifacts")) as store:
+        window = build_window()
+        window.go_to("records")
+        window.go_to("inference")
+        pickers = [picker for panel in window._all_panels() for picker in panel.findChildren(StorePicker)]
+        assert {"prior", "posterior", "observation"} <= {picker.kind for picker in pickers}, pickers
+        seen = []
+        for picker in pickers:
+            monkeypatch.setattr(picker, "refresh",
+                                lambda kept=picker.refresh, picker=picker: (seen.append(picker), kept())[1])
+        made = build_fdt_record(store, name="written_later")
+        window.part("records").store_changed.emit()
+        assert seen[:len(pickers)] == pickers, [picker.kind for picker in seen]
+        assert "temperature" not in window.built_parts()
+        window.go_to("temperature")
+        listed = window.part("temperature").fdt_panel.record_picker
+        assert made in [listed.combo.itemData(n) for n in range(listed.combo.count())], (
+            "a part built later lists the store as it was")
+
+
+def test_home_reads_an_empty_session_before_parameter_inference_is_built(tmp_path):
+    """Until Parameter inference is built Home reads a session that holds nothing, and that session's six steps'
+    states as the rules give them, which the rail shows too: the states the part works out when it is built, so
+    that its first opening changes nothing Home or the rail say. Home's reading builds no part."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.session import SbiSession
+    from tests._fixtures import build_browse_store
+    qt_app()
+    build_browse_store(tmp_path / "Artifacts")                    # records, so that Home states its next step
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        window = build_window()
+        rail, home, facts = window.shell.rail, window.part("home"), window._home_facts()
+        empty = chain.step_states(SbiSession(), label=record_words.label_of)
+        assert window.built_parts() == ("home",)
+        assert (facts.session, facts.states) == (SbiSession(), empty)
+        assert [rail.row(step.key).accessibleName() for step in keys.STEPS] == [state.spoken for state in empty]
+        assert home.next_heading.label.text() == "Next: choose a model" and not home.is_first_time()
+        window.go_to("inference")
+        assert window.part("inference").step_states() == empty == window._home_facts().states
+        assert [rail.row(step.key).accessibleName() for step in keys.STEPS] == [state.spoken for state in empty]
+
+
+def test_a_part_built_later_reads_the_appearance_and_the_models_in_force():
+    """A change of appearance is shown on Settings once it is built, and a model of your own saved or deleted has
+    the lists of models of the panels built judged again; a part not built yet is told neither, and reads both as
+    they are when it is built: Settings marks the appearance in force, and a panel lists the models in force."""
+    from core.config import VALID_MODELS
+    qt_app()
+    window = build_window()
+    window.set_appearance_mode("dark")
+    assert window.built_parts() == ("home",)
+    window.go_to("settings")
+    assert window.part("settings")._radios["dark"].isChecked(), "Settings built later shows another appearance"
+    window.go_to("live")
+    VALID_MODELS.append("DUFFING")                                 # a model of your own, saved
+    try:
+        window._on_user_models_changed("DUFFING")
+        live = window.part("live").model_combo
+        assert "DUFFING" in [live.itemText(n) for n in range(live.count())]
+        assert "temperature" not in window.built_parts()
+        window.go_to("temperature")
+        fdt = window.part("temperature").fdt_panel.model_combo
+        assert "DUFFING" in [fdt.itemText(n) for n in range(fdt.count())], "a part built later lists old models"
+    finally:
+        VALID_MODELS.remove("DUFFING")

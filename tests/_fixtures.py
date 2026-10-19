@@ -762,10 +762,11 @@ def compare_preflight_refusals(store) -> list:
 # it made to the record in tests/_built.py, and tests/conftest.py's _built_widgets_let_go deletes it
 # when the test that built it ends; what a fixture of wider scope built is left alone.
 def build_window():
-    """The whole window, a ``MainWindow``, built anew at every call. It is not shown and not closed, and
-    it is let go when the test that built it ends: deleted by its own deferred delete, never closed,
-    because closing one writes settings. A test that wants its window closed closes it itself; one that
-    needs a window beyond its own end builds it in a fixture of wider scope."""
+    """The whole window, a ``MainWindow``, built anew at every call, with Home alone of its parts: each
+    other part is built when the test first opens it or asks the window for it (``part``, ``panel``). It is
+    not shown and not closed, and it is let go when the test that built it ends: deleted by its own deferred
+    delete, never closed, because closing one writes settings. A test that wants its window closed closes it
+    itself; one that needs a window beyond its own end builds it in a fixture of wider scope."""
     qt_app()
     from core.gui.main_window import MainWindow
     return _built.keep(MainWindow())

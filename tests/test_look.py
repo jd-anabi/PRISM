@@ -742,7 +742,7 @@ INTER_KINDS = ("small", "body", "strong", "head", "brand", "title")
 CLASSES_WITH_A_FONT = ("QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu", "QMenuBar", "QTipLabel",
                        "QStatusBar")
 CLASSES_WITH_EQUAL_DIGITS = ("QAbstractItemView", "QHeaderView")      # where numbers stand under one another
-FIXED_FACE_CALLERS = {"screens/artifact_screen.py", "widgets/ask.py"}   # the record's text, a question's full error; each later caller joins by name
+FIXED_FACE_CALLERS = {"screens/artifact_screen.py", "screens/shell.py", "widgets/ask.py"}   # the record's text, a part's and a question's full error; each later caller joins by name
 
 
 def _tabular():

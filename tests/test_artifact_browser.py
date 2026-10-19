@@ -251,31 +251,6 @@ def test_a_sort_clicked_on_a_kind_with_no_artifacts_is_still_saved(tmp_path):
     assert screen.table.sort_state() == (2, 1), "the sort was lost switching back to an empty kind"
 
 
-def test_a_store_change_in_the_browser_re_lists_every_artifact_picker():
-    """MainWindow connects the screen's store_changed to _refresh_store_pickers, the twin of
-    _refresh_model_combos that a saved user model already drives. The pickers are found by TYPE, not
-    by naming prior_picker / post_picker / obs_picker, so a fourth one added to a tab is covered by
-    construction -- which is why what is asserted is EVERY picker the window holds, not a count. A
-    count would make a later change that adds a picker break this test instead of being covered by it.
-    The three kinds today are asserted as a SUBSET for the same reason. After the pickers the window works
-    out the steps' gates again, and a gate may list its own picker once more: what is compared is the
-    pickers' refreshes up to there."""
-    from core.gui.widgets.artifact_picker import StorePicker
-
-    qt_app()
-    w = build_window()
-    pickers = [p for panel in w._all_panels() for p in panel.findChildren(StorePicker)]
-    assert pickers, "the window holds no artifact picker at all, so this proves nothing"
-    assert {"prior", "posterior", "observation"} <= {p.kind for p in pickers}
-
-    seen = []
-    for p in pickers:
-        p.refresh = lambda _p=p: seen.append(_p)
-    w.part("records").store_changed.emit()
-    assert [id(p) for p in seen[:len(pickers)]] == [id(p) for p in pickers], \
-        f"refreshed {[p.kind for p in seen]}, but the window holds {[p.kind for p in pickers]}"
-
-
 def test_the_detail_pane_shows_the_manifest_and_the_run_records(tmp_path):
     """The manifest as render_manifest renders it, then the run's records verbatim with their
     HH:MM:SS level stamps -- one string, which is also exactly what Save writes."""
@@ -1101,7 +1076,9 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
         ids = [picker.combo.itemData(i) for i in range(picker.combo.count())]
         assert doomed.id not in ids, "the picker still offers the deleted prior"
         assert keep.id in ids and picker.key() != doomed.id
-        # and it is EVERY picker, not just the one that happened to be looked at
+        # and it is EVERY picker of the parts built, not just the one that happened to be looked at: Effective
+        # temperature built too, so that its saved-run picker is among them
+        w.part("temperature")
         seen = []
         real = StorePicker.refresh
         monkeypatch.setattr(StorePicker, "refresh",
