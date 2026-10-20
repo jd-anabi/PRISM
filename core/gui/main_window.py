@@ -525,12 +525,15 @@ class MainWindow(QMainWindow):
     def come_to_front(self) -> None:
         """Bring the window to the front, as a second start of PRISM asks: out of the minimised state when it is
         there (a window that was maximised comes back maximised), raised over the other windows and given the
-        keyboard. When the system keeps the front for the window a person is working in, the window's button on
-        the taskbar flashes instead, until the window is brought to the front."""
+        keyboard. While a question is open (a dialog that must be answered first), it is the question that is raised
+        and given the keyboard, and whose hold of the front is read. When the system keeps the front for the window a
+        person is working in, the window's button on the taskbar flashes instead, until the window is brought to the
+        front."""
         self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
-        self.raise_()
-        self.activateWindow()
-        if not _holds_the_front(self):
+        front = QApplication.activeModalWidget() or self
+        front.raise_()
+        front.activateWindow()
+        if not _holds_the_front(front):
             QApplication.alert(self)
 
     def go_to_run(self) -> None:

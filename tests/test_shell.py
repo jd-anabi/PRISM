@@ -18,6 +18,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from core.gui import chain, design, keys, record_words
+from core.gui.main_window import MainWindow
 from core.gui.screens.home_screen import HomeFacts, HomeScreen, RecordRow
 from core.gui.widgets.page import Columns, PageHead, Sentence
 from core.gui.widgets.rule_table import StateCell, TextCell
@@ -35,6 +36,9 @@ CHOICES = [("&Watch a live simulation", "Needs nothing first. See a cell's bundl
             ("temperature", None)),
            ("Read what each part is for", "A short section per part.", ("help", None))]
 PARTS = [(place.name, place.line) for place in keys.PARTS[1:]]
+# The window's own way to the front, read as this file is loaded: in a test not marked for the real screen a guard
+# stands in for it.
+COME_TO_FRONT = MainWindow.come_to_front
 
 
 def _session(**held):
@@ -3209,6 +3213,50 @@ def test_a_prism_whose_window_closed_while_a_run_goes_on_lets_the_next_start_ope
         finally:
             going.set()
             QThreadPool.globalInstance().waitForDone(30000)
+
+
+def test_bringing_the_window_forward_brings_the_question_open_over_it_first(monkeypatch):
+    """The window brought to the front, as a second start's knock asks: out of the minimised state, a maximised one
+    staying maximised; raised and activated; and its taskbar button flashed only when the system keeps the front for
+    another window. While a question is open over the window, it is the question that is raised and activated and
+    whose hold of the front is read, so that the keyboard stays on what must be answered first. Every call that
+    reaches the system is stood in for and noted: nothing is brought to the front here."""
+    from PySide6.QtWidgets import QWidget
+    from core.gui import main_window
+    from core.gui.widgets.ask import Ask
+    qt_app()
+    window = build_window()
+    question, did = None, []
+
+    def note(what):
+        return lambda widget, *_rest: did.append((what, "question" if widget is question else
+                                                  "window" if widget is window else type(widget).__name__))
+
+    monkeypatch.setattr(QWidget, "raise_", note("raise"))
+    monkeypatch.setattr(QWidget, "activateWindow", note("activate"))
+    monkeypatch.setattr(QApplication, "alert", note("alert"))
+    try:
+        for asking in (False, True):
+            if asking:
+                question = Ask(window, "Error", "The cell file could not be read.", "OK", marker="err")
+                question.setAttribute(Qt.WA_DontShowOnScreen)
+                question.show()
+            front = "question" if asking else "window"
+            for holds in (False, True):
+                monkeypatch.setattr(main_window, "_holds_the_front",
+                                    lambda widget, holds=holds: note("front")(widget) or holds)
+                window.setWindowState(Qt.WindowMaximized | Qt.WindowMinimized)
+                del did[:]
+                COME_TO_FRONT(window)
+                wanted = [("raise", front), ("activate", front), ("front", front)] + (
+                    [] if holds else [("alert", "window")])
+                assert (did, window.windowState()) == (wanted, Qt.WindowMaximized), (
+                    f"with {'a' if asking else 'no'} question open, the front {'held' if holds else 'refused'}: "
+                    f"{did}, {window.windowState()}")
+    finally:
+        if question is not None:
+            question.reject()
+            question.deleteLater()
 
 
 def test_no_key_fires_while_a_question_with_no_window_is_open():
