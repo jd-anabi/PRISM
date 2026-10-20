@@ -463,9 +463,9 @@ def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(mon
     nothing is dispatched. Asserted against a blank box and not only a typed zero, because a rule
     written as "reject below zero" would accept every blank box in the application.
 
-    ``t_obs`` is the shared key the Infer tab already owns, so its fix sentence now names both places
-    it appears. Without that a blank length on this screen sent the operator to a tab that has
-    nothing to do with it.
+    ``t_obs`` is the shared key step 5 already owns, so its fix sentence now names both places it
+    appears, step 5 and Live simulation. Without that a blank length in Live simulation sent the
+    operator to step 5 alone, which has nothing to do with it.
     """
     import pytest
     from core.gui import fields as gui_fields

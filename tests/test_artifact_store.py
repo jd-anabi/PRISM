@@ -966,9 +966,9 @@ def test_set_note_refuses_an_unknown_ref_with_the_artifact_field(store):
     The key is ``"artifact"``, NOT ``"note"``: this sentence is about a MISSING ARTIFACT, so the note
     key would send the operator to the Note box when the fix is to select an artifact that exists.
     ``"note"`` stays for ``core.refusals.require_note``'s own refusals, where the note text is what is
-    wrong. The window's entry for ``artifact`` is "Select an artifact in the list on the Artifacts
-    screen." and the tool has no flag for it (``FLAG["artifact"] is None``), so the tool's line ends at
-    the message with no trailing parenthetical -- both pinned in ``tests/test_refusals.py`` and
+    wrong. The window's entry for ``artifact`` is "Select an artifact in the list in Records." and the
+    tool has no flag for it (``FLAG["artifact"] is None``), so the tool's line ends at the message
+    with no trailing parenthetical -- both pinned in ``tests/test_refusals.py`` and
     ``tests/test_nav_and_gating.py``. The sentence itself is unchanged and still names no box and no
     flag."""
     c = _make(store, name="cal")

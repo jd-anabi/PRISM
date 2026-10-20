@@ -3524,7 +3524,7 @@ def test_the_validate_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(
     became a 1 nobody typed -- and for the operating points a 1 is a DIFFERENT measurement, not a
     smaller one: the calibration's operating-point count, cal_n_scales, is t_scale's effective sample
     size, which is why the stage now refuses it instead of clamping. A refused box is the yellow box
-    (stubbed here as _refusal) naming the box, the Validate tab and the default, and NOTHING is
+    (stubbed here as _refusal) naming the box, its place (step 4, Checks) and the default, and NOTHING is
     dispatched; a typed value in rule reaches validate_calibration as an int, and 1 operating point is
     allowed -- it is a choice, not a typo."""
     from core import config, orchestrator
@@ -3597,8 +3597,8 @@ def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(mon
     refused each with a sentence naming neither the box nor the default; the batch count was clamped
     to 1 and a blank rows-per-batch became a 0 nobody typed. Now the click reads every box through
     the shared rules BEFORE the observation is re-hashed (a refused box must cost nothing), shows a
-    refusal as the yellow box (stubbed here as _refusal) naming the box, the TSNPE tab and the
-    default, and dispatches nothing. A TYPED 0 in the rows-per-batch box still means automatic. The
+    refusal as the yellow box (stubbed here as _refusal) naming the box, its place (step 6, Narrowing
+    round) and the default, and dispatches nothing. A TYPED 0 in the rows-per-batch box still means automatic. The
     latent-width ceiling on the direction count stays the STAGE's -- the click has no posterior to
     measure it against -- so an oversized count is dispatched, and tsnpe_round refuses it with the
     width and the default in the sentence."""
