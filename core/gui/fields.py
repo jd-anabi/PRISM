@@ -25,8 +25,9 @@ Three shapes of entry:
   settings the window never exposes (the checkpoint cadence, the resume policy, the device, the
   two sample counts, the epoch ceiling), and the five FDT settings neither front end exposes.
 
-A place is written in the words the rail's places are written in (``keys.place_words``), so it is
-named in one table. ``num_runs`` and ``run_size_cap`` sit in both training and the narrowing round
+A place is written in the words the rail's places are written in (``keys.place_words``), and several
+are joined as ``keys.places_words`` joins them, so a place is named in one table and its joining is
+written in one place. ``num_runs`` and ``run_size_cap`` sit in both training and the narrowing round
 with the same label, so their place is a tuple of both and the sentence names both: one place would
 send a user refused in the narrowing round to training. The three drive keys
 are static strings built exactly as the Infer tab builds its rows (``labels.gui_forcing_label``
@@ -41,10 +42,6 @@ from core.refusals import FIELDS
 
 from . import keys
 
-# The keys of the six steps. A step's words begin with its number ("step 3, Training"), so a step named
-# after another place needs no "in" of its own.
-_STEPS = frozenset(step.key for step in keys.STEPS)
-
 _FIXED = "Fixed by measurement: change it in config.py, deliberately."
 
 
@@ -54,14 +51,10 @@ def _drive(name: str) -> str:
 
 
 def _in(place) -> str:
-    """Where a control is, as a sentence says it: ``"in step 5, Inference"``, and for a tuple each place in
-    its turn, joined by ", or": ``"in step 3, Training, or step 6, Narrowing round"``, ``"in step 5,
-    Inference, or in Live simulation"``. A step after another place begins with its own number; a part, or
-    a page of a part, takes its own "in", so that it does not read as one more name of the place before
-    it. KeyError for a place the window does not have."""
-    names = place if isinstance(place, tuple) else (place,)
-    return ", or ".join(keys.place_words(name) if number and name in _STEPS else f"in {keys.place_words(name)}"
-                        for number, name in enumerate(names))
+    """Where a control is, as a sentence says it: ``"in step 5, Inference"``, and for a tuple its places in
+    their turn as ``keys.places_words`` joins them: ``"in step 3, Training, or step 6, Narrowing round"``,
+    ``"in step 5, Inference, or in Live simulation"``. KeyError for a place the window does not have."""
+    return "in " + keys.places_words(place if isinstance(place, tuple) else (place,))
 
 
 CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {

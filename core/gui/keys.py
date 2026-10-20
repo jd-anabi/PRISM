@@ -110,6 +110,10 @@ def place_words(place: str) -> str:
 
 
 def places_words(places: tuple[str, ...]) -> str:
-    """Several places in one sentence, each as ``place_words`` writes it, joined by ", or ": "step 3, Training,
-    or step 6, Narrowing round"."""
-    return ", or ".join(place_words(place) for place in places)
+    """Several places in one sentence, as it names them after its "in", each as ``place_words`` writes it,
+    joined by ", or ": "step 3, Training, or step 6, Narrowing round". A step after another place begins with
+    its own number; a part, or a page of a part, after another place takes its own "in", so that it does not
+    read as one more name of the place before it: "step 5, Inference, or in Live simulation"."""
+    said = [place_words(place) for place in places]
+    return ", or ".join(words if number == 0 or words.startswith("step ") else f"in {words}"
+                        for number, words in enumerate(said))

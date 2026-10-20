@@ -209,7 +209,8 @@ def test_the_window_shortcuts_are_the_places_keys_and_three_more():
 
 def test_a_place_is_written_as_the_window_names_it():
     """A part by its name, a step by its number and name, a page of a part by both names, and several places
-    joined so that each keeps its own comma."""
+    joined as a sentence names them after its "in": each keeps its own comma, a step after another place
+    begins with its own number, and a part or a page after another place takes its own "in"."""
     assert keys.place_words("training") == "step 3, Training"
     assert keys.place_words("records") == "Records"
     assert keys.place_words("inference") == "Parameter inference"
@@ -219,7 +220,9 @@ def test_a_place_is_written_as_the_window_names_it():
     assert keys.places_words(("training", "narrowing")) == "step 3, Training, or step 6, Narrowing round"
     assert keys.places_words(("help",)) == "Help"
     assert keys.places_words(("model", "infer", "live")) == (
-        "step 1, Model and options, or step 5, Inference, or Live simulation")
+        "step 1, Model and options, or step 5, Inference, or in Live simulation")
+    assert keys.places_words(("temperature/one_cell", "temperature/sweep", "inference/narrowing")) == (
+        "Effective temperature, One cell, or in Effective temperature, Sweep study, or step 6, Narrowing round")
     for unknown in ("training/sweep", "temperature/compare", "records/prior", "nowhere", "inference/home"):
         with pytest.raises(KeyError):
             keys.place_words(unknown)
