@@ -1068,13 +1068,14 @@ def test_the_foots_time_keeps_its_width_as_it_ticks(monkeypatch):
     assert one != other, "the digits have one width without the feature as well: the lines above prove nothing"
 
 
-def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowhere():
+def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowhere(monkeypatch):
     """While a run is live the foot is a button that goes to the run's place, its page or step too, as
-    ``go_to_run`` does, a step that cannot start among them. A panel the window has no place for -- the bare run
-    host a test builds -- is named "a task", in the foot's title, tool tip and accessible name; the foot is no
-    button and the window stays where it is."""
+    ``go_to_run`` does, a step that cannot start among them, the place taking the keyboard as after a click. A panel
+    the window has no place for -- the bare run host a test builds -- is named "a task", in the foot's title, tool
+    tip and accessible name; the foot is no button and the window stays where it is."""
     from core.gui.panels.crossval_panel import CrossValPanel
     qt_app()
+    given = _given(monkeypatch)
     window = build_window()
     foot = window.shell.rail.foot
     for panel, place in ((window.panel(CrossValPanel), ("temperature", "sweep")),
@@ -1083,8 +1084,11 @@ def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowh
         window.part("temperature").show_page("one_cell")
         panel._set_busy(True)
         try:
+            del given[:]
             QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
             assert window.current_place() == place
+            assert given[-1:] == [(window.focusWidget(), Qt.OtherFocusReason)], (
+                f"{place}: a click on the foot gave the keyboard otherwise than as a click gives it")
         finally:
             panel._set_busy(False)
     orphan = build_run_host()
@@ -2435,7 +2439,8 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
     and Parameter inference first opened by a step's key, is built under the wait cursor with its row of the rail
     marked already. The ring shows also where the keyboard already stood, after a click in the help text or a move
     the mouse made, neither of which shows it. The key to the run goes to the running place only while the foot is
-    a button; the key between the rail and the page takes the keyboard from the page to the rail and back."""
+    a button, and moves nothing once the run has ended; the key between the rail and the page takes the keyboard
+    from the page to the rail and back."""
     from PySide6.QtGui import QShortcut
     from core.gui import main_window, style
     from core.gui.panels.reduction_panel import ReductionPanel
@@ -2455,10 +2460,11 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
     window, other = build_window(), build_window()
     rail = window.shell.rail
     try:
-        made = sorted((shortcut.key().toString(QKeySequence.PortableText), shortcut.property("does"),
-                       shortcut.context(), shortcut.autoRepeat()) for shortcut in window.findChildren(QShortcut))
-        assert made == sorted((sequence, does, Qt.WindowShortcut, False) for sequence, does in keys.BINDINGS), (
-            f"the window's shortcuts are not the key map's rows: {made}")
+        made = sorted(((shortcut.key().toString(QKeySequence.PortableText), str(shortcut.property("does")),
+                        shortcut.context(), shortcut.autoRepeat()) for shortcut in window.findChildren(QShortcut)),
+                      key=repr)                          # in words, so that a shortcut made twice is named too
+        assert made == sorted(((sequence, does, Qt.WindowShortcut, False) for sequence, does in keys.BINDINGS),
+                              key=repr), f"the window's shortcuts are not the key map's rows: {made}"
         assert [rail.row(place.key).toolTip().rpartition(" (")[2] for place in keys.PARTS + keys.STEPS] == [
             ", ".join(place.keys) + ")" for place in keys.PARTS + keys.STEPS], "a row's tool tip names no key"
         _shown_off_screen(window)
@@ -2519,6 +2525,10 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
                     "the running place took the keyboard otherwise than as a shortcut gives it")
             finally:
                 runner._set_busy(False)
+            window.go_to("home")
+            _press(window, "Ctrl+R")
+            assert (rail.foot.is_button(), window.current_place()) == (False, ("home", None)), (
+                "the key to the run moved after the run ended")
             window.go_to("live")
             field = window.focusWidget()
             _press(window, "F6")
@@ -2546,7 +2556,7 @@ def test_the_key_between_the_rail_and_the_page_moves_the_keyboard_both_ways(monk
     step's page, and from there back to that setting; from the run's foot, while it is a button, to the page; and
     from nowhere, when no control holds the keyboard, to the rail. On a page whose every setting a run has locked,
     the place's row, which the move gave the keyboard, gives it on to the page's first control that is not a button,
-    and takes it back."""
+    and takes it back; on either page of Effective temperature that control is none of its row of page names."""
     from PySide6.QtWidgets import QPushButton, QToolButton
     from core.gui import style
     from core.gui.panels.reduction_panel import ReductionPanel
@@ -2591,6 +2601,13 @@ def test_the_key_between_the_rail_and_the_page_moves_the_keyboard_both_ways(monk
                     held, Qt.ShortcutFocusReason), "the key gave a page a run locks a button, or not as a key"
                 _press(window, "Shift+F6")
                 assert window.focusWidget() is rail.row("live"), "the key did not take the keyboard back to the rail"
+                for page in ("one_cell", "sweep"):                           # a part of pages, every setting locked
+                    window.go_to("temperature", page)
+                    moved = window.focusWidget()
+                    _press(window, "F6")
+                    shown, held = window.part("temperature"), window.focusWidget()
+                    assert (moved, shown.isAncestorOf(held), shown.names.isAncestorOf(held)) == (
+                        rail.row("temperature"), True, False), f"{page}: the key from the rail reached the page names"
             finally:
                 runner._set_busy(False)
     finally:
@@ -2628,8 +2645,8 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
     """Escape in the rail, on the row of the place in sight or on another row the arrows reached, gives the page in
     sight its first setting, as a shortcut gives it; on a page whose every setting a run has locked, the page's first
     control that is not a button, never the rail again, and from the run's foot the same. Escape anywhere else moves
-    nothing: no page changes, the keyboard stays where it is and nothing is said; and a run goes on, Escape on its
-    own Cancel button too, which asks for no stop."""
+    nothing: no page changes, the keyboard stays where it is and nothing is said; and a run goes on, its stop
+    asked by no Escape, in the rail or on its own Cancel button."""
     from PySide6.QtWidgets import QPushButton, QToolButton
     from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.reduction_panel import ReductionPanel
@@ -2658,6 +2675,7 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
             runner = window.panel(ReductionPanel)
             runner._set_busy(True)
             try:
+                runner._cancel = BasePanel._active_cancel = CancelToken()   # what a run's start hands its panel
                 for target in ("reduction", "inference"):
                     window.go_to(target)                                     # every setting locked by the run
                     QTest.keyClick(window.focusWidget(), Qt.Key_Escape)
@@ -2671,7 +2689,8 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
                 assert window.focusWidget() is rail.foot, "Tab from the rail did not reach the foot"
                 QTest.keyClick(rail.foot, Qt.Key_Escape)
                 assert window.part("reduction").isAncestorOf(window.focusWidget()), "Escape on the foot moved nothing"
-                runner._cancel = CancelToken()                               # what a run's start hands its panel
+                assert (BasePanel._running, runner._cancel.requested.is_set(), runner.btn_cancel.text()) == (
+                    True, False, "Cancel"), "Escape in the rail asked the run to stop"
                 runner.btn_cancel.setFocus(Qt.TabFocusReason)
                 del said[:]
                 QTest.keyClick(runner.btn_cancel, Qt.Key_Escape)
@@ -2680,7 +2699,7 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
                 assert (window.current_place(), window.focusWidget(), said) == (
                     ("reduction", None), runner.btn_cancel, []), "Escape on the Cancel button moved something"
             finally:
-                runner._cancel = None
+                runner._cancel = BasePanel._active_cancel = None
                 runner._set_busy(False)
     finally:
         window.hide()
