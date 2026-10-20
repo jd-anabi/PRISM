@@ -2121,16 +2121,25 @@ def test_a_part_that_fails_to_build_while_a_run_is_live_leaves_the_runs_log_to_t
 
 def test_the_error_page_writes_the_errors_message_as_a_sentence():
     """The error page gives the error's message as a sentence after its bold opening words: its first letter a
-    capital when it starts with a small one, and a full stop at its end when it ends without a mark that ends a
-    sentence. A message that is a sentence already is shown as it is, one that starts with no letter keeps its
-    start, and an empty one leaves the opening words alone."""
+    capital only when its first word -- up to the first space, a comma, a semicolon or a colon at its end set aside
+    -- is an ordinary word, letters alone, that starts with a small one; any other start is kept as it was raised:
+    a name in code, a path, a number, a quotation. A full stop stands at its end when it ends without a mark that
+    ends a sentence, and nothing else of it changes. A message that is a sentence already is shown as it is, and an
+    empty one leaves the opening words alone."""
     from core.gui.screens.shell import PartError
     qt_app()
     for message, shown in (("the cell file could not be read", "The cell file could not be read."),
                            ("The cell file could not be read.", "The cell file could not be read."),
                            ("is the cell file there?", "Is the cell file there?"),
+                           ("missing: the bounds file", "Missing: the bounds file."),
+                           ("sbi_posterior.sample() failed", "sbi_posterior.sample() failed."),
+                           ("cells/x.txt not found", "cells/x.txt not found."),
+                           ("C:\\cells\\x.txt not found", "C:\\cells\\x.txt not found."),
+                           ("x2 is out of its box", "x2 is out of its box."),
                            ("[Errno 2] No such file or directory: 'cell.txt'",
                             "[Errno 2] No such file or directory: 'cell.txt'."),
+                           ("'NoneType' object has no attribute 'model'",
+                            "'NoneType' object has no attribute 'model'."),
                            ("", "")):
         page = build_part(PartError, part_name="Help", error=_CannotBeBuilt(message), trace="")
         sentence = " ".join(words for words in ("Help could not be opened.", shown) if words)
@@ -3155,3 +3164,157 @@ def test_the_open_prism_brings_its_window_to_the_front_when_a_second_start_knock
             "the second start was not handed over, the open PRISM let take the front first")
         pump(app, 0.2)
         assert brought_forward[1:] == [("come_to_front", window)], "the knock did not bring the window to the front"
+
+
+def test_no_key_fires_while_a_question_with_no_window_is_open():
+    """A question asked with no window under it -- the last-resort error's, before the window is built -- is modal to
+    the whole program: while it is open, no key of the map moves the window, pressed at the window or at the
+    question, whichever of the two is in front."""
+    from core.gui.widgets.ask import Ask
+    qt_app()
+    window = build_window()
+    said = []
+    window.place_changed.connect(lambda part, page: said.append((part, page)))
+    question = None
+    try:
+        _shown_off_screen(window)
+        window.go_to("live")
+        held = window.focusWidget()
+        question = Ask(None, "Error", "Something went wrong that PRISM did not expect.", "OK", marker="err")
+        question.setAttribute(Qt.WA_DontShowOnScreen)
+        question.show()
+        del said[:]
+        try:
+            for front, named in ((question, "the question"), (window, "the window")):
+                with _in_front(front):
+                    for sequence, _does in keys.BINDINGS:
+                        for at in (window, question):
+                            _press(at, sequence)
+                    assert (window.current_place(), window.focusWidget(), _marked(window.shell.rail), said) == (
+                        ("live", None), held, ["live"], []), f"a key moved the window, {named} in front"
+        finally:
+            question.reject()
+    finally:
+        window.hide()
+        if question is not None:
+            question.deleteLater()
+
+
+def test_a_window_whose_home_cannot_be_built_opens_on_its_error_page(monkeypatch):
+    """Home is built with the window, inside the guard every part is built in: when its construction raises, the
+    window opens all the same, on Home's error page, with Home's row marked and no part built. The steps' states, a
+    change of the store, a run's start and end and every move go on with no Home to read, and
+    "Try again", the construction mended, builds Home in its place and shows it."""
+    from core.gui import main_window
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.screens.shell import PartError
+    qt_app()
+
+    def refused(*_args, **_kwargs):
+        raise _CannotBeBuilt("the records could not be read")
+
+    monkeypatch.setattr(main_window, "HomeScreen", refused)
+    window = build_window()
+    rail = window.shell.rail
+    try:
+        _shown_off_screen(window, 1300, 820)
+        page = window.part("home")
+        assert isinstance(page, PartError) and window.shell.stack.currentWidget() is page, type(page).__name__
+        assert (window.current_place(), _marked(rail), window.built_parts()) == (("home", None), ["home"], ())
+        assert "Home could not be opened. The records could not be read." in _shown_words(page), _shown_words(page)
+        window._store_changed()
+        runner = window.panel(ReductionPanel)
+        runner._set_busy(True)
+        try:
+            window.go_to("help")
+            window.go_to("home")
+        finally:
+            runner._set_busy(False)
+        window.go_to("home")
+        assert window.shell.stack.currentWidget() is page, "Home was built again without being asked"
+        monkeypatch.setattr(main_window, "HomeScreen", HomeScreen)
+        _button(page, "Try again").click()
+        home = window.part("home")
+        assert isinstance(home, HomeScreen) and window.shell.stack.currentWidget() is home, "Try again built no Home"
+        assert (window.built_parts(), _marked(rail)) == (("home", "reduction", "help"), ["home"]), (
+            "Home built again is not counted among the parts built, or its row is not marked")
+    finally:
+        window.hide()
+
+
+def test_the_last_resort_error_goes_through_the_shared_question(monkeypatch):
+    """An error nothing else caught reaches the hook of last resort, which tells it through the shared question, as
+    an error: its one sentence the error's message, written as a sentence as a part's error page writes it, and
+    never the error's kind; one answer, "OK"; the kind and the trace behind "Show the full error". The question
+    stands over the window once there is one, and with no window under it before. An error with no message of its
+    own says that something went wrong. Each error is still written where it was before, and one raised while the
+    question is open is written there and asks nothing more."""
+    import sys
+    from core.gui import app as gui_app
+    from tests._fixtures import all_asked, choose
+    qt_app()
+    window = build_window()
+    written, parents, real_ask = [], [], gui_app.ask
+    monkeypatch.setattr(gui_app, "ask", lambda parent, *words, **more: parents.append(parent) or real_ask(
+        parent, *words, **more))
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)       # the hook installed here is put back at the end
+    monkeypatch.setattr(sys, "__excepthook__", lambda kind, error, trace: written.append(f"{kind.__name__}: {error}"))
+
+    def unhandled(error):
+        try:
+            raise error
+        except Exception as raised:                                 # noqa: BLE001 -- handed to the hook, as uncaught
+            sys.excepthook(type(raised), raised, raised.__traceback__)
+
+    for parent in (window, None):
+        gui_app._install_excepthook(lambda: parent)
+        unhandled(ValueError("sbi_posterior.sample() failed"))
+        told = all_asked()[-1]
+        assert (told.kind, told.marker, told.title, told.sentence, told.answers) == (
+            "error", "err", "Error", "sbi_posterior.sample() failed.", ("OK",)), f"{told.title}: {told.sentence}"
+        assert told.detail.startswith("Traceback") and told.detail.rstrip().endswith(
+            "ValueError: sbi_posterior.sample() failed"), "the detail is not the kind and the trace"
+        assert parents[-1] is parent, "the question does not stand over the window"
+    unhandled(ValueError("the cell file could not be read"))
+    unhandled(ValueError())
+    assert [told.sentence for told in all_asked()[-2:]] == [
+        "The cell file could not be read.", "Something went wrong that PRISM did not expect."]
+    asked_before, raised_again = len(all_asked()), []
+
+    def raise_again():                                              # once: while the first question is open
+        if not raised_again:
+            raised_again.append(True)
+            unhandled(RuntimeError("a second error"))
+
+    choose(monkeypatch, during=raise_again)
+    unhandled(ValueError("the first error"))
+    assert [told.sentence for told in all_asked()[asked_before:]] == ["The first error."], "a second question opened"
+    assert written == ["ValueError: sbi_posterior.sample() failed", "ValueError: sbi_posterior.sample() failed",
+                       "ValueError: the cell file could not be read", "ValueError: ",
+                       "RuntimeError: a second error", "ValueError: the first error"], (
+        "the errors were not written to the console as before")
+
+
+def test_the_class_fonts_are_set_once_at_start(tmp_path, monkeypatch):
+    """The fonts of the classes the toolkit keeps a font of their own for are set once as PRISM starts: by the first
+    apply of the appearance, after its style sheet, which empties them as the style set before it does. Then they
+    are the lettering face at the text size, with the digits of equal width in lists and tables and nowhere else."""
+    from PySide6.QtGui import QFont
+    from core.gui import design, fonts
+    from tests._fixtures import whole_program
+    qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    monkeypatch.setattr(design, "system_text_scale", lambda: 1.0)
+    sheet_was_set, real = [], fonts.apply_class_fonts
+
+    def watched(app=None):
+        sheet_was_set.append(bool(QApplication.instance().styleSheet()))
+        return real(app)
+
+    monkeypatch.setattr(fonts, "apply_class_fonts", watched)
+    with whole_program():
+        assert sheet_was_set == [True], f"the class fonts were set {len(sheet_was_set)} times: {sheet_was_set}"
+        tabular = QFont.Tag.fromString("tnum")
+        found = {name: (QApplication.font(name).family(), QApplication.font(name).pixelSize(),
+                        QApplication.font(name).isFeatureSet(tabular)) for name in ("QAbstractItemView", "QMenu")}
+        assert found == {"QAbstractItemView": ("Inter", 14, True), "QMenu": ("Inter", 14, False)}, found

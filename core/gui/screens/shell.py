@@ -28,12 +28,16 @@ def clock_words(seconds: int) -> str:
 
 
 def _as_sentence(message: str) -> str:
-    """An error's message as a sentence of the page: its first letter a capital when it is a small one, and a full
-    stop at its end when it ends without a mark that ends a sentence. An empty message stays empty."""
+    """An error's message as a sentence of the page: its first letter a capital only when its first word -- up to
+    the first space, a comma, a semicolon or a colon at its end set aside -- is an ordinary word, letters alone, that
+    starts with a small one; any other start is kept as it was raised, so that a name in code, a path, a number or a
+    quotation is shown as it is. A full stop at its end when it ends without a mark that ends a sentence; nothing
+    else of it changes. An empty message stays empty. The last-resort question writes its sentence with this too."""
     text = message.rstrip()
     if not text:
         return ""
-    if text[0].islower():
+    first = text.split(" ", 1)[0].rstrip(",;:")
+    if first.isalpha() and first[0].islower():
         text = text[0].upper() + text[1:]
     return text if text[-1] in ".!?" else text + "."
 

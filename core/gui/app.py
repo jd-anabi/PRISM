@@ -10,31 +10,42 @@ from core import config, logging_root, registry
 
 from . import app_icon, design, fonts, mpl_theme, one_instance, settings, style, theming
 from .main_window import MainWindow
+from .screens.shell import _as_sentence
+from .widgets.ask import ask
 
 # What a start of PRISM that builds no window says as it ends, on the error stream when the process has one:
 # started from a console, it is the only sign the person gets.
 SAID = {"hand_over": "PRISM is already open: its window was brought to the front.",
         "give_up": "PRISM is already running but did not answer; this start ends."}
 
+# What the last-resort question says of an error that has no message of its own.
+NO_MESSAGE = "Something went wrong that PRISM did not expect."
+
 
 def _install_excepthook(parent_getter):
-    """Route any otherwise-unhandled exception to a dialog with a collapsible traceback.
+    """Route any otherwise-unhandled exception to the shared question, telling: an error, whose one sentence is
+    the error's message, written as a sentence as a part's error page writes it, with one answer; the error's kind
+    and its trace are behind "Show the full error", and nowhere else. Over the window once there is one
+    (``parent_getter``), and with no window under it before. Each error is still written to the console as before.
 
     Installed BEFORE MainWindow() is built, so that it stands for everything after. A part that cannot
     be built (e.g. a bad cell file breaking a panel's prefill) does not reach it: the window builds each
     part inside a guard and shows that part's error page in its place. What reaches it is an error no
     other code catches -- a slot's, an event handler's -- and it shows a dialog instead of a bare
-    console traceback.
+    console traceback. One question at a time: an error raised while one is open, by a timer or a slot that
+    runs in the question's own event loop, is written to the console alone, so that questions cannot pile up.
     """
+    asking = []                              # holds a mark while a question of this hook is open
+
     def _excepthook(exc_type, exc, tb):
-        tb_text = "".join(traceback.format_exception(exc_type, exc, tb))
         try:
-            box = QMessageBox(parent_getter())
-            box.setIcon(QMessageBox.Critical)
-            box.setWindowTitle("Unhandled error")
-            box.setText(f"{exc_type.__name__}: {exc}")
-            box.setDetailedText(tb_text)
-            box.exec()
+            if not asking:
+                asking.append(True)
+                try:
+                    ask(parent_getter(), "Error", _as_sentence(str(exc)) or NO_MESSAGE, "OK", marker="err",
+                        detail="".join(traceback.format_exception(exc_type, exc, tb)))
+                finally:
+                    asking.clear()
         finally:
             sys.__excepthook__(exc_type, exc, tb)
 
@@ -131,8 +142,9 @@ def build_app(argv=None):
     qs = settings.settings()
     fonts.load_app_font(app)                             # the lettering face, before any widget
     appearance = theming.Appearance(app)
-    appearance.set_mode(settings.get_appearance(qs))     # the first apply: the palette and the first style sheet
-    fonts.apply_class_fonts(app)                         # after the style AND the first sheet: each one empties them
+    # The first apply: the palette, the first style sheet and, after both, the class fonts, which the style and
+    # the sheet each empty (theming.Appearance sets them after every sheet it sets).
+    appearance.set_mode(settings.get_appearance(qs))
     mpl_theme.install(appearance)   # the light figure settings, written once, whatever the appearance
 
     window_ref = {}
