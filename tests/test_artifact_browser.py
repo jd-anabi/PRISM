@@ -413,7 +413,7 @@ def test_setting_a_note_trims_it_and_asks_nothing(store):
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
     _select_ref(scr.table, p.id)
-    # The control core/gui/fields.py names ("Edit it in the Note box on the Artifacts screen.") has
+    # The control core/gui/fields.py names ("Edit it in the Note box in Records.") has
     # to exist, spelled that way: the table is the ONE place a control is named, and a sentence
     # pointing at a box nobody can find is the failure that table exists to stop.
     assert any(lbl.text() == "Note" for lbl in scr.findChildren(QLabel)), "no 'Note' label"
@@ -450,8 +450,8 @@ def test_an_over_long_note_is_refused_with_its_fix_sentence(store):
     assert (box.kind, box.marker) == ("refusal", "warn")
     assert "200" in box.sentence and "201" in box.sentence, box.sentence
     assert box.beneath == (
-        "Edit it in the Note box on the Artifacts screen, or in the 'Note' or 'Comparison note' "
-        "box on the FDT analysis or Sweep study cross-validation tab.")
+        "Edit it in the Note box in Records, or in the 'Note' or 'Comparison note' box in Effective "
+        "temperature, One cell, or in Effective temperature, Sweep study.")
     assert store.get("prior", p.id).note == ""
 
 
@@ -484,7 +484,7 @@ def test_delete_refuses_an_artifact_with_dependents_and_offers_no_yes(store):
     assert f"simulation (unnamed) [{cache.id}]" in box.sentence, box.sentence
     assert ("a training cache was generated against this prior and its rows are meaningless "
             "without it") in box.sentence, box.sentence
-    assert box.beneath == "Select an artifact in the list on the Artifacts screen."
+    assert box.beneath == "Select an artifact in the list in Records."
     assert store.get("prior", p.id).name == "ancestor", "nothing may be deleted"
     assert "2 dependent(s) and was not deleted" in scr.status.text(), scr.status.text()
 
@@ -703,7 +703,7 @@ def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch)
     # sentence it adds to every other fielded refusal -- the race path needs no refusal of its own.
     # The normal path still builds one, for the wording only: the store's sentence ends "pass
     # force=True to orphan them", and no front end offers that.
-    assert box.beneath == "Select an artifact in the list on the Artifacts screen."
+    assert box.beneath == "Select an artifact in the list in Records."
     assert store.get("prior", p.id).name == "ancestor", "the artifact survives its own refusal"
 
 
@@ -1168,7 +1168,7 @@ def test_a_leftover_row_is_nothing_to_act_on_and_no_row_at_all_is_a_refusal(stor
     box = asked()
     assert (box.kind, box.marker) == ("refusal", "warn")
     assert box.sentence == "No artifact is selected."
-    assert box.beneath == "Select an artifact in the list on the Artifacts screen."
+    assert box.beneath == "Select an artifact in the list in Records."
 
     # (b) a leftover selected: disabled, and a forced call explains rather than refuses
     s = _select_ref(scr.table, leftover.name)
@@ -1466,7 +1466,7 @@ def test_the_lineage_report_is_a_read_and_needs_a_complete_row(store, monkeypatc
     scr._lineage_report()
     box = asked()
     assert box.kind == "refusal"
-    assert box.beneath == "Select an artifact in the list on the Artifacts screen."
+    assert box.beneath == "Select an artifact in the list in Records."
     assert sorted(q.name for q in out_dir.iterdir()) == ["chain.txt"]
     assert CHOOSER_CALLS == [("save", "Save lineage report", "prior-ancestor-lineage.txt",
                               "Text file (*.txt)", str(bare))], \

@@ -1162,7 +1162,7 @@ def test_on_error_routes_a_refusal_to_the_yellow_box():
     assert box.kind == "refusal"
     assert box.marker == "warn"
     assert box.sentence == exc.message
-    assert box.beneath == "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
+    assert box.beneath == "Set it in the 'T_obs (s)' box in step 5, Inference, or in Live simulation."
     assert box.beneath == gui_fields.fix_sentence("t_obs")
     assert box.detail == "", "a refusal carries no traceback"
     assert box.answers == ("OK",)
@@ -1219,7 +1219,7 @@ def test_a_refusal_opens_the_yellow_box_without_a_traceback_and_a_bug_the_red_on
     box = _run_to_dialog(refuse)
     assert (box.kind, box.marker) == ("refusal", "warn")
     assert box.sentence.startswith("The observation length, in seconds, must be greater than 0")
-    assert box.beneath == "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
+    assert box.beneath == "Set it in the 'T_obs (s)' box in step 5, Inference, or in Live simulation."
     assert box.detail == "", "a refusal must not carry a traceback"
     assert pane.lines[-1][0] == "warning" and "'T_obs (s)'" in pane.lines[-1][1], pane.lines
 
@@ -1306,7 +1306,7 @@ def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
     panel = build_run_host()
     pane = PaneCapture(panel)
     holder = QWidget()                      # a parent that is NOT a panel; kept bound for its lifetime
-    fix = "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
+    fix = "Set it in the 'T_obs (s)' box in step 5, Inference, or in Live simulation."
     exc = Refusal("The observation length, in seconds, is blank (default none: it must be given).",
                   field="t_obs")
 

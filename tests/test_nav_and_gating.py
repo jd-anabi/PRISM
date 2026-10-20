@@ -1471,21 +1471,23 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
 
     (a) the table knows every registry key and no other -- an unmapped key would show a refusal
         with no way out, and an entry nobody raises is a sentence that can go stale unseen;
-    (b) every tuple names a place: one of the ten titles the refusals name today, each held here with the
-        place of the window it stands for until the refusals name the rail's places instead, or one of
-        SCREENS; every such place is read off the built window;
-        a tuple has a non-empty label and renders the box sentence; a sentence entry is
-        returned verbatim and has no label; a None entry says nothing and has no label; and none
-        of the three ever raises from fix_sentence, which runs while a refusal is being shown;
-    (c) the T_obs and direction-count sentences a user reads on the real screen, and the consents,
-        verbatim -- the consents quote their controls' own text (posterior_tab.py:232,
+    (b) every tuple names places of the window by their keys -- a step, a part, or a page of a part --
+        and every place named is read off the built window: moved there, it is the place in sight, and
+        the rail has its part's row; a tuple has a non-empty label and renders the box sentence, which
+        names its places in their order in the words the rail's places are written in; a sentence
+        entry is returned verbatim and has no label; a None entry says nothing and has no label; no
+        sentence names a tab or a screen; and none of the three ever raises from fix_sentence, which
+        runs while a refusal is being shown;
+    (c) the sentences a user reads on the real screen, verbatim, one for each way places are joined
+        (one step, two steps, a step and a part, a step with pages and parts, two pages, one part),
+        and the consents -- which quote their controls' own text (posterior_tab.py:232,
         tsnpe_tab.py:102, infer_tab.py:150);
     (d) the keys with no window control are exactly the six the window never exposes, the eleven
         tool-only diagnostics knobs, and the five FDT settings neither front end exposes, so a
         tool-only key renders no window sentence;
     (e) the three drive labels are built exactly as the Infer tab builds its rows
         (_rebuild_forcing_fields: labels.gui_forcing_label with config.FORCING_DISPLAY_UNITS, which
-        cli.INFERENCE_PROMPT_UNITS aliases), so the read-back over the built Infer tab can find them.
+        cli.INFERENCE_PROMPT_UNITS aliases), so the read-back over the built step 5 can find them.
     """
     from core import config
     import core.gui.fields as gui_fields
@@ -1497,37 +1499,31 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         f"only in CONTROL: {sorted(set(gui_fields.CONTROL) - set(FIELDS))}; "
         f"only in FIELDS: {sorted(set(FIELDS) - set(gui_fields.CONTROL))}")
 
-    # (b) the three shapes, against the ten titles the refusals name today plus the two screens. The
-    # window has no tab bar to read them from, so each is held here with the place of the window it
-    # stands for -- a part of the rail and, for a part with pages, the page -- and every one of those
-    # places is read off the built window: the rail has the part's row, and asked for the page the part
-    # shows it. The titles go from here when the refusals name the rail's places instead.
+    # (b) the three shapes. A tuple names places of the window by their keys, and every place it names
+    # is read off the built window: moved there, the window shows it, and the rail has its part's row.
+    import re
     from core.gui import keys
     qt_app()
     window = build_window()
-    titles = {"NWK → Hopf reduction map": ("reduction", None), "FDT analysis": ("temperature", "one_cell"),
-              "Sweep study cross-validation": ("temperature", "sweep"), "Config": ("inference", "model"),
-              "Prior": ("inference", "prior"), "Posterior": ("inference", "training"),
-              "Validate": ("inference", "checks"), "Infer": ("inference", "infer"),
-              "TSNPE": ("inference", "narrowing"), "Live simulation": ("live", None)}
-    screens = {"Artifacts": ("records", None), "Model Builder": ("models", "builder")}
-    for title, (part, page) in {**titles, **screens}.items():
-        window.go_to(part, page)
-        assert (window.current_place(), window.shell.rail.row(part).place) == ((part, page), keys.part(part)), title
-    assert gui_fields.SCREENS == frozenset(screens), \
-        "a place is one of the ten titles or one of these two screens"
-    places = set(titles) | set(gui_fields.SCREENS)
+    steps, parts = {step.key for step in keys.STEPS}, {part.key for part in keys.PARTS}
+    pages = {f"{part}/{page.key}" for part, held in keys.PAGES.items() for page in held}
+    named = set()
     for key, entry in gui_fields.CONTROL.items():
         if isinstance(entry, tuple):
-            tab, text = entry
-            names = tab if isinstance(tab, tuple) else (tab,)
-            assert names and all(t in places for t in names), f"{key}: {tab!r} is not a place"
+            place, text = entry
+            names = place if isinstance(place, tuple) else (place,)
+            assert names and all(n in steps | parts | pages for n in names), f"{key}: {place!r} is not a place"
+            assert len(set(names)) == len(names), f"{key}: a place named twice: {place!r}"
+            named |= set(names)
             assert isinstance(text, str) and text, f"{key}: empty label"
             assert gui_fields.label(key) == text
-            # the place phrase through _where itself, pinned verbatim below (the mixed tab+screen case
-            # included): one noun for the whole tuple would be a false red on the first mixed entry
-            assert gui_fields.fix_sentence(key) == \
-                f"Set it in the '{text}' box on {gui_fields._where(tab)}."
+            # the box by its label, then each place in the table's order, as the rail's places are written
+            sentence, at = gui_fields.fix_sentence(key), 0
+            assert sentence.startswith(f"Set it in the '{text}' box in ") and sentence.endswith("."), sentence
+            for name in names:
+                found = sentence.find(keys.place_words(name), at)
+                assert found > at, f"{key}: {keys.place_words(name)!r} is not in its turn in {sentence!r}"
+                at = found
         elif isinstance(entry, str):
             assert entry.endswith("."), f"{key}: a fix sentence ends with a period: {entry!r}"
             assert gui_fields.fix_sentence(key) == entry
@@ -1538,6 +1534,13 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
             assert gui_fields.fix_sentence(key) == ""
             with pytest.raises(KeyError):
                 gui_fields.label(key)
+        assert not re.search(r"\b(tab|screen)\b", gui_fields.fix_sentence(key)), gui_fields.fix_sentence(key)
+    for name in sorted(named):
+        part, page = ("inference", name) if name in steps else (*name.split("/"),) if "/" in name else (name, None)
+        window.go_to(part, page)
+        now = window.current_place()
+        assert now[0] == part and page in (None, now[1]), (name, now)
+        assert window.shell.rail.row(part).place == keys.part(part), name
     assert gui_fields.fix_sentence(None) == ""
     assert gui_fields.fix_sentence("no_such_key") == ""
     with pytest.raises(KeyError):
@@ -1545,56 +1548,59 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
 
     # (c) verbatim: the sentences a user reads on the real screen, and the consents
     assert gui_fields.fix_sentence("t_obs") == \
-        "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
+        "Set it in the 'T_obs (s)' box in step 5, Inference, or in Live simulation."
     assert gui_fields.fix_sentence("n_directions") == \
-        "Set it in the 'Directions truncated' box on the TSNPE tab."
+        "Set it in the 'Directions truncated' box in step 6, Narrowing round."
     assert gui_fields.fix_sentence("accept_other_observation") == \
-        "Tick 'Run on a different observation' on the Infer tab."
+        "Tick 'Run on a different observation' in step 5, Inference."
     assert gui_fields.fix_sentence("new_run") == (
-        "Answer 'Start a new run anyway' in the dialog on the Posterior tab, or tick 'Start a new "
-        "simulation even if a cache one setting away exists' on the TSNPE tab.")
-    assert gui_fields.fix_sentence("accept_truncated") == "Confirm the load in the dialog on the Posterior tab."
+        "Answer 'Start a new run anyway' in the dialog in step 3, Training, or tick 'Start a new "
+        "simulation even if a cache one setting away exists' in step 6, Narrowing round.")
+    assert gui_fields.fix_sentence("accept_truncated") == "Confirm the load in the dialog in step 3, Training."
     assert gui_fields.fix_sentence("recording_spont") == (
-        "Select the passive recording on the Infer tab (the 'Spontaneous' box on the driven page, "
+        "Select the passive recording in step 5, Inference (the 'Spontaneous' box on the driven page, "
         "the 'Passive' box on the χ page).")
     assert gui_fields.fix_sentence("recording_probe") == \
-        "Pick the probe's recording in the χ probe table on the Infer tab."
+        "Pick the probe's recording in the χ probe table in step 5, Inference."
     assert gui_fields.fix_sentence("name") == (
         "Choose another name in the Save box, or in the 'Record name' or 'Comparison name' box "
-        "on the FDT analysis or Sweep study cross-validation tab.")
+        "in Effective temperature, One cell, or in Effective temperature, Sweep study.")
     assert (gui_fields.fix_sentence("chi_f0") == gui_fields.fix_sentence("chi_freq_bounds")
             == "Fixed by measurement: change it in config.py, deliberately.")
-    # the budget boxes sit on two tabs, and a refusal raised on either must name the one the user is on
-    assert gui_fields.CONTROL["num_runs"] == (("Posterior", "TSNPE"), "Batches")
+    # the budget boxes sit in two steps, and a refusal raised in either must name the one the user is in;
+    # a step after a step begins with its own number
+    assert gui_fields.CONTROL["num_runs"] == (("training", "narrowing"), "Batches")
     assert gui_fields.fix_sentence("run_size_cap") == \
-        "Set it in the 'Max rows per batch (0 = auto)' box on the Posterior or TSNPE tab."
-    # An input that appears in several places lists them ALL. The cell picker is on five of
-    # them, and a bad cell chosen on the measurement screen used to send the owner to the Infer tab.
+        "Set it in the 'Max rows per batch (0 = auto)' box in step 3, Training, or step 6, Narrowing round."
+    # An input that appears in several places lists them ALL, a part or a page after another place with
+    # its own "in". The cell picker is in five of them, and a bad cell chosen for the measurement used to
+    # send a person to step 5 alone.
     assert gui_fields.fix_sentence("cell") == (
-        "Set it in the 'Cell' box on the Infer or FDT analysis or Sweep study cross-validation or "
-        "NWK → Hopf reduction map or Live simulation tab.")
+        "Set it in the 'Cell' box in step 5, Inference, or in Effective temperature, One cell, or in "
+        "Effective temperature, Sweep study, or in Reduction map, or in Live simulation.")
     assert gui_fields.fix_sentence("model") == (
-        "Set it in the 'Model' box on the Config or FDT analysis or Live simulation tab.")
+        "Set it in the 'Model' box in step 1, Model and options, or in Effective temperature, One cell, "
+        "or in Live simulation.")
     assert gui_fields.fix_sentence("n_freqs") == (
-        "Set it in the 'n_freqs' box on the FDT analysis or Sweep study cross-validation tab.")
+        "Set it in the 'n_freqs' box in Effective temperature, One cell, or in Effective temperature, "
+        "Sweep study.")
     # the label is the word the row SHOWS, and the row renders it
     assert gui_fields.fix_sentence("ensemble_m") == (
-        "Set it in the 'M_ensemble' box on the FDT analysis or Sweep study cross-validation tab.")
+        "Set it in the 'M_ensemble' box in Effective temperature, One cell, or in Effective temperature, "
+        "Sweep study.")
     assert labels.pretty_gui(gui_fields.label("ensemble_m")) == "M<sub>ensemble</sub>"
     assert gui_fields.label("freqs_per_batch") == "freqs / batch" == \
         labels.pretty_gui(gui_fields.label("freqs_per_batch"))
     assert gui_fields.label("s_grid") == "S grid  (T_a/T = 1)", \
-        "a box on a SCREEN still has a label, so a row and its hint cannot drift apart"
-    # the screen noun, on its own and beside a tab
-    assert gui_fields._where(("Model Builder",)) == "the Model Builder screen"
-    assert gui_fields._where(("Artifacts", "Model Builder")) == "the Artifacts or Model Builder screen"
-    assert gui_fields._where(("Infer", "Model Builder")) == "the Infer tab or the Model Builder screen"
-    assert gui_fields._where("Posterior") == "the Posterior tab"
-    # the Artifacts screen's two, on a screen rather than a tab
-    assert gui_fields.fix_sentence("artifact") == "Select an artifact in the list on the Artifacts screen."
+        "a box of a page still has a label, so a row and its hint cannot drift apart"
+    # a part by its name alone, and a page of a part by both names
+    assert gui_fields.fix_sentence("x_scale") == "Set it in the 'x_scale (nm)' box in Your own models."
+    assert gui_fields.fix_sentence("slice_at") == "Set it in the 'Slice at' box in Effective temperature, Sweep study."
+    # the two of Records, where the list and the Note box are no form rows
+    assert gui_fields.fix_sentence("artifact") == "Select an artifact in the list in Records."
     assert gui_fields.fix_sentence("note") == (
-        "Edit it in the Note box on the Artifacts screen, or in the 'Note' or 'Comparison note' "
-        "box on the FDT analysis or Sweep study cross-validation tab.")
+        "Edit it in the Note box in Records, or in the 'Note' or 'Comparison note' box in Effective "
+        "temperature, One cell, or in Effective temperature, Sweep study.")
 
     # (d) no window control: the six the window never exposes, and the tool-only set
     assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
@@ -1612,7 +1618,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     # (e) the drive labels, as the Infer tab builds them
     for key, name in (("drive_amplitude", "amp"), ("drive_frequency", "freq"), ("drive_phase", "phase")):
         assert gui_fields.CONTROL[key] == (
-            "Infer", labels.gui_forcing_label(name, config.FORCING_DISPLAY_UNITS[name])), key
+            "infer", labels.gui_forcing_label(name, config.FORCING_DISPLAY_UNITS[name])), key
     assert gui_fields.label("drive_amplitude") == "A (N)"
     assert gui_fields.label("drive_frequency") == "f (Hz)"
     assert gui_fields.label("drive_phase") == "φ (rad)"
@@ -1660,7 +1666,7 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
         assert box.sentence == f"a {kind} named 'p' already exists; rename or delete it first", kind
         assert box.beneath == gui_fields.fix_sentence("name") == (
             "Choose another name in the Save box, or in the 'Record name' or 'Comparison name' box "
-            "on the FDT analysis or Sweep study cross-validation tab."), kind
+            "in Effective temperature, One cell, or in Effective temperature, Sweep study."), kind
         assert box.detail == "", kind
         assert loaded.name == "", "a refused rename must not relabel the loaded artifact"
         assert pane.lines[-1][0] == "warning" and "already exists" in pane.lines[-1][1], pane.lines
@@ -1856,7 +1862,7 @@ def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch,
         assert (box.kind, box.marker) == ("refusal", "warn"), typed
         assert box.sentence == said, typed
         assert box.beneath == gui_fields.fix_sentence("f0"), typed
-        assert "NWK → Hopf reduction map" in box.text, box.text
+        assert "in Reduction map" in box.text, box.text
 
     # (d) a cell deleted after it was picked. The panel checks the file itself, beside the F0 check
     #     (make_reduction_config stays untouched), so it is one yellow box naming the cell -- not a
@@ -1912,7 +1918,7 @@ def test_the_fdt_panel_leaves_an_unsupported_model_to_the_builders_refusal(monke
     assert (box.kind, box.marker) == ("refusal", "warn")
     assert box.sentence == reason
     assert box.beneath == gui_fields.fix_sentence("model")
-    assert "FDT analysis" in box.text, box.text
+    assert "in Effective temperature, One cell" in box.text, box.text
 
 
 def test_the_fdt_panel_offers_only_single_cell_records(monkeypatch):
@@ -2147,7 +2153,7 @@ def test_an_fdt_record_note_is_judged_at_the_click(tmp_path, monkeypatch, how):
     assert (box.kind, box.marker) == ("refusal", "warn"), how
     assert said in box.sentence, box.sentence
     assert box.beneath == gui_fields.fix_sentence("note")
-    assert "'Note'" in box.text and "FDT analysis" in box.text
+    assert "'Note'" in box.text and "in Effective temperature, One cell" in box.text
     assert box.detail == "", "a refusal is not a crash and carries no traceback"
 
 
@@ -2415,7 +2421,7 @@ def test_a_crossval_record_note_is_judged_at_the_click(tmp_path, monkeypatch, ho
     assert said in box.sentence, box.sentence
     assert box.beneath == gui_fields.fix_sentence("note")
     assert "'Note'" in box.text
-    assert "Sweep study cross-validation" in box.text, box.text
+    assert "in Effective temperature, Sweep study" in box.text, box.text
     assert box.detail == "", "a refusal is not a crash and carries no traceback"
 
 
@@ -3334,7 +3340,7 @@ def test_the_prior_tabs_chi_line_reads_the_summary_width_at_the_click(monkeypatc
 
 def test_the_prior_tab_rows_are_labelled_from_the_control_table():
     """Every registered field's row on the Prior tab takes its label from core.gui.fields.label(key),
-    so the name in the yellow box ("Set it in the '<label>' box on the Prior tab.") and the name on
+    so the name in the yellow box ("Set it in the '<label>' box in step 2, Prior.") and the name on
     the tab are ONE string. A literal at an add_help_row call is the defect: the row can be renamed
     while the refusal keeps naming the old label. The control table's read-back pin
     (test_the_gui_control_table_matches_the_tabs_labels) checks the rendered QLabels over every tab;
@@ -3352,7 +3358,7 @@ def test_the_prior_tab_rows_are_labelled_from_the_control_table():
     assert keys == ["bounds", "prior", "num_iterations", "sweep_batch", "max_sets", "walk_step",
                     "stability_units", "min_cluster_size", "min_samples"], keys
     for key in keys:
-        assert CONTROL[key] == ("Prior", label(key)), (key, CONTROL[key])
+        assert CONTROL[key] == ("prior", label(key)), (key, CONTROL[key])
 
 
 def test_the_posterior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
@@ -3479,7 +3485,7 @@ def test_the_validate_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(
         default = config.SBC_N_CAL if field == "n_cal" else config.CAL_N_SCALES
         assert f"(default {default})" in str(e), str(e)
         fix = gui_fields.fix_sentence(e.field)
-        assert gui_fields.label(field) in fix and "Validate" in fix, fix
+        assert gui_fields.label(field) in fix and "in step 4, Checks" in fix, fix
 
     click("2000", "1")
     assert refused == [] and sent["fn"] is orchestrator.validate_calibration, (refused, sent)
@@ -3568,7 +3574,7 @@ def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(mon
         assert e.field == field and rule in str(e), (boxes, e.field, str(e))
         assert f"(default {default})" in str(e), str(e)
         fix = gui_fields.fix_sentence(e.field)
-        assert gui_fields.label(field) in fix and "TSNPE" in fix, fix
+        assert gui_fields.label(field) in fix and "step 6, Narrowing round" in fix, fix
 
     # in rule: the loaded observation and the read values travel; a typed 0 cap is automatic; the
     # direction count is NOT checked against a width the tab cannot know
@@ -3585,7 +3591,7 @@ def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(mon
 
 def test_the_validate_and_tsnpe_rows_are_named_from_the_control_table():
     """The rows' names are the CONTROL table's, through label(key), so the refusal's "Set it in the
-    '<label>' box on the <tab> tab" and the row on screen can never disagree: renaming a control is
+    '<label>' box in <its places>" and the row on screen can never disagree: renaming a control is
     one edit in core/gui/fields.py, and the control table's read-back pins the rendered text. A
     literal here would be a second copy of the name -- the kind that goes stale the day the first one
     moves."""
@@ -3936,31 +3942,28 @@ def test_the_probe_planner_refuses_a_blank_t_obs_through_the_yellow_box(tmp_path
 
 def test_the_gui_control_table_matches_the_tabs_labels():
     """The control table's pin. fields.CONTROL is where a refusal learns which box to name ("Set it
-    in the 'T_obs (s)' box on the Infer or Live simulation tab."), and the tabs build their rows
-    FROM it (label(key)), so the two cannot drift -- this reads every tab's form rows back and checks
-    that each (tab, label) entry is a label that tab actually shows. The rows are read the way Qt
-    holds them: the QLabel inside each help_label holder (help_badge.py), or the plain QLabel of a
-    row added without help text, compared against labels.pretty_gui(label), which is what the holder
-    was given. The Infer tab is read after install_config with a FORCED stub config so its three
-    drive rows exist; a chi config would build none (no force_params_dict) and the drive entries
-    would pass vacuously. The places are the panels behind the ten titles the refusals name and the two
-    screens, read off a built MainWindow -- the model builder with one variable declared and its
-    parameter detected, because four of the boxes it names exist only then. The ten titles are held here, each
-    with its panel, until the refusals name the rail's places instead.
+    in the 'T_obs (s)' box in step 5, Inference, or in Live simulation."), and the panels build their
+    rows FROM it (label(key)), so the two cannot drift -- this reads back the form rows shown at every
+    place the table names and checks that each (place, label) entry is a label shown there. The rows
+    are read the way Qt holds them: the QLabel inside each help_label holder (help_badge.py), or the
+    plain QLabel of a row added without help text, compared against labels.pretty_gui(label), which is
+    what the holder was given. Every place is read off a built MainWindow: the window moves there, and
+    the rows read are those of the panel it then shows -- a step's page, a page of Effective
+    temperature, the Reduction map's or Live simulation's own panel -- or, for Your own models, those
+    of the whole part with its builder, which has one variable declared and its parameter detected,
+    because four of the boxes it names exist only then. So a place that shows another place's panel,
+    two steps' pages swapped among them, fails here, as does an entry that names the wrong place.
+    Step 5 is read after install_config with a FORCED stub config so its three drive rows exist; a
+    chi config would build none (no force_params_dict) and the drive entries would pass vacuously.
 
     The second half: the Infer tab's registered rows are built from label(key), not from a literal
     that happens to match today."""
     from PySide6.QtWidgets import QFormLayout, QLabel
-    from core.gui import fields as gui_fields
+    from core.gui import fields as gui_fields, keys
     from core.gui.panels.inference.infer_tab import InferPanel
     from core.gui.widgets.field_row import LabeledFieldRow
     from core.Helpers import labels
     from tests._fixtures import code_only, qt_app
-
-    qt_app()
-    inf = build_inference(cfg=_forced_cfg())
-    tabs = {"Config": inf.config_panel, "Prior": inf.prior_panel, "Posterior": inf.posterior_panel,
-            "Validate": inf.validate_panel, "Infer": inf.infer_panel, "TSNPE": inf.tsnpe_panel}
 
     def shown(panel) -> list:
         out = []
@@ -3975,21 +3978,12 @@ def test_the_gui_control_table_matches_the_tabs_labels():
                     out.append(lab.text())
         return out
 
-    # A place may be the panel of any of the ten titles or one of the two screens, so read them all back
-    # off a built window rather than the six inference panels alone: each of the other four by its kind.
-    from core.gui.panels.crossval_panel import CrossValPanel
-    from core.gui.panels.fdt_panel import FdtPanel
-    from core.gui.panels.reduction_panel import ReductionPanel
-    from core.gui.panels.simulate_panel import SimulatePanel
+    qt_app()
     window = build_window()
-    for title, kind in (("NWK → Hopf reduction map", ReductionPanel), ("FDT analysis", FdtPanel),
-                        ("Sweep study cross-validation", CrossValPanel), ("Live simulation", SimulatePanel)):
-        tabs[title] = window.panel(kind)
-    tabs["Artifacts"] = window.part("records")
-    tabs["Model Builder"] = window.part("models").builder
+    window.part("inference").install_config(_forced_cfg())
     # The model builder's init row exists once per declared variable and its value/min/max boxes once
-    # per detected parameter (the control table names all four), so a freshly built screen shows
-    # none of them: declare one variable and detect its parameter before reading the screen back. The
+    # per detected parameter (the control table names all four), so a freshly built builder shows
+    # none of them: declare one variable and detect its parameter before reading the part back. The
     # parameter row's boxes are captioned inside a LabeledFieldRow, not a form row, so read those
     # captions too.
     mb = window.part("models").builder
@@ -3997,22 +3991,36 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     mb._set_variables()
     mb._var_rows[0].drift.setText("-k*x")
     mb._detect_params()
-    seen = {tab: shown(panel) for tab, panel in tabs.items()}
-    seen["Model Builder"] += [lab.text() for row in mb.findChildren(LabeledFieldRow)
-                              for lab in row.findChildren(QLabel)]
+    steps = {step.key for step in keys.STEPS}
+
+    def read(name) -> list:
+        """The labels shown at the place ``name`` once the window has moved there."""
+        part, page = ("inference", name) if name in steps else (*name.split("/"),) if "/" in name else (name, None)
+        window.go_to(part, page)
+        now = window.current_place()
+        assert now[0] == part and page in (None, now[1]), (name, now)
+        top = window.part(part)
+        if part == "models":
+            return shown(top) + [lab.text() for row in top.findChildren(LabeledFieldRow)
+                                 for lab in row.findChildren(QLabel)]
+        in_sight = [panel for panel in top.panels() if panel.isVisibleTo(top)] if hasattr(top, "panels") else [top]
+        assert len(in_sight) == 1, (name, in_sight)
+        return shown(in_sight[0])
+
     tuples = {k: e for k, e in gui_fields.CONTROL.items() if isinstance(e, tuple)}
-    assert tuples, "the control table has no (tab, label) entries"
+    assert tuples, "the control table has no (place, label) entries"
     for key in ("drive_amplitude", "drive_frequency", "drive_phase"):
-        assert key in tuples, f"{key} must be a (tab, label) entry so the read-back covers the drive rows"
-    # No exemptions: every entry is read back off its tab, the Seed rows of the FDT analysis and
-    # Sweep study cross-validation tabs included.
-    missing = []
-    for key, (tab, text) in tuples.items():
-        for name in (tab if isinstance(tab, tuple) else (tab,)):   # the budget boxes name two tabs
-            assert name in seen, f"{key}: CONTROL names a place that does not exist: {name!r}"
+        assert key in tuples, f"{key} must be a (place, label) entry so the read-back covers the drive rows"
+    # No exemptions: every entry is read back at its place, the Seed rows of both pages of Effective
+    # temperature included.
+    seen, missing = {}, []
+    for key, (place, text) in tuples.items():
+        for name in (place if isinstance(place, tuple) else (place,)):   # the budget boxes name two steps
+            if name not in seen:
+                seen[name] = read(name)
             if labels.pretty_gui(text) not in seen[name]:
                 missing.append((key, name, text))
-    assert not missing, f"CONTROL names labels no tab shows: {missing}\nshown: {seen}"
+    assert not missing, f"CONTROL names labels no place shows: {missing}\nshown: {seen}"
 
     src = code_only(InferPanel.__init__)
     for key in ("t_obs", "cell", "recording_forced", "chi_f0_si"):
@@ -4831,14 +4839,14 @@ def test_every_comparison_refusal_reaches_the_yellow_box_naming_its_control(tmp_
     fixes = {
         # the list quoted by its own row, and "Choose" -- the fix for "at most 2" or "named twice"
         # is a removal, never an "Add"
-        "compare_records": ("Choose the records in the 'Runs to compare' list on the FDT analysis "
-                            "tab, or in the 'Sweeps to compare' list on the Sweep study "
-                            "cross-validation tab."),
-        "prefactor": "Set it in the 'Normalisation constant' box on the FDT analysis tab.",
-        "slice_at": "Set it in the 'Slice at' box on the Sweep study cross-validation tab.",
+        "compare_records": ("Choose the records in the 'Runs to compare' list in Effective temperature, "
+                            "One cell, or in the 'Sweeps to compare' list in Effective temperature, "
+                            "Sweep study."),
+        "prefactor": "Set it in the 'Normalisation constant' box in Effective temperature, One cell.",
+        "slice_at": "Set it in the 'Slice at' box in Effective temperature, Sweep study.",
     }
-    assert gui_fields.CONTROL["prefactor"] == ("FDT analysis", "Normalisation constant")
-    assert gui_fields.CONTROL["slice_at"] == ("Sweep study cross-validation", "Slice at")
+    assert gui_fields.CONTROL["prefactor"] == ("temperature/one_cell", "Normalisation constant")
+    assert gui_fields.CONTROL["slice_at"] == ("temperature/sweep", "Slice at")
 
     app = qt_app()
     store = ArtifactStore(tmp_path)

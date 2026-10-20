@@ -624,7 +624,7 @@ def test_the_crossval_panel_remembers_its_saved_sweep_pick_and_never_its_seed(mo
         assert text in shown, f"the CrossVal panel shows no {text!r} row: {shown}"
         assert f"'{text}'" in gui_fields.fix_sentence(key), \
             f"the {key} fix sentence does not name the {text!r} box: {gui_fields.fix_sentence(key)!r}"
-        assert "Sweep study cross-validation" in gui_fields.fix_sentence(key), gui_fields.fix_sentence(key)
+        assert "in Effective temperature, Sweep study" in gui_fields.fix_sentence(key), gui_fields.fix_sentence(key)
 
 def test_panel_splitter_is_sized_and_not_collapsible():
     """Every panel opens with a usable controls column that cannot be dragged to nothing.

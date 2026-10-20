@@ -634,8 +634,8 @@ def test_the_builder_shows_a_field_refusal_in_the_yellow_box():
     else.
 
     Each of its numeric fields now carries a registry key, so the box's informative line names the
-    box on THIS screen -- "on the Model Builder screen", not "on the Infer tab", which is why the
-    table names screens as well as tabs. Five are checked here, one per shape: a blank bound
+    box in THIS part -- "in Your own models", not "in step 5, Inference", which is why the table
+    names parts as well as steps. Five are checked here, one per shape: a blank bound
     (FloatField.value() reads a blank as 0.0, the hazard _ParamRow's own docstring warns about), a
     cleared value (read through value_or_none for the same reason), an inverted pair, a non-positive
     display scale, and a blank forcing parameter -- which reached model_store as a real 0.0 nobody
@@ -702,7 +702,7 @@ def test_the_builder_shows_a_field_refusal_in_the_yellow_box():
     # the screen names every one of its own boxes, and on the right surface
     for key in ("param_value", "param_min", "param_max", "init", "x_scale", "t_scale",
                 "forcing_value"):
-        assert gui_fields.fix_sentence(key).endswith("on the Model Builder screen."), key
+        assert gui_fields.fix_sentence(key).endswith(" in Your own models."), key
 
 
 def test_the_builder_refuses_at_validate_what_save_would_refuse():

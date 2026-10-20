@@ -525,8 +525,8 @@ def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(mon
 
     # the two new boxes are named on this screen, and T_obs names BOTH places it appears
     assert gui_fields.fix_sentence("frame_steps") == \
-        "Set it in the 'Steps / frame' box on the Live simulation tab."
+        "Set it in the 'Steps / frame' box in Live simulation."
     assert gui_fields.fix_sentence("fps") == \
-        "Set it in the 'Max FPS' box on the Live simulation tab."
+        "Set it in the 'Max FPS' box in Live simulation."
     assert gui_fields.fix_sentence("t_obs") == \
-        "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
+        "Set it in the 'T_obs (s)' box in step 5, Inference, or in Live simulation."
