@@ -2850,7 +2850,9 @@ def test_help_prints_the_key_map():
     "What it does" and a row for each row of the map, in its order and its words, and no row to select, so that it
     takes no stop of the Tab key. In a window of the ordinary opening size the table stands whole under the text,
     which takes the room left, and nothing scrolls; in the smallest window the text keeps its least height, the
-    table stands whole under it, and the two scroll together under the page's heading."""
+    table stands whole under it, and the two scroll together under the page's heading. Exactly while they scroll,
+    the middle that holds them is a stop of the Tab key, reached by Shift+Tab from the text, and keeps the room of
+    its focus ring round what it holds, with the bar's gap beside it, so that the ring crosses nothing it holds."""
     from PySide6.QtWidgets import QAbstractItemView
     qt_app()
     window = build_window()
@@ -2871,5 +2873,15 @@ def test_help_prints_the_key_map():
             assert table.height() == table.sizeHint().height(), f"the table is cut at {size}"
             assert (bar.maximum() > 0, shown.viewer.height() == design.HELP_VIEWER_MIN_H) == (scrolls, scrolls), (
                 f"at {size} the middle scrolls {bar.maximum()} px and the text is {shown.viewer.height()} px high")
+            shown.viewer.setFocus(Qt.TabFocusReason)
+            QTest.keyClick(shown.viewer, Qt.Key_Backtab, Qt.ShiftModifier)
+            assert (window.focusWidget() is shown.middle) == scrolls, (
+                f"at {size} Shift+Tab from the text did not reach the middle exactly while it scrolls")
+            room = design.SIZE["focus_ring"] + design.SIZE["focus_gap"] if scrolls else 0
+            kept = shown.middle.widget().layout().contentsMargins()
+            got = (shown.middle.focusPolicy(), (kept.left(), kept.top(), kept.right(), kept.bottom()))
+            assert got == (Qt.TabFocus if scrolls else Qt.NoFocus,
+                           (room, room, room + (design.SIZE["scroll_gap"] if scrolls else 0), room)), (
+                f"the middle at {size}: {got}")
     finally:
         window.hide()

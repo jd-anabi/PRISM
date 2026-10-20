@@ -109,10 +109,12 @@ class HelpScreen(QWidget):
 
     @reported()
     def _range_changed(self, low, high):
-        """Hears the middle's scroll bar. While there is something to scroll, the bar gets a gap beside it and the
-        middle is a stop for the Tab key, so that the keyboard can scroll it."""
+        """Hears the middle's scroll bar. While there is something to scroll, the middle is a stop for the Tab key, so
+        that the keyboard can scroll it, and what it holds keeps the room of the middle's focus ring on every side,
+        so that the ring crosses none of it, the bar a gap beside it too."""
         scrolls = high > low
-        self._lines.setContentsMargins(0, 0, design.SIZE["scroll_gap"] if scrolls else 0, 0)
+        room = design.SIZE["focus_ring"] + design.SIZE["focus_gap"] if scrolls else 0
+        self._lines.setContentsMargins(room, room, room + (design.SIZE["scroll_gap"] if scrolls else 0), room)
         self.middle.setFocusPolicy(Qt.TabFocus if scrolls else Qt.NoFocus)
 
     def first_focus(self) -> QWidget:
