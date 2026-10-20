@@ -1332,7 +1332,7 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     assert {"sheet", "palette", "font", "figure settings", "error hook", "appearance",
             "appearance objects", "default store", "root log handler", "text factor",
             "class fonts", "theme flag", "small style", "focus follower", "follower objects", "layout room",
-            "top-level widgets"} <= changed, \
+            "top-level widgets", "one-PRISM lock", "local servers"} <= changed, \
         f"the whole program changed only {sorted(changed)}: the comparison below would prove nothing"
     # The window itself is deleted, but a name of it keeps alive what its parts hold in Python, the menus of its
     # plots among them: this test's own, and the one in the error hook the program set, which ``during`` holds.
@@ -1344,6 +1344,71 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     assert QApplication.font() == before_font and QApplication.font("QMenu") == before_font
     assert design.is_dark() is False, "the whole program left its theme in the look's table"
     assert not follows.listening(), "the follower was left on the application"
+
+
+def test_the_whole_program_lets_go_of_its_lock_and_its_listener(tmp_path, monkeypatch):
+    """The whole program takes the lock beside its settings file, here the test's own, and listens for a second start,
+    as PRISM does; as it ends it lets go of both, so that the next start of PRISM on that file is turned away by
+    neither: the lock can be taken again, and no server listens under its name. Every test that builds the whole
+    program goes through the one helper that lets go of them."""
+    from PySide6.QtCore import QLockFile
+    from core.gui import one_instance, settings
+    from tests._fixtures import whole_program
+    qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    path = settings.settings().fileName()
+    lock_path = os.path.join(os.path.dirname(os.path.abspath(path)), "PRISM.lock")
+    name = one_instance.server_name(path)
+
+    def taken_and_heard():
+        from PySide6.QtNetwork import QLocalSocket
+        lock = QLockFile(lock_path)
+        lock.setStaleLockTime(0)
+        taken = lock.tryLock(0)
+        if taken:
+            lock.unlock()
+        socket = QLocalSocket()
+        socket.connectToServer(name)
+        heard = socket.waitForConnected(300)
+        socket.abort()
+        return taken, heard
+
+    with whole_program() as (_app, window):
+        assert window is not None and taken_and_heard() == (False, True), "the program holds no lock or no listener"
+    assert taken_and_heard() == (True, False), "the whole program left its lock or its listener behind"
+
+
+@pytest.mark.display
+def test_on_a_real_windows_display_bringing_the_window_forward_returns_without_error(monkeypatch):
+    """Needs QT_QPA_PLATFORM=windows. A second start's knock brings PRISM's window to the front: out of the minimised
+    state, raised, activated, and the taskbar's alert when the system keeps the front for another window; and the
+    second start lets the open PRISM's process take the front. On a real display each returns without error. The
+    window is kept off the screen and never shown, and its activation alone is stood in for and noted: on a real
+    display it gives the keyboard to the window, which nobody can see here, whenever the system lets this process
+    take the front. So nothing a person sees changes: the window the person works in keeps the front and the
+    keyboard."""
+    import ctypes
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QWidget
+    from core.gui import one_instance
+    qt_app()
+    if QGuiApplication.platformName() != "windows":
+        pytest.skip(f"needs the windows platform, got {QGuiApplication.platformName()!r}")
+    activated = []
+    monkeypatch.setattr(QWidget, "activateWindow", lambda widget: activated.append(widget))
+    user32 = ctypes.WinDLL("user32")
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    window = build_window()
+    window.setAttribute(Qt.WA_DontShowOnScreen)
+    window.setWindowState(Qt.WindowMinimized)
+    front = user32.GetForegroundWindow()
+    window.come_to_front()
+    one_instance.allow_foreground(os.getpid())
+    assert activated == [window], "the window was not activated"
+    assert not window.windowState() & Qt.WindowMinimized, "the window stayed minimised"
+    assert not window.isVisible() and not user32.IsWindowVisible(int(window.winId())), "the window was shown"
+    assert user32.GetForegroundWindow() == front, "the front was taken from the window the person works in"
 
 
 def test_the_builders_empty_variables_box_shows_a_hint_that_cannot_be_an_entry():

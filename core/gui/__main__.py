@@ -15,6 +15,8 @@ from core.gui.app import build_app   # noqa: E402 -- must import after matplotli
 
 def main() -> int:
     app, window = build_app()
+    if window is None:          # PRISM is open already: this start handed over to it, and ends with nothing shown
+        return 0
     window.show()
     return app.exec()
 

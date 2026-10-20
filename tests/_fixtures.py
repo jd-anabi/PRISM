@@ -824,10 +824,11 @@ def process_state(app) -> dict:
     import matplotlib
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtNetwork import QLocalServer
     from PySide6.QtWidgets import QApplication
     from core import config, logging_root
     from core.artifacts import default_store
-    from core.gui import design, theming
+    from core.gui import design, one_instance, theming
     from core.gui import style as small_style
     gc.collect()
     palette = app.palette()
@@ -874,17 +875,29 @@ def process_state(app) -> dict:
         "quiet segment bar": config.QUIET_SEGMENT_BAR,
         "root log handler": logging_root.installed(),
         "default store": default_store(),
+        # The lock this process holds as the one PRISM, and the names its local servers listen under: either, left
+        # behind, would turn the next start of PRISM away or hear its knock.
+        "one-PRISM lock": one_instance.current(),
+        "local servers": tuple(sorted(server.serverName() for server in app.findChildren(QLocalServer)
+                                      if server.isListening())),
     }
 
 
 @contextmanager
-def whole_program():
+def whole_program(*, held_by_another: bool = False):
     """The whole program, built by ``core.gui.app.build_app`` and handed over as ``(app, window)``;
     on the way out, everything build_app set on the process is as it was found (``process_state``
-    lists it), and the window is deleted. What its parts hold in Python (the menus of its plots among
-    them) goes when the caller's last name of the window goes. The one application serves every later
-    test, so a test that builds the whole program does it through here. PRISM_ARTIFACTS must name a
-    temporary folder first: build_app makes the folder it names and installs it as the process's store."""
+    lists it), the lock it took beside the test's settings file and the server it listens on are let
+    go (``one_instance.release``), and the window is deleted. What its parts hold in Python (the menus
+    of its plots among them) goes when the caller's last name of the window goes. The one application
+    serves every later test, so a test that builds the whole program does it through here.
+    PRISM_ARTIFACTS must name a temporary folder first: build_app makes the folder it names and
+    installs it as the process's store.
+
+    With ``held_by_another`` a PRISM is open already: the test's own settings file is claimed first,
+    as an open PRISM claims it, so that build_app hands over to that claim and the block receives
+    ``(app, None)``. That claim is the one the process holds (``one_instance.current()``) until the
+    block ends, and it is let go then too."""
     import sys
     import matplotlib
     import shiboken6
@@ -893,7 +906,7 @@ def whole_program():
     from core import config, logging_root
     from core.artifacts import default_store, set_default_store
     from core.gui import app as gui_app
-    from core.gui import design, theming
+    from core.gui import design, one_instance, settings, theming
     from core.gui import style as small_style
     if not os.environ.get("PRISM_ARTIFACTS"):
         raise AssertionError("whole_program() needs PRISM_ARTIFACTS set to a temporary folder: "
@@ -909,8 +922,10 @@ def whole_program():
              "store": default_store(), "factor": design.text_scale(), "dark": design.is_dark(),
              "room": design._room}
     with matplotlib.rc_context():                     # the figure settings, exactly as found
-        built = None
+        built = held = None
         try:
+            if held_by_another:
+                held = one_instance.claim(settings.settings().fileName())
             built = gui_app.build_app([])
             yield built
         finally:
@@ -924,6 +939,10 @@ def whole_program():
             config.QUIET_SEGMENT_BAR = found["quiet"]
             design.set_text_scale(found["factor"])
             design.set_room(found["room"])
+            # Then the lock and the server, before the window goes, so that no knock reaches it on its way out.
+            one_instance.release()
+            if held is not None:
+                held.release()
             small_style.uninstall(app)                # the follower off the application before its style goes
             made = theming.active_appearance()
             theming._ACTIVE = found["appearance"]

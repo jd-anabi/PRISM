@@ -2,8 +2,9 @@
 
 `qapp` is the one QApplication a process may hold; ``tests/_fixtures.qt_app()`` is the same
 expression as a plain call, which is what the GUI suites use. The settings, dialog and drawing-code
-fixtures at the end, and the one that lets go what the builders made, are autouse at session and
-function scope, and no test requests them by name.
+fixtures at the end, the one that lets go what the builders made and the one that stands in for
+bringing a window to the front, are autouse at session and function scope; a test requests the last
+by name, ``brought_forward``, to read what it kept, and no other by name.
 """
 from pathlib import Path
 
@@ -310,3 +311,24 @@ def _built_widgets_let_go(_isolated_settings, _drawing_code_raises_nothing, _lay
     at_start = _built.noted()
     yield
     _built.end_of_test(at_start)
+
+
+@pytest.fixture(autouse=True)
+def brought_forward(request):
+    """No window is brought to the front, and no process is let take the front, in a test that is not marked for the
+    real screen: the window's ``come_to_front`` and ``one_instance.allow_foreground`` are stood in for, and each call
+    is kept, as its name and what it was handed (the window, the process number), in the list this fixture gives a
+    test that asks for it by name. A second start's knock that reached a window while a test pressed keys would
+    otherwise take the front from the window the test brought there, and the keys would go to the other; and the
+    second call reaches the system itself. A test marked for the real screen makes both calls for real. The window's
+    module is loaded here when nothing has loaded it yet, once in a process, so that the stand-in is in every test.
+    A monkeypatch of its own, so that a test that undoes its own does not undo this one."""
+    calls = []
+    mp = pytest.MonkeyPatch()
+    if request.node.get_closest_marker("display") is None:
+        from core.gui import one_instance
+        from core.gui.main_window import MainWindow
+        mp.setattr(MainWindow, "come_to_front", lambda window: calls.append(("come_to_front", window)))
+        mp.setattr(one_instance, "allow_foreground", lambda pid: calls.append(("allow_foreground", pid)))
+    yield calls
+    mp.undo()

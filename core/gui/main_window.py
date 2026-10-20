@@ -6,6 +6,7 @@ and one that cannot be built shows why in its place while the rest of the window
 parts are reused unchanged in behaviour. ``go_to`` is the one way to move between the parts; the run's state
 stands at the rail's foot."""
 import logging
+import sys
 import time
 import traceback
 from datetime import datetime
@@ -138,6 +139,17 @@ def _first_control(part: QWidget, takes=_is_setting) -> QWidget | None:
             return widget
         widget = widget.nextInFocusChain()
     return None
+
+
+def _holds_the_front(window) -> bool:
+    """Whether ``window`` is the window the system holds in front, the one that takes the person's keys: on Windows
+    the system's own answer, read at once; elsewhere the toolkit's, which it may learn a moment later."""
+    if sys.platform == "win32":
+        import ctypes
+        user32 = ctypes.WinDLL("user32")
+        user32.GetForegroundWindow.restype = ctypes.c_void_p
+        return user32.GetForegroundWindow() == int(window.winId())
+    return window.isActiveWindow()
 
 
 def _local(created):
@@ -509,6 +521,17 @@ class MainWindow(QMainWindow):
         again each time it is opened. A part the window does not have, or a page its part does not have, raises
         KeyError before anything moves or is built."""
         self._move(part, page, keyboard=Qt.OtherFocusReason)
+
+    def come_to_front(self) -> None:
+        """Bring the window to the front, as a second start of PRISM asks: out of the minimised state when it is
+        there (a window that was maximised comes back maximised), raised over the other windows and given the
+        keyboard. When the system keeps the front for the window a person is working in, the window's button on
+        the taskbar flashes instead, until the window is brought to the front."""
+        self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
+        self.raise_()
+        self.activateWindow()
+        if not _holds_the_front(self):
+            QApplication.alert(self)
 
     def go_to_run(self) -> None:
         """Go to the place of the live run. Nothing when no run is live, or its panel has no place."""

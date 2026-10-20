@@ -1,5 +1,5 @@
-"""Build the QApplication + MainWindow and install a last-resort excepthook that surfaces unhandled
-errors in a dialog instead of silently killing the app."""
+"""Build the QApplication + MainWindow, one PRISM at a time, and install a last-resort excepthook that
+surfaces unhandled errors in a dialog instead of silently killing the app."""
 import logging
 import sys
 import traceback
@@ -8,8 +8,13 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from core import config, logging_root, registry
 
-from . import app_icon, design, fonts, mpl_theme, settings, style, theming
+from . import app_icon, design, fonts, mpl_theme, one_instance, settings, style, theming
 from .main_window import MainWindow
+
+# What a start of PRISM that builds no window says as it ends, on the error stream when the process has one:
+# started from a console, it is the only sign the person gets.
+SAID = {"hand_over": "PRISM is already open: its window was brought to the front.",
+        "give_up": "PRISM is already running but did not answer; this start ends."}
 
 
 def _install_excepthook(parent_getter):
@@ -60,6 +65,19 @@ def _library_record_sink(record) -> None:
     stream.flush()
 
 
+def _say(case: str) -> None:
+    """Say what a start that builds no window did, in one line on the error stream; nothing when the process has
+    no such stream, as one started with no console, or when the stream cannot be written."""
+    stream = sys.stderr
+    if stream is None:
+        return
+    try:
+        stream.write(SAID[case] + "\n")
+        stream.flush()
+    except (OSError, ValueError):            # a stream that was closed, or whose reader is gone
+        pass
+
+
 def build_app(argv=None):
     # THE root-logger handler, before anything else in this process can log. A handler on the root
     # FROM START-UP is what stops a library's logging.warning from calling basicConfig and
@@ -91,6 +109,15 @@ def build_app(argv=None):
     app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
     app.setOrganizationName(settings.ORG)   # both are needed for a stable QSettings store on Windows
     app.setApplicationName(settings.APP)
+    # One PRISM at a time, settled as soon as the settings file is known and before the style, the fonts or any
+    # window: a start that finds PRISM open hands over to it, or gives up when it does not answer, and ends here
+    # having built nothing (one_instance.py).
+    claimed = one_instance.claim(settings.settings().fileName())
+    if claimed.case in SAID:
+        _say(claimed.case)
+        if claimed.case == "give_up":
+            raise SystemExit(1)
+        return app, None
     # On the APPLICATION, not on the window: every dialog, message box and popped-out figure window
     # inherits it, so there is no per-window wiring to forget. PRISM had no icon at all before this.
     app.setWindowIcon(app_icon.app_icon())
@@ -124,6 +151,9 @@ def build_app(argv=None):
         traceback.print_exc()
         raise SystemExit(1) from e
     window_ref["w"] = window
+    # A second start's knock brings this window to the front. One that came while the window was being built is
+    # heard when the event loop first runs, once the window is shown.
+    claimed.knocked.connect(window.come_to_front)
     # The taskbar draws the window CLASS icon whenever its icon query goes unanswered, and Qt's class
     # carries python.exe's generic glyph; PRISM's first show is busy long enough for that to happen
     # every time (app_icon.set_windows_class_icon has the measurements). Before the first show --

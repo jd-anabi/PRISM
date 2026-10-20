@@ -2904,3 +2904,254 @@ def test_help_prints_the_key_map():
                 f"the middle at {size}: {got}")
     finally:
         window.hide()
+
+
+# One PRISM at a time. A start claims the settings file it was given; a test claims one of its own, in its own
+# temporary folder, and lets go of what it claimed before it ends.
+def _answers(name):
+    """Whether a local server listens under ``name``: a connection to it is made, and let go at once."""
+    from PySide6.QtNetwork import QLocalSocket
+    socket = QLocalSocket()
+    socket.connectToServer(name)
+    made = socket.waitForConnected(300)
+    socket.abort()
+    return made
+
+
+def test_which_case_a_start_of_prism_falls_in():
+    """A start that took the lock starts; one that found it held is handed over when the open PRISM took its
+    connection; when nothing took it, it starts once the lock was removed, and gives up when the lock could not be
+    removed."""
+    from core.gui.one_instance import start_case
+    cases = [(start_case(locked=True, connected=False, removed=None), "start"),
+             (start_case(locked=False, connected=True, removed=None), "hand_over"),
+             (start_case(locked=False, connected=False, removed=True), "start_after_removal"),
+             (start_case(locked=False, connected=False, removed=False), "give_up")]
+    assert [got for got, _wanted in cases] == [wanted for _got, wanted in cases]
+
+
+def test_the_servers_name_is_one_per_settings_file(tmp_path):
+    """The server a second start knocks on is named after the settings file: two files, two names; one file whose
+    path is written another way -- its letters in another case, the other separator, a "." or a ".." among its
+    folders -- one name; and the name is one a local server listens under."""
+    from PySide6.QtNetwork import QLocalServer
+    from core.gui.one_instance import server_name
+    qt_app()
+    path = str(tmp_path / "PRISM" / "PRISM.ini")
+    ways = (path.upper(), path.replace("\\", "/"), str(tmp_path / "PRISM" / "." / "PRISM.ini"),
+            str(tmp_path / "PRISM" / "other" / ".." / "PRISM.ini"))
+    names = {server_name(way) for way in ways} | {server_name(path)}
+    assert len(names) == 1, f"one settings file, written {len(ways) + 1} ways, names {len(names)} servers"
+    assert server_name(str(tmp_path / "Another" / "PRISM.ini")) != server_name(path), "two settings files share a name"
+    server = QLocalServer()
+    try:
+        assert server.listen(server_name(path)), "no local server listens under the name"
+    finally:
+        server.close()
+
+
+def test_a_second_start_is_handed_over_even_while_the_first_is_busy(tmp_path, brought_forward):
+    """A second start on the settings file of a PRISM that is open -- one that holds the lock and listens -- connects
+    at once and is handed over, though the open one's event loop has not run since: before it knocks, it lets the
+    open one's process take the front. The open one hears the knock when its loop next runs, and not before: not
+    while its main thread is held for a second, as while a figure is drawn."""
+    import os
+    from core.gui import one_instance
+    from tests._fixtures import pump
+    app = qt_app()
+    path = str(tmp_path / "prism.ini")
+    first = one_instance.claim(path)
+    heard = []
+    first.knocked.connect(lambda: heard.append(True))
+    try:
+        began = time.monotonic()
+        second = one_instance.claim(path)
+        took = time.monotonic() - began
+        assert (first.case, second.case, one_instance.current() is first) == ("start", "hand_over", True), (
+            first.case, second.case)
+        assert took < 0.5, "the second start was not handed over at once"
+        assert brought_forward == [("allow_foreground", os.getpid())], "the open PRISM was not let take the front"
+        time.sleep(1.0)                               # the open PRISM's main thread is held
+        assert heard == [], "the knock was heard before the event loop ran"
+        pump(app, 0.2)
+        assert heard == [True], "the open PRISM did not hear the knock once its event loop ran"
+    finally:
+        first.release()
+
+
+def test_a_lock_left_by_a_prism_that_died_is_taken(tmp_path):
+    """A PRISM that died -- its process ended at once, saying nothing -- leaves its lock file behind, and the next
+    start takes the lock at once: the toolkit sees that the process the lock names is gone."""
+    import os
+    import subprocess
+    import sys
+    import threading
+    from pathlib import Path
+    from core.gui import one_instance
+    qt_app()
+    path = str(tmp_path / "prism.ini")
+    code = ("import sys\n"
+            "sys.path.insert(0, sys.argv[2])\n"
+            "from PySide6.QtCore import QCoreApplication\n"
+            "from core.gui import one_instance\n"
+            "app = QCoreApplication([])\n"
+            "print(one_instance.claim(sys.argv[1]).case, flush=True)\n"
+            "sys.stdin.read()\n")
+    repo = str(Path(__file__).resolve().parents[1])
+    child = subprocess.Popen([sys.executable, "-c", code, path, repo], cwd=repo, env=dict(os.environ),
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    stop = threading.Timer(60, child.kill)            # a child that hangs is ended, and its line reads empty
+    stop.start()
+    try:
+        said = child.stdout.readline().strip()
+        assert said == "start", f"the PRISM that is to die did not start: {said!r}"
+        child.kill()
+        child.wait(timeout=30)
+        assert (tmp_path / "PRISM.lock").is_file(), "the lock file went with its process"
+        taken = one_instance.claim(path, tries=1, pause_ms=0)
+        try:
+            assert (taken.case, one_instance.current() is taken) == ("start", True), "the lock was not taken at once"
+        finally:
+            taken.release()
+    finally:
+        stop.cancel()
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=30)
+        child.stdout.close()
+        child.stdin.close()
+
+
+def test_a_lock_nothing_answers_for_is_removed_and_taken_or_else_the_start_gives_up(tmp_path, brought_forward):
+    """When the lock is held and nothing takes the connection, the start knocks as many times as it is told, a
+    pause apart; then it removes the lock, takes it and listens, where the lock can be removed -- here a lock file
+    that names no process. Where it cannot, the lock's holder lives and does not answer -- here one that never
+    listens -- and the start gives up, holding nothing and listening for nothing, having let the holder's process
+    take the front."""
+    import os
+    from PySide6.QtCore import QLockFile
+    from core.gui import one_instance
+    qt_app()
+    path = str(tmp_path / "prism.ini")
+    name = one_instance.server_name(path)
+    (tmp_path / "PRISM.lock").write_bytes(b"")       # a lock file that names no process
+    began = time.monotonic()
+    taken = one_instance.claim(path, tries=3, pause_ms=100)
+    took = time.monotonic() - began
+    try:
+        assert (taken.case, one_instance.current() is taken, _answers(name)) == ("start_after_removal", True, True)
+        assert 0.2 <= took < 1.0, "the three knocks were not a tenth of a second apart"
+        assert brought_forward == [], "a lock that names no process let a process take the front"
+    finally:
+        taken.release()
+    holder = QLockFile(str(tmp_path / "PRISM.lock"))
+    holder.setStaleLockTime(0)
+    assert holder.tryLock(0), "the lock was not let go"
+    try:
+        refused = one_instance.claim(path, tries=2, pause_ms=100)
+        assert (refused.case, one_instance.current(), _answers(name)) == ("give_up", None, False), (
+            "the start did not give up beside a living holder")
+        assert brought_forward == [("allow_foreground", os.getpid())], "the living holder was not let take the front"
+    finally:
+        holder.unlock()
+
+
+def test_the_lock_is_made_in_a_settings_folder_that_is_not_there_yet(tmp_path):
+    """On a computer where PRISM has never run, the folder of the settings file is not there yet: the start makes it,
+    takes the lock in it and listens; once let go, the lock file is gone."""
+    from core.gui import one_instance
+    qt_app()
+    folder = tmp_path / "not" / "yet"
+    taken = one_instance.claim(str(folder / "prism.ini"), tries=1, pause_ms=0)
+    try:
+        assert (taken.case, (folder / "PRISM.lock").is_file(), _answers(one_instance.server_name(
+            str(folder / "prism.ini")))) == ("start", True, True), "the lock was not taken in the folder made for it"
+    finally:
+        taken.release()
+    assert sorted(path.name for path in folder.iterdir()) == [], "the lock file stays after it was let go"
+
+
+def test_a_lock_that_cannot_be_made_holds_no_start_back(tmp_path, caplog):
+    """Where the lock cannot be made at all, PRISM starts all the same, holding no lock and listening for nothing,
+    and a warning names the lock: here once where the settings file's folder is a file, and once where a folder
+    stands in the lock's place, which names no process and cannot be removed."""
+    import logging
+    from core.gui import one_instance
+    qt_app()
+    a_file = tmp_path / "a-file"
+    a_file.write_text("")
+    (tmp_path / "beside" / "PRISM.lock").mkdir(parents=True)
+    for settings_file in (a_file / "prism.ini", tmp_path / "beside" / "prism.ini"):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="core.gui.one_instance"):
+            made = one_instance.claim(str(settings_file), tries=1, pause_ms=0)
+        said = [record.getMessage() for record in caplog.records if record.name == "core.gui.one_instance"]
+        assert (made.case, one_instance.current(), _answers(one_instance.server_name(str(settings_file)))) == (
+            "start", None, False), "the start was turned away, or holds a lock or a listener"
+        assert len(said) == 1 and str(settings_file.parent / "PRISM.lock") in said[0], "no warning names the lock"
+
+
+def test_a_start_handed_over_builds_no_window_and_exits_zero(tmp_path, monkeypatch, brought_forward):
+    """A start of PRISM while PRISM is open on its settings file hands over to the open one: it builds no window and
+    no other widget, and hands back the application with no window, having let the open one's process take the
+    front; the open one hears the knock when its loop runs. Handed no window, the entry point ends with the status
+    0, showing nothing and running no event loop."""
+    import os
+    from core.gui import one_instance
+    from tests._fixtures import pump, whole_program
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    widgets = len(QApplication.topLevelWidgets())
+    with whole_program(held_by_another=True) as built:
+        held = one_instance.current()
+        heard = []
+        held.knocked.connect(lambda: heard.append(True))
+        assert (built, held.case) == ((app, None), "start"), "the start that was handed over built a window"
+        assert len(QApplication.topLevelWidgets()) == widgets, "the start that was handed over built a widget"
+        assert brought_forward == [("allow_foreground", os.getpid())], "the open PRISM was not let take the front"
+        pump(app, 0.2)
+        assert heard == [True], "the open PRISM did not hear the knock"
+    from core.gui import __main__ as entry
+    ran = []
+
+    class Application:
+        def exec(self):
+            ran.append("a loop")
+            return 3
+
+    monkeypatch.setattr(entry, "build_app", lambda: (Application(), None))
+    assert (entry.main(), ran) == (0, []), "the start that was handed over ran an event loop"
+
+
+def test_a_second_start_says_in_one_line_what_it_did(monkeypatch):
+    """A start that builds no window says what it did in one line on the error stream, the only sign a start from a
+    console gives: that PRISM was open and was brought to the front, or that it did not answer and this start ends.
+    With no error stream, as a start with no console has none, nothing is written and nothing is raised."""
+    import io
+    import sys
+    from core.gui import app as gui_app
+    for case, line in (("hand_over", "PRISM is already open: its window was brought to the front.\n"),
+                       ("give_up", "PRISM is already running but did not answer; this start ends.\n")):
+        stream = io.StringIO()
+        monkeypatch.setattr(sys, "stderr", stream)
+        gui_app._say(case)
+        assert stream.getvalue() == line, stream.getvalue()
+        monkeypatch.setattr(sys, "stderr", None)
+        gui_app._say(case)
+
+
+def test_the_open_prism_brings_its_window_to_the_front_when_a_second_start_knocks(tmp_path, monkeypatch,
+                                                                                    brought_forward):
+    """The whole program holds the lock beside its settings file and listens; a second start's knock on it brings
+    the program's window to the front once its event loop runs, and not before."""
+    import os
+    from core.gui import one_instance, settings
+    from tests._fixtures import pump, whole_program
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    with whole_program() as (_app, window):
+        second = one_instance.claim(settings.settings().fileName(), tries=1, pause_ms=0)
+        assert (second.case, brought_forward) == ("hand_over", [("allow_foreground", os.getpid())]), (
+            "the second start was not handed over, the open PRISM let take the front first")
+        pump(app, 0.2)
+        assert brought_forward[1:] == [("come_to_front", window)], "the knock did not bring the window to the front"
