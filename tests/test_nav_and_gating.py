@@ -1473,16 +1473,21 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         with no way out, and an entry nobody raises is a sentence that can go stale unseen;
     (b) every tuple names places of the window by their keys -- a step, a part, or a page of a part --
         listed in the window's own order (the parts as the rail lists them, a part's steps or pages as
-        it shows them), and every place named is read off the built window: moved there, it is the place
-        in sight, and the rail has its part's row; a tuple has a non-empty label and renders the box
-        sentence, which names its places in their order in the words the rail's places are written in; a
-        sentence entry is returned verbatim and has no label; a None entry says nothing and has no label;
-        no sentence names a tab or a screen; and none of the three ever raises from fix_sentence, which
-        runs while a refusal is being shown;
-    (c) the sentences a user reads on the real screen, verbatim, one for each way places are joined
-        (one step, two steps, a step and a part, a step with pages and parts, two pages, one part),
-        and the consents -- which quote their controls' own text (posterior_tab.py:232,
-        tsnpe_tab.py:102, infer_tab.py:150);
+        it shows them), and never a part that has steps or pages by its name alone, which would send a
+        person to whichever step or page it showed last; every place named is read off the built window:
+        moved there, it is the place in sight, and the rail has its part's row; a tuple has a non-empty
+        label and renders the box sentence, which names its places in their order in the words the
+        rail's places are written in; a sentence entry is returned verbatim, has no label, and types no
+        place's words itself (read off the table's own source), so a place renamed in the table of places
+        is renamed in it too; a None entry says nothing and has no label; no sentence names a tab or a
+        screen; and none of the three ever raises from fix_sentence, which runs while a refusal is being
+        shown;
+    (c) every sentence a user can read under a refusal, verbatim, in one table: one for each key the
+        window has a control for, among them each way places are joined (one step, two steps, a step
+        and a part, a step with pages and parts, two pages, one part) and the consents, which quote
+        their controls' own text (posterior_tab.py:232, tsnpe_tab.py:102, infer_tab.py:150), so a
+        reworded label, a renamed place or a place moved in a list is seen as a change of what a person
+        reads;
     (d) the keys with no window control are exactly the six the window never exposes, the eleven
         tool-only diagnostics knobs, and the five FDT settings neither front end exposes, so a
         tool-only key renders no window sentence;
@@ -1525,6 +1530,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
             assert names and all(n in steps | parts | pages for n in names), f"{key}: {place!r} is not a place"
             assert len(set(names)) == len(names), f"{key}: a place named twice: {place!r}"
             assert list(names) == sorted(names, key=order), f"{key}: places not in the window's order: {place!r}"
+            assert not set(names) & ({"inference"} | set(keys.PAGES)), \
+                f"{key}: a part that has steps or pages named by its name alone: {place!r}"
             named |= set(names)
             assert isinstance(text, str) and text, f"{key}: empty label"
             assert gui_fields.label(key) == text
@@ -1546,6 +1553,17 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
             with pytest.raises(KeyError):
                 gui_fields.label(key)
         assert not re.search(r"\b(tab|screen)\b", gui_fields.fix_sentence(key)), gui_fields.fix_sentence(key)
+    # A sentence entry names its places through the table of places and never types their words: read off
+    # the table's own source, no literal part of a sentence entry holds a place's words.
+    words = ({keys.place_words(p.key) for p in keys.PARTS + keys.STEPS} | {p.name for p in keys.PARTS + keys.STEPS}
+             | {keys.place_words(f"{whole}/{p.key}") for whole, held in keys.PAGES.items() for p in held})
+    table = next(node.value for node in ast.walk(ast.parse(inspect.getsource(gui_fields)))
+                 if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", None) == "CONTROL")
+    typed = [(k.value, w) for k, v in zip(table.keys, table.values)
+             for c in ([v] if isinstance(v, ast.Constant) else v.values if isinstance(v, ast.JoinedStr) else [])
+             if isinstance(c, ast.Constant) and isinstance(c.value, str)
+             for w in sorted(words) if re.search(rf"(?<!\w){re.escape(w)}(?!\w)", c.value)]
+    assert len(table.keys) == len(gui_fields.CONTROL) and not typed, f"place words typed in a sentence entry: {typed}"
     for name in sorted(named):
         part, page = ("inference", name) if name in steps else (*name.split("/"),) if "/" in name else (name, None)
         window.go_to(part, page)
@@ -1557,61 +1575,109 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     with pytest.raises(KeyError):
         gui_fields.label("no_such_key")
 
-    # (c) verbatim: the sentences a user reads on the real screen, and the consents
-    assert gui_fields.fix_sentence("t_obs") == \
-        "Set it in the 'T_obs (s)' box in step 5, Inference, or in Live simulation."
-    assert gui_fields.fix_sentence("n_directions") == \
-        "Set it in the 'Directions truncated' box in step 6, Narrowing round."
-    assert gui_fields.fix_sentence("accept_other_observation") == \
-        "Tick 'Run on a different observation' in step 5, Inference."
-    assert gui_fields.fix_sentence("new_run") == (
-        "Answer 'Start a new run anyway' in the dialog in step 3, Training, or tick 'Start a new "
-        "simulation even if a cache one setting away exists' in step 6, Narrowing round.")
-    assert gui_fields.fix_sentence("accept_truncated") == "Confirm the load in the dialog in step 3, Training."
-    assert gui_fields.fix_sentence("recording_spont") == (
-        "Select the passive recording in step 5, Inference (the 'Spontaneous' box, or the 'Passive' box for a "
-        "χ observation).")
-    assert gui_fields.fix_sentence("recording_probe") == \
-        "Pick the probe's recording in the χ probe table in step 5, Inference."
-    assert gui_fields.fix_sentence("name") == (
-        "Choose another name in the Save box in step 2, Prior, or step 3, Training, or in the 'Record name' or "
-        "'Comparison name' box in Effective temperature, One cell, or in Effective temperature, Sweep study.")
-    assert (gui_fields.fix_sentence("chi_f0") == gui_fields.fix_sentence("chi_freq_bounds")
-            == "Fixed by measurement: change it in config.py, deliberately.")
-    # the budget boxes sit in two steps, and a refusal raised in either must name the one the user is in;
-    # a step after a step begins with its own number
+    # (c) verbatim: every sentence a user can read under a refusal, in the table's order
+    sentences = {
+        # a step and a part, the part after another place with its own "in"; two steps, the second
+        # beginning with its own number
+        "t_obs": "Set it in the 'T_obs (s)' box in step 5, Inference, or in Live simulation.",
+        "num_runs": "Set it in the 'Batches' box in step 3, Training, or step 6, Narrowing round.",
+        "run_size_cap": ("Set it in the 'Max rows per batch (0 = auto)' box in step 3, Training, or step 6, "
+                         "Narrowing round."),
+        # the consents and the dialogs quote their controls' own text (tsnpe_tab.py:102,
+        # posterior_tab.py:232, infer_tab.py:150)
+        "new_run": ("Answer 'Start a new run anyway' in the dialog in step 3, Training, or tick 'Start a new "
+                    "simulation even if a cache one setting away exists' in step 6, Narrowing round."),
+        "n_directions": "Set it in the 'Directions truncated' box in step 6, Narrowing round.",
+        "hpd_level": "Set it in the 'HPD level' box in step 6, Narrowing round.",
+        "observation": "Set it in the 'Observation' box in step 6, Narrowing round.",
+        "n_cal": "Set it in the 'Calibration datasets' box in step 4, Checks.",
+        "cal_n_scales": "Set it in the '(t_scale, T_obs) operating points' box in step 4, Checks.",
+        "num_iterations": "Set it in the 'Global rounds' box in step 2, Prior.",
+        "sweep_batch": "Set it in the 'Candidates per round (0 = auto)' box in step 2, Prior.",
+        "max_sets": "Set it in the 'Max accepted sets' box in step 2, Prior.",
+        "walk_step": "Set it in the 'Random-walk step' box in step 2, Prior.",
+        "stability_units": "Set it in the 'Stability duration (ND units)' box in step 2, Prior.",
+        "min_cluster_size": "Set it in the 'Min cluster size' box in step 2, Prior.",
+        "min_samples": "Set it in the 'Min samples' box in step 2, Prior.",
+        "hidden_features": "Set it in the 'Hidden features' box in step 3, Training.",
+        "num_transforms": "Set it in the 'Transforms' box in step 3, Training.",
+        "learning_rate": "Set it in the 'Learning rate' box in step 3, Training.",
+        "stop_after_epochs": "Set it in the 'Early-stop patience' box in step 3, Training.",
+        "fisher_m": "Set it in the 'Ensemble per perturbation' box in step 3, Training.",
+        "fisher_dz": "Set it in the 'Central-difference step' box in step 3, Training.",
+        "fisher_points": "Set it in the 'Operating points' box in step 3, Training.",
+        "accept_truncated": "Confirm the load in the dialog in step 3, Training.",
+        "accept_other_observation": "Tick 'Run on a different observation' in step 5, Inference.",
+        "name": ("Choose another name in the Save box in step 2, Prior, or step 3, Training, or in the 'Record name' "
+                 "or 'Comparison name' box in Effective temperature, One cell, or in Effective temperature, Sweep "
+                 "study."),
+        # the two of Records, where the list and the Note box are no form rows
+        "artifact": "Select an artifact in the list in Records.",
+        "note": ("Edit it in the Note box in Records, or in the 'Note' or 'Comparison note' box in Effective "
+                 "temperature, One cell, or in Effective temperature, Sweep study."),
+        "compare_records": ("Choose the records in the 'Runs to compare' list in Effective temperature, One cell, or "
+                            "in the 'Sweeps to compare' list in Effective temperature, Sweep study."),
+        "prefactor": "Set it in the 'Normalisation constant' box in Effective temperature, One cell.",
+        "slice_at": "Set it in the 'Slice at' box in Effective temperature, Sweep study.",
+        "bounds": "Set it in the 'Bounds' box in step 2, Prior.",
+        # an input in several places lists them all, in the rail's order
+        "cell": ("Set it in the 'Cell' box in step 5, Inference, or in Effective temperature, One cell, or in "
+                 "Effective temperature, Sweep study, or in Live simulation, or in Reduction map."),
+        "units": "Set it in the 'Units' box in step 1, Model and options.",
+        "model": ("Set it in the 'Model' box in step 1, Model and options, or in Effective temperature, One cell, or "
+                  "in Live simulation."),
+        "prior": "Set it in the 'Prior' box in step 2, Prior.",
+        "posterior": "Set it in the 'Posterior' box in step 3, Training.",
+        "recording_spont": ("Select the passive recording in step 5, Inference (the 'Spontaneous' box, or the "
+                            "'Passive' box for a χ observation)."),
+        "recording_forced": "Set it in the 'Forced' box in step 5, Inference.",
+        "recording_probe": "Pick the probe's recording in the χ probe table in step 5, Inference.",
+        "drive_amplitude": "Set it in the 'A (N)' box in step 5, Inference.",
+        "drive_frequency": "Set it in the 'f (Hz)' box in step 5, Inference.",
+        "drive_phase": "Set it in the 'φ (rad)' box in step 5, Inference.",
+        "chi_f0_si": "Set it in the 'Drive F₀ (N)' box in step 5, Inference.",
+        "chi_n_freqs": "Set it in the 'χ probes per observation' box in step 1, Model and options.",
+        "chi_k_pad": "Set it in the 'χ probe slots (capacity)' box in step 1, Model and options.",
+        "chi_max_cycles": "Set it in the 'χ lock-in ceiling (cycles)' box in step 1, Model and options.",
+        "chi_f0": "Fixed by measurement: change it in config.py, deliberately.",
+        "chi_freq_bounds": "Fixed by measurement: change it in config.py, deliberately.",
+        "n_freqs": ("Set it in the 'n_freqs' box in Effective temperature, One cell, or in Effective temperature, "
+                    "Sweep study."),
+        "ensemble_m": ("Set it in the 'M_ensemble' box in Effective temperature, One cell, or in Effective "
+                       "temperature, Sweep study."),
+        "freqs_per_batch": ("Set it in the 'freqs / batch' box in Effective temperature, One cell, or in Effective "
+                            "temperature, Sweep study."),
+        "f0": ("Set it in the 'F0 (ND forcing amplitude)' box in Effective temperature, One cell, or in Effective "
+               "temperature, Sweep study, or in Reduction map."),
+        "preset": "Set it in the 'Preset' box in Effective temperature, Sweep study.",
+        "s_grid": "Set it in the 'S grid  (T_a/T = 1)' box in Effective temperature, Sweep study.",
+        "t_grid": "Set it in the 'T_a/T grid  (S = 0)' box in Effective temperature, Sweep study.",
+        "seed": ("Set it in the 'Seed' box in Effective temperature, One cell, or in Effective temperature, Sweep "
+                 "study."),
+        # a part by its name alone
+        "param_value": "Set it in the 'value' box in Your own models.",
+        "param_min": "Set it in the 'min' box in Your own models.",
+        "param_max": "Set it in the 'max' box in Your own models.",
+        "init": "Set it in the 'init' box in Your own models.",
+        "x_scale": "Set it in the 'x_scale (nm)' box in Your own models.",
+        "t_scale": "Set it in the 't_scale (s)' box in Your own models.",
+        "forcing_value": ("Set it in the forcing parameter's own box, beneath the variable's 'forcing' choice, in "
+                          "Your own models."),
+        "frame_steps": "Set it in the 'Steps / frame' box in Live simulation.",
+        "fps": "Set it in the 'Max FPS' box in Live simulation.",
+    }
+    rendered = {key: gui_fields.fix_sentence(key) for key in gui_fields.CONTROL if gui_fields.fix_sentence(key)}
+    differ = {key: (rendered.get(key), sentences.get(key)) for key in sorted(rendered.keys() | sentences.keys())
+              if rendered.get(key) != sentences.get(key)}
+    assert not differ, f"(as rendered, as written here): {differ}"
+    # the budget boxes sit in two steps, and a refusal raised in either must name the one the user is in
     assert gui_fields.CONTROL["num_runs"] == (("training", "narrowing"), "Batches")
-    assert gui_fields.fix_sentence("run_size_cap") == \
-        "Set it in the 'Max rows per batch (0 = auto)' box in step 3, Training, or step 6, Narrowing round."
-    # An input that appears in several places lists them ALL, in the rail's order, a part or a page after
-    # another place with its own "in". The cell picker is in five of them, and a bad cell chosen for the
-    # measurement used to send a person to step 5 alone.
-    assert gui_fields.fix_sentence("cell") == (
-        "Set it in the 'Cell' box in step 5, Inference, or in Effective temperature, One cell, or in "
-        "Effective temperature, Sweep study, or in Live simulation, or in Reduction map.")
-    assert gui_fields.fix_sentence("model") == (
-        "Set it in the 'Model' box in step 1, Model and options, or in Effective temperature, One cell, "
-        "or in Live simulation.")
-    assert gui_fields.fix_sentence("n_freqs") == (
-        "Set it in the 'n_freqs' box in Effective temperature, One cell, or in Effective temperature, "
-        "Sweep study.")
     # the label is the word the row SHOWS, and the row renders it
-    assert gui_fields.fix_sentence("ensemble_m") == (
-        "Set it in the 'M_ensemble' box in Effective temperature, One cell, or in Effective temperature, "
-        "Sweep study.")
     assert labels.pretty_gui(gui_fields.label("ensemble_m")) == "M<sub>ensemble</sub>"
     assert gui_fields.label("freqs_per_batch") == "freqs / batch" == \
         labels.pretty_gui(gui_fields.label("freqs_per_batch"))
     assert gui_fields.label("s_grid") == "S grid  (T_a/T = 1)", \
         "a box of a page still has a label, so a row and its hint cannot drift apart"
-    # a part by its name alone, and a page of a part by both names
-    assert gui_fields.fix_sentence("x_scale") == "Set it in the 'x_scale (nm)' box in Your own models."
-    assert gui_fields.fix_sentence("slice_at") == "Set it in the 'Slice at' box in Effective temperature, Sweep study."
-    # the two of Records, where the list and the Note box are no form rows
-    assert gui_fields.fix_sentence("artifact") == "Select an artifact in the list in Records."
-    assert gui_fields.fix_sentence("note") == (
-        "Edit it in the Note box in Records, or in the 'Note' or 'Comparison note' box in Effective "
-        "temperature, One cell, or in Effective temperature, Sweep study.")
 
     # (d) no window control: the six the window never exposes, and the tool-only set
     assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
@@ -3964,13 +4030,18 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     temperature, the Reduction map's or Live simulation's own panel -- or, for Your own models, those
     of the whole part with its builder, which has one variable declared and its parameter detected,
     because four of the boxes it names exist only then. So a place that shows another place's panel,
-    two steps' pages swapped among them, fails here, as does an entry that names the wrong place.
+    two steps' pages swapped among them, fails here, as does an entry that names the wrong place. The
+    labels are held as one literal, the words each row shows today, so a row reworded in the table and
+    on its page together is still seen as a change of what a person reads. And every control a sentence
+    entry quotes -- a tick box, a list's row, a name or note box, the Save button beside the Save box --
+    is shown in the panel the window shows at each place its sentence names, so a page that rewords or
+    moves it leaves no sentence pointing at words that are not there.
     Step 5 is read after install_config with a FORCED stub config so its three drive rows exist; a
     chi config would build none (no force_params_dict) and the drive entries would pass vacuously.
 
     The second half: the Infer tab's registered rows are built from label(key), not from a literal
     that happens to match today."""
-    from PySide6.QtWidgets import QFormLayout, QLabel
+    from PySide6.QtWidgets import QAbstractButton, QFormLayout, QLabel
     from core.gui import fields as gui_fields, keys
     from core.gui.panels.inference.infer_tab import InferPanel
     from core.gui.widgets.field_row import LabeledFieldRow
@@ -4005,19 +4076,26 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     mb._detect_params()
     steps = {step.key for step in keys.STEPS}
 
-    def read(name) -> list:
-        """The labels shown at the place ``name`` once the window has moved there."""
+    def at(name):
+        """The panel the window shows at the place ``name`` once it has moved there; Your own models whole."""
         part, page = ("inference", name) if name in steps else (*name.split("/"),) if "/" in name else (name, None)
         window.go_to(part, page)
         now = window.current_place()
         assert now[0] == part and page in (None, now[1]), (name, now)
         top = window.part(part)
         if part == "models":
-            return shown(top) + [lab.text() for row in top.findChildren(LabeledFieldRow)
-                                 for lab in row.findChildren(QLabel)]
+            return top
         in_sight = [panel for panel in top.panels() if panel.isVisibleTo(top)] if hasattr(top, "panels") else [top]
         assert len(in_sight) == 1, (name, in_sight)
-        return shown(in_sight[0])
+        return in_sight[0]
+
+    def read(name) -> list:
+        """The labels shown at the place ``name`` once the window has moved there."""
+        panel = at(name)
+        if name == "models":
+            return shown(panel) + [lab.text() for row in panel.findChildren(LabeledFieldRow)
+                                   for lab in row.findChildren(QLabel)]
+        return shown(panel)
 
     tuples = {k: e for k, e in gui_fields.CONTROL.items() if isinstance(e, tuple)}
     assert tuples, "the control table has no (place, label) entries"
@@ -4033,6 +4111,53 @@ def test_the_gui_control_table_matches_the_tabs_labels():
             if labels.pretty_gui(text) not in seen[name]:
                 missing.append((key, name, text))
     assert not missing, f"CONTROL names labels no place shows: {missing}\nshown: {seen}"
+    # the labels, as the window shows them today
+    labels_today = {
+        "t_obs": "T_obs (s)", "num_runs": "Batches", "run_size_cap": "Max rows per batch (0 = auto)",
+        "n_directions": "Directions truncated", "hpd_level": "HPD level", "observation": "Observation",
+        "n_cal": "Calibration datasets", "cal_n_scales": "(t_scale, T_obs) operating points",
+        "num_iterations": "Global rounds", "sweep_batch": "Candidates per round (0 = auto)",
+        "max_sets": "Max accepted sets", "walk_step": "Random-walk step",
+        "stability_units": "Stability duration (ND units)", "min_cluster_size": "Min cluster size",
+        "min_samples": "Min samples", "hidden_features": "Hidden features", "num_transforms": "Transforms",
+        "learning_rate": "Learning rate", "stop_after_epochs": "Early-stop patience",
+        "fisher_m": "Ensemble per perturbation", "fisher_dz": "Central-difference step",
+        "fisher_points": "Operating points", "prefactor": "Normalisation constant", "slice_at": "Slice at",
+        "bounds": "Bounds", "cell": "Cell", "units": "Units", "model": "Model", "prior": "Prior",
+        "posterior": "Posterior", "recording_forced": "Forced", "drive_amplitude": "A (N)", "drive_frequency": "f (Hz)",
+        "drive_phase": "φ (rad)", "chi_f0_si": "Drive F₀ (N)", "chi_n_freqs": "χ probes per observation",
+        "chi_k_pad": "χ probe slots (capacity)", "chi_max_cycles": "χ lock-in ceiling (cycles)", "n_freqs": "n_freqs",
+        "ensemble_m": "M_ensemble", "freqs_per_batch": "freqs / batch", "f0": "F0 (ND forcing amplitude)",
+        "preset": "Preset", "s_grid": "S grid  (T_a/T = 1)", "t_grid": "T_a/T grid  (S = 0)", "seed": "Seed",
+        "param_value": "value", "param_min": "min", "param_max": "max", "init": "init", "x_scale": "x_scale (nm)",
+        "t_scale": "t_scale (s)", "frame_steps": "Steps / frame", "fps": "Max FPS",
+    }
+    said = {key: text for key, (place, text) in tuples.items()}
+    differ = {key: (said.get(key), labels_today.get(key)) for key in sorted(said.keys() | labels_today.keys())
+              if said.get(key) != labels_today.get(key)}
+    assert not differ, f"(in the table, as written here): {differ}"
+    # every control a sentence entry quotes, at each place its sentence names
+    quoted = (
+        ("accept_other_observation", "infer", "Run on a different observation"),
+        ("new_run", "narrowing", "Start a new simulation even if a cache one setting away exists"),
+        ("name", "prior", "Save"), ("name", "training", "Save"),
+        ("name", "temperature/one_cell", "Record name"), ("name", "temperature/one_cell", "Comparison name"),
+        ("name", "temperature/sweep", "Record name"), ("name", "temperature/sweep", "Comparison name"),
+        ("note", "temperature/one_cell", "Note"), ("note", "temperature/one_cell", "Comparison note"),
+        ("note", "temperature/sweep", "Note"), ("note", "temperature/sweep", "Comparison note"),
+        ("compare_records", "temperature/one_cell", "Runs to compare"),
+        ("compare_records", "temperature/sweep", "Sweeps to compare"),
+        ("recording_spont", "infer", "Spontaneous"), ("recording_spont", "infer", "Passive"),
+    )
+    absent = []
+    for key, name, words in quoted:
+        sentence = gui_fields.fix_sentence(key)
+        assert words in sentence and keys.place_words(name) in sentence, (key, name, sentence)
+        panel = at(name)
+        texts = {w.text() for w in panel.findChildren(QLabel)} | {w.text() for w in panel.findChildren(QAbstractButton)}
+        if words not in texts and labels.pretty_gui(words) not in texts:
+            absent.append((key, name, words))
+    assert not absent, f"a sentence quotes words its place does not show: {absent}"
 
     src = code_only(InferPanel.__init__)
     for key in ("t_obs", "cell", "recording_forced", "chi_f0_si"):

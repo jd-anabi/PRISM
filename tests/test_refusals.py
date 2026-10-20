@@ -1150,7 +1150,9 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
         that can go stale unseen;
     (b) every flag it names is one build_parser defines, read off the REAL parsers (option strings,
         modes included) rather than a copy of the help text, because the flag is what the operator
-        types next. The one key whose flag is not its own name spelled with dashes is pinned by name;
+        types next. The one key whose flag is not its own name spelled with dashes is pinned by name,
+        and the whole table is held as one literal: a flag swapped for another real option passes
+        every other rule here and sends the operator to the wrong option;
     (c) fix_sentence owns the parentheses and never raises: it runs while a refusal is being printed;
     (d) the module imports in a bare interpreter with neither torch nor Qt -- the ladder prints
         refusals, and one of them can be that the card was not there;
@@ -1207,6 +1209,42 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
     # ladder's line for it therefore ends at the message, with no trailing parenthetical
     assert tool_fields.FLAG["note"] == "--note" and tool_fields.fix_sentence("note") == "(--note)"
     assert tool_fields.FLAG["artifact"] is None and tool_fields.fix_sentence("artifact") == ""
+    # the whole table, as one literal
+    flags = {
+        "t_obs": "--t-obs", "num_runs": "--num-runs", "run_size_cap": "--run-size",
+        "checkpoint_every": "--checkpoint-every", "resume": "--resume", "new_run": "--new-run",
+        "n_directions": "--directions", "hpd_level": "--level", "observation": "--observation", "n_cal": "--n-cal",
+        "cal_n_scales": "--cal-n-scales", "num_posterior_samples": "--posterior-samples", "n_samples": "--n-samples",
+        "num_iterations": "--num-iterations", "sweep_batch": "--sweep-batch", "max_sets": "--max-sets",
+        "walk_step": "--walk-step", "stability_units": "--stability-units", "min_cluster_size": "--min-cluster-size",
+        "min_samples": "--min-samples", "hidden_features": "--hidden-features", "num_transforms": "--num-transforms",
+        "learning_rate": "--learning-rate", "stop_after_epochs": "--stop-after-epochs",
+        "max_num_epochs": "--max-epochs", "fisher_m": "--fisher-m", "fisher_dz": "--fisher-dz",
+        "fisher_points": "--fisher-points", "accept_truncated": "--accept-truncated",
+        "accept_other_observation": "--accept-other-observation", "name": "--name", "artifact": None, "note": "--note",
+        "compare_records": "--record", "prefactor": "--prefactor", "slice_at": "--at", "param_value": None,
+        "param_min": None, "param_max": None, "init": None, "x_scale": None, "t_scale": None, "forcing_value": None,
+        "frame_steps": None, "fps": None, "n_freqs": "--n-freqs", "ensemble_m": "--ensemble-m",
+        "freqs_per_batch": "--freqs-per-batch", "f0": "--f0", "preset": "--preset", "s_grid": "--s-grid",
+        "t_grid": "--t-grid", "seed": "--seed", "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None,
+        "dt_nd": None, "psd_t_obs_nd": None, "bounds": "--bounds", "cell": "--cell", "units": None, "model": "--model",
+        "device": "--device", "prior": "--prior", "posterior": "--posterior", "recording_spont": "--spont",
+        "recording_forced": "--forced", "recording_probe": "--forced", "drive_amplitude": "--drive",
+        "drive_frequency": "--drive", "drive_phase": "--drive", "chi_f0_si": "--f0-si", "chi_n_freqs": "--chi-k",
+        "chi_k_pad": None, "chi_max_cycles": None, "chi_f0": None, "chi_freq_bounds": None, "repeats": "--repeats",
+        "n_points": "--n-points", "n_worst": "--n-worst", "top_n": "--top-n", "m": "--m", "m_noise": "--m-noise",
+        "rel": "--rel", "min_valid": "--min-valid", "rows": "--rows", "n_sweep": "--n-sweep",
+        "chi_k_fixed": "--chi-k-fixed", "probe_seed": "--seed", "probe_lengths": "--lengths",
+        "probe_multipliers": "--multipliers", "probe_drives": "--drives", "band_repeats": "--repeats",
+        "probe_cycle_caps": "--cycle-caps", "cv_max": "--cv-max", "phase_max": "--phase-max", "snr_min": "--snr-min",
+        "sup_min": "--sup-min", "band_peak_window": "--peak-window", "mask_num_runs": "--num-runs",
+        "mask_run_size": "--run-size", "drive_t_obs": "--t-obs", "drive_repeats": "--repeats",
+        "drive_detune": "--detune", "drive_strengths": "--strengths", "free_min": "--free-min",
+        "captured_max": "--captured-max", "drive_peak_window": "--peak-window", "clarity_min": "--clarity-min",
+    }
+    differ = {key: (tool_fields.FLAG.get(key), flags.get(key)) for key in sorted(tool_fields.FLAG.keys() | flags.keys())
+              if tool_fields.FLAG.get(key) != flags.get(key)}
+    assert not differ, f"(in the table, as written here): {differ}"
 
     # (c) fix_sentence owns the parentheses and never raises
     assert tool_fields.fix_sentence("t_obs") == "(--t-obs)"
