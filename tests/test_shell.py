@@ -1778,17 +1778,39 @@ def test_opening_prism_touches_no_card_and_starts_no_program(monkeypatch):
     """From the window's build to its first idle turn with Home shown, nothing asks the graphics card anything and
     no other program is started: a program run, whether there is a card, its free memory and the device check are
     each recorded (not refused by raising: the callers swallow what is raised, so a stand-in that raised would prove
-    nothing), and none is recorded. Nothing ticks then either: no timer of the window or of the application runs."""
-    from PySide6.QtCore import QTimer
+    nothing), and none is recorded. Nothing ticks then either: no timer of the window or of the application runs,
+    and of every start of a timer from Python, a timer with no parent among them, none still runs after the first
+    idle turn, nor is a single shot of a later moment waiting."""
+    from PySide6.QtCore import QObject, QTimer
     app = qt_app()
     calls = _card_and_programs(monkeypatch)
+    started, waiting = [], []
+    start, single_shot, start_timer = QTimer.start, QTimer.singleShot, QObject.startTimer
+
+    def started_timer(timer, *args):
+        started.append(timer)
+        return start(timer, *args)
+
+    def waiting_shot(msec, *args, **kwargs):
+        if msec > 0:
+            waiting.append(msec)
+        return single_shot(msec, *args, **kwargs)
+
+    def started_by(timed, *args, **kwargs):
+        started.append(timed)
+        return start_timer(timed, *args, **kwargs)
+
+    monkeypatch.setattr(QTimer, "start", started_timer)
+    monkeypatch.setattr(QTimer, "singleShot", staticmethod(waiting_shot))
+    monkeypatch.setattr(QObject, "startTimer", started_by)
     window = build_window()
     try:
         _shown_off_screen(window)                                 # Home shown, then one idle turn
         assert window.current_place() == ("home", None)
         assert calls == [], f"opening PRISM asked the card or started a program: {calls}"
         ticking = [timer for timer in app.findChildren(QTimer) + window.findChildren(QTimer) if timer.isActive()]
-        assert ticking == [], f"a timer runs at launch: {ticking}"
+        ticking += [timer for timer in started if not isinstance(timer, QTimer) or timer.isActive()]
+        assert (ticking, waiting) == ([], []), f"a timer runs at launch: {ticking}, {waiting}"
     finally:
         window.hide()
 
@@ -1889,6 +1911,7 @@ def test_a_part_that_fails_to_build_shows_its_error_page_and_the_rest_works(monk
             window.go_to("temperature")
         page = window.part("temperature")
         assert isinstance(page, PartError) and window.shell.stack.currentWidget() is page
+        assert window.focusWidget() is page.again, "the error page did not give Try again the keyboard"
         assert (window.current_place(), _marked(rail), window.built_parts()) == (
             ("temperature", None), ["temperature"], ("home",))
         assert page.message.kind == "err" and page.message.marker is not None, "no Error marker"
@@ -1907,6 +1930,7 @@ def test_a_part_that_fails_to_build_shows_its_error_page_and_the_rest_works(monk
         window.go_to("live")
         window.go_to("temperature")
         assert window.shell.stack.currentWidget() is page, "the part was built again without being asked"
+        window._store_changed()                                   # an error page is no part to tell
         for place in keys.PARTS:
             if place.key != "temperature":
                 window.go_to(place.key)
@@ -1919,6 +1943,7 @@ def test_a_part_that_fails_to_build_shows_its_error_page_and_the_rest_works(monk
         assert (window.current_place(), _marked(rail), said[-1]) == (
             ("temperature", "one_cell"), ["temperature"], ("temperature", "one_cell"))
         assert window.focusWidget() is built.fdt_panel.model_combo, "the part built again took no keyboard"
+        assert window._run_place(built.fdt_panel) == ("temperature", "one_cell"), "its run would have no place"
         assert window.built_parts() == tuple(place.key for place in keys.PARTS)
         assert window.shell.stack.indexOf(page) == -1, "the error page stays in the stack"
         QApplication.processEvents()
@@ -2166,6 +2191,7 @@ def test_a_part_first_opened_during_a_run_comes_up_locked_and_is_freed_at_its_en
     assert window.built_parts() == ("home", "reduction")
     runner._set_busy(True)
     try:
+        assert window.built_parts() == ("home", "reduction"), "a run's start built a part"
         for name, row in (("inference", "model"), ("temperature", "temperature"), ("live", "live")):
             window.go_to("home")                                  # the keyboard on Home's main button
             window.go_to(name)
@@ -2180,6 +2206,49 @@ def test_a_part_first_opened_during_a_run_comes_up_locked_and_is_freed_at_its_en
     window.go_to("home")
     window.go_to("live")
     assert window.focusWidget() is window.part("live").model_combo
+
+
+def test_a_part_handed_or_built_again_during_a_run_comes_up_locked_and_is_freed_at_its_end(monkeypatch):
+    """A part built while a run is live comes up locked by every route, as one first opened by a move does: a part
+    handed by ``part`` (Live simulation), and a part built again by "Try again" on its error page (Effective
+    temperature). The run's end frees them with the rest. The run here is the Reduction map's."""
+    from core.gui import main_window
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.screens.temperature_screen import TemperatureScreen
+    qt_app()
+
+    def broken():
+        raise _CannotBeBuilt("the cell file could not be read")
+
+    monkeypatch.setattr(main_window, "TemperatureScreen", broken)
+    window = build_window()
+    window.go_to("temperature")                                   # its error page
+    runner = window.panel(ReductionPanel)
+    runner._set_busy(True)
+    try:
+        assert not window.part("live").controls.isEnabled(), "a part handed during a run is not locked"
+        monkeypatch.setattr(main_window, "TemperatureScreen", TemperatureScreen)
+        _button(window.part("temperature"), "Try again").click()
+        rebuilt = window.part("temperature")
+        assert isinstance(rebuilt, TemperatureScreen)
+        assert [panel.controls.isEnabled() for panel in rebuilt.panels()] == [False, False], (
+            "a part built again during a run is not locked")
+    finally:
+        runner._set_busy(False)
+    assert [panel.controls.isEnabled() for panel in window._all_panels()] == [True] * 4, "the run's end freed none"
+
+
+def test_a_refusal_shown_in_a_part_builds_no_other_part_and_asks_the_card_nothing(monkeypatch):
+    """A refusal Live simulation's panel shows in the window builds no other part and asks the graphics card
+    nothing."""
+    from core.gui.panels.simulate_panel import SimulatePanel
+    from core.refusals import Refusal
+    qt_app()
+    window = build_window()
+    window.go_to("live")
+    calls = _card_and_programs(monkeypatch)
+    window.panel(SimulatePanel)._on_error(Refusal("The seed is not a whole number.", field="seed"), "")
+    assert (window.built_parts(), calls) == (("home", "live"), []), (window.built_parts(), calls)
 
 
 def test_a_part_never_opened_keeps_what_it_remembered_when_the_window_closes(tmp_path):

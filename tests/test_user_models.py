@@ -1284,8 +1284,15 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     remembered = stored.settings()                 # this test's own settings file
     stored.set_appearance(remembered, "dark")      # so that the first apply has to turn the look's table
     remembered.sync()
+    import subprocess
+    asked = []                                     # every program started, and every question put to the card
+    for holder, name in ((subprocess, "run"), (torch.cuda, "is_available"), (torch.cuda, "mem_get_info"),
+                        (torch.cuda, "memory_reserved"), (torch.cuda, "memory_allocated"), (config, "detect_device")):
+        monkeypatch.setattr(holder, name, lambda *_args, name=name, **_kwargs: asked.append(name))
     with whole_program() as (app, window):
         assert app is ours, "the whole program must use the one application of the process"
+        assert (window.built_parts(), asked) == (("home",), []), (
+            "the program as it starts built more than Home or asked the card", window.built_parts(), asked)
         icon = app.windowIcon()
         assert not icon.isNull(), "build_app left the application with no window icon"
         assert {16, 32, 256} <= {s.width() for s in icon.availableSizes()}
