@@ -1966,6 +1966,80 @@ def test_a_click_in_the_rail_over_parameter_inferences_error_page_raises_nothing
         window.hide()
 
 
+def test_a_part_that_fails_to_build_leaves_no_panel_for_a_run_to_lock_and_the_next_run_goes_through(monkeypatch):
+    """However a part fails to be built -- a panel's own construction raising partway (Parameter inference's
+    narrowing round, at its first field), the part raising once its two panels are whole (Effective temperature),
+    or the window's wiring of the part raising while a run is live (the lock of Effective temperature's first
+    panel) -- no panel the failed build made is left among the panels a run locks or in the window's map of
+    places, and nothing it made is left alive, a panel or a widget with no parent (a half-built part's own top
+    widget among them); the part's error page stands in its place. A run's end then raises nothing: the foot says
+    again that nothing is running, and no panel is left greyed. "Try again" builds the part whole."""
+    from PySide6.QtCore import QEvent
+    from core.gui import main_window
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.fdt_panel import FdtPanel
+    from core.gui.panels.inference import tsnpe_tab
+    from core.gui.panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel, TSNPEPanel,
+                                                ValidatePanel)
+    from core.gui.panels.simulate_panel import SimulatePanel
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.screens.shell import PartError
+    from core.gui.screens.temperature_screen import TemperatureScreen
+    qt_app()
+
+    def raising(*_args, **_kwargs):
+        raise _CannotBeBuilt("the cell file could not be read")
+
+    def half_built():
+        build_part(TemperatureScreen)                             # its two panels are built, then it fails
+        raise _CannotBeBuilt("the cell file could not be read")
+
+    def held(window, kinds, before):
+        """By the names of their kinds, what was made since ``before`` and is still held once the deletes asked for
+        are done: the panels among the panels a run locks, in the window's map of places, and alive, and the
+        widgets with no parent alive."""
+        QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        made = [[thing for thing in found if thing not in before]
+                for found in (BasePanel._instances, window._places, QApplication.allWidgets())]
+        return tuple(sorted(type(thing).__name__ for thing in found if isinstance(thing, kinds)) for found in made) + (
+            sorted(type(alone).__name__ for alone in QApplication.topLevelWidgets() if alone not in before),)
+
+    steps = (ConfigPanel, PriorPanel, PosteriorPanel, ValidatePanel, InferPanel, TSNPEPanel)
+    for name, cls, kinds, holder, attribute, failing, during_a_run in (
+            ("inference", InferenceScreen, steps, tsnpe_tab, "FloatField", raising, False),
+            ("temperature", TemperatureScreen, (FdtPanel, CrossValPanel), main_window, "TemperatureScreen",
+             half_built, False),
+            ("temperature", TemperatureScreen, (FdtPanel, CrossValPanel), FdtPanel, "set_controls_enabled",
+             raising, True)):
+        window = build_window()
+        runner, foot, raised = window.panel(SimulatePanel), window.shell.rail.foot, []
+        before = set(BasePanel._instances) | set(QApplication.allWidgets())
+        if during_a_run:
+            runner._set_busy(True)
+        try:
+            with monkeypatch.context() as failing_now:
+                failing_now.setattr(holder, attribute, failing)
+                window.go_to(name)
+        finally:
+            for busy in ([False] if during_a_run else []) + [True, False]:     # the run's end, and a run after it
+                try:
+                    runner._set_busy(busy)
+                except Exception as error:                        # noqa: BLE001 -- recorded, then asserted
+                    raised.append(repr(error))
+        page = window.part(name)
+        assert isinstance(page, PartError) and window.shell.stack.currentWidget() is page, attribute
+        greyed = sorted(type(panel).__name__ for panel in BasePanel._instances if not panel.controls.isEnabled())
+        assert (raised, foot.accessibleName().startswith("Nothing is running"), greyed) == ([], True, []), (
+            "a run's end did not go through", attribute, raised)
+        assert held(window, kinds, before) == ([], [], [], []), (
+            f"what the failed build of {name} made is still held", attribute, held(window, kinds, before))
+        _button(page, "Try again").click()
+        built = window.part(name)
+        assert isinstance(built, cls) and len(built.panels()) == len(kinds), attribute
+        assert set(built.panels()) <= set(BasePanel._instances), attribute
+
+
 def test_the_rail_marks_a_part_before_it_is_built_and_the_pointer_waits_while_it_is(monkeypatch):
     """While a part is built at its first opening its row of the rail is marked already, and was drawn so, and the
     pointer shows the wait cursor; once the part is built the pointer is the window's own again, and so it is when

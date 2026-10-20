@@ -293,20 +293,29 @@ class MainWindow(QMainWindow):
 
     def _build(self, name: str) -> QWidget:
         """Build the part ``name`` and hold it in its place -- in place of its error page when it shows one -- and
-        hand back what now stands there. It is built inside a guard: a part whose construction raises shows its
-        error page in its place, its error and the error's trace go to the log, and the rest of the window goes
-        on. The pointer shows the wait cursor while the part is built."""
+        hand back what now stands there. It is built inside a guard: a part whose construction or wiring raises
+        shows its error page in its place, nothing the failed build made is kept (no run locks a panel of it), its
+        error and the error's trace go to the log, and the rest of the window goes on. The pointer shows the wait
+        cursor while the part is built."""
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        # What stands before the build: any other panel, or widget with no parent, is the build's own.
+        enrolled, parentless = set(BasePanel._instances), set(QApplication.topLevelWidgets())
         try:
             widget = self._make(name)
+            self._wire(name, widget)
         except Exception as error:               # noqa: BLE001 -- one part that cannot be built stops no other
+            # Nothing the failed build made is kept: no run locks a panel of it and no place names one, and every
+            # widget it made with no parent goes, with all it holds (its panels, a half-built part's top widget).
+            for panel in set(BasePanel._instances) - enrolled:
+                BasePanel._instances.discard(panel)
+                self._places.pop(panel, None)
+            for made in set(QApplication.topLevelWidgets()) - parentless:
+                made.deleteLater()
             words, trace = keys.part(name).name, traceback.format_exc()
             # The error's words and its trace, never the error itself: its trace holds what was half built.
             log.error("%s could not be opened. %s\n%s", words, str(error), trace.rstrip())
             widget = PartError(words, error, trace)
             widget.try_again.connect(self._try_again)
-        else:
-            self._wire(name, widget)
         finally:
             QApplication.restoreOverrideCursor()
         held = self.shell.part_widget(name)
