@@ -10,16 +10,13 @@ from core import config, logging_root, registry
 
 from . import app_icon, design, fonts, mpl_theme, one_instance, settings, style, theming
 from .main_window import MainWindow
-from .screens.shell import _as_sentence
+from .screens.shell import NO_MESSAGE, _as_sentence
 from .widgets.ask import ask
 
 # What a start of PRISM that builds no window says as it ends, on the error stream when the process has one:
 # started from a console, it is the only sign the person gets.
 SAID = {"hand_over": "PRISM is already open: its window was brought to the front.",
         "give_up": "PRISM is already running but did not answer; this start ends."}
-
-# What the last-resort question says of an error that has no message of its own.
-NO_MESSAGE = "Something went wrong that PRISM did not expect."
 
 
 def _install_excepthook(parent_getter):

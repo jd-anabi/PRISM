@@ -2126,16 +2126,27 @@ def test_a_part_that_fails_to_build_while_a_run_is_live_leaves_the_runs_log_to_t
 def test_the_error_page_writes_the_errors_message_as_a_sentence():
     """The error page gives the error's message as a sentence after its bold opening words: its first letter a
     capital only when its first word -- up to the first space, a comma, a semicolon or a colon at its end set aside
-    -- is an ordinary word, letters alone, that starts with a small one; any other start is kept as it was raised:
-    a name in code, a path, a number, a quotation. A full stop stands at its end when it ends without a mark that
-    ends a sentence, and nothing else of it changes. A message that is a sentence already is shown as it is, and an
-    empty one leaves the opening words alone."""
+    -- is an ordinary word, letters alone, an apostrophe or a hyphen between two of them counted in, that starts
+    with a small one; any other start is kept as it was raised: a name in code, a path, a number, a quotation. A
+    message that holds no word outside its quotations, as a missing key's name is raised, follows the general
+    sentence and a colon. A full stop stands at its end when it ends without a mark that ends a sentence, and
+    nothing else of it changes. A message that is a sentence already is shown as it is, and an empty one leaves the
+    opening words alone."""
     from core.gui.screens.shell import PartError
     qt_app()
     for message, shown in (("the cell file could not be read", "The cell file could not be read."),
                            ("The cell file could not be read.", "The cell file could not be read."),
                            ("is the cell file there?", "Is the cell file there?"),
                            ("missing: the bounds file", "Missing: the bounds file."),
+                           ("missing, the bounds file", "Missing, the bounds file."),
+                           ("missing; the bounds file", "Missing; the bounds file."),
+                           ("can't multiply sequence by non-int of type 'float'",
+                            "Can't multiply sequence by non-int of type 'float'."),
+                           ("non-finite values in the prior", "Non-finite values in the prior."),
+                           ("my-cells/x.txt not found", "my-cells/x.txt not found."),
+                           ("'model' is missing", "'model' is missing."),
+                           ("'model'", "Something went wrong that PRISM did not expect: 'model'."),
+                           ("0", "Something went wrong that PRISM did not expect: 0."),
                            ("sbi_posterior.sample() failed", "sbi_posterior.sample() failed."),
                            ("cells/x.txt not found", "cells/x.txt not found."),
                            ("C:\\cells\\x.txt not found", "C:\\cells\\x.txt not found."),
@@ -3370,8 +3381,10 @@ def test_the_last_resort_error_goes_through_the_shared_question(monkeypatch):
         assert parents[-1] is parent, "the question does not stand over the window"
     unhandled(ValueError("the cell file could not be read"))
     unhandled(ValueError())
-    assert [told.sentence for told in all_asked()[-2:]] == [
-        "The cell file could not be read.", "Something went wrong that PRISM did not expect."]
+    unhandled(KeyError("model"))
+    assert [told.sentence for told in all_asked()[-3:]] == [
+        "The cell file could not be read.", "Something went wrong that PRISM did not expect.",
+        "Something went wrong that PRISM did not expect: 'model'."]
     asked_before, raised_again = len(all_asked()), []
 
     def raise_again():                                              # once: while the first question is open
@@ -3383,7 +3396,7 @@ def test_the_last_resort_error_goes_through_the_shared_question(monkeypatch):
     unhandled(ValueError("the first error"))
     assert [told.sentence for told in all_asked()[asked_before:]] == ["The first error."], "a second question opened"
     assert written == ["ValueError: sbi_posterior.sample() failed", "ValueError: sbi_posterior.sample() failed",
-                       "ValueError: the cell file could not be read", "ValueError: ",
+                       "ValueError: the cell file could not be read", "ValueError: ", "KeyError: 'model'",
                        "RuntimeError: a second error", "ValueError: the first error"], (
         "the errors were not written to the console as before")
 
