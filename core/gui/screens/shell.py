@@ -27,6 +27,17 @@ def clock_words(seconds: int) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
+def _as_sentence(message: str) -> str:
+    """An error's message as a sentence of the page: its first letter a capital when it is a small one, and a full
+    stop at its end when it ends without a mark that ends a sentence. An empty message stays empty."""
+    text = message.rstrip()
+    if not text:
+        return ""
+    if text[0].islower():
+        text = text[0].upper() + text[1:]
+    return text if text[-1] in ".!?" else text + "."
+
+
 class Shell(QWidget):
     """The rail and, beside it, a stack of the parts, with no margins and no space between them."""
 
@@ -117,7 +128,7 @@ class PartError(QWidget):
         self.page.add_fixed(PageHead(part_name))
         self.page.add_gap(design.scaled(design.GAP["head_to_body"]), design.scaled(design.GAP["head_to_body_small"]))
 
-        self.message = MessageRow("err", str(error), lead=f"{part_name} could not be opened")
+        self.message = MessageRow("err", _as_sentence(str(error)), lead=f"{part_name} could not be opened")
         self.rest = MessageRow("", "The rest of PRISM still works.")
         self.again = style.set_class(QPushButton("Try again"), cls="primary")
         self.again.clicked.connect(self.try_again)

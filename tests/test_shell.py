@@ -1893,7 +1893,7 @@ def test_a_part_that_fails_to_build_shows_its_error_page_and_the_rest_works(monk
             ("temperature", None), ["temperature"], ("home",))
         assert page.message.kind == "err" and page.message.marker is not None, "no Error marker"
         words = _shown_words(page)
-        assert "Effective temperature could not be opened. the cell file could not be read" in words, words
+        assert "Effective temperature could not be opened. The cell file could not be read." in words, words
         assert {"The rest of PRISM still works.", "Try again", "Show the full error"} <= set(words), words
         assert not [text for text in words if "_CannotBeBuilt" in text], "the error's kind is shown before it is asked"
         logged, = [record.getMessage() for record in caplog.records if record.name == "core.gui.main_window"]
@@ -2085,6 +2085,24 @@ def test_a_part_that_fails_to_build_while_a_run_is_live_leaves_the_runs_log_to_t
     assert "error: Effective temperature could not be opened. the cell file could not be read" in console, (
         f"the console did not get the failure: {console!r}")
     assert "_CannotBeBuilt: the cell file could not be read" in console, f"the console got no trace: {console!r}"
+
+
+def test_the_error_page_writes_the_errors_message_as_a_sentence():
+    """The error page gives the error's message as a sentence after its bold opening words: its first letter a
+    capital when it starts with a small one, and a full stop at its end when it ends without a mark that ends a
+    sentence. A message that is a sentence already is shown as it is, one that starts with no letter keeps its
+    start, and an empty one leaves the opening words alone."""
+    from core.gui.screens.shell import PartError
+    qt_app()
+    for message, shown in (("the cell file could not be read", "The cell file could not be read."),
+                           ("The cell file could not be read.", "The cell file could not be read."),
+                           ("is the cell file there?", "Is the cell file there?"),
+                           ("[Errno 2] No such file or directory: 'cell.txt'",
+                            "[Errno 2] No such file or directory: 'cell.txt'."),
+                           ("", "")):
+        page = build_part(PartError, part_name="Help", error=_CannotBeBuilt(message), trace="")
+        sentence = " ".join(words for words in ("Help could not be opened.", shown) if words)
+        assert sentence in _shown_words(page), (message, _shown_words(page))
 
 
 def test_the_rail_marks_a_part_before_it_is_built_and_the_pointer_waits_while_it_is(monkeypatch):
