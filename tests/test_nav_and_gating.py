@@ -1472,11 +1472,12 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     (a) the table knows every registry key and no other -- an unmapped key would show a refusal
         with no way out, and an entry nobody raises is a sentence that can go stale unseen;
     (b) every tuple names places of the window by their keys -- a step, a part, or a page of a part --
-        and every place named is read off the built window: moved there, it is the place in sight, and
-        the rail has its part's row; a tuple has a non-empty label and renders the box sentence, which
-        names its places in their order in the words the rail's places are written in; a sentence
-        entry is returned verbatim and has no label; a None entry says nothing and has no label; no
-        sentence names a tab or a screen; and none of the three ever raises from fix_sentence, which
+        listed in the window's own order (the parts as the rail lists them, a part's steps or pages as
+        it shows them), and every place named is read off the built window: moved there, it is the place
+        in sight, and the rail has its part's row; a tuple has a non-empty label and renders the box
+        sentence, which names its places in their order in the words the rail's places are written in; a
+        sentence entry is returned verbatim and has no label; a None entry says nothing and has no label;
+        no sentence names a tab or a screen; and none of the three ever raises from fix_sentence, which
         runs while a refusal is being shown;
     (c) the sentences a user reads on the real screen, verbatim, one for each way places are joined
         (one step, two steps, a step and a part, a step with pages and parts, two pages, one part),
@@ -1507,6 +1508,15 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     window = build_window()
     steps, parts = {step.key for step in keys.STEPS}, {part.key for part in keys.PARTS}
     pages = {f"{part}/{page.key}" for part, held in keys.PAGES.items() for page in held}
+    rail = [part.key for part in keys.PARTS]
+
+    def order(name):
+        """Where a place stands in the window: its part in the rail, then its step or page in the part."""
+        if name in steps:
+            return rail.index("inference"), [step.key for step in keys.STEPS].index(name)
+        whole, _, page = name.partition("/")
+        return rail.index(whole), ([held.key for held in keys.PAGES[whole]].index(page) if page else -1)
+
     named = set()
     for key, entry in gui_fields.CONTROL.items():
         if isinstance(entry, tuple):
@@ -1514,6 +1524,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
             names = place if isinstance(place, tuple) else (place,)
             assert names and all(n in steps | parts | pages for n in names), f"{key}: {place!r} is not a place"
             assert len(set(names)) == len(names), f"{key}: a place named twice: {place!r}"
+            assert list(names) == sorted(names, key=order), f"{key}: places not in the window's order: {place!r}"
             named |= set(names)
             assert isinstance(text, str) and text, f"{key}: empty label"
             assert gui_fields.label(key) == text
@@ -1558,13 +1569,13 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "simulation even if a cache one setting away exists' in step 6, Narrowing round.")
     assert gui_fields.fix_sentence("accept_truncated") == "Confirm the load in the dialog in step 3, Training."
     assert gui_fields.fix_sentence("recording_spont") == (
-        "Select the passive recording in step 5, Inference (the 'Spontaneous' box on the driven page, "
-        "the 'Passive' box on the χ page).")
+        "Select the passive recording in step 5, Inference (the 'Spontaneous' box, or the 'Passive' box for a "
+        "χ observation).")
     assert gui_fields.fix_sentence("recording_probe") == \
         "Pick the probe's recording in the χ probe table in step 5, Inference."
     assert gui_fields.fix_sentence("name") == (
-        "Choose another name in the Save box, or in the 'Record name' or 'Comparison name' box "
-        "in Effective temperature, One cell, or in Effective temperature, Sweep study.")
+        "Choose another name in the Save box in step 2, Prior, or step 3, Training, or in the 'Record name' or "
+        "'Comparison name' box in Effective temperature, One cell, or in Effective temperature, Sweep study.")
     assert (gui_fields.fix_sentence("chi_f0") == gui_fields.fix_sentence("chi_freq_bounds")
             == "Fixed by measurement: change it in config.py, deliberately.")
     # the budget boxes sit in two steps, and a refusal raised in either must name the one the user is in;
@@ -1572,12 +1583,12 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     assert gui_fields.CONTROL["num_runs"] == (("training", "narrowing"), "Batches")
     assert gui_fields.fix_sentence("run_size_cap") == \
         "Set it in the 'Max rows per batch (0 = auto)' box in step 3, Training, or step 6, Narrowing round."
-    # An input that appears in several places lists them ALL, a part or a page after another place with
-    # its own "in". The cell picker is in five of them, and a bad cell chosen for the measurement used to
-    # send a person to step 5 alone.
+    # An input that appears in several places lists them ALL, in the rail's order, a part or a page after
+    # another place with its own "in". The cell picker is in five of them, and a bad cell chosen for the
+    # measurement used to send a person to step 5 alone.
     assert gui_fields.fix_sentence("cell") == (
         "Set it in the 'Cell' box in step 5, Inference, or in Effective temperature, One cell, or in "
-        "Effective temperature, Sweep study, or in Reduction map, or in Live simulation.")
+        "Effective temperature, Sweep study, or in Live simulation, or in Reduction map.")
     assert gui_fields.fix_sentence("model") == (
         "Set it in the 'Model' box in step 1, Model and options, or in Effective temperature, One cell, "
         "or in Live simulation.")
@@ -1665,8 +1676,9 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
         assert (box.kind, box.marker) == ("refusal", "warn"), kind
         assert box.sentence == f"a {kind} named 'p' already exists; rename or delete it first", kind
         assert box.beneath == gui_fields.fix_sentence("name") == (
-            "Choose another name in the Save box, or in the 'Record name' or 'Comparison name' box "
-            "in Effective temperature, One cell, or in Effective temperature, Sweep study."), kind
+            "Choose another name in the Save box in step 2, Prior, or step 3, Training, or in the 'Record "
+            "name' or 'Comparison name' box in Effective temperature, One cell, or in Effective temperature, "
+            "Sweep study."), kind
         assert box.detail == "", kind
         assert loaded.name == "", "a refused rename must not relabel the loaded artifact"
         assert pane.lines[-1][0] == "warning" and "already exists" in pane.lines[-1][1], pane.lines

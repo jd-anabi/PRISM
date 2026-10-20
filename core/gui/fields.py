@@ -12,9 +12,11 @@ against the QLabels shown at the place a tuple names.
 Three shapes of entry:
 
 * ``(place, label)`` for a box or a picker: ``place`` is a place of the window by its key in
-  ``core/gui/keys.py`` -- a step ("infer"), a part ("live") or a page of a part
-  ("temperature/sweep") -- and the label is the row as the panel passes it to ``add_help_row``. A
-  tuple of places is how one input names every place it appears: the cell picker is in five of them.
+  ``core/gui/keys.py`` -- a step ("infer"), a part that has neither steps nor pages ("live") or a
+  page of a part ("temperature/sweep") -- and the label is the row as the panel passes it to
+  ``add_help_row``. A tuple of places is how one input names every place it appears, in the window's
+  order (the parts as the rail lists them, a part's steps or pages as it shows them): the cell picker
+  is in five of them.
 * one sentence, for a consent, a dialog, a table, the name box, a value fixed by measurement, a
   control in Records, whose list and Note box are not form rows, or the model builder's forcing
   fields, whose rows are labelled by parameter name; the sentence quotes the control's own text
@@ -100,11 +102,12 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # consents and names
     "accept_truncated": f"Confirm the load in the dialog {_in('training')}.",
     "accept_other_observation": f"Tick 'Run on a different observation' {_in('infer')}.",
-    # A name and a note are typed in several boxes, and each sentence lists them all: a run's record
-    # and a comparison's are named in boxes of their own on the same two pages, so a taken
-    # comparison name is sent to the 'Comparison name' box, not the run's.
-    "name": ("Choose another name in the Save box, or in the 'Record name' or 'Comparison name' box "
-             f"{_in(('temperature/one_cell', 'temperature/sweep'))}."),
+    # A name and a note are typed in several boxes, and each sentence lists them all: the Save box
+    # beside the Save button of steps 2 and 3 names the prior or the posterior held, and a run's record
+    # and a comparison's are named in boxes of their own on the same two pages, so a taken comparison
+    # name is sent to the 'Comparison name' box, not the run's.
+    "name": (f"Choose another name in the Save box {_in(('prior', 'training'))}, or in the 'Record name' or "
+             f"'Comparison name' box {_in(('temperature/one_cell', 'temperature/sweep'))}."),
     # Records. Sentences, not (place, label), although Records is a place: the list is not a box, and
     # the Note box sits in its action row, not in a form row the read-back pin reads.
     "artifact": f"Select an artifact in the list {_in('records')}.",
@@ -126,15 +129,15 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # toggle of step 1); everywhere else the units file is resolved from the model and there is no
     # control to name.
     "bounds": ("prior", "Bounds"),
-    "cell": (("infer", "temperature/one_cell", "temperature/sweep", "reduction", "live"), "Cell"),
+    "cell": (("infer", "temperature/one_cell", "temperature/sweep", "live", "reduction"), "Cell"),
     "units": ("model", "Units"),
     "model": (("model", "temperature/one_cell", "live"), "Model"),
     "device": None,
     "prior": ("prior", "Prior"),
     "posterior": ("training", "Posterior"),
     # recordings and the drive
-    "recording_spont": (f"Select the passive recording {_in('infer')} (the 'Spontaneous' box on the "
-                        "driven page, the 'Passive' box on the χ page)."),
+    "recording_spont": (f"Select the passive recording {_in('infer')} (the 'Spontaneous' box, or the "
+                        "'Passive' box for a χ observation)."),
     "recording_forced": ("infer", "Forced"),
     "recording_probe": f"Pick the probe's recording in the χ probe table {_in('infer')}.",
     "drive_amplitude": ("infer", _drive("amp")),
