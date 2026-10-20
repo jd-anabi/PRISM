@@ -15,9 +15,11 @@ from .main_window import MainWindow
 def _install_excepthook(parent_getter):
     """Route any otherwise-unhandled exception to a dialog with a collapsible traceback.
 
-    Installed BEFORE MainWindow() is built, so a failure during panel construction (e.g. a bad cell
-    file breaking a panel's prefill) shows a dialog instead of a bare console traceback -- app.py used
-    to install this only after MainWindow(), leaving that whole window unguarded.
+    Installed BEFORE MainWindow() is built, so that it stands for everything after. A part that cannot
+    be built (e.g. a bad cell file breaking a panel's prefill) does not reach it: the window builds each
+    part inside a guard and shows that part's error page in its place. What reaches it is an error no
+    other code catches -- a slot's, an event handler's -- and it shows a dialog instead of a bare
+    console traceback.
     """
     def _excepthook(exc_type, exc, tb):
         tb_text = "".join(traceback.format_exception(exc_type, exc, tb))

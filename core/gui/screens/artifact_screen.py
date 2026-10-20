@@ -280,8 +280,10 @@ class ArtifactScreen(QWidget):
     @reported(QWidget.showEvent)
     def showEvent(self, event):
         """List on every visit, so an artifact written since the last look is there. NOT from
-        __init__: MainWindow builds this screen at launch, and a directory scan per launch is exactly
-        the start-up cost that lost the taskbar icon on 2026-09-11."""
+        __init__ as well: the window builds this screen the first time Records is opened or asked for,
+        and the first show lists it anyway, so a scan there would read the store twice, or for nothing.
+        (When the window built every screen at launch, that scan was the start-up cost that lost the
+        taskbar icon on 2026-09-11.)"""
         super().showEvent(event)
         self.refresh()
 

@@ -238,12 +238,12 @@ class CrossValPanel(BasePanel):
         try:
             _i, params, _r, _f, _u, _si, _s = cli.parse_cell(cell, model=_MODEL)
         except Exception as e:                       # noqa: BLE001
-            # Deliberately broad. __init__ calls this, so ANY exception here escapes CrossValPanel()
-            # -> MainWindow() -> build_app() and the whole GUI fails to launch -- and app.py installs
-            # its excepthook only AFTER MainWindow() is built, so nothing would even show it. A cell
-            # with no sibling Bounds/<model>/<name>.txt is enough to trigger it: parse_cell then takes
-            # the legacy branch and raises a plain ValueError, not UnitParseError. A bad cell file must
-            # degrade this one label, never brick the app.
+            # Deliberately broad. __init__ calls this, so ANY exception here escapes CrossValPanel(),
+            # and Effective temperature, which builds it, could not be opened: the window would show
+            # that part's error page in its place. A cell with no sibling Bounds/<model>/<name>.txt is
+            # enough to trigger it: parse_cell then takes the legacy branch and raises a plain
+            # ValueError, not UnitParseError. A bad cell file must degrade this one label, never take
+            # the whole part away.
             self.cell_values.setText(f"(could not read cell: {e})")
             return
         cell_s = float(params["s"][0])
