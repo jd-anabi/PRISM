@@ -2040,6 +2040,53 @@ def test_a_part_that_fails_to_build_leaves_no_panel_for_a_run_to_lock_and_the_ne
         assert set(built.panels()) <= set(BasePanel._instances), attribute
 
 
+def test_a_part_that_fails_to_build_while_a_run_is_live_leaves_the_runs_log_to_the_run(monkeypatch, capsys):
+    """While a run is live its log shows what the run itself says: a part first opened then, whose construction
+    raises, shows its error page, and its sentence, the error's kind and its trace go to the console the run's
+    log stands in front of, not into the run's log, which still shows the run's own record."""
+    import logging
+    import threading
+    from core.gui import main_window
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.simulate_panel import SimulatePanel
+    from core.gui.screens.shell import PartError
+    app = qt_app()
+    window = build_window()
+    runner, gate = window.panel(SimulatePanel), threading.Event()
+    shown = runner.log_pane.toPlainText
+
+    def run():
+        logging.getLogger("core").info("the run's own record")
+        gate.wait(10)
+
+    def broken():
+        raise _CannotBeBuilt("the cell file could not be read")
+
+    def turn_until(done):
+        began = time.monotonic()
+        while not done() and time.monotonic() - began < 10:
+            app.processEvents()
+            time.sleep(0.01)
+
+    capsys.readouterr()
+    runner.dispatch(run)
+    try:
+        turn_until(lambda: "the run's own record" in shown())
+        monkeypatch.setattr(main_window, "TemperatureScreen", broken)
+        window.go_to("temperature")
+        assert isinstance(window.part("temperature"), PartError)
+    finally:
+        gate.set()
+    turn_until(lambda: not BasePanel._running)
+    console = capsys.readouterr().err
+    assert "the run's own record" in shown() and not BasePanel._running, f"the run's own record is lost: {shown()}"
+    assert [words for words in ("could not be opened", "Traceback", "_CannotBeBuilt") if words in shown()] == [], (
+        f"the run's log holds the failure: {shown()}")
+    assert "error: Effective temperature could not be opened. the cell file could not be read" in console, (
+        f"the console did not get the failure: {console!r}")
+    assert "_CannotBeBuilt: the cell file could not be read" in console, f"the console got no trace: {console!r}"
+
+
 def test_the_rail_marks_a_part_before_it_is_built_and_the_pointer_waits_while_it_is(monkeypatch):
     """While a part is built at its first opening its row of the rail is marked already, and was drawn so, and the
     pointer shows the wait cursor; once the part is built the pointer is the window's own again, and so it is when

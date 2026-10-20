@@ -21,7 +21,7 @@ import time
 import warnings
 from contextlib import contextmanager
 
-from core import runs  # also sets the ``core`` logger to INFO at import
+from core import logging_root, runs  # runs also sets the ``core`` logger to INFO at import
 
 from .vt import StreamRouter
 
@@ -241,14 +241,24 @@ class _PumpLogHandler(logging.Handler):
     see runs.cancel_is_deferred -- so a crash unwinding through a record-emitting ``finally``
     (core/Solvers/sdeint.py's bar teardown, notably) reaches Worker.run as the crash it is rather
     than being replaced by a cancel.
+
+    It hears its own run's records alone: those logged on the thread that set it up, the run's own, the
+    records the run's log.txt keeps too. A record logged on another thread while the run is live -- the
+    window's own word, a part that could not be opened among them -- is not the run's: it goes to the
+    console the run's redirect stands in front of, as the root's sink writes a record between runs.
     """
 
-    def __init__(self, pump, cancel: "CancelToken | None"):
+    def __init__(self, pump, cancel: "CancelToken | None", console=(None, None)):
         super().__init__()
         self._pump = pump
         self._cancel = cancel
+        self._owner = threading.get_ident()          # the run's own thread: redirect_streams runs on it
+        self._console = console                      # the output and error streams in force before the run
 
     def emit(self, record):
+        if threading.get_ident() != self._owner:
+            _to_console(record, self._console)
+            return
         if self._cancel is not None and not runs.cancel_is_deferred():
             self._cancel.check()
         level = {"WARNING": "warning", "ERROR": "error", "CRITICAL": "error"}.get(record.levelname, "info")
@@ -258,10 +268,21 @@ class _PumpLogHandler(logging.Handler):
             self.handleError(record)
 
 
+def _to_console(record, console) -> None:
+    """Write ``record`` to ``console``, the output and error streams in force before a run's redirect, as the
+    root's sink writes a record between runs: at WARNING and above to the error stream, else to the output
+    stream. A stream that is None (no console at all) is passed over."""
+    out, err = console
+    stream = err if record.levelno >= logging.WARNING else out
+    if stream is not None:
+        stream.write(logging_root.render(record) + "\n")
+        stream.flush()
+
+
 @contextmanager
 def redirect_streams(signals, cancel: "CancelToken | None" = None):
     """Swap sys.stdout/stderr for signal-emitting streams, route warnings.warn to the log, and feed the
-    ``core`` logger's records to the same pane at their own level.
+    ``core`` logger's records of this run's own thread to the same pane at their own level.
 
     `cancel`, when given, is shared by both streams AND the logging handler: a set-and-not-yet-fired
     token makes the next write() (i.e. the next print or tqdm redraw) or the next record raise
@@ -290,7 +311,7 @@ def redirect_streams(signals, cancel: "CancelToken | None" = None):
         sys.stdout, sys.stderr = out, err
         # The third channel. Installed AFTER the streams and removed FIRST in the finally below, so a
         # record can never reach a pump that has stopped.
-        handler = _PumpLogHandler(pump, cancel)
+        handler = _PumpLogHandler(pump, cancel, (old_out, old_err))
         logging.getLogger("core").addHandler(handler)
 
         def _showwarning(message, category, filename, lineno, file=None, line=None):
