@@ -10,6 +10,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+from core.gui import one_instance    # noqa: E402
 from core.gui.app import build_app   # noqa: E402 -- must import after matplotlib.use
 
 
@@ -18,7 +19,12 @@ def main() -> int:
     if window is None:          # PRISM is open already: this start handed over to it, and ends with nothing shown
         return 0
     window.show()
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        # The loop ends once the window has closed, though a run on the thread pool may go on to its end unseen: the
+        # lock and the listener are let go now, so that the next start of PRISM opens a window of its own.
+        one_instance.release()
 
 
 if __name__ == "__main__":

@@ -3166,6 +3166,51 @@ def test_the_open_prism_brings_its_window_to_the_front_when_a_second_start_knock
         assert brought_forward[1:] == [("come_to_front", window)], "the knock did not bring the window to the front"
 
 
+def test_a_prism_whose_window_closed_while_a_run_goes_on_lets_the_next_start_open(tmp_path, monkeypatch):
+    """A PRISM whose window is closed while a run still goes on, on the thread pool -- a run left to finish unseen --
+    holds its lock and its listener while its event loop runs, and lets go of both as the loop ends, though the run
+    goes on: the next start of PRISM on its settings file then takes the lock and opens a window of its own."""
+    import threading
+    from PySide6.QtCore import QRunnable, QThreadPool
+    from core.gui import __main__ as entry
+    from core.gui import one_instance, settings
+    from tests._fixtures import whole_program
+    qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    going, ended = threading.Event(), threading.Event()
+
+    class Run(QRunnable):
+        def run(self):
+            going.wait(30)
+            ended.set()
+
+    with whole_program() as (_app, window):
+        held, during = one_instance.current(), []
+
+        class Loop:
+            """The program's event loop, as far as its end goes: the window is closed while it runs, and it ends."""
+            def exec(self):
+                during.append(one_instance.current())
+                window.close()
+                return 0
+
+        window.setAttribute(Qt.WA_DontShowOnScreen)
+        monkeypatch.setattr(entry, "build_app", lambda: (Loop(), window))
+        QThreadPool.globalInstance().start(Run())
+        try:
+            assert entry.main() == 0
+            assert (during == [held], one_instance.current(), ended.is_set()) == (True, None, False), (
+                "the claim was not held while the loop ran and let go as it ended, the run going on")
+            again = one_instance.claim(settings.settings().fileName(), tries=1, pause_ms=0)
+            try:
+                assert again.case == "start", f"the next start was {again.case}"
+            finally:
+                again.release()
+        finally:
+            going.set()
+            QThreadPool.globalInstance().waitForDone(30000)
+
+
 def test_no_key_fires_while_a_question_with_no_window_is_open():
     """A question asked with no window under it -- the last-resort error's, before the window is built -- is modal to
     the whole program: while it is open, no key of the map moves the window, pressed at the window or at the
