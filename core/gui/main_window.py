@@ -11,6 +11,7 @@ import traceback
 from datetime import datetime
 
 from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplication, QMainWindow, QMessageBox,
                                QPlainTextEdit, QPushButton, QTabBar, QTextEdit, QToolButton, QWidget)
 
@@ -105,12 +106,18 @@ _OWN_INSET = {"inference": 6, "temperature": 6, "live": 6, "reduction": 6, "reco
               "help": 9}
 
 
+def _is_a_button(widget: QWidget) -> bool:
+    """Whether ``widget`` does something when pressed: a button, or a tab bar or a row of page names (a row of
+    such buttons)."""
+    return isinstance(widget, (QPushButton, QToolButton, QTabBar)) or isinstance(widget.parentWidget(), PageNames)
+
+
 def _is_setting(widget: QWidget) -> bool:
     """Whether ``widget`` is something a person sets: not a button that does something when pressed, nor a tab
     bar or a row of page names (a row of such buttons), nor an area that only shows or scrolls what stands in it
     -- a scrolling area, a plot's view, a text that can only be read. A list and a text one types in are
     settings."""
-    if isinstance(widget, (QPushButton, QToolButton, QTabBar)) or isinstance(widget.parentWidget(), PageNames):
+    if _is_a_button(widget):
         return False
     if isinstance(widget, QAbstractScrollArea):
         typed_in = isinstance(widget, (QPlainTextEdit, QTextEdit)) and not widget.isReadOnly()
@@ -118,15 +125,16 @@ def _is_setting(widget: QWidget) -> bool:
     return True
 
 
-def _first_control(part: QWidget) -> QWidget | None:
-    """The first setting of ``part`` in the order the Tab key takes, shown and able to take the keyboard: where a
-    part names no control to start at, the keyboard starts there. None when the part has none."""
+def _first_control(part: QWidget, takes=_is_setting) -> QWidget | None:
+    """The first control of ``part`` that ``takes`` admits, its first setting unless another rule is handed in, in
+    the order the Tab key takes, shown and able to take the keyboard: where a part names no control to start at,
+    the keyboard starts there. None when the part has none."""
     widget = part.nextInFocusChain()
     for _ in range(10_000):                  # the chain is a ring through the window: it comes back to the part
         if widget is None or widget is part:
             return None
         if (part.isAncestorOf(widget) and widget.isVisibleTo(part) and widget.isEnabled()
-                and widget.focusPolicy() & Qt.TabFocus and widget.focusProxy() is None and _is_setting(widget)):
+                and widget.focusPolicy() & Qt.TabFocus and widget.focusProxy() is None and takes(widget)):
             return widget
         widget = widget.nextInFocusChain()
     return None
@@ -220,6 +228,15 @@ class MainWindow(QMainWindow):
         self.shell.rail.opened.connect(self._rail_opened)
         self.shell.rail.left.connect(self._rail_left)
         self.shell.rail.foot.clicked.connect(self.go_to_run)
+        # A key for every part, every step and the run, and one between the rail and the page: a shortcut of this
+        # window for each row of the key map, heard only while the window is the one in front, so that no key
+        # moves anything while a question the window asks is open. A key held down acts once.
+        for sequence, does in keys.BINDINGS:
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.WindowShortcut)
+            shortcut.setAutoRepeat(False)
+            shortcut.setProperty("does", does)
+            shortcut.activated.connect(self._key_pressed)
 
         # The run's clock, STOPPED at launch: the timer is constructed here but never started, and an
         # unstarted QTimer registers nothing with the OS, so nothing on the launch path ticks.
@@ -495,9 +512,13 @@ class MainWindow(QMainWindow):
 
     def go_to_run(self) -> None:
         """Go to the place of the live run. Nothing when no run is live, or its panel has no place."""
+        self._to_run(Qt.OtherFocusReason)
+
+    def _to_run(self, keyboard) -> None:
+        """The move to the live run's place, the page taking the keyboard for the reason ``keyboard``."""
         place = self._run_place(self._running_panel)
         if place is not None:
-            self.go_to(*place)
+            self._move(*place, keyboard=keyboard)
 
     def _move(self, part: str, page, *, keyboard) -> None:
         """The move ``go_to`` makes. ``keyboard`` is the reason the page takes the keyboard for, or None for a move
@@ -539,18 +560,33 @@ class MainWindow(QMainWindow):
             self._give_keyboard(widget, keyboard)
         self.place_changed.emit(now, shown)
 
+    @staticmethod
+    def _start_of(widget: QWidget) -> QWidget | None:
+        """The control the part ``widget`` names to start at, or else its first setting; None when it has neither,
+        its every setting locked while a run is live."""
+        first = getattr(widget, "first_focus", None)
+        target = first() if callable(first) else None
+        return target if target is not None else _first_control(widget)
+
     def _give_keyboard(self, widget: QWidget, reason) -> None:
         """Put the keyboard on the control the part names to start at, or else on its first control that is not a
         button. A page with neither -- its every setting locked while a run is live -- gives it to its row of the
         rail, so that the keyboard is never left on the page a move left."""
-        first = getattr(widget, "first_focus", None)
-        target = first() if callable(first) else None
-        if target is None:
-            target = _first_control(widget)
+        target = self._start_of(widget)
         if target is None:
             part, page = self.current_place()
             target = self.shell.rail.row(page if part == "inference" and page else part)
         target.setFocus(reason)
+
+    def _to_page(self) -> None:
+        """The keyboard from the rail to the page in sight, as a key gives it: to the control the page names to
+        start at, or else to its first setting; on a page whose every setting a run has locked, to its first
+        control that is not a button (a scrolling area, a log or a view, which the keys scroll); on a page with
+        none of these it stays where it is."""
+        page = self.shell.stack.currentWidget()
+        target = self._start_of(page) or _first_control(page, takes=lambda widget: not _is_a_button(widget))
+        if target is not None:
+            target.setFocus(Qt.ShortcutFocusReason)
 
     def _rail_opened(self, part: str, step) -> None:
         """A row of the rail was pressed. By Enter or Space in the rail: the page takes the keyboard, as after a
@@ -573,7 +609,33 @@ class MainWindow(QMainWindow):
 
     def _rail_left(self) -> None:
         """Escape in the rail: the page in sight takes the keyboard."""
-        self._give_keyboard(self.shell.stack.currentWidget(), Qt.ShortcutFocusReason)
+        self._to_page()
+
+    def _key_pressed(self) -> None:
+        """A key of the map was pressed: what its row says. The key of a part or of a step opens that place as a
+        move does, the page taking the keyboard as after a key; the key to the run goes to the place of the live
+        run, which the foot is a button for, and does nothing while it is none; the key between the rail and the
+        page moves the keyboard from the one to the other."""
+        does = self.sender().property("does")
+        if does == "rail or page":
+            self._rail_or_page()
+        elif does == "run":
+            self._to_run(Qt.ShortcutFocusReason)
+        else:
+            kind, name = does.split(" ", 1)
+            if kind == "part":
+                self._move(name, None, keyboard=Qt.ShortcutFocusReason)
+            else:
+                self._move("inference", name, keyboard=Qt.ShortcutFocusReason)
+
+    def _rail_or_page(self) -> None:
+        """The key between the rail and the page, either way round: from the rail, a row of it or the run's foot,
+        the page in sight takes the keyboard; from anywhere else the rail takes it."""
+        held = self.focusWidget()
+        if held is not None and self.shell.rail.isAncestorOf(held):
+            self._to_page()
+        else:
+            self.shell.rail.take_keyboard()
 
     def _page_chosen(self, page: str) -> None:
         """A person chose a page of Effective temperature by its name, which only a part in sight offers: the move

@@ -1,12 +1,16 @@
 """Help: what each part's settings mean, in a reference assembled from the user-facing panel module docstrings and
-their per-control ``HELP`` dicts -- filling the gap where the app had no section-level "what is this for" text.
-``help_text`` builds that reference."""
+their per-control ``HELP`` dicts -- filling the gap where the app had no section-level "what is this for" text --
+and under it the window's keys, each with what it does. ``help_text`` builds that reference."""
 import html
 import importlib
 
-from PySide6.QtWidgets import QLabel, QTextBrowser, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QFrame, QLabel, QScrollArea, QTextBrowser, QVBoxLayout, QWidget
 
+from .. import design, fonts, keys, style
 from ..design import HELP_VIEWER_MIN_H
+from ..reported import reported
+from ..widgets.rule_table import Column, RuleTable, TextCell
 
 # (module path, human title) for the five user-facing sections, in display order. Each module opens with
 # a "<MODE> mode: ..." docstring line and (most) carry a per-control HELP dict.
@@ -52,7 +56,10 @@ def help_text() -> str:
 
 
 class HelpScreen(QWidget):
-    """Help: a heading over the help text, which lays itself out, scrolls itself and can be selected."""
+    """Help: a heading over the help text, which lays itself out, scrolls itself and can be selected, and under it
+    the window's keys, a table of each key or run of keys and what it does, as the key map lists them. The text
+    takes the room the table leaves; in a window too low for the text's least height and the table, the two
+    scroll together under the heading."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,9 +69,51 @@ class HelpScreen(QWidget):
         self.viewer.setHtml(help_text())
         self.viewer.setOpenExternalLinks(True)
         self.viewer.setMinimumHeight(HELP_VIEWER_MIN_H)
+        keys_heading = QLabel("Keys")
+        keys_heading.setTextFormat(Qt.PlainText)
+        style.set_class(keys_heading, cls="head")             # what the sheet's rule for a heading matches
+        # The font is given here, when the label is built, and nowhere later: a font handed to a widget after a
+        # sheet has dressed it is dropped at the next change of sheet.
+        keys_heading.setFont(fonts.inter("head"))
+        keys_heading.setFixedHeight(design.scaled(design.TYPE["head"][1]))
+        self.keys_table = RuleTable([Column("Key", "fit"), Column("What it does")],
+                                    [[TextCell(key), TextCell(does, wrap=True)] for key, does in keys.KEYS],
+                                    selectable=False)
+        body = QWidget()
+        self._lines = QVBoxLayout(body)
+        self._lines.setContentsMargins(0, 0, 0, 0)
+        self._lines.setSpacing(0)
+        self._lines.addWidget(self.viewer, 1)
+        self._lines.addSpacing(design.scaled(design.GAP["block"]))
+        self._lines.addWidget(keys_heading)
+        self._lines.addSpacing(design.scaled(design.GAP["head_table"]))
+        self._lines.addWidget(self.keys_table)
+        self.middle = QScrollArea()
+        # The frame is switched off here, at build: the sheet gives a line to a scrolling area that still has the
+        # frame it is born with.
+        self.middle.setFrameShape(QFrame.NoFrame)
+        self.middle.setWidgetResizable(True)
+        self.middle.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.middle.setFocusPolicy(Qt.NoFocus)                # a stop for the Tab key only while it scrolls
+        self.middle.setProperty("ring", "inset")              # its focus ring is drawn just inside its edge
+        self.middle.setWidget(body)
+        # Handing the body over switches on its ground, and the view fills itself with the window's colour: both
+        # are switched off again, so that the page's own ground shows through.
+        body.setAutoFillBackground(False)
+        self.middle.viewport().setAutoFillBackground(False)
+        # A bound method, never a function that holds the screen: connected to the area's own bar.
+        self.middle.verticalScrollBar().rangeChanged.connect(self._range_changed)
         layout = QVBoxLayout(self)
         layout.addWidget(heading)
-        layout.addWidget(self.viewer, 1)
+        layout.addWidget(self.middle, 1)
+
+    @reported()
+    def _range_changed(self, low, high):
+        """Hears the middle's scroll bar. While there is something to scroll, the bar gets a gap beside it and the
+        middle is a stop for the Tab key, so that the keyboard can scroll it."""
+        scrolls = high > low
+        self._lines.setContentsMargins(0, 0, design.SIZE["scroll_gap"] if scrolls else 0, 0)
+        self.middle.setFocusPolicy(Qt.TabFocus if scrolls else Qt.NoFocus)
 
     def first_focus(self) -> QWidget:
         """The control the keyboard starts at: the help text, which the keys scroll."""

@@ -5,7 +5,9 @@ function each test makes: a session is a plain namespace of the five fields the 
 steps' states are the rules' own. The window's reading of its session, its run and the record store in use, and
 what each of Home's places opens in the window, are tested on a whole window.
 """
+import contextlib
 import time
+import warnings
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -1400,7 +1402,8 @@ def test_a_part_held_in_the_place_of_another_stands_where_it_stood():
 
 def test_help_shows_the_help_text_that_settings_held():
     """Help shows its heading, "Help", over the help text Settings used to hold, built here now: the titles of its
-    five sections, and every word of the help text, in a viewer at least as tall as the look asks."""
+    five sections, and every word of the help text, in a viewer at least as tall as the look asks. The one other
+    heading of the page is that of the keys, under the text."""
     from PySide6.QtGui import QTextDocument
     from PySide6.QtWidgets import QLabel
     from core.gui.screens import help_screen, settings_screen
@@ -1415,7 +1418,7 @@ def test_help_shows_the_help_text_that_settings_held():
     written.setHtml(help_screen.help_text())
     assert shown == written.toPlainText()
     assert viewer.minimumHeight() == design.HELP_VIEWER_MIN_H and viewer.isReadOnly()
-    assert [label.text() for label in window.part("help").findChildren(QLabel)] == ["Help"]
+    assert [label.text() for label in window.part("help").findChildren(QLabel)] == ["Help", "Keys"]
     assert not hasattr(settings_screen, "help_text"), "the help text is built in two places"
 
 
@@ -2382,3 +2385,472 @@ def test_a_part_built_later_reads_the_appearance_and_the_models_in_force():
         assert "DUFFING" in [fdt.itemText(n) for n in range(fdt.count())], "a part built later lists old models"
     finally:
         VALID_MODELS.remove("DUFFING")
+
+
+# The key map in the window. A key of the map is a shortcut of the window, which only the window in front hears, so
+# a test that presses one first brings the window to the front (``_in_front``).
+@contextlib.contextmanager
+def _in_front(widget):
+    """``widget`` as the window in front, as the screen makes a window when a person brings it there. Shown where
+    no screen shows it, the window is brought there by telling the toolkit so, through a call the toolkit keeps
+    though it marks it as old, whose warning is not let through; the focus the window gives is then delivered with
+    its reason, as the screen delivers it. At the end no window is in front."""
+    def tell(front):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            QApplication.setActiveWindow(front)
+    tell(widget)
+    try:
+        yield widget
+    finally:
+        tell(None)
+
+
+def _press(window, sequence):
+    """Press the key ``sequence`` ("Ctrl+3", "Shift+F6") where a person's key goes: at the control that holds the
+    keyboard in ``window``, or at the window itself when none does."""
+    combination = QKeySequence(sequence)[0]
+    QTest.keyClick(window.focusWidget() or window, combination.key(), combination.keyboardModifiers())
+
+
+def _given(monkeypatch):
+    """Every focus given from now on, each as the widget and the reason it was given for, in their order."""
+    from PySide6.QtWidgets import QWidget
+    given, kept = [], QWidget.setFocus
+
+    def set_focus(widget, *reason):
+        given.append((widget, reason[0] if reason else Qt.OtherFocusReason))
+        return kept(widget, *reason)
+
+    monkeypatch.setattr(QWidget, "setFocus", set_focus)
+    return given
+
+
+def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
+    """The window makes one shortcut for each row of the key map and no other, each in the window's own context,
+    so that only the window in front hears it, and none repeating while its key is held down; each row of the rail
+    names in its tool tip the keys that open its place, and Help prints the rows of the map. With the window in
+    front, each part's key and each step's key, pressed where a person's key goes, shows that place and gives its
+    page the keyboard as a shortcut gives it, so that the focus ring shows there; a part first opened by its key,
+    and Parameter inference first opened by a step's key, is built under the wait cursor with its row of the rail
+    marked already. The key to the run goes to the running place only while the foot is a button; the key between
+    the rail and the page takes the keyboard from the page to the rail and back."""
+    from PySide6.QtGui import QShortcut
+    from core.gui import main_window, style
+    from core.gui.panels.reduction_panel import ReductionPanel
+    app = qt_app()
+    built, kept = [], main_window.MainWindow._make
+
+    def make(window, name):
+        """The construction of a part, noting what the rail marks and what the pointer shows while it runs."""
+        cursor = app.overrideCursor()
+        built.append((name, _marked(window.shell.rail), None if cursor is None else cursor.shape()))
+        return kept(window, name)
+
+    monkeypatch.setattr(main_window.MainWindow, "_make", make)
+    given = _given(monkeypatch)
+    follower = style.FocusFollower(app)
+    window, other = build_window(), build_window()
+    rail = window.shell.rail
+    try:
+        made = sorted((shortcut.key().toString(QKeySequence.PortableText), shortcut.property("does"),
+                       shortcut.context(), shortcut.autoRepeat()) for shortcut in window.findChildren(QShortcut))
+        assert made == sorted((sequence, does, Qt.WindowShortcut, False) for sequence, does in keys.BINDINGS), (
+            f"the window's shortcuts are not the key map's rows: {made}")
+        assert [rail.row(place.key).toolTip().rpartition(" (")[2] for place in keys.PARTS + keys.STEPS] == [
+            ", ".join(place.keys) + ")" for place in keys.PARTS + keys.STEPS], "a row's tool tip names no key"
+        _shown_off_screen(window)
+        _shown_off_screen(other)
+        with _in_front(window):
+            for sequence, does in keys.BINDINGS:
+                kind, _, name = does.partition(" ")
+                if kind not in ("part", "step"):
+                    continue
+                part, page = (name, None) if kind == "part" else ("inference", name)
+                first = part not in window.built_parts()
+                del built[:], given[:]
+                _press(window, sequence)
+                shown, held = window.current_place(), window.focusWidget()
+                assert shown[0] == part and (page is None or shown[1] == page), f"{sequence} opened {shown}"
+                assert held is not None and window.part(part).isAncestorOf(held), f"{sequence}: no keyboard on the page"
+                assert given[-1:] == [(held, Qt.ShortcutFocusReason)] and follower.target() is held, (
+                    f"{sequence}: the page took the keyboard otherwise than as a shortcut gives it")
+                row = shown[1] if part == "inference" else part
+                assert built == ([(part, [row], Qt.WaitCursor)] if first else []), f"{sequence} built {built}"
+            window.go_to("home")
+            _press(window, "Ctrl+R")
+            assert (rail.foot.is_button(), window.current_place()) == (False, ("home", None)), (
+                "the key to the run moved with nothing running")
+            orphan = build_run_host()
+            orphan._set_busy(True)                     # a run of a panel with no place: the foot is no button
+            try:
+                _press(window, "Ctrl+R")
+                assert (rail.foot.is_button(), window.current_place()) == (False, ("home", None)), (
+                    "the key to the run moved while the foot is no button")
+            finally:
+                orphan._set_busy(False)
+            runner = window.panel(ReductionPanel)
+            runner._set_busy(True)
+            try:
+                del given[:]
+                _press(window, "Ctrl+R")
+                assert (rail.foot.is_button(), window.current_place()) == (True, ("reduction", None)), (
+                    "the key to the run did not go to the run")
+                assert given[-1:] == [(rail.row("reduction"), Qt.ShortcutFocusReason)], (     # its settings locked
+                    "the running place took the keyboard otherwise than as a shortcut gives it")
+            finally:
+                runner._set_busy(False)
+            window.go_to("live")
+            field = window.focusWidget()
+            _press(window, "F6")
+            row = rail.row("live")
+            assert (window.focusWidget(), given[-1:]) == (row, [(row, Qt.ShortcutFocusReason)]), (
+                "the key between the rail and the page did not reach the rail")
+            _press(window, "F6")
+            assert (window.focusWidget(), given[-1:]) == (field, [(field, Qt.ShortcutFocusReason)]), (
+                "the key between the rail and the page did not come back to the page")
+        with _in_front(other):
+            del built[:]
+            _press(other, "Alt+3")
+            assert (other.current_place(), built) == (("inference", "training"), [
+                ("inference", ["training"], Qt.WaitCursor)]), f"a step's key opened {other.current_place()}: {built}"
+        assert _cells(window.part("help").keys_table) == [list(row) for row in keys.KEYS], "Help prints another map"
+    finally:
+        window.hide()
+        other.hide()
+        follower.stop()
+
+
+def test_the_key_between_the_rail_and_the_page_moves_the_keyboard_both_ways(monkeypatch):
+    """F6 and Shift+F6 each move the keyboard between the rail and the page, either way round, as a shortcut gives
+    it, the focus ring showing: from the page's first setting to the row of the place in sight, a step's row on a
+    step's page, and from there back to that setting; from the run's foot, while it is a button, to the page; and
+    from nowhere, when no control holds the keyboard, to the rail. On a page whose every setting a run has locked,
+    the place's row, which the move gave the keyboard, gives it on to the page's first control that is not a button,
+    and takes it back."""
+    from PySide6.QtWidgets import QPushButton, QToolButton
+    from core.gui import style
+    from core.gui.panels.reduction_panel import ReductionPanel
+    app = qt_app()
+    given = _given(monkeypatch)
+    follower = style.FocusFollower(app)
+    window = build_window()
+    rail = window.shell.rail
+    try:
+        _shown_off_screen(window)
+        with _in_front(window):
+            for part, page, row in (("live", None, "live"), ("inference", "training", "training"),
+                                    ("temperature", "sweep", "temperature"), ("help", None, "help")):
+                window.go_to(part, page)
+                first = window.focusWidget()
+                for sequence, to in (("F6", rail.row(row)), ("F6", first), ("Shift+F6", rail.row(row)),
+                                     ("Shift+F6", first)):
+                    _press(window, sequence)
+                    assert (window.focusWidget(), given[-1], follower.target()) == (
+                        to, (to, Qt.ShortcutFocusReason), to), f"{part}: {sequence} did not move the keyboard as a key"
+            window.go_to("home")
+            window.focusWidget().clearFocus()
+            assert window.focusWidget() is None
+            _press(window, "F6")
+            assert window.focusWidget() is rail.row("home"), "the key from nowhere did not reach the rail"
+            runner = window.panel(ReductionPanel)
+            runner._set_busy(True)
+            try:
+                window.go_to("home")
+                _press(window, "F6")
+                QTest.keyClick(window.focusWidget(), Qt.Key_Tab)            # on to the foot, a button now
+                assert window.focusWidget() is rail.foot, "Tab from the rail did not reach the foot"
+                _press(window, "F6")
+                assert window.focusWidget() is window.part("home").first_focus(), "the foot kept the keyboard"
+                window.go_to("live")                                         # every setting locked by the run
+                assert window.focusWidget() is rail.row("live"), "a move to a page a run locks left the rail"
+                _press(window, "F6")
+                held = window.focusWidget()
+                assert window.part("live").isAncestorOf(held) and held.isEnabled(), (
+                    "the key did not reach a page a run locks")
+                assert not isinstance(held, (QPushButton, QToolButton)) and given[-1] == (
+                    held, Qt.ShortcutFocusReason), "the key gave a page a run locks a button, or not as a key"
+                _press(window, "Shift+F6")
+                assert window.focusWidget() is rail.row("live"), "the key did not take the keyboard back to the rail"
+            finally:
+                runner._set_busy(False)
+    finally:
+        window.hide()
+        follower.stop()
+
+
+def test_the_help_key_opens_help(monkeypatch):
+    """F1 opens Help from wherever the window is -- a step, a page of Effective temperature, the model builder with
+    the keyboard in a field one types in, Help itself -- and so does Ctrl+9: Help is shown, its row of the rail is
+    marked, the window says where it is, and the help text takes the keyboard as a shortcut gives it."""
+    qt_app()
+    given = _given(monkeypatch)
+    window = build_window()
+    said = []
+    window.place_changed.connect(lambda part, page: said.append((part, page)))
+    try:
+        _shown_off_screen(window)
+        with _in_front(window):
+            for start in (("inference", "training"), ("temperature", "sweep"), ("models", "builder"), ("help", None)):
+                for sequence in ("F1", "Ctrl+9"):
+                    window.go_to(*start)
+                    del said[:]
+                    _press(window, sequence)
+                    viewer = window.part("help").viewer
+                    assert (window.current_place(), _marked(window.shell.rail), said) == (
+                        ("help", None), ["help"], [("help", None)]), f"{sequence} did not open Help from {start}"
+                    assert (window.focusWidget(), given[-1]) == (viewer, (viewer, Qt.ShortcutFocusReason)), (
+                        f"{sequence} from {start}: the help text did not take the keyboard as a key gives it")
+    finally:
+        window.hide()
+
+
+def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_moves_nothing(monkeypatch):
+    """Escape in the rail, on the row of the place in sight or on another row the arrows reached, gives the page in
+    sight its first setting, as a shortcut gives it; on a page whose every setting a run has locked, the page's first
+    control that is not a button, never the rail again, and from the run's foot the same. Escape anywhere else moves
+    nothing: no page changes, the keyboard stays where it is and nothing is said; and a run goes on, Escape on its
+    own Cancel button too, which asks for no stop."""
+    from PySide6.QtWidgets import QPushButton, QToolButton
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.streams import CancelToken
+    qt_app()
+    given = _given(monkeypatch)
+    window = build_window()
+    rail = window.shell.rail
+    said = []
+    window.place_changed.connect(lambda part, page: said.append((part, page)))
+    try:
+        _shown_off_screen(window)
+        with _in_front(window):
+            for part, page in (("live", None), ("inference", "prior"), ("records", None), ("models", "builder")):
+                window.go_to(part, page)
+                first = window.focusWidget()
+                rail.take_keyboard()
+                QTest.keyClick(window.focusWidget(), Qt.Key_Down)           # another row the arrows reached
+                QTest.keyClick(window.focusWidget(), Qt.Key_Escape)
+                assert (window.focusWidget(), given[-1]) == (first, (first, Qt.ShortcutFocusReason)), (
+                    f"Escape in the rail did not give the first setting of {part} the keyboard as a key")
+                del said[:]
+                QTest.keyClick(first, Qt.Key_Escape)
+                assert (window.current_place()[0], window.focusWidget(), said) == (part, first, []), (
+                    f"Escape on the first setting of {part} moved something")
+            runner = window.panel(ReductionPanel)
+            runner._set_busy(True)
+            try:
+                for target in ("reduction", "inference"):
+                    window.go_to(target)                                     # every setting locked by the run
+                    QTest.keyClick(window.focusWidget(), Qt.Key_Escape)
+                    held = window.focusWidget()
+                    assert not rail.isAncestorOf(held), f"Escape left the keyboard in the rail over {target}"
+                    assert window.part(target).isAncestorOf(held), f"Escape gave the keyboard away from {target}"
+                    assert not isinstance(held, (QPushButton, QToolButton)), f"Escape gave a button of {target} it"
+                window.go_to("reduction")
+                rail.take_keyboard()
+                QTest.keyClick(window.focusWidget(), Qt.Key_Tab)            # the foot, a button while the run is live
+                assert window.focusWidget() is rail.foot, "Tab from the rail did not reach the foot"
+                QTest.keyClick(rail.foot, Qt.Key_Escape)
+                assert window.part("reduction").isAncestorOf(window.focusWidget()), "Escape on the foot moved nothing"
+                runner._cancel = CancelToken()                               # what a run's start hands its panel
+                runner.btn_cancel.setFocus(Qt.TabFocusReason)
+                del said[:]
+                QTest.keyClick(runner.btn_cancel, Qt.Key_Escape)
+                assert (BasePanel._running, runner._cancel.requested.is_set(), runner.btn_cancel.text()) == (
+                    True, False, "Cancel"), "Escape asked the run to stop"
+                assert (window.current_place(), window.focusWidget(), said) == (
+                    ("reduction", None), runner.btn_cancel, []), "Escape on the Cancel button moved something"
+            finally:
+                runner._cancel = None
+                runner._set_busy(False)
+    finally:
+        window.hide()
+
+
+def test_tab_reaches_the_rail_then_the_foot_when_it_is_a_button_then_the_page():
+    """The Tab key reaches the rail's list as one stop, on the row of the place in sight, then the run's foot while
+    it is a button, then the page from its first stop on, and from the page's last stop the rail again; Shift+Tab
+    walks the same stops backwards. No other row of the rail is a stop, the steps under Parameter inference
+    neither. On Effective temperature the page's first stop is its row of page names, which stands over the page."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    qt_app()
+    window = build_window()
+    rail = window.shell.rail
+
+    def walk(start, key, count):
+        """Where the keyboard goes, press after press of ``key`` from ``start``: the rail, the foot, or the page."""
+        start.setFocus(Qt.TabFocusReason)
+        been = []
+        for _ in range(count):
+            QTest.keyClick(window.focusWidget(), key, Qt.ShiftModifier if key == Qt.Key_Backtab else Qt.NoModifier)
+            held = window.focusWidget()
+            been.append("foot" if held is rail.foot else held if rail.isAncestorOf(held) else
+                        "page" if window.shell.stack.currentWidget().isAncestorOf(held) else held)
+        return been
+
+    try:
+        _shown_off_screen(window)
+        for part, page, row in (("home", None, "home"), ("inference", "training", "training"),
+                                ("temperature", None, "temperature"), ("help", None, "help")):
+            window.go_to(part, page)
+            stops = walk(rail.row(row), Qt.Key_Tab, 40)
+            assert stops[0] == "page" and set(stops) == {"page", rail.row(row)}, (
+                f"{part}: Tab reached another stop than the rail's row and the page")
+            assert stops[stops.index(rail.row(row)) + 1] == "page", f"{part}: after the rail Tab did not reach the page"
+            back = walk(rail.row(row), Qt.Key_Backtab, 40)
+            assert back[0] == "page" and set(back) == {"page", rail.row(row)}, (
+                f"{part}: Shift+Tab reached another stop than the rail's row and the page")
+        window.go_to("temperature", "sweep")
+        walk(rail.row("temperature"), Qt.Key_Tab, 1)
+        assert window.part("temperature").names.isAncestorOf(window.focusWidget()), (
+            "the first stop of Effective temperature is not its row of page names")
+        runner = window.panel(ReductionPanel)
+        runner._set_busy(True)
+        try:
+            for part in ("home", "help"):
+                window.go_to(part)
+                assert walk(rail.row(part), Qt.Key_Tab, 2) == ["foot", "page"], (
+                    f"{part}: Tab from the rail did not reach the foot, a button, and then the page")
+                first = window.focusWidget()
+                assert walk(first, Qt.Key_Backtab, 2) == ["foot", rail.row(part)], (
+                    f"{part}: Shift+Tab from the page did not reach the foot and then the rail")
+        finally:
+            runner._set_busy(False)
+    finally:
+        window.hide()
+
+
+def test_after_a_move_the_keyboard_is_on_the_pages_first_setting_never_on_a_button_that_starts_a_run(monkeypatch):
+    """After a move to any place -- by its key, each part and each step, and by ``go_to``, each page of a part that
+    has several -- the keyboard is on the place's first setting, or on the button the place names to start at, which
+    opens a place and starts nothing: Home's main button, and the button of Your own models' list that opens the
+    builder. It is never on a button that starts or stops a run. Enter there starts no run and asks nothing, and a
+    press of the button a place names starts none either. A part that cannot be built, opened by its key or by
+    Enter on its row of the rail, gives the keyboard to its error page's "Try again", as a shortcut gives it."""
+    from PySide6.QtWidgets import QAbstractButton, QPushButton, QToolButton
+    from core.gui import main_window
+    from core.gui.panels.base_panel import BasePanel
+    from tests._fixtures import all_asked, forget_asked
+    qt_app()
+    given = _given(monkeypatch)
+    started = []
+    monkeypatch.setattr(BasePanel, "dispatch", lambda panel, *args, **kwargs: started.append(type(panel).__name__))
+    window = build_window()
+    moves = ([(sequence, *(("inference", does[5:]) if does.startswith("step ") else (does[5:], None)))
+              for sequence, does in keys.BINDINGS if does.startswith(("part ", "step "))]
+             + [(None, "temperature", "one_cell"), (None, "temperature", "sweep"), (None, "models", "list"),
+                (None, "models", "builder")])
+    try:
+        _shown_off_screen(window)
+        with _in_front(window):
+            for sequence, part, page in moves:
+                window.go_to("records")
+                if sequence is None:
+                    window.go_to(part, page)
+                else:
+                    _press(window, sequence)
+                assert window.current_place()[0] == part and page in (None, window.current_place()[1]), (
+                    f"{sequence or 'go_to'} did not open {part}, {page}")
+                held, place = window.focusWidget(), window.current_place()
+                named = getattr(window.part(part), "first_focus", lambda: None)()
+                assert held is not None and window.part(part).isAncestorOf(held) and held.isEnabled(), (
+                    f"{place}: the page holds no keyboard")
+                if isinstance(held, (QPushButton, QToolButton)):
+                    assert held is named, f"{place}: the keyboard is on a button the place does not name"
+                forget_asked()
+                QTest.keyClick(held, Qt.Key_Return)
+                assert (started, all_asked(), window.current_place()) == ([], [], place), (
+                    f"{place}: Enter started a run, asked something or moved: {started}")
+                if isinstance(held, QAbstractButton) and held is named:
+                    held.click()
+                    assert (started, all_asked()) == ([], []), f"{place}: the button the place names started a run"
+    finally:
+        window.hide()
+
+    def broken():
+        raise _CannotBeBuilt("the cell file could not be read")
+
+    monkeypatch.setattr(main_window, "ReductionPanel", broken)
+    window = build_window()
+    try:
+        _shown_off_screen(window)
+        with _in_front(window):
+            _press(window, "Ctrl+5")
+            again = _button(window.part("reduction"), "Try again")
+            assert (window.focusWidget(), given[-1]) == (again, (again, Qt.ShortcutFocusReason)), (
+                "the key of a part that cannot be built did not give its error page's Try again the keyboard")
+            window.shell.rail.take_keyboard()
+            QTest.keyClick(window.focusWidget(), Qt.Key_Return)
+            assert (window.focusWidget(), given[-1]) == (again, (again, Qt.ShortcutFocusReason)), (
+                "Enter on the row of a part that cannot be built did not give Try again the keyboard")
+    finally:
+        window.hide()
+
+
+def test_no_key_fires_while_a_question_is_open():
+    """While a question the window asks is open over the window, no key of the map does anything, pressed at the
+    window or at the question, with the question in front as the screen puts it or with the window there: the place,
+    the keyboard and the rail stay as they were, and nothing is said. Once the question is answered and the window
+    is in front again, the same keys move as their rows say."""
+    from core.gui.widgets.ask import Ask
+    qt_app()
+    window = build_window()
+    said = []
+    window.place_changed.connect(lambda part, page: said.append((part, page)))
+    try:
+        _shown_off_screen(window)
+        window.go_to("live")
+        held = window.focusWidget()
+        question = Ask(window, "Start a new session?", "Applying a model replaces the whole session.", "Keep it",
+                       "Apply and start a new session", loses_work=True)
+        question.setAttribute(Qt.WA_DontShowOnScreen)
+        question.show()                       # modal over the window, as the window shows it, with no loop of its own
+        del said[:]
+        try:
+            for front, named in ((question, "the question"), (window, "the window")):
+                with _in_front(front):
+                    for sequence, _does in keys.BINDINGS:
+                        for at in (window, question):
+                            _press(at, sequence)
+                    assert (window.current_place(), window.focusWidget(), _marked(window.shell.rail), said) == (
+                        ("live", None), held, ["live"], []), f"a key moved the window, {named} in front"
+        finally:
+            question.reject()
+        assert question.isHidden(), "the question is still open"
+        with _in_front(window):
+            for sequence, place in (("Ctrl+3", ("temperature", "one_cell")), ("Alt+2", ("inference", "prior")),
+                                    ("F1", ("help", None))):
+                _press(window, sequence)
+                assert window.current_place() == place, f"{sequence} moved nothing once the question was answered"
+    finally:
+        window.hide()
+
+
+def test_help_prints_the_key_map():
+    """Help prints the key map under its help text: a table under the heading "Keys", with the columns "Key" and
+    "What it does" and a row for each row of the map, in its order and its words, and no row to select, so that it
+    takes no stop of the Tab key. In a window of the ordinary opening size the table stands whole under the text,
+    which takes the room left, and nothing scrolls; in the smallest window the text keeps its least height, the
+    table stands whole under it, and the two scroll together under the page's heading."""
+    from PySide6.QtWidgets import QAbstractItemView
+    qt_app()
+    window = build_window()
+    shown = window.part("help")
+    table = shown.keys_table
+    assert (_titles(table), _cells(table)) == (["Key", "What it does"], [list(row) for row in keys.KEYS]), (
+        f"Help's table is not the key map: {_titles(table)}")
+    assert (table.view.focusPolicy(), table.view.selectionMode()) == (Qt.NoFocus, QAbstractItemView.NoSelection), (
+        "Help's table takes a stop of the Tab key or a selection")
+    try:
+        for size, scrolls in (((1300, 820), False), ((900, 600), True)):
+            _shown_off_screen(window, *size)
+            window.go_to("help")
+            QApplication.processEvents()
+            bar = shown.middle.verticalScrollBar()
+            text_ends = shown.viewer.mapTo(shown, QPoint(0, shown.viewer.height())).y()
+            assert table.mapTo(shown, QPoint(0, 0)).y() > text_ends, f"the table is not under the text at {size}"
+            assert table.height() == table.sizeHint().height(), f"the table is cut at {size}"
+            assert (bar.maximum() > 0, shown.viewer.height() == design.HELP_VIEWER_MIN_H) == (scrolls, scrolls), (
+                f"at {size} the middle scrolls {bar.maximum()} px and the text is {shown.viewer.height()} px high")
+    finally:
+        window.hide()
