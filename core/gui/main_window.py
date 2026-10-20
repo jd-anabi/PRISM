@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplicat
 from core.artifacts import KIND_DIRS, StoreError, default_store
 from core.config import VALID_MODELS
 
-from . import chain, design, keys, record_words, settings
+from . import chain, design, keys, record_words, settings, style
 from .panels.base_panel import RUN_STATE, BasePanel
 from .panels.crossval_panel import CrossValPanel
 from .panels.fdt_panel import FdtPanel
@@ -569,14 +569,20 @@ class MainWindow(QMainWindow):
         return target if target is not None else _first_control(widget)
 
     def _give_keyboard(self, widget: QWidget, reason) -> None:
-        """Put the keyboard on the control the part names to start at, or else on its first control that is not a
-        button. A page with neither -- its every setting locked while a run is live -- gives it to its row of the
-        rail, so that the keyboard is never left on the page a move left."""
+        """Put the keyboard on the control the part names to start at, or else on its first setting. A page with
+        neither -- its every setting locked while a run is live -- gives it to its row of the rail, so that the
+        keyboard is never left on the page a move left. When a shortcut gives the keyboard to a control that holds
+        it already, the ring shows there too: the toolkit tells a control nothing of a focus it holds, so the
+        follower that draws the focus ring is told here."""
         target = self._start_of(widget)
         if target is None:
             part, page = self.current_place()
             target = self.shell.rail.row(page if part == "inference" and page else part)
+        held = target.hasFocus()
         target.setFocus(reason)
+        follower = style.current_follower()
+        if held and reason == Qt.ShortcutFocusReason and follower is not None:
+            follower.arrived(target, reason)
 
     def _to_page(self) -> None:
         """The keyboard from the rail to the page in sight, as a key gives it: to the control the page names to

@@ -2433,8 +2433,9 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
     front, each part's key and each step's key, pressed where a person's key goes, shows that place and gives its
     page the keyboard as a shortcut gives it, so that the focus ring shows there; a part first opened by its key,
     and Parameter inference first opened by a step's key, is built under the wait cursor with its row of the rail
-    marked already. The key to the run goes to the running place only while the foot is a button; the key between
-    the rail and the page takes the keyboard from the page to the rail and back."""
+    marked already. The ring shows also where the keyboard already stood, after a click in the help text or a move
+    the mouse made, neither of which shows it. The key to the run goes to the running place only while the foot is
+    a button; the key between the rail and the page takes the keyboard from the page to the rail and back."""
     from PySide6.QtGui import QShortcut
     from core.gui import main_window, style
     from core.gui.panels.reduction_panel import ReductionPanel
@@ -2450,6 +2451,7 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
     monkeypatch.setattr(main_window.MainWindow, "_make", make)
     given = _given(monkeypatch)
     follower = style.FocusFollower(app)
+    monkeypatch.setattr(style, "_FOLLOWER", follower)         # the application's follower, as the window finds it
     window, other = build_window(), build_window()
     rail = window.shell.rail
     try:
@@ -2477,6 +2479,23 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
                     f"{sequence}: the page took the keyboard otherwise than as a shortcut gives it")
                 row = shown[1] if part == "inference" else part
                 assert built == ([(part, [row], Qt.WaitCursor)] if first else []), f"{sequence} built {built}"
+            viewer = window.part("help").viewer
+            for sequence in ("F1", "Ctrl+9"):          # Help opened by a click on its row, a click in its text, its key
+                QTest.mouseClick(rail.row("help"), Qt.LeftButton)
+                QTest.mouseClick(viewer.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(4, 4))
+                assert (window.focusWidget(), follower.target()) == (viewer, None), (
+                    "a click in the help text showed the ring")
+                _press(window, sequence)
+                assert follower.target() is viewer, f"{sequence}: no ring on the help text, which held the keyboard"
+            for sequence, does in keys.BINDINGS:        # each place's own key, after a move the mouse made there
+                kind, _, name = does.partition(" ")
+                if kind in ("part", "step"):
+                    QTest.mouseClick(window.shell, Qt.LeftButton)       # a press of the mouse ends the keys' turn
+                    window.go_to(*((name, None) if kind == "part" else ("inference", name)))
+                    held = window.focusWidget()
+                    _press(window, sequence)
+                    assert (window.focusWidget(), follower.target()) == (held, held), (
+                        f"{sequence}: no ring on the control that held the keyboard")
             window.go_to("home")
             _press(window, "Ctrl+R")
             assert (rail.foot.is_button(), window.current_place()) == (False, ("home", None)), (
