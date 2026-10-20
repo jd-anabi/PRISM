@@ -558,7 +558,9 @@ class MainWindow(QMainWindow):
         self._move(part, step, keyboard=None)
         if held is not None and rail.isAncestorOf(held):
             now, shown = self.current_place()
-            rail.row(shown if now == "inference" else now).setFocus(Qt.OtherFocusReason)
+            # the row the move marked: the step's, or the part's own while Parameter inference shows no step (its
+            # error page)
+            rail.row(shown if now == "inference" and shown else now).setFocus(Qt.OtherFocusReason)
 
     def _rail_left(self) -> None:
         """Escape in the rail: the page in sight takes the keyboard."""

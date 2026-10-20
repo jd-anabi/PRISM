@@ -1927,6 +1927,45 @@ def test_a_part_that_fails_to_build_shows_its_error_page_and_the_rest_works(monk
         window.hide()
 
 
+def test_a_click_in_the_rail_over_parameter_inferences_error_page_raises_nothing(monkeypatch):
+    """With the keyboard in the rail, as the window coming to the front leaves it, a click on Parameter
+    inference's row or on a step's row while the part shows its error page raises nothing: the error page stays
+    in sight, the part's row is marked, and the keyboard stays in the rail on that row, the row the click marked,
+    since the part shows no step. Once the part is built, a click on a step's row leaves the keyboard on that
+    step's row, as before."""
+    import sys
+    from core.gui import main_window
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.screens.shell import PartError
+    qt_app()
+    raised = []
+    monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: raised.append(f"{kind.__name__}: {error}"))
+
+    def broken():
+        raise _CannotBeBuilt("the cell file could not be read")
+
+    monkeypatch.setattr(main_window, "InferenceScreen", broken)
+    window = build_window()
+    rail = window.shell.rail
+    try:
+        _shown_off_screen(window)
+        for row in ("inference", "prior", "inference"):
+            rail.take_keyboard()                                  # the keyboard in the rail
+            QTest.mouseClick(rail.row(row), Qt.LeftButton)
+            assert raised == [], f"a click on the row of {row} raised: {raised}"
+            assert isinstance(window.shell.stack.currentWidget(), PartError), row
+            assert (window.current_place(), _marked(rail), window.focusWidget()) == (
+                ("inference", None), ["inference"], rail.row("inference")), (row, window.focusWidget())
+        monkeypatch.setattr(main_window, "InferenceScreen", InferenceScreen)
+        _button(window.part("inference"), "Try again").click()
+        rail.take_keyboard()
+        QTest.mouseClick(rail.row("prior"), Qt.LeftButton)
+        assert (raised, window.current_place(), window.focusWidget()) == (
+            [], ("inference", "prior"), rail.row("prior")), (raised, window.current_place(), window.focusWidget())
+    finally:
+        window.hide()
+
+
 def test_the_rail_marks_a_part_before_it_is_built_and_the_pointer_waits_while_it_is(monkeypatch):
     """While a part is built at its first opening its row of the rail is marked already, and was drawn so, and the
     pointer shows the wait cursor; once the part is built the pointer is the window's own again, and so it is when
