@@ -32,8 +32,9 @@ def _room(parent) -> int:
 
 def _fitted(sentence: str, room: int) -> str:
     """``sentence`` as the last-resort question can show it in ``room``, the height it may take: whole when the
-    question then stands whole; else cut after its last word that leaves the question whole, an ellipsis put in
-    place of the rest, which the full error holds. Measured on the question itself, built and never shown."""
+    question then stands whole; else cut after its last word that leaves the question whole -- inside its first
+    word, after its last letter that does, when not one whole word does -- an ellipsis put in place of the rest,
+    which the full error holds. Measured on the question itself, built and never shown."""
     question = Ask(None, "Error", sentence, "OK", marker="err", detail=sentence)
     try:
         over = question.sizeHint().height() - room
@@ -43,16 +44,23 @@ def _fitted(sentence: str, room: int) -> str:
         width = lines.minimumWidth()
         allowed = lines.heightForWidth(width) - over
         lines.setMinimumHeight(0)           # the question holds it at the whole message's height
+
+        def most(pieces, joined):
+            """The most of ``pieces`` that stand in what is allowed with the ellipsis after them, joined, without it."""
+            kept, last = 0, len(pieces) - 1
+            while kept < last:
+                middle = (kept + last + 1) // 2
+                lines.set_text(joined(pieces[:middle]) + "\u2026")
+                if lines.heightForWidth(width) <= allowed:
+                    kept = middle
+                else:
+                    last = middle - 1
+            return joined(pieces[:kept])
+
+        # After the last word that stands; where not one whole word does -- a message with no space to cut at, as
+        # paths one to a line -- inside the first word, after the last letter that does.
         words = sentence.split(" ")
-        kept, most = 0, len(words) - 1
-        while kept < most:                  # the most words that stand in what is allowed, the ellipsis after them
-            middle = (kept + most + 1) // 2
-            lines.set_text(" ".join(words[:middle]) + "\u2026")
-            if lines.heightForWidth(width) <= allowed:
-                kept = middle
-            else:
-                most = middle - 1
-        return " ".join(words[:kept]) + "\u2026"
+        return (most(words, " ".join) or most(words[0], "".join)) + "\u2026"
     finally:
         question.deleteLater()
 

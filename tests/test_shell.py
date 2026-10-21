@@ -3584,7 +3584,8 @@ def test_the_last_resort_question_cuts_a_message_its_screen_cannot_hold(monkeypa
     settings read into a network of another shape, which names every setting it misses -- is cut after its last
     word that leaves the question whole, its frame and its answer in sight, and an ellipsis stands for the rest,
     which the full error holds. On a screen 768 high, less a taskbar, the question then stands whole at the ordinary
-    text size; a message the question holds whole is not cut."""
+    text size; a message the question holds whole is not cut. A message with no space to cut at -- paths, one to a
+    line -- is cut inside its one word, after its last letter that leaves the question whole."""
     import sys
     import torch
     from core.gui import app as gui_app
@@ -3605,6 +3606,7 @@ def test_the_last_resort_question_cuts_a_message_its_screen_cannot_hold(monkeypa
         finally:
             question.deleteLater()
 
+    paths = "\n".join(f"cells/cell_{number:03}.txt" for number in range(300))    # one to a line, and no space
     screen = QApplication.primaryScreen().availableGeometry().height() - gui_app.FRAME
     for room in (768 - 48 - gui_app.FRAME, screen):
         shown = gui_app._fitted(whole, room)
@@ -3613,6 +3615,12 @@ def test_the_last_resort_question_cuts_a_message_its_screen_cannot_hold(monkeypa
         more = whole[:whole.index(" ", len(kept) + 1)] + "\u2026"         # a word more
         assert height(shown) <= room < min(height(more), height(whole)), (
             f"in {room} px the question is {height(shown)} px, and {height(more)} px with a word more")
+        cut = gui_app._fitted(paths, room)
+        more = paths[:len(cut)] + "\u2026"                                # a letter more
+        assert (cut[-1:], paths.startswith(cut[:-1]), len(cut) > 1) == ("\u2026", True, True), (
+            f"a message with no space was not cut inside its word: {ascii(cut[-40:])}")
+        assert height(cut) <= room < height(more), (
+            f"in {room} px the question is {height(cut)} px, and {height(more)} px with a letter more")
     short = "The cell file could not be read."
     assert gui_app._fitted(short, screen) == short, "a message the question holds whole was cut"
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)       # the hook installed here is put back at the end
