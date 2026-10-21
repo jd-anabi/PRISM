@@ -4727,18 +4727,24 @@ def test_a_kept_fit_is_listed_with_what_it_trains_for_its_passes_and_its_state(s
     """A training kept partway is a record of its own kind, always unnamed, listed with the posterior it
     is to write, the passes it holds and one word for its state: the first that holds of a process
     training it now, a reason it cannot be resumed, its fit having ended, a stop on purpose; otherwise it
-    stopped unexpectedly (a crash, a restart, a power cut, or an error the process recorded). Every
-    record has a manifest, so each is complete; only the one whose fit ended is finished."""
+    stopped unexpectedly (a crash, a restart, a power cut, or an error the process recorded). The records
+    that read running, cannot be resumed and finished also hold every state after their own word, as the
+    training stage leaves them: its process records the fit ended and then the posterior written before
+    it lets go of the lock, and a record whose posterior was written but could not be removed keeps both.
+    Read in any other order, the words would call one of them wrong. Every record has a manifest, so each
+    is complete; it is finished once its fit has ended."""
     from core.SBI.fit_state import STATE_WORDS, FitLock
     from tests._fixtures import build_fit_record
 
     asked = [(dict(stopped="on_purpose", posterior_name="kept_on_purpose"), "kept when stopped"),
              (dict(stopped="error", posterior_name="stopped_by_an_error"), "stopped unexpectedly"),
              (dict(stopped=None, posterior_name="said_nothing"), "stopped unexpectedly"),
-             (dict(unresumable="its simulation set is gone", posterior_name="gone"), "cannot be resumed"),
+             (dict(unresumable="its simulation set is gone", complete=True, posterior_name="gone"),
+              "cannot be resumed"),
              (dict(complete=True, posterior_name="ended"), "finished"),
-             (dict(posterior_name="in_training"), "running")]
-    made = {build_fit_record(store, **kw): (kw["posterior_name"], word) for kw, word in asked}
+             (dict(unresumable="its posterior in_training is written", complete=True,
+                   posterior_name="in_training"), "running")]
+    made = {build_fit_record(store, **kw): (kw, word) for kw, word in asked}
     assert {word for _, word in made.values()} == set(STATE_WORDS), "every state word is reached"
     held, = [i for i, (_, word) in made.items() if word == "running"]
     lock = FitLock(store.path("fit", held))
@@ -4749,15 +4755,15 @@ def test_a_kept_fit_is_listed_with_what_it_trains_for_its_passes_and_its_state(s
         lock.release()
 
     assert set(rows) == set(made)
-    for id_, (posterior_name, word) in made.items():
+    for id_, (kw, word) in made.items():
         r = rows[id_]
-        assert (r.fit_state, r.fit_passes, r.fit_for) == (word, 3, posterior_name), id_
-        assert r.complete is True and r.finished is (word == "finished"), (id_, word)
+        assert (r.fit_state, r.fit_passes, r.fit_for) == (word, 3, kw["posterior_name"]), id_
+        assert r.complete is True and r.finished is kw.get("complete", False), (id_, word)
         assert (r.name, r.label) == ("", f"(unnamed {id_})")
         assert r.path.parent == store.kind_dir("fit") and store.kind_dir("fit").name == "fits"
         assert r.dir_name == f"{mf.UNNAMED_DIR}__{id_}"
     again, = [r for r in store.list("fit") if r.id == held]
-    assert again.fit_state == "kept when stopped", "the lock let go, the record reads as it was stopped"
+    assert again.fit_state == "cannot be resumed", "the lock let go, the record reads as its body says"
 
 
 def test_the_store_opens_no_writer_for_a_kept_fit(store):
@@ -4834,9 +4840,12 @@ def test_a_running_kept_fit_is_refused_deletion_and_a_stopped_one_is_deleted(sto
 
 def test_write_fit_manifest_keeps_who_began_the_training_and_replaces_its_body(store):
     """A kept training's manifest is written again at every pass, and by every process that resumes it:
-    the later writes replace the body and keep who began it -- its id, when, its note, the checkout, the
-    machine, its settings and its parents. A new folder is named and not made. A loss that is not a
-    finite number cannot be recorded, so the writer must record None for one."""
+    the later writes replace the body and keep who began it -- its id, name and when, its note, the
+    checkout, the machine, its input files, its settings, its parents and its fingerprints. A resume runs
+    at a later checkout or on another machine, so what the beginning recorded is made, on disk, to differ
+    from anything this process would work out for itself: a later write that worked any of it out again
+    would show. A new folder is named and not made. A loss that is not a finite number cannot be
+    recorded, so the writer must record None for one."""
     from core.artifacts import write_fit_manifest
     from tests._fixtures import _fit_body
 
@@ -4849,15 +4858,28 @@ def test_write_fit_manifest_keeps_who_began_the_training_and_replaces_its_body(s
     first = write_fit_manifest(path, body=first_body, cfg=None, note="n", config={"hidden_features": 8},
                                parents={"prior": "p"})
     assert (first.kind, first.id, first.name) == ("fit", path.name.rpartition("__")[2], "")
+    assert (first.note, first.config, first.parents) == ("n", {"hidden_features": 8}, {"prior": "p"})
     assert first.inputs == {"bounds": None, "cell": None, "units": None, "model": None}
     assert (first.payloads, first.figures, first.fingerprints) == ({}, [], {})
     assert first.prism["git_rev"] and first.env["python"]
 
+    began = mf.validate({**first.to_dict(),
+                         "prism": {"git_rev": "0" * 40, "git_dirty": True, "branch": "another-branch"},
+                         "env": {**first.env, "hostname": "another-machine", "device_type": "cuda",
+                                 "device_name": "another card"},
+                         "inputs": {"bounds": {"path": "Bounds/nadrowski/master.txt", "sha256": "a" * 64},
+                                    "cell": None, "units": None, "model": "nadrowski"},
+                         "fingerprints": {"gmm": "b" * 16}})
+    for key in ("prism", "env", "inputs", "fingerprints"):
+        assert getattr(began, key) != getattr(first, key), key
+    (path / st.MANIFEST).write_bytes(mf.to_json_text(began).encode("utf-8"))
+
     second_body = _fit_body(passes=2, stopped="on_purpose", posterior_name="chi_post")
     second = write_fit_manifest(path, body=second_body, note="another", config={"hidden_features": 16},
-                                parents={})
-    for key in ("id", "created", "note", "prism", "env", "config", "parents"):
-        assert getattr(second, key) == getattr(first, key), key
+                                parents={}, fingerprints={"gmm": "c" * 16})
+    for key in ("id", "name", "created", "note", "prism", "env", "inputs", "config", "parents",
+                "fingerprints"):
+        assert getattr(second, key) == getattr(began, key), key
     assert (first.body, second.body) == (first_body, second_body)
     assert store.get("fit", first.id).to_dict() == second.to_dict(), "the second is what is on disk"
     for m in (first, second):
@@ -4867,6 +4889,48 @@ def test_write_fit_manifest_keeps_who_began_the_training_and_replaces_its_body(s
     unrecordable["progress"]["last_validation_loss"] = float("nan")
     with pytest.raises(mf.ManifestError, match="non-finite"):
         mf.validate({**second.to_dict(), "body": unrecordable})
+
+
+def test_write_fit_manifest_refuses_a_manifest_it_cannot_read_and_leaves_it(store, monkeypatch):
+    """A kept training's manifest that is there and cannot be read is never written over: a fresh one
+    would rewrite who began the training -- when, the checkout, the machine -- and, written with the body
+    alone, drop the parents that keep what it trains on from being deleted. The writer refuses, naming
+    the file and why, and writes nothing; the training's next save tries again. Three ways it cannot be
+    read: another program holds it (a virus scanner or a preview pane, which passes), a hand edit saved it
+    in another encoding, or a hand edit tore it. Only a manifest that is not there is written fresh."""
+    from core.artifacts import write_fit_manifest
+    from tests._fixtures import _fit_body
+
+    path = store.new_fit_dir()
+    fid = write_fit_manifest(path, body=_fit_body(passes=1), note="n", parents={"prior": "p"}).id
+    mpath = path / st.MANIFEST
+    began = mpath.read_bytes()
+    read_text = Path.read_text
+
+    def held(self, *args, **kwargs):
+        if self == mpath:
+            raise PermissionError(13, "the file is in use by another program", str(self))
+        return read_text(self, *args, **kwargs)
+
+    unreadable = [("held by another program", began, held, "PermissionError"),
+                  ("saved in another encoding", began.decode("utf-8").encode("utf-16"), None,
+                   "UnicodeDecodeError"),
+                  ("torn", began[:40], None, "not valid JSON")]
+    for how, on_disk, reader, says in unreadable:
+        mpath.write_bytes(on_disk)
+        with monkeypatch.context() as m:
+            if reader is not None:
+                m.setattr(Path, "read_text", reader)
+            with pytest.raises(st.StoreError, match=says) as refused:
+                write_fit_manifest(path, body=_fit_body(passes=2), note="n", parents={"prior": "p"})
+        assert str(mpath) in str(refused.value), (how, str(refused.value))
+        assert mpath.read_bytes() == on_disk, f"a manifest {how} is left as it was"
+        assert [p.name for p in path.iterdir()] == [st.MANIFEST], f"nothing is written beside one {how}"
+
+    mpath.unlink()
+    again = write_fit_manifest(path, body=_fit_body(passes=2), note="n", parents={"prior": "p"})
+    assert (again.id, again.body["progress"]["passes"]) == (fid, 2), "one that is not there is written fresh"
+    assert store.get("fit", fid).to_dict() == again.to_dict()
 
 
 def test_every_row_carries_its_own_directory_name(store, monkeypatch):

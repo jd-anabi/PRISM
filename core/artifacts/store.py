@@ -1653,14 +1653,23 @@ def write_fit_manifest(path, *, body: dict, cfg=None, note: str = "", config: "d
     wrote them, so a later process does not rewrite who began it. Otherwise the record is unnamed,
     created now, with this checkout's and this machine's description, the input files of ``cfg``
     (four Nones without one), ``config`` as given (or empty), no payloads and no figures.
+
+    Only a manifest that is not there is written fresh. One that is there and cannot be read --
+    another program holds it, or it is not a manifest this PRISM reads -- raises ``StoreError`` naming
+    it and why, and nothing is written: a fresh one would rewrite who began the training and, written
+    with the body alone, drop the parents that keep what it trains on from being deleted. The training
+    stage's next save tries again.
     """
     from core import config as prism_config     # the parameter ``config`` is the manifest's block
     path = Path(path)
-    old = None
     mpath = path / MANIFEST
-    if mpath.exists():
-        with contextlib.suppress(mf.ManifestError, OSError):
-            old = mf.from_json_text(mpath.read_text(encoding="utf-8"))
+    try:
+        old = mf.from_json_text(mpath.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        old = None                                  # a new kept training: its first manifest
+    except (OSError, UnicodeDecodeError, mf.ManifestError) as e:
+        raise StoreError(f"could not read the kept training's manifest {mpath}: {type(e).__name__}: {e}; "
+                         f"it is left as it was and nothing is written") from e
     if old is not None:
         d = old.to_dict()
         d["body"] = dict(body)
