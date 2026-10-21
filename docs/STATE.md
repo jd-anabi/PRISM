@@ -1,6 +1,6 @@
 # PRISM — state
 
-**Last updated:** 2026-10-20, early morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 9 AND IS HANDED TO A NEW CHAT BY THE RULE OF ABOUT THREE TASKS; it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md`: TASKS 7, 8 AND 9 ARE COMPLETE (`07a3fff`..`c914688`, each after one fix round, its review clean and its gate green; the last gate, on `c914688`: 1558 passed, 4 skipped, 5 deselected; the real-screen set 4 passed); departure 59 amended and three registry lines; the weekly bar at 24 % (it had reset to 0 %; next reset 25 October, 04:00 UTC). NEXT, IN A NEW CHAT THE OWNER STARTS WHEN THEY CHOOSE: Task 10 (one PRISM at a time, the last-resort error, the fonts once), then the stage's last review, then Task 11, the exit, from `docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-from-task-10.md`; the paragraph "THE BUILD OF STAGE 2, TASKS 7, 8 AND 9" below is this session's record. What follows in this parenthesis is the head as the morning of 16 October left it: 2026-10-16, morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 6 AND STOPS AT A CLEAN STATE AT THE OWNER'S WORD ("Try to also finish things up at a clean state when usage limits are near their max, I won't buy anymore credits"); it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-6.md`: TASK 6 IS COMPLETE (`22b8827`..`c1628d0`, after one fix round, its review clean and its gate green; the last gate, on `c1628d0`: 1532 passed, 4 skipped, 5 deselected); departure 70 amended; Task 7's preparation was begun and STOPPED (nothing of it in the repository); the weekly bar at 100 % (resets on the evening of 17 October). NEXT, IN A NEW CHAT THE OWNER STARTS WHEN THEY CHOOSE: Task 7 (each part built when first opened), its preparation afresh, from `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md`; the paragraph "THE BUILD OF STAGE 2, TASK 6" below is this session's record. What follows in this parenthesis is the head as the evening of 15 October left it: 2026-10-15, evening (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 5 AND IS HANDED TO A NEW
+**Last updated:** 2026-10-20, evening (THE BUILD OF STAGE 2, THE SHELL, IS COMPLETE AND REVIEWED, AND ITS EXIT STANDS AFTER STEP 3: Task 10 is complete (`d5a7a0b`..`ffc0a93`, after one fix round), the stage's last review is complete with its one fix wave (`9ababa1`..`c7106c3`), the fence holds and the gate of record is green on a quiet machine (1583 passed, 5 skipped, 5 deselected, 19 min 21 s); the owner answered fourteen questions; the weekly bar at 39 %. NEXT, IN A NEW CHAT THE OWNER STARTS: the exit from its Step 4 (the pictures, the owner's remaining questions, the documents, the list of rulings), then the pause for the design for saving the fit, from `docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-exit.md`; the paragraph "THE BUILD OF STAGE 2, TASK 10, ITS LAST REVIEW AND THE EXIT'S FIRST STEPS" below is this session's record. What follows in this parenthesis is the head as the early morning of 20 October left it: 2026-10-20, early morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 9 AND IS HANDED TO A NEW CHAT BY THE RULE OF ABOUT THREE TASKS; it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md`: TASKS 7, 8 AND 9 ARE COMPLETE (`07a3fff`..`c914688`, each after one fix round, its review clean and its gate green; the last gate, on `c914688`: 1558 passed, 4 skipped, 5 deselected; the real-screen set 4 passed); departure 59 amended and three registry lines; the weekly bar at 24 % (it had reset to 0 %; next reset 25 October, 04:00 UTC). NEXT, IN A NEW CHAT THE OWNER STARTS WHEN THEY CHOOSE: Task 10 (one PRISM at a time, the last-resort error, the fonts once), then the stage's last review, then Task 11, the exit, from `docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-from-task-10.md`; the paragraph "THE BUILD OF STAGE 2, TASKS 7, 8 AND 9" below is this session's record. What follows in this parenthesis is the head as the morning of 16 October left it: 2026-10-16, morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 6 AND STOPS AT A CLEAN STATE AT THE OWNER'S WORD ("Try to also finish things up at a clean state when usage limits are near their max, I won't buy anymore credits"); it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-6.md`: TASK 6 IS COMPLETE (`22b8827`..`c1628d0`, after one fix round, its review clean and its gate green; the last gate, on `c1628d0`: 1532 passed, 4 skipped, 5 deselected); departure 70 amended; Task 7's preparation was begun and STOPPED (nothing of it in the repository); the weekly bar at 100 % (resets on the evening of 17 October). NEXT, IN A NEW CHAT THE OWNER STARTS WHEN THEY CHOOSE: Task 7 (each part built when first opened), its preparation afresh, from `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md`; the paragraph "THE BUILD OF STAGE 2, TASK 6" below is this session's record. What follows in this parenthesis is the head as the evening of 15 October left it: 2026-10-15, evening (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 5 AND IS HANDED TO A NEW
 CHAT AT THE OWNER'S WORD; it ran in a session started from the owner's pasted prompt
 `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-4.md`: TASKS 4 AND 5 ARE COMPLETE
 (`c66fde9`..`827ff3d`, each after one fix round, its review clean and its gate green; the last gate, on `827ff3d`:
@@ -84,6 +84,61 @@ the build's state stands in four paragraphs, each as it was written on its date 
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**THE BUILD OF STAGE 2, TASK 10, ITS LAST REVIEW AND THE EXIT'S FIRST STEPS (2026-10-20; a session started from the
+owner's pasted prompt `docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-from-task-10.md`; the ledger's
+entries from "NEW CHAT 2026-10-20 (morning)" on have every figure and ruling).** At the start (09:54): the tree clean
+at `278c6ea`; the usage card's weekly bar at 25 %; ONE python alive, the owner's own PRISM (`python -m core.gui` from
+`run.bat`, 09:54:36), left alone, gone by 09:55, which wrote the real `PRISM.ini` at 09:54:52 with the same bytes
+(3,296, 79BF94DF…C83E): the first such write whose author is established, the earlier ones most likely the same.
+**The owner's answers** (asked one at a time while agents worked, each with its pictures where it had any and a
+recommendation, each the recommendation; the ledger's lines "THE OWNER'S ANSWERS, ASKED EARLY" and "… ON TASK 10'S
+REVIEW"): Help keeps the keys table in sight (Q1); an error's message takes a capital only on an ordinary first word
+(Q2), counting an apostrophe or a hyphen inside it (Q13), and a message of quotations alone follows "Something went
+wrong that PRISM did not expect:" (Q14); Home's records stay under the parts (Q3); the rail's scroll bar (Q4) and the
+open step's second line in a low window (Q5) stay; the page names' gap stays 16 px (Q6); a part with two pages opens on
+its first page each launch (Q7); Enter on a ringed button is decided when the pages are rebuilt (Q8, carried to stage
+4); the refusal sentences stay (Q9); the 29 old place words go with the stages that rebuild their pages (Q10); the
+three run behaviours stay (Q11); closing the window during a run lets go of the lock (Q12). **Task 10, start-up: one
+PRISM at a time, the last-resort error, the fonts once** (`d5a7a0b`, `1bf3b99`, then fix round 1 `36d5c83`..`ffc0a93`,
+with the documents commit `d8b68a1`): `core/gui/one_instance.py` (a `QLockFile` `PRISM.lock` beside the settings file,
+no stale time, tried once; a local server named from the settings file's path, for the user only; a second start
+lets the open PRISM take the front, knocks up to three times a second apart, and hands over (one line, "PRISM is already
+open: it was asked to come to the front.", exit 0, no window) or, when nothing answers and the lock cannot be removed,
+gives up ("PRISM is already running but did not answer; this start ends.", exit 1); a lock that cannot be made at all
+starts PRISM without it, with a warning); `MainWindow.come_to_front()` (out of the minimised state, raised, activated,
+the taskbar alert when Windows withholds the front; an open question brought forward instead of the window under it);
+the last-resort error through the shared question (titled "Error", one answer, the message as a sentence, cut to its
+screen with an ellipsis when long, the kind and the trace behind "Show the full error"; one at a time); the class fonts
+set once (every place pixel-identical); the claim let go when the window's close is accepted and when the loop ends.
+Its preparation's real-screen probes took the owner's keyboard about six times (activating a never-shown window takes
+Windows' foreground from the program in front): TOLD; the real-screen test stands the activation in, and no later run
+activates a window. Its review: one Critical (a PRISM whose window closed during a run turned later starts away),
+four Important test gaps, and minors, all cured in the fix round; departure 78's quoted line amended (`d8b68a1`).
+**The stage's last review** (three readers over `0db3980..d8b68a1`, 80 commits: the product as one piece, the tests
+as one piece, the sorting of 78 deferred lines into 251 rows: 95 cured, 21 settled, 22 past, 113 standing; 48 carried
+by stage, 12 to tell the owner, 24 for the audit's list, 41 dropped, none to cure now): one Critical (a window closed
+while a popped-out figure window stayed open kept the claim) and one Important (the first openings' card check never
+showed the window), cured with fourteen minors in ONE fix wave (`9ababa1`..`c7106c3`, re-read clean; the registry and
+two standing-check rows brought into line, `ec6147d`). **Gates:** green on `1bf3b99` (1573, 19:27), `ffc0a93` (1580,
+19:22), `c7106c3` (1583, 19:23), each with 5 skipped (the fifth the new real-screen test), 5 deselected and 205 warnings;
+the real-screen set 5 passed on each; the real `Artifacts/` (428) unchanged after each; `PRISM.ini` the same bytes.
+**The exit, Steps 1 to 3:** the fence holds (nothing under `core/` outside `core/gui/` in the stage; `core/config.py`,
+`README.md`, `CLAUDE.md`, `docs/checklists/`, the launchers untouched; 25 suites; 109 refusal keys); THE GATE OF RECORD
+on a quiet machine at the owner's word, alone, on `ec6147d` (code `c7106c3`): 1583 passed, 5 skipped, 5 deselected, 205 warnings, 19 min 21 s, exit 0 (3 min 21 s over the 16-minute target, with 176 more tests than stage 1's record of 1407 in 16 min 9 s; the busy gates of the day took 19:22 to 19:27, so the time is the tests', not the machine's); the real-screen set 5 passed, 1588 deselected, nothing on the screen and no window activated; 1,593 collected, checked against the carried-over list (`rows 369; twice []; missing 0: []`; the 22 gone each with its closing fate). **For the owner at the exit, still to ask:** the last-resort question's look; the
+corrected counts in `CLAUDE.md`; what the exit's pictures show; the rest to tell grouped (the sorting's twelve, the
+ledger's "FOR THE OWNER AT THE EXIT" lines). **The draft list of rulings** (`stage-2/exit/rulings-for-the-owner.md`,
+35 entries to Task 10's review, sent to the owner as a draft) is completed at the exit. **Carried** (the ledger's
+"CARRIED" lines): to stage 3's plan, the launcher's release of the claim and its streams, a hand-over's imports, the
+claim not idempotent in one process, reopening the running PRISM's own window, the run history's reading, `has_runs`,
+the product seat's notes for stage 3's planner; to stage 3's first task, one session helper across three suites and
+the wave re-read's nine lows; to stage 4, Enter on a ringed button and the layout room read once from the primary
+screen; to stages 6 and 7 the Records heading and two labels; to the audit's list, two dead names and the sorting's
+24. **Cost in background agents:** Task 10 about 3.65 million tokens, the last review with its wave about 3.24; the
+weekly bar went from 25 % to 39 %. **HANDED TO A NEW CHAT** for the exit's Steps 4 to 8 (the pictures, the owner's
+questions, the documents, the pause), this chat at about 58 % of its room, from
+`docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-exit.md` (not checked by a reader, to save the owner's
+usage); nothing running at the hand-over.
 
 **THE BUILD OF STAGE 2, TASKS 7, 8 AND 9 (2026-10-19, morning, to 2026-10-20, early morning; a session started from the
 owner's pasted prompt `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md`; the ledger's entries
