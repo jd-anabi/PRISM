@@ -1,6 +1,6 @@
 # PRISM — state
 
-**Last updated:** 2026-10-20, evening (THE BUILD OF STAGE 2, THE SHELL, IS COMPLETE AND REVIEWED, AND ITS EXIT STANDS AFTER STEP 3: Task 10 is complete (`d5a7a0b`..`ffc0a93`, after one fix round), the stage's last review is complete with its one fix wave (`9ababa1`..`c7106c3`), the fence holds and the gate of record is green on a quiet machine (1583 passed, 5 skipped, 5 deselected, 19 min 21 s); the owner answered fourteen questions; the weekly bar at 39 %. NEXT, IN A NEW CHAT THE OWNER STARTS: the exit from its Step 4 (the pictures, the owner's remaining questions, the documents, the list of rulings), then the pause for the design for saving the fit, from `docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-exit.md`; the paragraph "THE BUILD OF STAGE 2, TASK 10, ITS LAST REVIEW AND THE EXIT'S FIRST STEPS" below is this session's record. What follows in this parenthesis is the head as the early morning of 20 October left it: 2026-10-20, early morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 9 AND IS HANDED TO A NEW CHAT BY THE RULE OF ABOUT THREE TASKS; it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md`: TASKS 7, 8 AND 9 ARE COMPLETE (`07a3fff`..`c914688`, each after one fix round, its review clean and its gate green; the last gate, on `c914688`: 1558 passed, 4 skipped, 5 deselected; the real-screen set 4 passed); departure 59 amended and three registry lines; the weekly bar at 24 % (it had reset to 0 %; next reset 25 October, 04:00 UTC). NEXT, IN A NEW CHAT THE OWNER STARTS WHEN THEY CHOOSE: Task 10 (one PRISM at a time, the last-resort error, the fonts once), then the stage's last review, then Task 11, the exit, from `docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-from-task-10.md`; the paragraph "THE BUILD OF STAGE 2, TASKS 7, 8 AND 9" below is this session's record. What follows in this parenthesis is the head as the morning of 16 October left it: 2026-10-16, morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 6 AND STOPS AT A CLEAN STATE AT THE OWNER'S WORD ("Try to also finish things up at a clean state when usage limits are near their max, I won't buy anymore credits"); it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-6.md`: TASK 6 IS COMPLETE (`22b8827`..`c1628d0`, after one fix round, its review clean and its gate green; the last gate, on `c1628d0`: 1532 passed, 4 skipped, 5 deselected); departure 70 amended; Task 7's preparation was begun and STOPPED (nothing of it in the repository); the weekly bar at 100 % (resets on the evening of 17 October). NEXT, IN A NEW CHAT THE OWNER STARTS WHEN THEY CHOOSE: Task 7 (each part built when first opened), its preparation afresh, from `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md`; the paragraph "THE BUILD OF STAGE 2, TASK 6" below is this session's record. What follows in this parenthesis is the head as the evening of 15 October left it: 2026-10-15, evening (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 5 AND IS HANDED TO A NEW
+**Last updated:** 2026-10-21 (STAGE 2 OF THE WINDOW REDESIGN, THE SHELL, IS BUILT AND ITS EXIT IS PASSED; THE BUILD NOW PAUSES, as the owner decided on 6 October, FOR THE SEPARATE DESIGN FOR SAVING THE FIT, to be made in a new chat the owner starts; NO PROMPT FOR STAGE 3 IS WRITTEN until that design is made; the paragraph "STAGE 2 OF THE WINDOW REDESIGN IS BUILT" below is the stage's record and this session's; the weekly bar at 42 % after the pictures. What follows in this parenthesis is the head as the evening of 20 October left it: 2026-10-20, evening (THE BUILD OF STAGE 2, THE SHELL, IS COMPLETE AND REVIEWED, AND ITS EXIT STANDS AFTER STEP 3: Task 10 is complete (`d5a7a0b`..`ffc0a93`, after one fix round), the stage's last review is complete with its one fix wave (`9ababa1`..`c7106c3`), the fence holds and the gate of record is green on a quiet machine (1583 passed, 5 skipped, 5 deselected, 19 min 21 s); the owner answered fourteen questions; the weekly bar at 39 %. NEXT, IN A NEW CHAT THE OWNER STARTS: the exit from its Step 4 (the pictures, the owner's remaining questions, the documents, the list of rulings), then the pause for the design for saving the fit, from `docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-exit.md`; the paragraph "THE BUILD OF STAGE 2, TASK 10, ITS LAST REVIEW AND THE EXIT'S FIRST STEPS" below is this session's record. What follows in this parenthesis is the head as the early morning of 20 October left it: 2026-10-20, early morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 9 AND IS HANDED TO A NEW CHAT BY THE RULE OF ABOUT THREE TASKS; it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md`: TASKS 7, 8 AND 9 ARE COMPLETE (`07a3fff`..`c914688`, each after one fix round, its review clean and its gate green; the last gate, on `c914688`: 1558 passed, 4 skipped, 5 deselected; the real-screen set 4 passed); departure 59 amended and three registry lines; the weekly bar at 24 % (it had reset to 0 %; next reset 25 October, 04:00 UTC). NEXT, IN A NEW CHAT THE OWNER STARTS WHEN THEY CHOOSE: Task 10 (one PRISM at a time, the last-resort error, the fonts once), then the stage's last review, then Task 11, the exit, from `docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-from-task-10.md`; the paragraph "THE BUILD OF STAGE 2, TASKS 7, 8 AND 9" below is this session's record. What follows in this parenthesis is the head as the morning of 16 October left it: 2026-10-16, morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 6 AND STOPS AT A CLEAN STATE AT THE OWNER'S WORD ("Try to also finish things up at a clean state when usage limits are near their max, I won't buy anymore credits"); it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-6.md`: TASK 6 IS COMPLETE (`22b8827`..`c1628d0`, after one fix round, its review clean and its gate green; the last gate, on `c1628d0`: 1532 passed, 4 skipped, 5 deselected); departure 70 amended; Task 7's preparation was begun and STOPPED (nothing of it in the repository); the weekly bar at 100 % (resets on the evening of 17 October). NEXT, IN A NEW CHAT THE OWNER STARTS WHEN THEY CHOOSE: Task 7 (each part built when first opened), its preparation afresh, from `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md`; the paragraph "THE BUILD OF STAGE 2, TASK 6" below is this session's record. What follows in this parenthesis is the head as the evening of 15 October left it: 2026-10-15, evening (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 5 AND IS HANDED TO A NEW
 CHAT AT THE OWNER'S WORD; it ran in a session started from the owner's pasted prompt
 `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-4.md`: TASKS 4 AND 5 ARE COMPLETE
 (`c66fde9`..`827ff3d`, each after one fix round, its review clean and its gate green; the last gate, on `827ff3d`:
@@ -84,6 +84,102 @@ the build's state stands in four paragraphs, each as it was written on its date 
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**STAGE 2 OF THE WINDOW REDESIGN IS BUILT (2026-10-21; Task 11, the exit, finished from its Step 4 in a session
+started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-exit.md`; the
+ledger's entries from "NEW CHAT 2026-10-21 (morning)" on have every figure and ruling).** The plan the owner approved
+on 2026-10-14 (`docs/superpowers/plans/2026-10-14-window-redesign-stage-2.md`, `e90832e`) is built: `0db3980`..`c7106c3`,
+87 commits from the plan to the code head with the documents between (56 files under `core/` and `tests/`, 10,031
+lines in, 1,850 out), then the exit's documents. At the start of this session (about 09:40): the tree clean at
+`46760d1`, no python alive, the card at the desktop's share; the weekly bar at 39 %. **What landed:** the window's
+SHELL. A rail on the left with the nine parts in their order (Home, Parameter inference, Effective temperature,
+Live simulation, Reduction map, Records; Your own models, Settings, Help at its foot); under Parameter inference
+its six steps with a marker, a state's words and the chain's solid and dotted lines; the rail's FOOT ("Nothing is
+running", or "Running: <place>" with "m:ss so far. Settings are locked."); one way to move (`MainWindow.go_to`),
+the keyboard placed on a page's first setting. HOME rewritten as a status page: on a computer where nothing exists
+"What do you want to do?" with four choices; otherwise the next step with one main button, the six steps' states,
+the parts of PRISM and the five latest records. EVERY PLACE WITHOUT A TAB BAR: the six steps are pages of one stack;
+Effective temperature chooses "One cell" or "Sweep study" by a row of page names; the list of your own models and
+the model builder moved out of Settings into Your own models; the help text and a table of the keys into Help;
+Settings keeps the appearance alone; every place but Home 12 px from the rail. EACH PART BUILT WHEN FIRST OPENED,
+a part that cannot be built showing an error page ("<Part> could not be opened.", "Try again", "Show the full
+error"); opening PRISM reads no card. THE PLACES IN THE REFUSALS name the rail's places and steps. THE KEYS: Ctrl+1
+to Ctrl+9, Alt+1 to Alt+6, F6 and Shift+F6, Ctrl+R while the foot is a button, F1; Escape never stops a run. ONE
+PRISM AT A TIME: a lock beside the settings file; a second start hands over to the open window (exit 0) or gives up
+(exit 1); closing the window lets go of the lock, also while a run or a popped-out figure window outlives it. The
+last-resort error through the shared question; an error's message written as a sentence by the owner's rule; the
+class fonts set once. New modules `core/gui/keys.py`, `chain.py`, `record_words.py`, `one_instance.py`,
+`screens/shell.py`, `screens/help_screen.py`, `screens/models_screen.py`, `screens/temperature_screen.py`,
+`widgets/rail.py`, `widgets/page_names.py`; gone `screens/nav_shell.py`, `screens/section_screen.py`,
+`widgets/anim.py`. Two new suites (`tests/test_shell.py`, `tests/test_step_chain.py`: 25 suites) and three test
+helpers (`tests/_built.py`, `_settings_folder.py`, `_look_helpers.py`); every window a test builds is let go when its
+test ends; 1,593 collected (1,416 at stage 1's exit). Each step page keeps TODAY'S PANEL inside it (its old frame
+titles, "Config", "Posterior" and the rest, and Records headed "Artifacts", go with the stages that rebuild them, the
+owner's Q10). **Engine changes: none** (nothing under `core/` outside `core/gui/`; `core/config.py`, the refusals'
+109 keys, `README.md`, `docs/checklists/`, the launchers untouched). **Deviations from the design:** rows 54 to 82,
+the same under the same numbers in the design's section 8, the plan's head and the ledger: 54 to 78 approved with the
+plan; added during the build 79 (Help's F1 and Escape rows and Home's line for Records worded for stage 2), 80 (the
+open step keeps its second line in a low window), 81 (the rail's list shows a scroll bar), 82 (the first opening's
+sentence for Help, "A short section per part."); amended during the build 55, 59, 63, 70, 74 and 78; reworded at the
+exit 63 (its first sentence), 74 (the room is the primary screen's, read once) and 76 (its reason) (`7592729`).
+**Gates run:** a fast gate after every task and fix round, each green on its head (the ledger's "Gates"); THE FAST
+GATE OF RECORD on a quiet machine at the owner's word, alone, on `ec6147d` (code `c7106c3`): 1583 passed, 5 skipped,
+5 deselected, 205 warnings, 19 min 21 s, exit 0 (3 min 21 s over the 16-minute target with 176 more tests than stage
+1's 1407; the day's busy gates took 19:22 to 19:27, so the time is the tests'); the real-screen set 5 passed, 1588
+deselected, nothing on the screen and no window activated; the collection checked against the carried-over list
+(`rows 369; twice []; missing 0: []`; 22 gone, each with its fate); the guide's and the reference scan's tests after
+the exit's documents (11 passed). **Gates not run, and why:** the slow set and the card smoke gate with the
+diagnostic card (no engine change and no tensor code moved; the one card run of the redesign is owed at the end of
+stage 3). **Rows now the owner's to run on a real screen: none** (row 61: they are written with stage 3's group;
+`docs/checklists/` untouched). **The pictures** (Task 11 Step 4; one picture agent on a new script beside stage 1's,
+the window never shown and NEVER ACTIVATED, every dialog rendered, on scratch settings files and scratch stores;
+`stage-2/pictures/exit-index.md` in the ledger): three sets of 119 (`exit-plain/`, `exit-text150/`,
+`exit-scale150/`), light and dark: every part, the six steps, both pages of Effective temperature and of Your own
+models, Home first-time and mid-project (a store filled by the suites' record builders), Records with records, the
+foot with a run stood in, a part's error page, every part and step at the smallest window, the ring after a click and
+after a key, the last-resort question, Settings under each choice; the nine checks passed on each (the owner's
+settings folder and the real `Artifacts/` untouched, no lock beside the real settings file, the tree clean); one run
+stopped itself when Windows' front window changed (the owner switching windows; PRISM asked for nothing) and was run
+again; `compare-stage1-exit-to-stage2-exit.html` puts every screen beside stage 1's. **The owner's answers in this
+stage:** two on the plan (14 October: Effective temperature's row of page names now; your own models and the help
+text out of Settings now); fourteen on 20 October (Q1 to Q14: the paragraph below); two at the exit, each the
+recommendation: Q15 the last-resort question KEPT AS BUILT (one "OK", the message as a sentence, a very long message
+cut only as far as its screen needs, the whole behind "Show the full error"); Q16 `CLAUDE.md`'s two passages
+corrected as written (twenty-five suites; the settings guard's folder check; four per-test checks and the room put
+back), committed on their own (`0fb6da8`). **Told to the owner at the exit, grouped:** the cut question growing past a
+768-high screen when its full error is opened; what the pictures show (each settled by an answer, a departure or the
+stage that rebuilds that page); the ledger's lines "for the owner at the exit" not yet asked; the last review's
+twelve. **Every decision made without the owner:** 303 in 55 ledger lines, grouped into 42 entries, in the ledger's
+`stage-2/exit/rulings-for-the-owner.md` (drafted on 20 October, completed at the exit). **Ruled at the exit** (each in
+the ledger with its cost): the rail-aware picture script is a new file and stage 1's stays its record; no question
+from the pictures; the rail's rows shifting 1 to 2 px as the open part changes, carried to stage 3's first task.
+**CARRIED** (Step 7; the ledger's "CARRIED" lines and `stage-2/reviews/stage-2-final-review-sorting.md`'s table,
+48 rows by stage, have each): TO STAGE 3'S FIRST TASK, one session helper written three times across three suites, the
+fix wave's re-read's nine lows, the rail's 1 to 2 px shift. TO STAGE 3'S PLAN (the run): the launcher (a claim before
+the heavy imports, which then must not be made twice in one process; `main()` called or the claim let go; no stream
+under `pythonw`, so every thread's records into its log file; junction spellings of the settings path); reopening the
+running PRISM's own window (Q12) and the run history's reading now that a lock no longer proves a run died; a
+popped-out figure window keeping the process; `has_runs` never fed, so the first-time Home ignores a live run; the
+four jobs of the window's run-state handler; Home's read listing the whole store on each refresh; a run view as a
+part's page; the foot's tool tip and Ctrl+R; the tests that see a run only through today's base panel; a knock while
+a question is open on the real screen and a real second start as walkthrough rows; the sorting's 19 rows for stage 3.
+TO STAGE 4: Enter on a ringed button (Q8); the layout room read once from the primary screen; step 3's row against its
+page after a failed prior build; step 1's Alt+Space; the sorting's 10. TO STAGE 5: the sorting's 3. TO STAGE 6:
+Records' heading, Records read twice from Home, two unnamed simulation sets that read alike, "All records" opening one
+kind; the sorting's 5. TO STAGE 7: two labels in Your own models that show a name or a path; Live simulation at the
+smallest window; the sorting's 3. TO STAGE 8: Help's words and its key rows; the sorting's 3. TO STAGE 9 (the guide):
+the stale guide pages (`docs/guide/window.md`, `architecture.md`, `rules-and-traps.md`, `testing.md`); the sorting's
+4. TO THE AUDIT'S LIST: two names the stage left with no caller; the sorting's 24 rows. Still carried from stage 1: a
+selectable path in a sentence copies its words as handed in (the records part); which colour each plotting call
+takes, held by no test, and the latent cycle keys of the repeats' colours (the first stage that edits a plotting
+file, and the audit); on the command line the repeats' first colour stays the plotting library's blue (the audit);
+the replacement wording of `CLAUDE.md`'s rule on what is remembered and of its launch line (stages 3 and 4, the
+owner's to approve); bundling Cascadia Mono (not asked). **Cost in background agents:** about 37 million tokens for
+the stage (Tasks 1 to 9 about 29, Task 10 about 3.65, the last review with its wave about 3.24, the exit's pictures
+0.73), inside the plan's 35 to 50. Unpushed: `07a3fff`..this session's last commit (the owner pushed up to
+`1ad02f5`). **NEXT: THE BUILD PAUSES** for the separate design for saving the fit as it goes, made in a new chat the
+owner starts (the owner's decision of 6 October); stage 3 (the run) is planned on that design, for the owner's
+approval; then the code audit, then the retrain from the window. No training of real size before those.
 
 **THE BUILD OF STAGE 2, TASK 10, ITS LAST REVIEW AND THE EXIT'S FIRST STEPS (2026-10-20; a session started from the
 owner's pasted prompt `docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-from-task-10.md`; the ledger's
