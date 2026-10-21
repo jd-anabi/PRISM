@@ -65,15 +65,21 @@ what is on disk, the last gate). Update it at the end of every session.
   is the only session-wide KNOB default the suites install, and a test that wants a simulation
   cache passes `checkpoint_every` explicitly. Five more session-wide autouse guards stand beside
   it: a temp artifact root (`_sandbox_default_store`), a temp settings file so no panel reads the
-  real `PRISM.ini` and no test can write it (`_settings_home`, plus a fresh `.ini` per test), no
+  real `PRISM.ini` and no test can write it (`_settings_home`, plus a fresh `.ini` per test; at
+  teardown the real file must be unchanged and its folder must hold exactly what it held, so a
+  PRISM opened while a suite runs fails the run with its `PRISM.lock`), no
   modal dialog can stall the run (`_no_modal_dialogs`, on today's message boxes and on the shared
   question), no file chooser can open (`_no_file_choosers`: one a test did not answer is recorded
   and answers "cancelled"), and `<repo>/sbi-logs` must not exist (`_no_sbi_logs`) — asserted at
-  SETUP too, so a leftover tree makes every pytest run error before the first test. Two per-test
+  SETUP too, so a leftover tree makes every pytest run error before the first test. Four per-test
   checks fail a test at its teardown: a file chooser it opened and did not answer
-  (`_every_file_chooser_is_answered`), and an error the window's own drawing code caught while it
+  (`_every_file_chooser_is_answered`); an error the window's own drawing code caught while it
   ran (`_drawing_code_raises_nothing`; a test that causes one on purpose does it inside
-  `reported.expected()`).
+  `reported.expected()`); a run still live when it ends (`_built_widgets_let_go`, which then
+  deletes every window and part the builders made, so none outlives its test); and the lock of
+  one PRISM at a time still held (`brought_forward`, which also keeps any window from being
+  brought to the front, except in the tests marked for the real screen). After every test the
+  room the look's layout thresholds are held to is put back (`_layout_room_put_back`).
 - A green suite does not certify the GPU path. The gpu-marked tests do run on the card inside every
   fast gate when CUDA is present (`tests/test_gpu_paths.py`'s CUDA inference run, six in
   `tests/test_user_sbi.py` and one in `tests/test_diagnostics.py`), but they are not a substitute: no
@@ -242,8 +248,11 @@ what is on disk, the last gate). Update it at the end of every session.
   command line, bringing recordings, the science, the architecture, the rules and traps, testing,
   and the retrain runbook. They cite no working document (the source scan walks them), and each
   opens with the commit it was checked against.
-- `tests/` — the twenty-three suites (`test_look.py` the look's: no torch; the table of colours,
+- `tests/` — the twenty-five suites (`test_look.py` the look's: no torch; the table of colours,
   type and sizes, the lettering, the style sheet, the painted devices and the shared question;
+  `test_shell.py` the window's places — the rail, moving between places, the run's foot — and
+  Home, the keys, one PRISM at a time and the last-resort error; `test_step_chain.py` the
+  torch-free rules of the places, the keys and the six steps' states;
   `test_artifact_store.py` is the store's, `test_tool.py` the
   command-line tool's, `test_diagnostics.py` the diagnostics' (the five and the three `probes`
   modes), `test_refusals.py` the torch-free rules', tables' and run-buffer's,
@@ -256,7 +265,10 @@ what is on disk, the last gate). Update it at the end of every session.
   not, written in seconds) and `compare_preflight_refusals` (every comparison refusal made after
   the records are read, shared by the API's and the tool's tests), and `CODE_ROOTS` plus
   `CODE_FILES`, the directories and top-level files the source scans walk; `_dialogs.py` the record
-  of every box and file chooser a test opens); `core/Reduction/tests/`
+  of every box and file chooser a test opens; `_built.py` the record of every window and part the
+  builders made, deleted when its test ends; `_settings_folder.py` the listing of the real
+  settings folder that the session checks; `_look_helpers.py` the look's torch-free test
+  helpers); `core/Reduction/tests/`
   — the reduction map's (out of scope).
 - `core/tool/` — the command-line tool: `python -m core --help` lists every subcommand (the stages
   `prior train validate infer tsnpe`, the diagnostics `sbc identifiability ablation probes`
