@@ -6,19 +6,31 @@ them at its bottom, which also keeps monkeypatching ``pipeline.<name>`` effectiv
 the generation machinery go through the pipeline MODULE OBJECT at call time (``_pipeline.``), never
 ``from`` imports, so a test that rebinds ``pipeline.gen_training_data`` or
 ``pipeline.winsorize_summary_block`` is honoured here too.
+
+The training call comes in two halves, so that a fit kept partway can be put back between them:
+``prepare_fit`` appends one round's rows to the trainer, ``run_fit`` runs sbi's own passes. With a
+saver, the fit is handed to it at the end of every pass, through the trainer's per-pass summary;
+``restore_trainer`` puts a kept pass back onto a fresh trainer in a new process. sbi's private
+bookkeeping is read and written here and nowhere else in the program.
 """
 import contextlib
+import inspect
 import math
 import sys
+import time
+import typing
 import warnings
+from typing import Callable
 
 import torch
 from tqdm import tqdm
 from sbi.inference.posteriors import DirectPosterior
 from sbi.inference import SNPE
 from sbi.neural_nets import posterior_nn
+from sbi.neural_nets.net_builders import flow as _sbi_flow
 from torch.distributions.transforms import Transform
 
+from core.SBI import fit_state
 from core.SBI import pipeline as _pipeline
 
 
@@ -181,6 +193,413 @@ class _NoTracker:
         pass
 
 
+# ── the fit's settings, as sbi will use them ────────────────────────────────────────────────────────
+# The signature of sbi's training method as installed, read once, when this module is imported: the
+# defaults PRISM does not pass (the validation fraction, the gradient clip) are read from it. Read here
+# and not when a fit is prepared, so that a test which wraps the training method on the class cannot
+# change what a preparation records.
+_SNPE_TRAIN_SIGNATURE = inspect.signature(SNPE.train)
+
+# Where the rows stay while the network trains (see prepare_fit): one constant, handed to sbi and
+# recorded in the fit's settings, so the two cannot drift apart.
+_DATA_DEVICE = "cpu"
+
+# The flow builder's own settings PRISM does not pass. A builder that lacks one of them records None
+# there, so the settings always carry the same names.
+_BUILDER_DEFAULTS = ("tail_bound", "hidden_layers_spline_context", "num_blocks", "dropout_probability",
+                     "use_batch_norm")
+
+
+def _default_of(signature: inspect.Signature | None, name: str):
+    """The default of the parameter ``name`` in ``signature``; None when it has none or no such
+    parameter."""
+    parameter = None if signature is None else signature.parameters.get(name)
+    if parameter is None or parameter.default is inspect.Parameter.empty:
+        return None
+    return parameter.default
+
+
+def _sbi_defaults(model: str) -> dict:
+    """The values sbi uses for the settings PRISM does not pass: its training method's (as installed,
+    read at import), its posterior network factory's and its flow builder's (both read now)."""
+    builder = getattr(_sbi_flow, f"build_{model}", None)
+    built = inspect.signature(builder) if callable(builder) else None
+    return {
+        "validation_fraction": _default_of(_SNPE_TRAIN_SIGNATURE, "validation_fraction"),
+        "clip_max_norm": _default_of(_SNPE_TRAIN_SIGNATURE, "clip_max_norm"),
+        "z_score_theta": _default_of(inspect.signature(posterior_nn), "z_score_theta"),
+        **{name: _default_of(built, name) for name in _BUILDER_DEFAULTS},
+    }
+
+
+def fit_settings(*, model: str, hidden_features: int, num_transforms: int, num_bins: int, learning_rate: float,
+                 stop_after_epochs: int, max_num_epochs: int, batch_size: int, z_score_x: str, device, dtype,
+                 num_rounds: int = 1) -> dict:
+    """Every setting a fit is trained with, by value, the ones sbi fills in itself included.
+
+    A kept fit is resumed only under the same settings. The ones PRISM never passes are recorded as sbi
+    resolves them, so a later sbi whose default changed is seen as a change instead of passing unseen.
+    Plain Python values, so a record can carry them and two equal settings compare equal.
+    """
+    defaults = _sbi_defaults(model)
+    return {
+        "hidden_features": int(hidden_features),
+        "num_transforms": int(num_transforms),
+        "learning_rate": float(learning_rate),
+        "stop_after_epochs": int(stop_after_epochs),
+        "max_num_epochs": int(max_num_epochs),
+        "density_estimator": str(model),
+        "num_bins": int(num_bins),
+        "training_batch_size": int(batch_size),
+        "num_rounds": int(num_rounds),
+        "validation_fraction": defaults["validation_fraction"],
+        "clip_max_norm": defaults["clip_max_norm"],
+        "z_score_theta": defaults["z_score_theta"],
+        "z_score_x": str(z_score_x),
+        "tail_bound": defaults["tail_bound"],
+        "hidden_layers_spline_context": defaults["hidden_layers_spline_context"],
+        "num_blocks": defaults["num_blocks"],
+        "dropout_probability": defaults["dropout_probability"],
+        "use_batch_norm": defaults["use_batch_norm"],
+        "data_device": _DATA_DEVICE,
+        "device": torch.device(device).type,
+        "dtype": str(dtype),
+    }
+
+
+# ── the trainer and its rows ────────────────────────────────────────────────────────────────────────
+# What saving a fit as it goes calls on sbi's trainer: the per-pass summary it wraps, the network
+# builder and the stored rows a resume rebuilds from, the loaders and the patience check whose order the
+# restore relies on. The summary lists are read as a dict.
+_HOOK_POINTS = ("_summarize_epoch", "_build_neural_net", "get_simulations", "get_dataloaders", "_converged")
+
+
+def _require_hook_points(infer) -> None:
+    """Refuse, loudly and before any row exists, a trainer without what saving a fit as it goes relies
+    on: with another sbi than the one pinned, the first save, or a resume, would otherwise fail late or
+    continue a different fit."""
+    missing = next((name for name in _HOOK_POINTS if not callable(getattr(infer, name, None))), None)
+    if missing is None and not isinstance(getattr(infer, "_summary", None), dict):
+        missing = "_summary"
+    if missing is not None:
+        raise RuntimeError(
+            f"sbi {sbi.__version__}'s trainer has no {missing}, which saving a training as it goes relies "
+            f"on; install the sbi requirements.txt pins, or train without saving.")
+
+
+def build_trainer(model: str, prior, embedding_net: torch.nn.Module, *, hidden_features: int, num_transforms: int,
+                  num_bins: int, device, tracker=None, hooks: bool = False):
+    """sbi's trainer for the posterior, built once, before any round's rows exist. With ``hooks`` it is
+    checked at once for what saving a fit as it goes relies on."""
+    # sbi's default z_score_x="independent" fits a PER-COLUMN affine over the conditioning vector.
+    # Under the chi SET layout that is permutation-BREAKING (two orderings of one probe set would be
+    # scaled differently, destroying the encoder's whole guarantee), and the near-constant mask column
+    # becomes a ~1e7 amplifier under sbi's 1e-7 min-std clamp. The chi net standardizes itself instead
+    # -- per channel, over live probes only. Derived from the net, never a separate argument, so the
+    # standardizer and the encoder cannot be configured apart.
+    _owns = getattr(embedding_net, "owns_standardization", False)
+    neural_posterior = posterior_nn(model=model, embedding_net=embedding_net,
+                                    z_score_x=("none" if _owns else "independent"),
+                                    hidden_features=hidden_features, num_transforms=num_transforms,
+                                    num_bins=num_bins)
+    # tracker: sbi's default builds a TensorBoard writer under <cwd>/sbi-logs at THIS line (see
+    # _NoTracker). The loss curve PRISM keeps is the one train_nn returns in its diagnostics.
+    infer = SNPE(prior=prior, density_estimator=neural_posterior, device=str(device),
+                 tracker=_NoTracker() if tracker is None else tracker)
+    if hooks:
+        _require_hook_points(infer)
+    return infer
+
+
+@dataclasses.dataclass
+class PreparedFit:
+    """A trainer with one round's rows appended, ready for its fit: the trainer, the embedding network it
+    conditions on, the number of rows appended and the settings the fit is trained with."""
+    infer: object
+    embedding_net: torch.nn.Module
+    n_rows: int
+    settings: dict
+
+
+def prepare_fit(infer, training_params: TrainingPlan, model: str, embedding_net: torch.nn.Module,
+                forcing_prior: torch.distributions.Distribution, nd_dim: int, forcing_idx: dict, rescale_idx: dict,
+                *, theta_transform: Transform | None = None, fixed_dict: dict = None, proposal=None,
+                hidden_features: int, num_transforms: int, num_bins: int, learning_rate: float,
+                stop_after_epochs: int, max_num_epochs: int, batch_size: int, device,
+                num_rounds: int = 1) -> PreparedFit:
+    """Generate one round's rows (or read them back from the simulation set) and append them to the
+    trainer it is given, which keeps its own copy; nothing here holds the rows afterwards."""
+    _owns = getattr(embedding_net, "owns_standardization", False)
+    # train the density estimator
+    data, thetas = _pipeline.gen_training_data(
+        training_params.model, training_params.prior, forcing_prior, training_params.t,
+        training_params.run_size, training_params.num_runs,
+        training_params.steady_idx, training_params.dt_nd_min,
+        nd_dim, forcing_idx, rescale_idx,
+        dt_exp=training_params.dt_exp, t_min_exp=training_params.t_min_exp,
+        t_max_exp=training_params.t_max_exp, t_scale_bounds=training_params.t_scale_bounds,
+        proposal=proposal,
+        theta_transform=theta_transform,
+        fixed_dict=fixed_dict,
+        state_dep_drift=training_params.state_dep_drift,
+        spontaneous_only=training_params.spontaneous_only,
+        chi_mode=training_params.chi_mode,
+        chi_f0=training_params.chi_f0,
+        chi_freq_bounds=training_params.chi_freq_bounds,
+        chi_k_pad=training_params.chi_k_pad,
+        chi_k_fixed=training_params.chi_k_fixed,
+        chi_max_cycles=training_params.chi_max_cycles,
+        n_vars=training_params.n_vars,
+        checkpoint=training_params.checkpoint,
+        nd_idx=training_params.nd_idx,
+        k_b_cell=training_params.k_b_cell,
+        dtype=training_params.dtype, device=training_params.device,
+    )
+
+    # Filter the data -- and the TARGETS. thetas is the LATENT target (a logit); its row can in
+    # principle go non-finite while the corresponding data row stays perfectly finite, and
+    # filtering thetas only BY data would then feed the flow a +-inf target and NaN the loss for
+    # the whole round with no diagnostic. On torch 2.9 the box round-trip cannot actually produce
+    # one (SigmoidTransform._inverse clamps internally -- see gen_training_data), so this should
+    # never fire; it exists so that if the transform stack ever changes, the failure arrives as a
+    # message naming the offending columns instead of as a silently poisoned multi-hour run.
+    nan_mask = torch.isfinite(data).all(dim=1)
+    theta_finite_mask = torch.isfinite(thetas).all(dim=1)
+    # WINSORISATION REPLACES THE OLD `abs(data) < 1e15` ROW FILTER, and
+    # the change of instrument is the point. A row filter answers one bad channel by discarding
+    # every other value in that row, and at a 1e15 threshold it caught 10 rows in 10.24M while the
+    # outliers under the threshold survived: they are what dragged A1_mean's fitted std to
+    # 4.19e11 and made the channel invisible to the flow.
+    # Clipping each COLUMN at its own 0.1/99.9 percentile removes the leverage without removing
+    # any row, and it protects sbi's own z-scoring on the non-chi paths too, which is why it is
+    # not conditioned on who owns the standardisation.
+    n_sum = getattr(embedding_net, "input_dim", None)
+    if n_sum is None:
+        # An embedding net that does not declare its summary width (a stub, a hand-built net in a
+        # test) gets the pre-2026-08-26 behaviour exactly: there is no safe column split to clip
+        # on, and guessing one could clip the chi block. See the block comment on
+        # winsorize_summary_block.
+        valid_idx = nan_mask & (torch.abs(data) < 1e15).all(dim=1) & theta_finite_mask
+    else:
+        valid_idx = nan_mask & theta_finite_mask
+    n_bad_theta = int((~theta_finite_mask).sum())
+    if n_bad_theta:
+        bad_cols = torch.nonzero(~torch.isfinite(thetas).all(dim=0)).flatten().tolist()
+        # stacklevel 3: this function, then train_nn, then the caller the warning is meant to name.
+        warnings.warn(
+            f"train_nn: dropped {n_bad_theta}/{thetas.shape[0]} training rows with non-finite "
+            f"LATENT targets (columns {bad_cols}). The box round-trip is supposed to make this "
+            f"impossible -- treat it as a bug in the transform stack, not as expected attrition.",
+            stacklevel=3,
+        )
+    # Only pay for the gather when it actually drops something. `data[valid_idx]` is a boolean
+    # gather: it allocates a SECOND full-size tensor while the first is still live -- about 0.45 GiB
+    # per million rows, another ~9.3 GiB at the retrain's 20.48M -- and reinstates exactly the
+    # doubled host peak that gen_training_data's preallocated accumulators were introduced to
+    # remove. The mask is
+    # all-true in practice (the box round-trip cannot produce a non-finite latent on torch 2.9;
+    # SigmoidTransform._inverse clamps internally), so this is behaviour-identical and is what
+    # makes that preallocation pay.
+    if not bool(valid_idx.all()):
+        thetas = thetas[valid_idx]
+        data = data[valid_idx]
+
+    if n_sum is not None:
+        data = _pipeline.winsorize_summary_block(data, n_sum)
+
+    # Fit OUR standardizers, once, on the post-filter data. posterior_nn was already called (it is
+    # constructed before any data exists), so this has to happen here -- before append_simulations,
+    # because build_nsf/get_numel run the net inside infer.train(). Unfitted, 41 raw statistics
+    # spanning log-variances, nm-scale means and PLVs would reach the flow unscaled and the only
+    # symptom would be a worse loss curve, days later; the encoder raises rather than allow it.
+    if _owns and not embedding_net.standardization_fitted:
+        embedding_net.fit_standardization(data)
+        assert embedding_net.standardization_fitted, "chi standardization silently did not fit"
+
+    # data_device="cpu": sbi otherwise defaults it to the TRAINING device (npe_base.py:174-175)
+    # and moves the whole conditioning tensor onto the GPU -- at the retrain's 20.48M x 122 float32,
+    # ~9.3 GiB resident, a ~18.6 GiB transient for the `x = x[is_valid_x]` filter, two (20.48M,)
+    # bool masks from handle_invalid_x, and later a ~8.4 GiB gather when it slices the training
+    # split (about 0.45 GiB per million rows for each full copy). All of
+    # that on the same card that has to hold the flow, and all of it AFTER a multi-day generation
+    # run (whose rows the simulation cache keeps when checkpointing is on). The data is ALREADY on
+    # the CPU here (gen_training_data appends .cpu() tensors), so this also silences
+    # validate_theta_and_x's "Moving x to the data_device" warning, which describes a ~9.3 GiB
+    # copy nobody asked for.
+    #
+    # Training does not care: sbi's loop moves each minibatch to the training device itself, so a
+    # CPU-resident dataset costs one host-to-device copy of (training_batch_size, 122) float32 --
+    # tens of KB -- against a flow forward+backward that dominates it by orders of magnitude. It
+    # hands ~9.3 GiB of VRAM back to the flow, which is a straight win.
+    with _capped_zscore_check(skip=_owns):
+        infer.append_simulations(thetas, data, proposal=proposal, data_device=_DATA_DEVICE)
+    n_rows = int(thetas.shape[0])
+    # sbi copies what it is handed (its `x[is_valid_x]` filter always does) and keeps its copies
+    # through the fit, so this round's own reference is dead weight from here on: ~9.3 GiB of the
+    # host's 63 at the retrain's size. Nothing below reads either name.
+    del data, thetas
+    settings = fit_settings(model=model, hidden_features=hidden_features, num_transforms=num_transforms,
+                            num_bins=num_bins, learning_rate=learning_rate, stop_after_epochs=stop_after_epochs,
+                            max_num_epochs=max_num_epochs, batch_size=batch_size,
+                            z_score_x="none" if _owns else "independent", device=device,
+                            dtype=training_params.dtype, num_rounds=num_rounds)
+    return PreparedFit(infer=infer, embedding_net=embedding_net, n_rows=n_rows, settings=settings)
+
+
+# ── the fit, saved after every pass and put back in a new process ───────────────────────────────────
+class FitSaver(typing.Protocol):
+    """What a fit is handed to at the end of every pass."""
+
+    def save_pass(self, take: Callable[[], tuple[dict, dict]]) -> None:
+        """Called once per pass, after sbi has summarised it. ``take()`` returns ``(snapshot, start)``:
+        the fit as it stands and what was fixed when it began. The saver calls it inside its own
+        handling of a failed save, so a snapshot that cannot be taken fails like a write that cannot be
+        made."""
+
+
+def take_snapshot(infer) -> dict:
+    """The fit as it stands at the end of a pass, taken where sbi summarises the pass and before it
+    counts it: what a new process needs to continue it. It only reads, and draws no random number.
+
+    The weights and the optimizer's state are the trainer's own tensors, not copies, so a snapshot is
+    written before the next pass changes them; a saver writes it at once.
+    """
+    return {
+        "passes": infer.epoch + 1,                  # the number sbi gives the next pass
+        "val_loss": infer._val_loss,
+        "best_val_loss": infer._best_val_loss,
+        "passes_since_best": infer._epochs_since_last_improvement,
+        "best_state": infer._best_model_state_dict,
+        "net_state": infer._neural_net.state_dict(),
+        "optimizer_state": infer.optimizer.state_dict(),
+        "summary": {k: list(v) for k, v in infer._summary.items()},
+        "cpu_rng": torch.get_rng_state(),
+    }
+
+
+def restore_trainer(infer, start: dict, state: dict, *, settings: dict) -> None:
+    """Put a kept pass back onto a fresh trainer holding the same rows, so that sbi's
+    ``train(resume_training=True)`` continues the fit as if it had never stopped.
+
+    In this order: the settings; the number of rows sbi holds; the train/validation split, drawn again
+    from the generator's state kept when the fit began and checked by the digest of its validation
+    rows; the network, built by sbi's own builder from the training rows, checked by its shape and by
+    its fitted standardisers (fitted to the same rows they come out the same, so equal standardisers say
+    the rows are the same); then the weights, the move to the training device, the optimizer and its
+    state (after the move: the state is cast to each parameter's device as it loads), the counters, the
+    best weights and the histories; last, the generator's state, so the next pass shuffles as the
+    uninterrupted fit's would. The next pass's number comes from a snapshot taken at the pass's
+    summary, before sbi counts the pass towards its patience, so the pass is not counted twice where the
+    fit resumes. Raises ``fit_state.FitMismatch``, before the optimizer exists, when anything differs.
+    """
+    difference = fit_state.first_difference({"settings": start["settings"]}, {"settings": settings},
+                                            parts=("settings",))
+    if difference is not None:
+        raise fit_state.FitMismatch(
+            f"the setting {difference.name} was {difference.kept!r} when this training was kept, and is "
+            f"{difference.now!r} now")
+
+    theta, x, _ = infer.get_simulations(0)          # sbi's own stored rows, which its split is drawn over
+    n = int(theta.size(0))
+    if n != start["rows"]:
+        raise fit_state.FitMismatch(f"its rows number {n}, not the {start['rows']} it was trained on")
+
+    torch.set_rng_state(start["split_rng"])
+    perm = torch.randperm(n)
+    n_train = int((1 - start["settings"]["validation_fraction"]) * n)
+    infer.train_indices, infer.val_indices = perm[:n_train], perm[n_train:]
+    if fit_state.indices_digest(infer.val_indices) != start["validation_digest"]:
+        raise fit_state.FitMismatch("its validation rows are not the ones it was trained with")
+
+    infer._round = 0
+    net = infer._build_neural_net(theta[infer.train_indices].to("cpu"), x[infer.train_indices].to("cpu"))
+    del theta, x
+    if fit_state.network_digest(net) != start["network"]:
+        raise fit_state.FitMismatch("the network as built now differs in shape from the kept one")
+    kept = state["net_state"]
+    # Only the buffers the network's state keeps: one it does not keep (the flow's base distribution
+    # holds its normalising constant so) is neither saved nor loaded, and the build alone makes it.
+    persistent = net.state_dict()
+    for name, buffer in net.named_buffers():
+        if name in persistent and not torch.equal(buffer.detach().cpu(), kept[name].detach().cpu()):
+            raise fit_state.FitMismatch(
+                "the network's fitted standardisers differ from the kept ones, so its rows are not the same")
+
+    net.load_state_dict(kept)
+    infer._neural_net = net
+    net.to(infer._device)
+    infer.optimizer = torch.optim.Adam(list(net.parameters()), lr=settings["learning_rate"])
+    infer.optimizer.load_state_dict(state["optimizer_state"])
+    infer.epoch = state["passes"]
+    infer._val_loss = infer.val_loss = state["val_loss"]
+    infer._best_val_loss = state["best_val_loss"]
+    infer._epochs_since_last_improvement = state["passes_since_best"]
+    infer._best_model_state_dict = state["best_state"]
+    infer._summary = {k: list(v) for k, v in state["summary"].items()}
+    torch.set_rng_state(state["cpu_rng"])
+
+
+def run_fit(prepared: PreparedFit, *, batch_size: int, learning_rate: float, stop_after_epochs: int,
+            max_num_epochs: int, show_train_summary: bool, saver: FitSaver | None = None,
+            resume: tuple[dict, dict] | None = None):
+    """sbi's own passes over the prepared rows; returns sbi's density estimator.
+
+    ``resume`` is ``(start, state)`` of a kept fit: it is put back onto the trainer first and sbi
+    continues it. With a ``saver`` the fit is handed to it at the end of every pass.
+    """
+    infer = prepared.infer
+    # The passes are sbi's own. With a saver, the trainer's per-pass summary is wrapped: once sbi has
+    # summarised a pass, and before it counts it, the saver is handed a way to take the fit as it stands
+    # with what was fixed when it began. The window's Cancel is taken where sbi prints the pass's line,
+    # just after, so a stop loses no finished pass. A stopped fit continues from its last saved pass in a
+    # new process: the pass is put back onto a fresh trainer holding the same rows, and sbi resumes.
+    # Plain Python numbers: sbi 0.26 type-checks these strictly, and a numpy or tensor scalar would be
+    # refused here, after the generation. Any error from the fit is a FAILURE, not a refusal: sbi
+    # reports a non-finite loss as a ValueError, which the front ends read as a check made before
+    # anything was spent, but this one arrives after the generation and part of the fit.
+    knobs = dict(training_batch_size=int(batch_size), learning_rate=float(learning_rate),
+                 stop_after_epochs=int(stop_after_epochs), max_num_epochs=int(max_num_epochs),
+                 show_train_summary=bool(show_train_summary))
+    kept_start, state = resume if resume is not None else (None, None)
+    hooked = False
+    try:
+        if resume is not None:
+            restore_trainer(infer, kept_start, state, settings=prepared.settings)
+            knobs["resume_training"] = True
+        if saver is not None:
+            summarize = infer._summarize_epoch
+            begun = {}                                  # the start, made at the first save
+
+            def take() -> tuple[dict, dict]:
+                if not begun:
+                    begun.update(kept_start if kept_start is not None else {
+                        "split_rng": split_rng,
+                        "validation_digest": fit_state.indices_digest(infer.val_indices),
+                        "rows": len(infer.train_indices) + len(infer.val_indices),
+                        "network": fit_state.network_digest(infer._neural_net),
+                        "settings": prepared.settings,
+                    })
+                    begun["started"] = started
+                return take_snapshot(infer), begun
+
+            def _summarize_epoch(*args, **kwargs):
+                summarize(*args, **kwargs)
+                saver.save_pass(take)
+
+            infer._summarize_epoch = _summarize_epoch
+            hooked = True
+            # Read last, just before sbi's training method, whose first draw is the train/validation
+            # split: this state draws the same split again when the fit is resumed.
+            split_rng = None if kept_start is not None else torch.get_rng_state()
+            started = time.time()
+        return infer.train(**knobs)
+    except ValueError as e:
+        raise RuntimeError(f"the flow's fit failed after the training data was generated: {e}") from e
+    finally:
+        if hooked:
+            del infer._summarize_epoch                  # the trainer's own method again
+
+
 def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributions.Distribution, embedding_net: torch.nn.Module,
              forcing_prior: torch.distributions.Distribution, nd_dim: int, forcing_idx: dict, rescale_idx: dict,
              x_obs: torch.Tensor = None, theta_obs: torch.Tensor = None, num_rounds: int = 1, return_diagnostics: bool = False, theta_transform: Transform | None = None,
@@ -189,7 +608,8 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
              learning_rate: float = 5e-4, stop_after_epochs: int = 20, max_num_epochs: int = 2_147_483_647,
              show_train_summary: bool = False,
              batch_size: int = 128, device: torch.device = torch.device('cpu'),
-             tracker=None) -> DirectPosterior | tuple[DirectPosterior, dict]:
+             tracker=None, fit_saver: FitSaver | None = None,
+             fit_resume: tuple[dict, dict] | None = None) -> DirectPosterior | tuple[DirectPosterior, dict]:
     """
     Generate training data and fit the NPE flow (SNPE when ``num_rounds > 1``).
 
@@ -209,6 +629,8 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
         ``_NoTracker``, which discards them instead of letting sbi write ``<cwd>/sbi-logs``. Any object
         following sbi's ``Tracker`` protocol (``log_metric(name, value, step)``, ``flush()`` and the
         rest) is handed to sbi as is.
+    :param fit_saver: handed the fit at the end of every pass (a ``FitSaver``); None saves nothing.
+    :param fit_resume: ``(start, state)`` of a kept fit, which the fit continues instead of starting.
     :return: the trained ``DirectPosterior`` -- ``(posterior, diagnostics)`` when
         ``return_diagnostics``.
     """
@@ -224,22 +646,18 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
             f"Training-data checkpointing is not supported for SNPE (num_rounds={num_rounds}); the "
             f"per-round proposal is not part of the checkpoint's identity. Use num_rounds=1, or "
             f"drop the plan's checkpoint.")
+    saving = fit_saver is not None or fit_resume is not None
+    if num_rounds > 1 and saving:
+        # The same hole for a kept fit: a later round's rows come from the proposal, which its identity
+        # does not hold.
+        raise ValueError(
+            f"Saving a training as it goes is not supported for SNPE (num_rounds={num_rounds}); the "
+            f"per-round proposal is not part of a kept training's identity. Use num_rounds=1, or "
+            f"train without saving.")
 
-    # sbi's default z_score_x="independent" fits a PER-COLUMN affine over the conditioning vector.
-    # Under the chi SET layout that is permutation-BREAKING (two orderings of one probe set would be
-    # scaled differently, destroying the encoder's whole guarantee), and the near-constant mask column
-    # becomes a ~1e7 amplifier under sbi's 1e-7 min-std clamp. The chi net standardizes itself instead
-    # -- per channel, over live probes only. Derived from the net, never a separate argument, so the
-    # standardizer and the encoder cannot be configured apart.
-    _owns = getattr(embedding_net, "owns_standardization", False)
-    neural_posterior = posterior_nn(model=model, embedding_net=embedding_net,
-                                    z_score_x=("none" if _owns else "independent"),
-                                    hidden_features=hidden_features, num_transforms=num_transforms,
-                                    num_bins=num_bins)
-    # tracker: sbi's default builds a TensorBoard writer under <cwd>/sbi-logs at THIS line (see
-    # _NoTracker). The loss curve PRISM keeps is the one returned in the diagnostics below.
-    infer = SNPE(prior=prior, density_estimator=neural_posterior, device=str(device),
-                 tracker=_NoTracker() if tracker is None else tracker)
+    infer = build_trainer(model, prior, embedding_net, hidden_features=hidden_features,
+                          num_transforms=num_transforms, num_bins=num_bins, device=device, tracker=tracker,
+                          hooks=saving)
 
     proposal = None # set up initial proposal distribution
     posterior = None
@@ -252,124 +670,15 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
     }
 
     for _ in tqdm(range(num_rounds), desc=f"Training neural posterior", leave=False):
-        # train the density estimator
-        data, thetas = _pipeline.gen_training_data(
-            training_params.model, training_params.prior, forcing_prior, training_params.t,
-            training_params.run_size, training_params.num_runs,
-            training_params.steady_idx, training_params.dt_nd_min,
-            nd_dim, forcing_idx, rescale_idx,
-            dt_exp=training_params.dt_exp, t_min_exp=training_params.t_min_exp,
-            t_max_exp=training_params.t_max_exp, t_scale_bounds=training_params.t_scale_bounds,
-            proposal=proposal,
-            theta_transform=theta_transform,
-            fixed_dict=fixed_dict,
-            state_dep_drift=training_params.state_dep_drift,
-            spontaneous_only=training_params.spontaneous_only,
-            chi_mode=training_params.chi_mode,
-            chi_f0=training_params.chi_f0,
-            chi_freq_bounds=training_params.chi_freq_bounds,
-            chi_k_pad=training_params.chi_k_pad,
-            chi_k_fixed=training_params.chi_k_fixed,
-            chi_max_cycles=training_params.chi_max_cycles,
-            n_vars=training_params.n_vars,
-            checkpoint=training_params.checkpoint,
-            nd_idx=training_params.nd_idx,
-            k_b_cell=training_params.k_b_cell,
-            dtype=training_params.dtype, device=training_params.device,
-        )
-
-        # Filter the data -- and the TARGETS. thetas is the LATENT target (a logit); its row can in
-        # principle go non-finite while the corresponding data row stays perfectly finite, and
-        # filtering thetas only BY data would then feed the flow a +-inf target and NaN the loss for
-        # the whole round with no diagnostic. On torch 2.9 the box round-trip cannot actually produce
-        # one (SigmoidTransform._inverse clamps internally -- see gen_training_data), so this should
-        # never fire; it exists so that if the transform stack ever changes, the failure arrives as a
-        # message naming the offending columns instead of as a silently poisoned multi-hour run.
-        nan_mask = torch.isfinite(data).all(dim=1)
-        theta_finite_mask = torch.isfinite(thetas).all(dim=1)
-        # WINSORISATION REPLACES THE OLD `abs(data) < 1e15` ROW FILTER, and
-        # the change of instrument is the point. A row filter answers one bad channel by discarding
-        # every other value in that row, and at a 1e15 threshold it caught 10 rows in 10.24M while the
-        # outliers under the threshold survived: they are what dragged A1_mean's fitted std to
-        # 4.19e11 and made the channel invisible to the flow.
-        # Clipping each COLUMN at its own 0.1/99.9 percentile removes the leverage without removing
-        # any row, and it protects sbi's own z-scoring on the non-chi paths too, which is why it is
-        # not conditioned on who owns the standardisation.
-        n_sum = getattr(embedding_net, "input_dim", None)
-        if n_sum is None:
-            # An embedding net that does not declare its summary width (a stub, a hand-built net in a
-            # test) gets the pre-2026-08-26 behaviour exactly: there is no safe column split to clip
-            # on, and guessing one could clip the chi block. See the block comment on
-            # winsorize_summary_block.
-            valid_idx = nan_mask & (torch.abs(data) < 1e15).all(dim=1) & theta_finite_mask
-        else:
-            valid_idx = nan_mask & theta_finite_mask
-        n_bad_theta = int((~theta_finite_mask).sum())
-        if n_bad_theta:
-            bad_cols = torch.nonzero(~torch.isfinite(thetas).all(dim=0)).flatten().tolist()
-            warnings.warn(
-                f"train_nn: dropped {n_bad_theta}/{thetas.shape[0]} training rows with non-finite "
-                f"LATENT targets (columns {bad_cols}). The box round-trip is supposed to make this "
-                f"impossible -- treat it as a bug in the transform stack, not as expected attrition.",
-                stacklevel=2,
-            )
-        # Only pay for the gather when it actually drops something. `data[valid_idx]` is a boolean
-        # gather: it allocates a SECOND full-size tensor while the first is still live -- about 0.45 GiB
-        # per million rows, another ~9.3 GiB at the retrain's 20.48M -- and reinstates exactly the
-        # doubled host peak that gen_training_data's preallocated accumulators were introduced to
-        # remove. The mask is
-        # all-true in practice (the box round-trip cannot produce a non-finite latent on torch 2.9;
-        # SigmoidTransform._inverse clamps internally), so this is behaviour-identical and is what
-        # makes that preallocation pay.
-        if not bool(valid_idx.all()):
-            thetas = thetas[valid_idx]
-            data = data[valid_idx]
-
-        if n_sum is not None:
-            data = _pipeline.winsorize_summary_block(data, n_sum)
-
-        # Fit OUR standardizers, once, on the post-filter data. posterior_nn was already called (it is
-        # constructed before any data exists), so this has to happen here -- before append_simulations,
-        # because build_nsf/get_numel run the net inside infer.train(). Unfitted, 41 raw statistics
-        # spanning log-variances, nm-scale means and PLVs would reach the flow unscaled and the only
-        # symptom would be a worse loss curve, days later; the encoder raises rather than allow it.
-        if _owns and not embedding_net.standardization_fitted:
-            embedding_net.fit_standardization(data)
-            assert embedding_net.standardization_fitted, "chi standardization silently did not fit"
-
-        # data_device="cpu": sbi otherwise defaults it to the TRAINING device (npe_base.py:174-175)
-        # and moves the whole conditioning tensor onto the GPU -- at the retrain's 20.48M x 122 float32,
-        # ~9.3 GiB resident, a ~18.6 GiB transient for the `x = x[is_valid_x]` filter, two (20.48M,)
-        # bool masks from handle_invalid_x, and later a ~8.4 GiB gather when it slices the training
-        # split (about 0.45 GiB per million rows for each full copy). All of
-        # that on the same card that has to hold the flow, and all of it AFTER a multi-day generation
-        # run (whose rows the simulation cache keeps when checkpointing is on). The data is ALREADY on
-        # the CPU here (gen_training_data appends .cpu() tensors), so this also silences
-        # validate_theta_and_x's "Moving x to the data_device" warning, which describes a ~9.3 GiB
-        # copy nobody asked for.
-        #
-        # Training does not care: sbi's loop moves each minibatch to the training device itself, so a
-        # CPU-resident dataset costs one host-to-device copy of (training_batch_size, 122) float32 --
-        # tens of KB -- against a flow forward+backward that dominates it by orders of magnitude. It
-        # hands ~9.3 GiB of VRAM back to the flow, which is a straight win.
-        with _capped_zscore_check(skip=_owns):
-            infer.append_simulations(thetas, data, proposal=proposal, data_device="cpu")
-        # sbi copies what it is handed (its `x[is_valid_x]` filter always does) and keeps its copies
-        # through the fit, so this round's own reference is dead weight from here on: ~9.3 GiB of the
-        # host's 63 at the retrain's size. Nothing below reads either name; the next round rebinds them.
-        del data, thetas
-        # Plain Python numbers: sbi 0.26 type-checks these strictly, and a numpy or tensor scalar would
-        # be refused here, after the generation. Any error from the fit is a FAILURE, not a refusal:
-        # sbi reports a non-finite loss as a ValueError, which the front ends read as a check made before
-        # anything was spent, but this one arrives after the generation and part of the fit.
-        try:
-            density_estimator = infer.train(
-                training_batch_size=int(batch_size), learning_rate=float(learning_rate),
-                stop_after_epochs=int(stop_after_epochs), max_num_epochs=int(max_num_epochs),
-                show_train_summary=bool(show_train_summary),
-            )
-        except ValueError as e:
-            raise RuntimeError(f"the flow's fit failed after the training data was generated: {e}") from e
+        prepared = prepare_fit(infer, training_params, model, embedding_net, forcing_prior, nd_dim, forcing_idx,
+                               rescale_idx, theta_transform=theta_transform, fixed_dict=fixed_dict,
+                               proposal=proposal, hidden_features=hidden_features,
+                               num_transforms=num_transforms, num_bins=num_bins, learning_rate=learning_rate,
+                               stop_after_epochs=stop_after_epochs, max_num_epochs=max_num_epochs,
+                               batch_size=batch_size, device=device, num_rounds=num_rounds)
+        density_estimator = run_fit(prepared, batch_size=batch_size, learning_rate=learning_rate,
+                                    stop_after_epochs=stop_after_epochs, max_num_epochs=max_num_epochs,
+                                    show_train_summary=show_train_summary, saver=fit_saver, resume=fit_resume)
         posterior = infer.build_posterior(density_estimator)
         assert isinstance(posterior, DirectPosterior), f"Expected DirectPosterior, got {type(posterior)}"
 

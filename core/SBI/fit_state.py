@@ -58,6 +58,12 @@ LOCK = "running.lock"
 # and the features it reads, and what trains the network.
 FIT_CODE: tuple[str, ...] = (
     "core.SBI.train.train_nn",
+    "core.SBI.train.fit_settings",
+    "core.SBI.train.build_trainer",
+    "core.SBI.train.prepare_fit",
+    "core.SBI.train.run_fit",
+    "core.SBI.train.take_snapshot",
+    "core.SBI.train.restore_trainer",
     "core.SBI.train._capped_zscore_check",
     "core.SBI.embedded_network._probit",
     "core.SBI.embedded_network._column_quantiles",

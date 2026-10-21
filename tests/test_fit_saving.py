@@ -9,12 +9,16 @@ fit is resumed only while every one of those is what it was.
 
 Here: the two generations of the state and what a torn save leaves readable, the save's deferred-cancel
 section, the lock seen from this process and from another, and each digest of the identity with the
-first difference between two of them.
+first difference between two of them. Then the training call in its two halves: a fit stopped after a
+pass and put back in a fresh trainer ends as the fit never stopped, saving after every pass changes
+nothing the fit computes, the restore refuses a kept fit that differs, and the settings a kept fit
+records are the ones sbi uses.
 """
 import ast
 import copy
 import importlib
 import inspect
+import io
 import json
 import linecache
 import os
@@ -23,15 +27,18 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
 import torch
 
 import sbi
+from sbi.inference import SNPE
+from sbi.neural_nets.net_builders import flow
 from core import config, runs
 from core.Helpers import file_manager
-from core.SBI import fit_state
+from core.SBI import fit_state, pipeline, train
 from core.SBI.fit_state import (FIT_CODE, FIT_CONSTANTS, SBI_TRAINER_FILES, STATE, STATE_PREV, Difference,
                                 FitLock, code_digests, constants, first_difference, indices_digest,
                                 libraries, load_state, network_digest, running, save_state,
@@ -272,7 +279,9 @@ def test_the_named_code_is_the_code_that_builds_or_trains_the_network():
     """The three lists name what a kept fit's identity reads; one changed without this test is a list
     nobody checked against the code that builds or trains the network."""
     assert FIT_CODE == (
-        "core.SBI.train.train_nn", "core.SBI.train._capped_zscore_check", "core.SBI.embedded_network._probit",
+        "core.SBI.train.train_nn", "core.SBI.train.fit_settings", "core.SBI.train.build_trainer",
+        "core.SBI.train.prepare_fit", "core.SBI.train.run_fit", "core.SBI.train.take_snapshot",
+        "core.SBI.train.restore_trainer", "core.SBI.train._capped_zscore_check", "core.SBI.embedded_network._probit",
         "core.SBI.embedded_network._column_quantiles", "core.SBI.embedded_network.EmbeddedNet",
         "core.SBI.chi_encoder.ChiSetEncoder", "core.SBI.summaries.winsorize_summary_block",
         "core.SBI.chi.band_norm", "core.SBI.chi.n_chi_features", "core.orchestrator.build_embedding_net",
@@ -367,3 +376,262 @@ def test_the_network_and_the_split_digests_read_shapes_and_indices():
     assert indices_digest(split) != indices_digest(torch.tensor([1, 2, 3]))
     assert indices_digest(split.to(torch.int32)) == indices_digest(split)
     assert len(indices_digest(split)) == 16
+
+
+# ── the training call in two halves: a save after every pass, and the restore ───────────────────────
+class _Stopped(Exception):
+    """What the test saver raises after the pass it was told to stop at: the fit ends there, as it does
+    when the process training it dies."""
+
+
+class _Saves:
+    """A saver that keeps each pass's ``(snapshot, start)`` as the bytes ``torch.save`` writes, and stops
+    the fit after the pass numbered ``stop_after``."""
+
+    def __init__(self, stop_after: int | None = None):
+        self.stop_after = stop_after
+        self.saved: list[bytes] = []
+
+    def save_pass(self, take) -> None:
+        snapshot, start = take()
+        written = io.BytesIO()
+        torch.save((snapshot, start), written)
+        self.saved.append(written.getvalue())
+        if snapshot["passes"] == self.stop_after:
+            raise _Stopped()
+
+    def read(self, i: int = -1) -> tuple[dict, dict]:
+        """Save ``i`` read back, as a new process reads a kept fit."""
+        return torch.load(io.BytesIO(self.saved[i]), weights_only=False)
+
+    def passes(self) -> list[int]:
+        return [self.read(i)[0]["passes"] for i in range(len(self.saved))]
+
+
+_KNOBS = dict(hidden_features=8, num_transforms=1, num_bins=4, learning_rate=5e-3, stop_after_epochs=3,
+              max_num_epochs=40, batch_size=16)
+
+
+def _toy(monkeypatch, tmp_path, rows: int = 96):
+    """The cheapest real fit, in its two halves. The rows are drawn once, from a generator of their own,
+    and the generation is replaced by copies of them, so every preparation appends the same rows in the
+    same order, as a simulation set read back does. ``prepare(hooks)`` builds the trainer and appends the
+    rows; ``fit(prepared, saver, resume)`` runs sbi's passes; ``train_nn(**kwargs)`` is the whole
+    training call; ``generated`` records each call of the generation."""
+    from sbi.utils import BoxUniform
+
+    monkeypatch.chdir(tmp_path)
+    prior = BoxUniform(torch.zeros(2), torch.ones(2))
+    draw = torch.Generator().manual_seed(1)
+    theta = torch.rand(rows, 2, generator=draw)
+    x = torch.cat([theta, theta.sum(1, keepdim=True)], 1) + 0.05 * torch.randn(rows, 3, generator=draw)
+    generated = []
+
+    def fake_gen(*args, **kwargs):
+        generated.append(len(theta))
+        return x.clone(), theta.clone()
+
+    monkeypatch.setattr(pipeline, "gen_training_data", fake_gen)
+    plan = pipeline.TrainingPlan(model="toy", prior=prior, t=torch.zeros(1), run_size=rows, num_runs=1,
+                                 steady_idx=0, dt_nd_min=1.0, dt_exp=1.0, t_min_exp=1.0, t_max_exp=1.0,
+                                 t_scale_bounds=(1.0, 1.0), dtype=torch.float32, device=torch.device("cpu"))
+    flow_knobs = {k: _KNOBS[k] for k in ("hidden_features", "num_transforms", "num_bins")}
+    fit_knobs = {k: _KNOBS[k] for k in ("batch_size", "learning_rate", "stop_after_epochs", "max_num_epochs")}
+
+    def prepare(hooks: bool = True):
+        net = torch.nn.Identity()
+        infer = train.build_trainer("nsf", prior, net, **flow_knobs, device="cpu", hooks=hooks)
+        return train.prepare_fit(infer, plan, "nsf", net, None, 2, {}, {}, **_KNOBS, device="cpu")
+
+    def fit(prepared, saver=None, resume=None):
+        return train.run_fit(prepared, **fit_knobs, show_train_summary=False, saver=saver, resume=resume)
+
+    def train_nn(**kwargs):
+        return pipeline.train_nn(plan, "nsf", prior, torch.nn.Identity(), None, 2, {}, {}, **_KNOBS, **kwargs)
+
+    return types.SimpleNamespace(prepare=prepare, fit=fit, train_nn=train_nn, generated=generated)
+
+
+def _history(infer) -> dict:
+    """sbi's histories of the fit: the losses pass by pass, as Python floats, and its two entries per
+    training call."""
+    summary = infer._summary
+    return {"training_loss": [float(v) for v in summary["training_loss"]],
+            "validation_loss": [float(v) for v in summary["validation_loss"]],
+            "epochs_trained": list(summary["epochs_trained"]),
+            "best_validation_loss": [float(v) for v in summary["best_validation_loss"]]}
+
+
+def _unequal(a: dict, b: dict) -> list[str]:
+    """The names of two state dicts whose tensors are not equal, or that only one of them has."""
+    return sorted(set(a) ^ set(b)) + [name for name in a if name in b and not torch.equal(a[name], b[name])]
+
+
+@pytest.mark.parametrize("where", ["first_pass", "no_improvement", "last_but_one"])
+def test_a_fit_stopped_after_a_pass_and_resumed_in_a_fresh_trainer_ends_as_the_uninterrupted_one(
+        monkeypatch, tmp_path, where):
+    """A fit stopped after a pass, then put back in a fresh trainer (another random stream, the rows
+    appended again, the network built again) from what its saver kept, ends exactly as the fit never
+    stopped: the same losses pass by pass, the same counters, the same final and best weights. Stopped
+    after the first pass; after the pass that follows the best one, the first of the passes without
+    improvement that end the fit by its patience (where sbi's own resume within one process counts that
+    pass twice and stops a pass early); and one pass before the end. The resumed fit goes on saving from
+    the next pass under the start it was kept with. This is also the alarm for an sbi whose trainer no
+    longer resumes this way."""
+    toy = _toy(monkeypatch, tmp_path)
+    torch.manual_seed(0)
+    reference = toy.prepare(hooks=False)
+    toy.fit(reference)
+    ref = reference.infer
+    passes = ref._summary["epochs_trained"][-1]
+    assert passes < 41, f"the uninterrupted fit ran to its ceiling ({passes} passes), not to its patience"
+    losses = ref._summary["validation_loss"]
+    best = losses.index(min(losses)) + 1                # the pass sbi keeps as the best
+    stop = {"first_pass": 1, "no_improvement": best + 1, "last_but_one": passes - 1}[where]
+    assert 1 <= stop < passes, (where, stop, passes)
+
+    torch.manual_seed(0)
+    before = _Saves(stop_after=stop)
+    with pytest.raises(_Stopped):
+        toy.fit(toy.prepare(), saver=before)
+    assert before.passes() == list(range(1, stop + 1))
+    snapshot, start = before.read()
+
+    torch.manual_seed(999)
+    resumed = toy.prepare()
+    after = _Saves()
+    toy.fit(resumed, saver=after, resume=(start, snapshot))
+    got = resumed.infer
+    assert _history(got) == _history(ref)
+    assert len(got._summary["epochs_trained"]) == 1
+    assert got._epochs_since_last_improvement == ref._epochs_since_last_improvement
+    assert _unequal(got._neural_net.state_dict(), ref._neural_net.state_dict()) == []
+    assert _unequal(got._best_model_state_dict, ref._best_model_state_dict) == []
+    assert after.passes() == list(range(stop + 1, passes + 1))
+    later = after.read()[1]
+    assert torch.equal(later["split_rng"], start["split_rng"])
+    assert {k: later[k] for k in ("validation_digest", "rows", "network", "settings")} == \
+        {k: start[k] for k in ("validation_digest", "rows", "network", "settings")}
+
+
+def test_saving_every_pass_changes_nothing_the_fit_computes(monkeypatch, tmp_path):
+    """The save only reads: a fit saved after every pass computes what the same fit computes unsaved, the
+    same losses and weights, and leaves the random stream where the unsaved one leaves it. The saver is
+    handed every pass, numbered from one, in order."""
+    toy = _toy(monkeypatch, tmp_path)
+    torch.manual_seed(0)
+    plain = toy.prepare(hooks=False)
+    toy.fit(plain)
+    stream_plain = torch.get_rng_state()
+
+    torch.manual_seed(0)
+    saved = toy.prepare()
+    saves = _Saves()
+    toy.fit(saved, saver=saves)
+    stream_saved = torch.get_rng_state()
+
+    assert _history(saved.infer) == _history(plain.infer)
+    assert _unequal(saved.infer._neural_net.state_dict(), plain.infer._neural_net.state_dict()) == []
+    assert torch.equal(stream_saved, stream_plain), "a save drew a random number"
+    assert saves.passes() == list(range(1, plain.infer._summary["epochs_trained"][-1] + 1))
+
+
+@pytest.mark.parametrize("what, said", [
+    ("settings", ("z_score_x", "summaries' z-scoring")),
+    ("rows", ("its rows number 96, not the 97",)),
+    ("split", ("validation rows",)),
+    ("network", ("differs in shape",)),
+    ("standardisers", ("standardisers",)),
+])
+def test_the_restore_refuses_what_differs_from_the_kept_fit(monkeypatch, tmp_path, what, said):
+    """Each check the restore makes once the rows are read refuses a kept fit that differs, naming what
+    differs, and refuses before the optimizer exists, so nothing of the kept fit is put back."""
+    toy = _toy(monkeypatch, tmp_path)
+    torch.manual_seed(0)
+    stopped = toy.prepare()
+    saves = _Saves(stop_after=2)
+    with pytest.raises(_Stopped):
+        toy.fit(stopped, saver=saves)
+    snapshot, start = saves.read()
+    if what == "settings":
+        start["settings"]["z_score_x"] = "none"
+    elif what == "rows":
+        start["rows"] += 1
+    elif what == "split":
+        start["validation_digest"] = "0" * 16
+    elif what == "network":
+        start["network"] = "0" * 16
+    else:
+        name = next(name for name, buffer in stopped.infer._neural_net.named_buffers()
+                    if buffer.is_floating_point() and name in snapshot["net_state"])
+        snapshot["net_state"][name] = snapshot["net_state"][name] + 1
+
+    fresh = toy.prepare()
+    with pytest.raises(fit_state.FitMismatch) as refused:
+        train.restore_trainer(fresh.infer, start, snapshot, settings=fresh.settings)
+    assert any(words in str(refused.value) for words in said), refused.value
+    assert not hasattr(fresh.infer, "optimizer"), "the refusal came after the optimizer was made"
+
+
+def test_saving_a_fit_needs_the_trainers_hook_points(monkeypatch, tmp_path):
+    """Saving a fit wraps and calls private parts of sbi's trainer, so a trainer without one of them is
+    refused as it is built, before any row exists, naming the part and the sbi installed: an sbi other
+    than the one pinned stops the run at once, not at the first save or at a resume."""
+    with pytest.raises(RuntimeError) as missing:
+        train._require_hook_points(types.SimpleNamespace())
+    assert "_summarize_epoch" in str(missing.value) and sbi.__version__ in str(missing.value), missing.value
+
+    class _WithoutItsBuilder(SNPE):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            del self._build_neural_net
+
+    toy = _toy(monkeypatch, tmp_path)
+    monkeypatch.setattr(train, "SNPE", _WithoutItsBuilder)
+    with pytest.raises(RuntimeError, match="_build_neural_net") as refused:
+        toy.train_nn(fit_saver=_Saves())
+    assert sbi.__version__ in str(refused.value)
+    assert any(entry.name == "build_trainer" for entry in refused.traceback), "not refused as the trainer is built"
+    assert toy.generated == []
+
+
+def test_the_fit_settings_are_the_values_sbi_will_use_its_own_defaults_included(monkeypatch):
+    """A kept fit records every setting it is trained with, the ones PRISM leaves to sbi included, as sbi
+    resolves them: its training method's as installed, its posterior network factory's and its flow
+    builder's. The training method's are read when the module is imported, so wrapping the method on the
+    class, as some tests do, changes nothing; a builder without a setting records None for it."""
+    asked = dict(model="nsf", hidden_features=8, num_transforms=1, num_bins=10, learning_rate=0.001,
+                 stop_after_epochs=20, max_num_epochs=2_147_483_647, batch_size=512, z_score_x="none",
+                 device="cpu", dtype=torch.float32)
+    expected = {"hidden_features": 8, "num_transforms": 1, "learning_rate": 0.001, "stop_after_epochs": 20,
+                "max_num_epochs": 2_147_483_647, "density_estimator": "nsf", "num_bins": 10,
+                "training_batch_size": 512, "num_rounds": 1, "validation_fraction": 0.1, "clip_max_norm": 5.0,
+                "z_score_theta": "independent", "z_score_x": "none", "tail_bound": 3.0,
+                "hidden_layers_spline_context": 1, "num_blocks": 2, "dropout_probability": 0.0,
+                "use_batch_norm": False, "data_device": "cpu", "device": "cpu", "dtype": "torch.float32"}
+    assert list(train.fit_settings(**asked).items()) == list(expected.items())
+
+    def wider_tails(batch_x, batch_y, tail_bound: float = 4.0, hidden_layers_spline_context: int = 1,
+                    num_blocks: int = 2, dropout_probability: float = 0.0, use_batch_norm: bool = False,
+                    **kwargs):
+        raise AssertionError("the settings read the builder's signature; they never build")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(flow, "build_nsf", wider_tails)
+        assert train.fit_settings(**asked) == {**expected, "tail_bound": 4.0}
+    with monkeypatch.context() as patch:
+        patch.setattr(SNPE, "train", lambda self, *a, **k: None)
+        assert train.fit_settings(**asked) == expected
+    maf = train.fit_settings(**{**asked, "model": "maf"})
+    assert maf == {**expected, "density_estimator": "maf", "tail_bound": None, "hidden_layers_spline_context": None}
+
+
+def test_saving_a_fit_is_refused_for_more_than_one_round(monkeypatch, tmp_path):
+    """A later round's rows are drawn from the round before's posterior, which a kept fit's identity does
+    not hold, so saving or resuming a fit of more than one round is refused before any row is made."""
+    toy = _toy(monkeypatch, tmp_path)
+    for given in ({"fit_saver": _Saves()}, {"fit_resume": ({}, {})}):
+        with pytest.raises(ValueError, match=r"num_rounds=2") as refused:
+            toy.train_nn(num_rounds=2, x_obs=torch.zeros(1, 3), **given)
+        assert "as it goes" in str(refused.value), refused.value
+    assert toy.generated == []
