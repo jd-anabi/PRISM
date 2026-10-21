@@ -36,7 +36,7 @@ _QUOTATION = re.compile(r"'[^']*'|\"[^\"]*\"")                   # in either mar
 _ORDINARY = re.compile(r"[^\W\d_]+(?:['-][^\W\d_]+)*")          # letters, an apostrophe or a hyphen between two
 
 
-def _as_sentence(message: str) -> str:
+def as_sentence(message: str) -> str:
     """An error's message as a sentence of the page: its first letter a capital only when its first word -- up to
     the first space, a comma, a semicolon or a colon at its end set aside -- is an ordinary word, letters alone, an
     apostrophe or a hyphen between two of them counted in ("can't", "non-finite"), that starts with a small one; any
@@ -146,7 +146,7 @@ class PartError(QWidget):
         self.page.add_fixed(PageHead(part_name))
         self.page.add_gap(design.scaled(design.GAP["head_to_body"]), design.scaled(design.GAP["head_to_body_small"]))
 
-        self.message = MessageRow("err", _as_sentence(str(error)), lead=f"{part_name} could not be opened")
+        self.message = MessageRow("err", as_sentence(str(error)), lead=f"{part_name} could not be opened")
         self.rest = MessageRow("", "The rest of PRISM still works.")
         self.again = style.set_class(QPushButton("Try again"), cls="primary")
         self.again.clicked.connect(self.try_again)

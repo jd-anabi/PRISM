@@ -10,7 +10,7 @@ from core import config, logging_root, registry
 
 from . import app_icon, design, fonts, mpl_theme, one_instance, settings, style, theming
 from .main_window import MainWindow
-from .screens.shell import NO_MESSAGE, _as_sentence
+from .screens.shell import NO_MESSAGE, as_sentence
 from .widgets.ask import Ask, ask
 
 # What a start of PRISM that builds no window says as it ends, on the error stream when the process has one:
@@ -80,7 +80,7 @@ def _install_excepthook(parent_getter):
                 asking.append(True)
                 try:
                     parent = parent_getter()
-                    ask(parent, "Error", _fitted(_as_sentence(str(exc)) or NO_MESSAGE, _room(parent)), "OK",
+                    ask(parent, "Error", _fitted(as_sentence(str(exc)) or NO_MESSAGE, _room(parent)), "OK",
                         marker="err", detail="".join(traceback.format_exception(exc_type, exc, tb)))
                 finally:
                     asking.clear()

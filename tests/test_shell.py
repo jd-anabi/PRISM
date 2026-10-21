@@ -3596,7 +3596,7 @@ def test_the_last_resort_question_cuts_a_message_its_screen_cannot_hold(monkeypa
             torch.nn.Sequential(*[torch.nn.Linear(4, 4) for _ in range(2)]).state_dict())
     except RuntimeError as raised:
         error = raised
-    whole = gui_app._as_sentence(str(error))
+    whole = gui_app.as_sentence(str(error))
 
     def height(sentence):
         question = Ask(None, "Error", sentence, "OK", marker="err", detail=whole)
