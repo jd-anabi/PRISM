@@ -2,6 +2,8 @@
 
 Checked against commit b2d73c2.
 
+This page describes the window as it was before its layout was redesigned; it is rewritten when that redesign is complete.
+
 This page describes the PySide6 window screen by screen: what each screen is for, every setting on
 the Parameter Inference tabs and what it really changes, what the window remembers between sessions,
 and which models each screen accepts. [Launching PRISM](getting-started.md#launching-prism) says how
