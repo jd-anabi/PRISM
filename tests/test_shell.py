@@ -3401,6 +3401,51 @@ def test_the_last_resort_error_goes_through_the_shared_question(monkeypatch):
         "the errors were not written to the console as before")
 
 
+def test_the_last_resort_question_cuts_a_message_its_screen_cannot_hold(monkeypatch):
+    """A message too long for the last-resort question to stand whole on its screen -- here a network's saved
+    settings read into a network of another shape, which names every setting it misses -- is cut after its last
+    word that leaves the question whole, its frame and its answer in sight, and an ellipsis stands for the rest,
+    which the full error holds. On a screen 768 high, less a taskbar, the question then stands whole at the ordinary
+    text size; a message the question holds whole is not cut."""
+    import sys
+    import torch
+    from core.gui import app as gui_app
+    from core.gui.widgets.ask import Ask
+    from tests._fixtures import all_asked
+    qt_app()
+    try:
+        torch.nn.Sequential(*[torch.nn.Linear(4, 4) for _ in range(60)]).load_state_dict(
+            torch.nn.Sequential(*[torch.nn.Linear(4, 4) for _ in range(2)]).state_dict())
+    except RuntimeError as raised:
+        error = raised
+    whole = gui_app._as_sentence(str(error))
+
+    def height(sentence):
+        question = Ask(None, "Error", sentence, "OK", marker="err", detail=whole)
+        try:
+            return question.sizeHint().height()
+        finally:
+            question.deleteLater()
+
+    screen = QApplication.primaryScreen().availableGeometry().height() - gui_app.FRAME
+    for room in (768 - 48 - gui_app.FRAME, screen):
+        shown = gui_app._fitted(whole, room)
+        kept = shown[:-1]
+        assert (shown[-1:], whole.startswith(kept + " ")) == ("\u2026", True), f"not cut at a word: {shown[-40:]}"
+        more = whole[:whole.index(" ", len(kept) + 1)] + "\u2026"         # a word more
+        assert height(shown) <= room < min(height(more), height(whole)), (
+            f"in {room} px the question is {height(shown)} px, and {height(more)} px with a word more")
+    short = "The cell file could not be read."
+    assert gui_app._fitted(short, screen) == short, "a message the question holds whole was cut"
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)       # the hook installed here is put back at the end
+    monkeypatch.setattr(sys, "__excepthook__", lambda *_args: None)
+    gui_app._install_excepthook(lambda: None)
+    sys.excepthook(type(error), error, error.__traceback__)
+    told = all_asked()[-1]
+    assert (told.sentence == gui_app._fitted(whole, screen), told.detail.rstrip().endswith(str(error).rstrip())) == (
+        True, True), "the question did not cut the message to its screen, or the full error does not hold it whole"
+
+
 def test_the_class_fonts_are_set_once_at_start(tmp_path, monkeypatch):
     """The fonts of the classes the toolkit keeps a font of their own for are set once as PRISM starts: by the first
     apply of the appearance, after its style sheet, which empties them as the style set before it does. Then they

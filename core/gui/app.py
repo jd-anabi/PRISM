@@ -11,19 +11,59 @@ from core import config, logging_root, registry
 from . import app_icon, design, fonts, mpl_theme, one_instance, settings, style, theming
 from .main_window import MainWindow
 from .screens.shell import NO_MESSAGE, _as_sentence
-from .widgets.ask import ask
+from .widgets.ask import Ask, ask
 
 # What a start of PRISM that builds no window says as it ends, on the error stream when the process has one:
 # started from a console, it is the only sign the person gets.
 SAID = {"hand_over": "PRISM is already open: its window was brought to the front.",
         "give_up": "PRISM is already running but did not answer; this start ends."}
 
+# The most a window's frame -- its title bar and its borders -- takes of a screen's height, which a question's own
+# height leaves out.
+FRAME = 40
+
+
+def _room(parent) -> int:
+    """The height a question may take, its frame left out, on the screen it is asked on: the window's, or the main
+    screen when there is no window; the taskbar's room is not the screen's to give."""
+    screen = parent.screen() if parent is not None else QApplication.primaryScreen()
+    return screen.availableGeometry().height() - FRAME
+
+
+def _fitted(sentence: str, room: int) -> str:
+    """``sentence`` as the last-resort question can show it in ``room``, the height it may take: whole when the
+    question then stands whole; else cut after its last word that leaves the question whole, an ellipsis put in
+    place of the rest, which the full error holds. Measured on the question itself, built and never shown."""
+    question = Ask(None, "Error", sentence, "OK", marker="err", detail=sentence)
+    try:
+        over = question.sizeHint().height() - room
+        if over <= 0:
+            return sentence
+        lines = question.sentence
+        width = lines.minimumWidth()
+        allowed = lines.heightForWidth(width) - over
+        lines.setMinimumHeight(0)           # the question holds it at the whole message's height
+        words = sentence.split(" ")
+        kept, most = 0, len(words) - 1
+        while kept < most:                  # the most words that stand in what is allowed, the ellipsis after them
+            middle = (kept + most + 1) // 2
+            lines.set_text(" ".join(words[:middle]) + "\u2026")
+            if lines.heightForWidth(width) <= allowed:
+                kept = middle
+            else:
+                most = middle - 1
+        return " ".join(words[:kept]) + "\u2026"
+    finally:
+        question.deleteLater()
+
 
 def _install_excepthook(parent_getter):
     """Route any otherwise-unhandled exception to the shared question, telling: an error, whose one sentence is
     the error's message, written as a sentence as a part's error page writes it, with one answer; the error's kind
-    and its trace are behind "Show the full error", and nowhere else. Over the window once there is one
-    (``parent_getter``), and with no window under it before. Each error is still written to the console as before.
+    and its trace are behind "Show the full error", and nowhere else. A message too long for the question to stand
+    whole on its screen is cut, with an ellipsis (``_fitted``); the full error holds it whole. Over the window once
+    there is one (``parent_getter``), and with no window under it before. Each error is still written to the console
+    as before.
 
     Installed BEFORE MainWindow() is built, so that it stands for everything after. A part that cannot
     be built (e.g. a bad cell file breaking a panel's prefill) does not reach it: the window builds each
@@ -39,8 +79,9 @@ def _install_excepthook(parent_getter):
             if not asking:
                 asking.append(True)
                 try:
-                    ask(parent_getter(), "Error", _as_sentence(str(exc)) or NO_MESSAGE, "OK", marker="err",
-                        detail="".join(traceback.format_exception(exc_type, exc, tb)))
+                    parent = parent_getter()
+                    ask(parent, "Error", _fitted(_as_sentence(str(exc)) or NO_MESSAGE, _room(parent)), "OK",
+                        marker="err", detail="".join(traceback.format_exception(exc_type, exc, tb)))
                 finally:
                     asking.clear()
         finally:
