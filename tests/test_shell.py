@@ -2123,6 +2123,29 @@ def test_a_part_that_fails_to_build_while_a_run_is_live_leaves_the_runs_log_to_t
     assert "_CannotBeBuilt: the cell file could not be read" in console, f"the console got no trace: {console!r}"
 
 
+def test_a_record_the_console_cannot_take_during_a_run_is_reported_and_not_raised(capsys):
+    """While a run is live a record logged on another thread -- the window's own word -- goes to the console the
+    run's log stands in front of. A console that cannot take it, whose encoding has no letter for a word of it, does
+    not raise where the record was logged: the failed write is reported on the error stream, as logging reports
+    one, and the program goes on."""
+    import io
+    import logging
+    import threading
+    from core.gui import streams
+    narrow = io.TextIOWrapper(io.BytesIO(), encoding="ascii")
+    made = []
+    run = threading.Thread(target=lambda: made.append(streams._PumpLogHandler(None, None, (narrow, narrow))))
+    run.start()                                       # the run's handler is made on the run's own thread
+    run.join()
+    record = logging.makeLogRecord({"name": "core.gui.main_window", "levelno": logging.ERROR, "levelname": "ERROR",
+                                    "msg": "the \u03c7 probe table holds no row"})
+    capsys.readouterr()
+    made[0].handle(record)
+    said = capsys.readouterr().err
+    assert "--- Logging error ---" in said and "UnicodeEncodeError" in said, (
+        f"the failed write was not reported: {said!r}")
+
+
 def test_the_error_page_writes_the_errors_message_as_a_sentence():
     """The error page gives the error's message as a sentence after its bold opening words: its first letter a
     capital only when its first word -- up to the first space, a comma, a semicolon or a colon at its end set aside

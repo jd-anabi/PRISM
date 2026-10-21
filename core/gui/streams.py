@@ -245,7 +245,8 @@ class _PumpLogHandler(logging.Handler):
     It hears its own run's records alone: those logged on the thread that set it up, the run's own, the
     records the run's log.txt keeps too. A record logged on another thread while the run is live -- the
     window's own word, a part that could not be opened among them -- is not the run's: it goes to the
-    console the run's redirect stands in front of, as the root's sink writes a record between runs.
+    console the run's redirect stands in front of, as the root's sink writes a record between runs; a console
+    that cannot take it is reported as logging reports a failed write, and nothing is raised where it was logged.
     """
 
     def __init__(self, pump, cancel: "CancelToken | None", console=(None, None)):
@@ -257,7 +258,10 @@ class _PumpLogHandler(logging.Handler):
 
     def emit(self, record):
         if threading.get_ident() != self._owner:
-            _to_console(record, self._console)
+            try:
+                _to_console(record, self._console)
+            except Exception:                 # noqa: BLE001 -- logging's contract: emit never raises
+                self.handleError(record)
             return
         if self._cancel is not None and not runs.cancel_is_deferred():
             self._cancel.check()
