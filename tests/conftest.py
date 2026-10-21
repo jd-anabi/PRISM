@@ -322,13 +322,19 @@ def brought_forward(request):
     otherwise take the front from the window the test brought there, and the keys would go to the other; and the
     second call reaches the system itself. A test marked for the real screen makes both calls for real. The window's
     module is loaded here when nothing has loaded it yet, once in a process, so that the stand-in is in every test.
-    A monkeypatch of its own, so that a test that undoes its own does not undo this one."""
+    A monkeypatch of its own, so that a test that undoes its own does not undo this one. A test that ends holding
+    the claim of a start of PRISM -- its lock and its listener -- fails here, once the claim is let go: kept, it
+    would turn a later test's start away, or hear its knock."""
+    from core.gui import one_instance
     calls = []
     mp = pytest.MonkeyPatch()
     if request.node.get_closest_marker("display") is None:
-        from core.gui import one_instance
         from core.gui.main_window import MainWindow
         mp.setattr(MainWindow, "come_to_front", lambda window: calls.append(("come_to_front", window)))
         mp.setattr(one_instance, "allow_foreground", lambda pid: calls.append(("allow_foreground", pid)))
     yield calls
     mp.undo()
+    held = one_instance.current()
+    if held is not None:
+        held.release()
+        pytest.fail("the test ended holding the lock and the listener of a start of PRISM, now let go")

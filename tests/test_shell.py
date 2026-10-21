@@ -2956,14 +2956,18 @@ def test_which_case_a_start_of_prism_falls_in():
 
 def test_the_servers_name_is_one_per_settings_file(tmp_path):
     """The server a second start knocks on is named after the settings file: two files, two names; one file whose
-    path is written another way -- its letters in another case, the other separator, a "." or a ".." among its
-    folders -- one name; and the name is one a local server listens under."""
+    path is written another way -- its letters in another case where the system does not tell them apart, as on
+    Windows, the other separator, a "." or a ".." among its folders -- one name; and the name is one a local server
+    listens under."""
+    import os
     from PySide6.QtNetwork import QLocalServer
     from core.gui.one_instance import server_name
     qt_app()
     path = str(tmp_path / "PRISM" / "PRISM.ini")
-    ways = (path.upper(), path.replace("\\", "/"), str(tmp_path / "PRISM" / "." / "PRISM.ini"),
-            str(tmp_path / "PRISM" / "other" / ".." / "PRISM.ini"))
+    folds = os.path.normcase("A") == "a"                 # the system's paths do not tell a letter's case apart
+    assert folds == (os.name == "nt"), "the case of a path's letters is not set aside on Windows alone"
+    ways = ((path.upper(),) if folds else ()) + (path.replace("\\", "/"), str(tmp_path / "PRISM" / "." / "PRISM.ini"),
+                                                 str(tmp_path / "PRISM" / "other" / ".." / "PRISM.ini"))
     names = {server_name(way) for way in ways} | {server_name(path)}
     assert len(names) == 1, f"one settings file, written {len(ways) + 1} ways, names {len(names)} servers"
     assert server_name(str(tmp_path / "Another" / "PRISM.ini")) != server_name(path), "two settings files share a name"
@@ -2974,7 +2978,7 @@ def test_the_servers_name_is_one_per_settings_file(tmp_path):
         server.close()
 
 
-def test_a_second_start_is_handed_over_even_while_the_first_is_busy(tmp_path, brought_forward):
+def test_a_second_start_is_handed_over_even_while_the_first_is_busy(tmp_path, monkeypatch, brought_forward):
     """A second start on the settings file of a PRISM that is open -- one that holds the lock and listens -- connects
     at once and is handed over, though the open one's event loop has not run since: before it knocks, it lets the
     open one's process take the front. The open one hears the knock when its loop next runs, and not before: not
@@ -2985,8 +2989,9 @@ def test_a_second_start_is_handed_over_even_while_the_first_is_busy(tmp_path, br
     app = qt_app()
     path = str(tmp_path / "prism.ini")
     first = one_instance.claim(path)
-    heard = []
+    heard, knock = [], one_instance._knock
     first.knocked.connect(lambda: heard.append(True))
+    monkeypatch.setattr(one_instance, "_knock", lambda *told: brought_forward.append(("knock",)) or knock(*told))
     try:
         began = time.monotonic()
         second = one_instance.claim(path)
@@ -2994,7 +2999,8 @@ def test_a_second_start_is_handed_over_even_while_the_first_is_busy(tmp_path, br
         assert (first.case, second.case, one_instance.current() is first) == ("start", "hand_over", True), (
             first.case, second.case)
         assert took < 0.5, "the second start was not handed over at once"
-        assert brought_forward == [("allow_foreground", os.getpid())], "the open PRISM was not let take the front"
+        assert brought_forward == [("allow_foreground", os.getpid()), ("knock",)], (
+            "the open PRISM was not let take the front before the knock")
         time.sleep(1.0)                               # the open PRISM's main thread is held
         assert heard == [], "the knock was heard before the event loop ran"
         pump(app, 0.2)
@@ -3047,8 +3053,8 @@ def test_a_lock_left_by_a_prism_that_died_is_taken(tmp_path):
 
 
 def test_a_lock_nothing_answers_for_is_removed_and_taken_or_else_the_start_gives_up(tmp_path, brought_forward):
-    """When the lock is held and nothing takes the connection, the start knocks as many times as it is told, a
-    pause apart; then it removes the lock, takes it and listens, where the lock can be removed -- here a lock file
+    """When the lock is held and nothing takes the connection, the start knocks as it is told (the next test counts
+    the knocks); then it removes the lock, takes it and listens, where the lock can be removed -- here a lock file
     that names no process. Where it cannot, the lock's holder lives and does not answer -- here one that never
     listens -- and the start gives up, holding nothing and listening for nothing, having let the holder's process
     take the front."""
@@ -3059,12 +3065,10 @@ def test_a_lock_nothing_answers_for_is_removed_and_taken_or_else_the_start_gives
     path = str(tmp_path / "prism.ini")
     name = one_instance.server_name(path)
     (tmp_path / "PRISM.lock").write_bytes(b"")       # a lock file that names no process
-    began = time.monotonic()
     taken = one_instance.claim(path, tries=3, pause_ms=100)
-    took = time.monotonic() - began
     try:
-        assert (taken.case, one_instance.current() is taken, _answers(name)) == ("start_after_removal", True, True)
-        assert 0.2 <= took < 1.0, "the three knocks were not a tenth of a second apart"
+        assert (taken.case, one_instance.current() is taken, _answers(name)) == ("start_after_removal", True, True), (
+            "the lock nothing answers for was not removed and taken, or nothing listens")
         assert brought_forward == [], "a lock that names no process let a process take the front"
     finally:
         taken.release()
@@ -3078,6 +3082,41 @@ def test_a_lock_nothing_answers_for_is_removed_and_taken_or_else_the_start_gives
         assert brought_forward == [("allow_foreground", os.getpid())], "the living holder was not let take the front"
     finally:
         holder.unlock()
+
+
+def test_a_start_knocks_as_many_times_as_it_is_told_a_pause_apart(tmp_path, monkeypatch):
+    """Beside a living holder of the lock that never answers, a start knocks as many times as it is told, with the
+    pause it is told between two knocks and none before the first, and then gives up; told nothing, it knocks three
+    times a second apart. The knocks are counted and the pauses noted, and nothing waits."""
+    import inspect
+    from types import SimpleNamespace
+    from PySide6.QtCore import QLockFile
+    from PySide6.QtNetwork import QLocalSocket
+    from core.gui import one_instance
+    qt_app()
+    tried, slept = [], []
+
+    class Counted(QLocalSocket):
+        def connectToServer(self, name):
+            tried.append(name)
+            super().connectToServer(name)
+
+    monkeypatch.setattr(one_instance, "QLocalSocket", Counted)
+    monkeypatch.setattr(one_instance, "time", SimpleNamespace(sleep=slept.append))
+    holder = QLockFile(str(tmp_path / "PRISM.lock"))
+    holder.setStaleLockTime(0)
+    assert holder.tryLock(0), "the lock could not be held for the test"
+    got = []
+    try:
+        for told in ({"tries": 2, "pause_ms": 50}, {"tries": 4, "pause_ms": 70}, {}):
+            del tried[:], slept[:]
+            got.append((one_instance.claim(str(tmp_path / "prism.ini"), **told).case, len(tried), list(slept)))
+    finally:
+        holder.unlock()
+    assert got == [("give_up", 2, [0.05]), ("give_up", 4, [0.07] * 3), ("give_up", 3, [1.0, 1.0])], got
+    told = {name: parameter.default for name, parameter in inspect.signature(one_instance.claim).parameters.items()
+            if name in ("tries", "pause_ms")}
+    assert told == {"tries": 3, "pause_ms": 1000}, told
 
 
 def test_the_lock_is_made_in_a_settings_folder_that_is_not_there_yet(tmp_path):
@@ -3117,16 +3156,23 @@ def test_a_lock_that_cannot_be_made_holds_no_start_back(tmp_path, caplog):
 
 def test_a_start_handed_over_builds_no_window_and_exits_zero(tmp_path, monkeypatch, brought_forward):
     """A start of PRISM while PRISM is open on its settings file hands over to the open one: it builds no window and
-    no other widget, and hands back the application with no window, having let the open one's process take the
-    front; the open one hears the knock when its loop runs. Handed no window, the entry point ends with the status
-    0, showing nothing and running no event loop."""
+    no other widget, sets nothing of the look on the process -- the icon, the text size, the style, the fonts, the
+    appearance, the figure settings -- and hands back the application with no window, having let the open one's
+    process take the front; the open one hears the knock when its loop runs. With no error stream, as a start with
+    no console has none, it hands over all the same. Handed no window, the entry point ends with the status 0,
+    showing nothing and running no event loop."""
     import os
+    import sys
     from core.gui import one_instance
-    from tests._fixtures import pump, whole_program
+    from tests._fixtures import process_state, pump, whole_program
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
-    widgets = len(QApplication.topLevelWidgets())
+    monkeypatch.setattr(sys, "stderr", None)
+    widgets, found = len(QApplication.topLevelWidgets()), process_state(app)
     with whole_program(held_by_another=True) as built:
+        changed = sorted(key for key, value in process_state(app).items() if value != found[key])
+        assert set(changed) <= {"names", "root log handler", "quiet segment bar", "default store", "one-PRISM lock",
+                                "local servers"}, f"the start that was handed over set {changed}"
         held = one_instance.current()
         heard = []
         held.knocked.connect(lambda: heard.append(True))
@@ -3145,6 +3191,31 @@ def test_a_start_handed_over_builds_no_window_and_exits_zero(tmp_path, monkeypat
 
     monkeypatch.setattr(entry, "build_app", lambda: (Application(), None))
     assert (entry.main(), ran) == (0, []), "the start that was handed over ran an event loop"
+
+
+def test_a_start_beside_a_prism_that_never_answers_ends_with_the_status_one(tmp_path, monkeypatch, capsys):
+    """The whole program started beside a living holder of the lock that never answers -- a PRISM busy past the
+    start's three knocks, or one that does not listen -- builds no window and no other widget, holds no claim, says
+    in one line that PRISM did not answer, and ends with the status 1."""
+    import os
+    from PySide6.QtCore import QLockFile
+    from core.gui import one_instance, settings
+    from tests._fixtures import whole_program
+    qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    holder = QLockFile(os.path.join(os.path.dirname(os.path.abspath(settings.settings().fileName())), "PRISM.lock"))
+    holder.setStaleLockTime(0)
+    assert holder.tryLock(0), "the lock could not be held for the test"
+    widgets = len(QApplication.topLevelWidgets())
+    try:
+        with pytest.raises(SystemExit) as ended:
+            with whole_program():
+                pass
+    finally:
+        holder.unlock()
+    assert (ended.value.code, len(QApplication.topLevelWidgets()), one_instance.current()) == (1, widgets, None), (
+        "the start beside a holder that never answers built something, holds a claim or ended otherwise")
+    assert capsys.readouterr().err.endswith("PRISM is already running but did not answer; this start ends.\n")
 
 
 def test_a_second_start_says_in_one_line_what_it_did(monkeypatch):
@@ -3372,7 +3443,8 @@ def test_the_last_resort_error_goes_through_the_shared_question(monkeypatch):
     """An error nothing else caught reaches the hook of last resort, which tells it through the shared question, as
     an error: its one sentence the error's message, written as a sentence as a part's error page writes it, and
     never the error's kind; one answer, "OK"; the kind and the trace behind "Show the full error". The question
-    stands over the window once there is one, and with no window under it before. An error with no message of its
+    stands over the window once there is one, and with no window under it before, the window read when the error
+    comes, not when the hook is installed. An error with no message of its
     own says that something went wrong. Each error is still written where it was before, and one raised while the
     question is open is written there and asks nothing more."""
     import sys
@@ -3392,8 +3464,10 @@ def test_the_last_resort_error_goes_through_the_shared_question(monkeypatch):
         except Exception as raised:                                 # noqa: BLE001 -- handed to the hook, as uncaught
             sys.excepthook(type(raised), raised, raised.__traceback__)
 
-    for parent in (window, None):
-        gui_app._install_excepthook(lambda: parent)
+    held = {}
+    gui_app._install_excepthook(lambda: held.get("window"))     # installed before there is a window, as at start
+    for parent in (None, window):
+        held["window"] = parent
         unhandled(ValueError("sbi_posterior.sample() failed"))
         told = all_asked()[-1]
         assert (told.kind, told.marker, told.title, told.sentence, told.answers) == (
@@ -3421,6 +3495,23 @@ def test_the_last_resort_error_goes_through_the_shared_question(monkeypatch):
                        "ValueError: the cell file could not be read", "ValueError: ", "KeyError: 'model'",
                        "RuntimeError: a second error", "ValueError: the first error"], (
         "the errors were not written to the console as before")
+
+
+def test_the_programs_last_resort_question_stands_over_its_window(tmp_path, monkeypatch):
+    """The whole program installs its hook of last resort before its window is built, and the question an error
+    nothing else caught then asks stands over the window."""
+    import sys
+    from core.gui import app as gui_app
+    from tests._fixtures import whole_program
+    qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    monkeypatch.setattr(sys, "__excepthook__", lambda *_args: None)
+    parents, real_ask = [], gui_app.ask
+    monkeypatch.setattr(gui_app, "ask", lambda parent, *words, **more: parents.append(parent) or real_ask(
+        parent, *words, **more))
+    with whole_program() as (_app, window):
+        sys.excepthook(ValueError, ValueError("the cell file could not be read"), None)
+        assert parents == [window], "the last-resort question does not stand over the program's window"
 
 
 def test_the_last_resort_question_cuts_a_message_its_screen_cannot_hold(monkeypatch):
