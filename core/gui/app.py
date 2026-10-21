@@ -15,7 +15,7 @@ from .widgets.ask import Ask, ask
 
 # What a start of PRISM that builds no window says as it ends, on the error stream when the process has one:
 # started from a console, it is the only sign the person gets.
-SAID = {"hand_over": "PRISM is already open: its window was brought to the front.",
+SAID = {"hand_over": "PRISM is already open: it was asked to come to the front.",
         "give_up": "PRISM is already running but did not answer; this start ends."}
 
 # The most a window's frame -- its title bar and its borders -- takes of a screen's height, which a question's own

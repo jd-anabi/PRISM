@@ -88,8 +88,9 @@ class Claim(QObject):
                 server.newConnection.connect(self._knocked_on)
                 self._server = server
             else:
-                log.warning("PRISM cannot hear a second start of itself, which will start a second PRISM: the local "
-                            "server %s did not listen (%s).", name, server.errorString())
+                log.warning("PRISM cannot hear a second start of itself, so a second start of PRISM is turned away "
+                            "while this one is open: the local server %s did not listen (%s).", name,
+                            server.errorString())
                 server.setParent(None)
 
     def _knocked_on(self) -> None:

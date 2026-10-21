@@ -3149,12 +3149,12 @@ def test_a_start_handed_over_builds_no_window_and_exits_zero(tmp_path, monkeypat
 
 def test_a_second_start_says_in_one_line_what_it_did(monkeypatch):
     """A start that builds no window says what it did in one line on the error stream, the only sign a start from a
-    console gives: that PRISM was open and was brought to the front, or that it did not answer and this start ends.
-    With no error stream, as a start with no console has none, nothing is written and nothing is raised."""
+    console gives: that PRISM was open and was asked to come to the front, or that it did not answer and this start
+    ends. With no error stream, as a start with no console has none, nothing is written and nothing is raised."""
     import io
     import sys
     from core.gui import app as gui_app
-    for case, line in (("hand_over", "PRISM is already open: its window was brought to the front.\n"),
+    for case, line in (("hand_over", "PRISM is already open: it was asked to come to the front.\n"),
                        ("give_up", "PRISM is already running but did not answer; this start ends.\n")):
         stream = io.StringIO()
         monkeypatch.setattr(sys, "stderr", stream)
@@ -3162,6 +3162,28 @@ def test_a_second_start_says_in_one_line_what_it_did(monkeypatch):
         assert stream.getvalue() == line, stream.getvalue()
         monkeypatch.setattr(sys, "stderr", None)
         gui_app._say(case)
+
+
+def test_a_prism_that_cannot_listen_turns_a_second_start_away_and_says_so(tmp_path, monkeypatch, caplog):
+    """A PRISM that holds the lock but whose local server does not listen cannot hear a second start of itself, and
+    a second start on its settings file is turned away while it is open, as its warning says, naming the server."""
+    import logging
+    from PySide6.QtNetwork import QLocalServer
+    from core.gui import one_instance
+    qt_app()
+    path = str(tmp_path / "prism.ini")
+    monkeypatch.setattr(QLocalServer, "listen", lambda server, name: False)
+    with caplog.at_level(logging.WARNING, logger="core.gui.one_instance"):
+        first = one_instance.claim(path)
+    try:
+        said = [record.getMessage() for record in caplog.records if record.name == "core.gui.one_instance"]
+        refused = one_instance.claim(path, tries=1, pause_ms=0)
+        assert (first.case, one_instance.current() is first, refused.case) == ("start", True, "give_up"), (
+            f"the first start: {first.case}, the second: {refused.case}")
+        assert len(said) == 1 and one_instance.server_name(path) in said[0] and (
+            "so a second start of PRISM is turned away while this one is open") in said[0], f"the warnings: {said}"
+    finally:
+        first.release()
 
 
 def test_the_open_prism_brings_its_window_to_the_front_when_a_second_start_knocks(tmp_path, monkeypatch,
