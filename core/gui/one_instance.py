@@ -14,6 +14,10 @@ connection, it is removed and taken; when it cannot be removed, its holder lives
 gives up. A lock that cannot be made at all holds no start back: PRISM then starts without it, and says so in a
 warning.
 
+The claim is let go as the window's close is accepted, though a figure window left open keeps the event loop
+running, or a run on the thread pool keeps the process: the next start then opens a window of its own. As the
+loop ends it is let go again, which does nothing.
+
 The command-line tool takes no lock and does not see this one.
 """
 import hashlib
@@ -186,7 +190,8 @@ def current() -> Claim | None:
 
 
 def release() -> None:
-    """Let go of the claim this process holds, when it holds one: the one call a test that builds the whole program
-    makes as it ends."""
+    """Let go of the claim this process holds, when it holds one; nothing when it holds none, so that letting go
+    twice does nothing. Made as the window's close is accepted, as the program's event loop ends, and as a test
+    that builds the whole program ends."""
     if _current is not None:
         _current.release()

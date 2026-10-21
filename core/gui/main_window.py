@@ -518,8 +518,10 @@ class MainWindow(QMainWindow):
         its row of the rail marked before it is. Then mark the rail, give the page the keyboard and say where the
         window is, all before returning. Parameter inference opened with no step shows the step in hand the first
         time and the step last shown after that; every step opens, one that cannot start yet too. Home is read
-        again each time it is opened. A part the window does not have, or a page its part does not have, raises
-        KeyError before anything moves or is built."""
+        again each time it is opened. A part the window does not have, or a page that a part of several pages does
+        not have -- Parameter inference, Effective temperature, Your own models -- raises KeyError before anything
+        moves or is built; a page named for a part of one page is not read, and a kind of record Records does not
+        list leaves Records at the kind it showed."""
         self._move(part, page, keyboard=Qt.OtherFocusReason)
 
     def come_to_front(self) -> None:

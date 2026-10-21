@@ -1,6 +1,6 @@
 """The Artifacts screen: read the artifact store from inside the app.
 
-A fifth Home tile and a PLAIN QWidget -- deliberately NOT a BasePanel. A BasePanel enrols itself in
+The window's part Records, and a PLAIN QWidget -- deliberately NOT a BasePanel. A BasePanel enrols itself in
 ``BasePanel._instances`` and ``_set_busy`` disables every instance's controls column while ANY run is
 live, so a browser built on one would grey out the moment a training started and you could not read
 the log of the thing you were waiting for. Reading is never blocked here; the actions that CHANGE the
@@ -267,8 +267,8 @@ class ArtifactScreen(QWidget):
         self._sync_actions()
 
         # Restore BEFORE connecting currentIndexChanged: setCurrentIndex fires it, and a refresh()
-        # during __init__ would read the store at launch -- start-up work kept off that path (see
-        # showEvent). Same construction-never-fires rule the Settings screen's radios follow.
+        # during __init__ would read the store as the screen is built, though its first show lists it
+        # anyway (see showEvent). Same construction-never-fires rule the Settings screen's radios follow.
         self.restore_settings(settings.settings())
         self.kind_combo.currentIndexChanged.connect(lambda _i: self.refresh())
 

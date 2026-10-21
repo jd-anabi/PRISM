@@ -286,8 +286,7 @@ def _drawing_code_raises_nothing():
 def _layout_room_put_back():
     """The room the screen offers the window, which the look's two layout thresholds are held to, is put back to
     none after every test. Every window a test builds hands the look its room as it sizes itself, and a room left
-    in force would hold the thresholds of every later test. The look is read where its module is kept, and loaded
-    by nothing here: a test that never loads it pays nothing."""
+    in force would hold the thresholds of every later test. The look is read where its module is kept."""
     import sys
     yield
     design = sys.modules.get("core.gui.design")
