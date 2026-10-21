@@ -122,6 +122,26 @@ def code_only(obj) -> str:
     return ast.unparse(_strip_docstrings(ast.parse(textwrap.dedent(inspect.getsource(obj)))))
 
 
+def calls_that_speak(source: str) -> list[str]:
+    """Every call in ``source`` that prints, logs or writes to a standard stream, as text: ``print``,
+    a call on ``log``, ``logger``, ``LOGGER``, ``logging`` or ``_log``, and a call on ``sys.stdout`` or
+    ``sys.stderr``. Under the window each of them passes a cancel checkpoint, which a save's commit
+    must not. Hand it ``code_only(fn)``, so a docstring that quotes the rule cannot trip it."""
+    loggers = {"log", "logger", "LOGGER", "logging", "_log"}
+    said = []
+    for n in ast.walk(ast.parse(source)):
+        if not isinstance(n, ast.Call):
+            continue
+        f = n.func
+        if isinstance(f, ast.Name) and f.id == "print":
+            said.append(ast.unparse(n))
+        elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in loggers:
+            said.append(ast.unparse(n))
+        elif isinstance(f, ast.Attribute) and ast.unparse(f.value) in ("sys.stdout", "sys.stderr"):
+            said.append(ast.unparse(n))
+    return said
+
+
 class PaneCapture:
     """Records what a panel writes to its log pane, as ``(level, text)`` in order, INSTEAD of
     rendering it. ``PaneCapture(panel)`` replaces BOTH of that one pane's channels:

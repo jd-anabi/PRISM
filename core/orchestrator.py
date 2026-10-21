@@ -58,7 +58,7 @@ from .SBI.run_guards import (_find_nd_gmm, _gmm_fingerprint,  # noqa: E402
                              _log_params_for)
 from .SBI import (embedded_network, pipeline, analysis, decorrelate, chi, derived, overlay, ppc,
                   truncate,
-                  statistics, training_checkpoint)
+                  statistics, training_checkpoint, fit_state)
 from .SBI.Priors import sbi_prior_wrapper
 from .SBI.reparam import (
     build_inferred_bijection, TransformedPosterior, build_rescale_bijection,
@@ -2660,3 +2660,8 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
 # which is where the suites patch them (orchestrator.build_experiment_obs_chi).
 from .SBI.observations import (build_experiment_obs, build_experiment_obs_spontaneous,  # noqa: E402
                                build_experiment_obs_chi, RecordingSet)
+
+# Last, once everything the named code needs has loaded: its digests are taken now and kept for the
+# process, so a fit records the code this process runs, even when a file is edited while the window
+# stays open. Nothing may follow this line.
+fit_state.remember_loaded_code()

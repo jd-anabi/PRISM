@@ -11,7 +11,10 @@ Here: the two generations of the state and what a torn save leaves readable, the
 section, the lock seen from this process and from another, and each digest of the identity with the
 first difference between two of them.
 """
+import ast
 import copy
+import importlib
+import inspect
 import json
 import linecache
 import os
@@ -33,6 +36,7 @@ from core.SBI.fit_state import (FIT_CODE, FIT_CONSTANTS, SBI_TRAINER_FILES, STAT
                                 FitLock, code_digests, constants, first_difference, indices_digest,
                                 libraries, load_state, network_digest, running, save_state,
                                 trainer_files_digest)
+from tests._fixtures import calls_that_speak, code_only
 
 
 # ── the two generations of the state ─────────────────────────────────────────────────────────────
@@ -111,6 +115,40 @@ def test_a_save_runs_inside_the_deferred_cancel_section(tmp_path, monkeypatch):
     save_state(tmp_path, {"passes": 1})
     assert seen == [True]
     assert not runs.cancel_is_deferred()
+
+
+def _run_by(fn) -> list:
+    """``fn`` and every function of the program's own that its parsed code calls by name, and the ones
+    those call in turn: what runs when ``fn`` does, as far as a name can tell."""
+    found, todo = [], [fn]
+    while todo:
+        f = todo.pop()
+        if f in found:
+            continue
+        found.append(f)
+        for node in ast.walk(ast.parse(code_only(f))):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                callee = f.__globals__.get(node.func.id)
+                if inspect.isfunction(callee) and callee.__module__.startswith("core."):
+                    todo.append(callee)
+    return found
+
+
+def test_nothing_prints_or_logs_inside_a_saved_pass():
+    """Under the window every print and every record passes a cancel checkpoint, so one said inside the
+    save would let a Cancel stop it between its two renames. Read on the parsed code of the save and of
+    every function of the program's own it reaches by name, the atomic writer's helpers among them, so a
+    helper the save gains later is read too, and a docstring that quotes the rule cannot trip it."""
+    ran = _run_by(fit_state.save_state)
+    reached = {f"{f.__module__}.{f.__name__}" for f in ran}
+    assert {"core.SBI.fit_state.save_state", "core.Helpers.file_manager.atomic_torch_save",
+            "core.Helpers.file_manager._atomic_write", "core.Helpers.file_manager._replace_retrying",
+            "core.Helpers.file_manager._discard"} <= reached, reached
+    for fn in ran:
+        said = calls_that_speak(code_only(fn))
+        assert said == [], f"{fn.__module__}.{fn.__name__} speaks inside a saved pass: {said}"
+    # the scan sees each kind of call it should flag
+    assert len(calls_that_speak("def f():\n    log.info('x')\n    print('y')\n    sys.stderr.write('z')\n")) == 3
 
 
 # ── the lock ─────────────────────────────────────────────────────────────────────────────────────
@@ -192,6 +230,42 @@ def test_the_code_digest_moves_with_an_edit_inside_a_named_function_and_not_outs
         # Taken out of the module table here rather than through the monkeypatch fixture: the fixture
         # puts back at its teardown whatever it took out, which would leave the probe imported.
         sys.modules.pop("fit_code_probe", None)
+
+
+def test_the_code_digest_kept_for_a_process_is_the_code_it_loaded(tmp_path, monkeypatch):
+    """A process runs the code it imported, while its file can be edited afterwards and is then read
+    as it stands. The digest a fit records is the one kept when the code was loaded, so a window left
+    open across an edit does not record the edited file as the code it trains with."""
+    importlib.import_module("core.orchestrator")       # its own remembering lands in the process's store
+    monkeypatch.setattr(fit_state, "_LOADED", {})      # this test's store, put back at its end
+    probe = tmp_path / "fit_code_probe.py"
+    probe.write_text(_PROBE, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    names = ("fit_code_probe.f",)
+    try:
+        fit_state.remember_loaded_code(names)
+        kept = fit_state.loaded_code(names)
+        assert kept == code_digests(names) and kept["fit_code_probe.f"] != "unreadable", kept
+
+        probe.write_text(_PROBE.replace("the first wording", "a second, longer wording"), encoding="utf-8")
+        linecache.checkcache()
+        assert code_digests(names) != kept, "the edit on disk was not seen"
+        assert fit_state.loaded_code(names) == kept, "the kept digest followed the file, not the loaded code"
+        fit_state.remember_loaded_code(names)
+        assert fit_state.loaded_code(names) == kept, "remembering again replaced the first digest"
+    finally:
+        sys.modules.pop("fit_code_probe", None)         # for the reason the test above gives
+
+
+def test_the_training_code_keeps_its_digests_as_it_finishes_loading():
+    """The module that builds and trains the network takes the digests of the named code as its last
+    statement, once every named module has loaded, so the code a process keeps is the code it runs."""
+    orchestrator = importlib.import_module("core.orchestrator")
+    last = ast.parse(inspect.getsource(orchestrator)).body[-1]
+    assert ast.unparse(last) == "fit_state.remember_loaded_code()", ast.unparse(last)
+    kept = fit_state.loaded_code()
+    assert set(kept) == set(FIT_CODE)
+    assert [name for name, digest in kept.items() if digest == "unreadable"] == []
 
 
 def test_the_named_code_is_the_code_that_builds_or_trains_the_network():
@@ -291,5 +365,5 @@ def test_the_network_and_the_split_digests_read_shapes_and_indices():
     assert network_digest(torch.nn.Linear(3, 4)) != network_digest(a)
     split = torch.tensor([3, 1, 2])
     assert indices_digest(split) != indices_digest(torch.tensor([1, 2, 3]))
-    assert indices_digest(split) == indices_digest(split.to(torch.int32).to(torch.int64))
+    assert indices_digest(split.to(torch.int32)) == indices_digest(split)
     assert len(indices_digest(split)) == 16

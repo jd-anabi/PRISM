@@ -24,7 +24,9 @@ has the parts named in ``IDENTITY_PARTS``, compared in that order by ``first_dif
 simulated rows, the number of batches read, the training settings, a digest of the source of each
 function and class that builds or trains the network (``FIT_CODE``), the configuration's constants
 that code reads (``FIT_CONSTANTS``), the libraries with a digest of the files of sbi's trainer, and the
-shape of the network. Only the digests are made here; what fills each part is the trainer's.
+shape of the network. Only the digests are made here; what fills each part is the trainer's. The code's
+digests are the ones kept when that code was loaded (``loaded_code``): a process runs the code it
+imported, and a window left open across an edit must not record the edited file as what it trains with.
 """
 import errno
 import hashlib
@@ -103,6 +105,33 @@ def code_digests(names: tuple[str, ...] = FIT_CODE) -> dict[str, str]:
         except (OSError, TypeError, SyntaxError):   # no file, a built-in, a class's file mid-edit
             out[dotted] = "unreadable"
     return out
+
+
+# The digests of the named code as this process loaded it, by dotted name (``remember_loaded_code``).
+_LOADED: dict[str, str] = {}
+
+
+def remember_loaded_code(names: tuple[str, ...] = FIT_CODE) -> None:
+    """Keep, for the rest of the process, the digest of each named function or class as its file
+    stands now; a name already kept keeps its first digest.
+
+    Called as the last statement of the module that builds and trains the network, when the named code
+    has just been loaded. A process runs the code it imported, while ``inspect.getsource`` reads the
+    file as it stands when asked: a window left open across an edit would otherwise record, for a fit
+    it starts, the edited text while it trains the code it loaded, and a resume in a new window,
+    running the edited code, would match it. A name that does not resolve raises, as in
+    ``code_digests``, so a list out of step with the code fails the import at once.
+    """
+    missing = tuple(name for name in names if name not in _LOADED)
+    if missing:
+        _LOADED.update(code_digests(missing))
+
+
+def loaded_code(names: tuple[str, ...] = FIT_CODE) -> dict[str, str]:
+    """``{dotted name: digest}`` of the named code as this process loaded it: what a fit records as
+    its code. A name not kept yet is read now and kept (``remember_loaded_code``)."""
+    remember_loaded_code(names)
+    return {name: _LOADED[name] for name in names}
 
 
 def _as_lists(value):

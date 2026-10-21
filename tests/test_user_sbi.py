@@ -5062,32 +5062,17 @@ def test_nothing_prints_or_logs_inside_a_checkpoint_commit():
     Parsed (code_only), so a docstring that quotes the rule cannot trip it."""
     from core.Helpers import file_manager
     from core.SBI import training_checkpoint as tc
+    from tests._fixtures import calls_that_speak
 
-    commit = [tc.save, tc.mark_complete, tc._refresh_manifest, file_manager._atomic_write]
-    if hasattr(file_manager, "atomic_torch_save"):
-        commit.append(file_manager.atomic_torch_save)
-    loggers = {"log", "logger", "LOGGER", "logging", "_log"}
+    # Each named outright, none only when present: a helper renamed away fails here instead of leaving
+    # its code unread. The atomic writer's rename and clean-up live in helpers of their own.
+    commit = [tc.save, tc.mark_complete, tc._refresh_manifest, file_manager._atomic_write,
+              file_manager._replace_retrying, file_manager._discard, file_manager.atomic_torch_save]
     for fn in commit:
-        tree = ast.parse(code_only(fn))
-        said = []
-        for n in ast.walk(tree):
-            if not isinstance(n, ast.Call):
-                continue
-            f = n.func
-            if isinstance(f, ast.Name) and f.id == "print":
-                said.append(ast.unparse(n))
-            elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in loggers:
-                said.append(ast.unparse(n))
-            elif isinstance(f, ast.Attribute) and ast.unparse(f.value) in ("sys.stdout", "sys.stderr"):
-                said.append(ast.unparse(n))
+        said = calls_that_speak(code_only(fn))
         assert said == [], f"{fn.__module__}.{fn.__name__} speaks inside a checkpoint commit: {said}"
-    # non-vacuous: the scan does see a call it should flag
-    probe = ast.parse("def f():\n    log.info('x')\n    print('y')\n")
-    flagged = [n for n in ast.walk(probe) if isinstance(n, ast.Call)
-               and ((isinstance(n.func, ast.Name) and n.func.id == "print")
-                    or (isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)
-                        and n.func.value.id in loggers))]
-    assert len(flagged) == 2, flagged
+    # non-vacuous: the scan does see each kind of call it should flag
+    assert len(calls_that_speak("def f():\n    log.info('x')\n    print('y')\n    sys.stderr.write('z')\n")) == 3
 
 
 def test_the_sbi_records_carry_their_levels_at_run_time(monkeypatch, caplog):
