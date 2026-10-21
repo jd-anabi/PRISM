@@ -1122,27 +1122,31 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
     tests/_fixtures.py. Parsed, not searched: a class named in prose, or handed to a builder, is not
     a construction. Refused in every file of this folder but that one: a call of a window class
     (also through an expression that names one, as a lookup in a dict of classes), a local subclass
-    of BasePanel, and a call of build_app, which whole_program alone makes. A class called through
-    a variable is not seen here; the builders take the class as an argument, so no suite has a
-    reason to hold one and call it."""
+    of a window class, BasePanel among them, and a call of build_app, which whole_program alone
+    makes. A class called through a variable is not seen here; the builders take the class as an
+    argument, so no suite has a reason to hold one and call it."""
     import ast
     built = {"MainWindow", "InferenceScreen", "FdtPanel", "CrossValPanel", "SimulatePanel",
              "ReductionPanel", "ModelBuilderScreen", "ArtifactScreen", "ConfigPanel", "PriorPanel",
              "PosteriorPanel", "ValidatePanel", "InferPanel", "TSNPEPanel", "BasePanel",
              "HomeScreen", "SettingsScreen", "TemperatureScreen", "RecordViewer", "Shell", "HelpScreen",
              "ModelsScreen", "PartError"}
-    # The list is kept closed over the program. Every class with a base that a file of the window, of its
-    # screens or of its panels defines under a public name is named above, or here among those a suite still
-    # builds itself. So a class a later change adds, or a folder it adds beside the window's, fails here
+    # The list is kept closed over the program. Every class with a base that a file of the window's own
+    # folder, of its screens or of its panels defines under a public name is named above, or here among
+    # those a suite still builds itself, or among the classes of the window's folder that are no window,
+    # part or step. So a class a later change adds, or a folder it adds beside the window's, fails here
     # until it is placed.
     by_hand_still = set()                    # none today
+    no_window = {"Place", "Claim", "NewPngWatcher", "WorkerCancelled", "PrismStyle", "FocusRing",
+                 "FocusFollower", "Appearance", "WorkerSignals", "Worker"}
+    placed = built | by_hand_still | no_window
     gui = Path(__file__).resolve().parents[1] / "core" / "gui"
     folders = sorted(p.name for p in gui.iterdir() if p.is_dir() and p.name != "__pycache__")
-    defined = {node.name for path in (gui / "main_window.py", *sorted((gui / "screens").rglob("*.py")),
+    defined = {node.name for path in (*sorted(gui.glob("*.py")), *sorted((gui / "screens").rglob("*.py")),
                                       *sorted((gui / "panels").rglob("*.py")))
                for node in ast.parse(path.read_text(encoding="utf-8")).body
                if isinstance(node, ast.ClassDef) and node.bases and not node.name.startswith("_")}
-    assert (folders, sorted(defined - built - by_hand_still), sorted((built | by_hand_still) - defined)) == (
+    assert (folders, sorted(defined - placed), sorted(placed - defined)) == (
         ["assets", "panels", "screens", "widgets"], [], []), (
         "the window's folders; then the classes it defines that this scan names nowhere; then the names "
         "this scan holds that are defined no longer")
@@ -1166,7 +1170,7 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
                            or (callee is None and bool(named(node.func) & built)))
             else:
                 by_hand = (isinstance(node, ast.ClassDef)
-                           and any(last_name(base) == "BasePanel" for base in node.bases))
+                           and any(last_name(base) in built for base in node.bases))
             if by_hand:
                 found.append(f"{path.name}:{node.lineno}")
     assert found == [], f"{len(found)} constructions written by hand: {found}"

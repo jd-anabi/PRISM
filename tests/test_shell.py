@@ -756,8 +756,8 @@ def test_a_mouse_click_on_a_rail_row_puts_no_ring_on_the_page():
     from core.gui import style
     from tests._look_helpers import _arrive, _moved_on
     app = qt_app()
+    window = build_window()                             # first: a window that cannot be built leaves no follower
     follower = style.FocusFollower(app)
-    window = build_window()
     try:
         _shown_off_screen(window)
         for (start, page), target in ((("live", None), "models"), (("models", "builder"), "live"),
@@ -788,6 +788,8 @@ def test_a_click_on_a_rail_row_gives_the_page_no_keyboard_whatever_held_it_and_a
     from PySide6.QtWidgets import QWidget
     from core.gui import style
     app = qt_app()
+    window = build_window()                             # first: a window that cannot be built leaves no follower
+    rail = window.shell.rail
     follower = style.FocusFollower(app)
     kept = QWidget.setFocus
 
@@ -796,8 +798,6 @@ def test_a_click_on_a_rail_row_gives_the_page_no_keyboard_whatever_held_it_and_a
         follower.arrived(widget, reason)
 
     monkeypatch.setattr(QWidget, "setFocus", set_focus)
-    window = build_window()
-    rail = window.shell.rail
 
     def click(key):
         """A click on the row of the part ``key``; the row the rail marks then."""
@@ -1001,14 +1001,19 @@ def test_a_step_names_a_held_record_by_the_name_its_save_box_gave_it(monkeypatch
     assert rail.row("training").accessibleName() == "Step 3, Training. Done: retrain"
 
 
-def test_the_foot_reads_nothing_is_running_at_start_and_names_the_running_place():
+def test_the_foot_reads_nothing_is_running_at_start_and_names_the_running_place(monkeypatch):
     """At the window's start the foot says nothing is running, is no control and no clock is ticking. While a
     panel's run is live it names the place by its part ("Running: Effective temperature") or, for a step, by the
     step, with the time it has gone on and that settings are locked; its tool tip and its accessible name name the
     place in full, its page too. It is a button then, and the clock ticks once a second. When the run ends the
-    foot says nothing is running again and the clock stops; a foot that held the keyboard hands it to the rail."""
+    foot says nothing is running again and the clock stops; a foot that held the keyboard hands it to the rail.
+    The window's clock is read through a stand-in, so that each time is exact: a run's time starts at 0:00, that
+    of a run started a minute after another ended too."""
+    from core.gui import main_window
     from core.gui.panels.crossval_panel import CrossValPanel
     qt_app()
+    now = [1000.0]
+    monkeypatch.setattr(main_window, "time", SimpleNamespace(monotonic=lambda: now[0]))
     window = build_window()
     foot = window.shell.rail.foot
     idle = ("none", "Nothing is running", "Only one run at a time.", False)
@@ -1021,13 +1026,17 @@ def test_the_foot_reads_nothing_is_running_at_start_and_names_the_running_place(
         panel._set_busy(True)
         try:
             assert (foot._marker, foot._title, foot.is_button()) == ("now", title, True)
-            # tolerant by one tick: this is real elapsed time, not a stub
-            assert foot._words in ("0:00 so far. Settings are locked.", "0:01 so far. Settings are locked.")
+            assert foot._words == "0:00 so far. Settings are locked.", (
+                f"the run's time did not start at 0:00: {foot._words}")
             assert foot.toolTip() == foot.accessibleName() == f"{whole}. {foot._words}"
             assert window._run_timer.isActive() and window._run_timer.interval() == 1000
             assert window._run_timer.parent() is window
+            now[0] += 247                                         # four minutes and seven seconds on, a tick
+            window._tick_running()
+            assert foot._words == "4:07 so far. Settings are locked.", f"the clock did not tick: {foot._words}"
         finally:
             panel._set_busy(False)
+        now[0] += 60                                              # the next run starts a minute later
         assert (foot._marker, foot._title, foot._words, foot.is_button()) == idle
         assert not window._run_timer.isActive(), "the clock must stop when the run does"
     panel._set_busy(True)
@@ -1111,8 +1120,9 @@ def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowh
 def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
     """A live run is said at the foot alone: no row of the rail is marked for it or carries a mark of it, no page
     name does, and no row of Home's three tables, which Home reads in sight as the run starts; the page names keep
-    their words. Nothing is disabled by it: every part and every step still opens, and Effective temperature's
-    other page can still be chosen by its name."""
+    their words. Nothing is disabled by it: Home's main button goes to the run, every part and every step still
+    opens and no part is disabled as a whole, so that every list and page stays usable, and Effective
+    temperature's other page can still be chosen by its name."""
     from PySide6.QtWidgets import QAbstractButton
     from core.gui.panels.crossval_panel import CrossValPanel
     qt_app()
@@ -1127,17 +1137,21 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
                 [_cells(table) for table in (home.parts_table, home.records_table)],
                 [row[0] for row in _cells(home.steps_table)])
 
-    def during(panel):
-        """A run of ``panel`` live, started while Home is in sight."""
+    def during(panel, where):
+        """A run of ``panel`` live, started while Home is in sight; ``where`` is the run's place."""
         window.go_to("home")
         panel._set_busy(True)
         try:
             assert home.next_heading.label.text() == "Next: nothing until the run ends", "Home did not read"
             assert seen() == before, "a row carries a mark of the run"
             assert [name.text() for name in names] == page_words
+            home.next_button.click()
+            assert window.current_place() == where, (
+                f"Home's main button did not go to the run: {window.current_place()}")
             for place in keys.PARTS:
                 window.go_to(place.key)
                 assert window.current_place()[0] == place.key and rail.row(place.key).isEnabled()
+                assert window.part(place.key).isEnabled(), f"{place.key} is disabled by a live run"
             for step in keys.STEPS:
                 window.go_to("inference", step.key)
                 assert window.current_place() == ("inference", step.key) and rail.row(step.key).isEnabled()
@@ -1150,8 +1164,9 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
     try:
         _shown_off_screen(window)
         before = seen()
-        for panel in (window.panel(CrossValPanel), window.part("inference").posterior_panel):
-            during(panel)
+        for panel, where in ((window.panel(CrossValPanel), ("temperature", "sweep")),
+                             (window.part("inference").posterior_panel, ("inference", "training"))):
+            during(panel, where)
     finally:
         window.hide()
 
@@ -1749,14 +1764,31 @@ class _CannotBeBuilt(Exception):
 def _card_and_programs(monkeypatch) -> list:
     """Every question put to the graphics card and every program started, from now to the test's end, each named in
     the list handed back: a program run (by the program's name), whether there is a card, the card's free memory,
-    the memory the card holds for the program and the memory it uses, and the device check. Each stand-in records
-    its call and answers as a card with room to spare would, so that the code behind it goes on as it goes on a
-    computer with one, whatever an earlier test woke on the card; nothing reaches a card."""
+    the memory the card holds for the program and the memory it uses, and the device check. Each of these six
+    stand-ins records its call and answers as a card with room to spare would, so that the code behind it goes on
+    as it goes on a computer with one, whatever an earlier test woke on the card. Beneath them every other public
+    function of the card's module, and the other ways to start a program, are recorded by their names and passed
+    through to the real call: a question put to the card some other way is named too."""
+    import os
     import subprocess
     import torch
     from core import config
     calls = []
     card = config.DeviceConfig(device=torch.device("cuda"), dtype=torch.float32, batch_size=2 ** 11)
+
+    def passed_through(name, real):
+        def stand_in(*args, **kwargs):
+            calls.append(name)
+            return real(*args, **kwargs)
+        return stand_in
+
+    for name in dir(torch.cuda):
+        value = getattr(torch.cuda, name)
+        if (not name.startswith("_") and callable(value) and not isinstance(value, type)
+                and str(getattr(value, "__module__", "")).startswith("torch.cuda")):
+            monkeypatch.setattr(torch.cuda, name, passed_through(f"torch.cuda.{name}", value))
+    monkeypatch.setattr(subprocess, "Popen", passed_through("subprocess.Popen", subprocess.Popen))
+    monkeypatch.setattr(os, "system", passed_through("os.system", os.system))
 
     def recorded(words, answer):
         def stand_in(*args, **kwargs):
@@ -1785,15 +1817,18 @@ _READ_AT_FIRST_OPENING = {"inference": {"the program nvidia-smi": 1, "the device
                                         "the card's memory held": 4, "the card's memory in use": 4}}
 
 
-def test_opening_prism_touches_no_card_and_starts_no_program(monkeypatch):
-    """From the window's build to its first idle turn with Home shown, nothing asks the graphics card anything and
-    no other program is started: a program run, whether there is a card, its free memory and the device check are
-    each recorded (not refused by raising: the callers swallow what is raised, so a stand-in that raised would prove
-    nothing), and none is recorded. Nothing ticks then either: no timer of the window or of the application runs,
-    and of every start of a timer from Python, a timer with no parent among them, none still runs after the first
-    idle turn, nor is a single shot of a later moment waiting."""
+def test_opening_prism_touches_no_card_and_starts_no_program(tmp_path, monkeypatch):
+    """From the start of the whole program -- as a start of PRISM builds it, its window among it -- to its first idle
+    turn with Home shown, nothing asks the graphics card anything and no other program is started: a program run,
+    whether there is a card, its free memory and the device check are each recorded (not refused by raising: the
+    callers swallow what is raised, so a stand-in that raised would prove nothing), and none is recorded. Nothing
+    ticks then either: no timer of the window or of the application runs, and of every start of a timer from Python,
+    a timer with no parent among them, none still runs after the first idle turn, nor is a single shot of a later
+    moment waiting."""
     from PySide6.QtCore import QObject, QTimer
+    from tests._fixtures import whole_program
     app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     calls = _card_and_programs(monkeypatch)
     started, waiting = [], []
     start, single_shot, start_timer = QTimer.start, QTimer.singleShot, QObject.startTimer
@@ -1814,32 +1849,57 @@ def test_opening_prism_touches_no_card_and_starts_no_program(monkeypatch):
     monkeypatch.setattr(QTimer, "start", started_timer)
     monkeypatch.setattr(QTimer, "singleShot", staticmethod(waiting_shot))
     monkeypatch.setattr(QObject, "startTimer", started_by)
-    window = build_window()
-    try:
-        _shown_off_screen(window)                                 # Home shown, then one idle turn
-        assert window.current_place() == ("home", None)
-        assert calls == [], f"opening PRISM asked the card or started a program: {calls}"
-        ticking = [timer for timer in app.findChildren(QTimer) + window.findChildren(QTimer) if timer.isActive()]
-        ticking += [timer for timer in started if not isinstance(timer, QTimer) or timer.isActive()]
-        assert (ticking, waiting) == ([], []), f"a timer runs at launch: {ticking}, {waiting}"
-    finally:
-        window.hide()
+    with whole_program() as (_app, window):
+        try:
+            _shown_off_screen(window)                             # Home shown, then one idle turn
+            assert window.current_place() == ("home", None)
+            assert calls == [], f"opening PRISM asked the card or started a program: {calls}"
+            ticking = [timer for timer in app.findChildren(QTimer) + window.findChildren(QTimer) if timer.isActive()]
+            ticking += [timer for timer in started if not isinstance(timer, QTimer) or timer.isActive()]
+            assert (ticking, waiting) == ([], []), f"a timer runs at launch: {ticking}, {waiting}"
+        finally:
+            window.hide()
 
 
 def test_only_the_known_pages_read_the_card_when_first_opened(monkeypatch):
     """Each part opened for the first time, in the rail's order, asks the graphics card nothing and starts no
     program, but Parameter inference, whose six steps are built together at its first opening: what it asks is
-    what is listed, so many times each, and nothing else."""
+    what is listed, so many times each, and nothing else. The window is shown, off the screen, and given an idle
+    turn after each opening, so that each part's first show runs as it runs in front of a person: a first opening
+    is a build and a show."""
     from collections import Counter
     qt_app()
     calls = _card_and_programs(monkeypatch)
     window = build_window()
     found = {}
+    try:
+        _shown_off_screen(window)
+        for place in keys.PARTS:
+            calls.clear()
+            window.go_to(place.key)
+            QApplication.processEvents()
+            found[place.key] = dict(Counter(calls))
+    finally:
+        window.hide()
+    listed = {place.key: _READ_AT_FIRST_OPENING.get(place.key, {}) for place in keys.PARTS}
+    otherwise = {part: asked for part, asked in found.items() if asked != listed[part]}
+    assert otherwise == {}, f"a first opening asked other than is listed: {otherwise}"
+
+
+def test_every_kind_of_panel_a_part_holds_is_listed_with_that_part():
+    """The window, asked for a panel of a kind no part built holds, builds the part that holds that kind, read off
+    its list of the part each kind of panel stands in: every kind of panel the window's parts hold stands in that
+    list with the part that holds it, and the list holds no other."""
+    from core.gui import main_window
+    qt_app()
+    window = build_window()
     for place in keys.PARTS:
-        calls.clear()
-        window.go_to(place.key)
-        found[place.key] = dict(Counter(calls))
-    assert found == {place.key: _READ_AT_FIRST_OPENING.get(place.key, {}) for place in keys.PARTS}, found
+        window.part(place.key)
+    held = {type(panel): window._places[panel][0] for panel in window._all_panels()}
+    listed = main_window._PANEL_PARTS
+    otherwise = sorted(f"{kind.__name__}: held in {held.get(kind)}, listed with {listed.get(kind)}"
+                       for kind in set(held) | set(listed) if held.get(kind) != listed.get(kind))
+    assert otherwise == [], f"a kind of panel not listed with the part that holds it: {otherwise}"
 
 
 def test_a_part_is_built_at_its_first_opening_and_once():
@@ -2502,10 +2562,10 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
 
     monkeypatch.setattr(main_window.MainWindow, "_make", make)
     given = _given(monkeypatch)
+    window, other = build_window(), build_window()      # first: a window that cannot be built leaves no follower
+    rail = window.shell.rail
     follower = style.FocusFollower(app)
     monkeypatch.setattr(style, "_FOLLOWER", follower)         # the application's follower, as the window finds it
-    window, other = build_window(), build_window()
-    rail = window.shell.rail
     try:
         made = sorted(((shortcut.key().toString(QKeySequence.PortableText), str(shortcut.property("does")),
                         shortcut.context(), shortcut.autoRepeat()) for shortcut in window.findChildren(QShortcut)),
@@ -2609,9 +2669,9 @@ def test_the_key_between_the_rail_and_the_page_moves_the_keyboard_both_ways(monk
     from core.gui.panels.reduction_panel import ReductionPanel
     app = qt_app()
     given = _given(monkeypatch)
-    follower = style.FocusFollower(app)
-    window = build_window()
+    window = build_window()                             # first: a window that cannot be built leaves no follower
     rail = window.shell.rail
+    follower = style.FocusFollower(app)
     try:
         _shown_off_screen(window)
         with _in_front(window):
@@ -3608,7 +3668,7 @@ def test_the_last_resort_question_cuts_a_message_its_screen_cannot_hold(monkeypa
 
     paths = "\n".join(f"cells/cell_{number:03}.txt" for number in range(300))    # one to a line, and no space
     screen = QApplication.primaryScreen().availableGeometry().height() - gui_app.FRAME
-    for room in (768 - 48 - gui_app.FRAME, screen):
+    for room in (768 - 48 - gui_app.FRAME, 600 - gui_app.FRAME):        # rooms of their own, not the run's screen
         shown = gui_app._fitted(whole, room)
         kept = shown[:-1]
         assert (shown[-1:], whole.startswith(kept + " ")) == ("\u2026", True), f"not cut at a word: {shown[-40:]}"
