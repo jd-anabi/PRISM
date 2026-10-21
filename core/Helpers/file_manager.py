@@ -9,8 +9,28 @@ import numpy as np
 import torch
 
 
+def _discard(tmp: Path) -> None:
+    """Remove a temp file a failed write left; a failure to remove it is not worth the caller's error."""
+    try:
+        tmp.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _replace_retrying(src: Path, dst: Path, retries: int, backoff_s: float) -> None:
+    """``os.replace(src, dst)``, tried again on PermissionError (see ``retries`` in :func:`_atomic_write`)."""
+    for attempt in range(retries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == retries - 1:
+                raise
+            time.sleep(backoff_s * (attempt + 1))
+
+
 def _atomic_write(path, writer: Callable[..., None], *, retries: int = 3,
-                  backoff_s: float = 0.1) -> Path:
+                  backoff_s: float = 0.1, previous: Path | None = None) -> Path:
     """Run ``writer(fh)`` against a sibling temp file, then ``os.replace`` it over ``path``.
 
     The one mechanism every ``atomic_*`` helper below shares. Writes a sibling ``<name>.tmp``, fsyncs
@@ -28,6 +48,17 @@ def _atomic_write(path, writer: Callable[..., None], *, retries: int = 3,
     :param retries: os.replace attempts on PermissionError. Windows-specific: a virus scanner or an
                     Explorer preview holding the destination open makes the rename fail transiently,
                     and a multi-day run must not die on that.
+    :param previous: where the file being replaced is kept, one generation back. Once the temp file is
+                    fsynced, an existing ``path`` is renamed to ``previous`` (replacing what was there),
+                    then the temp file to ``path``. At every instant one whole generation is on disk:
+                    before the first rename both files are as they were, between the two ``path`` is
+                    absent and ``previous`` holds the last good one, after them ``path`` is the new one
+                    and ``previous`` the one before it. A rename rather than a copy, because a copy
+                    rewrites the whole file on every save. Both renames are tried again on
+                    PermissionError like the single one.
+
+    A failed rename removes the temp file and re-raises; a failure at the first of the two leaves
+    ``path`` and ``previous`` as they were.
     """
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
@@ -42,23 +73,20 @@ def _atomic_write(path, writer: Callable[..., None], *, retries: int = 3,
         # writes every N batches, so a recurring failure would otherwise leave one per attempt beside
         # the file it failed to replace -- noise exactly where someone is trying to diagnose a
         # failing run. The original exception is re-raised untouched.
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        _discard(tmp)
         raise
-    for attempt in range(retries):
-        try:
-            os.replace(tmp, path)
-            return path
-        except PermissionError:
-            if attempt == retries - 1:
-                raise
-            time.sleep(backoff_s * (attempt + 1))
-    return path                                          # unreachable; keeps the return type honest
+    try:
+        if previous is not None and path.exists():
+            _replace_retrying(path, Path(previous), retries, backoff_s)
+        _replace_retrying(tmp, path, retries, backoff_s)
+    except BaseException:
+        _discard(tmp)                                    # the same reason as a failed write's
+        raise
+    return path
 
 
-def atomic_torch_save(obj, path, *, retries: int = 3, backoff_s: float = 0.1) -> Path:
+def atomic_torch_save(obj, path, *, previous: Path | None = None, retries: int = 3,
+                      backoff_s: float = 0.1) -> Path:
     """``torch.save`` that a crash cannot leave half-written. Mechanism: :func:`_atomic_write`.
 
     Added for the training checkpoint (the simulation cache), which rewrites its state file every N
@@ -68,8 +96,12 @@ def atomic_torch_save(obj, path, *, retries: int = 3, backoff_s: float = 0.1) ->
     ``ArtifactWriter.payload``). The window there is one write rather than one every 50 batches, but
     what it protects is the product of a multi-day run, and a torn ``.pt`` is not detectably torn: it
     is an unpickling error hours later.
+
+    ``previous`` keeps the file it replaces one generation back (see :func:`_atomic_write`): the saved
+    state of a training's fit, rewritten after every pass.
     """
-    return _atomic_write(path, lambda fh: torch.save(obj, fh), retries=retries, backoff_s=backoff_s)
+    return _atomic_write(path, lambda fh: torch.save(obj, fh), retries=retries, backoff_s=backoff_s,
+                         previous=previous)
 
 
 def atomic_savez(path, arrays: dict, *, retries: int = 3, backoff_s: float = 0.1) -> Path:
