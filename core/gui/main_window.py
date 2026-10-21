@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplicat
 from core.artifacts import KIND_DIRS, StoreError, default_store
 from core.config import VALID_MODELS
 
-from . import chain, design, keys, record_words, settings, style
+from . import chain, design, keys, one_instance, record_words, settings, style
 from .panels.base_panel import RUN_STATE, BasePanel
 from .panels.crossval_panel import CrossValPanel
 from .panels.fdt_panel import FdtPanel
@@ -782,6 +782,9 @@ class MainWindow(QMainWindow):
                 return
 
         self._save_state()
+        # The close is accepted: the lock and the listener are let go now, not when the event loop ends, which a
+        # figure popped out of the window keeps running, so that the next start of PRISM opens a window of its own.
+        one_instance.release()
         super().closeEvent(event)
 
     def _save_state(self):

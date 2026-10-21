@@ -3276,8 +3276,9 @@ def test_the_open_prism_brings_its_window_to_the_front_when_a_second_start_knock
 
 def test_a_prism_whose_window_closed_while_a_run_goes_on_lets_the_next_start_open(tmp_path, monkeypatch):
     """A PRISM whose window is closed while a run still goes on, on the thread pool -- a run left to finish unseen --
-    holds its lock and its listener while its event loop runs, and lets go of both as the loop ends, though the run
-    goes on: the next start of PRISM on its settings file then takes the lock and opens a window of its own."""
+    holds its lock and its listener while its event loop runs, until the window's close is accepted, and has let go
+    of both by the time the loop ends, though the run goes on; letting go once more as the loop ends does nothing.
+    The next start of PRISM on its settings file then takes the lock and opens a window of its own."""
     import threading
     from PySide6.QtCore import QRunnable, QThreadPool
     from core.gui import __main__ as entry
@@ -3317,6 +3318,47 @@ def test_a_prism_whose_window_closed_while_a_run_goes_on_lets_the_next_start_ope
         finally:
             going.set()
             QThreadPool.globalInstance().waitForDone(30000)
+
+
+def test_closing_the_window_lets_go_of_the_claim_while_a_figure_window_keeps_prism_running(tmp_path, monkeypatch):
+    """A figure popped out of the window is a window of its own, with no parent, and keeps the program's event loop
+    running after the window has closed. The lock and the listener are let go as the window's close is accepted,
+    not when the loop ends, so that the next start of PRISM on its settings file takes the lock and opens a window
+    of its own beside the figure left open. A close refused while a run is live keeps both, and the window."""
+    from PySide6.QtWidgets import QWidget
+    from core.gui import one_instance, settings
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._fixtures import choose, whole_program
+    qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    figure = QWidget()                                # a figure popped out: a window of its own, with no parent
+    figure.setAttribute(Qt.WA_DontShowOnScreen)
+    try:
+        with whole_program() as (_app, window):
+            held = one_instance.current()
+            _shown_off_screen(window)
+            figure.show()
+            runner = window.panel(ReductionPanel)
+            runner._set_busy(True)
+            try:
+                choose(monkeypatch, words="Don't quit")
+                window.close()
+                refused = (window.isVisible(), one_instance.current() is held)
+            finally:
+                runner._set_busy(False)
+            assert refused == (True, True), (
+                "a close refused while a run is live closed the window or let go of the claim")
+            window.close()
+            assert (window.isVisible(), figure.isVisible(), one_instance.current()) == (False, True, None), (
+                "the claim was not let go as the window's close was accepted, a figure window still open")
+            again = one_instance.claim(settings.settings().fileName(), tries=1, pause_ms=0)
+            try:
+                assert again.case == "start", f"the next start was {again.case}"
+            finally:
+                again.release()
+    finally:
+        figure.hide()
+        figure.deleteLater()
 
 
 def test_bringing_the_window_forward_brings_the_question_open_over_it_first(monkeypatch):

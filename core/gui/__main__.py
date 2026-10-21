@@ -22,8 +22,9 @@ def main() -> int:
     try:
         return app.exec()
     finally:
-        # The loop ends once the window has closed, though a run on the thread pool may go on to its end unseen: the
-        # lock and the listener are let go now, so that the next start of PRISM opens a window of its own.
+        # The window's close let go of the lock and the listener as it was accepted, though a figure window left
+        # open keeps the loop running and a run on the thread pool may go on to its end unseen; a loop that ended
+        # otherwise lets go of them here. Letting go twice does nothing.
         one_instance.release()
 
 
