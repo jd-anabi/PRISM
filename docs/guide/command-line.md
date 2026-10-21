@@ -1126,7 +1126,7 @@ screen. [Browsing the store](getting-started.md#browsing-the-store) sets the two
   `PRISM_ARTIFACTS` names. A listing must not be able to fail on a bounds file it does not need, so
   the family loads nothing and cannot tell you whether a posterior matches your bounds file; loading
   it does.
-- `<kind>` is one of the eight kinds of [The artifact store](getting-started.md#the-artifact-store),
+- `<kind>` is one of the nine kinds of [The artifact store](getting-started.md#the-artifact-store),
   named in the singular. It is a plain positional, so an unknown kind is a refusal (exit 1), not a
   usage error. `<ref>` is a record's name or its id.
 - Its output is plain aligned text on stdout, meant for a person or a script. It is not a record and
@@ -1138,13 +1138,14 @@ screen. [Browsing the store](getting-started.md#browsing-the-store) sets the two
 ### artifacts list
 
 `python -m core artifacts list [<kind>]`: one line per record of a kind, or, with no kind, of all
-eight under `== <kind> ==` headings. The mode takes no flags.
+nine under `== <kind> ==` headings. The mode takes no flags.
 
 The columns are the window's, lower-cased: name and created for every kind; then progress and
 finished for a simulation cache, mode, width and amortized for a posterior, mode and width for an
-observation, variant for a diagnostic, and study, points and finished for an fdt record; then the
-note. A directory with no usable manifest comes last, as `incomplete  <dir>  -- <reason>`. With no
-kind, the kinds that hold nothing are named on a trailing `nothing in:` line.
+observation, variant for a diagnostic, study, points and finished for an fdt record, and for,
+passes and state for a kept training (`fit`); then the note. A directory with no usable manifest
+comes last, as `incomplete  <dir>  -- <reason>`. With no kind, the kinds that hold nothing are
+named on a trailing `nothing in:` line.
 
 **Exit codes** as in [Exit codes](#exit-codes): an empty listing exits 0, so a script can tell
 "nothing on disk" from a mistake.

@@ -447,7 +447,7 @@ names that column `f_scale`.
 
 ## The artifact store
 
-What a record is, the eight kinds, names and ids, and where each run saves are in
+What a record is, the nine kinds, names and ids, and where each run saves are in
 [The artifact store](getting-started.md#the-artifact-store) on the getting-started page. This section
 is how the store is built, in `core/artifacts/`.
 
@@ -517,6 +517,9 @@ is how the store is built, in `core/artifacts/`.
     ([The Fisher settings on a resumed run](window.md#the-fisher-settings-on-a-resumed-run)).
   - On a resume, `training_checkpoint.verify` re-checks the header field by field and names the field
     that differs, and the bijection probe catches a changed box.
+- **A kept training** (`fit`) is a training saved partway; it has no writer, like the simulation set,
+  and names its prior and simulation set (and, for a narrowing round, its observation and parent
+  posterior) as parents, so neither can be deleted under it; a running one cannot be deleted.
 - **Loading** refuses these mismatches: the manifest's checks run before the payload is read, and
   the payload's own checks after it.
   - `load_prior`: the model, the ND parameter set and its order, the ND box and the log-box mask; then

@@ -1390,6 +1390,7 @@ def test_columns_for_names_all_seven_kinds_after_name_and_created():
     assert columns_for("inference") == ("Name", "Created", "Note")
     assert columns_for("diagnostic") == ("Name", "Created", "Variant", "Note")
     assert columns_for("fdt") == ("Name", "Created", "Study", "Points", "Finished", "Note")
+    assert columns_for("fit") == ("Name", "Created", "For", "Passes", "State", "Note")
     for kind in KIND_DIRS:
         cols = columns_for(kind)
         assert cols[:2] == ("Name", "Created") and cols[-1] == "Note", kind
@@ -1418,6 +1419,10 @@ def test_cells_for_renders_each_kind_from_the_summary_alone():
     assert cells_for("diagnostic", _row("diagnostic", variant=None))[2] == ""
     # an observation carries no amortization, so it gets no such column at all
     assert "Amortized" not in columns_for("observation")
+    # a kept training: the posterior it is to write, its passes and its state's word
+    assert cells_for("fit", _row("fit", fit_for="chi_post", fit_passes=10, fit_state="running")) == (
+        "run-a", "2026-09-14T10:22:31", "chi_post", "10", "running", "a note")
+    assert cells_for("fit", _row("fit"))[2:5] == ("", "", "")
 
 
 def test_a_numeric_column_sorts_by_its_number_and_not_as_text():
@@ -1435,6 +1440,7 @@ def test_a_numeric_column_sorts_by_its_number_and_not_as_text():
     assert cell_key("Points", "9/12") < cell_key("Points", "10/12"), "9 sorts before 10"
     assert cell_key("Note", "10") < cell_key("Note", "9"), "... yes: text order, as today"
     assert "Points" in NUMERIC_COLUMNS and "Progress" in NUMERIC_COLUMNS
+    assert "Passes" in NUMERIC_COLUMNS and cell_key("Passes", "9") < cell_key("Passes", "10")
 
     rows = [_row("fdt", id="s9", name="nine", points_done=9, points_planned=12, study="sweep"),
             _row("fdt", id="s10", name="ten", points_done=10, points_planned=12, study="sweep"),

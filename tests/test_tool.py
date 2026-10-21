@@ -3054,7 +3054,7 @@ def test_no_print_call_remains_in_the_converted_modules():
 
 @pytest.fixture
 def browse_store(tmp_path, monkeypatch):
-    """A store holding one artifact of each of the eight kinds plus three unusable directories, with
+    """A store holding one artifact of each of the nine kinds plus three unusable directories, with
     PRISM_ARTIFACTS pointing at it.
 
     ``config.artifacts_root()`` reads the variable on EVERY call and ``main``
@@ -3077,7 +3077,7 @@ def test_the_artifacts_listing_shows_the_browsers_own_columns():
     agree by eye. THIS TEST imports both front ends; the tool imports neither. A column added to the
     table without one added to the tool fails right here.
 
-    The eight kinds are restated in the tool as a literal for the same reason (reading KIND_DIRS at
+    The nine kinds are restated in the tool as a literal for the same reason (reading KIND_DIRS at
     parser-build time would import torch), so their order is pinned too -- the same shape as
     test_crossval_preset_choices_match_sweep_presets, which pins --preset's hard-coded choices against
     cli.SWEEP_PRESETS."""
@@ -3086,7 +3086,7 @@ def test_the_artifacts_listing_shows_the_browsers_own_columns():
     from core.gui.widgets.artifact_table import columns_for
     from core.tool import browse
 
-    assert browse.KINDS == tuple(KIND_DIRS), "the eight kinds, in KIND_DIRS order"
+    assert browse.KINDS == tuple(KIND_DIRS), "the nine kinds, in KIND_DIRS order"
     assert set(browse.COLUMNS) == set(browse.KINDS), "every kind has a column set, and no other"
     for kind in browse.KINDS:
         # The tool's literal is the GUI's own spelling, lower-cased: one canonical column list,
@@ -3223,6 +3223,25 @@ def test_artifacts_list_with_no_kind_covers_every_kind_under_a_heading(browse_st
     for kind in browse.KINDS:
         assert f"== {kind} ==" in out, kind
     assert "nothing in:" not in out, "build_browse_store writes one artifact of every kind"
+
+
+def test_artifacts_list_fit_prints_what_each_kept_training_is_for_its_passes_and_its_state(browse_store,
+                                                                                          capsys):
+    """A kept training's row: its label (always unnamed), when it began, the posterior it is to write
+    ("-" when none is named yet), the passes it holds, its state's word and its note -- the window's
+    columns, lower-cased."""
+    import re
+    root, ids = browse_store
+    capsys.readouterr()
+    assert main(["artifacts", "list", "fit"]) == 0
+    out = capsys.readouterr().out
+    assert "== fit ==" in out, out
+    header = next(ln for ln in out.splitlines() if ln.split()[:1] == ["name"])
+    assert header.split() == ["name", "created", "for", "passes", "state", "note"], header
+    line = next(ln for ln in out.splitlines() if f"(unnamed {ids['fit']})" in ln)
+    cells = re.split(r"\s{2,}", line.strip())
+    assert cells[0] == f"(unnamed {ids['fit']})" and cells[2:] == ["-", "3", "kept when stopped",
+                                                                    "the fit row"], cells
 
 
 def test_an_empty_artifacts_listing_exits_0_and_a_bad_kind_exits_1(tmp_path, monkeypatch, capsys):

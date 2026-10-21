@@ -153,10 +153,11 @@ def _bodies():
     """One valid body per WRITER kind -- the seven ``store.create`` accepts. A FRESH dict per call, so
     a test that hands one to the writer cannot leave a mutation behind for the next.
 
-    The simulation kind is deliberately absent: its manifest has no writer at all (``store.create``
-    refuses it outright) and ``write_simulation_manifest`` builds its body itself. That absence is
-    why ``test_bodies_covers_every_writer_kind`` closes this dict against ``BODY_KEYS`` MINUS that
-    one kind rather than against ``BODY_KEYS`` itself.
+    The simulation kind and the kept training (``fit``) are deliberately absent: neither has a writer
+    at all (``store.create`` refuses both outright), and ``write_simulation_manifest`` and
+    ``write_fit_manifest`` write their manifests. That absence is why
+    ``test_bodies_covers_every_writer_kind`` closes this dict against ``BODY_KEYS`` MINUS those two
+    kinds rather than against ``BODY_KEYS`` itself.
     """
     return {
         "prior": {"gmm": {"n_components": 2, "param_keys": ["a"],
@@ -184,11 +185,11 @@ def _bodies():
 def test_bodies_covers_every_writer_kind():
     """A SILENT pin. ``_bodies`` feeds the per-kind round trip and the finished-per-kind test, and
     neither is closed against the schema -- so a kind added to ``BODY_KEYS`` and forgotten
-    here is simply never round-tripped, and nothing says so. The simulation kind is subtracted rather
-    than listed: it has no writer at all (``store.create`` refuses it), which is why ``_bodies``
-    omits it on purpose.
+    here is simply never round-tripped, and nothing says so. Two kinds have no writer, and are
+    subtracted rather than listed: the simulation kind and the kept training (``store.create`` refuses
+    both), which is why ``_bodies`` omits them on purpose.
     """
-    assert set(_bodies()) == set(mf.BODY_KEYS) - {"simulation"}, \
+    assert set(_bodies()) == set(mf.BODY_KEYS) - {"simulation", "fit"}, \
         "a kind in BODY_KEYS with no body here is silently never written by any test"
     for kind, body in _bodies().items():
         assert set(body) == set(mf.BODY_KEYS[kind]), kind
@@ -4615,12 +4616,12 @@ def test_the_orchestrator_says_everything_through_its_logger():
 
 def test_a_summary_says_whether_the_run_finished_for_every_kind(store):
     """``complete`` means "has a valid manifest"; ``finished`` means "the run finished". For six of
-    the eight kinds they are the same fact -- ``ArtifactWriter._commit`` writes the manifest LAST, so a
-    manifest exists only for a run that reached the end. For the two kinds whose body carries a
+    the nine kinds they are the same fact -- ``ArtifactWriter._commit`` writes the manifest LAST, so a
+    manifest exists only for a run that reached the end. For the three kinds whose body carries a
     ``complete`` flag they differ: ``training_checkpoint.create`` manifests the simulation cache BEFORE
-    the first batch is simulated, and an fdt record is written progressively and keeps its folder when
-    the run is interrupted. For both, ``body["complete"]`` is the field that says whether the run got
-    to the end.
+    the first batch is simulated, an fdt record is written progressively and keeps its folder when
+    the run is interrupted, and a kept training is manifested from its first saved pass. For all
+    three, ``body["complete"]`` is the field that says whether the run got to the end.
 
     ``complete`` is NOT redefined: ``list``'s secondary sort puts rows without it last, and this suite
     asserts on it. The honest question goes beside it instead -- and it is the one StorePicker.refresh
@@ -4654,8 +4655,8 @@ def test_a_summary_says_whether_the_run_finished_for_every_kind(store):
 
 def test_an_fdt_row_carries_its_study_its_points_and_whether_it_finished(store):
     """``finished`` used to be "True unless this is the simulation kind" -- one kind named by hand.
-    Two kinds now carry a ``complete`` flag in their body, and the branch is derived from BODY_KEYS
-    rather than restated, so a third can never be forgotten.
+    Three kinds now carry a ``complete`` flag in their body, and the branch is derived from BODY_KEYS
+    rather than restated, so a fourth can never be forgotten.
 
     The point counts come off ``body["points"]`` in ONE manifest read, like every other Summary
     field: a listing costs one directory scan and a browser row costs nothing. A single run and
@@ -4684,8 +4685,8 @@ def test_an_fdt_row_carries_its_study_its_points_and_whether_it_finished(store):
         assert s.finished is True, "a kind with no ``complete`` key is finished by construction"
 
     # the branch is DERIVED, not a hand-written pair of names
-    assert {k for k, keys in mf.BODY_KEYS.items() if "complete" in keys} == {"simulation", "fdt"}, \
-        "the two kinds whose manifest exists before the run has finished"
+    assert {k for k, keys in mf.BODY_KEYS.items() if "complete" in keys} == {"simulation", "fdt", "fit"}, \
+        "the three kinds whose manifest exists before the run has finished"
 
 
 def test_a_cache_row_carries_its_progress_until_mark_complete_flips_it(store):
@@ -4717,6 +4718,155 @@ def test_a_cache_row_carries_its_progress_until_mark_complete_flips_it(store):
     assert (done.complete, done.finished, done.batches_done, done.batches_planned) == (True, True, 3, 3)
     assert done.rows == (12, 5) and isinstance(done.rows, tuple), done.rows
     assert done.dir_name == d.name == done.id, "the cache's folder IS its identity digest"
+
+
+# ── the kept training (``fit``) ──────────────────────────────────────────────────────────────────
+
+
+def test_a_kept_fit_is_listed_with_what_it_trains_for_its_passes_and_its_state(store):
+    """A training kept partway is a record of its own kind, always unnamed, listed with the posterior it
+    is to write, the passes it holds and one word for its state: the first that holds of a process
+    training it now, a reason it cannot be resumed, its fit having ended, a stop on purpose; otherwise it
+    stopped unexpectedly (a crash, a restart, a power cut, or an error the process recorded). Every
+    record has a manifest, so each is complete; only the one whose fit ended is finished."""
+    from core.SBI.fit_state import STATE_WORDS, FitLock
+    from tests._fixtures import build_fit_record
+
+    asked = [(dict(stopped="on_purpose", posterior_name="kept_on_purpose"), "kept when stopped"),
+             (dict(stopped="error", posterior_name="stopped_by_an_error"), "stopped unexpectedly"),
+             (dict(stopped=None, posterior_name="said_nothing"), "stopped unexpectedly"),
+             (dict(unresumable="its simulation set is gone", posterior_name="gone"), "cannot be resumed"),
+             (dict(complete=True, posterior_name="ended"), "finished"),
+             (dict(posterior_name="in_training"), "running")]
+    made = {build_fit_record(store, **kw): (kw["posterior_name"], word) for kw, word in asked}
+    assert {word for _, word in made.values()} == set(STATE_WORDS), "every state word is reached"
+    held, = [i for i, (_, word) in made.items() if word == "running"]
+    lock = FitLock(store.path("fit", held))
+    assert lock.acquire()
+    try:
+        rows = {r.id: r for r in store.list("fit")}
+    finally:
+        lock.release()
+
+    assert set(rows) == set(made)
+    for id_, (posterior_name, word) in made.items():
+        r = rows[id_]
+        assert (r.fit_state, r.fit_passes, r.fit_for) == (word, 3, posterior_name), id_
+        assert r.complete is True and r.finished is (word == "finished"), (id_, word)
+        assert (r.name, r.label) == ("", f"(unnamed {id_})")
+        assert r.path.parent == store.kind_dir("fit") and store.kind_dir("fit").name == "fits"
+        assert r.dir_name == f"{mf.UNNAMED_DIR}__{id_}"
+    again, = [r for r in store.list("fit") if r.id == held]
+    assert again.fit_state == "kept when stopped", "the lock let go, the record reads as it was stopped"
+
+
+def test_the_store_opens_no_writer_for_a_kept_fit(store):
+    """A kept training is reopened by later processes and removed once its posterior is written, so the
+    writer, which commits once at its end, cannot keep one: the store refuses to open a writer for the
+    kind and names the function that writes its manifest instead."""
+    with pytest.raises(st.StoreError, match="write_fit_manifest"):
+        store.create("fit")
+    assert not store.kind_dir("fit").exists(), "the refusal leaves nothing on disk"
+
+
+def test_what_a_kept_fit_trains_on_is_refused_deletion(store):
+    """A kept training names what it trains on and from -- its prior, its simulation set, and for a
+    narrowing round its observation and parent posterior -- as its parents, so none of them can be
+    deleted under it, each refusal naming it; nothing names a kept training, and once it is deleted each
+    of the four deletes."""
+    from tests._fixtures import build_fit_record
+    cfg = _nad_cfg()
+    prior = _prior_artifact(store, cfg, name="p")
+    # another prior's fingerprint and no parent link, so the kept training is the only thing that
+    # holds each of the four
+    ident = {"format": "training-rows/2", "prior_fingerprint": "e" * 16, "n_runs": 4, "truncation": None}
+    sim = st.write_simulation_manifest(store.kind_dir("simulation") / "abcdef012345", ident, batches_done=2)
+    post = _posterior_artifact(store, cfg, name="parent")
+    obs = _obs_artifact(store, cfg, name="seen", x_obs=torch.zeros(1, 4, dtype=torch.float64))
+    targets = [("prior", prior.id), ("simulation", sim.id), ("posterior", post.id), ("observation", obs.id)]
+    for kind, ref in targets:
+        assert store.dependents(kind, ref) == [], kind
+
+    fid = build_fit_record(store, parents={"prior": prior.id, "simulation": sim.id,
+                                           "parent_posterior": post.id, "observation": obs.id})
+    for kind, ref in targets:
+        assert store.dependents(kind, ref) == [("fit", fid, "")], kind
+        with pytest.raises(st.StoreError) as refused:
+            store.delete(kind, ref)
+        assert refused.value.field == "artifact", kind
+        assert fid in str(refused.value), str(refused.value)
+        assert store.get(kind, ref).id == ref, f"the refused {kind} is still there"
+    assert store.dependents("fit", fid) == [], "nothing names a kept training"
+
+    store.delete("fit", fid)
+    for kind, ref in targets:
+        store.delete(kind, ref)
+        with pytest.raises(st.StoreError):
+            store.get(kind, ref)
+
+
+def test_a_running_kept_fit_is_refused_deletion_and_a_stopped_one_is_deleted(store):
+    """A kept training a process holds is being written at every pass: deleting it is refused, with or
+    without ``force``, saying a running process is training it, and every file is left as it was. Once
+    the lock is let go it deletes."""
+    from core.SBI.fit_state import FitLock
+    from tests._fixtures import build_fit_record
+    fid = build_fit_record(store)
+    where = store.path("fit", fid)
+    lock = FitLock(where)
+    assert lock.acquire()
+    try:
+        before = {p.name: p.read_bytes() for p in where.iterdir() if p.name != "running.lock"}
+        assert sorted(p.name for p in where.iterdir()) == ["manifest.json", "running.lock"]
+        for force in (False, True):
+            with pytest.raises(st.StoreError) as refused:
+                store.delete("fit", fid, force=force)
+            assert refused.value.field == "artifact", force
+            assert "running process" in str(refused.value) and fid in str(refused.value), str(refused.value)
+            assert sorted(p.name for p in where.iterdir()) == ["manifest.json", "running.lock"], force
+            assert {n: (where / n).read_bytes() for n in before} == before, force
+    finally:
+        lock.release()
+    store.delete("fit", fid)
+    assert not where.exists()
+    assert store.list("fit") == []
+
+
+def test_write_fit_manifest_keeps_who_began_the_training_and_replaces_its_body(store):
+    """A kept training's manifest is written again at every pass, and by every process that resumes it:
+    the later writes replace the body and keep who began it -- its id, when, its note, the checkout, the
+    machine, its settings and its parents. A new folder is named and not made. A loss that is not a
+    finite number cannot be recorded, so the writer must record None for one."""
+    from core.artifacts import write_fit_manifest
+    from tests._fixtures import _fit_body
+
+    path = store.new_fit_dir()
+    assert not path.exists(), "a new kept training's folder is named, not made"
+    assert path.parent == store.kind_dir("fit") and path.name.startswith(f"{mf.UNNAMED_DIR}__")
+    assert store.new_fit_dir() != path, "two folders named in the same second differ"
+
+    first_body = _fit_body(passes=1, stopped=None, posterior_name="chi_post")
+    first = write_fit_manifest(path, body=first_body, cfg=None, note="n", config={"hidden_features": 8},
+                               parents={"prior": "p"})
+    assert (first.kind, first.id, first.name) == ("fit", path.name.rpartition("__")[2], "")
+    assert first.inputs == {"bounds": None, "cell": None, "units": None, "model": None}
+    assert (first.payloads, first.figures, first.fingerprints) == ({}, [], {})
+    assert first.prism["git_rev"] and first.env["python"]
+
+    second_body = _fit_body(passes=2, stopped="on_purpose", posterior_name="chi_post")
+    second = write_fit_manifest(path, body=second_body, note="another", config={"hidden_features": 16},
+                                parents={})
+    for key in ("id", "created", "note", "prism", "env", "config", "parents"):
+        assert getattr(second, key) == getattr(first, key), key
+    assert (first.body, second.body) == (first_body, second_body)
+    assert store.get("fit", first.id).to_dict() == second.to_dict(), "the second is what is on disk"
+    for m in (first, second):
+        assert mf.validate(m.to_dict()).to_dict() == m.to_dict()
+
+    unrecordable = _fit_body(passes=2)
+    unrecordable["progress"]["last_validation_loss"] = float("nan")
+    with pytest.raises(mf.ManifestError, match="non-finite"):
+        mf.validate({**second.to_dict(), "body": unrecordable})
 
 
 def test_every_row_carries_its_own_directory_name(store, monkeypatch):

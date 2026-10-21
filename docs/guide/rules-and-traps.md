@@ -564,7 +564,8 @@ seconds with no simulation: run it first after touching anything chi.
     ([Training-cache flags](command-line.md#training-cache-flags)), and
     [artifacts rm](command-line.md#artifacts-rm) refuses while any record names it as a parent, so
     delete from the leaves up: the calibrations, inferences, diagnostics and narrowing rounds built
-    on each posterior trained from the cache, then those posteriors, then
+    on each posterior trained from the cache, then those posteriors and the kept trainings that name
+    the cache (`artifacts rm fit <ref>`; one a process is training is refused until it stops), then
     `artifacts rm simulation <ref>`. Each refusal lists the records that still name it as a parent.
   - Keep the old records, and train with `train --checkpoint-every 0`, which reads and writes no
     simulation cache. The run then cannot be resumed, `--resume require` and `--resume never` are

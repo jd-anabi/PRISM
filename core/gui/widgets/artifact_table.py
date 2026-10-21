@@ -33,9 +33,13 @@ _EXTRA_COLUMNS: dict[str, tuple[str, ...]] = {
     "diagnostic": ("Variant",),
     # An fdt record shows WHICH of the three studies it is, a sweep's operating points, and whether
     # the run finished -- ``finished`` is a real question for this kind (an interrupted run keeps
-    # its folder, marked unfinished), which is why it has the cache's column and the other six do
-    # not.
+    # its folder, marked unfinished), which is why it has the cache's column and the other kinds
+    # do not.
     "fdt": ("Study", "Points", "Finished"),
+    # A kept training shows the posterior it is to write, the passes it holds and its state's word,
+    # which says more than a Finished column could: whether a process is training it now, how it
+    # stopped, and whether it can be resumed.
+    "fit": ("For", "Passes", "State"),
 }
 
 # "Created", descending: newest first, which is the order ArtifactStore.list already returns. Used on
@@ -48,9 +52,9 @@ DEFAULT_SORT = (1, 1)
 # The columns whose cell STARTS with a number and must sort by that number. Sorting them as text
 # puts "10/12 batches" above "9/12", and "Points" is a column of exactly that shape -- so the key
 # lives here, named by column title, rather than in a per-kind branch that the next numeric column
-# would have to remember to join. "Width" is here for the same reason: "100" sorts before "50" as
-# text.
-NUMERIC_COLUMNS: frozenset = frozenset({"Progress", "Points", "Width"})
+# would have to remember to join. "Width" and "Passes" are here for the same reason: "100" sorts
+# before "50" as text, and "10" before "9".
+NUMERIC_COLUMNS: frozenset = frozenset({"Progress", "Points", "Width", "Passes"})
 
 _LEADING_NUMBER = re.compile(r"^\s*(-?\d+(?:\.\d+)?)")
 
@@ -163,6 +167,8 @@ def cells_for(kind: str, s) -> tuple[str, ...]:
         middle = (s.variant or "",)
     elif kind == "fdt":
         middle = (s.study or "", _points(s), "yes" if s.finished else "no")
+    elif kind == "fit":
+        middle = (s.fit_for or "", "" if s.fit_passes is None else str(s.fit_passes), s.fit_state or "")
     return (s.label, s.created) + middle + (s.note or "",)
 
 

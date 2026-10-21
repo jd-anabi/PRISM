@@ -151,8 +151,8 @@ mode and the bounds file it was trained with. At its defaults `train` is a full-
 
 ## The artifact store
 
-Every record belongs to one of eight kinds, the keys of `core.artifacts.store.KIND_DIRS`. A kind is
-named in the singular; seven have a plural directory, and `fdt` keeps its own name.
+Every record belongs to one of nine kinds, the keys of `core.artifacts.store.KIND_DIRS`. A kind is
+named in the singular; eight have a plural directory, and `fdt` keeps its own name.
 
 | kind | directory under the root | written by the tool | written by the window |
 |---|---|---|---|
@@ -164,6 +164,7 @@ named in the singular; seven have a plural directory, and `fdt` keeps its own na
 | `inference` | `inferences/` | `infer` | the Infer tab |
 | `diagnostic` | `diagnostics/` | `sbc`, `identifiability`, `ablation`, `probes` | none |
 | `fdt` | `fdt/` | `fdt`, `crossval`, `compare` | the FDT Analysis screen |
+| `fit` | `fits/` | `train`, `tsnpe` | the Posterior and TSNPE tabs |
 
 `smoke` writes the first six kinds into its own root; it writes a simulation cache only with
 `--checkpoint`. A few things are saved outside the kinds, with no manifest:
@@ -246,13 +247,14 @@ live (`core.gui.screens.artifact_screen.ArtifactScreen`). A run in another proce
 command-line run, is guarded only by the sweeps' recency check: a directory or file written in the
 last five minutes is refused rather than removed (`core.artifacts.store.RECENT_WRITE_SECONDS`),
 because an ordinary record's manifest is written last and a run in flight looks like a leftover
-until then.
+until then. A kept training is the exception: one that a running process holds, in this window or
+any other process, cannot be deleted (`core.SBI.fit_state.running`).
 
 **On the command line**, the `artifacts` family does the same against the `PRISM_ARTIFACTS` root:
 
 | command | what it does |
 |---|---|
-| `python -m core artifacts list [<kind>]` | one line per record of a kind, or of all eight kinds under headings |
+| `python -m core artifacts list [<kind>]` | one line per record of a kind, or of all nine kinds under headings |
 | `python -m core artifacts show <kind> <ref>` | the record's manifest and its run's log |
 | `python -m core artifacts note <kind> <ref> --note TEXT` | sets the note; `--note ''` clears it |
 | `python -m core artifacts rm <kind> <ref>` | deletes one record; refused while anything depends on it |

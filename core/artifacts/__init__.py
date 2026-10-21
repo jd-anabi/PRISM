@@ -6,5 +6,5 @@ from .report import render_lineage, render_manifest  # noqa: F401
 from .store import (ArtifactStore, ArtifactWriter, Accept, Summary, StoreError, KIND_DIRS,  # noqa: F401
                     Loaded, LoadedPrior, LoadedPosterior, LoadedObservation, LoadedCalibration,
                     LoadedInference, LoadedDiagnostic, LoadedFdt, LooseFile, PROGRESSIVE_KINDS,
-                    LEGACY_DIRS, write_simulation_manifest,
+                    LEGACY_DIRS, write_simulation_manifest, write_fit_manifest,
                     default_store, set_default_store, use_store, resolve_store)

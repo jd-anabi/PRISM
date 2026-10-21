@@ -417,7 +417,8 @@ def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_s
             summary, = [one for one in store.list(kind) if one.id == ids[kind]]
             made = datetime.fromisoformat(summary.created).astimezone()
             row = rows[(kind, ids[kind])]
-            label = "Simulation set for a prior that is no longer here" if kind == "simulation" else f"browse_{kind}"
+            label = ("Simulation set for a prior that is no longer here" if kind == "simulation" else
+                     record_words.record_label("fit", "", made) if kind == "fit" else f"browse_{kind}")
             assert (row.label, row.kind_word, row.made, row.made.utcoffset()) == (
                 label, record_words.kind_word(kind, summary.study), made, made.utcoffset())
         assert rows[("simulation", held.id)].label == "Simulation set for browse_prior"

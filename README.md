@@ -184,7 +184,7 @@ One row per subcommand, and per mode where a subcommand has modes; each name lin
 | [`compare repeats`](docs/guide/command-line.md#compare-repeats) | Several runs of one cell, their spread drawn as a band | `fdt` (a comparison) |
 | [`compare renormalise`](docs/guide/command-line.md#compare-renormalise) | One run's ratio recomputed with a supplied normalisation constant | `fdt` (a comparison) |
 | [`compare sweeps`](docs/guide/command-line.md#compare-sweeps) | Two sweep records together, and a slice of both at one operating point | `fdt` (a comparison) |
-| [`artifacts list`](docs/guide/command-line.md#artifacts-list) | One line per record of a kind, or of all eight | nothing |
+| [`artifacts list`](docs/guide/command-line.md#artifacts-list) | One line per record of a kind, or of all nine | nothing |
 | [`artifacts show`](docs/guide/command-line.md#artifacts-show) | One record's manifest and the log of the run that wrote it | nothing |
 | [`artifacts note`](docs/guide/command-line.md#artifacts-note) | Sets or clears one record's note | nothing new (the note in the manifest) |
 | [`artifacts rm`](docs/guide/command-line.md#artifacts-rm) | Deletes one record; refused while another record depends on it | nothing (removes a record) |

@@ -49,6 +49,7 @@ KIND_LABELS = {
     # comparisons too: a comparison is a record of this kind, and both measurement panels send the
     # operator here to find one
     "fdt": "FDT measurements, sweeps and comparisons",
+    "fit": "Unfinished trainings",
 }
 
 # The tail of a run's records the pane shows. A ceiling, not a budget: a training run's log is
@@ -95,10 +96,17 @@ _STUDY_PHRASES = {"single": "single-cell measurement", "sweep": "sweep", "compar
 def _unfinished_note(s) -> str:
     """The one sentence that says what deleting an UNFINISHED record of this kind destroys.
 
-    TWO kinds can be unfinished, not one: a training cache, whose manifest exists from its first
-    batch because it is resumable, and an fdt record, whose folder survives a cancel or a crash so
-    that what it measured is still readable. The old form named the cache by hand and would
-    have deleted a half-measured sweep behind a prompt that said nothing about it.
+    THREE kinds can be unfinished, not one: a training cache, whose manifest exists from its first
+    batch because it is resumable, an fdt record, whose folder survives a cancel or a crash so
+    that what it measured is still readable, and a kept training, which holds the passes a fit has
+    made. The old form named the cache by hand and would have deleted a half-measured sweep behind a
+    prompt that said nothing about it.
+
+    A kept training names the pass it is kept after: deleting it loses those passes, and a new
+    training starts from its first pass, while the simulation cache it trained on stays. One a
+    process is training now also says to stop it first; the store refuses that delete anyway. It is
+    said for every kept training, including one whose fit ended but whose posterior was not written:
+    deleting that one loses every pass just the same (``_delete_prompt``).
 
     The cache names its committed BATCHES and not its rows, deliberately: ``rows`` is written by
     ``mark_complete`` alone -- ``training_checkpoint.save`` passes none -- so every real mid-run
@@ -131,6 +139,15 @@ def _unfinished_note(s) -> str:
                 "Deleting it throws those batches away and a later run starts from zero. "
                 "(Only the batch count is known while a cache is running: the rows are "
                 "recorded when the cache finishes.)")
+    if s.kind == "fit":
+        kept = ("This unfinished training is kept partway: deleting it loses the passes it holds"
+                if s.fit_passes is None else
+                f"This unfinished training is kept after pass {s.fit_passes}: deleting it loses those "
+                "passes")
+        text = f"{kept}, and a new training starts from its first pass. Its simulation set is kept."
+        if s.fit_state == "running":
+            text += " If it is still running, stop it first."
+        return text
     if s.kind == "fdt":
         why = ("its run was interrupted or failed, or it is still being written by a run in another "
                "window or at a terminal, which looks exactly the same until it finishes. If one is "
@@ -164,9 +181,12 @@ def _delete_prompt(s) -> tuple:
     never reaches this button (``_sync_actions`` enables Delete on complete rows only); the leftover
     sweep removes one only when it has no manifest file at all, and leaves one whose manifest this
     build cannot read for the operator (``ArtifactStore.remove_incomplete``).
+
+    A kept training always says what deleting it loses, finished or not: one whose fit ended is a
+    record whose posterior was never written, and deleting it loses every pass of the fit.
     """
     lines = [f"id {s.id}"]
-    if s.complete and not s.finished:
+    if s.complete and (not s.finished or s.kind == "fit"):
         lines.append(_unfinished_note(s))
     lines.append(f"This removes {s.path} and everything in it, and cannot be undone.")
     return f"Delete {s.kind} {s.label}?", "\n".join(lines)

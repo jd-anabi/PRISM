@@ -576,7 +576,7 @@ def test_each_store_kind_has_one_word():
     assert record_words.KIND_WORDS == {
         "prior": "prior", "simulation": "simulation set", "posterior": "posterior", "observation": "observation",
         "calibration": "calibration", "inference": "inference result", "diagnostic": "check",
-        "fdt": "effective-temperature measurement"}
+        "fdt": "effective-temperature measurement", "fit": "unfinished training"}
     assert [record_words.kind_word("fdt", study) for study in ("single", "sweep", "comparison", None)] == [
         "effective-temperature measurement", "sweep", "comparison", "effective-temperature measurement"]
     assert record_words.kind_word("prior", "sweep") == "prior"

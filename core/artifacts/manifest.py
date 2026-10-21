@@ -17,7 +17,7 @@ from core.refusals import Refusal
 
 SCHEMA = 1
 KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference", "diagnostic",
-         "fdt")
+         "fdt", "fit")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 # A UTC second, with -2/-3 on a same-second collision; or the simulation kind's 12-hex identity digest.
 ID_RE = re.compile(r"^(\d{8}T\d{6}(-\d+)?|[0-9a-f]{12})$")
@@ -53,6 +53,17 @@ BODY_KEYS = {
     # -- False until the writer commits -- is the one that says whether it ever did.
     "fdt": ("study", "settings", "seed", "grid", "points", "offgrid", "notices", "compared",
             "complete", "results"),
+    # A training kept partway (its files are ``core.SBI.fit_state``'s), written like the simulation
+    # cache, with no writer (``store.write_fit_manifest``), and refreshed at every saved pass.
+    # ``posterior_name`` is the name the posterior is to take (a kept training is itself unnamed);
+    # ``identity`` holds every part of ``fit_state.IDENTITY_PARTS``; ``region`` is a narrowing round's
+    # region (``region_to_json``), None for an amortized training; ``progress`` is the passes, the best
+    # and the last validation loss, the passes since the best, when it was saved, the wall time and the
+    # number of processes that trained it, a loss that is not finite recorded as None; ``stopped`` is
+    # None or how and when it stopped and why; ``unresumable`` and ``save_error`` are None or a
+    # sentence; ``complete`` is True only from the end of the fit until the record is removed.
+    "fit": ("posterior_name", "identity", "region", "progress", "stopped", "unresumable", "save_error",
+            "complete"),
 }
 
 

@@ -55,12 +55,12 @@ from pathlib import Path
 
 from core.refusals import NOTE_MAX_CHARS, Refusal
 
-# The eight kinds in KIND_DIRS order, restated as a literal: reading core.artifacts.store.KIND_DIRS
+# The nine kinds in KIND_DIRS order, restated as a literal: reading core.artifacts.store.KIND_DIRS
 # at parser-build time would import torch (core/artifacts/__init__.py imports .store, which imports
 # core.config). tests/test_tool.py pins the two in sync, both order and membership -- the same shape
 # as --preset's hard-coded choices pinned against cli.SWEEP_PRESETS.
 KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference", "diagnostic",
-         "fdt")
+         "fdt", "fit")
 
 # The columns each kind shows: the browser's own tuples (core/gui/widgets/artifact_table.columns_for),
 # LOWER-CASED. A SECOND literal on purpose -- that module is a Qt module, and importing it here
@@ -76,6 +76,7 @@ COLUMNS = {
     "inference": ("name", "created", "note"),
     "diagnostic": ("name", "created", "variant", "note"),
     "fdt": ("name", "created", "study", "points", "finished", "note"),
+    "fit": ("name", "created", "for", "passes", "state", "note"),
 }
 
 # The tail of log.txt ``show`` prints. A DISPLAY cap, not a knob: it bounds what one screenful of
@@ -102,7 +103,7 @@ family cannot tell you whether a posterior matches your bounds file; loading
 it does (python -m core validate --posterior ...).
 
 """ + textwrap.fill("<kind> is one of " + ", ".join(KINDS) + "; list and sweep with no kind cover "
-                    "all eight.", 79) + """
+                    "all nine.", 79) + """
 <ref> is an artifact's name or its id. An empty listing exits 0: a script must
 be able to tell "nothing on disk" from "you asked for something wrong".
 """
@@ -148,8 +149,8 @@ def _fdt_points(s) -> str:
 
 def _cells(kind: str, s) -> tuple:
     """One complete row's cells, in ``COLUMNS[kind]`` order. ``label`` is the name, or
-    ``(unnamed <id>)`` -- as the pickers show it, and as a simulation cache always reads, because
-    write_simulation_manifest always writes ``name=""``."""
+    ``(unnamed <id>)`` -- as the pickers show it, and as a simulation cache and a kept training always
+    read, because write_simulation_manifest and write_fit_manifest always write ``name=""``."""
     head = (_flat(s.label), _flat(s.created))
     if kind == "simulation":
         return head + (_progress(s), "yes" if s.finished else "no", _flat(s.note))
@@ -168,6 +169,11 @@ def _cells(kind: str, s) -> tuple:
     if kind == "fdt":
         return head + (_flat(s.study) or "-", _fdt_points(s), "yes" if s.finished else "no",
                        _flat(s.note))
+    if kind == "fit":
+        # the posterior it is to write, the passes it holds and its state's word; "-" for each the
+        # record does not say, as a diagnostic's missing variant reads
+        return head + (_flat(s.fit_for) or "-", "-" if s.fit_passes is None else str(s.fit_passes),
+                       _flat(s.fit_state) or "-", _flat(s.note))
     return head + (_flat(s.note),)
 
 
@@ -193,7 +199,7 @@ def _print_kind(kind: str, rows) -> None:
 
 def _list(args, store) -> int:
     """``list [<kind>]``. An empty listing is EXIT 0 with a line saying so; an unknown kind is
-    the store's own refusal, through the ladder's ``refused:`` rung at exit 1. With no kind, all eight
+    the store's own refusal, through the ladder's ``refused:`` rung at exit 1. With no kind, all nine
     are walked and a kind with nothing in it is NAMED in a trailing line rather than silently
     skipped, so "I did not look" and "there is nothing" stay distinguishable."""
     kinds = [args.kind] if args.kind else list(KINDS)
@@ -362,7 +368,7 @@ def _joined(clauses: list) -> str:
 
 
 def _sweep(args, store) -> int:
-    """``sweep [<kind>] [--yes]``: remove every directory of a kind (or of all eight) that has NO
+    """``sweep [<kind>] [--yes]``: remove every directory of a kind (or of all nine) that has NO
     manifest at all, and the two categories below. Nothing to remove is exit 0; anything that would
     not delete is 1, naming each. A failure never stops the sweep -- ``sweep_incomplete`` finishes
     the rest and reports it, and the two loops below follow the same rule.
@@ -553,7 +559,7 @@ def register(subparsers) -> dict:
     modes = p.add_subparsers(dest="mode", required=True,
                              metavar="{list,show,note,rm,sweep,summary}")
 
-    text = "one line per artifact of a kind, or, with no kind, of all eight under headings"
+    text = "one line per artifact of a kind, or, with no kind, of all nine under headings"
     ls = modes.add_parser("list", help=text, description=text)
     ls.add_argument("kind", nargs="?", default=None, metavar="<kind>", help=_KIND)
     ls.set_defaults(handler=_list)
@@ -585,7 +591,7 @@ def register(subparsers) -> dict:
             "directories (a dry run until --yes)")
     sweep = modes.add_parser("sweep", help=text, description=text)
     sweep.add_argument("kind", nargs="?", default=None, metavar="<kind>",
-                       help=f"{_KIND}; with no kind, all eight, and the legacy directory beside them")
+                       help=f"{_KIND}; with no kind, all nine, and the legacy directory beside them")
     sweep.add_argument("--yes", action="store_true",
                        help="actually remove them. Without it this is a DRY RUN: it prints exactly "
                             "what it would remove and removes nothing, which is the confirmation "

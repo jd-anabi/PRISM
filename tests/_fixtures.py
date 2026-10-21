@@ -554,7 +554,7 @@ def only_masked_probe_warnings():
 
 
 def build_browse_store(root):
-    """One artifact of each of the EIGHT kinds plus the three bad-directory shapes, in a store at
+    """One artifact of each of the NINE kinds plus the three bad-directory shapes, in a store at
     ``root``. Returns ``{kind: id, ..., "bad": (dir_name, dir_name, dir_name)}``.
 
     SECONDS, not minutes -- the browser suite must not reach for ``tiny_run``, whose cost is why
@@ -575,6 +575,11 @@ def build_browse_store(root):
     writer can be in mid-run: ``training_checkpoint.save`` passes none and only ``mark_complete``
     records them. A fixture that handed rows to an unfinished cache would be a shape no run
     produces, and would hide every "rows only once it finished" branch in both front ends.
+
+    The kept training (``fit``) is unnamed too, like the simulation cache, and always: its posterior's
+    name-to-be is in its body, never its own name. It is written by ``build_fit_record`` at 3 passes,
+    stopped on purpose, with the note "the fit row", so it has a manifest and no header or state, and
+    its ``finished`` is False while ``complete`` is True.
 
     No artifact gets a ``log.txt``: the writer writes one only when a public entry is active
     (``runs.current_run_log()``), and this helper is not one. A test that wants records writes the
@@ -622,6 +627,7 @@ def build_browse_store(root):
     m = write_simulation_manifest(store.kind_dir("simulation") / identity_digest(identity), identity,
                                   batches_done=3, complete=False)
     ids["simulation"] = m.id
+    ids["fit"] = build_fit_record(store, note="the fit row", stopped="on_purpose", passes=3)
 
     priors = store.kind_dir("prior")
     bad = ("leftover_no_manifest", "leftover_bad_json", "leftover_wrong_kind")
@@ -708,6 +714,51 @@ def build_fdt_record(store, *, study="single", name="", note="", finished=True,
     except _FdtStop:
         pass
     return w.id
+
+
+# How a kept training's record says it was stopped, by ``build_fit_record``'s ``stopped``.
+_FIT_STOPS = {"on_purpose": (True, "cancelled"), "error": (False, "RuntimeError: the card ran out of memory")}
+
+
+def _fit_body(*, passes: int = 3, stopped: "str | None" = "on_purpose", posterior_name: str = "",
+              complete: bool = False, unresumable: "str | None" = None) -> dict:
+    """A kept training's manifest body at its smallest, every key of its kind present: an identity with
+    each of its parts, a progress of ``passes`` passes with finite losses, and the stop ``stopped`` names
+    ("on_purpose", "error", or None for a record whose process never wrote how it stopped)."""
+    from datetime import datetime, timezone
+    if stopped is not None and stopped not in _FIT_STOPS:
+        raise ValueError(f"stopped must be one of {sorted(_FIT_STOPS)} or None, not {stopped!r}")
+    at = datetime.now(timezone.utc).isoformat()
+    stop = None
+    if stopped is not None:
+        on_purpose, reason = _FIT_STOPS[stopped]
+        stop = {"on_purpose": on_purpose, "at": at, "reason": reason}
+    identity = {"simulation": {"digest": "0" * 12}, "batches": 4, "settings": {"hidden_features": 8},
+                "code": {}, "constants": {}, "libraries": {}, "network": "0" * 16}
+    return {"posterior_name": posterior_name, "identity": identity, "region": None,
+            "progress": {"passes": int(passes), "best_validation_loss": 1.5, "passes_since_best": 0,
+                         "last_validation_loss": 1.5, "saved_at": at, "wall_seconds": 12.0,
+                         "processes": 1},
+            "stopped": stop, "unresumable": unresumable, "save_error": None, "complete": bool(complete)}
+
+
+def build_fit_record(store, *, passes: int = 3, stopped: "str | None" = "on_purpose",
+                     posterior_name: str = "", note: str = "", parents: "dict | None" = None,
+                     complete: bool = False, unresumable: "str | None" = None) -> str:
+    """A kept training's record, its manifest alone (no header and no state), written in an instant
+    through ``write_fit_manifest`` into a new folder of ``store`` (``store.new_fit_dir()``).
+
+    ``stopped`` is "on_purpose", "error" or None (a process that never recorded how it stopped);
+    ``complete`` says its fit ended before its posterior was written; ``unresumable`` is the sentence
+    that says why it cannot be resumed. ``cfg=None``, like ``build_browse_store``'s rows: nothing here
+    reads a bounds file or trains anything.
+
+    :returns: the record's id.
+    """
+    from core.artifacts import write_fit_manifest
+    body = _fit_body(passes=passes, stopped=stopped, posterior_name=posterior_name, complete=complete,
+                     unresumable=unresumable)
+    return write_fit_manifest(store.new_fit_dir(), body=body, note=note, parents=parents).id
 
 
 def compare_preflight_refusals(store) -> list:

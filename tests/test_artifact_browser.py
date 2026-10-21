@@ -79,6 +79,10 @@ def test_the_browser_lists_the_seven_kinds_with_the_incomplete_directories_last(
         if kind == "simulation":
             # a cache is always unnamed, so its label is "(unnamed <digest>)"
             assert ids["simulation"] in first and "unnamed" in first, first
+        elif kind == "fit":
+            # a kept training is always unnamed too: its posterior's name-to-be is in its body
+            assert ids["fit"] in first and "unnamed" in first, first
+            assert "the fit row" in first, f"the note column is empty: {first}"
         else:
             assert f"browse_{kind}" in first, first
             assert f"the {kind} row" in first, f"the note column is empty: {first}"
@@ -576,6 +580,38 @@ def test_deleting_an_unfinished_fdt_record_names_what_is_half_written(store, mon
     s2 = _select_ref(scr.table, done.id)
     assert s2.finished
     assert "UNFINISHED" not in _delete_prompt(s2)[1], _delete_prompt(s2)[1]
+
+
+def test_deleting_an_unfinished_training_says_what_is_lost(store):
+    """A kept training holds the passes a fit has made, and deleting it throws them away: the question
+    says after which pass it is kept, that a new training starts from its first pass, and that its
+    simulation set stays. A record a process is training now says to stop it first (the store refuses
+    that delete anyway). A record whose fit ended but whose posterior was not written loses every pass
+    just the same, so it says so too."""
+    from dataclasses import replace
+
+    from core.gui.screens.artifact_screen import _delete_prompt
+    from tests._fixtures import build_fit_record
+
+    fid = build_fit_record(store, passes=3)
+    s, = [r for r in store.list("fit") if r.id == fid]
+    assert s.complete and not s.finished and s.fit_state == "kept when stopped"
+    text, detail = _delete_prompt(s)
+    assert text == f"Delete fit {s.label}?"
+    assert "This unfinished training is kept after pass 3" in detail, detail
+    assert "a new training starts from its first pass" in detail, detail
+    assert "Its simulation set is kept." in detail, detail
+    assert "If it is still running" not in detail, detail
+    assert "cannot be undone" in detail, detail
+
+    running = _delete_prompt(replace(s, fit_state="running"))[1]
+    assert "This unfinished training is kept after pass 3" in running, running
+    assert "If it is still running, stop it first." in running, running
+
+    ended_id = build_fit_record(store, passes=5, complete=True)
+    ended, = [r for r in store.list("fit") if r.id == ended_id]
+    assert ended.finished and ended.fit_state == "finished"
+    assert "This unfinished training is kept after pass 5" in _delete_prompt(ended)[1]
 
 
 def _interrupted_fdt(store, name, body):

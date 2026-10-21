@@ -20,6 +20,7 @@ KIND_WORDS: dict[str, str] = {
     "inference": "inference result",
     "diagnostic": "check",
     "fdt": "effective-temperature measurement",
+    "fit": "unfinished training",
 }
 
 # an effective-temperature record is a measurement on one cell, a sweep study's sweep, or a comparison of them

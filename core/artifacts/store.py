@@ -6,9 +6,11 @@ named -- with ``manifest.json`` written LAST, atomically, by ``ArtifactWriter``.
 READING manifests, so a hand-renamed folder still resolves and parent references (by id) survive.
 The simulation cache is the exception: its directory is the identity digest and its manifest is
 written by ``training_checkpoint`` (``write_simulation_manifest``), because a resumable cache must
-survive an interrupted run, which a writer's remove-on-exception would delete. An fdt record needs
-the same survival but keeps the writer, through its progressive mode (``PROGRESSIVE_KINDS``): its
-manifest is written FIRST and refreshed as the run proceeds.
+survive an interrupted run, which a writer's remove-on-exception would delete. A kept training
+(``fit``) has no writer either, for the same reason and one more: a later process reopens it, so its
+manifest is written by the training stage (``write_fit_manifest``), which keeps who began it. An fdt
+record needs the same survival but keeps the writer, through its progressive mode
+(``PROGRESSIVE_KINDS``): its manifest is written FIRST and refreshed as the run proceeds.
 """
 from __future__ import annotations
 
@@ -38,7 +40,9 @@ KIND_DIRS = {"prior": "priors", "simulation": "simulations", "posterior": "poste
              # existing vocabulary. Reusing the EXISTING ``fdt`` directory is chosen, not
              # accidental: the owner's stray pictures then sit as loose files inside a kind
              # directory, which is where ``loose_files`` can reach them.
-             "fdt": "fdt"}
+             "fdt": "fdt",
+             # a training kept partway, until its posterior is written (core/SBI/fit_state.py)
+             "fit": "fits"}
 MANIFEST = "manifest.json"
 # The run's records, written beside the manifest by ArtifactWriter. NOT a payload: not hashed, not in
 # ``payloads``, never read by a loader. The simulation cache never gets one: it has no writer.
@@ -86,7 +90,11 @@ _PARENT_KEYS = {"prior": ("prior",), "simulation": ("simulation",),
                 # A comparison names the records it drew in its BODY, not here -- ``parents`` is a
                 # flat {key: id} map read as ``m.parents.get(pk) == id_``, so it cannot
                 # carry an arbitrary number of ids without widening the contract for every kind.
-                "fdt": ()}
+                "fdt": (),
+                # Nothing names a kept training. It names what it trains on and from -- its prior,
+                # its simulation cache, and for a narrowing round its observation and parent
+                # posterior -- through the keys above, so none of them can be deleted under it.
+                "fit": ()}
 
 
 class StoreError(Refusal):
@@ -131,7 +139,8 @@ class Summary:
     path: Path
     # "has a valid manifest", i.e. the directory describes a real artifact -- NOT "the run finished".
     # For the kinds whose body carries ``complete`` those differ: a cache is manifested from its first
-    # batch on, an fdt record from its first moment, and ``body["complete"]`` is the
+    # batch on, an fdt record from its first moment, a kept training from its first saved pass, and
+    # ``body["complete"]`` is the
     # field that says whether the run got to the end. ``finished`` below is that honest question,
     # asked the same way for every kind -- ask it, not this one, when what you mean is "did the run
     # get to the end".
@@ -156,6 +165,11 @@ class Summary:
     points_done: "int | None" = None
     points_planned: "int | None" = None
     points_failed: "int | None" = None
+    # fit only: the name the posterior is to take (body["posterior_name"]), the passes the kept
+    # training holds (body["progress"]["passes"]) and its state's word (``fit_state.state_word``).
+    fit_for: "str | None" = None
+    fit_passes: "int | None" = None
+    fit_state: "str | None" = None
 
     @property
     def label(self) -> str:
@@ -718,6 +732,18 @@ class ArtifactStore:
             # partially written body from taking the whole listing down.
             pts = body.get("points")
             pts = pts if isinstance(pts, dict) else {}
+            # A kept training's posterior-to-be, its passes and its state's word, off the same read.
+            # The word also asks the record's lock whether a process holds it now, which costs one
+            # open of a small file per kept training and never raises.
+            fit_for = fit_passes = fit_word = None
+            if kind == "fit":
+                from core.SBI import fit_state
+                progress = body.get("progress")
+                progress = progress if isinstance(progress, dict) else {}
+                posterior_name = body.get("posterior_name")
+                fit_for = posterior_name if isinstance(posterior_name, str) else None
+                fit_passes = _as_int(progress.get("passes"))
+                fit_word = fit_state.state_word(sub, body)
             out.append(Summary(kind, m.id, m.name, m.created, m.note, sub, True, None,
                                mode=body.get("mode"), width=(body.get("conditioning") or {}).get("width"),
                                amortized=body.get("amortized"), parents=dict(m.parents),
@@ -729,7 +755,8 @@ class ArtifactStore:
                                study=body.get("study"),
                                points_done=_as_int(pts.get("done")),
                                points_planned=_as_int(pts.get("planned")),
-                               points_failed=_as_int(pts.get("failed"))))
+                               points_failed=_as_int(pts.get("failed")),
+                               fit_for=fit_for, fit_passes=fit_passes, fit_state=fit_word))
         out.sort(key=lambda s: s.created, reverse=True)       # newest first ...
         out.sort(key=lambda s: not s.complete)                # ... complete first (stable)
         return out
@@ -846,8 +873,16 @@ class ArtifactStore:
     def create(self, kind: str, cfg=None, *, name: str = "", note: str = "") -> ArtifactWriter:
         if kind == "simulation":
             raise StoreError("simulation manifests are written by training_checkpoint (write_simulation_manifest)")
+        if kind == "fit":
+            raise StoreError("fit records are written by the training stage (write_fit_manifest), not through a writer")
         self.assert_name_free(kind, name)
         return ArtifactWriter(self, kind, cfg, name=name, note=note, id=self._new_id(kind), created=self._clock())
+
+    def new_fit_dir(self) -> Path:
+        """The folder a new kept training is to be written in, ``fits/_unnamed__<id>``, with an id no
+        other kept training has; nothing is created. The training stage makes it with its first saved
+        pass, through ``write_fit_manifest``, which takes the id from the folder's name."""
+        return self.kind_dir("fit") / f"{mf.UNNAMED_DIR}__{self._new_id('fit')}"
 
     def rename(self, kind: str, ref: str, new_name: str) -> mf.Manifest:
         if not new_name:
@@ -919,6 +954,14 @@ class ArtifactStore:
         sub, m = self._find(kind, ref)
         if m is None:
             raise StoreError(f"no complete {kind} artifact named or id'd {ref!r}", field="artifact")
+        if kind == "fit":
+            # A kept training a process holds is written at every pass, and ``force`` does not change
+            # that: removing its folder under the run would lose the passes it is saving, and on
+            # Windows the held lock file would stop the removal partway, after other files had gone.
+            from core.SBI import fit_state
+            if fit_state.running(sub):
+                raise StoreError(f"refusing to delete fit {m.id}: a running process is training it; "
+                                 f"stop that training first", field="artifact")
         deps = self.dependents(kind, m.id)
         if deps and not force:
             listed = "; ".join(f"{k} {n or '(unnamed)'} [{i}]" for k, i, n in deps)
@@ -1592,6 +1635,46 @@ def write_simulation_manifest(path, identity: dict, *, parents=None, inputs=None
               "complete": bool(complete), "rows": None if rows is None else [int(r) for r in rows],
               "V_digest": v_digest, "wall_seconds": wall},
     )
+    m = mf.validate(d)
+    path.mkdir(parents=True, exist_ok=True)
+    _write_manifest(path, m)
+    return m
+
+
+def write_fit_manifest(path, *, body: dict, cfg=None, note: str = "", config: "dict | None" = None,
+                       parents: "dict | None" = None, fingerprints: "dict | None" = None,
+                       hw=None) -> mf.Manifest:
+    """A kept training's manifest, written into its folder ``path`` by the training stage at every
+    saved pass and by every later process that resumes it. Validated, written atomically, last.
+
+    The id is the part of the folder's name after ``"__"`` (``ArtifactStore.new_fit_dir``). When a
+    manifest is already there, only its body is replaced: its id, name, created, note, checkout,
+    machine, inputs, settings, parents and fingerprints stay as the process that began the training
+    wrote them, so a later process does not rewrite who began it. Otherwise the record is unnamed,
+    created now, with this checkout's and this machine's description, the input files of ``cfg``
+    (four Nones without one), ``config`` as given (or empty), no payloads and no figures.
+    """
+    from core import config as prism_config     # the parameter ``config`` is the manifest's block
+    path = Path(path)
+    old = None
+    mpath = path / MANIFEST
+    if mpath.exists():
+        with contextlib.suppress(mf.ManifestError, OSError):
+            old = mf.from_json_text(mpath.read_text(encoding="utf-8"))
+    if old is not None:
+        d = old.to_dict()
+        d["body"] = dict(body)
+    else:
+        d = dict(
+            schema=mf.SCHEMA, kind="fit", id=path.name.rpartition("__")[2], name="",
+            created=_utc_now().isoformat(), note=str(note),
+            prism=prov.git_info(prism_config.REPO_ROOT),
+            env=prov.env_info(hw if hw is not None else prism_config.cpu_device()),
+            inputs=(prov.inputs_from_cfg(cfg, missing_ok=True) if cfg is not None
+                    else {"bounds": None, "cell": None, "units": None, "model": None}),
+            config=dict(config or {}), parents=dict(parents or {}), fingerprints=dict(fingerprints or {}),
+            payloads={}, figures=[], body=dict(body),
+        )
     m = mf.validate(d)
     path.mkdir(parents=True, exist_ok=True)
     _write_manifest(path, m)

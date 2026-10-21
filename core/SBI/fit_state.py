@@ -360,3 +360,35 @@ def running(path: Path) -> bool:
         return False
     finally:
         os.close(fd)
+
+
+# ── the record's state, in words ─────────────────────────────────────────────────────────────────
+# The words a kept training's state is listed by, in the store's listing and on both front ends.
+STATE_WORDS = ("running", "stopped unexpectedly", "kept when stopped", "cannot be resumed", "finished")
+
+
+def state_word(path: Path, body: dict) -> str:
+    """The word for the state of the kept training in the folder ``path`` whose manifest body is
+    ``body``: the first that holds of
+
+    - "running": a process holds its lock now (``running``);
+    - "cannot be resumed": the record says why it cannot be (``unresumable``);
+    - "finished": its fit ended, and its posterior was not written before its process ended or the
+      posterior could not be written (``complete``);
+    - "kept when stopped": it was stopped on purpose;
+    - "stopped unexpectedly": anything else -- a crash, a restart, a power cut, or an error the process
+      recorded with its reason.
+
+    Never raises: a body a hand edit left in another shape reads as stopped unexpectedly.
+    """
+    if running(path):
+        return "running"
+    body = body if isinstance(body, dict) else {}
+    if body.get("unresumable"):
+        return "cannot be resumed"
+    if body.get("complete"):
+        return "finished"
+    stopped = body.get("stopped")
+    if isinstance(stopped, dict) and stopped.get("on_purpose"):
+        return "kept when stopped"
+    return "stopped unexpectedly"
