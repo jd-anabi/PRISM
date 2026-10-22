@@ -165,10 +165,10 @@ One row per subcommand, and per mode where a subcommand has modes; each name lin
 | command | what it does | what it writes |
 |---|---|---|
 | [`prior`](docs/guide/command-line.md#prior) | Builds a stability-screened prior over the bounds file's parameters | `prior` |
-| [`train`](docs/guide/command-line.md#train) | Trains an amortized posterior on a stored prior | `posterior`; as it runs, the `simulation` cache and a kept training (`fit`), removed once the posterior is written |
+| [`train`](docs/guide/command-line.md#train) | Trains an amortized posterior on a stored prior | `posterior`; as it runs, the `simulation` cache and a kept training (`fit`, removed once the posterior is written) |
 | [`validate`](docs/guide/command-line.md#validate) | Calibrates a posterior without an observation: SBC, TARP, one verdict | `calibration` |
 | [`infer`](docs/guide/command-line.md#infer) | Runs a posterior on one observation, simulated from a cell or built from recordings | `observation`, `inference` |
-| [`tsnpe`](docs/guide/command-line.md#tsnpe) | One narrowing round: a region around an observation, then training on the prior restricted to it | `posterior` (not amortized); as it runs, its `simulation` cache and a kept training (`fit`), removed once the posterior is written |
+| [`tsnpe`](docs/guide/command-line.md#tsnpe) | One narrowing round: a region around an observation, then training on the prior restricted to it | `posterior` (not amortized); as it runs, its `simulation` cache and a kept training (`fit`, removed once the posterior is written) |
 | [`sbc`](docs/guide/command-line.md#sbc) | SBC repeated on one posterior, to show its run-to-run spread | `diagnostic` |
 | [`identifiability rotation`](docs/guide/command-line.md#identifiability-rotation) | Decomposes a trained posterior's Fisher eigenbasis; simulates nothing | `diagnostic` |
 | [`identifiability laplace`](docs/guide/command-line.md#identifiability-laplace) | Laplace marginal SD of every parameter at a cell's ground truth and at draws from the training prior | `diagnostic` |

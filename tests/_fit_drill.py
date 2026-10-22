@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
         real(self, take)
         if self.passes == args.end_after_pass:      # the last pass whose save went through whole
             # os._exit skips Python's own flush, and the last saved pass's line must reach the log; a flush
-            # that fails (a console pipe closed early) must not turn the power cut into an error stop.
+            # that fails (a console pipe closed early) must not turn the sudden end into an error stop.
             try:
                 sys.stdout.flush()
                 sys.stderr.flush()

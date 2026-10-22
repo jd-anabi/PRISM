@@ -505,8 +505,8 @@ $LASTEXITCODE
   patience, the cadence, the name and the note), and a setting given that differs from its own is
   refused before anything is read, naming its flag; so is a change since it was kept in its rows, in
   the code that builds or trains the network, in a configuration constant that code reads or in the
-  libraries, naming the flag that answers it where one does (`--prior`, `--num-runs`, `--device`,
-  `--bounds`) and ending `(--resume-fit)` otherwise. It prints
+  libraries, naming the flag that answers it where one does (`--prior`, `--num-runs`, `--run-size`,
+  `--model`, `--device`, `--bounds`) and ending `(--resume-fit)` otherwise. It prints
   `[fit] resuming the kept training <id> after pass <n> (best validation loss <x>, <k> passes since the best); its simulation set is read back first.`,
   then the cache's resume lines above, and `[fit] saved after pass <n+1>.` once the next pass is
   saved. When the newest saved pass cannot be read it warns, and resumes from the pass before it. A
