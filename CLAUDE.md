@@ -180,8 +180,9 @@ what is on disk, the last gate). Update it at the end of every session.
   stamped `HH:MM:SS info/warning/error` (`core/runs.py`) — for every kind but the simulation cache,
   which has no writer. The store's code is `core/artifacts/`; the `Artifacts/` tree is gitignored.
   The kinds are priors, simulations (the training cache, keyed by identity digest), posteriors,
-  observations, calibrations, inferences, diagnostics and fdt (the effective-temperature
-  measurement, the parameter sweep and their comparisons — piece 5). Every stage writes its
+  observations, calibrations, inferences, diagnostics, fdt (the effective-temperature
+  measurement, the parameter sweep and their comparisons — piece 5) and fits (a training kept
+  partway; removed when its posterior is written). Every stage writes its
   artifact at completion and returns a `Loaded*` wrapper, with two exceptions: the training cache,
   which commits batch by batch and has no writer at all, and an `fdt` record, which is
   PROGRESSIVE — its directory and a first manifest exist from the moment the run starts,
@@ -212,9 +213,18 @@ what is on disk, the last gate). Update it at the end of every session.
   is live, edit no file under `core/` (whether an import late in a run can read an edited file is
   not established), and note `git rev-parse HEAD` when it starts: a posterior stamps the
   checkout's git revision and dirty flag when it is written at the end, so a commit of any file
-  during the run, documents included, moves that stamp. A fit is not checkpointed: any stop during
-  it loses the whole fit. The simulated rows survive in the simulation cache, which the window and
-  `train` keep by default (a commit every 50 batches).
+  during the run, documents included, moves that stamp. A fit is saved after every pass when its
+  rows are in a kept simulation set, which the window and `train` keep by default (a commit every
+  50 batches): any stop loses at most the pass in progress (about an hour at full size), and the
+  stopped training is kept as a record of its own (kind `fit`, under `Artifacts/fits/`). It is
+  resumed by hand, from the command line with `train --resume-fit <id>`, given the same `--bounds`,
+  `--prior`, `--chi` and `--device` it was trained with (the window's Resume comes with its
+  redesign), only while its settings, its network's shape, the code that builds or trains the
+  network, the libraries and its simulation set are what it was trained with: an edit inside that
+  code (`fit_state.FIT_CODE`), even a comment, makes every training kept before it unresumable, so
+  finish a kept training you want before such an edit. A resume reads the simulation set back
+  first (about four minutes at full size). A fit trained with checkpointing off is not saved and
+  cannot be resumed.
 - Git: work directly on the local `main` branch — no feature branches, no worktrees (decided
   2026-09-11 after piece 1's merge). Claude makes the local commits, one per logical step, never
   amended, ending with the Co-Authored-By line the harness provides. Commit messages are SHORT:
@@ -248,7 +258,9 @@ what is on disk, the last gate). Update it at the end of every session.
   command line, bringing recordings, the science, the architecture, the rules and traps, testing,
   and the retrain runbook. They cite no working document (the source scan walks them), and each
   opens with the commit it was checked against.
-- `tests/` — the twenty-five suites (`test_look.py` the look's: no torch; the table of colours,
+- `tests/` — the twenty-six suites (`test_fit_saving.py` the kept training's: its files, lock and
+  identity, the training call's per-pass hook and restore, the training stage's saving and resuming;
+  `test_look.py` the look's: no torch; the table of colours,
   type and sizes, the lettering, the style sheet, the painted devices and the shared question;
   `test_shell.py` the window's places — the rail, moving between places, the run's foot — and
   Home, the keys, one PRISM at a time and the last-resort error; `test_step_chain.py` the
