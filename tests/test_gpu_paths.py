@@ -44,3 +44,74 @@ def test_inference_runs_on_cuda_with_a_loaded_observation(tiny_run_cuda):
     inf = orchestrator.infer_and_visualize(r.cfg, r.posterior, obs, fig_sink=r.sink, n_samples=20, name="inf")
     assert inf.manifest.parents == {"posterior": r.posterior.id, "observation": obs.id}
     assert inf.results["n_samples"] == 20 and inf.results["accepted"] == []
+
+
+def _stop_after(patch, at: int, exc: BaseException) -> None:
+    """Stop the training with ``exc`` right after pass ``at`` is saved, as a Ctrl-C between two passes
+    would: the pass's save runs whole (its state, its record and its line), then ``exc`` is raised where
+    the trainer hands the pass on."""
+    from core.SBI import fit_state
+    real = fit_state.FitSession.save_pass
+
+    def save_pass(self, take):
+        real(self, take)
+        if self.passes == at:
+            raise exc
+
+    patch.setattr(fit_state.FitSession, "save_pass", save_pass)
+
+
+def test_a_training_stopped_on_the_card_resumes_with_its_split_counters_and_optimizer_on_the_device(
+        tiny_run_cuda, monkeypatch):
+    """A training on the card, its rows in a kept simulation set, stopped by a Ctrl-C after its second
+    pass is saved, is resumed in a new call with nothing but the kept training named. When sbi's training
+    method is called to continue it, the optimizer's moments and every weight of the network are on the
+    card (the kept state is read onto the processor and must be moved back), the pass count is the
+    kept one, and the validation rows are the ones the training was split into. The posterior is written
+    and says it was resumed over two processes. Its losses are not compared with an uninterrupted fit's:
+    on the card the spline's gather is not deterministic."""
+    import numpy as np
+    from sbi.inference import SNPE
+    from core import orchestrator
+    from core.SBI import fit_state
+    r = tiny_run_cuda
+    assert r.cfg.hw.device.type == "cuda"
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 2, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, store=r.store,
+                                         name="card_resumed", num_runs=3, run_size_cap=8, hidden_features=8,
+                                         num_transforms=1, stop_after_epochs=3, max_num_epochs=8,
+                                         checkpoint_every=1, new_run=True, fisher_points=1, fisher_m=4)
+    row, = r.store.list("fit")
+    assert (row.fit_state, row.fit_passes) == ("kept when stopped", 2)
+    kept_validation = fit_state.read_header(row.path)["start"]["validation_digest"]
+
+    seen, real = [], SNPE.train
+
+    def train(self, *args, **kwargs):
+        if kwargs.get("resume_training"):
+            seen.append({
+                "moments": [st["exp_avg"].device.type for st in self.optimizer.state.values()],
+                "weights": [p.device.type for p in self._neural_net.parameters()],
+                "epoch": self.epoch,
+                "validation": fit_state.indices_digest(self.val_indices),
+            })
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(SNPE, "train", train)
+    post = orchestrator.build_posterior(r.cfg, r.prior, None, True, resume_fit=row.id, fig_sink=r.sink,
+                                        store=r.store)
+    at_resume, = seen
+    assert at_resume["moments"] and set(at_resume["moments"]) == {"cuda"}, at_resume["moments"]
+    assert at_resume["weights"] and set(at_resume["weights"]) == {"cuda"}, at_resume["weights"]
+    # The kept state was taken at the second pass's summary, before sbi counted the pass, and holds the
+    # number sbi gives the next pass; counted from nought, that is the third pass's number, 2.
+    assert at_resume["epoch"] == 2
+    assert at_resume["validation"] == kept_validation
+    assert post.name == "card_resumed"
+    validation_loss = np.load(post.path / "loss.npz")["validation_loss"]
+    assert len(validation_loss) > 2 and np.isfinite(validation_loss).all(), validation_loss
+    training = post.manifest.body["training"]
+    assert (training["resumed_fit"], training["fit_processes"], training["fit_id"]) == (True, 2, row.id)
+    assert r.store.list("fit") == []
