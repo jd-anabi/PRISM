@@ -764,9 +764,16 @@ def test_a_checkpointed_training_saves_every_pass_and_removes_its_kept_fit_after
 def test_a_training_stopped_on_purpose_is_kept_and_says_how_it_stopped(tiny_run, fits_left, monkeypatch):
     """A Ctrl-C after the second pass's save keeps the training as a record of its own: stopped on
     purpose, after pass 2, with the pass before it one file away, its identity whole and the same in its
-    header and its record, its lock let go, its log up to the stop, and the simulation set it trains on
-    protected from deletion. No posterior is written."""
+    header and its record, its code the code as the process loaded it (made here to differ from the files
+    as they stand, as after an edit made while a window is open), its lock let go, its log up to the
+    stop, and the simulation set it trains on protected from deletion. No posterior is written."""
     r = tiny_run
+    real_code = fit_state.loaded_code
+
+    def as_loaded(names=FIT_CODE):
+        return {**real_code(names), "core.orchestrator.build_embedding_net": "1" * 16}
+
+    monkeypatch.setattr(fit_state, "loaded_code", as_loaded)
     _stop_after(monkeypatch, 2, KeyboardInterrupt())
     with pytest.raises(KeyboardInterrupt):
         _train(r, 2, 7, name="fit_stopped")
@@ -781,7 +788,10 @@ def test_a_training_stopped_on_purpose_is_kept_and_says_how_it_stopped(tiny_run,
     assert torch.load(row.path / STATE_PREV, weights_only=False)["passes"] == 1
     header = fit_state.read_header(row.path)
     assert list(header["identity"]) == list(fit_state.IDENTITY_PARTS)
-    assert header["identity"]["code"] == fit_state.loaded_code()
+    loaded = as_loaded()
+    assert loaded != code_digests()
+    assert header["identity"]["code"] == loaded, "the training must record the code as this process loaded it"
+    assert m.body["identity"]["code"] == loaded
     assert first_difference(header["identity"], m.body["identity"]) is None
     assert "started" not in header["start"]
     assert not running(row.path)
