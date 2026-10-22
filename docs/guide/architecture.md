@@ -519,14 +519,16 @@ is how the store is built, in `core/artifacts/`.
     that differs, and the bijection probe catches a changed box.
 - **A kept training** (`fit`) is a training saved partway; it has no writer, like the simulation set,
   and names its prior and simulation set (and, for a narrowing round, its observation and parent
-  posterior) as parents, so neither can be deleted under it; a running one cannot be deleted.
+  posterior) as parents, so none of them can be deleted under it; a running one cannot be deleted.
   - It is saved after every pass while its rows are in a kept simulation set (`core.SBI.fit_state`):
     a header written once with its identity (the rows, the batches, the settings, a digest of the code
-    that builds or trains the network as the process loaded it, the constants that code reads, the
-    libraries and the network's shape), and two generations of its state, `state.pt` and
-    `state.prev.pt`, rotated by renaming inside a deferred-cancel section, so a save torn at any step
-    leaves a whole pass. An operating-system lock on `running.lock`, held while a process trains it and
-    let go by the system when that process dies, says it is running.
+    that builds or trains the network as the process loaded it (the functions and classes
+    `fit_state.FIT_CODE` names: an edit inside one, a comment included, makes every training kept
+    before it unresumable), the constants that code reads, the libraries and the network's shape), and
+    two generations of its state, `state.pt` and `state.prev.pt`, rotated by renaming inside a
+    deferred-cancel section, so a save torn at any step leaves a whole pass. An operating-system lock on
+    `running.lock`, held while a process trains it and let go by the system when that process dies, says
+    it is running.
   - It is resumed by its id (`build_posterior(resume_fit=...)`, `--resume-fit`), on its own record's
     settings. Before anything is read, the lock must be free and the identity unchanged: a difference in
     a setting the call gives is refused naming it, one in the code, a constant, a library or the

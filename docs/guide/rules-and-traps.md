@@ -720,6 +720,14 @@ The narrowing-round rules themselves are in the table above.
   switch (`config.QUIET_SEGMENT_BAR`, `config.SIM_VRAM_CEILING_GIB`); carry it on the configuration,
   for anything a trained record must describe (the chi fields, `reparam_rotate`); or take it as an
   argument that defaults to the constant, for a per-run setting (the stages' arguments).
+- **An edit inside the code a kept training names makes every kept training unresumable.**
+  `core.SBI.fit_state.FIT_CODE` names the functions and classes that build or train the network and
+  `FIT_CONSTANTS` the configuration constants they read; a kept training records a digest of each as
+  the process loaded it, with the versions of torch, sbi and nflows. Any edit inside one of them, a
+  comment included, a changed constant or another library refuses every resume of a training kept
+  before it, naming what changed; an edit outside them changes nothing. Guard: the refusal itself,
+  made before anything is read (`fit_state.kept_fits`, the training stage's checks). Before editing
+  them, look for a kept training you mean to resume (`artifacts list fit`) and finish it first.
 
 ### Reading diagnostics
 

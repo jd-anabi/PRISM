@@ -505,7 +505,8 @@ $LASTEXITCODE
   patience, the cadence, the name and the note), and a setting given that differs from its own is
   refused before anything is read, naming its flag; so is a change since it was kept in its rows, in
   the code that builds or trains the network, in a configuration constant that code reads or in the
-  libraries, without a flag. It prints
+  libraries, naming the flag that answers it where one does (`--prior`, `--num-runs`, `--device`,
+  `--bounds`) and ending `(--resume-fit)` otherwise. It prints
   `[fit] resuming the kept training <id> after pass <n> (best validation loss <x>, <k> passes since the best); its simulation set is read back first.`,
   then the cache's resume lines above, and `[fit] saved after pass <n+1>.` once the next pass is
   saved. When the newest saved pass cannot be read it warns, and resumes from the pass before it. A
@@ -676,6 +677,10 @@ A narrowing round from `retrain`, drawn around the simulated tier-1 cell at 4.5 
   resume is refused for want of a cache, either the round's first process committed nothing or its
   region did not come out the same; the refusal names no cache one setting away, because a different
   region never counts as one. Either way, start the round again without `--resume require`.
+- A round stopped while its flow trains is kept like the retrain's training (a `[fit]` line names it)
+  and resumed with the same `tsnpe` command, `--resume-fit <id>` added and `--directions` and `--level`
+  left out: it trains in the region it was kept with, and a number of directions or a level given beside
+  it is refused.
 - An optional child inference records the narrowed posterior on the cell. Re-simulating the cell
   draws new noise, so the observation is never the region's own, and the command needs both
   acceptances. Left at their defaults, as for `cert_parent`: `--chi-k 6` and `--n-samples 1000`.

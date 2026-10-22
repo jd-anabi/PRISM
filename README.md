@@ -160,15 +160,15 @@ On macOS/Linux, remember to activate the environment (`conda activate biophys-en
 
 PRISM has two front ends over one core: the desktop window and the command-line tool, `python -m core <subcommand> [<mode>] <flags>`. The tool takes flags only and never prompts, so a run can be written down and repeated. Both call the same stages and the same FDT analysis; the diagnostics are reached from the tool alone, and its `artifacts` family is the twin of the window's Artifacts screen. Run it from the repository root, in the environment the window uses. No flag edits a configuration constant: each becomes an argument to a stage, to the configuration or to the store the tool builds (or, for `smoke --stages`, the choice of stages), so a flag you leave off gives the stage's own default, except `validate --seed` (the tool draws and records one) and `smoke` (which always passes its own small sizes; [the rule](docs/guide/command-line.md#conventions)). `--bounds` is required by every command that builds a configuration (all but `fdt`, `crossval`, `compare` and `artifacts`): the bounds file declares which parameters are inferred and in what order, and what a stored prior or posterior is checked against. `--chi` is off by default, so every chi command passes it, and a chain keeps it the same from prior to inference.
 
-One row per subcommand, and per mode where a subcommand has modes; each name links to its section of the command-line page. The store's kinds are `prior`, `simulation`, `posterior`, `observation`, `calibration`, `inference`, `diagnostic` and `fdt`.
+One row per subcommand, and per mode where a subcommand has modes; each name links to its section of the command-line page. The store's kinds are `prior`, `simulation`, `posterior`, `observation`, `calibration`, `inference`, `diagnostic`, `fdt` and `fit`.
 
 | command | what it does | what it writes |
 |---|---|---|
 | [`prior`](docs/guide/command-line.md#prior) | Builds a stability-screened prior over the bounds file's parameters | `prior` |
-| [`train`](docs/guide/command-line.md#train) | Trains an amortized posterior on a stored prior | `posterior`, and the `simulation` cache as it runs |
+| [`train`](docs/guide/command-line.md#train) | Trains an amortized posterior on a stored prior | `posterior`; as it runs, the `simulation` cache and a kept training (`fit`), removed once the posterior is written |
 | [`validate`](docs/guide/command-line.md#validate) | Calibrates a posterior without an observation: SBC, TARP, one verdict | `calibration` |
 | [`infer`](docs/guide/command-line.md#infer) | Runs a posterior on one observation, simulated from a cell or built from recordings | `observation`, `inference` |
-| [`tsnpe`](docs/guide/command-line.md#tsnpe) | One narrowing round: a region around an observation, then training on the prior restricted to it | `posterior` (not amortized), and its `simulation` cache |
+| [`tsnpe`](docs/guide/command-line.md#tsnpe) | One narrowing round: a region around an observation, then training on the prior restricted to it | `posterior` (not amortized); as it runs, its `simulation` cache and a kept training (`fit`), removed once the posterior is written |
 | [`sbc`](docs/guide/command-line.md#sbc) | SBC repeated on one posterior, to show its run-to-run spread | `diagnostic` |
 | [`identifiability rotation`](docs/guide/command-line.md#identifiability-rotation) | Decomposes a trained posterior's Fisher eigenbasis; simulates nothing | `diagnostic` |
 | [`identifiability laplace`](docs/guide/command-line.md#identifiability-laplace) | Laplace marginal SD of every parameter at a cell's ground truth and at draws from the training prior | `diagnostic` |

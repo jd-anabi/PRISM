@@ -143,9 +143,14 @@ training whose rows and settings match a kept one names it before its fit, and s
 the same. The same command with `--resume-fit <id>` continues the kept training: it takes every
 setting not given from the kept training's own record, the name and the note included, reads the
 cache back without simulating again, and goes on from the last saved pass. Before anything is read,
-a setting given that differs from the kept training's is refused, naming its flag; a change since it
-was kept in its rows, in the code that builds or trains the network, in a configuration constant that
-code reads or in the libraries is refused too, with no flag. Once the rows are read back, a kept
+a setting given that differs from the kept training's is refused, naming its flag; so is a difference
+in its rows that a flag answers (`--prior`, `--num-runs`, `--run-size`, `--model`, `--device` or
+`--bounds`; a units file that differs is named with no flag, as the tool has none). Any other
+difference in its rows, such as the observation mode (`--chi` or `--no-chi`),
+and a change since it was kept in the code that builds or trains the network, in a configuration
+constant that code reads or in the libraries, is refused too, naming what differs and ending
+`(--resume-fit)`: the first is answered by giving the command what the training was kept with, the
+others by nothing while the change stands. Once the rows are read back, a kept
 training whose split, network shape or fitted standardisers no longer come out as they were kept is
 refused and marked as one that cannot be resumed, saying why. Once the posterior is written, the kept
 training is removed; `artifacts rm fit <id>` removes one by hand, and refuses one a process is
@@ -226,10 +231,11 @@ Two more are set rather than read as settings:
   same case ends `(--model)`. A refusal that carries no flag ends at the message: a record
   reference that resolves to nothing (`--prior`, `--posterior`, `--observation`, or an `artifacts`
   mode's `<ref>`), `--resume require` with no cache to resume, the narrowed-parent rule of
-  [tsnpe](#tsnpe), a missing units file (the tool has no units flag), a rule two settings answer
-  together, and a kept training that cannot be resumed for a reason no setting of the command answers
-  (its code, a constant, a library or its cache changed, or its rows read back do not give its fit;
-  [Training-cache flags](#training-cache-flags)). An error raised as a plain `ValueError`, such as an unsupported `--model`
+  [tsnpe](#tsnpe), a missing units file (the tool has no units flag), and a rule two settings
+  answer together. A kept training that cannot be resumed for a reason no setting of the command
+  answers (its code, a constant, a library or its cache changed, or its rows read back do not give its
+  fit; [Training-cache flags](#training-cache-flags)) is refused ending `(--resume-fit)`, the flag that
+  named it. An error raised as a plain `ValueError`, such as an unsupported `--model`
   (`core.tool.config_args.make_cfg`) or the cache refusals of [ablation](#ablation), prints
   `prism <subcommand>: refused: <error class>: <message> [raised at <file>:<line>]`, and so does a
   missing file that no check covers. Anything else is a bug: the traceback, then
@@ -1177,8 +1183,8 @@ nine under `== <kind> ==` headings. The mode takes no flags.
 
 The columns are the window's, lower-cased: name and created for every kind; then progress and
 finished for a simulation cache, mode, width and amortized for a posterior, mode and width for an
-observation, variant for a diagnostic, study, points and finished for an fdt record, and for,
-passes and state for a kept training (`fit`); then the note. A directory with no usable manifest
+observation, variant for a diagnostic, study, points and finished for an fdt record, and, for a kept
+training (`fit`), "for", passes and state; then the note. A directory with no usable manifest
 comes last, as `incomplete  <dir>  -- <reason>`. With no kind, the kinds that hold nothing are
 named on a trailing `nothing in:` line.
 
@@ -1214,9 +1220,10 @@ A reference that names a leftover directory, rather than a record, is refused wi
 
 It is refused while any other record depends on it. The refusal names every dependent and why: it
 names this record as a parent, or, for a prior, it is a training cache generated against it, found
-by the prior's fit alone. Delete those first; no flag overrides the refusal. A comparison is not a
-dependent: deleting a record a comparison drew succeeds, and the comparison's lineage report then
-prints it as `MISSING` ([compare](#compare)).
+by the prior's fit alone. Delete those first; no flag overrides the refusal. A kept training (`fit`)
+that a running process is training is refused too, until that process stops; no flag overrides that
+either. A comparison is not a dependent: deleting a record a comparison drew succeeds, and the
+comparison's lineage report then prints it as `MISSING` ([compare](#compare)).
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
