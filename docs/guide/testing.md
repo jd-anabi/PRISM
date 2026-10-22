@@ -109,8 +109,10 @@ and the session guards).
 
 The suites run on the CPU apart from the gpu-marked tests, so a tensor built on the wrong device
 passes them and fails only on the card. After touching code that moves tensors, and before any
-full-size run, run these five command lines on the card, from the repository root, and check
-`$LASTEXITCODE` after each one. Replace `<scratch>` with a folder outside the repository.
+full-size run, run these five command lines on the card, then run 5's resume drill
+(`tests/_fit_drill.py`, which ends a training like a power cut right after a chosen pass is saved),
+from the repository root, and check `$LASTEXITCODE` after each one. Replace `<scratch>` with a
+folder outside the repository.
 
 ```powershell
 $py = "C:\Users\J\anaconda3\envs\biophys-env\python.exe"
@@ -127,6 +129,13 @@ $S  = "<scratch>"
 & $py -m core smoke --no-chi --t-obs 4.5 @B --cell Resources/Cells/nadrowski/master_weak.txt --checkpoint --save --store-root "$S/smoke_chi0"
 # run 4: the tier-1 box (temperature inferred, the force scale derived) at the larger network, its own store
 & $py -m core smoke --chi --t-obs 4.5 --bounds Resources/Bounds/nadrowski/master_tier1.txt --cell Resources/Cells/nadrowski/master_spont_tier1.txt --hidden-features 256 --num-transforms 10 --checkpoint --save --store-root "$S/smoke_t1"
+# run 5: a chi training ended like a power cut right after its third pass is saved, then resumed by the tool, its own store
+& $py tests/_fit_drill.py --end-after-pass 3 smoke --chi --t-obs 4.5 @B @C --checkpoint --save --store-root "$S/smoke_fit" --stages prior,posterior --max-epochs 30
+$env:PRISM_ARTIFACTS = "$S/smoke_fit"
+$F = [regex]::Match((& $py -m core artifacts list fit | Out-String), '\(unnamed (\d{8}T\d{6}(-\d+)?)\)').Groups[1].Value
+& $py -m core train --resume-fit $F --chi @B --prior smoke_prior
+& $py -m core artifacts list fit
+Remove-Item Env:PRISM_ARTIFACTS
 ```
 
 Pass criteria, read off `$LASTEXITCODE` and the printed lines after each command:
@@ -134,13 +143,26 @@ Pass criteria, read off `$LASTEXITCODE` and the printed lines after each command
   run; on the two chi runs (1 and 4) the training `[chi] masked probes` run-total line (the one
   scoped to every committed batch of the simulation cache; the calibration stage logs a second
   one, scoped to this process only, which is not the criterion) within ±12 pp of 37 %;
+- runs 1, 3 and 4, also: one `[fit] saved after pass N.` per pass, and `artifacts list fit`
+  against each store (`$env:PRISM_ARTIFACTS` set to it) prints `nothing here yet`;
 - run 2: prints `Reusing the Fisher rotation stored with the training checkpoint` and
   `[checkpoint] resuming at batch 4/4`, `$LASTEXITCODE` 0;
 - run 2b: `$LASTEXITCODE` 1, the refusal names `n_runs`, no `[fisher]` line, no new directory
   under `$S/smoke/simulations/`;
 - run 4, also: both `[tier1]` lines, `rescale order: ['x_scale', 't_scale', 'T']` in the banner,
   and `smoke_posterior`'s `manifest.json` lists `T` in `body.transform.param_keys` and carries a
-  `config.tier1` block.
+  `config.tier1` block;
+- run 5: the drill's `$LASTEXITCODE` 9 first (any other code and `$F` may be empty, so the resume
+  line means nothing), its last `[fit]` line `[fit] saved after pass 3.`, and the first listing
+  one row, 3 passes, `stopped unexpectedly`; the resume's `$LASTEXITCODE` 0, no OOM lines,
+  `[fit] resuming the kept training <F> after pass 3`, `Reusing the Fisher rotation stored with
+  the training checkpoint`, no `[fisher]` line, `[checkpoint] resuming at batch 4/4`, then
+  `[fit] saved after pass 4.` onward and `[prism] posterior smoke_posterior__<id>`; the last
+  listing prints `nothing here yet`; `smoke_posterior`'s `manifest.json` reads
+  `body.training.resumed_fit: true`, `fit_processes: 2`, `fit_id: <F>`. Expected after the
+  drill's cut: torch's allocator note and joblib's warnings about leaked memory-mapping folders.
+  Run 5 shows that the training resumes from its kept pass; that the resumed fit is the same fit
+  is shown by the processor's standing checks and the gpu-marked card test, not by run 5.
 
 `--bounds` is required: the same-named sibling rule would otherwise resolve the 12-dim
 spontaneous box. After a change under `core/diagnostics` that moves tensors, also run the
@@ -181,6 +203,15 @@ What each run checks, and what passing looks like:
   above in the `[cfg]` banner, and the two manifest entries the criteria name
   ([The tier-1 constraint and temperature](science.md#the-tier-1-constraint-and-temperature)). Its
   calibration verdict means nothing at this size ([smoke](command-line.md#smoke)).
+- **Run 5**, a chi training in a store of its own, run through `tests/_fit_drill.py`, which ends
+  `python -m core` at once right after the third pass of its fit is saved, with nothing cleaned up,
+  as a crash or a power cut would (exit 9). The training is kept, `stopped unexpectedly` after 3
+  passes; `train --resume-fit` then reads its simulation set back, goes on from pass 4 to the end,
+  writes `smoke_posterior` with `resumed_fit: true` and `fit_processes: 2`, and removes the kept
+  training. It is the card's check that a training stopped on the card resumes there
+  ([train](command-line.md#train) has the kept training's flag and refusals). The `$F` line takes
+  the kept training's id from the listing; an empty `$F` would drop out of the resume line, which is
+  why the drill's exit code is read first.
 - **Run 4's resume** is not part of the recipe. The last card run also ran run 4 again against its
   own store, which checks that a resumed tier-1 run carries the stored rotation's eigenvalues: it
   printed `[checkpoint] the stored rotation's eigenvalues come with it (…)`, and the record kept
@@ -219,6 +250,12 @@ prior: run 4's took 209 s of its 227, run 1's 119 of 139. Each run's prior logge
 `[prior] stability sweep: kept 101779 of 102400 candidates over 40000 steps` and
 `[prior] fill: kept 73939 new sets from 74752 steps (680 outside the box, 133 unstable); 175718 sets in all`
 (`smoke` seeds the build, so the three agree) and `Found 2 clusters (in latent space)`.
+
+The gate ran again on 22 October 2026, when the kept training's saving and resuming were added, on a
+day the processor ran slower (each prior stage about 20 s longer): run 1 139 / 141 / 24 / 58 s and
+run 4 137 / 230 / 31 / 67 s, with the same masked-probe counts as above; run 3 137 / 43 / 13 / 23 s;
+run 2 exited 0 in 10 s and run 2b exited 1 in 7 s; run 5's drill ran about 7 minutes to its cut
+after pass 3, and its resume exited 0 in about 16 s.
 
 sbi 0.26 warns when its calibration tests get fewer than 100 datasets, so runs 1, 3 and 4, which
 calibrate on 40, each log `Number of TARP samples should be on the order of 100s to give reliable results.`

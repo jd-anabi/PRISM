@@ -2544,6 +2544,13 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
   & $py -m core smoke --no-chi --t-obs 4.5 @B --cell Resources/Cells/nadrowski/master_weak.txt --checkpoint --save --store-root "$S/smoke_chi0"
   # run 4: the tier-1 box (temperature inferred, the force scale derived) at the larger network, its own store
   & $py -m core smoke --chi --t-obs 4.5 --bounds Resources/Bounds/nadrowski/master_tier1.txt --cell Resources/Cells/nadrowski/master_spont_tier1.txt --hidden-features 256 --num-transforms 10 --checkpoint --save --store-root "$S/smoke_t1"
+  # run 5: a chi training ended like a power cut right after its third pass is saved, then resumed by the tool, its own store
+  & $py tests/_fit_drill.py --end-after-pass 3 smoke --chi --t-obs 4.5 @B @C --checkpoint --save --store-root "$S/smoke_fit" --stages prior,posterior --max-epochs 30
+  $env:PRISM_ARTIFACTS = "$S/smoke_fit"
+  $F = [regex]::Match((& $py -m core artifacts list fit | Out-String), '\(unnamed (\d{8}T\d{6}(-\d+)?)\)').Groups[1].Value
+  & $py -m core train --resume-fit $F --chi @B --prior smoke_prior
+  & $py -m core artifacts list fit
+  Remove-Item Env:PRISM_ARTIFACTS
   ```
 
   Pass criteria, read off `$LASTEXITCODE` and the printed lines after each command:
@@ -2551,13 +2558,26 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
     run; on the two chi runs (1 and 4) the training `[chi] masked probes` run-total line (the one
     scoped to every committed batch of the simulation cache; the calibration stage logs a second
     one, scoped to this process only, which is not the criterion) within ±12 pp of 37 %;
+  - runs 1, 3 and 4, also: one `[fit] saved after pass N.` per pass, and `artifacts list fit`
+    against each store (`$env:PRISM_ARTIFACTS` set to it) prints `nothing here yet`;
   - run 2: prints `Reusing the Fisher rotation stored with the training checkpoint` and
     `[checkpoint] resuming at batch 4/4`, `$LASTEXITCODE` 0;
   - run 2b: `$LASTEXITCODE` 1, the refusal names `n_runs`, no `[fisher]` line, no new directory
     under `$S/smoke/simulations/`;
   - run 4, also: both `[tier1]` lines, `rescale order: ['x_scale', 't_scale', 'T']` in the banner,
     and `smoke_posterior`'s `manifest.json` lists `T` in `body.transform.param_keys` and carries a
-    `config.tier1` block.
+    `config.tier1` block;
+  - run 5: the drill's `$LASTEXITCODE` 9 first (any other code and `$F` may be empty, so the resume
+    line means nothing), its last `[fit]` line `[fit] saved after pass 3.`, and the first listing
+    one row, 3 passes, `stopped unexpectedly`; the resume's `$LASTEXITCODE` 0, no OOM lines,
+    `[fit] resuming the kept training <F> after pass 3`, `Reusing the Fisher rotation stored with
+    the training checkpoint`, no `[fisher]` line, `[checkpoint] resuming at batch 4/4`, then
+    `[fit] saved after pass 4.` onward and `[prism] posterior smoke_posterior__<id>`; the last
+    listing prints `nothing here yet`; `smoke_posterior`'s `manifest.json` reads
+    `body.training.resumed_fit: true`, `fit_processes: 2`, `fit_id: <F>`. Expected after the
+    drill's cut: torch's allocator note and joblib's warnings about leaked memory-mapping folders.
+    Run 5 shows that the training resumes from its kept pass; that the resumed fit is the same fit
+    is shown by the processor's standing checks and the gpu-marked card test, not by run 5.
 
   `--bounds` is required: the same-named sibling rule would otherwise resolve the 12-dim
   spontaneous box. After a change under `core/diagnostics` that moves tensors, also run the
