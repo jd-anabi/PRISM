@@ -1,11 +1,12 @@
-"""Run ``python -m core`` and end it like a power cut right after a chosen pass of a training is saved.
+"""Run ``python -m core`` and end it at once, as a crash or a killed process would, right after a chosen pass of a training is saved.
 
 It exists for the resume run of the smoke gate on the graphics card. A fit of seconds cannot be stopped
 at an exact pass from outside, so this script runs the command-line tool with the arguments it is given
 and, the moment the training's chosen pass is saved whole (its state, its record and its line), ends the
 process at once, with exit code 9 and nothing cleaned up: no stop is recorded, so the kept training reads
-as stopped unexpectedly, and its lock is freed by the system as the process dies. The tool then resumes
-it in a new process.
+as stopped unexpectedly, and its lock is freed by the system as the process dies. A power cut also loses
+what the system had not yet written to disk; every file a resume reads is flushed to disk before it is
+renamed into place, so the drill stands for one. The tool then resumes it in a new process.
 
     python tests/_fit_drill.py --end-after-pass N <the arguments of python -m core>
 
@@ -34,10 +35,13 @@ def main(argv: list[str] | None = None) -> int:
     def save_pass(self, take):
         real(self, take)
         if self.passes == args.end_after_pass:      # the last pass whose save went through whole
-            # os._exit skips Python's own flush, and the last saved pass's line must reach the log.
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os._exit(9)
+            # os._exit skips Python's own flush, and the last saved pass's line must reach the log; a flush
+            # that fails (a console pipe closed early) must not turn the power cut into an error stop.
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+            finally:
+                os._exit(9)
 
     fit_state.FitSession.save_pass = save_pass
     try:

@@ -65,12 +65,15 @@ def test_a_training_stopped_on_the_card_resumes_with_its_split_counters_and_opti
         tiny_run_cuda, monkeypatch):
     """A training on the card, its rows in a kept simulation set, stopped by a Ctrl-C after its second
     pass is saved, is resumed in a new call with nothing but the kept training named. When sbi's training
-    method is called to continue it, the optimizer's moments and every weight of the network are on the
-    card (the kept state is read onto the processor and must be moved back), the pass count is the
-    kept one, and the validation rows are the ones the training was split into. The posterior is written
-    and says it was resumed over two processes. Its losses are not compared with an uninterrupted fit's:
-    on the card the spline's gather is not deterministic."""
+    method is called to continue it, every parameter has its moments back in the optimizer, on the card,
+    and every weight of the network is on the card with its kept value (the kept state is read onto the
+    processor and must be moved back), the pass count, the history of the two passes and the
+    early-stopping counters are the kept ones, and the validation rows are the ones the training was split
+    into. The posterior is written, trained past the kept passes, and says it was resumed over two
+    processes. Its losses are not compared with an uninterrupted fit's: on the card the spline's gather is
+    not deterministic."""
     import numpy as np
+    import torch
     from sbi.inference import SNPE
     from core import orchestrator
     from core.SBI import fit_state
@@ -86,31 +89,39 @@ def test_a_training_stopped_on_the_card_resumes_with_its_split_counters_and_opti
     row, = r.store.list("fit")
     assert (row.fit_state, row.fit_passes) == ("kept when stopped", 2)
     kept_validation = fit_state.read_header(row.path)["start"]["validation_digest"]
+    kept = fit_state.load_state(row.path)
 
-    seen, real = [], SNPE.train
+    resumed, real = [], SNPE.train
 
     def train(self, *args, **kwargs):
         if kwargs.get("resume_training"):
-            seen.append({
-                "moments": [st["exp_avg"].device.type for st in self.optimizer.state.values()],
-                "weights": [p.device.type for p in self._neural_net.parameters()],
-                "epoch": self.epoch,
-                "validation": fit_state.indices_digest(self.val_indices),
-            })
+            # Checked here, before sbi's own passes run: a fault these checks name would otherwise end the
+            # fit first with an error of torch's own (an optimizer step across two devices).
+            resumed.append(True)
+            params = list(self._neural_net.parameters())
+            moments = [self.optimizer.state[p]["exp_avg"].device.type for p in params if p in self.optimizer.state]
+            assert len(moments) == len(params) and set(moments) == {"cuda"}, f"the optimizer's moments: {moments}"
+            weights = [p.device.type for p in params]
+            assert set(weights) == {"cuda"}, f"the network's weights are not all on the card: {weights}"
+            changed = [name for name, t in self._neural_net.state_dict().items()
+                       if not torch.equal(t.detach().cpu(), kept["net_state"][name].cpu())]
+            assert changed == [], f"the kept weights were not put back: {changed}"
+            # The kept state was taken at the second pass's summary, before sbi counted the pass, and holds
+            # the number sbi gives the next pass; counted from nought, that is the third pass's number, 2,
+            # with the two passes trained before the stop in sbi's own history.
+            assert (self.epoch, len(self._summary["validation_loss"])) == (2, 2), (self.epoch, self._summary)
+            assert (float(self._best_val_loss), self._epochs_since_last_improvement) == \
+                (float(kept["best_val_loss"]), kept["passes_since_best"]), "the early-stopping counters"
+            assert fit_state.indices_digest(self.val_indices) == kept_validation, "the split is not the kept one"
         return real(self, *args, **kwargs)
 
     monkeypatch.setattr(SNPE, "train", train)
     post = orchestrator.build_posterior(r.cfg, r.prior, None, True, resume_fit=row.id, fig_sink=r.sink,
                                         store=r.store)
-    at_resume, = seen
-    assert at_resume["moments"] and set(at_resume["moments"]) == {"cuda"}, at_resume["moments"]
-    assert at_resume["weights"] and set(at_resume["weights"]) == {"cuda"}, at_resume["weights"]
-    # The kept state was taken at the second pass's summary, before sbi counted the pass, and holds the
-    # number sbi gives the next pass; counted from nought, that is the third pass's number, 2.
-    assert at_resume["epoch"] == 2
-    assert at_resume["validation"] == kept_validation
+    assert resumed == [True], "sbi's training method was never called to resume the kept training"
     assert post.name == "card_resumed"
     validation_loss = np.load(post.path / "loss.npz")["validation_loss"]
+    # the two kept passes' losses, as the history showed at the resume, and at least one pass trained here
     assert len(validation_loss) > 2 and np.isfinite(validation_loss).all(), validation_loss
     training = post.manifest.body["training"]
     assert (training["resumed_fit"], training["fit_processes"], training["fit_id"]) == (True, 2, row.id)

@@ -717,9 +717,11 @@ def test_train_resume_fit_continues_a_kept_training_and_names_the_flag_of_what_d
     --resume-fit; resumed with a setting that differs from the kept training's, it is refused naming that
     setting's flag; resumed with nothing but the kept training, it writes the posterior under the name it
     was started with, and the kept training is gone. Placed after the near-miss test, which expects no
-    cache but the module's own one setting away from its run."""
+    cache but the module's own one setting away from its run. The resume reads back the kept training's
+    six batches: a resume that lost its kept training would fall back on the configured budget of
+    thousands, and fails at once instead of simulating for hours."""
     from core.artifacts import ArtifactStore
-    from core.SBI import fit_state
+    from core.SBI import fit_state, pipeline
     bounds, cell, root = tool_run
     before = {s.id for s in ArtifactStore(root).list("fit")}
     real = fit_state.FitSession.save_pass
@@ -740,6 +742,14 @@ def test_train_resume_fit_continues_a_kept_training_and_names_the_flag_of_what_d
     assert "--resume-fit" in said.err, said.err
     kept, = [s for s in ArtifactStore(root).list("fit") if s.id not in before]
     assert f"is kept as fit {kept.id}" in said.out, said.out
+    real_rows = pipeline.gen_training_data
+
+    def rows(*args, **kwargs):
+        batches = args[5] if len(args) > 5 else kwargs.get("n_runs")
+        assert batches == 6, f"the resume reached the simulation with {batches} batches, not the kept training's 6"
+        return real_rows(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "gen_training_data", rows)
     assert main([*argv, "--resume-fit", kept.id, "--hidden-features", "16"]) == 1
     err = capsys.readouterr().err
     refused = [ln for ln in err.splitlines() if ln.startswith("prism train: refused:")]
@@ -1410,6 +1420,7 @@ def test_smoke_ctrl_c_advice_depends_on_store_root():
     assert r"--store-root C:\scratch\smoke" in advice
     assert "--prior smoke_prior" in advice and "--stages prior,posterior" in advice
     assert "--resume require" in advice and "--checkpoint" in advice
+    assert "--resume-fit" not in advice, "smoke takes no --resume-fit, so its advice never names it"
     assert "--num-runs" in advice and "--run-size" in advice
 
     # without --save the prior this run built is unnamed: the advice must not name smoke_prior
@@ -3269,8 +3280,10 @@ def test_artifacts_list_fit_prints_what_each_kept_training_is_for_its_passes_and
                                                                                           capsys):
     """A kept training's row: its label (always unnamed), when it began, the posterior it is to write
     ("-" when none is named yet), the passes it holds, its state's word and its note -- the window's
-    columns, lower-cased."""
+    columns, lower-cased. A record that says none of the three prints "-" for each, never "None"."""
     import re
+    from core.artifacts.store import Summary
+    from core.tool import browse
     root, ids = browse_store
     capsys.readouterr()
     assert main(["artifacts", "list", "fit"]) == 0
@@ -3282,6 +3295,9 @@ def test_artifacts_list_fit_prints_what_each_kept_training_is_for_its_passes_and
     cells = re.split(r"\s{2,}", line.strip())
     assert cells[0] == f"(unnamed {ids['fit']})" and cells[2:] == ["-", "3", "kept when stopped",
                                                                     "the fit row"], cells
+    bare = Summary(kind="fit", id="k", name="", created="2026-01-01 00:00:00", note="", path=Path("."),
+                   complete=True, reason=None)
+    assert browse._cells("fit", bare)[2:5] == ("-", "-", "-"), browse._cells("fit", bare)
 
 
 def test_an_empty_artifacts_listing_exits_0_and_a_bad_kind_exits_1(tmp_path, monkeypatch, capsys):
