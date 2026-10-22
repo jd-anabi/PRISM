@@ -557,12 +557,12 @@ def run_fit(prepared: PreparedFit, *, batch_size: int, learning_rate: float, sto
     # refused here, after the generation. Any error from the fit is a FAILURE, not a refusal: sbi
     # reports a non-finite loss as a ValueError, which the front ends read as a check made before
     # anything was spent, but this one arrives after the generation and part of the fit.
-    knobs = dict(training_batch_size=int(batch_size), learning_rate=float(learning_rate),
-                 stop_after_epochs=int(stop_after_epochs), max_num_epochs=int(max_num_epochs),
-                 show_train_summary=bool(show_train_summary))
     kept_start, state = resume if resume is not None else (None, None)
     hooked = False
     try:
+        knobs = dict(training_batch_size=int(batch_size), learning_rate=float(learning_rate),
+                     stop_after_epochs=int(stop_after_epochs), max_num_epochs=int(max_num_epochs),
+                     show_train_summary=bool(show_train_summary))
         if resume is not None:
             restore_trainer(infer, kept_start, state, settings=prepared.settings)
             knobs["resume_training"] = True

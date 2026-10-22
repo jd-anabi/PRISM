@@ -6,6 +6,9 @@ A fit is sbi's training of the neural posterior. Kept, it is a folder of its own
     state.pt        the state after the last finished pass, rewritten after every pass
     state.prev.pt   the state one pass before it, so that a save torn mid-way still leaves a whole pass
     running.lock    whose operating-system lock is held by the process training the fit now
+    manifest.json   the record of the kept training, rewritten after every pass
+    log.txt         the records of every process that trained it, the earliest first
+    state.unreadable.pt   a newest state found unreadable when the training was resumed, set aside there
 
 THE TWO GENERATIONS. ``save_state`` writes the new state to a temporary file, renames ``state.pt`` to
 ``state.prev.pt``, then renames the temporary file to ``state.pt`` (``atomic_torch_save`` with
@@ -730,7 +733,8 @@ class FitSession:
         try:
             if not self._kept:
                 self._discard()
-                log.info("[fit] the training stopped before its first pass was saved; nothing is kept.")
+                log.info("[fit] the training stopped before its fit saved a pass, so no kept training was made; "
+                         "the simulation set keeps the batches it committed.")
                 return
             if not self._saved_here:
                 # A resumed record this process has saved no pass into is left as it was found (a failed

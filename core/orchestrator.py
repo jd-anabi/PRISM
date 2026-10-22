@@ -1263,6 +1263,14 @@ def build_posterior(
             if near and not new_run:
                 raise Refusal(_near_miss_message(ckpt_dir, near), field="new_run")
 
+    # Without kept rows a training is not saved as it goes; the run says so among its opening lines,
+    # before the rotation and the simulation, which can take long.
+    if kept is None and (save_fit is False or ckpt_dir is None):
+        log.info("[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."
+                 if save_fit is False else
+                 "[fit] the simulation set is not kept (checkpointing off), so this training is not saved as "
+                 "it goes and cannot be resumed.")
+
     rotate = cfg.reparam_rotate
     # Two locals, kept apart on purpose. fisher_evals is set only by the freshly computed branch below,
     # so it stays the one witness that the Fisher RAN in this process, and the record's three Fisher
@@ -1530,15 +1538,10 @@ def build_posterior(
     # Ctrl-C, the window's Cancel, a crash -- can be resumed in a new process instead of started again.
     # Its identity is made here, before the fit: the rows and their batches, the code this process
     # loaded, the constants and the libraries; the fit adds its settings and the network's shape at its
-    # first save. Without kept rows there is nothing to resume on, and the run says so once.
+    # first save. Without kept rows there is nothing to resume on (the run said so before its rotation).
     # A resumed training's session is the kept record's own, reopened as the first step of the fit below.
     session = None
-    if kept is None and (save_fit is False or ckpt_dir is None):
-        log.info("[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."
-                 if save_fit is False else
-                 "[fit] the simulation set is not kept (checkpointing off), so this training is not saved as "
-                 "it goes and cannot be resumed.")
-    elif kept is None:
+    if kept is None and save_fit is not False and ckpt_dir is not None:
         fit_identity = {"simulation": ident, "batches": n_runs, "code": fit_state.loaded_code(),
                         "constants": fit_state.constants(), "libraries": fit_state.libraries()}
         # The kept trainings this one could have resumed instead, named before its fit: the settings

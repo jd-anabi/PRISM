@@ -979,7 +979,7 @@ def test_a_training_that_fails_is_kept_as_stopped_unexpectedly_with_its_reason(t
 
 def test_a_stop_before_the_first_pass_is_saved_keeps_nothing(tiny_run, fits_left, monkeypatch, caplog):
     """A training stopped before its first pass was saved leaves no kept training and no posterior, and
-    the run says that nothing is kept."""
+    the run says that no kept training was made."""
     r = tiny_run
 
     def interrupted(*args, **kwargs):
@@ -992,7 +992,8 @@ def test_a_stop_before_the_first_pass_is_saved_keeps_nothing(tiny_run, fits_left
     assert _added_folders(r, fits_left) == []
     assert "fit_never_saved" not in _posterior_names(r)
     said = [rec.getMessage() for rec in caplog.records if rec.getMessage().startswith("[fit] ")]
-    assert said[-1:] == ["[fit] the training stopped before its first pass was saved; nothing is kept."], said
+    assert said[-1:] == ["[fit] the training stopped before its fit saved a pass, so no kept training was made; "
+                         "the simulation set keeps the batches it committed."], said
 
 
 def test_a_posterior_that_cannot_be_written_leaves_its_finished_training_kept_and_unlocked(
