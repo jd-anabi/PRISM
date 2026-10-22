@@ -34,6 +34,13 @@ how the training stopped, and removes the record once the training's posterior i
 ``kept_fits`` lists the kept fits with whether each can be resumed and, when it cannot, why; it reads
 their manifests and never a fit's state files, since a reader holding one would make the next save's
 rename fail on Windows.
+
+THE RESUME. ``kept_fit`` finds a kept fit by its id, as the listing reads it; ``FitSession.reopen``
+takes its lock and reads its header and its newest whole pass, and the session then saves the resumed
+fit into the same record. A check made once the rows are read back that finds the fit cannot continue
+marks the record so (``FitSession.mark_unresumable``) and changes nothing else, and so does a header
+saved in another format; a header or a pass that cannot be read at the moment marks nothing, since it
+may read at the next attempt.
 """
 import errno
 import hashlib
@@ -55,6 +62,7 @@ import torch
 
 from core import runs
 from core.Helpers.file_manager import atomic_torch_save
+from core.refusals import Refusal
 
 if os.name == "nt":
     import msvcrt
@@ -68,6 +76,9 @@ HEADER = "header.pt"
 STATE = "state.pt"
 STATE_PREV = "state.prev.pt"
 LOCK = "running.lock"
+# Where a resumed fit moves a newest state that could not be read, before its first save: a name
+# ``load_state`` never reads, so the save's rotation cannot put it over the last good pass.
+_STATE_UNREADABLE = "state.unreadable.pt"
 
 # The functions and classes whose source makes up the code digest: what builds the embedding network
 # and the features it reads, and what trains the network.
@@ -444,6 +455,16 @@ def _progress(snapshot: dict, wall: float, processes: int) -> dict:
             "wall_seconds": float(wall), "processes": int(processes)}
 
 
+def _read_log(path: Path) -> str:
+    """The kept record's ``log.txt``, the earlier processes' records; "" when there is none or it cannot
+    be read."""
+    from core.artifacts.store import LOG_FILE
+    try:
+        return (Path(path) / LOG_FILE).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
 def _reason(exc: BaseException) -> str:
     """What stopped a training, in one line: the exception's name, then its words when it has any."""
     said = " ".join(str(exc).split())
@@ -465,6 +486,10 @@ class FitSession:
     ``identity`` holds the parts known before the fit (the rows, the batches, the code, the constants
     and the libraries); the settings and the network's shape come from the fit's start, at the first
     save. Nothing is written when the session is made.
+
+    A kept fit resumed in a later process has a session of its own, made by ``reopen``: it holds the
+    record's lock from the start, saves into the same record, and, until it has saved a pass, leaves
+    the record as it found it when the training stops (but for a failed save's note).
     """
 
     def __init__(self, store, *, identity: dict, region: "dict | None", posterior_name: str, note: str, cfg,
@@ -494,6 +519,104 @@ class FitSession:
         self._unresumable: "str | None" = None
         self._save_error: "str | None" = None
         self._complete = False
+        # A resumed record's: the start its fit was kept with and the pass it resumes from, handed to
+        # the trainer; whether this process has saved a pass yet; and whether the record's newest state
+        # could not be read, so that its first save moves that file out of the way first.
+        self.resume_pair: "tuple[dict, dict] | None" = None
+        self._saved_here = False
+        self._newest_unreadable = False
+
+    @classmethod
+    def reopen(cls, store, kept: "KeptFit", *, cfg) -> "FitSession":
+        """The session of the kept fit ``kept``, to be resumed in this process, with its lock taken.
+
+        Refused when another handle holds the lock: a running process is training it. Then its record,
+        its header and its newest whole pass are read (``state.pt``, else ``state.prev.pt``, which is
+        said with the pass it resumes from). A header saved in another format marks the record as one
+        that cannot be resumed, and is refused. A header, or every pass, that cannot be read now is
+        refused and leaves the record as it was, to be tried again or deleted: a file another program
+        holds for a moment reads as unreadable too. Nothing else is written here. The session carries
+        the record's own identity, the earlier processes' time and log, and the start the fit was kept
+        with (``resume_pair``); its first save in this process clears the stop an earlier process
+        recorded. Every way out of here but the session handed back lets the lock go.
+        """
+        lock = FitLock(kept.path)
+        if not lock.acquire():
+            raise Refusal(f"The kept training {kept.id} is being trained by a running process.",
+                          field="resume_fit")
+        try:
+            m = store.get("fit", kept.id)
+            body = dict(m.body)
+            session = cls(store, identity={}, region=body.get("region"),
+                          posterior_name=body.get("posterior_name") or "", note=m.note, cfg=cfg,
+                          config=dict(m.config), parents=dict(m.parents), fingerprints=dict(m.fingerprints))
+            session.id, session.path, session._lock = m.id, Path(kept.path), lock
+            session._kept = session.resumed = True
+            session._progress, session._stopped = body.get("progress"), body.get("stopped")
+            session._save_error, session._complete = body.get("save_error"), bool(body.get("complete"))
+            try:
+                header = read_header(session.path)
+            except Exception:                       # noqa: BLE001 -- torn, truncated, held, or another version's
+                header = None
+            if isinstance(header, dict) and header.get("format") != FIT_FORMAT:
+                # Another format is the record's own: no later attempt reads it, so it is marked.
+                why = f"it was saved in format {header.get('format')}; this PRISM reads format {FIT_FORMAT}"
+                session.mark_unresumable(why)
+                raise Refusal(f"The kept training {kept.id} cannot be resumed: {why}.", field="resume_fit")
+            # A header or a state that cannot be read now may read at the next attempt (on Windows a file
+            # another program holds without sharing, a virus scanner say, reads as unreadable), so the
+            # record is left exactly as it was: marking it would end a days-long training for good.
+            state = None
+            if not isinstance(header, dict) or not isinstance(header.get("identity"), dict) \
+                    or not isinstance(header.get("start"), dict):
+                unread = "its header cannot be read"
+            else:
+                state = load_state(session.path)
+                unread = "no saved pass of it can be read" if state is None else None
+            if unread is not None:
+                raise Refusal(f"The kept training {kept.id} cannot be resumed now: {unread}; nothing of it was "
+                              f"changed, and it can be tried again or deleted.", field="resume_fit")
+            fell_back = state.pop("_state_file") == STATE_PREV
+            session.identity = dict(header["identity"])
+            session._full = {part: session.identity.get(part) for part in IDENTITY_PARTS}
+            session.passes = int(state["passes"])
+            session._wall_before = float(state.get("wall_seconds") or 0.0)
+            session.processes = int(state.get("processes") or 1) + 1
+            session.log_before = _read_log(session.path)
+            session.resume_pair = (dict(header["start"]), state)
+            # A newest state that is there and cannot be read is moved aside at the first save, not
+            # here: a resume refused once the rows are read must leave every file as it was.
+            session._newest_unreadable = fell_back and (session.path / STATE).exists()
+            if fell_back:
+                log.warning(f"[fit] the newest saved pass of the kept training {m.id} could not be read; it "
+                            f"resumes from the pass before it, pass {session.passes}.")
+            progress = _progress(state, 0.0, 0)
+            best, since = progress["best_validation_loss"], progress["passes_since_best"]
+            log.info(f"[fit] resuming the kept training {m.id} after pass {session.passes} ("
+                     + (f"best validation loss {best:.4g}, {since} passes since the best" if best is not None
+                        else "no finite validation loss yet")
+                     + "); its simulation set is read back first.")
+            return session
+        except BaseException:
+            lock.release()
+            raise
+
+    def mark_unresumable(self, reason: str) -> None:
+        """Mark the kept fit as one that cannot be resumed, saying why, and let its lock go. Only the
+        record's ``unresumable`` changes: its header, its two states and its log stay as they were. A
+        record that cannot be written is warned about; never raises an ``Exception``."""
+        self._unresumable = reason
+        try:
+            from core.artifacts.store import write_fit_manifest
+            m = self.store.get("fit", self.id)
+            write_fit_manifest(self.path, body={**m.body, "unresumable": reason}, cfg=self.cfg, note=m.note,
+                               config=dict(m.config), parents=dict(m.parents), fingerprints=dict(m.fingerprints),
+                               hw=getattr(self.cfg, "hw", None))
+        except Exception as e:                      # noqa: BLE001 -- the refusal that follows comes first
+            log.warning(f"[fit] could not mark the kept training {self.id} as one that cannot be resumed "
+                        f"({type(e).__name__}: {e}).")
+        finally:
+            self._release()
 
     # ── the files ──
     def _begin(self, start: dict) -> None:
@@ -533,6 +656,15 @@ class FitSession:
                            parents=self.parents, fingerprints=self.fingerprints,
                            hw=getattr(self.cfg, "hw", None))
 
+    def _set_aside_newest(self) -> None:
+        """Move the newest state that could not be read out of the save's way, under a name no reader
+        reads. Left where it was, the save's rotation would rename it over the last good pass, and a save
+        torn between its two renames would leave only the unreadable one."""
+        newest = self.path / STATE
+        if newest.exists():
+            os.replace(newest, self.path / _STATE_UNREADABLE)
+        self._newest_unreadable = False
+
     def _release(self) -> None:
         if self._lock is not None:
             self._lock.release()
@@ -562,6 +694,8 @@ class FitSession:
                 wall = self._wall_before + (time.time() - start["started"])
                 if not self._kept:
                     self._begin(start)
+                if self._newest_unreadable:
+                    self._set_aside_newest()
                 save_state(self.path, {**snapshot, "wall_seconds": wall, "processes": self.processes})
                 progress = _progress(snapshot, wall, self.processes)
                 self._write_log()
@@ -569,7 +703,7 @@ class FitSession:
                 # saved: a resumed training killed afterwards reads as stopped unexpectedly.
                 self._write_manifest(progress=progress, stopped=None, save_error=None)
                 self._progress, self._stopped, self._save_error = progress, None, None
-                self.passes, self._kept = progress["passes"], True
+                self.passes, self._kept, self._saved_here = progress["passes"], True, True
                 self.id = self.path.name.rpartition("__")[2]
             except Exception as e:                  # noqa: BLE001 -- a failed save never stops the fit
                 failure = e
@@ -597,6 +731,12 @@ class FitSession:
             if not self._kept:
                 self._discard()
                 log.info("[fit] the training stopped before its first pass was saved; nothing is kept.")
+                return
+            if not self._saved_here:
+                # A resumed record this process has saved no pass into is left as it was found (a failed
+                # save's note aside): the stop an earlier process recorded still describes it.
+                log.info(f"[fit] the training stopped before it saved a pass in this process; it is kept as "
+                         f"fit {self.id}, as it was after pass {self.passes}.")
                 return
             on_purpose = not isinstance(exc, Exception)
             reason = _reason(exc)
@@ -746,3 +886,14 @@ def matching_kept_fits(store, identity: dict) -> "list[KeptFit]":
     now = _plain({part: identity.get(part) for part in _MATCHED_PARTS})
     return [kept for kept in kept_fits(store)
             if kept.can_resume and first_difference(kept.identity, now, parts=_MATCHED_PARTS) is None]
+
+
+def kept_fit(store, ref: str) -> KeptFit:
+    """The kept fit whose id is ``ref``, read as the listing reads it, with whether it can be resumed
+    now and, when it cannot, why. Refused, naming the kept training to resume, when the store keeps
+    none with that id."""
+    ref = str(ref).strip()
+    for kept in kept_fits(store):
+        if kept.id == ref:
+            return kept
+    raise Refusal(f"There is no kept training with the id {ref!r} in the store.", field="resume_fit")

@@ -15,7 +15,10 @@ nothing the fit computes, the restore refuses a kept fit that differs, and the s
 records are the ones sbi uses. Last, the training stage on a real tiny training: a training whose rows
 are in a kept simulation set is saved after every pass, kept as a record of its own when it stops (by
 a Ctrl-C, the window's Cancel or an error), removed once its posterior is written, and listed with
-whether it can be resumed and why not.
+whether it can be resumed and why not. And resumed: on its own settings, into the very posterior the
+training writes uninterrupted, refused before anything is read when anything it was kept with has
+changed, marked as one that cannot be resumed when its rows read back do not give the kept fit, and
+never resumed by two processes at once.
 """
 import ast
 import copy
@@ -35,6 +38,7 @@ import time
 import types
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 
@@ -988,7 +992,11 @@ def test_save_fit_false_saves_nothing(tiny_run, fits_left, monkeypatch):
 def test_a_new_training_names_the_kept_trainings_that_match_its_settings(tiny_run, fits_left, monkeypatch):
     """A training started with the settings of a kept one, on the same rows, names it before its fit as
     one that can be resumed, and starts a new one all the same; a training with other settings names
-    none."""
+    none. A kept training's record that cannot be read (its manifest saved in another encoding) is listed
+    as unreadable and is no kept training to resume: beside it a training names the kept ones as before,
+    saves every pass and removes its own record as usual. And the line only informs: when the kept
+    trainings cannot be listed at all, a training warns once and trains and writes its posterior all the
+    same."""
     r = tiny_run
     with monkeypatch.context() as patch:
         _stop_after(patch, 1, KeyboardInterrupt())
@@ -1001,6 +1009,44 @@ def test_a_new_training_names_the_kept_trainings_that_match_its_settings(tiny_ru
         f"after pass 1); this run starts a new one."]
     third = _train(r, 3, 5, hidden_features=16, name="fit_third")
     assert "match these settings" not in _log(third)
+    assert [s.id for s in _new_fits(r, fits_left)] == [first.id]
+
+    damaged = r.store.kind_dir("fit") / "_unnamed__20000101T000000"
+    damaged.mkdir()
+    (damaged / "manifest.json").write_bytes(b'{"kind": "fit", "note": "\xff\xfe"}')
+    saves, real_save = [], fit_state.save_state
+
+    def spy(path, state):
+        saves.append(state["passes"])
+        real_save(path, state)
+
+    try:
+        row, = [s for s in r.store.list("fit") if s.dir_name == damaged.name]
+        assert row.complete is False and row.reason.startswith("unreadable manifest"), row
+        assert [k.id for k in fit_state.kept_fits(r.store) if k.path == damaged] == []
+        with monkeypatch.context() as patch:
+            patch.setattr(fit_state, "save_state", spy)
+            fourth = _train(r, 3, 5, name="fit_fourth")
+    finally:
+        shutil.rmtree(damaged)
+    training = fourth.manifest.body["training"]
+    assert saves == list(range(1, training["epochs_trained"] + 1)), saves
+    assert training["fit_id"] is not None
+    assert _said(_log(fourth), "warning", "[fit] ") == []
+    assert _said(_log(fourth), "info", "[fit] 1 kept") == [
+        f"[fit] 1 kept training(s) match these settings and can be resumed: {first.id} (kept when stopped, "
+        f"after pass 1); this run starts a new one."]
+    assert [s.id for s in _new_fits(r, fits_left)] == [first.id]
+
+    def unlisted(store, identity):
+        raise OSError("the kept trainings' folder could not be read")
+
+    monkeypatch.setattr(fit_state, "matching_kept_fits", unlisted)
+    fifth = _train(r, 3, 5, name="fit_fifth")
+    assert _said(_log(fifth), "warning", "[fit] ") == [
+        "[fit] the kept trainings could not be listed to name the ones that match these settings (OSError: "
+        "the kept trainings' folder could not be read); this run starts a new one."]
+    assert fifth.manifest.body["training"]["fit_id"] is not None
     assert [s.id for s in _new_fits(r, fits_left)] == [first.id]
 
 
@@ -1083,3 +1129,498 @@ def test_a_narrowing_rounds_kept_fit_names_its_observation_and_parent_posterior(
     assert _added_folders(r, fits_left) == [row.dir_name]
     assert _said(_log(unsaved), "info", "[fit] ") == [
         "[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."]
+
+
+# ── resuming a kept training ─────────────────────────────────────────────────────────────────────────
+# A training kept when it stopped is resumed by naming it: the training stage takes every setting it is
+# not given from the kept training's own record, checks before anything is read that nothing the
+# training was kept with has changed, reads its simulation set back, puts the kept pass back onto a fresh
+# trainer and goes on saving into the same record. Each test keeps its trainings on a simulation set of
+# its own, four or five batches wide (the saving tests above use two and three).
+
+
+def _keep(r, batches: int, width: int, *, at: int = 1, **given):
+    """A tiny training stopped by a Ctrl-C right after pass ``at`` is saved: the store's row of the kept
+    training it leaves."""
+    before = {s.id for s in r.store.list("fit")}
+    with pytest.MonkeyPatch.context() as patch:
+        _stop_after(patch, at, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            _train(r, batches, width, **given)
+    row, = [s for s in r.store.list("fit") if s.id not in before]
+    return row
+
+
+def _resume(r, ref: str, prior=None, **given):
+    """The training stage resuming the kept training ``ref``, given nothing else but ``given``."""
+    from core import orchestrator
+    return orchestrator.build_posterior(r.cfg, r.prior if prior is None else prior, None, True, resume_fit=ref,
+                                        fig_sink=r.sink, store=r.store, **given)
+
+
+def _bytes(path) -> dict:
+    """Every file of the folder ``path``, by name, with its bytes."""
+    return {p.name: p.read_bytes() for p in sorted(Path(path).iterdir()) if p.is_file()}
+
+
+def _row(r, fit_id: str):
+    return next(s for s in r.store.list("fit") if s.id == fit_id)
+
+
+def test_a_kept_training_resumed_writes_the_same_posterior_as_an_uninterrupted_one(tiny_run, fits_left):
+    """A training stopped after its second pass and resumed in a new call -- another random stream, the
+    rows read back again, the network built again -- writes the very posterior the same training writes
+    uninterrupted: the same losses pass by pass, the same best loss and number of passes, the same
+    weights. The resumed posterior has the stopped training's name and note, says it was resumed over two
+    processes, holds the stopped process's records before its own, and the kept training is gone. The
+    two trainings start from one seed: the embedding network is drawn before the simulation set read
+    back puts the random stream where its last batch left it."""
+    r = tiny_run
+    _train(r, 4, 8, save_fit=False, name="fit_same_rows")              # makes the simulation set, whole
+    torch.manual_seed(2026)
+    whole = _train(r, 4, 8, name="fit_same_whole")
+    torch.manual_seed(2026)
+    row = _keep(r, 4, 8, at=2, name="fit_same_split", note="split in two")
+    torch.manual_seed(12345)                    # the resumed network is built, then the kept one put back
+    resumed = _resume(r, row.id)
+    assert (resumed.name, resumed.manifest.note) == ("fit_same_split", "split in two")
+    a, b = (np.load(p.path / "loss.npz") for p in (whole, resumed))
+    assert np.array_equal(a["training_loss"], b["training_loss"])
+    assert np.array_equal(a["validation_loss"], b["validation_loss"])
+    tw, tr = whole.manifest.body["training"], resumed.manifest.body["training"]
+    assert (tr["epochs_trained"], tr["best_validation_loss"]) == (tw["epochs_trained"], tw["best_validation_loss"])
+    assert tr["epochs_trained"] > 2
+    assert _unequal(whole.latent.posterior_estimator.state_dict(),
+                    resumed.latent.posterior_estimator.state_dict()) == []
+    assert (tr["resumed_fit"], tr["fit_processes"], tr["fit_id"]) == (True, 2, row.id)
+    assert tr["fit_wall_seconds"] > 0
+    text = _log(resumed)
+    assert text.index("[fit] saved after pass 1.") < text.index(f"[fit] resuming the kept training {row.id}")
+    assert _new_fits(r, fits_left) == []
+
+
+def test_a_resume_runs_on_the_kept_trainings_own_settings_name_and_note(tiny_run, fits_left, monkeypatch):
+    """A resume given nothing but the kept training trains with the kept training's own budget, flow,
+    patience and ceiling, and writes the posterior under the name and note it was started with; a name
+    given with the resume is the posterior's instead."""
+    from core import orchestrator
+    r = tiny_run
+    first = _keep(r, 4, 7, name="fit_own", note="kept note")
+    second = _keep(r, 4, 7, name="fit_own", note="kept note")
+    seen, real = [], orchestrator.pipeline.train_nn
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", spy)
+    own = _resume(r, first.id)
+    assert [(k["hidden_features"], k["num_transforms"], k["stop_after_epochs"], k["max_num_epochs"])
+            for k in seen] == [(8, 1, 3, 8)]
+    assert (own.manifest.config["num_runs"], own.manifest.config["run_size"]) == (4, 7)
+    assert (own.name, own.manifest.note) == ("fit_own", "kept note")
+    renamed = _resume(r, second.id, name="fit_renamed")
+    assert (renamed.name, renamed.manifest.note) == ("fit_renamed", "kept note")
+    assert _new_fits(r, fits_left) == []
+
+
+@pytest.fixture(scope="module")
+def kept_once(tiny_run):
+    """One kept training the identity cases below share, stopped after its first pass; deleted when the
+    module ends."""
+    row = _keep(tiny_run, 4, 6, name="fit_identity")
+    yield row
+    tiny_run.store.delete("fit", row.id)
+
+
+def _clip(r, patch):
+    real = train._sbi_defaults
+    patch.setattr(train, "_sbi_defaults", lambda model: {**real(model), "clip_max_norm": 1.0})
+    return {}
+
+
+def _edited_code(r, patch):
+    real = fit_state.loaded_code
+    patch.setattr(fit_state, "loaded_code",
+                  lambda names=FIT_CODE: {**real(names), "core.SBI.train.restore_trainer": "0" * 16})
+    return {}
+
+
+def _constant(r, patch):
+    patch.setattr(config, "WINSOR_PCT", (0.002, 0.998))
+    return {}
+
+
+def _library(r, patch):
+    real = fit_state.libraries
+    patch.setattr(fit_state, "libraries", lambda: {**real(), "sbi": "0.27.0"})
+    return {}
+
+
+# Each part of the identity changed alone: what changes it, the setting that answers the refusal, and
+# words the refusal says.
+_IDENTITY_CASES = {
+    "batches": (lambda r, patch: {"num_runs": 5}, "num_runs", "the number of training batches was 4 when it was kept"),
+    "prior": (lambda r, patch: {"prior": r.other_prior()}, "prior", "the prior was"),
+    "hidden_features": (lambda r, patch: {"hidden_features": 16}, "hidden_features",
+                        "the number of hidden features was 8 when it was kept, and is 16 now"),
+    "num_transforms": (lambda r, patch: {"num_transforms": 2}, "num_transforms",
+                       "the number of flow transforms was 1 when it was kept, and is 2 now"),
+    "learning_rate": (lambda r, patch: {"learning_rate": 0.01}, "learning_rate",
+                      "the learning rate was 0.001 when it was kept, and is 0.01 now"),
+    "stop_after_epochs": (lambda r, patch: {"stop_after_epochs": 4}, "stop_after_epochs",
+                          "the early-stop patience, in epochs was 3 when it was kept, and is 4 now"),
+    "max_num_epochs": (lambda r, patch: {"max_num_epochs": 9}, "max_num_epochs",
+                       "the maximum number of epochs was 8 when it was kept, and is 9 now"),
+    "gradient_clip": (_clip, "resume_fit", "the gradient clip was 5.0 when it was kept, and is 1.0 now"),
+    "code": (_edited_code, "resume_fit", "the code that builds or trains the network has changed since this "
+                                         "training was kept (core.SBI.train.restore_trainer)"),
+    "constant": (_constant, "resume_fit", "the configuration constant WINSOR_PCT was"),
+    "library": (_library, "resume_fit", "sbi was"),
+}
+
+
+@pytest.mark.parametrize("case", list(_IDENTITY_CASES))
+def test_each_part_of_a_kept_trainings_identity_changed_alone_refuses_the_resume_and_names_itself(
+        tiny_run, kept_once, fits_left, monkeypatch, case):
+    """A kept training is resumed only while everything it was trained with is what it was: its rows
+    (the batches, the prior), its settings (the ones a call gives and the ones sbi fills in), the code
+    that builds or trains the network, the constants that code reads and the libraries. Each changed
+    alone refuses the resume, naming what differs and the setting that answers it, before a single row
+    is read, and leaves every file of the kept training as it was, its lock free."""
+    from core import orchestrator
+    r = tiny_run
+    change, field, words = _IDENTITY_CASES[case]
+    before = _bytes(kept_once.path)
+    generated = []
+    monkeypatch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: generated.append(1))
+    given = change(r, monkeypatch)
+    with pytest.raises(Refusal) as refused:
+        _resume(r, kept_once.id, **given)
+    assert refused.value.field == field, refused.value
+    assert words in str(refused.value), str(refused.value)
+    assert generated == []
+    assert _bytes(kept_once.path) == before
+    assert not running(kept_once.path)
+
+
+def test_a_resume_is_refused_for_a_load_with_saving_off_without_a_simulation_set_or_never_resuming(
+        tiny_run, fits_left, monkeypatch):
+    """A kept training is resumed only by a training call that saves it as it goes, on its kept
+    simulation set: a load, saving switched off, checkpointing off and a policy that never resumes a set
+    are each refused, naming what answers it, and so are an id no kept training has and a kept training
+    whose simulation set is gone. None of them touches the kept training. A kept training whose header,
+    or every saved pass of it, cannot be read when it is resumed -- a file damaged, or one another
+    program holds for a moment -- is refused before a single row is read and left exactly as it was, its
+    lock free, to be tried again; only a header saved in another format, which no later attempt can
+    read, marks it as one that cannot be resumed."""
+    from core import orchestrator
+    r = tiny_run
+    row = _keep(r, 4, 5, name="fit_refused")
+    before = _bytes(row.path)
+    for ref, train_new, given, field, words in (
+            (r.posterior.id, False, {}, "resume_fit", "this call loads a posterior"),
+            (None, True, {"save_fit": False}, "resume_fit", "saving cannot be switched off"),
+            (None, True, {"checkpoint_every": 0}, "checkpoint_every", "checkpointing is off"),
+            (None, True, {"resume": "never"}, "resume", "resume='never'")):
+        with pytest.raises(Refusal) as refused:
+            orchestrator.build_posterior(r.cfg, r.prior, ref, train_new, resume_fit=row.id, fig_sink=r.sink,
+                                         store=r.store, **given)
+        assert (refused.value.field, words in str(refused.value)) == (field, True), refused.value
+    with pytest.raises(Refusal) as refused:
+        _resume(r, "20000101T000000")
+    assert refused.value.field == "resume_fit" and "no kept training with the id" in str(refused.value)
+    assert _bytes(row.path) == before and not running(row.path)
+
+    # A kept training of its own, on the same simulation set, stopped after its second pass so that it
+    # has both saved passes.
+    unread = _keep(r, 4, 5, at=2, name="fit_unread")
+    whole ={name: data for name, data in _bytes(unread.path).items()
+             if name in (fit_state.HEADER, STATE, STATE_PREV)}
+    assert set(whole) == {fit_state.HEADER, STATE, STATE_PREV}, whole.keys()
+    generated = []
+    with monkeypatch.context() as patch:
+        patch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: generated.append(1))
+        for damaged, words in (((fit_state.HEADER,), "its header cannot be read"),
+                               ((STATE, STATE_PREV), "no saved pass of it can be read")):
+            for name, data in whole.items():
+                (unread.path / name).write_bytes(data[:10] if name in damaged else data)
+            files = _bytes(unread.path)
+            with pytest.raises(Refusal) as refused:
+                _resume(r, unread.id)
+            said = str(refused.value)
+            assert refused.value.field == "resume_fit" and words in said and "can be tried again" in said, said
+            assert _bytes(unread.path) == files, f"the kept training was changed by a read that failed ({words})"
+            assert _row(r, unread.id).fit_state == unread.fit_state == "kept when stopped"
+            listed, = [k for k in fit_state.kept_fits(r.store) if k.id == unread.id]
+            assert (listed.can_resume, listed.why_not) == (True, None)
+            assert not running(unread.path)
+        for name, data in whole.items():
+            (unread.path / name).write_bytes(data)
+        fit_state.write_header(unread.path, {**fit_state.read_header(unread.path), "format": 2})
+        states = {name: (unread.path / name).read_bytes() for name in (STATE, STATE_PREV)}
+        with pytest.raises(Refusal) as refused:
+            _resume(r, unread.id)
+        assert refused.value.field == "resume_fit" and "it was saved in format 2" in str(refused.value), refused.value
+        assert _row(r, unread.id).fit_state == "cannot be resumed"
+        assert "it was saved in format 2" in r.store.get("fit", unread.id).body["unresumable"]
+        assert {name: (unread.path / name).read_bytes() for name in (STATE, STATE_PREV)} == states
+        assert not running(unread.path)
+    assert generated == []
+
+    sim =r.store.get("fit", row.id).parents["simulation"]
+    r.store.delete("simulation", sim, force=True)
+    with pytest.raises(Refusal) as refused:
+        _resume(r, row.id)
+    assert refused.value.field == "resume_fit", refused.value
+    assert f"its simulation set {sim} is not in the store any more" in str(refused.value)
+
+
+_LATE = {"network": ((4, 4), "the network as built now differs in shape from the kept one"),
+         "standardisers": ((4, 3), "the network's fitted standardisers differ from the kept ones"),
+         "probe": ((5, 8), "was generated under a DIFFERENT parameter transform")}
+
+
+@pytest.mark.parametrize("check", list(_LATE))
+def test_a_late_check_that_fails_marks_the_kept_training_and_leaves_its_files_as_they_were(
+        tiny_run, fits_left, monkeypatch, check):
+    """A kept training whose rows, once read back, no longer give the fit it was kept with -- a network
+    of another shape, other fitted standardisers, a simulation set generated under another parameter
+    transform -- is refused then: it is marked as one that cannot be resumed, saying why, its lock is let
+    go, its header, its two states and its log are as they were, its record changes in that one entry,
+    and no posterior is written."""
+    from core.SBI import training_checkpoint
+    r = tiny_run
+    (batches, width), words = _LATE[check]
+    row = _keep(r, batches, width, name=f"fit_late_{check}")
+    files = {name: data for name, data in _bytes(row.path).items() if name != "manifest.json"}
+    record = json.loads((row.path / "manifest.json").read_text(encoding="utf-8"))
+    if check == "network":
+        monkeypatch.setattr(fit_state, "network_digest", lambda net: "0" * 16)
+    elif check == "standardisers":
+        real_winsorize = pipeline.winsorize_summary_block
+
+        def shifted(data, n_sum):
+            out = real_winsorize(data, n_sum).clone()
+            out[:, 0] += 1.0
+            return out
+
+        monkeypatch.setattr(pipeline, "winsorize_summary_block", shifted)
+    else:
+        real_verify = training_checkpoint.verify
+        monkeypatch.setattr(training_checkpoint, "verify", lambda path, identity, probe=None, **kw: real_verify(
+            path, identity, None if probe is None else probe + 1.0, **kw))
+    with pytest.raises(Refusal) as refused:
+        _resume(r, row.id)
+    assert refused.value.field == "resume_fit" and words in str(refused.value), refused.value
+    assert {name: data for name, data in _bytes(row.path).items() if name != "manifest.json"} == files
+    now = json.loads((row.path / "manifest.json").read_text(encoding="utf-8"))
+    reason = now["body"]["unresumable"]
+    assert words in reason, reason
+    now["body"]["unresumable"] = None
+    assert now == record, "the record changed in more than whether it can be resumed"
+    assert not running(row.path)
+    assert _row(r, row.id).fit_state == "cannot be resumed"
+    listed, = [k for k in fit_state.kept_fits(r.store) if k.id == row.id]
+    assert (listed.can_resume, listed.why_not) == (False, reason)
+    assert f"fit_late_{check}" not in _posterior_names(r)
+
+
+def test_a_kept_training_another_process_holds_is_refused_and_listed_as_running(tiny_run, fits_left, monkeypatch):
+    """A kept training whose lock another handle holds -- the same training resumed in another window or
+    shell -- is listed as running and as one that cannot be resumed, and a resume is refused before a
+    single row is read; a resume that slips past the listing (it raced the lock) is refused when it
+    takes the lock."""
+    from core import orchestrator
+    r = tiny_run
+    row = _keep(r, 5, 7, name="fit_held")
+    generated = []
+    monkeypatch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: generated.append(1))
+    other = FitLock(row.path)
+    assert other.acquire()
+    try:
+        assert _row(r, row.id).fit_state == "running"
+        listed, = [k for k in fit_state.kept_fits(r.store) if k.id == row.id]
+        assert (listed.can_resume, listed.why_not) == (False, "a running process is training it")
+        with pytest.raises(Refusal) as refused:
+            _resume(r, row.id)
+        assert refused.value.field == "resume_fit" and "a running process is training it" in str(refused.value)
+        monkeypatch.setattr(fit_state, "running", lambda path: False)       # the listing raced the lock
+        with pytest.raises(Refusal) as refused:
+            _resume(r, row.id)
+        assert refused.value.field == "resume_fit", refused.value
+        assert "is being trained by a running process" in str(refused.value)
+        assert generated == []
+    finally:
+        other.release()
+    assert not running(row.path)
+
+
+def test_a_kept_training_whose_newest_state_is_unreadable_resumes_from_the_pass_before_it(
+        tiny_run, fits_left, monkeypatch):
+    """A kept training whose newest saved pass cannot be read (a save torn by a crash, a file damaged)
+    resumes from the pass before it, and says so. A resume stopped while its simulation set is read back
+    leaves every file as it was, the unreadable one too, and lets the lock go. The resume that goes on
+    moves the unreadable file aside at its first save, so that the save's rotation keeps the pass before
+    it, and writes the posterior."""
+    from core.SBI import training_checkpoint
+    r = tiny_run
+    row = _keep(r, 5, 6, at=3, name="fit_torn")
+    (row.path / STATE).write_bytes((row.path / STATE).read_bytes()[:10])
+    before = _bytes(row.path)
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(training_checkpoint, "load_rows", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            _resume(r, row.id)
+    assert _bytes(row.path) == before and not running(row.path)
+    assert _row(r, row.id).fit_state == "kept when stopped"
+
+    seen, real = {}, fit_state.FitSession.save_pass
+
+    def save_pass(self, take):
+        real(self, take)
+        if not seen:
+            seen.update(newest=torch.load(self.path / STATE, weights_only=False)["passes"],
+                        before_it=torch.load(self.path / STATE_PREV, weights_only=False)["passes"],
+                        aside=(self.path / fit_state._STATE_UNREADABLE).read_bytes())
+
+    monkeypatch.setattr(fit_state.FitSession, "save_pass", save_pass)
+    post = _resume(r, row.id)
+    text = _log(post)
+    assert _said(text, "warning", "[fit] the newest") == [
+        f"[fit] the newest saved pass of the kept training {row.id} could not be read; it resumes from the "
+        f"pass before it, pass 2."]
+    assert seen == {"newest": 3, "before_it": 2, "aside": before[STATE]}
+    resumed = text[text.index(f"[fit] resuming the kept training {row.id} after pass 2"):]
+    assert _said(resumed, "info", "[fit] saved")[0] == "[fit] saved after pass 3."
+    assert post.manifest.body["training"]["resumed_fit"] is True and _new_fits(r, fits_left) == []
+
+
+def test_a_finished_training_resumed_writes_its_posterior_with_no_pass_trained(tiny_run, fits_left, monkeypatch):
+    """A training whose fit ended but whose posterior could not be written is kept finished; resumed, it
+    trains no pass -- the patience is spent, or the ceiling passed, where it stopped -- and writes the
+    posterior at once, under its name, with the passes it was kept with, and the kept training is gone."""
+    r = tiny_run
+    real_create = r.store.create
+
+    def create(kind, *args, **kwargs):
+        if kind == "posterior":
+            raise OSError("No space left on device")
+        return real_create(kind, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(r.store, "create", create)
+        with pytest.raises(OSError, match="No space left on device"):
+            _train(r, 5, 5, name="fit_finished")
+    row, = _new_fits(r, fits_left)
+    assert row.fit_state == "finished"
+    saved, real = [], fit_state.save_state
+
+    def spy(path, state):
+        saved.append(state["passes"])
+        real(path, state)
+
+    monkeypatch.setattr(fit_state, "save_state", spy)
+    post = _resume(r, row.id)
+    training = post.manifest.body["training"]
+    assert saved == []
+    assert post.name == "fit_finished"
+    assert training["epochs_trained"] == row.fit_passes
+    assert (training["resumed_fit"], training["fit_processes"], training["fit_id"]) == (True, 2, row.id)
+    assert _new_fits(r, fits_left) == []
+
+
+def test_a_resumed_training_clears_its_old_stop_at_its_first_save_so_a_crash_reads_stopped_unexpectedly(
+        tiny_run, fits_left, monkeypatch, tmp_path):
+    """A training kept when it was stopped on purpose, once resumed and saved again, no longer says it
+    was stopped on purpose: a crash of the resumed process -- which lets the lock go and writes nothing --
+    leaves it reading "stopped unexpectedly". Stopped on purpose again, it says so, after its new pass."""
+    r = tiny_run
+    row = _keep(r, 5, 4, name="fit_restopped")
+    assert row.fit_state == "kept when stopped"
+    seen, real = [], fit_state.FitSession.save_pass
+
+    def save_pass(self, take):
+        real(self, take)
+        if self.resumed and not seen:
+            on_disk = json.loads((self.path / "manifest.json").read_text(encoding="utf-8"))
+            copy = tmp_path / "after_a_crash"
+            copy.mkdir()
+            (copy / "manifest.json").write_text(json.dumps(on_disk), encoding="utf-8")
+            seen.append((self.passes, on_disk["body"]["stopped"], fit_state.state_word(copy, on_disk["body"])))
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(fit_state.FitSession, "save_pass", save_pass)
+    with pytest.raises(KeyboardInterrupt):
+        _resume(r, row.id)
+    assert seen == [(2, None, "stopped unexpectedly")]
+    after = _row(r, row.id)
+    assert (after.fit_state, after.fit_passes) == ("kept when stopped", 2)
+    assert not running(row.path)
+
+
+def test_a_training_whose_later_saves_failed_resumes_from_its_last_good_pass(tiny_run, fits_left, monkeypatch):
+    """A training whose saves failed from its second pass on (a full disk), then stopped, is kept at its
+    last good pass with the failure on its record; resumed, it goes on from that pass and writes the
+    posterior."""
+    r = tiny_run
+    real = fit_state.save_state
+
+    def full_disk(path, state):
+        if state["passes"] == 4:
+            raise KeyboardInterrupt
+        if state["passes"] >= 2:
+            raise OSError("No space left on device")
+        real(path, state)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fit_state, "save_state", full_disk)
+        with pytest.raises(KeyboardInterrupt):
+            _train(r, 5, 3, name="fit_full_disk")
+    row, = _new_fits(r, fits_left)
+    assert row.fit_passes == 1
+    assert "OSError: No space left on device" in r.store.get("fit", row.id).body["save_error"]
+    post = _resume(r, row.id)
+    text = _log(post)
+    resumed = text[text.index(f"[fit] resuming the kept training {row.id} after pass 1 ("):]
+    assert _said(resumed, "info", "[fit] saved")[0] == "[fit] saved after pass 2."
+    assert post.manifest.body["training"]["resumed_fit"] is True and _new_fits(r, fits_left) == []
+
+
+def test_a_kept_narrowing_round_resumes_in_its_own_region(tiny_run, fits_left, monkeypatch):
+    """A narrowing round kept when it stopped resumes in the region it was trained in, read from its
+    record and never drawn again, so a number of directions given with the resume is refused; the
+    resumed round trains on the same simulation set, around the same observation and from the same
+    parent, and its posterior records the kept region."""
+    from core import orchestrator
+    r = tiny_run
+    obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="fit_resumed_round_obs")
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 1, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, obs, n_directions=1, num_runs=4, run_size_cap=8,
+                                     name="fit_resumed_round", fig_sink=r.sink, store=r.store, **_TRAINING)
+    row, = _new_fits(r, fits_left)
+    kept = r.store.get("fit", row.id)
+    with pytest.raises(Refusal) as refused:
+        orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, obs, resume_fit=row.id, n_directions=1,
+                                 fig_sink=r.sink, store=r.store)
+    assert refused.value.field == "resume_fit" and "the region it was trained in" in str(refused.value)
+    drawn, real_draw = [], orchestrator.build_truncation_region
+
+    def draw(*args, **kwargs):
+        drawn.append(1)
+        return real_draw(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "build_truncation_region", draw)
+    post = orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, obs, resume_fit=row.id, fig_sink=r.sink,
+                                    store=r.store)
+    assert drawn == []
+    assert post.name == "fit_resumed_round"
+    assert post.manifest.body["truncation"] == kept.body["region"]
+    assert dict(post.manifest.parents) == dict(kept.parents)
+    assert post.manifest.body["training"]["resumed_fit"] is True and _new_fits(r, fits_left) == []

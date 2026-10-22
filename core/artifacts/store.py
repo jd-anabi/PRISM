@@ -391,6 +391,9 @@ class ArtifactWriter:
         # neither block can change while one run is in flight.
         self._prism = None
         self._env = None
+        # Text the record's ``log.txt`` begins with, before this run's records: a training resumed in a
+        # new process sets it to the earlier processes' log, so the posterior's log holds the whole fit.
+        self.log_prefix: str = ""
 
     def payload(self, filename: str) -> Path:
         if "/" in filename or "\\" in filename:
@@ -577,7 +580,7 @@ class ArtifactWriter:
         # repeat in every later record of the same run.
         run_log = runs.current_run_log()
         if run_log is not None:
-            text = run_log.text()
+            text = self.log_prefix + run_log.text()
             if stopped_by is not None:
                 said = " ".join(str(stopped_by).split())
                 what = type(stopped_by).__name__ + (f": {said}" if said else "")
@@ -683,7 +686,9 @@ class ArtifactStore:
                 continue
             try:
                 m = mf.from_json_text(mpath.read_text(encoding="utf-8"))
-            except (mf.ManifestError, OSError) as e:
+            except (mf.ManifestError, OSError, UnicodeDecodeError) as e:
+                # A manifest saved in another encoding is unreadable like a torn one: listed, never
+                # raised, so one damaged record cannot stop a listing, a new record's id or a training.
                 out.append((sub, None, f"unreadable manifest: {e}"))
                 continue
             if m.kind != kind:

@@ -223,25 +223,33 @@ def read_header(path) -> dict:
     return torch.load(str(Path(path) / _HEADER), map_location="cpu", weights_only=False)
 
 
+class CheckpointMismatch(ValueError):
+    """A simulation cache that does not match the configuration that wants to resume it: another
+    format, an identity field that differs, or rows generated under another parameter transform. A
+    ValueError, so every caller that catches one still catches this; a resumed training tells it apart
+    from any other error, because it means the training kept on these rows cannot go on."""
+
+
 def verify(path, identity: dict, probe=None, *, probe_atol: float = 1e-6) -> dict:
     """Validate a checkpoint against the config that wants to resume it; return its header.
 
     Field by field, naming the field and BOTH values, in the voice of the store's own load-side
     refusals (``ArtifactStore.load_posterior``, ``load_prior``). The digest already routed us here,
     so anything caught below is a hand-moved directory, a format skew, or a collision -- all of which
-    deserve a message that says what is wrong rather than "digest mismatch".
+    deserve a message that says what is wrong rather than "digest mismatch". Each is a
+    ``CheckpointMismatch``.
     """
     path = Path(path)
     header = read_header(path)
     if header.get("format") != CHECKPOINT_FORMAT:
-        raise ValueError(
+        raise CheckpointMismatch(
             f"Training checkpoint at {path} was written in format {header.get('format')!r}; this "
             f"PRISM reads format {CHECKPOINT_FORMAT}. Delete the directory to start fresh.")
     stored = header.get("identity", {})
     for key in sorted(set(stored) | set(identity)):
         want, got = _canonical(identity.get(key)), _canonical(stored.get(key))
         if want != got:
-            raise ValueError(
+            raise CheckpointMismatch(
                 f"Training checkpoint at {path} does not match this configuration: '{key}' was "
                 f"{got!r} when the checkpoint was written, and is {want!r} now. Resuming would mix "
                 f"rows generated under two different settings. Change it back, or delete the "
@@ -249,12 +257,12 @@ def verify(path, identity: dict, probe=None, *, probe_atol: float = 1e-6) -> dic
     if probe is not None:
         got = header.get("probe")
         if got is None or got.shape != probe.shape:
-            raise ValueError(
+            raise CheckpointMismatch(
                 f"Training checkpoint at {path} carries no comparable parameter-transform probe "
                 f"(stored {None if got is None else tuple(got.shape)}, expected "
                 f"{tuple(probe.shape)}). It cannot be resumed safely.")
         if not torch.allclose(got, probe, rtol=probe_atol, atol=probe_atol):
-            raise ValueError(
+            raise CheckpointMismatch(
                 f"Training checkpoint at {path} was generated under a DIFFERENT parameter transform "
                 f"(max|diff| = {float((got - probe).abs().max()):.3g}). The stored targets are latent, "
                 f"so every batch after the resume point would be expressed in another coordinate. "

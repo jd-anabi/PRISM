@@ -39,8 +39,8 @@ from . import cli, config, forcing
 # PreflightWarning, the judgement channel, is defined in core.refusals (with its "always" filter) so
 # the FDT path can raise it without importing this module; ``orchestrator.PreflightWarning`` is that
 # same class, re-exported here for every caller and test that names it through this module.
-from .refusals import (PreflightWarning, Refusal, require_at_least, require_between, require_choice,
-                       require_file, require_positive)
+from .refusals import (PreflightWarning, Refusal, describe, require_at_least, require_between,
+                       require_choice, require_file, require_positive)
 from .rng import calibration_seed, require_seed, seeded
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import thin_ticks as _thin_ticks
@@ -782,6 +782,48 @@ def build_forcing_prior(cfg: SimConfig) -> Distribution:
     return forcing.construct_prior(bounds, types)
 
 
+# ── a kept training resumed with a setting that differs ──────────────────────────────────────────────
+# The setting a front end can change to answer each part of a kept training's identity: the simulation
+# set's fields a setting of this call decides, and the fit's settings this call passes. Everything else
+# -- the box's fields, which the bounds file decides, and what the kept training alone fixes -- is
+# answered by the bounds file or by no setting at all.
+_FIT_FIELD = {("simulation", "prior_fingerprint"): "prior", ("simulation", "n_runs"): "num_runs",
+              ("simulation", "run_size"): "run_size_cap", ("simulation", "model"): "model",
+              ("simulation", "units_sha256"): "units", ("simulation", "device"): "device",
+              ("simulation", "dtype"): "device", ("settings", "hidden_features"): "hidden_features",
+              ("settings", "num_transforms"): "num_transforms", ("settings", "learning_rate"): "learning_rate",
+              ("settings", "stop_after_epochs"): "stop_after_epochs",
+              ("settings", "max_num_epochs"): "max_num_epochs", ("settings", "device"): "device",
+              ("settings", "dtype"): "device"}
+_BOX_KEYS = ("param_keys", "nd_lows", "nd_highs", "rescale_lows", "rescale_highs", "log_params")
+# The fit's settings no setting of this call changes, in words.
+_SETTING_WORDS = {"density_estimator": "the flow's family", "num_bins": "the spline bins",
+                  "training_batch_size": "the training batch size", "num_rounds": "the training rounds",
+                  "validation_fraction": "the validation fraction", "clip_max_norm": "the gradient clip",
+                  "z_score_theta": "the parameters' z-scoring", "z_score_x": "the summaries' z-scoring",
+                  "tail_bound": "the spline's tail bound", "hidden_layers_spline_context": "the spline's context layers",
+                  "num_blocks": "the blocks per transform", "dropout_probability": "the dropout",
+                  "use_batch_norm": "the batch norm", "data_device": "the data's device"}
+
+
+def _fit_refusal(kept, d) -> Refusal:
+    """The refusal of a kept training resumed where its identity differs at ``d`` (a
+    ``fit_state.Difference``), naming what differs, both values, and the setting that answers it."""
+    field = _FIT_FIELD.get((d.part, d.name))
+    if field is None:
+        field = "bounds" if d.part == "simulation" and d.name in _BOX_KEYS else "resume_fit"
+    if field != "resume_fit":
+        words = describe(field)
+    elif d.part == "simulation":
+        words = f"the simulation set's '{d.name}'"
+    elif d.part == "settings":
+        words = _SETTING_WORDS.get(d.name, f"the setting '{d.name}'")
+    else:
+        words = "the number of batches it was trained on"
+    return Refusal(f"The kept training {kept.id} cannot be resumed with these settings: {words} was "
+                   f"{d.kept!r} when it was kept, and is {d.now!r} now.", field=field)
+
+
 # ── Step 3: Posterior construction ──────────────────────────────────────────
 @public_entry
 def build_posterior(
@@ -799,7 +841,7 @@ def build_posterior(
     resume: str = "auto", new_run: bool = False,
     fisher_m: int | None = None, fisher_dz: float | None = None,
     fisher_points: int | None = None,
-    save_fit: bool | None = None,
+    save_fit: bool | None = None, resume_fit: str | None = None,
 ) -> LoadedPosterior:
     """
     Load an existing posterior artifact through the store, or train a new one via NPE in latent
@@ -865,6 +907,15 @@ def build_posterior(
                      its rows are in a kept simulation set (checkpointing on); True refuses when
                      checkpointing is off, since a kept training is resumed on its kept rows; False saves
                      nothing. The run says once, before the fit, when its training is not saved.
+    :param resume_fit: the id of a kept training to resume instead of starting a new fit
+                     (``core.SBI.fit_state.kept_fits`` lists them). The kept training's own record gives
+                     every setting not given here -- the budget, the flow, the patience, the ceiling, the
+                     cadence, the posterior's name and note -- and a setting given that differs from it
+                     is refused, naming it, as is anything the training was kept with that has changed
+                     since (the rows, the code, the constants, the libraries). These checks run before
+                     anything is read; once the rows are read back, the split, the network and its
+                     standardisers are checked against the kept ones, and a kept training that fails
+                     them is marked as one that cannot be resumed. None = a new training.
     :return: a LoadedPosterior; ``.posterior`` is the TransformedPosterior every downstream stage samples.
 
     ⚠ THESE FOUR ARE WHAT A COMPLETE TRAINING CHECKPOINT (THE SIMULATION CACHE) IS FOR. Its own
@@ -892,6 +943,29 @@ def build_posterior(
     and the one stage it shortens is the flow's fit, whose time grows with the rows.
     """
     store = resolve_store(store)
+    # A RESUMED TRAINING RUNS ON ITS OWN RECORD. Read first, because the record gives the name, the note
+    # and every setting not given here; a setting given is kept as given, and compared with the
+    # record's below, before anything is read.
+    kept = None
+    if resume_fit is not None:
+        kept = fit_state.kept_fit(store, resume_fit)
+        if not train_new:
+            raise Refusal("A kept training is resumed by a training call; this call loads a posterior.",
+                          field="resume_fit")
+        if save_fit is False:
+            raise Refusal("A resumed training is saved as it goes; saving cannot be switched off for it.",
+                          field="resume_fit")
+        name = name or kept.posterior_name
+        note = note or kept.note
+        _own = kept.config
+        num_runs = _own.get("num_runs") if num_runs is None else num_runs
+        run_size_cap = _own.get("run_size_cap") if run_size_cap is None else run_size_cap
+        hidden_features = _own.get("hidden_features") if hidden_features is None else hidden_features
+        num_transforms = _own.get("num_transforms") if num_transforms is None else num_transforms
+        learning_rate = _own.get("learning_rate") if learning_rate is None else learning_rate
+        stop_after_epochs = _own.get("stop_after_epochs") if stop_after_epochs is None else stop_after_epochs
+        max_num_epochs = _own.get("max_num_epochs") if max_num_epochs is None else max_num_epochs
+        checkpoint_every = _own.get("checkpoint_every") if checkpoint_every is None else checkpoint_every
     # Before anything is spent, on BOTH branches. A LOAD with a name is not a thing the GUI does, but
     # the check is cheap and uniform, and a load that would end in a refused rename is worth refusing
     # up front too. Days of training, in the training branch's case.
@@ -966,6 +1040,14 @@ def build_posterior(
             raise Refusal("Saving the training as it goes needs its rows in a kept simulation set, and "
                           "checkpointing is off (checkpoint_every=0).", field="checkpoint_every")
     resume = require_choice("resume", resume, ("auto", "require", "never"))
+    if kept is not None:
+        # A kept training is resumed on the simulation set it was trained on, which is read back first.
+        if resume == "never":
+            raise Refusal("A kept training is resumed on its kept simulation set, which resume='never' "
+                          "refuses to read.", field="resume")
+        if not ck_every:
+            raise Refusal("A kept training is resumed on its kept simulation set, and checkpointing is off "
+                          "(checkpoint_every=0).", field="checkpoint_every")
     if resume != "auto" and not ck_every and train_new:
         # Without this, a `resume='require'` drill with checkpointing off exits 0 having tested
         # nothing: there is no cache for the policy to act on, so the policy is silently ignored.
@@ -1099,6 +1181,38 @@ def build_posterior(
         ident = SimulationIdentity.from_cfg(cfg, prior, run_size, n_runs, truncation=truncation).to_dict()
         ckpt_dir = training_checkpoint.resolve_dir(ident, store.kind_dir("simulation"))
         _st = training_checkpoint.peek(ckpt_dir)
+        if kept is not None:
+            # THE CHECKS AT THE CLICK, before the near-miss refusal (a resume on other rows must name what
+            # differs from the kept training, not offer a new simulation set) and before anything is
+            # read: whether it can be resumed now (its code, constants and libraries, its simulation set,
+            # a running process), then its rows, its batches and its settings as this call has them. The
+            # summaries' z-scoring follows the network the mode builds, which does not exist yet: the
+            # kept one stands in here, and the restore compares it once the network is built.
+            if not kept.can_resume:
+                raise Refusal(f"The kept training {kept.id} cannot be resumed: {kept.why_not}.",
+                              field="resume_fit")
+            _now = {"simulation": ident, "batches": n_runs, "settings": pipeline.fit_settings(
+                model=DENSITY_ESTIMATOR, hidden_features=hf, num_transforms=nt, num_bins=NSF_NUM_BINS,
+                learning_rate=lr, stop_after_epochs=patience, max_num_epochs=max_ep,
+                batch_size=TRAINING_BATCH_SIZE,
+                z_score_x=(kept.identity.get("settings") or {}).get("z_score_x"),
+                device=cfg.hw.device, dtype=cfg.hw.dtype, num_rounds=TRAINING_NUM_ROUNDS)}
+            _d = fit_state.first_difference(kept.identity, fit_state._plain(_now),
+                                            parts=("simulation", "batches", "settings"))
+            if _d is not None:
+                raise _fit_refusal(kept, _d)
+            # A narrowing round's kept training resumes around the observation and from the parent it
+            # was drawn with; an amortized one names neither.
+            _obs_id = observation.id if observation is not None else None
+            if _obs_id != kept.parents.get("observation"):
+                raise Refusal(f"The kept training {kept.id} was trained around the observation "
+                              f"{kept.parents.get('observation')}, and this round names {_obs_id}.",
+                              field="observation")
+            _parent_id = parent_posterior.id if parent_posterior is not None else None
+            if _parent_id != kept.parents.get("parent_posterior"):
+                raise Refusal(f"The kept training {kept.id} was drawn from the posterior "
+                              f"{kept.parents.get('parent_posterior')}, and this round names {_parent_id}.",
+                              field="posterior")
         # A COMPLETE checkpoint counts too, and deliberately so. Its rows are already expressed in the
         # V they were generated under, so recomputing V here would make gen_training_data's probe
         # check refuse the very rows it is about to reuse -- turning the "died during NN training,
@@ -1392,13 +1506,14 @@ def build_posterior(
     # Its identity is made here, before the fit: the rows and their batches, the code this process
     # loaded, the constants and the libraries; the fit adds its settings and the network's shape at its
     # first save. Without kept rows there is nothing to resume on, and the run says so once.
+    # A resumed training's session is the kept record's own, reopened as the first step of the fit below.
     session = None
-    if save_fit is False or ckpt_dir is None:
+    if kept is None and (save_fit is False or ckpt_dir is None):
         log.info("[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."
                  if save_fit is False else
                  "[fit] the simulation set is not kept (checkpointing off), so this training is not saved as "
                  "it goes and cannot be resumed.")
-    else:
+    elif kept is None:
         fit_identity = {"simulation": ident, "batches": n_runs, "code": fit_state.loaded_code(),
                         "constants": fit_state.constants(), "libraries": fit_state.libraries()}
         # The kept trainings this one could have resumed instead, named before its fit: the settings
@@ -1409,7 +1524,15 @@ def build_posterior(
             batch_size=TRAINING_BATCH_SIZE,
             z_score_x="none" if getattr(embedded_net, "owns_standardization", False) else "independent",
             device=cfg.hw.device, dtype=cfg.hw.dtype, num_rounds=TRAINING_NUM_ROUNDS)
-        _matches = fit_state.matching_kept_fits(store, {**fit_identity, "settings": _settings})
+        # The line only informs, and it comes after the rotation: a kept training's record that cannot be
+        # read (a manifest damaged, or saved by hand in another encoding) is warned about, never a reason
+        # to stop this training.
+        try:
+            _matches = fit_state.matching_kept_fits(store, {**fit_identity, "settings": _settings})
+        except Exception as _e:                  # noqa: BLE001 -- see above
+            _matches = []
+            log.warning(f"[fit] the kept trainings could not be listed to name the ones that match these "
+                        f"settings ({type(_e).__name__}: {_e}); this run starts a new one.")
         if _matches:
             log.info(f"[fit] {len(_matches)} kept training(s) match these settings and can be resumed: "
                      + ", ".join(f"{k.id} ({k.state}, after pass {k.passes})" for k in _matches)
@@ -1434,6 +1557,11 @@ def build_posterior(
     # then let go: stopped during the fit, or after it with its posterior not written (a full disk after
     # days of training), it can be resumed, or deleted, without restarting the program.
     try:
+        if kept is not None:
+            # The kept record reopened, its lock taken: from here every way out lets it go -- a stop while
+            # its simulation set is read back (minutes at full size, inside the training call), a check
+            # that fails once the rows are read, a stop during the fit or the posterior's write, the end.
+            session = fit_state.FitSession.reopen(store, kept, cfg=cfg)
         # hf, nt, lr, patience and max_ep were resolved (and range-checked) above, before any spend -- not
         # inlined into this call -- so the manifest records what was actually used.
         posterior_latent, pos_diagnostics = pipeline.train_nn(
@@ -1447,6 +1575,7 @@ def build_posterior(
             learning_rate=lr, stop_after_epochs=patience,
             max_num_epochs=max_ep, show_train_summary=TRAINING_SHOW_SUMMARY,
             batch_size=TRAINING_BATCH_SIZE, device=cfg.hw.device, fit_saver=session,
+            fit_resume=session.resume_pair if kept is not None else None,
         )
         if session is not None:
             session.finished()
@@ -1479,6 +1608,8 @@ def build_posterior(
         diag = pos_diagnostics or {}
         _best = diag.get("best_validation_loss")
         with store.create("posterior", cfg, name=name, note=note) as w:
+            if session is not None and session.resumed:
+                w.log_prefix = session.log_before     # the earlier processes' records, then this one's
             file_manager.atomic_torch_save(posterior_latent, w.payload("posterior.pt"))
             if diag.get("validation_loss"):
                 file_manager.atomic_savez(w.payload("loss.npz"), dict(
@@ -1543,15 +1674,28 @@ def build_posterior(
                              "wall_seconds": time.time() - _t0,
                              # The kept training this posterior's fit was saved as while it ran: None
                              # when it was not saved, and over how many processes and how long.
-                             "resumed_fit": False,
+                             "resumed_fit": bool(session is not None and session.resumed),
                              "fit_id": session.id if session is not None else None,
-                             "fit_processes": 1,
+                             "fit_processes": session.processes if session is not None else 1,
                              "fit_wall_seconds": (session.wall_seconds() if session is not None and session.id
                                                   else None)},
             }
         # Read back through the loader: the freshly written artifact is verified exactly as a later load
         # would verify it (box, width, the rotation against the pickled prior, the region's basis).
         loaded = store.load_posterior(cfg, w.id, accept=Accept(truncated=True))
+    except (fit_state.FitMismatch, training_checkpoint.CheckpointMismatch) as e:
+        if kept is None or session is None:
+            # Not a resume: a new training meeting a cache that does not match fails as it always has.
+            if session is not None:
+                session.stopped(e)
+            raise
+        # A RESUME THAT CANNOT CONTINUE. Found once the rows were read back -- the simulation set no
+        # longer matches its own record, or the split, the network or its standardisers rebuilt from
+        # the rows are not the kept ones -- so it will not continue in this process or any other: the
+        # record says why, and nothing else of it changes.
+        reason = str(e).rstrip(".")
+        session.mark_unresumable(reason)
+        raise Refusal(f"The kept training {kept.id} cannot be resumed: {reason}.", field="resume_fit") from None
     except BaseException as e:
         if session is not None:
             session.stopped(e)
@@ -2645,6 +2789,7 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
                 learning_rate: float | None = None, stop_after_epochs: int | None = None,
                 max_num_epochs: int | None = None, checkpoint_every: int | None = None,
                 resume: str = "auto", new_run: bool = False, save_fit: bool | None = None,
+                resume_fit: str | None = None,
                 name: str = "", note: str = "", fig_sink=None, store=None) -> LoadedPosterior:
     """One TSNPE round: the region drawn from ``posterior`` around ``observation``, then the PRIOR
     RESTRICTED to it, simulated and retrained.
@@ -2671,30 +2816,44 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
                       forwarded to build_posterior always.
     :param save_fit: whether the round's fit is saved as it goes (build_posterior's own); forwarded only
                       when given, like the budget and the flow settings.
+    :param resume_fit: the id of a kept narrowing round's training to resume (build_posterior's own),
+                      forwarded only when given. It resumes in the region it was trained in, read from its
+                      record and never drawn again, so ``n_directions`` and ``level`` are refused beside it.
     :return: the LoadedPosterior build_posterior wrote and read back. It carries its own region and
                       observation digest, so nothing here has to return them separately.
     """
     store = resolve_store(store)
     store.assert_name_free("posterior", name)      # before the region draw and before days of training
+    kept = None
+    if resume_fit is not None:
+        # A kept round's region is the one its rows were drawn in: read from the record, never redrawn.
+        kept = fit_state.kept_fit(store, resume_fit)
+        if n_directions is not None or level is not None:
+            raise Refusal("A kept narrowing round resumes in the region it was trained in; the number of "
+                          "directions and the HPD level are not given again.", field="resume_fit")
+        if kept.region is None:
+            raise Refusal(f"The kept training {kept.id} is not a narrowing round's.", field="resume_fit")
     # region_from_posterior CLAMPS both ends silently (max(1, min(n, p))). Clamping a 0 up to 1 hides a
     # miskeyed setting; clamping down to P truncates EVERY direction, including the flat ones the
     # eigenbasis rule leaves at full width. Both are refusals here instead, with the default in the
     # sentence; the width's is built here because only the stage knows the width (the TSNPE tab has
-    # no posterior to measure it against at the click).
-    n = require_at_least("n_directions",
-                         truncate.DEFAULT_N_DIRECTIONS if n_directions is None else n_directions, 1)
-    P = len(cfg.params_dict) + len(cfg.rescale_params)
-    if n > P:
-        raise Refusal(f"The number of directions to truncate must be at most {P}, this posterior's latent "
-                      f"width; got {n} (default {truncate.DEFAULT_N_DIRECTIONS}). Truncating every "
-                      f"direction deletes support along the flat ones too.", field="n_directions")
-    q = require_between("hpd_level", truncate.DEFAULT_HPD if level is None else level, 0.0, 1.0,
-                        open_lo=True, open_hi=True)
-    if q < truncate.DEFAULT_HPD - 0.009:           # i.e. below 0.99
-        # A judgement, so it warns rather than refuses -- but deleted support is a ONE-WAY ratchet, and
-        # a region that is too TIGHT is the expensive mistake, not the cheap one.
-        _preflight_warn(f"HPD {q:g} is tighter than the recommended {truncate.DEFAULT_HPD:g}. Truncation "
-                        f"permanently deletes prior support; no later round can recover it.")
+    # no posterior to measure it against at the click). A resumed round draws nothing, so neither is
+    # checked for it: its region is the kept one.
+    if kept is None:
+        n = require_at_least("n_directions",
+                             truncate.DEFAULT_N_DIRECTIONS if n_directions is None else n_directions, 1)
+        P = len(cfg.params_dict) + len(cfg.rescale_params)
+        if n > P:
+            raise Refusal(f"The number of directions to truncate must be at most {P}, this posterior's "
+                          f"latent width; got {n} (default {truncate.DEFAULT_N_DIRECTIONS}). Truncating every "
+                          f"direction deletes support along the flat ones too.", field="n_directions")
+        q = require_between("hpd_level", truncate.DEFAULT_HPD if level is None else level, 0.0, 1.0,
+                            open_lo=True, open_hi=True)
+        if q < truncate.DEFAULT_HPD - 0.009:           # i.e. below 0.99
+            # A judgement, so it warns rather than refuses -- but deleted support is a ONE-WAY ratchet,
+            # and a region that is too TIGHT is the expensive mistake, not the cheap one.
+            _preflight_warn(f"HPD {q:g} is tighter than the recommended {truncate.DEFAULT_HPD:g}. "
+                            f"Truncation permanently deletes prior support; no later round can recover it.")
     # A NARROWED PARENT AROUND ANOTHER OBSERVATION IS REFUSED, WITH NO ESCAPE HATCH. A non-amortized
     # parent is valid only near its own observation, so a region drawn from it around another one is
     # drawn where the flow extrapolates rather than where it was trained. Reachable today by loading a
@@ -2716,16 +2875,21 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
     # t_scale_idx: a direction that loads on t_scale is not truncated -- the per-batch t_scale override
     # would turn its box into a reweighting -- and the region records which ones were skipped.
     t_scale_idx = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
-    region = build_truncation_region(posterior, observation, n_directions=n, level=q,
-                                     t_scale_idx=t_scale_idx)
-    log.info(f"[tsnpe] region from observation {observation.name or observation.id}: {region!r}")
+    if kept is not None:
+        from .artifacts.manifest import region_from_json
+        region = truncate.TruncationRegion.from_dict(region_from_json(kept.region))
+        log.info(f"[tsnpe] region of the kept training {kept.id}: {region!r}")
+    else:
+        region = build_truncation_region(posterior, observation, n_directions=n, level=q,
+                                         t_scale_idx=t_scale_idx)
+        log.info(f"[tsnpe] region from observation {observation.name or observation.id}: {region!r}")
     # Forwarded only when set, so every stage default stays written down in exactly one place; resume
     # and new_run always travel, because their defaults are this function's own.
     knobs = {k: v for k, v in (("num_runs", num_runs), ("run_size_cap", run_size_cap),
                                ("hidden_features", hidden_features), ("num_transforms", num_transforms),
                                ("learning_rate", learning_rate), ("stop_after_epochs", stop_after_epochs),
                                ("max_num_epochs", max_num_epochs), ("checkpoint_every", checkpoint_every),
-                               ("save_fit", save_fit))
+                               ("save_fit", save_fit), ("resume_fit", resume_fit))
              if v is not None}
     return build_posterior(cfg, prior, None, True, truncation=region, observation=observation,
                            parent_posterior=posterior, resume=resume, new_run=new_run,
