@@ -1376,6 +1376,68 @@ def test_a_resume_is_refused_for_a_load_with_saving_off_without_a_simulation_set
     assert f"its simulation set {sim} is not in the store any more" in str(refused.value)
 
 
+def test_a_resume_is_refused_unless_its_settings_name_the_kept_simulation_set_whole_and_its_cadence(
+        tiny_run, fits_left, monkeypatch, tmp_path):
+    """A resume reads back the very simulation set the kept training was trained on, and records the
+    cadence its rows were committed at, or it is refused before a row is read or simulated. Settings whose
+    rows compare equal to the kept ones but name another set's folder -- a bound given as a numpy float of
+    the same value, which the folder's name reads and the comparison does not -- are refused naming both
+    sets: given consent to a new set, as the command that was stopped had it, the resume would otherwise
+    compute a new rotation and simulate a whole new set. A set removed between the listing and the resume
+    is refused as gone, and a cadence given that differs from the kept one is refused naming it. Each
+    leaves every file of the kept training as it was, its lock free, and the store's sets as they were."""
+    from core import orchestrator
+    r = tiny_run
+    row = _keep(r, 6, 4, name="fit_own_set")
+    sim = r.store.get("fit", row.id).parents["simulation"]
+    before = _bytes(row.path)
+    sets = sorted(p.name for p in r.store.kind_dir("simulation").iterdir())
+    read = []
+
+    def gen_training_data(*args, **kwargs):
+        read.append(Path(kwargs["checkpoint"]["dir"]).name)
+        raise RuntimeError(f"the resume went on to read or simulate the simulation set {read[-1]}")
+
+    monkeypatch.setattr(orchestrator.pipeline, "gen_training_data", gen_training_data)
+
+    def refused(cfg=r.cfg, **given) -> Refusal:
+        with pytest.raises(Refusal) as caught:
+            orchestrator.build_posterior(cfg, r.prior, None, True, resume_fit=row.id, fig_sink=r.sink,
+                                         store=r.store, new_run=True, **_ROTATION, **given)
+        assert _bytes(row.path) == before and not running(row.path)
+        return caught.value
+
+    numpy_bound = r.cfg.copy_for_run()
+    key, (value, (lo, hi)) = next(iter(numpy_bound.params_dict.items()))
+    numpy_bound.params_dict[key] = (value, (np.float64(lo), hi))
+    said = refused(numpy_bound)
+    assert said.field == "resume_fit", said
+    assert "they name the simulation set " in str(said) and f", and it was trained on {sim}." in str(said), said
+    assert f"they name the simulation set {sim}," not in str(said), said
+
+    folder, real_kept_fit = r.store.kind_dir("simulation") / sim, fit_state.kept_fit
+
+    def listed_then_removed(store, ref):
+        kept = real_kept_fit(store, ref)
+        os.replace(folder, tmp_path / sim)          # removed by another process just after the listing
+        return kept
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fit_state, "kept_fit", listed_then_removed)
+        try:
+            said = refused()
+        finally:
+            if (tmp_path / sim).exists():
+                os.replace(tmp_path / sim, folder)
+    assert said.field == "resume_fit" and f"its simulation set {sim} is not in the store any more" in str(said), said
+
+    said = refused(checkpoint_every=2)
+    assert said.field == "checkpoint_every", said
+    assert "the checkpoint cadence, in batches (0 = off) was 1 when it was kept, and is 2 now" in str(said), said
+    assert read == []
+    assert sorted(p.name for p in r.store.kind_dir("simulation").iterdir()) == sets
+
+
 _LATE = {"network": ((4, 4), "the network as built now differs in shape from the kept one"),
          "standardisers": ((4, 3), "the network's fitted standardisers differ from the kept ones"),
          "probe": ((5, 8), "was generated under a DIFFERENT parameter transform")}

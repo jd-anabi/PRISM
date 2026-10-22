@@ -1185,9 +1185,10 @@ def build_posterior(
             # THE CHECKS AT THE CLICK, before the near-miss refusal (a resume on other rows must name what
             # differs from the kept training, not offer a new simulation set) and before anything is
             # read: whether it can be resumed now (its code, constants and libraries, its simulation set,
-            # a running process), then its rows, its batches and its settings as this call has them. The
-            # summaries' z-scoring follows the network the mode builds, which does not exist yet: the
-            # kept one stands in here, and the restore compares it once the network is built.
+            # a running process), then its rows, its batches and its settings as this call has them, the
+            # simulation set they name and the cadence. The summaries' z-scoring follows the network the
+            # mode builds, which does not exist yet: the kept one stands in here, and the restore compares
+            # it once the network is built.
             if not kept.can_resume:
                 raise Refusal(f"The kept training {kept.id} cannot be resumed: {kept.why_not}.",
                               field="resume_fit")
@@ -1201,6 +1202,30 @@ def build_posterior(
                                             parts=("simulation", "batches", "settings"))
             if _d is not None:
                 raise _fit_refusal(kept, _d)
+            # The simulation set these settings name must be the kept training's own, and whole. The digest
+            # that names a set's folder reads the identity more finely than the comparison above does (a
+            # numpy float and a float of the same value name two folders), and the naming may change with
+            # the code. Should the two part, a resume that went on would compute a new rotation and simulate
+            # a whole new set, and the read-back would then mark the kept training as one that cannot be
+            # resumed.
+            _kept_set = kept.parents.get("simulation")
+            if ckpt_dir.name != _kept_set:
+                raise Refusal(f"The kept training {kept.id} cannot be resumed with these settings: they name the "
+                              f"simulation set {ckpt_dir.name}, and it was trained on {_kept_set}.",
+                              field="resume_fit")
+            if not (_st and _st.get("complete") and _st.get("batches_done") == n_runs):
+                _why = (f"its simulation set {_kept_set} is not in the store any more" if not _st else
+                        f"its simulation set {_kept_set} holds {_st.get('batches_done')} committed batches, "
+                        f"not the {n_runs} it was trained on")
+                raise Refusal(f"The kept training {kept.id} cannot be resumed: {_why}.", field="resume_fit")
+            # The cadence is not part of the identity: the kept set is whole, so a resume commits no batch at
+            # any cadence. One given that differs is refused all the same, so that the posterior records the
+            # cadence its rows were committed at.
+            _kept_every = kept.config.get("checkpoint_every")
+            if _kept_every is not None and ck_every != _kept_every:
+                raise Refusal(f"The kept training {kept.id} cannot be resumed with these settings: "
+                              f"{describe('checkpoint_every')} was {_kept_every!r} when it was kept, and is "
+                              f"{ck_every!r} now.", field="checkpoint_every")
             # A narrowing round's kept training resumes around the observation and from the parent it
             # was drawn with; an amortized one names neither.
             _obs_id = observation.id if observation is not None else None
