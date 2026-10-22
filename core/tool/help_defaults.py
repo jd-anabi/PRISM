@@ -53,6 +53,7 @@ _TRAINING = _value("--num-runs", "--run-size", "--hidden-features", "--num-trans
                    "--learning-rate", "--stop-after-epochs", "--max-epochs", "--checkpoint-every")
 _FISHER = _value("--fisher-m", "--fisher-dz", "--fisher-points")
 _RESUME = {"--resume": (VALUE, None)}
+_RESUME_FIT = {"--resume-fit": (BEHAVIOUR, "a new training")}            # train and tsnpe only
 _PROBE = {"--m": (VALUE, None), "--m-noise": (VALUE, None), "--rel": (VALUE, None),
           "--min-valid": (VALUE, "0.5"), "--seed": (VALUE, "0")}
 _FDT_KNOBS = {"--store-root": (BEHAVIOUR, "the artifacts root"), "--freqs-per-batch": (VALUE, None),
@@ -63,7 +64,7 @@ _PER_LEAF = {
     "prior": {**_CONFIG, **_NAMES,
               **_value("--num-iterations", "--sweep-batch", "--max-sets", "--walk-step",
                        "--stability-units", "--min-cluster-size", "--min-samples")},
-    "train": {**_CONFIG, **_NAMES, **_none("--prior"), **_TRAINING, **_FISHER, **_RESUME},
+    "train": {**_CONFIG, **_NAMES, **_none("--prior"), **_TRAINING, **_FISHER, **_RESUME, **_RESUME_FIT},
     "validate": {**_CONFIG, **_NAMES, **_none("--posterior"),
                  **_value("--n-cal", "--cal-n-scales", "--posterior-samples"), "--seed": (VALUE, None)},
     "infer": {**_CONFIG, **_NAMES,
@@ -71,7 +72,7 @@ _PER_LEAF = {
                       "--f0-si"),
               **_value("--n-samples")},
     "tsnpe": {**_CONFIG, **_NAMES, **_none("--posterior", "--observation"),
-              **_value("--directions", "--level"), **_TRAINING, **_RESUME},
+              **_value("--directions", "--level"), **_TRAINING, **_RESUME, **_RESUME_FIT},
     "sbc": {**_CONFIG, **_NAMES, **_none("--posterior"), **_value("--repeats", "--cal-n-scales"),
             "--n-cal": (VALUE, "2000"), "--posterior-samples": (VALUE, "1000"),
             "--chi-k-fixed": (BEHAVIOUR, "pooled over the training mixture"),

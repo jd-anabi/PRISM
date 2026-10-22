@@ -66,6 +66,8 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "resume": None,
     "new_run": (f"Answer 'Start a new run anyway' in the dialog {_in('training')}, or tick 'Start a "
                 f"new simulation even if a cache one setting away exists' {_in('narrowing')}."),
+    # the kept training to resume: no control yet, its Resume comes with the window's training page
+    "resume_fit": None,
     # the narrowing round
     "n_directions": ("narrowing", "Directions truncated"),
     "hpd_level": ("narrowing", "HPD level"),

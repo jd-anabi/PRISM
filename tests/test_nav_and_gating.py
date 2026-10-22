@@ -1690,7 +1690,9 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "mask_num_runs", "mask_run_size", "drive_t_obs", "drive_repeats", "drive_detune", "drive_strengths",
         "free_min", "captured_max", "drive_peak_window", "clarity_min",
         # the five FDT settings neither front end exposes
-        "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd"}
+        "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd",
+        # the kept training to resume: the window's Resume comes with its training page
+        "resume_fit"}
 
     # (e) the drive labels, as the Infer tab builds them
     for key, name in (("drive_amplitude", "amp"), ("drive_frequency", "freq"), ("drive_phase", "phase")):

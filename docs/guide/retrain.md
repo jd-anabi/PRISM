@@ -423,15 +423,21 @@ it keeps beyond that depends on how it stopped:
 - **A crash during generation, or Ctrl-C when the command is not piped,** also saves the batches
   completed since the last commit. Ctrl-C then prints
   `[checkpoint] stopping: saving <n> completed batches (<from> -> <to>) before unwinding…` and
-  `prism train: interrupted: the artifact being written was removed. If a [checkpoint] line above says batches were saved, the same command with --resume require continues them.`,
+  `prism train: interrupted: the artifact being written was removed. If a [checkpoint] line above says batches were saved, the same command with --resume require continues them. If a [fit] line above says the training is kept as fit <id>, the same command with --resume-fit <id> continues it.`,
   and exits 130.
 - **Ctrl-C under the console capture of step 6 ends the run like a killed process**: PowerShell kills
   a program whose output it pipes, before the rescue save can run. The run keeps what its last commit
   holds, prints neither line, and `$LASTEXITCODE` reads -1. A power cut or a killed process loses the
   same, at most the batches since the last commit. When the rescue save matters more than the
   capture, run the command without the pipe.
-- **A run that dies, or is stopped, while the flow trains** loses the fit and none of the rows: its
-  cache is complete, so the resumed run skips generation and fits the flow from the start.
+- **A run that dies, or is stopped, while the flow trains** keeps its fit at its last saved pass, as
+  a kept training, and none of its rows: the fit is saved after every pass, and losing the pass in
+  progress is the most it can lose. Its cache is complete, so the same command with
+  `--resume-fit <id>` instead of `--resume require` reads the rows back without simulating any again
+  and continues the fit from that pass (the last bullet below). Ctrl-C prints
+  `[fit] the training stopped after pass <n> and is kept as fit <id> (stopped on purpose).`; after a
+  crash, a power cut or a killed process, `python -m core artifacts list fit` names it, as stopped
+  unexpectedly.
 - **A process that stopped before its first commit**, in the Fisher step or the first 50 batches (on
   Ctrl-C under the pipe, say), left nothing to resume, and `--resume require` is refused. Run the
   first command again instead, with `--new-run` again on the new-prior route of
@@ -484,9 +490,27 @@ $LASTEXITCODE
   A resume refused because the cache holds two shards that overlap names both: move the one that
   does not fit the committed run, with its `th_` twin, into the cache's `uncommitted` folder, as the
   message says, and resume again.
-- **Capture every process, with `-Append`.** The posterior's `log.txt` holds only the last
-  process's records, so a resumed run's first process's lines, its `[fisher]` lines among them, exist
-  nowhere but in the captured file.
+- **Capture every process, with `-Append`.** The posterior's `log.txt` holds the last process's
+  records, after those of the processes that trained the kept training it resumed, if it resumed one;
+  a process that stopped before the fit saved its first pass is in none of them, so its lines, its
+  `[fisher]` lines among them, exist nowhere but in the captured file.
+- **A fit kept partway** resumes with the kept training's id in place of `--resume require`:
+
+  ```powershell
+  & $py -m core train @Box --chi --device cuda --prior retrain_prior --resume-fit <id> 2>&1 | Plain | Tee-Object -FilePath $Log -Append
+  $LASTEXITCODE
+  ```
+
+  The kept training gives every setting the command leaves out (the batches, the network, the
+  patience, the cadence, the name and the note), and a setting given that differs from its own is
+  refused before anything is read, naming its flag; so is a change since it was kept in its rows, in
+  the code that builds or trains the network, in a configuration constant that code reads or in the
+  libraries, without a flag. It prints
+  `[fit] resuming the kept training <id> after pass <n> (best validation loss <x>, <k> passes since the best); its simulation set is read back first.`,
+  then the cache's resume lines above, and `[fit] saved after pass <n+1>.` once the next pass is
+  saved. When the newest saved pass cannot be read it warns, and resumes from the pass before it. A
+  kept training whose rows, read back, do not give the kept fit is refused then and marked as one that
+  cannot be resumed: stop for the owner. Once the posterior is written the kept training is removed.
 
 ## What to watch
 
@@ -548,9 +572,9 @@ as well ([Conventions](command-line.md#conventions)).
   Hours elapsed over epochs gained is the hours per epoch; the further apart the readings, the finer
   it is. More than about 2.2 hours per epoch, stop the run for the owner. The budget also assumes
   about 130 epochs: a fit still running about 290 hours after generation ended stops for the owner's
-  decision too. Either way the simulation cache is complete, so stopping loses only the fit's hours,
-  never a simulated row, and the same command with `--resume require` goes straight to fitting
-  ([Resuming](#resuming)).
+  decision too. Either way the simulation cache is complete and the fit is kept after every pass, so
+  stopping loses at most the pass in progress, never a simulated row, and the kept training resumes
+  with `--resume-fit <id>` from its last saved pass ([Resuming](#resuming)).
 - `[prism] posterior retrain__<id>  <path>`: the record is written.
 - In the record: `figures/training_loss.png`, the loss curve with the best epoch and the early-stop
   window marked, and `loss.npz`, its numbers.
@@ -579,7 +603,8 @@ ends, before the flow's fit has gone far; the other three once the run and its d
      range and median, and the per-batch masking notices in the captured file, with the audit's
      per-batch figures (its `[mask] masked per batch: …` line, and `results.per_batch` in its record).
    - D above 5: stop the run and investigate. The simulation cache is complete, so the fit can be run
-     later without simulating again ([Resuming](#resuming)).
+     later without simulating again, and a fit stopped partway is kept and resumes from its last saved
+     pass ([Resuming](#resuming)).
 
    D spreads as the audit's reading does, about 1.2 to 1.6 points: the full run's own total, over
    10,000 batches, is far steadier, and neither the reference's uncertainty nor the prior's build

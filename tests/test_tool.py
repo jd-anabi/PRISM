@@ -529,7 +529,7 @@ def test_every_train_flag_reaches_build_posterior_as_a_keyword(tool_env, monkeyp
                  "--num-transforms", "2", "--learning-rate", "0.001", "--stop-after-epochs", "4",
                  "--max-epochs", "6", "--fisher-m", "12", "--fisher-dz", "0.05",
                  "--fisher-points", "2", "--checkpoint-every", "1", "--resume", "require",
-                 "--new-run"]) == 0
+                 "--new-run", "--resume-fit", "kf"]) == 0
     (_, p_ref, p_new), _ = prior_rec.calls[0]
     assert p_ref == "tp" and p_new is False, "train LOADS its prior"
     (cfg, prior, ref, train_new), kw = post_rec.calls[0]
@@ -537,12 +537,13 @@ def test_every_train_flag_reaches_build_posterior_as_a_keyword(tool_env, monkeyp
     assert set(kw) == {"name", "note", "fig_sink", "store", "new_run", "num_runs", "run_size_cap",
                        "hidden_features", "num_transforms", "learning_rate", "stop_after_epochs",
                        "max_num_epochs", "fisher_m", "fisher_dz", "fisher_points",
-                       "checkpoint_every", "resume"}
+                       "checkpoint_every", "resume", "resume_fit"}
     assert (kw["num_runs"], kw["run_size_cap"]) == (3, 8)
     assert (kw["hidden_features"], kw["num_transforms"]) == (16, 2)
     assert (kw["learning_rate"], kw["stop_after_epochs"], kw["max_num_epochs"]) == (0.001, 4, 6)
     assert (kw["fisher_m"], kw["fisher_dz"], kw["fisher_points"]) == (12, 0.05, 2)
     assert kw["checkpoint_every"] == 1 and kw["resume"] == "require" and kw["new_run"] is True
+    assert kw["resume_fit"] == "kf"
 
     post_rec.calls.clear()
     assert main(["train", *_cfg(bounds), "--prior", "tp"]) == 0
@@ -708,6 +709,44 @@ def test_near_miss_is_refused_before_simulation(tool_run, capsys):
         "the refusal must name BOTH values, not just the field -- read literally off the message"
     assert {p.name for p in sims.iterdir()} == sims_before, "a new cache was started anyway"
     assert {s.id for s in store.list("posterior")} == posts_before
+
+
+def test_train_resume_fit_continues_a_kept_training_and_names_the_flag_of_what_differs(tool_run, monkeypatch,
+                                                                                         capsys):
+    """A training stopped by Ctrl-C while its flow trains is kept, and the interrupt's advice names
+    --resume-fit; resumed with a setting that differs from the kept training's, it is refused naming that
+    setting's flag; resumed with nothing but the kept training, it writes the posterior under the name it
+    was started with, and the kept training is gone. Placed after the near-miss test, which expects no
+    cache but the module's own one setting away from its run."""
+    from core.artifacts import ArtifactStore
+    from core.SBI import fit_state
+    bounds, cell, root = tool_run
+    before = {s.id for s in ArtifactStore(root).list("fit")}
+    real = fit_state.FitSession.save_pass
+
+    def save_pass(self, take):
+        real(self, take)
+        if self.passes == 2:
+            raise KeyboardInterrupt
+
+    argv = ["train", *_cfg(bounds), "--prior", "tp"]
+    capsys.readouterr()
+    with monkeypatch.context() as patch:
+        patch.setattr(fit_state.FitSession, "save_pass", save_pass)
+        assert main([*argv, "--name", "tk", "--num-runs", "6", "--run-size", "8", "--hidden-features", "8",
+                     "--num-transforms", "1", "--stop-after-epochs", "3", "--max-epochs", "8",
+                     "--checkpoint-every", "1", "--new-run"]) == 130
+    said = capsys.readouterr()
+    assert "--resume-fit" in said.err, said.err
+    kept, = [s for s in ArtifactStore(root).list("fit") if s.id not in before]
+    assert f"is kept as fit {kept.id}" in said.out, said.out
+    assert main([*argv, "--resume-fit", kept.id, "--hidden-features", "16"]) == 1
+    err = capsys.readouterr().err
+    refused = [ln for ln in err.splitlines() if ln.startswith("prism train: refused:")]
+    assert len(refused) == 1 and refused[0].endswith("(--hidden-features)"), err
+    assert main([*argv, "--resume-fit", kept.id]) == 0
+    assert "[prism] posterior tk__" in capsys.readouterr().out
+    assert [s for s in ArtifactStore(root).list("fit") if s.id not in before] == []
 
 
 @pytest.fixture(scope="module")
@@ -876,17 +915,18 @@ def test_every_validate_infer_and_tsnpe_flag_reaches_its_stage_as_a_keyword(tool
                  "--directions", "2", "--level", "0.99", "--num-runs", "6", "--run-size", "9",
                  "--hidden-features", "10", "--num-transforms", "3", "--learning-rate", "0.002",
                  "--stop-after-epochs", "5", "--max-epochs", "3", "--checkpoint-every", "2",
-                 "--resume", "require", "--new-run"]) == 0
+                 "--resume", "require", "--new-run", "--resume-fit", "kf"]) == 0
     (_c3, _p3, _pr3, _obs3), kw = t.calls[0]
     assert set(kw) == {"name", "note", "fig_sink", "store", "new_run", "n_directions", "level",
                        "num_runs", "run_size_cap", "hidden_features", "num_transforms",
                        "learning_rate", "stop_after_epochs", "max_num_epochs", "checkpoint_every",
-                       "resume"}
+                       "resume", "resume_fit"}
     assert (kw["n_directions"], kw["level"]) == (2, 0.99)
     assert (kw["num_runs"], kw["run_size_cap"]) == (6, 9)
     assert (kw["hidden_features"], kw["num_transforms"]) == (10, 3)
     assert (kw["learning_rate"], kw["stop_after_epochs"], kw["max_num_epochs"]) == (0.002, 5, 3)
     assert kw["checkpoint_every"] == 2 and kw["resume"] == "require" and kw["new_run"] is True
+    assert kw["resume_fit"] == "kf"
 
     # The accept hatch on validate/tsnpe reaches only load_posterior_and_prior (their own
     # compositions take no accept= of their own) -- so record what THAT receives, delegating to the

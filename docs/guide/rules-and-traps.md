@@ -569,7 +569,8 @@ seconds with no simulation: run it first after touching anything chi.
     `artifacts rm simulation <ref>`. Each refusal lists the records that still name it as a parent.
   - Keep the old records, and train with `train --checkpoint-every 0`, which reads and writes no
     simulation cache. The run then cannot be resumed, `--resume require` and `--resume never` are
-    refused beside it, and the posterior names no cache as a parent. The window has no control for
+    refused beside it, its fit is not saved as it goes either, so a stop while the flow trains loses
+    the whole fit, and the posterior names no cache as a parent. The window has no control for
     the checkpoint cadence. The old cache stays on disk: a later run at the default cadence with the
     same identity finds it and reuses its rows, so remove it, or build a new prior, before that run.
 

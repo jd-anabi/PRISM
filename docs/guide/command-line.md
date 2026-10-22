@@ -134,6 +134,23 @@ prints `Reusing the Fisher rotation stored with the training checkpoint (...)` b
 line. A `tsnpe` round never computes a rotation, resumed or not: it prints
 `[tsnpe] basis: reusing the PARENT posterior's rotation ...` instead.
 
+**Kept trainings.** On `train` and `tsnpe`, with the cache kept (`--checkpoint-every` above 0), the
+flow's fit is saved too, after every pass, as a kept training: a record of the kind `fit`, which
+`artifacts list fit` lists with the posterior it is for, the passes saved and its state. A Ctrl-C, a
+crash or a power cut while the flow trains keeps it at its last saved pass; Ctrl-C prints
+`[fit] the training stopped after pass <n> and is kept as fit <id> (stopped on purpose).` A new
+training whose rows and settings match a kept one names it before its fit, and starts a new one all
+the same. The same command with `--resume-fit <id>` continues the kept training: it takes every
+setting not given from the kept training's own record, the name and the note included, reads the
+cache back without simulating again, and goes on from the last saved pass. Before anything is read,
+a setting given that differs from the kept training's is refused, naming its flag; a change since it
+was kept in its rows, in the code that builds or trains the network, in a configuration constant that
+code reads or in the libraries is refused too, with no flag. Once the rows are read back, a kept
+training whose split, network shape or fitted standardisers no longer come out as they were kept is
+refused and marked as one that cannot be resumed, saying why. Once the posterior is written, the kept
+training is removed; `artifacts rm fit <id>` removes one by hand, and refuses one a process is
+training.
+
 ### Acceptance flags
 
 A posterior that a narrowing round (`tsnpe`) trained is valid only near the observation its region
@@ -209,8 +226,10 @@ Two more are set rather than read as settings:
   same case ends `(--model)`. A refusal that carries no flag ends at the message: a record
   reference that resolves to nothing (`--prior`, `--posterior`, `--observation`, or an `artifacts`
   mode's `<ref>`), `--resume require` with no cache to resume, the narrowed-parent rule of
-  [tsnpe](#tsnpe), a missing units file (the tool has no units flag), and a rule two settings answer
-  together. An error raised as a plain `ValueError`, such as an unsupported `--model`
+  [tsnpe](#tsnpe), a missing units file (the tool has no units flag), a rule two settings answer
+  together, and a kept training that cannot be resumed for a reason no setting of the command answers
+  (its code, a constant, a library or its cache changed, or its rows read back do not give its fit;
+  [Training-cache flags](#training-cache-flags)). An error raised as a plain `ValueError`, such as an unsupported `--model`
   (`core.tool.config_args.make_cfg`) or the cache refusals of [ablation](#ablation), prints
   `prism <subcommand>: refused: <error class>: <message> [raised at <file>:<line>]`, and so does a
   missing file that no check covers. Anything else is a bug: the traceback, then
@@ -227,8 +246,9 @@ Two more are set rather than read as settings:
     same command starts it again;
   - every other command: the generic advice, that the record being written was removed and, if a
     `[checkpoint]` line said batches were saved, the same command with `--resume require` continues
-    them. The `artifacts` family prints it too, although it fits none of its modes
-    ([artifacts](#artifacts)).
+    them, and, if a `[fit]` line said the training is kept as fit `<id>`, the same command with
+    `--resume-fit <id>` continues it. The `artifacts` family prints it too, although it fits none of
+    its modes ([artifacts](#artifacts)).
 
 ## prior
 
@@ -293,6 +313,7 @@ training rows batch by batch, and fits the flow.
 - `--fisher-dz X` — latent central-difference step of the Fisher rotation (default 0.1).
 - `--fisher-points N` — operating points the Fisher rotation is averaged over (default 8).
 - `--checkpoint-every N` — batches between commits of the simulation cache; 0 keeps no cache, so nothing can resume (default 50).
+- `--resume-fit REF` — resume the kept training REF, by the id `artifacts list fit` prints, on its own settings: a setting given must be the one it was trained with; see [Training-cache flags](#training-cache-flags) (default a new training).
 - `--resume auto|require|never` — see [Training-cache flags](#training-cache-flags) (default auto).
 - `--new-run` — see [Training-cache flags](#training-cache-flags).
 
@@ -328,12 +349,22 @@ run goes and keeps no `log.txt`. On the way it prints:
   `--checkpoint-every 0` both `--resume require` and `--resume never` are refused, because no cache
   is read or written;
 - a resume reuses the cache's stored rotation, so `--fisher-m`, `--fisher-dz` and `--fisher-points`
-  have no effect on it, and the record writes them as null.
+  have no effect on it, and the record writes them as null;
+- with `--resume-fit`: an id no kept training has, a kept training that cannot be resumed (a running
+  process holds it, its cache is gone, or its code, a constant or a library changed since it was kept,
+  naming which), `--checkpoint-every 0` and `--resume never` are refused, and so is a setting given
+  that differs from the kept training's, naming its flag, or a change in its rows (the prior, the box,
+  the batch count). A kept training whose saved header or passes cannot be read at that moment (a
+  file another program holds reads so too) is refused before the cache is read and left as it was, to
+  be tried again; one saved in another format is refused and marked as one that cannot be resumed.
+  After the cache is read back, a kept training whose rows do not give the kept fit is refused, and
+  marked as one that cannot be resumed.
 
 **Exit codes** as in [Exit codes](#exit-codes). After Ctrl-C, if a `[checkpoint]` line said
 batches were saved (`[checkpoint] stopping: saving ...` is the one an interrupt prints), the same
 command with `--resume require` continues from the last saved batch; with checkpointing off, nothing
-simulated is kept.
+simulated is kept. If a `[fit]` line said the training is kept as fit `<id>`, the same command with
+`--resume-fit <id>` continues the fit from its last saved pass.
 
 ## validate
 
@@ -485,6 +516,7 @@ result is valid only near that observation.
 - `--stop-after-epochs N` — early-stopping patience, in epochs (default 20).
 - `--max-epochs N` — as for [train](#train) (default no ceiling).
 - `--checkpoint-every N` — batches between commits of the round's simulation cache; 0 keeps no cache (default 50).
+- `--resume-fit REF` — resume the kept narrowing round REF, by the id `artifacts list fit` prints, in the region it was trained in, on its own settings; see [Training-cache flags](#training-cache-flags) (default a new training).
 - `--resume auto|require|never` — see [Training-cache flags](#training-cache-flags) (default auto).
 - `--new-run` — see [Training-cache flags](#training-cache-flags).
 - `--accept-truncated` — see [Acceptance flags](#acceptance-flags); needed when the parent is itself narrowed.
@@ -514,6 +546,9 @@ inside it, then `[prism] posterior <name>__<id>  <path>`.
   A truth outside also raises a pre-flight warning. A recording has no truth, and nothing is said.
 - The observation is checked against the configuration's mode and conditioning width when it loads,
   and the cache rules are those of [train](#train).
+- A kept round resumes with `--resume-fit` in the region read from its record, never drawn again:
+  `--directions` and `--level` are refused beside it, and `--posterior` and `--observation` must name
+  the parent and the observation it was drawn with. Its other rules are those of [train](#train).
 
 **Refuses**, before any simulation: a taken name; a `--directions` below 1 or above the posterior's
 latent width `(--directions)`; a `--level` not strictly between 0 and 1 `(--level)`; a training

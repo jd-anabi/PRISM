@@ -173,8 +173,12 @@ def main(argv=None) -> int:
         if note is not None:
             print(f"prism {args.cmd}: interrupted: {note}", file=sys.stderr)
         else:
+            # The second sentence is for a training stopped while the flow trains: the training stage
+            # keeps it, after its last saved pass, and says so on a [fit] line. smoke takes no
+            # --resume-fit, so its own advice never names it.
             advice = _smoke_interrupt_advice(args, root) if temp_store_root else \
-                "the same command with --resume require continues them."
+                ("the same command with --resume require continues them. If a [fit] line above says the "
+                 "training is kept as fit <id>, the same command with --resume-fit <id> continues it.")
             print(f"prism {args.cmd}: interrupted: the artifact being written was removed. If a "
                   f"[checkpoint] line above says batches were saved, {advice}", file=sys.stderr)
         rc = 130

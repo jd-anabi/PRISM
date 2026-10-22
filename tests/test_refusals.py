@@ -35,8 +35,8 @@ BASE_KEYS = (
     "num_posterior_samples", "n_samples", "num_iterations", "sweep_batch", "max_sets", "walk_step",
     "stability_units", "min_cluster_size", "min_samples", "hidden_features", "num_transforms",
     "learning_rate", "stop_after_epochs", "max_num_epochs", "fisher_m", "fisher_dz", "fisher_points",
-    "checkpoint_every", "resume", "new_run", "accept_truncated", "accept_other_observation", "name",
-    "bounds", "cell", "units", "recording_spont", "recording_forced", "recording_probe",
+    "checkpoint_every", "resume", "new_run", "resume_fit", "accept_truncated", "accept_other_observation",
+    "name", "bounds", "cell", "units", "recording_spont", "recording_forced", "recording_probe",
     "drive_amplitude", "drive_frequency", "drive_phase", "chi_f0_si", "chi_n_freqs", "chi_k_pad",
     "chi_max_cycles", "chi_f0", "chi_freq_bounds", "device", "model", "observation", "posterior", "prior",
     # the secondary analyses: the eight knobs the FDT and sweep screens and their two subcommands
@@ -113,7 +113,7 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     reader and refuses an unknown key with a KeyError: a message can only be built for a field a
     front end can map."""
     assert set(FIELDS) == set(BASE_KEYS) | set(TOOL_ONLY_KEYS)
-    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 109, "a key is listed twice above"
+    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 110, "a key is listed twice above"
     control_words = re.compile(r"\b(tab|box|flag|button|click|tick|dialog)\b")
     for key, f in FIELDS.items():
         assert isinstance(f, Field) and f.key == key, key
@@ -1213,6 +1213,7 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
     flags = {
         "t_obs": "--t-obs", "num_runs": "--num-runs", "run_size_cap": "--run-size",
         "checkpoint_every": "--checkpoint-every", "resume": "--resume", "new_run": "--new-run",
+        "resume_fit": "--resume-fit",
         "n_directions": "--directions", "hpd_level": "--level", "observation": "--observation", "n_cal": "--n-cal",
         "cal_n_scales": "--cal-n-scales", "num_posterior_samples": "--posterior-samples", "n_samples": "--n-samples",
         "num_iterations": "--num-iterations", "sweep_batch": "--sweep-batch", "max_sets": "--max-sets",

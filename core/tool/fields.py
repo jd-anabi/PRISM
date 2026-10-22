@@ -31,6 +31,7 @@ FLAG: dict[str, str | None] = {
     "checkpoint_every": "--checkpoint-every",
     "resume": "--resume",
     "new_run": "--new-run",
+    "resume_fit": "--resume-fit",
     # TSNPE
     "n_directions": "--directions",
     "hpd_level": "--level",

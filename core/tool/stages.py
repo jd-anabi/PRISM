@@ -18,13 +18,13 @@ PRIOR_KNOBS = ("num_iterations", "sweep_batch", "max_sets", "walk_step", "stabil
                "min_cluster_size", "min_samples")
 TRAIN_KNOBS = ("num_runs", "run_size_cap", "hidden_features", "num_transforms", "learning_rate",
                "stop_after_epochs", "max_num_epochs", "fisher_m", "fisher_dz", "fisher_points",
-               "checkpoint_every", "resume")
+               "checkpoint_every", "resume", "resume_fit")
 VALIDATE_KNOBS = ("n_cal", "cal_n_scales", "num_posterior_samples")
 # No Fisher knobs, by design: with a region set, build_posterior reuses the parent's basis and never
 # reaches the Fisher, so a --fisher-* flag could only ever be silently ignored.
 TSNPE_KNOBS = ("n_directions", "level", "num_runs", "run_size_cap", "hidden_features",
                "num_transforms", "learning_rate", "stop_after_epochs", "max_num_epochs",
-               "checkpoint_every", "resume")
+               "checkpoint_every", "resume", "resume_fit")
 
 
 def register(subparsers) -> dict:

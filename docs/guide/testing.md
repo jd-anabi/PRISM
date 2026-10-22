@@ -18,7 +18,11 @@ suite does not certify, and notes for writing tests. What each flag means is on
   tabulate (since 1 October 2026; sbi 0.25.0 before). A later upgrade must check again that sbi's
   per-epoch print still fires: the window's cooperative cancel hooks into it, and without it a Cancel
   pressed while the flow trains waits for the whole fit instead of one epoch
-  ([The window](architecture.md#the-window)). Calibration TARP numbers from before the 0.26.1 upgrade
+  ([The window](architecture.md#the-window)). It must also keep `tests/test_fit_saving.py` green:
+  saving a training as it goes and resuming it read and write sbi's private trainer attributes (the
+  per-pass summary, the network builder, the counters, the best weights and the histories), and that
+  file's resume tests are the alarm for an sbi whose trainer no longer resumes the very fit it stopped.
+  Calibration TARP numbers from before the 0.26.1 upgrade
   are not comparable with those after it
   ([Reading calibration honestly](science.md#reading-calibration-honestly)).
 - Run every check from the repository root. The code finds its two roots from its own location

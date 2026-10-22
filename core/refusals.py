@@ -106,6 +106,7 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("checkpoint_every", "the checkpoint cadence, in batches (0 = off)", "50"),   # TRAINING_CHECKPOINT_EVERY
     Field("resume", "the resume policy", "auto"),                                      # build_posterior
     Field("new_run", "consent to start a new simulation cache", None),
+    Field("resume_fit", "the kept training to resume", None),
     Field("accept_truncated", "consent to load a non-amortized posterior", None),
     Field("accept_other_observation", "consent to infer on another observation", None),
     Field("name", "the artifact name", None),

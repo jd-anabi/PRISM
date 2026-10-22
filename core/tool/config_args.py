@@ -83,7 +83,8 @@ def add_training_flags(p, *, fisher: bool) -> None:
     parent's rotation and never computes a Fisher of its own, so a Fisher flag there would be
     silently ignored. ``smoke`` does not use this helper: its defaults are its own literals, the
     smoke gate's small sizes, and its ``--checkpoint`` is an on/off switch rather than a count of
-    batches.
+    batches. ``--resume-fit`` names a kept training to resume; the stage takes every setting not given
+    from that training's own record.
     """
     p.add_argument("--num-runs", type=int, default=None, metavar="N",
                    help="training batches to simulate" + default_clause("num_runs"))
@@ -114,6 +115,10 @@ def add_training_flags(p, *, fisher: bool) -> None:
     p.add_argument("--checkpoint-every", type=int, default=None, metavar="N",
                    help="batches between checkpoint commits; 0 = no cache, nothing resumable"
                         + default_clause("checkpoint_every"))
+    p.add_argument("--resume-fit", dest="resume_fit", default=None, metavar="REF",
+                   help="resume the kept training REF (its id, as artifacts list fit prints it) with its own "
+                        "settings: a setting given here must be the one it was trained with, and a narrowing "
+                        "round keeps its region" + default_text("a new training"))
 
 
 def add_resume_flags(p) -> None:

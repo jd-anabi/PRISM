@@ -520,6 +520,21 @@ is how the store is built, in `core/artifacts/`.
 - **A kept training** (`fit`) is a training saved partway; it has no writer, like the simulation set,
   and names its prior and simulation set (and, for a narrowing round, its observation and parent
   posterior) as parents, so neither can be deleted under it; a running one cannot be deleted.
+  - It is saved after every pass while its rows are in a kept simulation set (`core.SBI.fit_state`):
+    a header written once with its identity (the rows, the batches, the settings, a digest of the code
+    that builds or trains the network as the process loaded it, the constants that code reads, the
+    libraries and the network's shape), and two generations of its state, `state.pt` and
+    `state.prev.pt`, rotated by renaming inside a deferred-cancel section, so a save torn at any step
+    leaves a whole pass. An operating-system lock on `running.lock`, held while a process trains it and
+    let go by the system when that process dies, says it is running.
+  - It is resumed by its id (`build_posterior(resume_fit=...)`, `--resume-fit`), on its own record's
+    settings. Before anything is read, the lock must be free and the identity unchanged: a difference in
+    a setting the call gives is refused naming it, one in the code, a constant, a library or the
+    simulation set is refused naming what changed. Once the rows are read back, the restore rebuilds the
+    split from the generator state kept when the fit began and the network from the training rows, and
+    compares the validation rows, the network's shape and its fitted standardisers with the kept ones;
+    a kept training that fails is marked as one that cannot be resumed, and nothing else of it changes.
+    The resumed fit saves into the same record, which is removed once its posterior is written.
 - **Loading** refuses these mismatches: the manifest's checks run before the payload is read, and
   the payload's own checks after it.
   - `load_prior`: the model, the ND parameter set and its order, the ND box and the log-box mask; then
