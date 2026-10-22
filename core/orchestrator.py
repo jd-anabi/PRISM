@@ -61,7 +61,7 @@ from .SBI import (embedded_network, pipeline, analysis, decorrelate, chi, derive
                   statistics, training_checkpoint, fit_state)
 from .SBI.Priors import sbi_prior_wrapper
 from .SBI.reparam import (
-    build_inferred_bijection, TransformedPosterior, build_rescale_bijection,
+    build_inferred_bijection, TransformedPosterior, build_rescale_bijection, kept_inverse,
     build_rotated_bijection, RotatedLatentPrior,
     nd_log_mask, resolved_log_params,
     rotation_of, rotation_of_prior, transform_device, UnitToBoxTransform,
@@ -1116,9 +1116,11 @@ def build_posterior(
                 field="prior"
             )
 
-    # Pushforward the physical rescale prior through T_rescale.inv.
+    # Pushforward the physical rescale prior through T_rescale's inverse. The inverse is kept_inverse's,
+    # not torch's own: this prior is pickled inside the posterior, and torch's inverse loses the
+    # transform it inverts when pickled, so the loaded posterior's prior could not draw a point.
     T_rescale = build_rescale_bijection(cfg)
-    latent_rescale = torch.distributions.TransformedDistribution(rescale_prior_physical, T_rescale.inv)
+    latent_rescale = torch.distributions.TransformedDistribution(rescale_prior_physical, kept_inverse(T_rescale))
 
     latent_inferred_prior = ProductPrior(
         distributions=[latent_nd, latent_rescale],
@@ -2656,7 +2658,8 @@ def _build_latent_prior_for_validation(cfg, inferred_prior):
             field="prior")
     latent_nd = nd_prior_physical.base_dist
     T_rescale = build_rescale_bijection(cfg)
-    latent_rescale = torch.distributions.TransformedDistribution(inferred_prior.distributions[1], T_rescale.inv)
+    latent_rescale = torch.distributions.TransformedDistribution(inferred_prior.distributions[1],
+                                                                 kept_inverse(T_rescale))
     return ProductPrior(
         distributions=[latent_nd, latent_rescale],
         dims=[len(cfg.params_dict), len(cfg.rescale_params)],

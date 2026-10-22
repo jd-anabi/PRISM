@@ -728,6 +728,12 @@ The narrowing-round rules themselves are in the table above.
   before it, naming what changed; an edit outside them changes nothing. Guard: the refusal itself,
   made before anything is read (`fit_state.kept_fits`, the training stage's checks). Before editing
   them, look for a kept training you mean to resume (`artifacts list fit`) and finish it first.
+- **A transform pickled inside a posterior must not be torch's own inverse.** A posterior is saved
+  whole, its training prior inside it, and torch's `t.inv` holds the transform it inverts in an
+  attribute torch clears whenever a transform is pickled: a prior built on it comes back from disk
+  unable to draw a single point (the Laplace diagnostic once failed so on every stored posterior).
+  Guard: `core.SBI.reparam.kept_inverse`, which the latent rescale prior is built on, computing the
+  same numbers; `tests/test_artifact_store.py` draws from a posterior read back from disk.
 
 ### Reading diagnostics
 

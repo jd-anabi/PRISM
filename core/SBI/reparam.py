@@ -191,6 +191,69 @@ def build_rescale_bijection(cfg, log_params=None) -> ComposeTransform:
     return build_box_bijection(lows, highs, _log_mask(names, lows, log_params))
 
 
+class KeptInverse(Transform):
+    """The inverse of ``base``, kept whole when pickled.
+
+    torch's own inverse (``t.inv``) holds the transform it inverts in an attribute that torch clears
+    whenever a transform is pickled, so a prior built on ``t.inv`` and saved inside a posterior came
+    back unable to draw a single point. This holds it in an attribute of its own and otherwise does
+    what torch's inverse does, call for call, so it computes the very same numbers.
+    """
+
+    def __init__(self, base: Transform) -> None:
+        super().__init__(cache_size=base._cache_size)
+        self.base = base
+
+    @constraints.dependent_property(is_discrete=False)
+    def domain(self):
+        return self.base.codomain
+
+    @constraints.dependent_property(is_discrete=False)
+    def codomain(self):
+        return self.base.domain
+
+    @property
+    def bijective(self) -> bool:
+        return self.base.bijective
+
+    @property
+    def sign(self) -> int:
+        return self.base.sign
+
+    @property
+    def inv(self) -> Transform:
+        return self.base
+
+    def with_cache(self, cache_size=1):
+        return KeptInverse(self.base.with_cache(cache_size))
+
+    def __eq__(self, other):
+        return isinstance(other, KeptInverse) and self.base == other.base
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.base!r})"
+
+    def __call__(self, x):
+        return self.base._inv_call(x)
+
+    def log_abs_det_jacobian(self, x, y):
+        return -self.base.log_abs_det_jacobian(y, x)
+
+    def forward_shape(self, shape):
+        return self.base.inverse_shape(shape)
+
+    def inverse_shape(self, shape):
+        return self.base.forward_shape(shape)
+
+
+def kept_inverse(t: Transform) -> Transform:
+    """``t.inv`` that survives pickling: a composition is inverted part by part, in reverse order, as
+    torch's own ``ComposeTransform.inv`` does, and any other transform is wrapped whole."""
+    if isinstance(t, ComposeTransform):
+        return ComposeTransform([kept_inverse(p) for p in reversed(t.parts)])
+    return KeptInverse(t)
+
+
 def build_inferred_bijection(cfg, log_params=None) -> ComposeTransform:
     """
     Bijection for the full inferred parameter space (ND + rescale), in the same order

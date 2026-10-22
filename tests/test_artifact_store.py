@@ -2013,6 +2013,47 @@ def test_inference_records_ppc_summary_and_ground_truth(tiny_run):
     assert r.store.load_inference(inf.id).results == res and m.fingerprints["x_obs"] == obs.digest
 
 
+def test_a_posterior_read_back_from_disk_keeps_a_training_prior_that_can_be_drawn_from(tiny_run):
+    """A posterior is pickled whole, its training prior inside it, and the Laplace diagnostic draws its
+    points off the ground truth from that prior. torch drops the transform an inverse transform holds
+    when it is pickled, so a prior built on ``t.inv`` came back unable to draw a single point: the
+    diagnostic failed inside torch with an AssertionError on every stored posterior."""
+    from core.diagnostics.identifiability import _training_latent_prior
+    r = tiny_run
+    loaded = r.store.load_posterior(r.cfg, r.posterior.id)
+    prior = _training_latent_prior(loaded.latent)
+    z = prior.sample((3,))
+    assert tuple(z.shape) == (3, len(r.cfg.params_dict) + len(r.cfg.rescale_params))
+    assert torch.isfinite(z).all() and torch.isfinite(prior.log_prob(z)).all()
+
+
+def test_the_kept_inverse_draws_and_scores_as_torchs_own_and_survives_a_save():
+    """The latent rescale prior is built on ``kept_inverse`` so that it survives being pickled inside a
+    posterior. It must draw and score exactly as torch's own inverse does, from the same seed, or every
+    training would draw other rows than before; and loaded back, it must still do so."""
+    import io
+    from core.SBI.reparam import build_rescale_bijection, kept_inverse
+    cfg = _nad_cfg()
+    T = build_rescale_bijection(cfg)
+    lows = torch.tensor([b[0] for _, b in cfg.rescale_params.values()], dtype=cfg.hw.dtype)
+    highs = torch.tensor([b[1] for _, b in cfg.rescale_params.values()], dtype=cfg.hw.dtype)
+    physical = torch.distributions.Independent(torch.distributions.Uniform(lows, highs), 1)
+    theirs = torch.distributions.TransformedDistribution(physical, T.inv)
+    ours = torch.distributions.TransformedDistribution(physical, kept_inverse(T))
+    torch.manual_seed(7)
+    drawn = theirs.sample((64,))
+    torch.manual_seed(7)
+    assert torch.equal(ours.sample((64,)), drawn)
+    assert torch.equal(ours.log_prob(drawn), theirs.log_prob(drawn))
+    buffer = io.BytesIO()
+    torch.save(ours, buffer)
+    buffer.seek(0)
+    back = torch.load(buffer, weights_only=False)
+    torch.manual_seed(7)
+    assert torch.equal(back.sample((64,)), drawn)
+    assert torch.equal(back.log_prob(drawn), theirs.log_prob(drawn))
+
+
 def test_inference_refuses_a_foreign_observation_for_a_truncated_posterior_unless_accepted(tiny_run):
     """Successor of test_conditioning_repair's warning test: a NON-AMORTIZED posterior on an observation
     other than its region's is a REFUSAL now, and accepting it is written into the inference beside
