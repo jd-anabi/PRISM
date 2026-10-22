@@ -799,6 +799,7 @@ def build_posterior(
     resume: str = "auto", new_run: bool = False,
     fisher_m: int | None = None, fisher_dz: float | None = None,
     fisher_points: int | None = None,
+    save_fit: bool | None = None,
 ) -> LoadedPosterior:
     """
     Load an existing posterior artifact through the store, or train a new one via NPE in latent
@@ -859,6 +860,11 @@ def build_posterior(
                      they are written only when the Fisher ran in this process. The rotation's
                      EIGENVALUES travel with V instead -- the cache header's on a resume, the parent
                      posterior's on a truncated round -- and are recorded whenever they are known.
+    :param save_fit: whether the fit is saved at the end of every pass, so that a training stopped
+                     partway is kept and can be resumed (``core.SBI.fit_state``). None = saved whenever
+                     its rows are in a kept simulation set (checkpointing on); True refuses when
+                     checkpointing is off, since a kept training is resumed on its kept rows; False saves
+                     nothing. The run says once, before the fit, when its training is not saved.
     :return: a LoadedPosterior; ``.posterior`` is the TransformedPosterior every downstream stage samples.
 
     ⚠ THESE FOUR ARE WHAT A COMPLETE TRAINING CHECKPOINT (THE SIMULATION CACHE) IS FOR. Its own
@@ -891,7 +897,8 @@ def build_posterior(
     # up front too. Days of training, in the training branch's case.
     store.assert_name_free("posterior", name)
     from .artifacts import Accept
-    from .artifacts.manifest import conditioning_block, region_to_json, tensor_digest, tensor_to_json
+    from .artifacts.manifest import (conditioning_block, config_from_cfg, region_to_json, tensor_digest,
+                                     tensor_to_json)
     accept = accept or Accept()
     # The observation now carries its own digest: a separately-supplied one is no longer taken as a
     # parameter, it is read straight off the LoadedObservation a narrowed posterior records as the one
@@ -954,6 +961,10 @@ def build_posterior(
         fm = require_at_least("fisher_m", fm, 1)
         fdz = require_positive("fisher_dz", fdz)
         fp = require_at_least("fisher_points", fp, 1)
+        if save_fit and not ck_every:
+            # A kept training is resumed on its kept rows; with checkpointing off there are none.
+            raise Refusal("Saving the training as it goes needs its rows in a kept simulation set, and "
+                          "checkpointing is off (checkpoint_every=0).", field="checkpoint_every")
     resume = require_choice("resume", resume, ("auto", "require", "never"))
     if resume != "auto" and not ck_every and train_new:
         # Without this, a `resume='require'` drill with checkpointing off exits 0 having tested
@@ -1375,115 +1386,178 @@ def build_posterior(
     # feed training-time diagnostics, so we pass None — no ground-truth observation needed to train.
     theta_obs_latent = None
 
-    # hf, nt, lr, patience and max_ep were resolved (and range-checked) above, before any spend -- not
-    # inlined into this call -- so the manifest records what was actually used.
-    posterior_latent, pos_diagnostics = pipeline.train_nn(
-        training_params, model=DENSITY_ESTIMATOR, prior=sbi_prior,
-        embedding_net=embedded_net, forcing_prior=force_prior,
-        nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
-        x_obs=None, theta_obs=theta_obs_latent, num_rounds=TRAINING_NUM_ROUNDS,
-        return_diagnostics=True,
-        theta_transform=T_train,
-        hidden_features=hf, num_transforms=nt, num_bins=NSF_NUM_BINS,
-        learning_rate=lr, stop_after_epochs=patience,
-        max_num_epochs=max_ep, show_train_summary=TRAINING_SHOW_SUMMARY,
-        batch_size=TRAINING_BATCH_SIZE, device=cfg.hw.device,
-    )
-
-    # The tsnpe kept-fraction lines stay exactly as they were (they are how the generous-region rule is
-    # watched); they run before the write.
-    _acc = _in = _tot = None
-    if truncation is not None and hasattr(train_prior, "acceptance_rate"):
-        # THE GENEROUS-REGION RULE: the fraction of prior mass this round threw away, measured rather
-        # than assumed. Deleted support is a one-way ratchet -- no later round can recover it -- so the
-        # number belongs in the run log next to the artifact it produced. TWO numbers, and they
-        # differ: the rejection sampler's acceptance is P(A) of the draws BEFORE gen_training_data's
-        # per-batch t_scale override; the recorded containment is what the training set holds after
-        # it, and only the second says how much of the set actually lies in the region.
-        _acc = float(train_prior.acceptance_rate)
-        _in, _tot = getattr(train_prior, "recorded_counts", (0, 0))
-        log.info(f"[tsnpe] the truncation accepted {_acc:.3%} of prior draws at the rejection sampler "
-                 f"(P(A), PRE-override); {1 - _acc:.3%} of the prior's mass along the truncated "
-                 f"directions is unavailable to later rounds.")
-        log.info(f"[tsnpe] post-override containment of the recorded training targets: "
-                 + ("not measured -- no rows were generated or loaded in this process"
-                    if not _tot else f"{_in:,}/{_tot:,} = {_in / _tot:.3%}")
-                 + " (this is the number that says how much of the training set lies in the region).")
-
-    assert isinstance(posterior_latent, DirectPosterior)
-
-    keys = list(cfg.params_dict) + list(cfg.rescale_params)
-    V_rec = rotation_of(T_train)             # THE one decoder of the convention; None when unrotated
-    probe = training_checkpoint.bijection_probe(T_train, len(keys), device=cfg.hw.device)
-    diag = pos_diagnostics or {}
-    _best = diag.get("best_validation_loss")
-    with store.create("posterior", cfg, name=name, note=note) as w:
-        file_manager.atomic_torch_save(posterior_latent, w.payload("posterior.pt"))
-        if diag.get("validation_loss"):
-            file_manager.atomic_savez(w.payload("loss.npz"), dict(
-                training_loss=np.asarray(diag.get("training_loss", []), dtype=float),
-                validation_loss=np.asarray(diag.get("validation_loss", []), dtype=float),
-                best_validation_loss=float(_best if _best is not None else float("nan")),
-                epochs_trained=int(diag.get("epochs_trained") or -1),
-                stop_after_epochs=int(diag.get("stop_after_epochs") or -1)))
-            fig_loss = visualizers.plot_training_loss(diag)
-            if fig_loss is not None:
-                w.fig_sink(fig_sink)("Training loss", fig_loss)
-        w.parents = {"prior": prior.id}
-        if ckpt_dir is not None:
-            w.parents["simulation"] = ckpt_dir.name
+    # THE FIT, SAVED AS IT GOES. With its rows in a kept simulation set, the fit is kept at the end of
+    # every pass as a record of its own (core.SBI.fit_state), so a training stopped partway -- by a
+    # Ctrl-C, the window's Cancel, a crash -- can be resumed in a new process instead of started again.
+    # Its identity is made here, before the fit: the rows and their batches, the code this process
+    # loaded, the constants and the libraries; the fit adds its settings and the network's shape at its
+    # first save. Without kept rows there is nothing to resume on, and the run says so once.
+    session = None
+    if save_fit is False or ckpt_dir is None:
+        log.info("[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."
+                 if save_fit is False else
+                 "[fit] the simulation set is not kept (checkpointing off), so this training is not saved as "
+                 "it goes and cannot be resumed.")
+    else:
+        fit_identity = {"simulation": ident, "batches": n_runs, "code": fit_state.loaded_code(),
+                        "constants": fit_state.constants(), "libraries": fit_state.libraries()}
+        # The kept trainings this one could have resumed instead, named before its fit: the settings
+        # are the ones the fit itself records, as sbi will use them.
+        _settings = pipeline.fit_settings(
+            model=DENSITY_ESTIMATOR, hidden_features=hf, num_transforms=nt, num_bins=NSF_NUM_BINS,
+            learning_rate=lr, stop_after_epochs=patience, max_num_epochs=max_ep,
+            batch_size=TRAINING_BATCH_SIZE,
+            z_score_x="none" if getattr(embedded_net, "owns_standardization", False) else "independent",
+            device=cfg.hw.device, dtype=cfg.hw.dtype, num_rounds=TRAINING_NUM_ROUNDS)
+        _matches = fit_state.matching_kept_fits(store, {**fit_identity, "settings": _settings})
+        if _matches:
+            log.info(f"[fit] {len(_matches)} kept training(s) match these settings and can be resumed: "
+                     + ", ".join(f"{k.id} ({k.state}, after pass {k.passes})" for k in _matches)
+                     + "; this run starts a new one.")
+        _fit_parents = {"prior": prior.id, "simulation": ckpt_dir.name}
         if parent_posterior is not None:
-            w.parents["parent_posterior"] = parent_posterior.id
+            _fit_parents["parent_posterior"] = parent_posterior.id
         if observation is not None:
-            w.parents["observation"] = observation.id
-        w.fingerprints = {"gmm": prior.fingerprint, "V": tensor_digest(V_rec), "probe": tensor_digest(probe)}
-        # The three Fisher settings are recorded only when the rotation RAN in this process, and
-        # fisher_evals is its one witness (only the freshly-computed branch sets it). A
-        # resumed run reuses the checkpoint's V -- whose header carries no m, dz or points -- a truncated
-        # round reuses the region's, and an unrotated run has no Fisher at all: each records None, never
-        # the settings of a Fisher nobody computed. When it ran, the values are the ones it was called
-        # with, resolved at entry. The eigenvalues are another matter: they describe the rotation, not
-        # the run that computed it, so they travel with V -- from the cache header on a resume, from
-        # the parent posterior's record on a narrowing round -- and are recorded whenever known, while
-        # the three settings are written only when the Fisher ran here.
-        _fisher_ran = fisher_evals is not None
-        w.config.update({"num_runs": n_runs, "run_size": run_size, "hidden_features": hf, "num_transforms": nt,
-                         "learning_rate": lr, "stop_after_epochs": patience,
-                         "fisher_m": fm if _fisher_ran else None,
-                         "fisher_dz": fdz if _fisher_ran else None,
-                         "fisher_points": fp if _fisher_ran else None,
-                         "checkpoint_every": ck_every, "max_num_epochs": max_ep})
-        w.body = {
-            "mode": cfg.observation_mode,
-            "conditioning": conditioning_block(cfg),
-            "transform": {"param_keys": keys,
-                          "log_params": list(resolved_log_params(cfg, log_params=_log_params_for(cfg))),
-                          "nd_lows": [float(b[0]) for _, b in cfg.params_dict.values()],
-                          "nd_highs": [float(b[1]) for _, b in cfg.params_dict.values()],
-                          "rescale_lows": [float(b[0]) for _, b in cfg.rescale_params.values()],
-                          "rescale_highs": [float(b[1]) for _, b in cfg.rescale_params.values()],
-                          "V": tensor_to_json(V_rec), "V_orientation": "columns",
-                          "fisher_eigenvalues": evals_rec, "V_digest": tensor_digest(V_rec)},
-            "amortized": truncation is None,
-            "truncation": None if truncation is None else region_to_json(truncation),
-            "training": {"n_runs": n_runs, "run_size": run_size,
-                         "resumed_from_batch": int(_st["batches_done"]) if ckpt_resumed is not None else None,
-                         "hidden_features": hf, "num_transforms": nt, "learning_rate": lr,
-                         "stop_after_epochs": patience,
-                         "epochs_trained": diag.get("epochs_trained"),
-                         "best_validation_loss": (float(_best) if _best is not None and math.isfinite(float(_best)) else None),
-                         "fisher_spread": (_spread if _spread is not None and math.isfinite(_spread) else None),
-                         "tsnpe_acceptance": _acc,
-                         "tsnpe_containment": None if _tot is None else {"inside": int(_in), "total": int(_tot)},
-                         "truth_containment": _containment,
-                         # The acceptances the parent was loaded under, so a round drawn from a
-                         # narrowed parent is marked as one; none without a parent.
-                         "accepted": list(getattr(parent_posterior, "accepted", None) or []),
-                         "wall_seconds": time.time() - _t0},
-        }
-    # Read back through the loader: the freshly written artifact is verified exactly as a later load
-    # would verify it (box, width, the rotation against the pickled prior, the region's basis).
-    loaded = store.load_posterior(cfg, w.id, accept=Accept(truncated=True))
+            _fit_parents["observation"] = observation.id
+        session = fit_state.FitSession(
+            store, identity=fit_identity,
+            region=None if truncation is None else region_to_json(truncation),
+            posterior_name=name, note=note, cfg=cfg,
+            config={**config_from_cfg(cfg), "num_runs": n_runs, "run_size": run_size, "run_size_cap": size_cap,
+                    "hidden_features": hf, "num_transforms": nt, "learning_rate": lr,
+                    "stop_after_epochs": patience, "max_num_epochs": max_ep, "checkpoint_every": ck_every},
+            parents=_fit_parents,
+            fingerprints={"gmm": prior.fingerprint, "V": tensor_digest(rotation_of(T_train)),
+                          "probe": tensor_digest(training_params.checkpoint["probe"])})
+
+    # From the fit to the read-back, a training that stops is recorded on its kept fit, whose lock is
+    # then let go: stopped during the fit, or after it with its posterior not written (a full disk after
+    # days of training), it can be resumed, or deleted, without restarting the program.
+    try:
+        # hf, nt, lr, patience and max_ep were resolved (and range-checked) above, before any spend -- not
+        # inlined into this call -- so the manifest records what was actually used.
+        posterior_latent, pos_diagnostics = pipeline.train_nn(
+            training_params, model=DENSITY_ESTIMATOR, prior=sbi_prior,
+            embedding_net=embedded_net, forcing_prior=force_prior,
+            nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
+            x_obs=None, theta_obs=theta_obs_latent, num_rounds=TRAINING_NUM_ROUNDS,
+            return_diagnostics=True,
+            theta_transform=T_train,
+            hidden_features=hf, num_transforms=nt, num_bins=NSF_NUM_BINS,
+            learning_rate=lr, stop_after_epochs=patience,
+            max_num_epochs=max_ep, show_train_summary=TRAINING_SHOW_SUMMARY,
+            batch_size=TRAINING_BATCH_SIZE, device=cfg.hw.device, fit_saver=session,
+        )
+        if session is not None:
+            session.finished()
+
+        # The tsnpe kept-fraction lines stay exactly as they were (they are how the generous-region rule is
+        # watched); they run before the write.
+        _acc = _in = _tot = None
+        if truncation is not None and hasattr(train_prior, "acceptance_rate"):
+            # THE GENEROUS-REGION RULE: the fraction of prior mass this round threw away, measured rather
+            # than assumed. Deleted support is a one-way ratchet -- no later round can recover it -- so the
+            # number belongs in the run log next to the artifact it produced. TWO numbers, and they
+            # differ: the rejection sampler's acceptance is P(A) of the draws BEFORE gen_training_data's
+            # per-batch t_scale override; the recorded containment is what the training set holds after
+            # it, and only the second says how much of the set actually lies in the region.
+            _acc = float(train_prior.acceptance_rate)
+            _in, _tot = getattr(train_prior, "recorded_counts", (0, 0))
+            log.info(f"[tsnpe] the truncation accepted {_acc:.3%} of prior draws at the rejection sampler "
+                     f"(P(A), PRE-override); {1 - _acc:.3%} of the prior's mass along the truncated "
+                     f"directions is unavailable to later rounds.")
+            log.info(f"[tsnpe] post-override containment of the recorded training targets: "
+                     + ("not measured -- no rows were generated or loaded in this process"
+                        if not _tot else f"{_in:,}/{_tot:,} = {_in / _tot:.3%}")
+                     + " (this is the number that says how much of the training set lies in the region).")
+
+        assert isinstance(posterior_latent, DirectPosterior)
+
+        keys = list(cfg.params_dict) + list(cfg.rescale_params)
+        V_rec = rotation_of(T_train)             # THE one decoder of the convention; None when unrotated
+        probe = training_checkpoint.bijection_probe(T_train, len(keys), device=cfg.hw.device)
+        diag = pos_diagnostics or {}
+        _best = diag.get("best_validation_loss")
+        with store.create("posterior", cfg, name=name, note=note) as w:
+            file_manager.atomic_torch_save(posterior_latent, w.payload("posterior.pt"))
+            if diag.get("validation_loss"):
+                file_manager.atomic_savez(w.payload("loss.npz"), dict(
+                    training_loss=np.asarray(diag.get("training_loss", []), dtype=float),
+                    validation_loss=np.asarray(diag.get("validation_loss", []), dtype=float),
+                    best_validation_loss=float(_best if _best is not None else float("nan")),
+                    epochs_trained=int(diag.get("epochs_trained") or -1),
+                    stop_after_epochs=int(diag.get("stop_after_epochs") or -1)))
+                fig_loss = visualizers.plot_training_loss(diag)
+                if fig_loss is not None:
+                    w.fig_sink(fig_sink)("Training loss", fig_loss)
+            w.parents = {"prior": prior.id}
+            if ckpt_dir is not None:
+                w.parents["simulation"] = ckpt_dir.name
+            if parent_posterior is not None:
+                w.parents["parent_posterior"] = parent_posterior.id
+            if observation is not None:
+                w.parents["observation"] = observation.id
+            w.fingerprints = {"gmm": prior.fingerprint, "V": tensor_digest(V_rec), "probe": tensor_digest(probe)}
+            # The three Fisher settings are recorded only when the rotation RAN in this process, and
+            # fisher_evals is its one witness (only the freshly-computed branch sets it). A
+            # resumed run reuses the checkpoint's V -- whose header carries no m, dz or points -- a truncated
+            # round reuses the region's, and an unrotated run has no Fisher at all: each records None, never
+            # the settings of a Fisher nobody computed. When it ran, the values are the ones it was called
+            # with, resolved at entry. The eigenvalues are another matter: they describe the rotation, not
+            # the run that computed it, so they travel with V -- from the cache header on a resume, from
+            # the parent posterior's record on a narrowing round -- and are recorded whenever known, while
+            # the three settings are written only when the Fisher ran here.
+            _fisher_ran = fisher_evals is not None
+            w.config.update({"num_runs": n_runs, "run_size": run_size, "hidden_features": hf, "num_transforms": nt,
+                             "learning_rate": lr, "stop_after_epochs": patience,
+                             "fisher_m": fm if _fisher_ran else None,
+                             "fisher_dz": fdz if _fisher_ran else None,
+                             "fisher_points": fp if _fisher_ran else None,
+                             "checkpoint_every": ck_every, "max_num_epochs": max_ep})
+            w.body = {
+                "mode": cfg.observation_mode,
+                "conditioning": conditioning_block(cfg),
+                "transform": {"param_keys": keys,
+                              "log_params": list(resolved_log_params(cfg, log_params=_log_params_for(cfg))),
+                              "nd_lows": [float(b[0]) for _, b in cfg.params_dict.values()],
+                              "nd_highs": [float(b[1]) for _, b in cfg.params_dict.values()],
+                              "rescale_lows": [float(b[0]) for _, b in cfg.rescale_params.values()],
+                              "rescale_highs": [float(b[1]) for _, b in cfg.rescale_params.values()],
+                              "V": tensor_to_json(V_rec), "V_orientation": "columns",
+                              "fisher_eigenvalues": evals_rec, "V_digest": tensor_digest(V_rec)},
+                "amortized": truncation is None,
+                "truncation": None if truncation is None else region_to_json(truncation),
+                "training": {"n_runs": n_runs, "run_size": run_size,
+                             "resumed_from_batch": int(_st["batches_done"]) if ckpt_resumed is not None else None,
+                             "hidden_features": hf, "num_transforms": nt, "learning_rate": lr,
+                             "stop_after_epochs": patience,
+                             "epochs_trained": diag.get("epochs_trained"),
+                             "best_validation_loss": (float(_best) if _best is not None and math.isfinite(float(_best)) else None),
+                             "fisher_spread": (_spread if _spread is not None and math.isfinite(_spread) else None),
+                             "tsnpe_acceptance": _acc,
+                             "tsnpe_containment": None if _tot is None else {"inside": int(_in), "total": int(_tot)},
+                             "truth_containment": _containment,
+                             # The acceptances the parent was loaded under, so a round drawn from a
+                             # narrowed parent is marked as one; none without a parent.
+                             "accepted": list(getattr(parent_posterior, "accepted", None) or []),
+                             "wall_seconds": time.time() - _t0,
+                             # The kept training this posterior's fit was saved as while it ran: None
+                             # when it was not saved, and over how many processes and how long.
+                             "resumed_fit": False,
+                             "fit_id": session.id if session is not None else None,
+                             "fit_processes": 1,
+                             "fit_wall_seconds": (session.wall_seconds() if session is not None and session.id
+                                                  else None)},
+            }
+        # Read back through the loader: the freshly written artifact is verified exactly as a later load
+        # would verify it (box, width, the rotation against the pickled prior, the region's basis).
+        loaded = store.load_posterior(cfg, w.id, accept=Accept(truncated=True))
+    except BaseException as e:
+        if session is not None:
+            session.stopped(e)
+        raise
+    if session is not None:
+        session.done(loaded.name or loaded.id)
     loaded.diagnostics = pos_diagnostics
     loaded.accepted = []                     # a round just trained is not an "accepted" load
     return loaded
@@ -2570,7 +2644,7 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
                 hidden_features: int | None = None, num_transforms: int | None = None,
                 learning_rate: float | None = None, stop_after_epochs: int | None = None,
                 max_num_epochs: int | None = None, checkpoint_every: int | None = None,
-                resume: str = "auto", new_run: bool = False,
+                resume: str = "auto", new_run: bool = False, save_fit: bool | None = None,
                 name: str = "", note: str = "", fig_sink=None, store=None) -> LoadedPosterior:
     """One TSNPE round: the region drawn from ``posterior`` around ``observation``, then the PRIOR
     RESTRICTED to it, simulated and retrained.
@@ -2595,6 +2669,8 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
                       per-direction interval; None = ``truncate.DEFAULT_N_DIRECTIONS`` / ``DEFAULT_HPD``.
     :param resume / new_run: the cache policy and the consent to start a new cache beside a near miss,
                       forwarded to build_posterior always.
+    :param save_fit: whether the round's fit is saved as it goes (build_posterior's own); forwarded only
+                      when given, like the budget and the flow settings.
     :return: the LoadedPosterior build_posterior wrote and read back. It carries its own region and
                       observation digest, so nothing here has to return them separately.
     """
@@ -2648,7 +2724,8 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
     knobs = {k: v for k, v in (("num_runs", num_runs), ("run_size_cap", run_size_cap),
                                ("hidden_features", hidden_features), ("num_transforms", num_transforms),
                                ("learning_rate", learning_rate), ("stop_after_epochs", stop_after_epochs),
-                               ("max_num_epochs", max_num_epochs), ("checkpoint_every", checkpoint_every))
+                               ("max_num_epochs", max_num_epochs), ("checkpoint_every", checkpoint_every),
+                               ("save_fit", save_fit))
              if v is not None}
     return build_posterior(cfg, prior, None, True, truncation=region, observation=observation,
                            parent_posterior=posterior, resume=resume, new_run=new_run,
