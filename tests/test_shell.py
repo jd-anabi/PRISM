@@ -1753,11 +1753,13 @@ def _card_and_programs(monkeypatch) -> list:
     the memory the card holds for the program and the memory it uses, and the device check. Each of these six
     stand-ins records its call and answers as a card with room to spare would, so that the code behind it goes on
     as it goes on a computer with one, whatever an earlier test woke on the card. Beneath them every other public
-    function of the card's module, and the other ways to start a program, are recorded by their names and passed
-    through to the real call: a question put to the card some other way is named too."""
+    function of the card's package and of its memory module, and the other ways to start a program, are recorded by
+    their names, each under the path it was called by, and passed through to the real call: a question put to the
+    card some other way is named too."""
     import os
     import subprocess
     import torch
+    from torch.cuda import memory as cuda_memory
     from core import config
     calls = []
     card = config.DeviceConfig(device=torch.device("cuda"), dtype=torch.float32, batch_size=2 ** 11)
@@ -1768,11 +1770,14 @@ def _card_and_programs(monkeypatch) -> list:
             return real(*args, **kwargs)
         return stand_in
 
-    for name in dir(torch.cuda):
-        value = getattr(torch.cuda, name)
-        if (not name.startswith("_") and callable(value) and not isinstance(value, type)
-                and str(getattr(value, "__module__", "")).startswith("torch.cuda")):
-            monkeypatch.setattr(torch.cuda, name, passed_through(f"torch.cuda.{name}", value))
+    # A function of the memory module is reachable by two paths, the package's name for it and the module's own, and
+    # a call by the second passes through no stand-in set on the first: both are recorded, each by its own path.
+    for space, prefix in ((torch.cuda, "torch.cuda"), (cuda_memory, "torch.cuda.memory")):
+        for name in dir(space):
+            value = getattr(space, name)
+            if (not name.startswith("_") and callable(value) and not isinstance(value, type)
+                    and str(getattr(value, "__module__", "")).startswith("torch.cuda")):
+                monkeypatch.setattr(space, name, passed_through(f"{prefix}.{name}", value))
     monkeypatch.setattr(subprocess, "Popen", passed_through("subprocess.Popen", subprocess.Popen))
     monkeypatch.setattr(os, "system", passed_through("os.system", os.system))
 
@@ -1810,8 +1815,10 @@ def test_opening_prism_touches_no_card_and_starts_no_program(tmp_path, monkeypat
     callers swallow what is raised, so a stand-in that raised would prove nothing), and none is recorded. Nothing
     ticks then either: no timer of the window or of the application runs, and of every start of a timer from Python,
     a timer with no parent among them, none still runs after the first idle turn, nor is a single shot of a later
-    moment waiting."""
+    moment waiting. The same holds after the entry point's own lines, which show the window, run the event loop and
+    let go of the claim once the program is built: run here with a loop that turns once and ends."""
     from PySide6.QtCore import QObject, QTimer
+    from core.gui import __main__ as entry
     from tests._fixtures import whole_program
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
@@ -1835,14 +1842,28 @@ def test_opening_prism_touches_no_card_and_starts_no_program(tmp_path, monkeypat
     monkeypatch.setattr(QTimer, "start", started_timer)
     monkeypatch.setattr(QTimer, "singleShot", staticmethod(waiting_shot))
     monkeypatch.setattr(QObject, "startTimer", started_by)
+
+    def nothing_asked_and_nothing_ticking(window):
+        """Home is in sight, the card was asked nothing, no program was started, and no timer runs or waits."""
+        assert window.current_place() == ("home", None)
+        assert calls == [], f"opening PRISM asked the card or started a program: {calls}"
+        ticking = [timer for timer in app.findChildren(QTimer) + window.findChildren(QTimer) if timer.isActive()]
+        ticking += [timer for timer in started if not isinstance(timer, QTimer) or timer.isActive()]
+        assert (ticking, waiting) == ([], []), f"a timer runs at launch: {ticking}, {waiting}"
+
+    class Loop:
+        """The program's event loop, as far as the start goes: it turns once and ends."""
+        def exec(self):
+            QApplication.processEvents()
+            return 0
+
     with whole_program() as (_app, window):
         try:
             _shown_off_screen(window)                             # Home shown, then one idle turn
-            assert window.current_place() == ("home", None)
-            assert calls == [], f"opening PRISM asked the card or started a program: {calls}"
-            ticking = [timer for timer in app.findChildren(QTimer) + window.findChildren(QTimer) if timer.isActive()]
-            ticking += [timer for timer in started if not isinstance(timer, QTimer) or timer.isActive()]
-            assert (ticking, waiting) == ([], []), f"a timer runs at launch: {ticking}, {waiting}"
+            nothing_asked_and_nothing_ticking(window)
+            monkeypatch.setattr(entry, "build_app", lambda: (Loop(), window))
+            assert entry.main() == 0                              # the entry point's own lines, after the build
+            nothing_asked_and_nothing_ticking(window)
         finally:
             window.hide()
 
@@ -1872,20 +1893,33 @@ def test_only_the_known_pages_read_the_card_when_first_opened(monkeypatch):
     assert otherwise == {}, f"a first opening asked other than is listed: {otherwise}"
 
 
-def test_every_kind_of_panel_a_part_holds_is_listed_with_that_part():
-    """The window, asked for a panel of a kind no part built holds, builds the part that holds that kind, read off
-    its list of the part each kind of panel stands in: every kind of panel the window's parts hold stands in that
-    list with the part that holds it, and the list holds no other."""
-    from core.gui import main_window
+def test_every_panel_of_the_built_parts_has_its_place():
+    """Every kind of panel any part of the window holds is found by the window's ``panel`` in a window that has built
+    nothing but Home: asking for the kind builds the part that holds it, and no part that does not, and hands back
+    a panel of that kind standing in that part. The kinds are found by walking each part's widgets, not by the
+    window's own lists, so a kind of panel held by a part those lists do not name is seen too. A part that cannot be
+    built stands as an error page and hides its panels, so every part is required to be built."""
+    from core.gui.panels.base_panel import BasePanel
     qt_app()
-    window = build_window()
+    every, fresh = build_window(), build_window()
+    held = {}                                          # each kind of panel, with the keys of the parts holding one
     for place in keys.PARTS:
-        window.part(place.key)
-    held = {type(panel): window._places[panel][0] for panel in window._all_panels()}
-    listed = main_window._PANEL_PARTS
-    otherwise = sorted(f"{kind.__name__}: held in {held.get(kind)}, listed with {listed.get(kind)}"
-                       for kind in set(held) | set(listed) if held.get(kind) != listed.get(kind))
-    assert otherwise == [], f"a kind of panel not listed with the part that holds it: {otherwise}"
+        part = every.part(place.key)
+        for panel in ([part] if isinstance(part, BasePanel) else []) + part.findChildren(BasePanel):
+            held.setdefault(type(panel), set()).add(place.key)
+    assert every.built_parts() == tuple(place.key for place in keys.PARTS), "a part could not be built"
+    assert len(held) >= 10, f"the walk found only {sorted(kind.__name__ for kind in held)}"
+    wrong = []
+    for kind, parts in held.items():
+        before = set(fresh.built_parts())
+        found = fresh.panel(kind)
+        built = set(fresh.built_parts()) - before
+        standing = found is not None and any(
+            key in fresh.built_parts() and (fresh.part(key) is found or fresh.part(key).isAncestorOf(found))
+            for key in parts)
+        if not (isinstance(found, kind) and standing and built <= parts):
+            wrong.append(f"{kind.__name__}: held in {sorted(parts)}, asking built {sorted(built)} and found {found}")
+    assert wrong == [], f"a kind of panel the window does not find in the part that holds it: {wrong}"
 
 
 def test_a_part_is_built_at_its_first_opening_and_once():
@@ -3228,13 +3262,23 @@ def test_a_start_handed_over_builds_no_window_and_exits_zero(tmp_path, monkeypat
 def test_a_start_beside_a_prism_that_never_answers_ends_with_the_status_one(tmp_path, monkeypatch, capsys):
     """The whole program started beside a living holder of the lock that never answers -- a PRISM busy past the
     start's three knocks, or one that does not listen -- builds no window and no other widget, holds no claim, says
-    in one line that PRISM did not answer, and ends with the status 1."""
+    in one line that PRISM did not answer, and ends with the status 1. What the start's claim was is read as the claim
+    came back, before the program lets go of anything: a give-up holds none."""
     import os
     from PySide6.QtCore import QLockFile
     from core.gui import one_instance, settings
     from tests._fixtures import whole_program
     qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    made, claim = [], one_instance.claim
+
+    def recording(*args, **kwargs):
+        """The start's claim as it comes back: its case, and the claim the process holds at that moment."""
+        claimed = claim(*args, **kwargs)
+        made.append((claimed.case, one_instance.current()))
+        return claimed
+
+    monkeypatch.setattr(one_instance, "claim", recording)
     holder = QLockFile(os.path.join(os.path.dirname(os.path.abspath(settings.settings().fileName())), "PRISM.lock"))
     holder.setStaleLockTime(0)
     assert holder.tryLock(0), "the lock could not be held for the test"
@@ -3245,6 +3289,7 @@ def test_a_start_beside_a_prism_that_never_answers_ends_with_the_status_one(tmp_
                 pass
     finally:
         holder.unlock()
+    assert made == [("give_up", None)], f"the start's case and the claim held when it came back: {made}"
     assert (ended.value.code, len(QApplication.topLevelWidgets()), one_instance.current()) == (1, widgets, None), (
         "the start beside a holder that never answers built something, holds a claim or ended otherwise")
     assert capsys.readouterr().err.endswith("PRISM is already running but did not answer; this start ends.\n")
@@ -3352,6 +3397,41 @@ def test_a_prism_whose_window_closed_while_a_run_goes_on_lets_the_next_start_ope
             QThreadPool.globalInstance().waitForDone(30000)
 
 
+def test_main_lets_go_of_the_claim_when_its_loop_ends_without_a_close(tmp_path, monkeypatch):
+    """The program's event loop can end with the window never closed -- the application told to quit -- and the
+    claim is then the entry point's to let go: it holds the lock and the listener while the loop runs and has let go
+    of both as the loop returns, so that the next start of PRISM on its settings file opens a window of its own."""
+    from core.gui import __main__ as entry
+    from core.gui import one_instance, settings
+    from tests._fixtures import whole_program
+    qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    with whole_program() as (_app, window):
+        held, during = one_instance.current(), []
+        assert held is not None, "the whole program holds no claim"
+
+        class Loop:
+            """The program's event loop, as far as its end goes: it ends at once, the window never closed."""
+            def exec(self):
+                during.append(one_instance.current())
+                return 0
+
+        window.setAttribute(Qt.WA_DontShowOnScreen)
+        monkeypatch.setattr(entry, "build_app", lambda: (Loop(), window))
+        try:
+            assert entry.main() == 0
+            assert (during == [held], window.isVisible(), one_instance.current()) == (True, True, None), (
+                "the claim was not held while the loop ran, the window was closed, or the claim was not let go as "
+                "the loop ended")
+            again = one_instance.claim(settings.settings().fileName(), tries=1, pause_ms=0)
+            try:
+                assert again.case == "start", f"the next start was {again.case}"
+            finally:
+                again.release()
+        finally:
+            window.hide()
+
+
 def test_closing_the_window_lets_go_of_the_claim_while_a_figure_window_keeps_prism_running(tmp_path, monkeypatch):
     """A figure popped out of the window is a window of its own, with no parent, and keeps the program's event loop
     running after the window has closed. The lock and the listener are let go as the window's close is accepted,
@@ -3368,6 +3448,7 @@ def test_closing_the_window_lets_go_of_the_claim_while_a_figure_window_keeps_pri
     try:
         with whole_program() as (_app, window):
             held = one_instance.current()
+            assert held is not None, "the whole program holds no claim"
             _shown_off_screen(window)
             figure.show()
             runner = window.panel(ReductionPanel)
@@ -3391,6 +3472,33 @@ def test_closing_the_window_lets_go_of_the_claim_while_a_figure_window_keeps_pri
     finally:
         figure.hide()
         figure.deleteLater()
+
+
+def test_a_close_whose_settings_cannot_be_written_still_lets_go_of_the_claim(tmp_path, monkeypatch):
+    """The window writes its settings as a close is accepted and lets go of the claim after them. A disk that cannot
+    take the settings makes that write raise, and the claim is let go all the same: the window is closing, and a
+    claim kept would turn the next start of PRISM away for as long as a figure window left open, or anything else,
+    keeps the process alive. How the toolkit's binding reports the error is not asserted."""
+    from core.gui import one_instance, settings
+    from tests._fixtures import whole_program
+    qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    with whole_program() as (_app, window):
+        assert one_instance.current() is not None, "the whole program holds no claim"
+        _shown_off_screen(window)
+
+        def full_disk(_window):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(MainWindow, "_save_state", full_disk)
+        with contextlib.suppress(OSError):             # the binding reports the error itself, or hands it back here
+            window.close()
+        assert one_instance.current() is None, "a close whose settings could not be written kept the claim"
+        again = one_instance.claim(settings.settings().fileName(), tries=1, pause_ms=0)
+        try:
+            assert again.case == "start", f"the next start was {again.case}"
+        finally:
+            again.release()
 
 
 def test_bringing_the_window_forward_brings_the_question_open_over_it_first(monkeypatch):

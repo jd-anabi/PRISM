@@ -783,10 +783,13 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
-        self._save_state()
-        # The close is accepted: the lock and the listener are let go now, not when the event loop ends, which a
-        # figure popped out of the window keeps running, so that the next start of PRISM opens a window of its own.
-        one_instance.release()
+        try:
+            self._save_state()
+        finally:
+            # The close is accepted: the lock and the listener are let go now, not when the event loop ends, which a
+            # figure popped out of the window keeps running, so that the next start of PRISM opens a window of its
+            # own. Also when the settings cannot be written: a window that has closed must not keep the claim.
+            one_instance.release()
         super().closeEvent(event)
 
     def _save_state(self):
