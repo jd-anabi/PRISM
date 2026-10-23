@@ -13,7 +13,9 @@ THE BUG THESE LOCK DOWN
 
 Run:  pytest tests/test_figures.py
 """
+import ast
 import os
+import re
 import tempfile
 import sys
 from pathlib import Path
@@ -28,7 +30,7 @@ import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
 from core.gui.worker import WorkerSignals                         # noqa: E402
-from tests._fixtures import build_part, qt_app, pump              # noqa: E402
+from tests._fixtures import CODE_ROOTS, build_part, qt_app, pump  # noqa: E402
 import contextlib                                                  # noqa: E402
 
 # ── interactive "Pop out" for figures ────────────────────────────────────────────────────────────
@@ -822,3 +824,185 @@ def test_every_plotting_function_draws_under_the_windows_figure_settings(tmp_pat
     assert len(rendered) == len(names) and all(rendered), \
         f"{len(names)} figures named, and the pictures rendered hold {rendered} bytes"
     assert plt.get_fignums() == open_before, "a figure was left open"
+
+# ── the figure library across threads ────────────────────────────────────────────────────────────
+_FIGURE_LIBRARY_WORDS = frozenset({"matplotlib", "pyplot", "Figure"})
+
+def _figure_library_names(tree) -> list:
+    """``(line, word)``, in order, for every word of ``tree`` that names the figure library: ``matplotlib``,
+    ``pyplot``, ``Figure`` or a name that begins ``FigureCanvas``, met as a name, an attribute, a module or
+    a name imported (an import inside a function included), a name defined, a parameter or a keyword, or a
+    word of a string, docstrings among them. Comments are not in the tree and are not read."""
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            words = [node.id]
+        elif isinstance(node, ast.Attribute):
+            words = [node.attr]
+        elif isinstance(node, ast.ImportFrom):
+            words = (node.module or "").split(".")
+        elif isinstance(node, ast.alias):
+            words = node.name.split(".") + [node.asname or ""]
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            words = [node.name]
+        elif isinstance(node, (ast.arg, ast.keyword)):
+            words = [node.arg or ""]
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            words = re.findall(r"\w+", node.value)
+        else:
+            continue
+        found += [(node.lineno, word) for word in words
+                  if word in _FIGURE_LIBRARY_WORDS or word.startswith("FigureCanvas")]
+    return sorted(found)
+
+def test_the_run_page_draws_with_no_figure_library():
+    """The run's page, and every module under core/gui/run, draws with the toolkit's own painting and never
+    with the figure library. That library keeps one parser of math-style text for the whole process, with
+    no lock, so two threads laying out such text at once (a label between dollar signs, the tick labels of
+    a log axis) both fail: the window's draw raises or draws wrong pixels, and the figure that fails on the
+    other thread can be the one a run is saving inside its record (the prior's corner plot, whose labels
+    are math-style text, is saved inside the prior's). A run builds its figures on its own thread, so the
+    window's thread must never lay one out while a run is live.
+
+    What is read is the package's own source, off its syntax tree, not what importing it loads: the run's
+    controller, its history and its retry reach the engine, whose imports load the figure library anyway.
+    No module there names matplotlib, pyplot, Figure or a name that begins FigureCanvas, in an import (a
+    late one inside a function included), a name, an attribute or a string, its docstrings among them
+    (they say "the figure library"). The package is read when it exists; the scanner is checked on a
+    snippet first, so the walk cannot pass by reading nothing."""
+    snippet = ast.parse("\n".join([
+        "def draw(self):",
+        "    from matplotlib.figure import Figure",                       # 2: a late import, its module and name
+        "    canvas = FigureCanvasAgg(Figure())",                         # 3: two names
+        "    self.figure.canvas.draw()",                                  #    attributes, not the library's
+        '    library = importlib.import_module("matplotlib.pyplot")',     # 5: a string that names it
+        "    return pyplot.gcf()",                                        # 6: a name
+        "import matplotlib.pyplot as plt",                                # 7: an import
+        "from ..widgets.figure_stack import FigureStack",                 #    a module of the window's own
+        '"""Drawn by PRISM itself, with no figure library; the figures stay the page\'s."""',
+        "chart = backend.FigureCanvasBase",                               # 10: an attribute
+        "def fit(Figure=None): return dict(pyplot=1)",                    # 11: a parameter and a keyword
+    ]))
+    assert _figure_library_names(snippet) == [
+        (2, "Figure"), (2, "matplotlib"), (3, "Figure"), (3, "FigureCanvasAgg"), (5, "matplotlib"),
+        (5, "pyplot"), (6, "pyplot"), (7, "matplotlib"), (7, "pyplot"), (10, "FigureCanvasBase"),
+        (11, "Figure"), (11, "pyplot")], _figure_library_names(snippet)
+
+    repo = Path(__file__).resolve().parents[1]
+    package = repo / "core" / "gui" / "run"
+    found = {}
+    for py in sorted(package.rglob("*.py")) if package.is_dir() else []:
+        names = _figure_library_names(ast.parse(py.read_text(encoding="utf-8")))
+        if names:
+            found[py.relative_to(repo).as_posix()] = names
+    assert not found, (
+        "the run's package names the figure library, which would let the window's thread lay out a figure "
+        f"while a run builds one; draw with the toolkit's own painting instead: {found}")
+
+# How the library and its pyplot are spelled where a call is made on them.
+_LIBRARY_OWNERS = frozenset({"matplotlib", "mpl", "pyplot", "plt"})
+# The methods of rcParams that only read it.
+_RCPARAMS_READS = frozenset({"get", "copy", "keys", "values", "items", "find_all"})
+# The library's own functions that write its settings, read off its source: the first set under any
+# spelling, the second only as the library's (plt.rc, matplotlib.use), since names as short as rc or use
+# are common elsewhere. pyplot's colour-map shortcuts (plt.gray() and the rest) set the default colour map.
+_WRITES_BY_ANY_SPELLING = frozenset({"rc_context", "rcdefaults", "rc_file", "rc_file_defaults", "switch_backend",
+                                     "ion", "ioff", "xkcd"})
+_WRITES_OF_THE_LIBRARY = frozenset({"rc", "use", "interactive", "set_cmap", "autumn", "bone", "cool", "copper",
+                                    "flag", "gray", "hot", "hsv", "jet", "pink", "prism", "spring", "summer",
+                                    "winter", "magma", "inferno", "plasma", "viridis", "nipy_spectral"})
+
+def _last_name(node):
+    return node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
+
+def _figure_setting_writes(tree) -> list:
+    """``(line, what)``, in order, for every write in ``tree`` to the figure library's process-wide settings
+    and every call that reaches the window's theme, which writes them: an assignment into ``rcParams`` or a
+    deletion from it, a rebinding of ``rcParams`` itself, a call of a method of ``rcParams`` that does more
+    than read, a call of one of the library's own functions that write them, an import of one of those
+    under its short name, and a call of ``apply_mpl_theme`` or of the theme module's ``install``. A read is
+    none of these."""
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Subscript, ast.Attribute)) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            gone = isinstance(node.ctx, ast.Del)
+            if isinstance(node, ast.Subscript) and _last_name(node.value) == "rcParams":
+                found.append((node.lineno, "del rcParams[...]" if gone else "rcParams[...] ="))
+            elif isinstance(node, ast.Attribute) and node.attr == "rcParams":
+                found.append((node.lineno, "del rcParams" if gone else "rcParams ="))
+        elif isinstance(node, ast.ImportFrom):
+            module = (node.module or "").split(".")[-1]
+            shorts = (("use", "context") if module == "style" else ("install",) if module == "mpl_theme"
+                      else _WRITES_OF_THE_LIBRARY if module in _LIBRARY_OWNERS else ())
+            found += [(node.lineno, f"{module}.{alias.name}") for alias in node.names if alias.name in shorts]
+        elif isinstance(node, ast.Call):
+            name = _last_name(node.func)
+            owner = _last_name(node.func.value) if isinstance(node.func, ast.Attribute) else None
+            if owner == "rcParams" and name not in _RCPARAMS_READS:
+                found.append((node.lineno, f"rcParams.{name}"))
+            elif name in _WRITES_BY_ANY_SPELLING or name == "apply_mpl_theme":
+                found.append((node.lineno, name))
+            elif owner in _LIBRARY_OWNERS and name in _WRITES_OF_THE_LIBRARY:
+                found.append((node.lineno, f"{owner}.{name}"))
+            elif owner == "style" and name in ("use", "context"):
+                found.append((node.lineno, f"style.{name}"))
+            elif owner == "mpl_theme" and name == "install":
+                found.append((node.lineno, "mpl_theme.install"))
+    return sorted(found)
+
+def test_nothing_changes_the_figure_settings_but_the_windows_theme_as_it_starts():
+    """The figure library's settings are one table for the whole process, read by every figure as it is
+    built and as it is saved, so one thread's change to them reaches every other thread's figure: a figure
+    a run saves in its record would take colours, widths or a face it never asked for, and the window's
+    own figures likewise. So they are written in three places only, each before any run can start: the
+    window's theme, once, as the application is built (core/gui/app.py hands it the appearance and
+    core/gui/mpl_theme.py writes), and the drawing backend, which each entry module, core/__main__.py and
+    core/gui/__main__.py, chooses before any other import.
+
+    Read off the syntax tree of every module under the code roots: an assignment into rcParams or a
+    deletion from it, a call of any method of rcParams but those that only read, a call of one of the
+    library's own functions that write the settings (rc_context, rcdefaults, switch_backend, rc, use,
+    style.use, style.context and the others it has), an import of one of them under its short name, and a
+    call that reaches the window's theme. A read, plt.rcParams["axes.edgecolor"], is none of these; the
+    engine reads the settings in many places. The scanner is checked on a snippet first, and the tree must
+    hold these places and no other, so a walk that read nothing fails too."""
+    snippet = ast.parse("\n".join([
+        "import matplotlib",
+        "import matplotlib.pyplot as plt",
+        "from matplotlib import colors, rcParams",                                 #    names that only read
+        'edge = plt.rcParams["axes.edgecolor"]',                                   #    a read
+        'cycle = rcParams["axes.prop_cycle"].by_key()',                           #    a read, then a call on it
+        'width, every = matplotlib.rcParams.get("lines.linewidth"), dict(matplotlib.rcParams)',
+        'matplotlib.rcParams.update({"axes.edgecolor": "red"})',                   # 7
+        'plt.rcParams["axes.edgecolor"] = "red"',                                  # 8
+        'rcParams["lines.linewidth"] += 1',                                        # 9
+        'del plt.rcParams["axes.edgecolor"]',                                      # 10
+        'with matplotlib.rc_context({"axes.edgecolor": "red"}): pass',             # 11
+        'plt.rc("lines", linewidth=2)',                                            # 12
+        'plt.style.use("dark_background")',                                        # 13
+        'with plt.style.context("ggplot"): pass',                                  # 14
+        'plt.rcdefaults(); plt.switch_backend("QtAgg"); plt.ion(); plt.gray()',    # 15
+        'matplotlib.use("Agg")',                                                   # 16
+        "from matplotlib import rc",                                               # 17
+        "self.rc(1); tool.use(2); sheet.style.update(3); style.install(app); image.set_cmap('gray')",
+        "mpl_theme.apply_mpl_theme(); mpl_theme.install(appearance)",              # 19
+    ]))
+    assert _figure_setting_writes(snippet) == [
+        (7, "rcParams.update"), (8, "rcParams[...] ="), (9, "rcParams[...] ="), (10, "del rcParams[...]"),
+        (11, "rc_context"), (12, "plt.rc"), (13, "style.use"), (14, "style.context"), (15, "ion"),
+        (15, "plt.gray"), (15, "rcdefaults"), (15, "switch_backend"), (16, "matplotlib.use"),
+        (17, "matplotlib.rc"), (19, "apply_mpl_theme"), (19, "mpl_theme.install")], _figure_setting_writes(snippet)
+
+    repo = Path(__file__).resolve().parents[1]
+    found = {}
+    for py in sorted(p for root in CODE_ROOTS for p in (repo / root).rglob("*.py")):
+        writes = _figure_setting_writes(ast.parse(py.read_text(encoding="utf-8")))
+        if writes:
+            found[py.relative_to(repo).as_posix()] = [what for _line, what in writes]
+    assert found == {
+        "core/__main__.py": ["matplotlib.use"],                           # before any other import
+        "core/gui/__main__.py": ["matplotlib.use"],
+        "core/gui/app.py": ["mpl_theme.install"],                         # once, as the application is built
+        "core/gui/mpl_theme.py": ["rcParams.update", "apply_mpl_theme"],
+    }, ("the figure settings are written, or the window's theme is reached, somewhere else than where the "
+        f"window or the tool starts; one thread's change reaches every other thread's figure: {found}")
