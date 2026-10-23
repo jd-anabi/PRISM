@@ -474,6 +474,20 @@ def _reason(exc: BaseException) -> str:
     return type(exc).__name__ + (f": {said}" if said else "")
 
 
+@dataclass(frozen=True)
+class KeptNote:
+    """The kept training a stop or a failure of the training leaves, as the exception the training stage
+    re-raises carries it (``kept_fit``): its id, the passes kept, whether it was resumed from an earlier
+    process, whether this process saved a pass into it, and how many processes have trained it. Whoever
+    catches the stop reads it to ask whether to keep the training, to offer to resume it, and to say when
+    a resumed training was stopped before it kept anything new."""
+    id: str
+    passes: int
+    resumed: bool
+    saved_here: bool
+    processes: int
+
+
 class FitSession:
     """The kept record of one training: handed the fit at the end of every pass (it is the trainer's
     saver), it keeps the fit as a ``fit`` record of the store, records how the training stopped, and
@@ -793,6 +807,13 @@ class FitSession:
         if self._started is None:
             return self._wall_before
         return self._wall_before + (time.time() - self._started)
+
+    def kept_note(self) -> "KeptNote | None":
+        """The kept training this session leaves, for the stop or the failure the training stage raises;
+        None while no pass is kept."""
+        if not self._kept or self.id is None:
+            return None
+        return KeptNote(self.id, self.passes, self.resumed, self._saved_here, self.processes)
 
 
 # ── the listing ──────────────────────────────────────────────────────────────────────────────────

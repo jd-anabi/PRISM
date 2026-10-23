@@ -1973,7 +1973,7 @@ def test_a_window_stop_during_the_fit_keeps_every_pass_saved_before_it(tiny_run,
     core_logger = logging.getLogger("core")
     core_logger.addHandler(handler)
     try:
-        with pytest.raises(WorkerCancelled):
+        with pytest.raises(WorkerCancelled) as stopped:
             _train(r, 6, 3, name="fit_stopped_in_its_fit")
     finally:
         core_logger.removeHandler(handler)
@@ -1982,6 +1982,8 @@ def test_a_window_stop_during_the_fit_keeps_every_pass_saved_before_it(tiny_run,
     assert (row.fit_state, row.fit_passes) == ("kept when stopped", 2)
     assert torch.load(row.path / STATE, weights_only=False)["passes"] == 2
     assert torch.load(row.path / STATE_PREV, weights_only=False)["passes"] == 1
+    assert (stopped.value.kept_fit.id, stopped.value.kept_fit.passes) == (row.id, 2)
+    assert stopped.value.kept_fit.saved_here is True
     said = [text for text, _level in heard]
     assert "[fit] saved after pass 1." in said and any(text.startswith("[fit] epoch 1: ") for text in said), said
     assert any(text.startswith(f"[fit] the training stopped after pass 2 and is kept as fit {row.id}")
@@ -2140,3 +2142,50 @@ def test_an_epoch_record_that_cannot_be_written_is_skipped_and_a_stop_still_pass
     monkeypatch.setattr(train, "fit_epoch_line", interrupted)
     with pytest.raises(KeyboardInterrupt):
         toy.fit(toy.prepare(), saver=_Saves())
+
+
+def test_the_stop_the_training_stage_raises_names_the_training_it_kept(tiny_run, fits_left, monkeypatch):
+    """The stop or the failure the training stage raises carries the kept training it leaves, as
+    ``kept_fit``: its id, the passes kept, whether it was resumed, whether this process saved a pass, and
+    how many processes have trained it -- what the window needs to ask whether to keep the training and to
+    offer to resume it, which otherwise only the run's lines say. A stop and an error after the second
+    pass's save carry it; a stop before the first save carries none, nothing being kept; a kept training
+    resumed and stopped before it saved a pass in its new process carries the record as it was, with
+    nothing saved into it here; and a narrowing round's stop carries one, through the round's own entry."""
+    from core import orchestrator
+    from core.SBI import training_checkpoint
+    r = tiny_run
+    for exc, width in ((KeyboardInterrupt(), 6), (RuntimeError("the flow diverged"), 7)):
+        with monkeypatch.context() as patch:
+            _stop_after(patch, 2, exc)
+            with pytest.raises(type(exc)) as stopped:
+                _train(r, 6, width, name="fit_noted")
+        note = stopped.value.kept_fit
+        assert note == fit_state.KeptNote(note.id, 2, False, True, 1), note
+        assert note.id in {row.id for row in _new_fits(r, fits_left)} and _row(r, note.id).fit_passes == 2
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(train, "run_fit", interrupted)
+        with pytest.raises(KeyboardInterrupt) as stopped:
+            _train(r, 6, 8, name="fit_noted_never_saved")
+    assert not hasattr(stopped.value, "kept_fit"), stopped.value.kept_fit
+
+    kept = _keep(r, 7, 4, at=2, name="fit_noted_resumed")
+    with monkeypatch.context() as patch:
+        patch.setattr(training_checkpoint, "load_rows", interrupted)
+        with pytest.raises(KeyboardInterrupt) as stopped:
+            _resume(r, kept.id)
+    assert stopped.value.kept_fit == fit_state.KeptNote(kept.id, 2, True, False, 2), stopped.value.kept_fit
+
+    obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="fit_noted_round_obs")
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 1, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt) as stopped:
+            orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, obs, n_directions=1, num_runs=3, run_size_cap=8,
+                                     name="fit_noted_round", fig_sink=r.sink, store=r.store, **_TRAINING)
+    note = stopped.value.kept_fit
+    assert (note.passes, note.resumed, note.saved_here, note.processes) == (1, False, True, 1), note
+    assert r.store.get("fit", note.id).body["region"] is not None

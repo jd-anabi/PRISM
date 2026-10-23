@@ -1718,6 +1718,9 @@ def build_posterior(
             # Not a resume: a new training meeting a cache that does not match fails as it always has.
             if session is not None:
                 session.stopped(e)
+                note = session.kept_note()
+                if note is not None:
+                    e.kept_fit = note
             raise
         # A RESUME THAT CANNOT CONTINUE. Found once the rows were read back -- the simulation set no
         # longer matches its own record, or the split, the network or its standardisers rebuilt from
@@ -1729,6 +1732,13 @@ def build_posterior(
     except BaseException as e:
         if session is not None:
             session.stopped(e)
+            # The kept training a stop or a failure leaves rides on the exception itself, re-raised as it is
+            # (a ``raise ... from`` would hand on another exception, without it): whoever catches it -- the
+            # window, to ask whether to keep the training and to offer to resume it -- has its id and its
+            # passes, which otherwise only the run's lines and the store's listing say.
+            note = session.kept_note()
+            if note is not None:
+                e.kept_fit = note
         raise
     if session is not None:
         session.done(loaded.name or loaded.id)
