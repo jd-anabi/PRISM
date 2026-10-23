@@ -86,7 +86,7 @@ the build's state stands in four paragraphs, each as it was written on its date 
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
 
-**THE BUILD OF STAGE 3, TASKS 0 TO 3 (2026-10-23, about 09:35 to 16:30; a session started from the owner's pasted
+**THE BUILD OF STAGE 3, TASKS 0 TO 3 (2026-10-23, about 09:35 to 16:15 by `date`; a session started from the owner's pasted
 prompt `docs/superpowers/prompts/2026-10-23-window-redesign-stage-3-build.md`; the ledger's section "## Stage 3 — the run
 (build …)" has every figure, ruling and cost).** At the start: the tree clean at `6dd4f12`, no python alive, the card at
 the desktop's share (2,948 MiB), no `PRISM.lock`, the real `PRISM.ini` 3,296 bytes sha256 79BF94DF…C83E (unchanged at
