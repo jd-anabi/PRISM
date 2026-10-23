@@ -478,9 +478,9 @@ def _reason(exc: BaseException) -> str:
 class KeptNote:
     """The kept training a stop or a failure of the training leaves, as the exception the training stage
     re-raises carries it (``kept_fit``): its id, the passes kept, whether it was resumed from an earlier
-    process, whether this process saved a pass into it, and how many processes have trained it. Whoever
-    catches the stop reads it to ask whether to keep the training, to offer to resume it, and to say when
-    a resumed training was stopped before it kept anything new."""
+    process, whether this process saved a pass into it, and the processes that have trained it and saved a
+    pass, as its record counts them. Whoever catches the stop reads it to ask whether to keep the training,
+    to offer to resume it, and to say when a resumed training was stopped before it kept anything new."""
     id: str
     passes: int
     resumed: bool
@@ -810,10 +810,12 @@ class FitSession:
 
     def kept_note(self) -> "KeptNote | None":
         """The kept training this session leaves, for the stop or the failure the training stage raises;
-        None while no pass is kept."""
+        None while no pass is kept. Its processes are the ones its record counts: a resumed training this
+        process has saved no pass into is counted as the processes before this one left it."""
         if not self._kept or self.id is None:
             return None
-        return KeptNote(self.id, self.passes, self.resumed, self._saved_here, self.processes)
+        processes = self.processes - (1 if self.resumed and not self._saved_here else 0)
+        return KeptNote(self.id, self.passes, self.resumed, self._saved_here, processes)
 
 
 # ── the listing ──────────────────────────────────────────────────────────────────────────────────

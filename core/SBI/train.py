@@ -22,6 +22,7 @@ import sys
 import time
 import typing
 import warnings
+import weakref
 from typing import Callable, Sequence
 
 import torch
@@ -214,11 +215,11 @@ def fit_epoch_line(epoch: int, training_loss: float, validation_loss: float, sec
 
 def epochs_since_best(validation_losses: Sequence[float]) -> int:
     """The epochs since the best one, read from a fit's validation losses so far, the last entry being the
-    epoch just ended: counted back from the last entry to the first least loss that is a finite number, so
-    that a tie, or a loss that is not a finite number, is no improvement, as sbi counts its patience. With
-    no finite loss, the number of entries, which is what sbi's own count then reads; 0 with none. Read from
-    the history and kept nowhere, so it holds in a fit resumed in a new process, whose history comes back
-    with it."""
+    epoch just ended: counted back from the last entry to the first least loss that is a finite number. A
+    tie is no improvement, as sbi counts its patience, and a loss that is not a finite number is never the
+    best, minus infinity included (sbi would take that one as its best), as the kept training's record
+    counts it. With no finite loss, the number of entries; 0 with none. Read from the history and kept
+    nowhere, so it holds in a fit resumed in a new process, whose history comes back with it."""
     losses = [float(v) for v in validation_losses]
     finite = [i for i, v in enumerate(losses) if math.isfinite(v)]
     if not finite:
@@ -226,17 +227,34 @@ def epochs_since_best(validation_losses: Sequence[float]) -> int:
     return len(losses) - 1 - min(finite, key=lambda i: losses[i])
 
 
+# The trainers that have said an epoch's record could not be written: a training says it once, not at
+# every epoch. Held weakly, so that it keeps no trainer alive.
+_SKIP_SAID = weakref.WeakSet()
+
+
 def _announce(infer) -> None:
     """Say the pass sbi has just summarised in one record (``fit_epoch_line``), from the trainer's own
     histories: its number (sbi counts the pass only after the summary), its two losses, its time and the
     epochs since the best. It only reads -- it draws no random number and touches no tensor -- so a fit
-    computes the same with it or without it. A record that cannot be made is skipped: only an
-    ``Exception`` is caught, so a stop raised while it is said passes."""
+    computes the same with it or without it. A record that cannot be made is skipped, and the first one a
+    training skips is said in one warning instead, where the record would have been: said once the error
+    is handled, not while it is, since under the window a stop is taken at a record said in normal flow
+    and only carried past one said while an error is handled. Only an ``Exception`` is caught, so a stop
+    raised while either is said passes."""
     try:
         summary = infer._summary
         log.info(fit_epoch_line(infer.epoch + 1, summary["training_loss"][-1], summary["validation_loss"][-1],
                                 summary["epoch_durations_sec"][-1], epochs_since_best(summary["validation_loss"])))
-    except Exception:                                   # noqa: BLE001 -- a record is never a reason to stop a fit
+        return
+    except Exception as e:                              # noqa: BLE001 -- a record is never a reason to stop a fit
+        skipped = e
+    try:
+        if infer not in _SKIP_SAID:
+            _SKIP_SAID.add(infer)
+            said = " ".join(str(skipped).split())
+            log.warning(f"[fit] an epoch's record could not be written ({type(skipped).__name__}"
+                        + (f": {said}" if said else "") + "), so the epochs of this training are not all said.")
+    except Exception:                                   # noqa: BLE001 -- nor is the word that one was skipped
         pass
 
 

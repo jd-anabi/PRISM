@@ -2077,17 +2077,22 @@ def test_the_epoch_record_changes_nothing_the_fit_computes(monkeypatch, tmp_path
 
 def test_epochs_since_the_best_is_read_from_the_history_and_holds_across_a_resume(monkeypatch, tmp_path, caplog):
     """The epochs since the best one are read from the validation losses so far, never counted by the
-    record itself: back from the last entry to the first least loss that is a finite number, a tie or a
-    loss that is not a finite number being no improvement, as sbi counts its patience; with no finite loss,
-    every epoch so far. So a fit stopped at its best pass and resumed in a fresh trainer from what its saver
-    kept says each epoch after the stop as the same fit says it uninterrupted (the seconds aside): each a
-    count that a record keeping its own would have started again from nothing. The pass the stop came with
-    is said by neither part: the stop is raised by its save, and its record would come after it."""
-    nan = float("nan")
+    record itself: back from the last entry to the first least loss that is a finite number. A tie is no
+    improvement, as sbi counts its patience, and a loss that is not a finite number, minus infinity
+    included, is never the best, as the kept training's record counts it; with no finite loss, every epoch
+    so far. So a fit stopped at its best pass and resumed in a fresh trainer from what its saver kept says
+    each epoch after the stop as the same fit says it uninterrupted (the seconds aside): each a count that a
+    record keeping its own would have started again from nothing. The pass the stop came with is said by
+    neither part: the stop is raised by its save, and its record would come after it."""
+    nan, minus_infinity = float("nan"), float("-inf")
     assert train.epochs_since_best([3.0, 2.0, 2.5, 2.0, nan]) == 3
+    assert train.epochs_since_best([5.0, minus_infinity, 6.0]) == 2
     assert train.epochs_since_best([]) == 0
     assert train.epochs_since_best([nan, nan]) == 2
     assert train.epochs_since_best([1.0]) == 0
+    for history in ([3.0, 2.0, 2.5, 2.0, nan], [5.0, minus_infinity, 6.0]):
+        kept = fit_state._progress({"summary": {"validation_loss": history}, "passes": len(history)}, 0.0, 1)
+        assert kept["passes_since_best"] == train.epochs_since_best(history), history
 
     toy = _toy(monkeypatch, tmp_path)
     caplog.set_level(logging.INFO, logger="core")
@@ -2137,10 +2142,21 @@ def test_a_trainer_with_no_per_pass_summary_trains_with_one_warning(caplog):
 
 def test_an_epoch_record_that_cannot_be_written_is_skipped_and_a_stop_still_passes(monkeypatch, tmp_path, caplog):
     """An epoch's record that cannot be made is skipped and the fit trains to its end, saved after every
-    pass as before: the record is the fit's account, never a reason to stop it. A stop raised while the
+    pass as before: the record is the fit's account, never a reason to stop it. The first record a training
+    skips is said in one warning naming the error, and no later one is, however many epochs it skips; the
+    next training says its own. The warning is said where the record would have been, once the error is
+    handled, so that under the window a stop is taken there as it is at the record. A stop raised while the
     record is made (a Ctrl-C, the window's Stop: no ordinary error) is not caught, and stops the fit."""
     toy = _toy(monkeypatch, tmp_path)
     caplog.set_level(logging.INFO, logger="core")
+    warned = []
+
+    class _Warned(logging.Handler):
+        """Each warning of the training call, with whether a stop would be taken where it is said."""
+
+        def emit(self, record):
+            if record.name == "core.SBI.train" and record.levelno == logging.WARNING:
+                warned.append((record.getMessage(), not runs.cancel_is_deferred()))
 
     def unwritable(*args, **kwargs):
         raise ValueError("the record cannot be made")
@@ -2149,11 +2165,20 @@ def test_an_epoch_record_that_cannot_be_written_is_skipped_and_a_stop_still_pass
         raise KeyboardInterrupt
 
     monkeypatch.setattr(train, "fit_epoch_line", unwritable)
-    torch.manual_seed(0)
-    prepared, saves = toy.prepare(), _Saves()
-    toy.fit(prepared, saver=saves)
-    epochs = prepared.infer._summary["epochs_trained"][-1]
-    assert epochs > 1 and saves.passes() == list(range(1, epochs + 1)), (epochs, saves.passes())
+    said = ("[fit] an epoch's record could not be written (ValueError: the record cannot be made), so the "
+            "epochs of this training are not all said.", True)
+    handler = _Warned()
+    logging.getLogger("core").addHandler(handler)
+    try:
+        for training in (1, 2):
+            torch.manual_seed(0)
+            prepared, saves = toy.prepare(), _Saves()
+            toy.fit(prepared, saver=saves)
+            epochs = prepared.infer._summary["epochs_trained"][-1]
+            assert epochs > 1 and saves.passes() == list(range(1, epochs + 1)), (epochs, saves.passes())
+            assert warned == [said] * training, warned
+    finally:
+        logging.getLogger("core").removeHandler(handler)
     assert _epoch_records(caplog) == []
     monkeypatch.setattr(train, "fit_epoch_line", interrupted)
     with pytest.raises(KeyboardInterrupt):
@@ -2163,11 +2188,13 @@ def test_an_epoch_record_that_cannot_be_written_is_skipped_and_a_stop_still_pass
 def test_the_stop_the_training_stage_raises_names_the_training_it_kept(tiny_run, fits_left, monkeypatch):
     """The stop or the failure the training stage raises carries the kept training it leaves, as
     ``kept_fit``: its id, the passes kept, whether it was resumed, whether this process saved a pass, and
-    how many processes have trained it -- what the window needs to ask whether to keep the training and to
-    offer to resume it, which otherwise only the run's lines say. A stop and an error after the second
-    pass's save carry it; a stop before the first save carries none, nothing being kept; a kept training
-    resumed and stopped before it saved a pass in its new process carries the record as it was, with
-    nothing saved into it here; and a narrowing round's stop carries one, through the round's own entry."""
+    the processes that have trained it and saved a pass, as its record counts them -- what the window needs
+    to ask whether to keep the training and to offer to resume it, which otherwise only the run's lines
+    say. A stop and an error after the second pass's save carry it; a stop before the first save carries
+    none, nothing being kept; a kept training resumed and stopped before it saved a pass in its new process
+    carries the record as it was, with nothing saved into it here and its one process; the same training
+    resumed again and stopped once a pass is saved in that process counts two; and a narrowing round's stop
+    carries one, through the round's own entry."""
     from core import orchestrator
     from core.SBI import training_checkpoint
     r = tiny_run
@@ -2194,7 +2221,14 @@ def test_the_stop_the_training_stage_raises_names_the_training_it_kept(tiny_run,
         patch.setattr(training_checkpoint, "load_rows", interrupted)
         with pytest.raises(KeyboardInterrupt) as stopped:
             _resume(r, kept.id)
-    assert stopped.value.kept_fit == fit_state.KeptNote(kept.id, 2, True, False, 2), stopped.value.kept_fit
+    assert stopped.value.kept_fit == fit_state.KeptNote(kept.id, 2, True, False, 1), stopped.value.kept_fit
+    assert r.store.get("fit", kept.id).body["progress"]["processes"] == 1
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 3, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt) as stopped:
+            _resume(r, kept.id)
+    assert stopped.value.kept_fit == fit_state.KeptNote(kept.id, 3, True, True, 2), stopped.value.kept_fit
+    assert r.store.get("fit", kept.id).body["progress"]["processes"] == 2
 
     obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="fit_noted_round_obs")
     with monkeypatch.context() as patch:
