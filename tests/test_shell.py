@@ -1901,14 +1901,14 @@ def test_only_the_known_pages_read_the_card_when_first_opened(monkeypatch):
 
 
 def test_every_panel_of_the_built_parts_has_its_place():
-    """Every kind of panel any part of the window holds is found by the window's ``panel`` in a window that has built
-    nothing but Home: asking for the kind builds the part that holds it, and no part that does not, and hands back
-    a panel of that kind standing in that part. The kinds are found by walking each part's widgets, not by the
-    window's own lists, so a kind of panel held by a part those lists do not name is seen too. A part that cannot be
-    built stands as an error page and hides its panels, so every part is required to be built."""
+    """Every kind of panel any part of the window holds is found by the window's ``panel``, each kind in a window of
+    its own that has built nothing but Home: asking for the kind builds the part that holds it, and no part that does
+    not, and hands back a panel of that kind standing in that part. The kinds are found by walking each part's
+    widgets, not by the window's own lists, so a kind of panel held by a part those lists do not name is seen too. A
+    part that cannot be built stands as an error page and hides its panels, so every part is required to be built."""
     from core.gui.panels.base_panel import BasePanel
     qt_app()
-    every, fresh = build_window(), build_window()
+    every = build_window()
     held = {}                                          # each kind of panel, with the keys of the parts holding one
     for place in keys.PARTS:
         part = every.part(place.key)
@@ -1918,6 +1918,9 @@ def test_every_panel_of_the_built_parts_has_its_place():
     assert len(held) >= 10, f"the walk found only {sorted(kind.__name__ for kind in held)}"
     wrong = []
     for kind, parts in held.items():
+        # a window of its own: in one window shared by every kind, a part built for an earlier kind would hand over
+        # every later kind it holds without the window's list of the part each kind stands in being read
+        fresh = build_window()
         before = set(fresh.built_parts())
         found = fresh.panel(kind)
         built = set(fresh.built_parts()) - before

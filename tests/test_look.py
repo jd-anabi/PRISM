@@ -6503,9 +6503,9 @@ def test_the_rail_marks_exactly_one_row():
     other, the bar as wide as the look's bar on whole device pixels down the whole row but for the open part's
     hairlines, which lie over the row's top or bottom edge where the row stands at the top or the bottom of the
     open part, the tint from the bar to the rail's right edge; and with no place open the rail shows no tint and
-    no accent at all. Every part is
-    tried, every step of parameter inference and that part with no step, at four scalings in both themes; then
-    once with the steps' states shown, where the step in hand wears the accent in its marker."""
+    no accent at all. Every part is tried, every step of parameter inference and that part with no step, at four
+    scalings in both themes; then once with the steps' states shown, where the step in hand wears the accent in
+    its marker."""
     with _railed() as held:
         rail, kit = held.rail, held.kit
         places = [(place.key, None) for place in kit.keys.PARTS] + [("inference", place.key) for place in kit.keys.STEPS]
