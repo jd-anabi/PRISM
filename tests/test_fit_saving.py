@@ -30,6 +30,7 @@ import linecache
 import logging
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -845,6 +846,12 @@ def _said(text: str, level: str, prefix: str) -> list:
     return [line.split(f" {level} ", 1)[1] for line in text.splitlines() if f" {level} {prefix}" in line]
 
 
+def _said_but_epochs(text: str, level: str, prefix: str) -> list:
+    """``_said`` without the records of each epoch's numbers (they begin ``[fit] epoch ``): what the
+    training says about saving it, which the lists that use this hold whole."""
+    return [said for said in _said(text, level, prefix) if not said.startswith("[fit] epoch ")]
+
+
 def _posterior_names(r) -> set:
     return {s.name for s in r.store.list("posterior")}
 
@@ -1081,7 +1088,7 @@ def test_without_a_kept_simulation_set_nothing_is_saved_and_the_run_says_so(tiny
     assert _added_folders(r, fits_left) == []
     training = post.manifest.body["training"]
     assert training["fit_id"] is None and training["fit_wall_seconds"] is None
-    assert _said(_log(post), "info", "[fit] ") == [
+    assert _said_but_epochs(_log(post), "info", "[fit] ") == [
         "[fit] the simulation set is not kept (checkpointing off), so this training is not saved as it goes "
         "and cannot be resumed."]
     generated = []
@@ -1107,7 +1114,7 @@ def test_save_fit_false_saves_nothing(tiny_run, fits_left, monkeypatch):
     torch.manual_seed(5)
     off = _train(r, 3, 6, save_fit=False, name="fit_unsaved")
     assert saved == []
-    assert _said(_log(off), "info", "[fit] ") == [
+    assert _said_but_epochs(_log(off), "info", "[fit] ") == [
         "[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."]
     assert off.manifest.body["training"]["fit_id"] is None
     torch.manual_seed(5)
@@ -1276,7 +1283,7 @@ def test_a_narrowing_rounds_kept_fit_names_its_observation_and_parent_posterior(
                                        save_fit=False, name="fit_round_unsaved", fig_sink=r.sink,
                                        store=r.store, **_TRAINING)
     assert _added_folders(r, fits_left) == [row.dir_name]
-    assert _said(_log(unsaved), "info", "[fit] ") == [
+    assert _said_but_epochs(_log(unsaved), "info", "[fit] ") == [
         "[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."]
 
 
@@ -1919,3 +1926,217 @@ def test_a_kept_narrowing_round_resumes_in_its_own_region(tiny_run, kept_once, f
     assert post.manifest.body["truncation"] == kept.body["region"]
     assert dict(post.manifest.parents) == dict(kept.parents)
     assert post.manifest.body["training"]["resumed_fit"] is True and _new_fits(r, fits_left) == []
+
+
+# ── the record of each epoch ─────────────────────────────────────────────────────────────────────────
+# Each epoch of a fit (a pass, in the lines about saving it) is said in one record of the run, once sbi has
+# summarised it and, when the fit is saved as it goes, once it is saved: its number, its two losses, the
+# seconds it took and the epochs since the best one. Under the window every record is where a requested
+# stop is taken, which is why the record comes after the save and never before it.
+_EPOCH_LINE = re.compile(r"\[fit\] epoch (\d+): training loss (\S+), validation loss (\S+), took (\S+) s, "
+                         r"epochs since the best (\d+)$")
+
+
+def _epoch_records(caplog) -> list:
+    """The epoch records the training call said since the capture was last read, in order, the seconds
+    each took left out (they differ from run to run); the capture is then cleared."""
+    said = [re.sub(r", took \S+ s,", ", took _ s,", rec.getMessage()) for rec in caplog.records
+            if rec.name == "core.SBI.train" and rec.getMessage().startswith("[fit] epoch ")]
+    caplog.clear()
+    return said
+
+
+def test_a_window_stop_during_the_fit_keeps_every_pass_saved_before_it(tiny_run, fits_left, monkeypatch):
+    """A Stop pressed in the window while a pass of the fit is being trained lands at the first record
+    after that pass is saved: the training is kept with every pass finished before the stop landed, the
+    one that was in progress included. Requested here from sbi's own summary of the second pass, before
+    that pass is saved, as a click lands while the pass runs. Under the window every record is where a
+    requested stop is taken, so any record said between the summary and the save -- the epoch's own above
+    all -- would stop the training with its second pass unsaved. The record that carries the stop is never
+    delivered: the window hears the first pass's saved line and its epoch line, then the line that says
+    the training is kept, and neither line of the second pass. Driven through the window's own channel, as
+    the test of a Cancel pressed during a save is."""
+    from core.gui.streams import CancelToken, WorkerCancelled, _PumpLogHandler
+    r = tiny_run
+    token = CancelToken()
+    token.arm()
+    heard = []
+    handler = _PumpLogHandler(types.SimpleNamespace(sink=lambda kind, payload: heard.append(payload)), token)
+    summarize = SNPE._summarize_epoch
+
+    def summarize_then_stop(self, *args, **kwargs):
+        summarize(self, *args, **kwargs)
+        if self.epoch + 1 == 2:
+            token.requested.set()                       # Stop pressed during pass 2; nothing has taken it yet
+
+    monkeypatch.setattr(SNPE, "_summarize_epoch", summarize_then_stop)
+    core_logger = logging.getLogger("core")
+    core_logger.addHandler(handler)
+    try:
+        with pytest.raises(WorkerCancelled):
+            _train(r, 6, 3, name="fit_stopped_in_its_fit")
+    finally:
+        core_logger.removeHandler(handler)
+    assert token.fired is True
+    row, = _new_fits(r, fits_left)
+    assert (row.fit_state, row.fit_passes) == ("kept when stopped", 2)
+    assert torch.load(row.path / STATE, weights_only=False)["passes"] == 2
+    assert torch.load(row.path / STATE_PREV, weights_only=False)["passes"] == 1
+    said = [text for text, _level in heard]
+    assert "[fit] saved after pass 1." in said and any(text.startswith("[fit] epoch 1: ") for text in said), said
+    assert any(text.startswith(f"[fit] the training stopped after pass 2 and is kept as fit {row.id}")
+               for text in said), said
+    assert "[fit] saved after pass 2." not in said, said
+    assert not any(text.startswith("[fit] epoch 2: ") for text in said), said
+
+
+def test_the_epoch_record_says_each_epochs_numbers_once(tiny_run, fits_left):
+    """A training saved after every pass says each epoch in one record of its log, numbered from one, on
+    the line right after the one that says its pass is saved: the training and the validation loss as the
+    posterior's loss curves hold them, the seconds the epoch took, to one decimal, and the epochs since the
+    best one, read from the validation losses so far. The fit has room to end by its patience, so that
+    epochs come after the best one."""
+    r = tiny_run
+    post = _train(r, 6, 2, max_num_epochs=30, name="fit_epochs_said")
+    lines = _log(post).splitlines()
+    epochs = post.manifest.body["training"]["epochs_trained"]
+    said = _said(_log(post), "info", "[fit] epoch ")
+    assert len(said) == epochs, said
+    curves = np.load(post.path / "loss.npz")
+    counts = []
+    for n, record in enumerate(said, start=1):
+        got = _EPOCH_LINE.match(record)
+        assert got is not None, record
+        number, training, validation, took, since = got.groups()
+        assert int(number) == n, record
+        assert (training, validation) == (f"{curves['training_loss'][n - 1]:.6g}",
+                                          f"{curves['validation_loss'][n - 1]:.6g}"), record
+        assert re.fullmatch(r"\d+\.\d", took), record
+        assert int(since) == train.epochs_since_best(curves["validation_loss"][:n]), record
+        counts.append(int(since))
+        saved = next(i for i, line in enumerate(lines) if line.endswith(f" info [fit] saved after pass {n}."))
+        assert lines[saved + 1].endswith(f" info {record}"), (n, lines[saved:saved + 2])
+    assert max(counts) > 0, f"every epoch improved on the ones before ({counts}): no count was read back"
+
+
+def test_the_epoch_record_comes_without_a_saver_too(tiny_run, fits_left):
+    """A training that is not saved as it goes (its simulation set not kept) says each epoch all the
+    same, one record per epoch, numbered from one: the record waits on a save only when there is one."""
+    r = tiny_run
+    post = _train(r, 2, 8, checkpoint_every=0, name="fit_epochs_unsaved")
+    said = _said(_log(post), "info", "[fit] epoch ")
+    epochs = post.manifest.body["training"]["epochs_trained"]
+    assert [int(_EPOCH_LINE.match(record).group(1)) for record in said] == list(range(1, epochs + 1)), said
+    assert _added_folders(r, fits_left) == []
+
+
+def test_the_epoch_record_changes_nothing_the_fit_computes(monkeypatch, tmp_path, caplog):
+    """The record of each epoch only reads: from the same seed, a fit that says its epochs and the same fit
+    with the record replaced by nothing end with the same weights, the same best weights and the same loss
+    histories, and leave the random stream in the same place -- saved as it goes or not. So a fit never
+    interrupted computes exactly what it computed before the record was said."""
+    toy = _toy(monkeypatch, tmp_path)
+    caplog.set_level(logging.INFO, logger="core")
+
+    def fit(saving: bool):
+        torch.manual_seed(0)
+        prepared = toy.prepare(hooks=saving)
+        toy.fit(prepared, saver=_Saves() if saving else None)
+        return prepared.infer, torch.get_rng_state()
+
+    for saving in (True, False):
+        said, said_stream = fit(saving)
+        assert len(_epoch_records(caplog)) == said._summary["epochs_trained"][-1], saving
+        with monkeypatch.context() as patch:
+            patch.setattr(train, "_announce", lambda infer: None)
+            silent, silent_stream = fit(saving)
+        assert _epoch_records(caplog) == [], saving
+        assert _history(said) == _history(silent), saving
+        assert _unequal(said._neural_net.state_dict(), silent._neural_net.state_dict()) == [], saving
+        assert _unequal(said._best_model_state_dict, silent._best_model_state_dict) == [], saving
+        assert torch.equal(said_stream, silent_stream), f"the record drew a random number (saving={saving})"
+
+
+def test_epochs_since_the_best_is_read_from_the_history_and_holds_across_a_resume(monkeypatch, tmp_path, caplog):
+    """The epochs since the best one are read from the validation losses so far, never counted by the
+    record itself: back from the last entry to the first least loss that is a finite number, a tie or a
+    loss that is not a finite number being no improvement, as sbi counts its patience; with no finite loss,
+    every epoch so far. So a fit stopped at its best pass and resumed in a fresh trainer from what its saver
+    kept says each epoch after the stop as the same fit says it uninterrupted (the seconds aside): each a
+    count that a record keeping its own would have started again from nothing. The pass the stop came with
+    is said by neither part: the stop is raised by its save, and its record would come after it."""
+    nan = float("nan")
+    assert train.epochs_since_best([3.0, 2.0, 2.5, 2.0, nan]) == 3
+    assert train.epochs_since_best([]) == 0
+    assert train.epochs_since_best([nan, nan]) == 2
+    assert train.epochs_since_best([1.0]) == 0
+
+    toy = _toy(monkeypatch, tmp_path)
+    caplog.set_level(logging.INFO, logger="core")
+    torch.manual_seed(0)
+    whole = toy.prepare()
+    toy.fit(whole, saver=_Saves())
+    uninterrupted = _epoch_records(caplog)
+    losses = whole.infer._summary["validation_loss"]
+    stop = losses.index(min(losses)) + 1                # the best pass: every pass after it counts on from it
+    assert len(uninterrupted) == len(losses) > stop, (stop, uninterrupted)
+
+    torch.manual_seed(0)
+    before = _Saves(stop_after=stop)
+    with pytest.raises(_Stopped):
+        toy.fit(toy.prepare(), saver=before)
+    assert _epoch_records(caplog) == uninterrupted[:stop - 1]
+    snapshot, start = before.read()
+    torch.manual_seed(999)
+    toy.fit(toy.prepare(), saver=_Saves(), resume=(start, snapshot))
+    resumed = _epoch_records(caplog)
+    assert resumed == uninterrupted[stop:], (stop, resumed, uninterrupted)
+    assert all(int(_EPOCH_LINE.match(record).group(5)) > 0 for record in resumed), resumed
+
+
+def test_the_epoch_line_is_written_as_the_window_reads_it():
+    """The record of an epoch, word for word: the window reads its numbers back from this text."""
+    assert train.fit_epoch_line(12, -3.41274, -3.39812, 3541.2, 0) == (
+        "[fit] epoch 12: training loss -3.41274, validation loss -3.39812, took 3541.2 s, epochs since the best 0")
+
+
+def test_a_trainer_with_no_per_pass_summary_trains_with_one_warning(caplog):
+    """A trainer with no per-pass summary to wrap (an sbi other than the one pinned) is not wrapped: a fit
+    not saved as it goes trains all the same, with one warning that no record is said per epoch. Saving one
+    as it goes needs that summary and is refused, as the trainer is built for it (the test of the trainer's
+    hook points) and here again."""
+    caplog.set_level(logging.INFO, logger="core")
+    assert train._wrap_summary(types.SimpleNamespace(), None) is False
+    said = [(rec.levelname, rec.getMessage()) for rec in caplog.records if rec.name == "core.SBI.train"]
+    assert said == [("WARNING", "[fit] this sbi's trainer has no per-pass summary to read, so no line is "
+                                "written per epoch.")], said
+    with pytest.raises(RuntimeError, match="has no _summarize_epoch,"):
+        train._wrap_summary(types.SimpleNamespace(), _Saves())
+    caplog.clear()
+    assert train._wrap_summary(types.SimpleNamespace(_summarize_epoch=lambda *a, **k: None), None) is True
+    assert [rec for rec in caplog.records if rec.name == "core.SBI.train"] == []
+
+
+def test_an_epoch_record_that_cannot_be_written_is_skipped_and_a_stop_still_passes(monkeypatch, tmp_path, caplog):
+    """An epoch's record that cannot be made is skipped and the fit trains to its end, saved after every
+    pass as before: the record is the fit's account, never a reason to stop it. A stop raised while the
+    record is made (a Ctrl-C, the window's Stop: no ordinary error) is not caught, and stops the fit."""
+    toy = _toy(monkeypatch, tmp_path)
+    caplog.set_level(logging.INFO, logger="core")
+
+    def unwritable(*args, **kwargs):
+        raise ValueError("the record cannot be made")
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(train, "fit_epoch_line", unwritable)
+    torch.manual_seed(0)
+    prepared, saves = toy.prepare(), _Saves()
+    toy.fit(prepared, saver=saves)
+    epochs = prepared.infer._summary["epochs_trained"][-1]
+    assert epochs > 1 and saves.passes() == list(range(1, epochs + 1)), (epochs, saves.passes())
+    assert _epoch_records(caplog) == []
+    monkeypatch.setattr(train, "fit_epoch_line", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        toy.fit(toy.prepare(), saver=_Saves())

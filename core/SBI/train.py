@@ -8,19 +8,21 @@ the generation machinery go through the pipeline MODULE OBJECT at call time (``_
 ``pipeline.winsorize_summary_block`` is honoured here too.
 
 The training call comes in two halves, so that a fit kept partway can be put back between them:
-``prepare_fit`` appends one round's rows to the trainer, ``run_fit`` runs sbi's own passes. With a
-saver, the fit is handed to it at the end of every pass, through the trainer's per-pass summary;
+``prepare_fit`` appends one round's rows to the trainer, ``run_fit`` runs sbi's own passes. Every
+pass ends in the trainer's per-pass summary, which is wrapped: with a saver the fit is handed to it
+there, and then the pass is said in one record (``fit_epoch_line``), after its save.
 ``restore_trainer`` puts a kept pass back onto a fresh trainer in a new process. sbi's private
 bookkeeping is read and written here and nowhere else in the program.
 """
 import contextlib
 import inspect
+import logging
 import math
 import sys
 import time
 import typing
 import warnings
-from typing import Callable
+from typing import Callable, Sequence
 
 import torch
 from tqdm import tqdm
@@ -32,6 +34,8 @@ from torch.distributions.transforms import Transform
 
 from core.SBI import fit_state
 from core.SBI import pipeline as _pipeline
+
+log = logging.getLogger(__name__)
 
 
 import dataclasses
@@ -191,6 +195,63 @@ class _NoTracker:
 
     def flush(self):
         pass
+
+
+# ── the record of each epoch ────────────────────────────────────────────────────────────────────────
+# Every pass of a fit (an epoch, on screen) is said in one record once sbi has summarised it and, when the
+# fit is saved as it goes, once it is saved: the window and the command line follow a fit by these, and the
+# run's log keeps them. sbi reports its curves to a tracker only after its loop has ended, so they are the
+# fit's only account while it runs. None of these functions is in the code a kept fit's identity names:
+# they only read, and a rewording of the record must not make a kept fit unresumable.
+def fit_epoch_line(epoch: int, training_loss: float, validation_loss: float, seconds: float,
+                   since_best: int) -> str:
+    """The record of one epoch, as the window reads it back: its number, counted from one, its training
+    and validation losses to six significant digits, the seconds it took to one decimal, and the epochs
+    since the best one."""
+    return (f"[fit] epoch {int(epoch)}: training loss {float(training_loss):.6g}, validation loss "
+            f"{float(validation_loss):.6g}, took {float(seconds):.1f} s, epochs since the best {int(since_best)}")
+
+
+def epochs_since_best(validation_losses: Sequence[float]) -> int:
+    """The epochs since the best one, read from a fit's validation losses so far, the last entry being the
+    epoch just ended: counted back from the last entry to the first least loss that is a finite number, so
+    that a tie, or a loss that is not a finite number, is no improvement, as sbi counts its patience. With
+    no finite loss, the number of entries, which is what sbi's own count then reads; 0 with none. Read from
+    the history and kept nowhere, so it holds in a fit resumed in a new process, whose history comes back
+    with it."""
+    losses = [float(v) for v in validation_losses]
+    finite = [i for i, v in enumerate(losses) if math.isfinite(v)]
+    if not finite:
+        return len(losses)
+    return len(losses) - 1 - min(finite, key=lambda i: losses[i])
+
+
+def _announce(infer) -> None:
+    """Say the pass sbi has just summarised in one record (``fit_epoch_line``), from the trainer's own
+    histories: its number (sbi counts the pass only after the summary), its two losses, its time and the
+    epochs since the best. It only reads -- it draws no random number and touches no tensor -- so a fit
+    computes the same with it or without it. A record that cannot be made is skipped: only an
+    ``Exception`` is caught, so a stop raised while it is said passes."""
+    try:
+        summary = infer._summary
+        log.info(fit_epoch_line(infer.epoch + 1, summary["training_loss"][-1], summary["validation_loss"][-1],
+                                summary["epoch_durations_sec"][-1], epochs_since_best(summary["validation_loss"])))
+    except Exception:                                   # noqa: BLE001 -- a record is never a reason to stop a fit
+        pass
+
+
+def _wrap_summary(infer, saver) -> bool:
+    """Whether the fit wraps the trainer's per-pass summary, where each pass is handed to the saver and
+    said in a record: True when the trainer has one. A trainer without one (an sbi other than the one
+    pinned) cannot save a fit as it goes, so with a ``saver`` it is refused (``_require_hook_points``; a
+    trainer built for saving was refused so already); without one the fit trains all the same, and one
+    warning says that no record is said per epoch."""
+    if callable(getattr(infer, "_summarize_epoch", None)):
+        return True
+    if saver is not None:
+        _require_hook_points(infer)
+    log.warning("[fit] this sbi's trainer has no per-pass summary to read, so no line is written per epoch.")
+    return False
 
 
 # ── the fit's settings, as sbi will use them ────────────────────────────────────────────────────────
@@ -545,14 +606,18 @@ def run_fit(prepared: PreparedFit, *, batch_size: int, learning_rate: float, sto
     """sbi's own passes over the prepared rows; returns sbi's density estimator.
 
     ``resume`` is ``(start, state)`` of a kept fit: it is put back onto the trainer first and sbi
-    continues it. With a ``saver`` the fit is handed to it at the end of every pass.
+    continues it. With a ``saver`` the fit is handed to it at the end of every pass. Every pass then
+    ends with one record of its numbers (``fit_epoch_line``), said after the pass's save.
     """
     infer = prepared.infer
-    # The passes are sbi's own. With a saver, the trainer's per-pass summary is wrapped: once sbi has
-    # summarised a pass, and before it counts it, the saver is handed a way to take the fit as it stands
-    # with what was fixed when it began. The window's Cancel is taken where sbi prints the pass's line,
-    # just after, so a stop loses no finished pass. A stopped fit continues from its last saved pass in a
-    # new process: the pass is put back onto a fresh trainer holding the same rows, and sbi resumes.
+    # The passes are sbi's own. The trainer's per-pass summary is wrapped whenever it has one, saver or
+    # not: once sbi has summarised a pass, and before it counts it, the saver (when there is one) is
+    # handed a way to take the fit as it stands with what was fixed when it began, and then the pass is
+    # said in one record. Under the window every record is where a Cancel is taken. With a saver it is
+    # taken at the first record after the pass's save, the "[fit] saved" line, so a stop loses no
+    # finished pass; without one, at the pass's own record, which loses the pass in progress, since
+    # nothing is kept. A stopped fit continues from its last saved pass in a new process: the pass is put
+    # back onto a fresh trainer holding the same rows, and sbi resumes.
     # Plain Python numbers: sbi 0.26 type-checks these strictly, and a numpy or tensor scalar would be
     # refused here, after the generation. Any error from the fit is a FAILURE, not a refusal: sbi
     # reports a non-finite loss as a ValueError, which the front ends read as a check made before
@@ -566,7 +631,7 @@ def run_fit(prepared: PreparedFit, *, batch_size: int, learning_rate: float, sto
         if resume is not None:
             restore_trainer(infer, kept_start, state, settings=prepared.settings)
             knobs["resume_training"] = True
-        if saver is not None:
+        if _wrap_summary(infer, saver):
             summarize = infer._summarize_epoch
             begun = {}                                  # the start, made at the first save
 
@@ -584,10 +649,13 @@ def run_fit(prepared: PreparedFit, *, batch_size: int, learning_rate: float, sto
 
             def _summarize_epoch(*args, **kwargs):
                 summarize(*args, **kwargs)
-                saver.save_pass(take)
+                if saver is not None:
+                    saver.save_pass(take)
+                _announce(infer)
 
             infer._summarize_epoch = _summarize_epoch
             hooked = True
+        if saver is not None:
             # Read last, just before sbi's training method, whose first draw is the train/validation
             # split: this state draws the same split again when the fit is resumed.
             split_rng = None if kept_start is not None else torch.get_rng_state()
@@ -625,10 +693,11 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
         count; ``num_bins`` the spline bins (NSF only); ``learning_rate`` /
         ``stop_after_epochs`` / ``max_num_epochs`` / ``batch_size`` sbi's fit-loop knobs;
         ``show_train_summary`` prints sbi's per-epoch loss table.
-    :param tracker: what sbi reports its per-epoch curves to; None (every PRISM caller) =
-        ``_NoTracker``, which discards them instead of letting sbi write ``<cwd>/sbi-logs``. Any object
-        following sbi's ``Tracker`` protocol (``log_metric(name, value, step)``, ``flush()`` and the
-        rest) is handed to sbi as is.
+    :param tracker: what sbi reports the fit's curves to; None (every PRISM caller) = ``_NoTracker``,
+        which discards them instead of letting sbi write ``<cwd>/sbi-logs``. Any object following sbi's
+        ``Tracker`` protocol (``log_metric(name, value, step)``, ``flush()`` and the rest) is handed to
+        sbi as is. sbi hands a tracker its curves only after its loop has ended; the per-epoch record is
+        the run's line for each epoch.
     :param fit_saver: handed the fit at the end of every pass (a ``FitSaver``); None saves nothing.
     :param fit_resume: ``(start, state)`` of a kept fit, which the fit continues instead of starting.
     :return: the trained ``DirectPosterior`` -- ``(posterior, diagnostics)`` when
