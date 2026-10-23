@@ -431,9 +431,17 @@ class ArtifactWriter:
         self._wrote_anything = True
         return p
 
-    def fig_sink(self, forward=None):
+    def fig_sink(self, forward=None, *, optional: bool = False):
         """A ``(title, fig) -> None`` sink that saves the PNG here and THEN forwards to the GUI's sink
-        (which closes the figure after rendering, base_panel._png_fig_sink) or closes it itself."""
+        (which closes the figure after rendering, base_panel._png_fig_sink) or closes it itself.
+
+        ``optional`` makes it the sink of a figure the record can be saved without. An ``Exception`` from
+        its save then takes the figure back out of the record -- its path out of the list, a part-written
+        file off the disk -- and one from the forward leaves the figure, saved whole, in it; either way the
+        figure is closed, ``figure_lost`` says what failed, and the record goes on. A stop (a
+        ``BaseException`` that is not an ``Exception``) passes, as from the default sink, which every other
+        figure keeps: there a figure that fails fails its stage.
+        """
         def _sink(title, fig):
             from matplotlib import pyplot as plt
             from core.Helpers.visualizers import save_figure
@@ -442,7 +450,48 @@ class ArtifactWriter:
                 forward(title, fig)
             else:
                 plt.close(fig)
-        return _sink
+        if not optional:
+            return _sink
+
+        def _optional(title, fig):
+            from matplotlib import pyplot as plt
+            from core.Helpers.visualizers import save_figure
+            listed = len(self._figures)
+            try:
+                save_figure(fig, self.figure_path(title), dpi=110, bbox_inches="tight")
+            except Exception as e:                  # noqa: BLE001 -- the figure, never the record
+                for rel in self._figures[listed:]:
+                    with contextlib.suppress(OSError):
+                        (self.dir / rel).unlink(missing_ok=True)
+                del self._figures[listed:]
+                plt.close(fig)
+                self.figure_lost(title, "saved", e)
+                return
+            try:
+                if forward is not None:
+                    forward(title, fig)
+                else:
+                    plt.close(fig)
+            except Exception as e:                  # noqa: BLE001 -- saved whole; only showing it failed
+                plt.close(fig)
+                self.figure_lost(title, "shown", e)
+        return _optional
+
+    def figure_lost(self, title: str, what: str, exc: BaseException) -> None:
+        """Say, in one ``PreflightWarning`` naming this record, that its figure ``title`` could not be
+        ``what`` ("drawn", "saved" or "shown") and why; its filter says a second one in a session too. A
+        figure not shown is saved with the record, and one not drawn or not saved is not in it; when the
+        record holds ``loss.npz``, the warning says that it holds the curves (the training's loss figure,
+        the one figure a stage hands an optional sink, draws them)."""
+        said = " ".join(str(exc).split())
+        why = type(exc).__name__ + (f": {said}" if said else "")
+        if what == "shown":
+            then = f"it is saved with the {self.kind}."
+        else:
+            then = (f"the {self.kind} is saved without it"
+                    + (", and loss.npz holds its curves" if "loss.npz" in self._payloads else "") + ".")
+        warnings.warn(f"The figure {title!r} of {self.kind} {self.id} could not be {what} ({why}); {then}",
+                      PreflightWarning, stacklevel=2)
 
     def __enter__(self):
         self.dir.mkdir(parents=True, exist_ok=False)

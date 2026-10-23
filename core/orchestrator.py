@@ -1673,9 +1673,16 @@ def build_posterior(
                     best_validation_loss=float(_best if _best is not None else float("nan")),
                     epochs_trained=int(diag.get("epochs_trained") or -1),
                     stop_after_epochs=int(diag.get("stop_after_epochs") or -1)))
-                fig_loss = visualizers.plot_training_loss(diag)
-                if fig_loss is not None:
-                    w.fig_sink(fig_sink)("Training loss", fig_loss)
+                # A figure the posterior can be saved without, since loss.npz holds its curves: one that cannot
+                # be drawn, saved or shown costs a warning, never the trained posterior. A stop still passes.
+                loss_sink = w.fig_sink(fig_sink, optional=True)
+                try:
+                    fig_loss = visualizers.plot_training_loss(diag)
+                except Exception as _e:              # noqa: BLE001 -- the figure, never the training
+                    w.figure_lost("Training loss", "drawn", _e)
+                else:
+                    if fig_loss is not None:
+                        loss_sink("Training loss", fig_loss)
             w.parents = {"prior": prior.id}
             if ckpt_dir is not None:
                 w.parents["simulation"] = ckpt_dir.name

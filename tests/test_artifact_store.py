@@ -6018,3 +6018,60 @@ def test_the_choice_for_a_taken_name_reaches_only_the_record_written_at_the_end(
         assert (str(refused.value), refused.value.field) == (
             "if_name_taken must be 'refuse' or 'unnamed', not 'later'", None)
         assert seen == {}, f"the choice was checked after the run began: {seen}"
+
+
+def test_a_loss_figure_that_cannot_be_drawn_saved_or_shown_costs_the_posterior_nothing(store, monkeypatch):
+    """The training's loss figure is one its posterior can be saved without: loss.npz holds its curves. A
+    figure that cannot be drawn, saved (a part-written file left behind) or shown (the window's sink
+    failing) costs one warning naming the posterior and what failed, never the trained posterior: it is
+    written and loads, its manifest lists only figures on its disk, loss.npz is there, and the warning is in
+    its log.txt. A figure saved whole and then not shown stays with it. A stop raised while the figure is
+    shown is no ordinary failure: it passes, and no posterior is written. Every other figure keeps the
+    writer's default, where a figure that fails fails its stage (the test of the writer's sink)."""
+    from core import orchestrator
+    from core.gui.streams import WorkerCancelled
+    from core.Helpers import visualizers
+    from core.refusals import PreflightWarning
+    from tests._fixtures import stubbed_training
+    tr = stubbed_training(store, monkeypatch)
+    shown = tr.budget["fig_sink"]
+
+    def undrawable(diagnostics):
+        raise RuntimeError("the curve could not be drawn")
+
+    def half_saved(fig, target, **kwargs):
+        Path(target).write_bytes(b"half a picture")
+        raise OSError("No space left on device")
+
+    def unshowable(title, fig):
+        raise RuntimeError("the window's figure was deleted")
+
+    def stopped(title, fig):
+        raise WorkerCancelled()
+
+    without = "the posterior is saved without it, and loss.npz holds its curves."
+    for what, patched, sink, then, figures in (
+            ("drawn", ("plot_training_loss", undrawable), shown,
+             f"RuntimeError: the curve could not be drawn); {without}", []),
+            ("saved", ("save_figure", half_saved), shown, f"OSError: No space left on device); {without}", []),
+            ("shown", None, unshowable, "RuntimeError: the window's figure was deleted); it is saved with the posterior.",
+             ["figures/training_loss.png"])):
+        with monkeypatch.context() as patch:
+            if patched is not None:
+                patch.setattr(visualizers, *patched)
+            with pytest.warns(PreflightWarning, match=f"could not be {what}"):
+                post = orchestrator.build_posterior(tr.cfg, tr.prior, None, True, name=f"loss_not_{what}",
+                                                    num_runs=2, **{**tr.budget, "fig_sink": sink})
+        m = store.get("posterior", post.id)
+        assert store.load_posterior(tr.cfg, post.id).id == post.id, what
+        assert m.figures == figures and "loss.npz" in m.payloads and (post.path / "loss.npz").is_file(), what
+        folder = post.path / "figures"
+        on_disk = sorted(f"figures/{p.name}" for p in folder.iterdir()) if folder.is_dir() else []
+        assert on_disk == figures, (what, on_disk)
+        assert (f" warning PreflightWarning: The figure 'Training loss' of posterior {post.id} could not be {what} "
+                f"({then}") in (post.path / "log.txt").read_text(encoding="utf-8"), what
+    before = {s.id for s in store.list("posterior")}
+    with pytest.raises(WorkerCancelled):
+        orchestrator.build_posterior(tr.cfg, tr.prior, None, True, name="loss_stopped", num_runs=2,
+                                     **{**tr.budget, "fig_sink": stopped})
+    assert {s.id for s in store.list("posterior")} == before
