@@ -144,9 +144,10 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         # Passed, never written to config: orchestrator does `from .config import TRAINING_NUM_RUNS`,
         # so setting the constant here would be a silent no-op and the run would use the default.
         # On a load `v` is empty: every knob stays at its default of None, which the load branch
-        # never reads.
+        # never reads. A name another posterior takes while this one trains is dropped, not refused: the
+        # posterior is saved under its id and the run says so, so the training is never lost to it.
         self.dispatch(orchestrator.build_posterior, cfg, self.session.inf_prior,
-                      entry, is_new, accept=accept, new_run=new_run,
+                      entry, is_new, accept=accept, new_run=new_run, if_name_taken="unnamed",
                       provide_fig_sink=True, on_result=self._on_posterior, **v)
 
     def _read_inputs(self, is_new: bool) -> dict:

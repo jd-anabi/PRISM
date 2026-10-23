@@ -2189,3 +2189,27 @@ def test_the_stop_the_training_stage_raises_names_the_training_it_kept(tiny_run,
     note = stopped.value.kept_fit
     assert (note.passes, note.resumed, note.saved_here, note.processes) == (1, False, True, 1), note
     assert r.store.get("fit", note.id).body["region"] is not None
+
+
+def test_a_posterior_whose_name_was_taken_during_its_fit_is_saved_unnamed_when_asked_and_its_kept_training_goes(
+        tiny_run, fits_left, monkeypatch):
+    """Asked to, the training stage writes a posterior whose name another posterior took while it trained
+    without that name, under its id, and its log says so; the kept training it was saved as goes, as it goes
+    for every posterior written. Not asked, the write refuses the name, as before, and the finished training
+    stays kept, to be resumed under another name (the test of a finished training resumed)."""
+    from tests._fixtures import _posterior_artifact
+    r = tiny_run
+    real = fit_state.FitSession.save_pass
+
+    def save_pass(self, take):
+        real(self, take)
+        if self.passes == 1:
+            _posterior_artifact(r.store, r.cfg, name="fit_taken_meanwhile")      # another posterior takes the name
+
+    monkeypatch.setattr(fit_state.FitSession, "save_pass", save_pass)
+    post = _train(r, 6, 5, name="fit_taken_meanwhile", if_name_taken="unnamed")
+    assert post.name == "" and r.store.get("posterior", "fit_taken_meanwhile").id != post.id
+    assert (f" warning PreflightWarning: the name 'fit_taken_meanwhile' was taken by another posterior while this "
+            f"run was going, so this posterior is saved without a name, under its id {post.id}; it can be named "
+            f"afterwards.") in _log(post)
+    assert post.manifest.body["training"]["fit_id"] is not None and _new_fits(r, fits_left) == []

@@ -154,10 +154,12 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
             # one string, and the yellow box could never be opened for it.
             self._on_error(e, traceback.format_exc())
             return
+        # A name another posterior takes while the round trains is dropped, not refused: the round's
+        # posterior is saved under its id and the run says so.
         self.dispatch(orchestrator.tsnpe_round, s.cfg, s.posterior, s.inf_prior, obs,
                       n_directions=v["n_directions"], level=v["hpd_level"],
                       num_runs=v["num_runs"], run_size_cap=v["run_size_cap"],
-                      new_run=self.new_run.isChecked(),
+                      new_run=self.new_run.isChecked(), if_name_taken="unnamed",
                       provide_fig_sink=True, on_result=self._on_round)
         self.new_run.setChecked(False)
 

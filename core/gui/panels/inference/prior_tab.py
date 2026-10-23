@@ -240,8 +240,10 @@ class PriorPanel(_StagePanel):
         # PRIOR_SWEEP_ITERATIONS, ...`, so assigning to the constants here would be a silent no-op.
         # Unclamped and undefaulted: _read_inputs already refused a blank or out-of-rule box. On a
         # load `knobs` is empty and the stage resolves every None to its config.py default -- its
-        # load branch (`if not build_new and ref is not None:`) never reads them.
-        self.dispatch(orchestrator.build_prior, cfg, entry, is_new,
+        # load branch (`if not build_new and ref is not None:`) never reads them. A name another prior
+        # takes while this one is swept is dropped, not refused: the prior is saved under its id and the
+        # run says so, so the sweep is never lost to it.
+        self.dispatch(orchestrator.build_prior, cfg, entry, is_new, if_name_taken="unnamed",
                       provide_fig_sink=True, on_result=self._on_prior, **knobs)
 
     def _read_inputs(self, is_new: bool) -> dict:

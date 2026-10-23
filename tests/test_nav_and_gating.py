@@ -579,6 +579,8 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     pp._build_prior()
     k = cap["kwargs"]
     assert (k["min_cluster_size"], k["min_samples"], k["num_iterations"]) == (9, 4, 3), k
+    # a name another prior takes during the sweep is dropped, not refused: the window asks the stage so
+    assert k["if_name_taken"] == "unnamed", k
     assert _cfg.PRIOR_CLUSTER_MIN_SIZE != 9, "the panel wrote PRIOR_CLUSTER_MIN_SIZE"
     # a blank knob box is REFUSED at the click (the yellow box), never clamped to 2 and dispatched
     refused = []
@@ -1171,6 +1173,8 @@ def test_the_infer_tab_dispatches_the_compositions(tmp_path):
     assert cap["kwargs"]["provide_fig_sink"] is True
     assert cap["kwargs"]["on_result"] == panel._on_observation
     assert cap["kwargs"]["accept"] is None, "an amortized posterior dispatches no Accept"
+    # the observation's name, should another observation take it during the run, is dropped, not refused
+    assert cap["kwargs"]["if_name_taken"] == "unnamed", cap["kwargs"]
 
     # experimental, chi: one passive recording + the probe pairs, as a RecordingSet
     passive = tmp_path / "passive.npy"
@@ -1196,6 +1200,7 @@ def test_the_infer_tab_dispatches_the_compositions(tmp_path):
                                                         (str(probes[1]), 11.0))
     assert rec.T_obs_s == 2.0 and cap["kwargs"]["provide_fig_sink"] is True
     assert cap["kwargs"]["accept"] is None, "an amortized posterior dispatches no Accept"
+    assert cap["kwargs"]["if_name_taken"] == "unnamed", cap["kwargs"]
 
     # a NON-AMORTIZED posterior with the box ticked -- the consent travels on both branches
     inf.session.posterior = _posterior_stub(truncation=object(), x_obs_digest="d" * 16)
@@ -1248,6 +1253,8 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
     assert seen["num_runs"] == 2 and seen["run_size_cap"] == 8, seen
     assert seen["prior"] is inf.session.inf_prior, seen
     assert sent["fn"] is orchestrator.build_posterior and sent["kwargs"]["new_run"] is True
+    # a name another posterior takes during the training is dropped, not refused: the window asks so
+    assert sent["kwargs"]["if_name_taken"] == "unnamed", sent["kwargs"]
     assert sent["kwargs"]["num_runs"] == 2 and sent["kwargs"]["run_size_cap"] == 8
 
     # answered no: nothing is dispatched at all
@@ -1358,6 +1365,8 @@ def test_the_tsnpe_tab_dispatches_a_loaded_observation(monkeypatch):
     assert cap["kwargs"]["num_runs"] == 3 and cap["kwargs"]["run_size_cap"] == 8
     assert cap["kwargs"]["new_run"] is False and cap["kwargs"]["provide_fig_sink"] is True
     assert "store" not in cap["kwargs"], "the GUI names no store; build_app installs the default"
+    # a name another posterior takes during the round is dropped, not refused: the window asks so
+    assert cap["kwargs"]["if_name_taken"] == "unnamed", cap["kwargs"]
 
     # ticked: the consent travels, and the box clears itself so it cannot silently persist
     cap.clear()

@@ -467,7 +467,10 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             self._refusal(e)
             return
         branch = self._branch()
-        common = dict(accept=self._accept(), provide_fig_sink=True, on_result=self._on_observation)
+        # Both compositions hand the choice for a taken name to the observation they write: should another
+        # observation take its name during the run, it is saved under its id, not refused.
+        common = dict(accept=self._accept(), if_name_taken="unnamed", provide_fig_sink=True,
+                      on_result=self._on_observation)
         if branch == "simulated":
             direct = self.cell_source.is_direct()
             # ONE flow: the composition in orchestrator carries the ignored-cell note, the T_obs range

@@ -3329,7 +3329,7 @@ class _EntryStore:
         if self.case == "boom":
             _raise_injected()
 
-    def create(self, kind, cfg, *, name="", note=""):
+    def create(self, kind, cfg, *, name="", note="", if_name_taken="refuse"):
         self._handed(cfg)
         return _EntryWriter()
 
@@ -5845,3 +5845,176 @@ def test_load_observation_refuses_a_payload_that_disagrees_with_its_manifest(sto
     assert "compared the MANIFEST, not this row" in str(e.value)
     assert e.value.field == "observation", "the same key as the width Refusal above it"
     assert isinstance(e.value, Refusal), "a StoreError is a Refusal: the front ends route it as one"
+
+
+# ── a name taken while a run goes on ─────────────────────────────────────────────────────────────────
+# Three kinds are written at the end of a spend -- a prior after its sweep, a posterior after its training,
+# an observation after its simulation -- so another record of the kind (another window, the command line)
+# can take the name meanwhile, after the stage's entry found it free. Asked to, the write then saves the
+# record without the name rather than lose the spend; the window asks, the command line never does.
+
+
+def test_a_name_taken_during_the_run_is_refused_or_dropped_as_asked(store):
+    """By default the write refuses a name another record of the kind holds, as every stage's entry
+    does. Asked to drop it, it makes the record without a name, saved under its id, and says so in one
+    warning naming the name, the kind and the id; a name that is no name at all is still refused, a free
+    one is kept, and nothing is said. The choice is the calling code's, never a person's, so one it does
+    not know is refused with no field to name; and a record written as its run goes holds its name from
+    its first moment, so dropping that name at its end is refused too."""
+    import warnings
+    from core.refusals import PreflightWarning
+    held = _make(store, "posterior", name="taken", body=_post_body())
+    for asked in ({}, {"if_name_taken": "refuse"}):
+        with pytest.raises(st.StoreError, match="already exists") as refused:
+            store.create("posterior", None, name="taken", **asked)
+        assert refused.value.field == "name", asked
+    with pytest.warns(PreflightWarning) as said:
+        w = store.create("posterior", None, name="taken", if_name_taken="unnamed")
+    assert [str(x.message) for x in said] == [
+        f"the name 'taken' was taken by another posterior while this run was going, so this posterior is saved "
+        f"without a name, under its id {w.id}; it can be named afterwards."]
+    with w:
+        w.body = _post_body()
+        w.payload("results.json").write_text("{}", encoding="utf-8")
+    assert (w.name, w.dir.name) == ("", f"_unnamed__{w.id}")
+    assert store.get("posterior", w.id).name == "" and store.get("posterior", "taken").id == held.id
+    for bad, why in (("no spaces", "bad artifact name"), (held.id, "shaped like an artifact id")):
+        with pytest.raises(st.StoreError, match=why) as refused:
+            store.create("posterior", None, name=bad, if_name_taken="unnamed")
+        assert refused.value.field == "name", bad
+    with warnings.catch_warnings(record=True) as quiet:
+        warnings.simplefilter("always")
+        free = store.create("posterior", None, name="free", if_name_taken="unnamed")
+    assert free.name == "free" and [x for x in quiet if issubclass(x.category, PreflightWarning)] == []
+    for kind, value, words in (
+            ("posterior", "later", "if_name_taken must be 'refuse' or 'unnamed', not 'later'"),
+            ("fdt", "unnamed", "if_name_taken='unnamed' does not apply to the kind 'fdt': its record is written "
+                               "as its run goes and holds its name from its first moment.")):
+        with pytest.raises(st.StoreError) as refused:
+            store.create(kind, None, if_name_taken=value)
+        assert (str(refused.value), refused.value.field) == (words, None), kind
+
+
+def test_a_prior_a_posterior_and_an_observation_whose_name_was_taken_meanwhile_are_saved_unnamed(
+        store, monkeypatch):
+    """Asked to, each of the three stages writes its record without a name another record of the kind
+    took while it spent, under its id: the record is finished and loads, its log holds the warning that
+    says so, and the other record keeps the name. Not asked, each refuses the name at that write, after its
+    spend, as before. Each refuses a choice it does not know at its entry, before it spends anything. The
+    sweep and the training are stand-ins; the observation's simulation runs, its name taken as it begins.
+    A real training, whose kept training then goes as for any posterior written, is the test of a posterior
+    named meanwhile among the tests of a training saved as it goes."""
+    from core import orchestrator
+    from core.refusals import PreflightWarning
+    from tests._fixtures import stubbed_training
+    tr = stubbed_training(store, monkeypatch)
+    fake_training = orchestrator.pipeline.train_nn
+    real_simulation = orchestrator.pipeline.gen_obs
+    cfg, ocfg = _nad_cfg(), _forced_cfg()
+    width = int(mf.conditioning_block(ocfg)["width"])
+    spent = []
+
+    def prior(name, **asked):
+        def sweep(model, t, global_batch_size, local_batch_size, segs, prior_bounds, **kw):
+            spent.append("prior")
+            if name:
+                _prior_artifact(store, cfg, name=name)               # another prior takes the name meanwhile
+            return _gmm_in_box([float(b[0]) for b in prior_bounds], [float(b[1]) for b in prior_bounds],
+                               kw.get("log_mask"))
+
+        with monkeypatch.context() as patch:
+            patch.setattr(orchestrator.pipeline, "gen_prior", sweep)
+            return orchestrator.build_prior(cfg, None, True, name=name, fig_sink=_close, num_iterations=1,
+                                            **asked)
+
+    def posterior(name, **asked):
+        def training(plan, **kw):
+            spent.append("posterior")
+            if name:
+                _posterior_artifact(store, tr.cfg, name=name)        # another posterior takes the name meanwhile
+            return fake_training(plan, **kw)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(orchestrator.pipeline, "train_nn", training)
+            return orchestrator.build_posterior(tr.cfg, tr.prior, None, True, name=name, num_runs=2,
+                                                **tr.budget, **asked)
+
+    def observation(name, **asked):
+        def simulation(*args, **kwargs):
+            if "observation" not in spent:
+                spent.append("observation")
+                if name:                                             # another observation takes the name
+                    _obs_artifact(store, ocfg, name=name, x_obs=torch.zeros(1, width, dtype=torch.float64))
+            return real_simulation(*args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(orchestrator.pipeline, "gen_obs", simulation)
+            return orchestrator.generate_observations(ocfg, name=name, fig_sink=_close, **asked)
+
+    for kind, stage in (("prior", prior), ("posterior", posterior), ("observation", observation)):
+        name = f"{kind}_taken_meanwhile"
+        spent.clear()
+        with pytest.warns(PreflightWarning, match="was taken by another"):
+            made = stage(name, if_name_taken="unnamed")
+        other = store.get(kind, name)
+        assert spent == [kind] and made.name == "" and made.id != other.id, (kind, spent)
+        assert store.get(kind, made.id).name == "" and made.path.name == f"_unnamed__{made.id}", kind
+        assert (f" warning PreflightWarning: the name {name!r} was taken by another {kind} while this run was "
+                f"going, so this {kind} is saved without a name, under its id {made.id}; it can be named "
+                f"afterwards.") in (made.path / "log.txt").read_text(encoding="utf-8"), kind
+        again = f"{kind}_taken_again"
+        spent.clear()
+        with pytest.raises(st.StoreError, match="already exists") as refused:
+            stage(again)
+        assert refused.value.field == "name" and spent == [kind], (kind, spent)
+        assert [s.name for s in store.list(kind) if s.name == again] == [again], kind
+        spent.clear()
+        with pytest.raises(st.StoreError) as refused:
+            stage("", if_name_taken="later")
+        assert (str(refused.value), refused.value.field) == (
+            "if_name_taken must be 'refuse' or 'unnamed', not 'later'", None), kind
+        assert spent == [], (kind, spent)
+
+
+def test_the_choice_for_a_taken_name_reaches_only_the_record_written_at_the_end(store, monkeypatch):
+    """An inference made together with its observation hands the choice for a name taken during the run to
+    its observation's stage alone: the inference's own name is checked again once the observation is
+    written and is refused there as before, which costs one observation and no training. A narrowing round
+    hands it to the training stage, which writes the round's posterior. Each hands it on only when it is
+    given, so the stage's own default stays the one place it is written down, and each refuses a choice it
+    does not know at its entry, before anything is simulated, drawn or trained."""
+    from core import orchestrator
+    from core.config import CELL_PATH
+    from core.SBI.observations import RecordingSet
+    seen = {}
+    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: seen.update(observation=k) or "OBS")
+    monkeypatch.setattr(orchestrator, "build_experiment_observation",
+                        lambda c, r, **k: seen.update(observation=k) or "OBS")
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: seen.update(inference=k) or "INF")
+    monkeypatch.setattr(orchestrator, "build_truncation_region", lambda *a, **k: seen.update(region=k) or "REGION")
+    monkeypatch.setattr(orchestrator, "build_posterior", lambda *a, **k: seen.update(training=k) or "CHILD")
+    cfg = _nad_cfg()
+    cell = str(CELL_PATH / "nadrowski" / "master_weak.txt")
+    rec = RecordingSet(spont="x.npy", T_obs_s=1.0)
+    calls = (
+        (lambda **k: orchestrator.simulated_inference(cfg, _sim_post(), 1.0, cell=cell, store=store, **k),
+         "observation", "inference"),
+        (lambda **k: orchestrator.experimental_inference(cfg, _sim_post(), rec, store=store, **k),
+         "observation", "inference"),
+        (lambda **k: orchestrator.tsnpe_round(cfg, _sim_post(), _prior_stub(), _experimental_obs(cfg), store=store,
+                                              **k),
+         "training", "region"),
+    )
+    for call, handed, not_handed in calls:
+        seen.clear()
+        call(if_name_taken="unnamed")
+        assert seen[handed]["if_name_taken"] == "unnamed" and "if_name_taken" not in seen[not_handed], seen
+        seen.clear()
+        call()
+        assert "if_name_taken" not in seen[handed], seen
+        seen.clear()
+        with pytest.raises(st.StoreError) as refused:
+            call(if_name_taken="later")
+        assert (str(refused.value), refused.value.field) == (
+            "if_name_taken must be 'refuse' or 'unnamed', not 'later'", None)
+        assert seen == {}, f"the choice was checked after the run began: {seen}"

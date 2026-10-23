@@ -46,6 +46,7 @@ from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import thin_ticks as _thin_ticks
 from .artifacts import (LoadedPrior, LoadedPosterior, LoadedObservation, LoadedCalibration,
                         LoadedInference, resolve_store)
+from .artifacts.store import check_if_name_taken
 from .artifacts.provenance import inputs_from_cfg as _inputs_from_cfg
 from .artifacts.provenance import file_ref as _file_ref
 # Every public stage below works on a private copy of its config. RUN_BOUNDARY_FILES keeps a
@@ -125,7 +126,7 @@ def _parent_fisher_eigenvalues(parent_posterior) -> list[float] | None:
 # ── Step 1: Synthetic data ──────────────────────────────────────────────────
 @public_entry
 def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig_sink=None,
-                          store=None) -> LoadedObservation:
+                          store=None, if_name_taken: str = "refuse") -> LoadedObservation:
     """
     Simulate a ground-truth observation matching experimental conditions, and WRITE it as an
     observation artifact (the trace figure, the payload, and a manifest carrying the source cell,
@@ -134,9 +135,15 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
     Simulates at fine ND resolution (dt_nd_min, stable for EM), then downsamples
     to match the physical sampling rate dt_exp and duration T_obs — exactly
     mirroring what the training loop produces.
+
+    ``if_name_taken``: "refuse" (the default) or "unnamed", what the write at the end does with a name
+    another observation took while this one was simulated (the entry found it free): refused, as the
+    entry refuses one, or dropped, the observation saved without a name, under its id, with a warning
+    that says so. The window asks for "unnamed"; the command line never does.
     """
     store = resolve_store(store)
     store.assert_name_free("observation", name)      # before the simulation, not at the write
+    check_if_name_taken(if_name_taken)
     t = cfg.t  # full pre-simulated ND time vector at dt_nd_min
 
     # Ground-truth rescale and forcing params as (1, n) tensors
@@ -286,18 +293,20 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
                     if (cfg.has_forcing and not cfg.chi_mode) else {})
     return _write_observation(store, cfg, name, note, fig_sink, obs_stats, x_dim, t_dim,
                               title="Ground-truth trace", source=source, forcing_vals=forcing_vals,
-                              simulated_f_scale=simulated_f_scale)
+                              simulated_f_scale=simulated_f_scale, if_name_taken=if_name_taken)
 
 
 @public_entry
 def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: str = "", note: str = "",
-                                 fig_sink=None, store=None) -> LoadedObservation:
+                                 fig_sink=None, store=None, if_name_taken: str = "refuse") -> LoadedObservation:
     """A bench recording set -> the observation artifact. Every file is checked and hashed BEFORE any
     compute (a blank or missing recording is a Refusal naming that recording's field here, not a
     traceback inside a worker), then the mode's builder runs -- refusing a bad drive before any lock-in
-    -- and the artifact records the recordings, the drive and the context."""
+    -- and the artifact records the recordings, the drive and the context. ``if_name_taken`` is
+    ``generate_observations``'s."""
     store = resolve_store(store)
     store.assert_name_free("observation", name)      # with the file checks, before any compute
+    check_if_name_taken(if_name_taken)
     named = [(rec.spont, "spont", None)] + [(p, "forced", f) for p, f in rec.forced]
     # The field each role answers to, for the front ends' tables: the passive recording, forced mode's
     # one driven recording, or a chi probe's recording (picked in the probe table).
@@ -355,20 +364,22 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
               "forcing_params_si": None if rec.forcing_params_si is None else
               {k: float(v) for k, v in rec.forcing_params_si.items()}}
     return _write_observation(store, cfg, name, note, fig_sink, obs_stats, obs_data, t_dim,
-                              title="Observed trace", source=source, forcing_vals=forcing_vals)
+                              title="Observed trace", source=source, forcing_vals=forcing_vals,
+                              if_name_taken=if_name_taken)
 
 
 def _write_observation(store, cfg, name, note, fig_sink, x_obs, obs_data, t_dim, *, title, source, forcing_vals,
-                       simulated_f_scale: float | None = None):
+                       simulated_f_scale: float | None = None, if_name_taken: str = "refuse"):
     """The one write site for both observation stages: the payload, the trace figure, and the manifest
     carrying the mode, the conditioning geometry, the digest, the context and the source. Read back
     through the loader, exactly as a later load would verify it.
 
     ``simulated_f_scale`` is the force scale a simulated observation was really simulated at; when
-    given, the record's ``config`` carries it. A recording passes none."""
+    given, the record's ``config`` carries it. A recording passes none. ``if_name_taken`` is the stage's,
+    for the write."""
     from .artifacts.manifest import conditioning_block, tensor_digest, tensor_to_json
     digest = tensor_digest(x_obs)
-    with store.create("observation", cfg, name=name, note=note) as w:
+    with store.create("observation", cfg, name=name, note=note, if_name_taken=if_name_taken) as w:
         if simulated_f_scale is not None:
             w.config["simulated_f_scale"] = float(simulated_f_scale)
         file_manager.atomic_torch_save({"x_obs": x_obs.detach().cpu(), "obs_data": obs_data.detach().cpu(),
@@ -601,7 +612,8 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
                 max_sets: int | None = None, walk_step: float | None = None,
                 stability_units: float | None = None,
                 min_cluster_size: int | None = None,
-                min_samples: int | None = None) -> LoadedPrior:
+                min_samples: int | None = None,
+                if_name_taken: str = "refuse") -> LoadedPrior:
     """
     Load a prior artifact by name or id, or construct a new product prior and WRITE it at once:
         ProductPrior = ND parameter prior x rescaling prior x forcing prior
@@ -638,6 +650,11 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
                      ⚠ These two are the CLUSTERING stage, not the sweep: HDBSCAN's label count is
                      handed straight to the GMM's n_components, so they set how many modes the
                      prior has. A prior with a different component count is a different prior.
+    :param if_name_taken: "refuse" (the default) or "unnamed": what the write at the end does with a
+                     name another prior took while this one was swept (the entry found it free):
+                     refused, as the entry refuses one, though the sweep is then lost; or dropped, the
+                     prior saved without a name, under its id, with a warning that says so. The window
+                     asks for "unnamed"; the command line never does.
     :return: A LoadedPrior wrapping the artifact's ProductPrior (ND x rescale x forcing).
 
     ⚠ WHY THESE ARE PARAMETERS AND NOT "JUST SET THE CONFIG CONSTANT" -- the same reason
@@ -650,6 +667,7 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
     # sweep. Uniform across every stage (see build_posterior, the observation stages, validate and
     # infer), and a no-op for the unnamed default.
     store.assert_name_free("prior", name)
+    check_if_name_taken(if_name_taken)
     # FIRST, before the stability sweep: is this chi configuration the one you meant? The
     # prior itself is chi-independent, so this is here purely to fail at the START of a session
     # rather than after its first expensive stage.
@@ -723,7 +741,7 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
 
     nd_log = nd_log_mask(cfg, log_params=_log_params_for(cfg))
     gmm = _find_nd_gmm(nd_prior)
-    with store.create("prior", cfg, name=name, note=note) as w:
+    with store.create("prior", cfg, name=name, note=note, if_name_taken=if_name_taken) as w:
         file_manager.save_mix_dist(nd_prior, str(w.payload("prior.pt")),
                                    model=cfg.model, param_keys=list(cfg.params_dict.keys()))
         visualizers.visualize_dist(nd_prior, labels=cfg.labels, title="Prior", sink=w.fig_sink(fig_sink))
@@ -841,7 +859,7 @@ def build_posterior(
     resume: str = "auto", new_run: bool = False,
     fisher_m: int | None = None, fisher_dz: float | None = None,
     fisher_points: int | None = None,
-    save_fit: bool | None = None, resume_fit: str | None = None,
+    save_fit: bool | None = None, resume_fit: str | None = None, if_name_taken: str = "refuse",
 ) -> LoadedPosterior:
     """
     Load an existing posterior artifact through the store, or train a new one via NPE in latent
@@ -916,6 +934,12 @@ def build_posterior(
                      anything is read; once the rows are read back, the split, the network and its
                      standardisers are checked against the kept ones, and a kept training that fails
                      them is marked as one that cannot be resumed. None = a new training.
+    :param if_name_taken: "refuse" (the default) or "unnamed": what the posterior's write at the end
+                     does with a name another posterior took while this one trained (the entry found it
+                     free): refused, as the entry refuses one -- the finished training is then kept, to
+                     be resumed under another name -- or dropped, the posterior saved without a name,
+                     under its id, with a warning that says so. The window asks for "unnamed"; the
+                     command line never does.
     :return: a LoadedPosterior; ``.posterior`` is the TransformedPosterior every downstream stage samples.
 
     ⚠ THESE FOUR ARE WHAT A COMPLETE TRAINING CHECKPOINT (THE SIMULATION CACHE) IS FOR. Its own
@@ -970,6 +994,7 @@ def build_posterior(
     # the check is cheap and uniform, and a load that would end in a refused rename is worth refusing
     # up front too. Days of training, in the training branch's case.
     store.assert_name_free("posterior", name)
+    check_if_name_taken(if_name_taken)
     from .artifacts import Accept
     from .artifacts.manifest import (conditioning_block, config_from_cfg, region_to_json, tensor_digest,
                                      tensor_to_json)
@@ -1637,7 +1662,7 @@ def build_posterior(
         probe = training_checkpoint.bijection_probe(T_train, len(keys), device=cfg.hw.device)
         diag = pos_diagnostics or {}
         _best = diag.get("best_validation_loss")
-        with store.create("posterior", cfg, name=name, note=note) as w:
+        with store.create("posterior", cfg, name=name, note=note, if_name_taken=if_name_taken) as w:
             if session is not None and session.resumed:
                 w.log_prefix = session.log_before     # the earlier processes' records, then this one's
             file_manager.atomic_torch_save(posterior_latent, w.payload("posterior.pt"))
@@ -2708,7 +2733,8 @@ def _t_obs_outside_training(T_obs_s: float) -> "str | None":
 def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: float, *,
                         cell=None, gt_values=None, prior: "LoadedPrior | None" = None,
                         accept=None, n_samples: int | None = None,
-                        name: str = "", note: str = "", fig_sink=None, store=None):
+                        name: str = "", note: str = "", fig_sink=None, store=None,
+                        if_name_taken: str = "refuse"):
     """Simulate a ground-truth observation for a cell and infer on it: the whole simulated path.
 
     Every check that used to live in one front end only lives here now, and every one of them runs
@@ -2725,6 +2751,9 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
                       observation that posterior's region was drawn around.
     :param n_samples: posterior draws; None leaves infer_and_visualize's own default, so that number
                       stays written down in exactly one place.
+    :param if_name_taken: the observation's (``generate_observations``'s own), handed on only when it
+                      is given, and checked here before anything is simulated. The inference's own name
+                      is checked again once the observation is written, and refused there as before.
     :return: ``(observation, inference)`` -- the payload shape the Infer tab unpacks.
     """
     from .artifacts import Accept
@@ -2740,6 +2769,7 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
     # observation had been simulated AND written, so a taken name cost a simulation and left an
     # observation artifact nothing would ever name.
     store.assert_name_free("inference", name)
+    check_if_name_taken(if_name_taken)
     if (cell is None) == (gt_values is None):
         raise Refusal("simulated_inference takes exactly one of cell= (a cell file) and gt_values= "
                       "(hand-entered values in parse_values_file's shape).")
@@ -2784,7 +2814,10 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
         for msg in _truth_outside_region(posterior.posterior.T, region, cfg.ground_truth_tensor):
             _preflight_warn("this truth lies outside the region the NON-AMORTIZED posterior was trained "
                             "on; the flow extrapolates there: " + msg)
-    obs = generate_observations(cfg, fig_sink=fig_sink, store=store)
+    # The choice for a taken name is the observation's alone, handed on only when it is given, so the
+    # observation stage's own default stays the one place it is written down.
+    taken = {} if if_name_taken == "refuse" else {"if_name_taken": if_name_taken}
+    obs = generate_observations(cfg, fig_sink=fig_sink, store=store, **taken)
     inf = infer_and_visualize(cfg, posterior, obs, name=name, note=note, fig_sink=fig_sink, store=store,
                               accept=accept,
                               **({"n_samples": n_samples} if n_samples is not None else {}))
@@ -2794,7 +2827,8 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
 @public_entry
 def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "RecordingSet", *,
                            accept=None, n_samples: int | None = None,
-                           name: str = "", note: str = "", fig_sink=None, store=None):
+                           name: str = "", note: str = "", fig_sink=None, store=None,
+                           if_name_taken: str = "refuse"):
     """Any bench recording set (passive, driven, chi) -> the observation artifact -> the inference.
 
     Its own checks are the inputs' alone, before any compute: the sample count, the observation length
@@ -2805,16 +2839,19 @@ def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "Rec
     recordings reproduces a region's digest, which is the LEGITIMATE match -- so the non-amortized
     refusal stays in infer_and_visualize, where it can tell that case apart from a foreign observation.
     Nothing is lost by waiting: building an experimental observation costs no simulation.
+    ``if_name_taken`` is the observation's, as in ``simulated_inference``.
     """
     store = resolve_store(store)
     # The pre-spend block, in the simulated path's order: the numeric knobs, then the name.
     _refuse_no_samples(n_samples)
     T_obs_s = require_positive("t_obs", rec.T_obs_s)
     store.assert_name_free("inference", name)   # with the recordings' own file checks, before any compute
+    check_if_name_taken(if_name_taken)
     _outside = _t_obs_outside_training(T_obs_s)
     if _outside:
         _preflight_warn(_outside)
-    obs = build_experiment_observation(cfg, rec, fig_sink=fig_sink, store=store)
+    taken = {} if if_name_taken == "refuse" else {"if_name_taken": if_name_taken}
+    obs = build_experiment_observation(cfg, rec, fig_sink=fig_sink, store=store, **taken)
     inf = infer_and_visualize(cfg, posterior, obs, name=name, note=note, fig_sink=fig_sink, store=store,
                               accept=accept,
                               **({"n_samples": n_samples} if n_samples is not None else {}))
@@ -2830,7 +2867,7 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
                 learning_rate: float | None = None, stop_after_epochs: int | None = None,
                 max_num_epochs: int | None = None, checkpoint_every: int | None = None,
                 resume: str = "auto", new_run: bool = False, save_fit: bool | None = None,
-                resume_fit: str | None = None,
+                resume_fit: str | None = None, if_name_taken: str = "refuse",
                 name: str = "", note: str = "", fig_sink=None, store=None) -> LoadedPosterior:
     """One TSNPE round: the region drawn from ``posterior`` around ``observation``, then the PRIOR
     RESTRICTED to it, simulated and retrained.
@@ -2860,11 +2897,14 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
     :param resume_fit: the id of a kept narrowing round's training to resume (build_posterior's own),
                       forwarded only when given. It resumes in the region it was trained in, read from its
                       record and never drawn again, so ``n_directions`` and ``level`` are refused beside it.
+    :param if_name_taken: build_posterior's own, checked here before the region is drawn and forwarded
+                      only when it is not the default, like the knobs.
     :return: the LoadedPosterior build_posterior wrote and read back. It carries its own region and
                       observation digest, so nothing here has to return them separately.
     """
     store = resolve_store(store)
     store.assert_name_free("posterior", name)      # before the region draw and before days of training
+    check_if_name_taken(if_name_taken)
     kept = None
     if resume_fit is not None:
         # A kept round's region is the one its rows were drawn in: read from the record, never redrawn.
@@ -2930,7 +2970,8 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
                                ("hidden_features", hidden_features), ("num_transforms", num_transforms),
                                ("learning_rate", learning_rate), ("stop_after_epochs", stop_after_epochs),
                                ("max_num_epochs", max_num_epochs), ("checkpoint_every", checkpoint_every),
-                               ("save_fit", save_fit), ("resume_fit", resume_fit))
+                               ("save_fit", save_fit), ("resume_fit", resume_fit),
+                               ("if_name_taken", None if if_name_taken == "refuse" else if_name_taken))
              if v is not None}
     return build_posterior(cfg, prior, None, True, truncation=region, observation=observation,
                            parent_posterior=posterior, resume=resume, new_run=new_run,

@@ -3100,6 +3100,22 @@ def test_no_print_call_remains_in_the_converted_modules():
     assert left == [], f"print() calls left in the converted modules: {sorted(left)}"
 
 
+def test_no_command_of_the_tool_passes_the_choice_for_a_taken_name():
+    """A name another record takes while a command runs is refused at that record's write, as before: the
+    tool never asks a stage to save the record without its name. Only the window asks, where the run's
+    page can say so and offer to name it. Read on the text of every module of the tool, for the stages'
+    own keyword."""
+    import inspect
+    from core import orchestrator
+    root = Path(__file__).resolve().parents[1]
+    modules = sorted((root / "core" / "tool").rglob("*.py"))
+    assert modules, "core/tool/ holds no modules"
+    assert "if_name_taken" in inspect.signature(orchestrator.build_posterior).parameters, \
+        "the stages' keyword is spelled otherwise: this scan reads for nothing"
+    said = [py.relative_to(root).as_posix() for py in modules if "if_name_taken" in py.read_text(encoding="utf-8")]
+    assert said == [], f"the tool passes the choice for a taken name: {said}"
+
+
 # ── the artifacts family ─────────────────────────────────────────────────────────────────────────
 
 

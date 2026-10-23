@@ -27,7 +27,7 @@ from pathlib import Path
 
 from core import config, runs
 from core.Helpers import file_manager
-from core.refusals import Refusal
+from core.refusals import PreflightWarning, Refusal
 
 from . import manifest as mf
 from . import provenance as prov
@@ -99,6 +99,22 @@ _PARENT_KEYS = {"prior": ("prior",), "simulation": ("simulation",),
 
 class StoreError(Refusal):
     """The store refused: a missing, incomplete, duplicate or depended-upon artifact."""
+
+
+# What the write at the end of a run does with a name another record of its kind took while the run went
+# on, after the stage's entry found it free (``ArtifactStore.create``): "refuse" it, as the entry does, or
+# drop it and save the record "unnamed", under its id, saying so. The calling code's choice, never a
+# person's: the window asks for "unnamed", the command line never does.
+NAME_TAKEN = ("refuse", "unnamed")
+
+
+def check_if_name_taken(value) -> str:
+    """``value`` when it is one of ``NAME_TAKEN``; refused otherwise, with no field: no control and no flag
+    answers it, since it is the calling code's choice. Every stage that takes the choice checks it at its
+    entry, before it spends anything, and ``create`` checks it again."""
+    if value not in NAME_TAKEN:
+        raise StoreError(f"if_name_taken must be 'refuse' or 'unnamed', not {value!r}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -875,13 +891,36 @@ class ArtifactStore:
         if other is not None and (allow is None or other.id != allow):
             raise StoreError(f"a {kind} named {name!r} already exists; rename or delete it first", field="name")
 
-    def create(self, kind: str, cfg=None, *, name: str = "", note: str = "") -> ArtifactWriter:
+    def create(self, kind: str, cfg=None, *, name: str = "", note: str = "",
+               if_name_taken: str = "refuse") -> ArtifactWriter:
+        """The writer of a new record of ``kind``, its name checked again: a stage checks it at its entry,
+        before its spend, and another process (another window, the command line) may take it meanwhile.
+
+        ``if_name_taken`` says what is done with a name another record of the kind holds now: "refuse" (the
+        default) refuses it, as ``assert_name_free`` does; "unnamed" makes the writer with no name, so the
+        record is saved under its id, and says so in one ``PreflightWarning`` (the record's log keeps it,
+        and its filter says a second one in a session too). A name that is no name at all (its shape) is
+        refused either way. A record written as its run goes (``PROGRESSIVE_KINDS``) holds its name from its
+        first moment, so "unnamed" is refused for it, as is a choice that is neither.
+        """
+        check_if_name_taken(if_name_taken)
         if kind == "simulation":
             raise StoreError("simulation manifests are written by training_checkpoint (write_simulation_manifest)")
         if kind == "fit":
             raise StoreError("fit records are written by the training stage (write_fit_manifest), not through a writer")
-        self.assert_name_free(kind, name)
-        return ArtifactWriter(self, kind, cfg, name=name, note=note, id=self._new_id(kind), created=self._clock())
+        if if_name_taken == "unnamed" and kind in PROGRESSIVE_KINDS:
+            raise StoreError(f"if_name_taken='unnamed' does not apply to the kind {kind!r}: its record is written "
+                             f"as its run goes and holds its name from its first moment.")
+        holder = self._find(kind, name)[1] if if_name_taken == "unnamed" and name else None
+        # The name's shape is checked either way; asked to, the record that holds the name is no refusal.
+        self.assert_name_free(kind, name, allow=None if holder is None else holder.id)
+        if holder is None:
+            return ArtifactWriter(self, kind, cfg, name=name, note=note, id=self._new_id(kind), created=self._clock())
+        writer = ArtifactWriter(self, kind, cfg, name="", note=note, id=self._new_id(kind), created=self._clock())
+        warnings.warn(f"the name {name!r} was taken by another {kind} while this run was going, so this {kind} is "
+                      f"saved without a name, under its id {writer.id}; it can be named afterwards.",
+                      PreflightWarning, stacklevel=2)
+        return writer
 
     def new_fit_dir(self) -> Path:
         """The folder a new kept training is to be written in, ``fits/_unnamed__<id>``, with an id no
