@@ -2,9 +2,9 @@
 and first-time test, and what a record is called; and the six steps as the built window holds them.
 
 Torch-free at its module level: the modules under test load neither the toolkit (the record words aside) nor the
-engine, and a fresh interpreter proves it, since this process already holds both. A session is a plain
-namespace of the five fields the window's session holds. A test that reads the store's own tables or writes a
-record imports them inside itself, and so does a test that builds the window.
+engine, and a fresh interpreter proves it, since this process already holds both. A session is the window's own
+session class, made by tests/_window_helpers.py. A test that reads the store's own tables or writes a record imports
+them inside itself, and so does a test that builds the window.
 """
 import ast
 import subprocess
@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.gui import chain, keys, record_words
+from tests._window_helpers import session as _session
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -229,12 +230,6 @@ def test_a_place_is_written_as_the_window_names_it():
 
 
 # the six steps
-def _session(**held):
-    fields = dict(draft=None, cfg=None, inf_prior=None, posterior=None, observation=None)
-    fields.update(held)
-    return SimpleNamespace(**fields)
-
-
 def _record(name, *, truncation=None):
     """A held record by its name; a posterior's network carries the region it was narrowed to, or None."""
     return SimpleNamespace(name=name, posterior=SimpleNamespace(truncation=truncation))

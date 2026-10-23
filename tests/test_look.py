@@ -44,6 +44,7 @@ from core.gui.widgets.marker import Marker, painted_icon
 from core.gui.widgets.ruled import Ruled, SectionHead
 from tests._look_helpers import (_BLANK, _arrive, _at, _gone, _image, _moved_on, _screen, _screen_of, _settle,
                                  _the_look, text_size, theme)
+from tests._window_helpers import session
 
 REPO = Path(__file__).resolve().parents[1]
 # every module of the look that exists; a new one joins this tuple in the commit that adds it, and the
@@ -399,7 +400,7 @@ def test_the_look_and_this_file_load_without_the_engine():
     # The fresh interpreter loads each module of the look and calls nothing in it, so an import that stands
     # inside a function is never made there. So every import of every module is read as well, wherever it stands,
     # and every import of the helpers this file shares with the window's suites.
-    for module in LOOK_MODULES + ("tests._look_helpers",):
+    for module in LOOK_MODULES + ("tests._look_helpers", "tests._window_helpers"):
         package, inside = module.rpartition(".")[0].split("."), set()
         for node in ast.walk(ast.parse((REPO / (module.replace(".", "/") + ".py")).read_text(encoding="utf-8"))):
             if isinstance(node, ast.Import):
@@ -6341,13 +6342,6 @@ def _rail_kit():
     return SimpleNamespace(rail=rail, names=page_names, chain=chain, keys=keys)
 
 
-def _rail_session(**held):
-    """A session holding what is handed in and nothing else."""
-    fields = {"draft": None, "inf_prior": None, "posterior": None, "observation": None}
-    fields.update(held)
-    return SimpleNamespace(**fields)
-
-
 @contextlib.contextmanager
 def _railed(height=820, *, fields=False):
     """A rail at the left edge of a window of that height, as the window holds it, with a field before it and one
@@ -6532,7 +6526,7 @@ def test_the_rail_marks_exactly_one_row():
                             _RAIL_BARS[ratio], image.width() - 1, first, last), where
                         assert bar == (_RAIL_BARS[ratio] * (last - first + 1),
                                        QRect(0, first, _RAIL_BARS[ratio], last - first + 1)), where
-        rail.set_step_states(kit.chain.step_states(_rail_session(draft=SimpleNamespace(model="NADROWSKI"))))
+        rail.set_step_states(kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI"))))
         rail.set_place("inference", "infer")
         _settle()
         first, last = _device_rows(rail.row("infer"), rail, 1.0)
@@ -6621,11 +6615,11 @@ def test_a_step_row_draws_its_marker_its_line_and_its_words(monkeypatch):
     while the step has not started; the current step's number and name are semibold and its words in the first
     ink."""
     kit = _rail_kit()
-    states = kit.chain.step_states(_rail_session(draft=SimpleNamespace(model="NADROWSKI")))
-    held = kit.chain.step_states(_rail_session(draft=SimpleNamespace(model="NADROWSKI"),
-                                               inf_prior=SimpleNamespace(name="retrain_prior")), ended=4)
+    states = kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI")))
+    held = kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI"),
+                                         inf_prior=SimpleNamespace(name="retrain_prior")), ended=4)
     shown = [states[0], states[1], states[2],
-             kit.chain.step_states(_rail_session(draft=SimpleNamespace(model="NADROWSKI")),
+             kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI")),
                                    pending=frozenset({"checks"}))[3],
              held[2], dataclasses.replace(states[4], marker="err", word="Error", rail_words="Error: 1 of 6 passed")]
     assert [state.marker for state in shown] == ["done", "now", "later", "warn", "half", "err"]
@@ -6679,7 +6673,7 @@ def test_a_step_row_draws_its_marker_its_line_and_its_words(monkeypatch):
         assert not any(image.pixel(29, y) in (design.colour("rule").rgb(), design.colour("ink_3").rgb())
                        for y in range(24, 46))
 
-        long = kit.chain.step_states(_rail_session(draft=SimpleNamespace(model="hair_bundle_with_two_compartments")))[0]
+        long = kit.chain.step_states(session(draft=SimpleNamespace(model="hair_bundle_with_two_compartments")))[0]
         first.set_state(long)
         assert long.rail_words == "Done: hair_bundle_with_two_compartments"
         number, name, words = _painted_words(monkeypatch, first)
@@ -6750,7 +6744,7 @@ def test_the_small_rail_shortens_its_rows_and_keeps_two_steps_whole(monkeypatch)
         rail.set_small(True)
         _settle()
         assert heights() == (48, [32] * 9, [32, 46, 32, 32, 32, 32])    # no state shown: the open step alone
-        states = kit.chain.step_states(_rail_session(draft=SimpleNamespace(model="NADROWSKI")))
+        states = kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI")))
         assert (kit.chain.step_in_hand(states), [s.key for s in states if not s.can_start][0]) == ("prior", "training")
         rail.set_step_states(states)
         _settle()
@@ -6764,7 +6758,7 @@ def test_the_small_rail_shortens_its_rows_and_keeps_two_steps_whole(monkeypatch)
         assert heights() == usual and needed() == 756
     with text_size(1.5), _railed() as held:
         rail, kit = held.rail, held.kit
-        rail.set_step_states(kit.chain.step_states(_rail_session()))
+        rail.set_step_states(kit.chain.step_states(session()))
         rail.set_small(True)
         rail.set_place("inference", "model")
         _settle()
@@ -6783,7 +6777,7 @@ def test_the_rail_scrolls_its_list_under_a_fixed_name_and_above_a_fixed_foot():
             scroll = rail._scroll
             bar = scroll.verticalScrollBar()
             rail.set_small(True)
-            rail.set_step_states(kit.chain.step_states(_rail_session(draft=SimpleNamespace(model="NADROWSKI"))))
+            rail.set_step_states(kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI"))))
             rail.set_place("inference", "prior")
             _settle()
             fixed = (rail.brand.geometry(), rail.foot.geometry())
@@ -6823,8 +6817,8 @@ def test_the_rail_is_one_tab_stop_and_its_arrows_move_in_the_order_seen(monkeypa
     app = QApplication.instance() or QApplication([])
     with _railed(fields=True) as held, theme(False), _focus_as_on_a_screen(monkeypatch) as given:
         rail, kit, window = held.rail, held.kit, held.window
-        rail.set_step_states(kit.chain.step_states(_rail_session(draft=SimpleNamespace(model="NADROWSKI"),
-                                                                 inf_prior=SimpleNamespace(name="retrain_prior"))))
+        rail.set_step_states(kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI"),
+                                                           inf_prior=SimpleNamespace(name="retrain_prior"))))
         rail.set_place("inference", "training")
         _settle()
         opened, left = [], []
@@ -7107,8 +7101,8 @@ def test_the_rail_draws_the_chains_lines_from_the_states():
     scalings in both themes, with a model and a prior in use, so that the first two steps are done."""
     with _railed() as held:
         rail, kit = held.rail, held.kit
-        rail.set_step_states(kit.chain.step_states(_rail_session(draft=SimpleNamespace(model="NADROWSKI"),
-                                                                 inf_prior=SimpleNamespace(name="retrain_prior"))))
+        rail.set_step_states(kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI"),
+                                                           inf_prior=SimpleNamespace(name="retrain_prior"))))
         rail.set_place("inference", None)
         _settle()
         for dark, ratio in itertools.product((False, True), _SCALINGS):

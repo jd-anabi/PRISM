@@ -1,13 +1,12 @@
 """The window's places -- the rail, ``go_to`` and the run's foot -- and Home.
 
 Home is built as the window builds it, through the builders of tests/_fixtures.py, and handed what it states by a
-function each test makes: a session is a plain namespace of the five fields the window's session holds, and the
+function each test makes: a session is the window's own session class (tests/_window_helpers.py), and the
 steps' states are the rules' own. The window's reading of its session, its run and the record store in use, and
 what each of Home's places opens in the window, are tested on a whole window.
 """
 import contextlib
 import time
-import warnings
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -23,6 +22,8 @@ from core.gui.screens.home_screen import HomeFacts, HomeScreen, RecordRow
 from core.gui.widgets.page import Columns, PageHead, Sentence
 from core.gui.widgets.rule_table import StateCell, TextCell
 from tests._fixtures import build_part, build_run_host, build_window, qt_app
+from tests._window_helpers import (given as _given, in_front as _in_front, press as _press, session as _session,
+                                   shown_off_screen as _shown_off_screen)
 
 HEAD = ("Home", "What to do next, where your work stands, and what each part is for.")
 FIRST_HEAD = ("What do you want to do?",
@@ -39,13 +40,6 @@ PARTS = [(place.name, place.line) for place in keys.PARTS[1:]]
 # The window's own way to the front, read as this file is loaded: in a test not marked for the real screen a guard
 # stands in for it.
 COME_TO_FRONT = MainWindow.come_to_front
-
-
-def _session(**held):
-    """A session holding what is named; every other field holds nothing."""
-    fields = dict(draft=None, cfg=None, inf_prior=None, posterior=None, observation=None)
-    fields.update(held)
-    return SimpleNamespace(**fields)
 
 
 def _under_way():
@@ -605,15 +599,6 @@ def _name(screen, page):
 def _button(widget, words):
     """The push button of ``widget`` that reads ``words``."""
     return next(button for button in widget.findChildren(QPushButton) if button.text() == words)
-
-
-def _shown_off_screen(window, width=None, height=None):
-    """Show ``window`` where no screen shows it, at a size when one is handed, and let its layouts settle."""
-    window.setAttribute(Qt.WA_DontShowOnScreen)
-    if width is not None:
-        window.resize(width, height)
-    window.show()
-    QApplication.processEvents()
 
 
 def _in_view(rail, row):
@@ -2501,43 +2486,6 @@ def test_a_part_built_later_reads_the_appearance_and_the_models_in_force():
 
 # The key map in the window. A key of the map is a shortcut of the window, which only the window in front hears, so
 # a test that presses one first brings the window to the front (``_in_front``).
-@contextlib.contextmanager
-def _in_front(widget):
-    """``widget`` as the window in front, as the screen makes a window when a person brings it there. Shown where
-    no screen shows it, the window is brought there by telling the toolkit so, through a call the toolkit keeps
-    though it marks it as old, whose warning is not let through; the focus the window gives is then delivered with
-    its reason, as the screen delivers it. At the end no window is in front."""
-    def tell(front):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            QApplication.setActiveWindow(front)
-    tell(widget)
-    try:
-        yield widget
-    finally:
-        tell(None)
-
-
-def _press(window, sequence):
-    """Press the key ``sequence`` ("Ctrl+3", "Shift+F6") where a person's key goes: at the control that holds the
-    keyboard in ``window``, or at the window itself when none does."""
-    combination = QKeySequence(sequence)[0]
-    QTest.keyClick(window.focusWidget() or window, combination.key(), combination.keyboardModifiers())
-
-
-def _given(monkeypatch):
-    """Every focus given from now on, each as the widget and the reason it was given for, in their order."""
-    from PySide6.QtWidgets import QWidget
-    given, kept = [], QWidget.setFocus
-
-    def set_focus(widget, *reason):
-        given.append((widget, reason[0] if reason else Qt.OtherFocusReason))
-        return kept(widget, *reason)
-
-    monkeypatch.setattr(QWidget, "setFocus", set_focus)
-    return given
-
-
 def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
     """The window makes one shortcut for each row of the key map and no other, each in the window's own context,
     so that only the window in front hears it, and none repeating while its key is held down; each row of the rail
