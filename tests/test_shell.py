@@ -1331,8 +1331,9 @@ def test_the_current_row_stays_in_view_when_a_step_above_it_takes_a_second_line(
 
 def test_the_mounted_rail_marks_one_row_for_every_place():
     """In the window, whatever place is open, the accent's bar stands in one row of the rail: the row of the
-    step open while Parameter inference is open, or else of the part open, down that whole row and nowhere
-    else."""
+    step open while Parameter inference is open, or else of the part open, down that whole row but for the open
+    part's hairlines, which lie over the row's top or bottom edge where the row stands at the top or the bottom of
+    the open part, and nowhere else."""
     from tests._look_helpers import _image
     qt_app()
     window = build_window()
@@ -1349,7 +1350,13 @@ def test_the_mounted_rail_marks_one_row_for_every_place():
             shown, page = window.current_place()
             row = rail.row(page if shown == "inference" else shown)
             top = row.mapTo(rail, QPoint(0, 0)).y()
-            assert marked == list(range(top, top + row.height())), (part, step)
+            block = rail.row(shown).parentWidget()
+            above = row.mapTo(block, QPoint(0, 0)).y()
+            under = block.height() - above - row.height()
+            hair = design.SIZE["hair"]              # the open part's lines lie over the row's top and bottom edge
+            first = top + (hair if above == 0 else 0)
+            end = top + row.height() - (hair if under == 0 and shown != "help" else 0)
+            assert marked == list(range(first, end)), (part, step)
     finally:
         window.hide()
 

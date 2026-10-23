@@ -27,6 +27,15 @@ def _px(name: str) -> int:
     return design.scaled(design.SIZE[name])
 
 
+def _band_hairlines(painter, rect, edges: tuple[bool, bool]) -> None:
+    """The open part's hairlines along the top and the bottom of ``rect`` where it stands at the edge of the open
+    part's band, painted over what the row has painted there: a current row's tint and bar would cover the band's own
+    lines under it, and the lines run unbroken along the band."""
+    top, bottom = edges
+    hair = design.SIZE["hair"]
+    paint.fill_px(painter, rect, design.colour("rule_light"), top=hair if top else 0, bottom=hair if bottom else 0)
+
+
 def _tool_tip(words: str, place: keys.Place) -> str:
     """A row's tool tip: its words, then the keys that open its place."""
     return f"{words} ({', '.join(place.keys)})" if place.keys else words
@@ -49,6 +58,7 @@ class PartRow(QAbstractButton):
         super().__init__()
         self.place = place
         self._current = self._open = self._small = False
+        self._edges = (False, False)
         self.setText(place.name)
         self.setAccessibleName(place.name)
         self.setToolTip(_tool_tip(place.name, place))
@@ -62,6 +72,12 @@ class PartRow(QAbstractButton):
         """Mark this row as the place in sight, or take the mark off."""
         self._current = bool(on)
         self.setProperty("ring_left", design.SIZE["bar"] if self._current else 0)     # the ring leaves the bar whole
+        self.update()
+
+    def set_edges(self, top: bool, bottom: bool) -> None:
+        """Which of the row's edges lie on a hairline of the open part's band, its top, its bottom or both: when the
+        row is the current one its tint and bar stop short of that line, which is drawn over them."""
+        self._edges = (bool(top), bool(bottom))
         self.update()
 
     def _set_open(self, on: bool) -> None:
@@ -90,6 +106,7 @@ class PartRow(QAbstractButton):
             if self._current:
                 painter.fillRect(rect, design.colour("accent_tint"))
                 paint.fill_px(painter, rect, design.colour("accent"), left=design.SIZE["bar"])
+                _band_hairlines(painter, rect, self._edges)
             font = fonts.inter("strong" if (self._current or self._open) else "body")
             painter.setFont(font)
             painter.setPen(design.colour("ink"))
@@ -115,6 +132,7 @@ class StepRow(QAbstractButton):
         self._state = None
         self._current = self._one_line = False
         self._out, self._into = None, False
+        self._edges = (False, False)
         self.setText(place.name)
         self.setFocusPolicy(Qt.NoFocus)
         self.setProperty("ring", "inset")
@@ -139,6 +157,12 @@ class StepRow(QAbstractButton):
         """Mark this step as the place in sight, or take the mark off."""
         self._current = bool(on)
         self.setProperty("ring_left", design.SIZE["bar"] if self._current else 0)
+        self.update()
+
+    def set_edges(self, top: bool, bottom: bool) -> None:
+        """Which of the row's edges lie on a hairline of the open part's band, its top, its bottom or both: when the
+        row is the current one its tint and bar stop short of that line, which is drawn over them."""
+        self._edges = (bool(top), bool(bottom))
         self.update()
 
     def set_line(self, out: str | None, into: bool) -> None:
@@ -186,6 +210,7 @@ class StepRow(QAbstractButton):
             if self._current:
                 painter.fillRect(rect, design.colour("accent_tint"))
                 paint.fill_px(painter, rect, design.colour("accent"), left=design.SIZE["bar"])
+                _band_hairlines(painter, rect, self._edges)
             if self._number > 1:
                 self._line(painter, "solid" if self._into else "dotted", 0, step["line_in"])
             if self._out is not None:
@@ -469,11 +494,17 @@ class Rail(QWidget):
             row._set_open(key == self._part and self._step is not None)
         for key, row in self._steps.items():
             row.set_current(key == self._step)
-        hair = design.SIZE["hair"]
-        for key, block in self._blocks.items():
-            # room for the open part's two hairlines; the lower one of the last part is the foot's own
-            edge = hair if key == self._part else 0
-            block.layout().setContentsMargins(0, edge, 0, 0 if key == keys.PARTS[-1].key else edge)
+        # The open part's two hairlines are drawn over its first and last row's own edge, so that no block keeps room
+        # for them and no row moves when another part is opened; the lower one of the last part is the foot's own.
+        for row in (*self._parts.values(), *self._steps.values()):
+            row.set_edges(False, False)
+        if self._part is not None:
+            first = self._parts[self._part]
+            last = self._steps[keys.STEPS[-1].key] if self._part == "inference" else first
+            lower = self._part != keys.PARTS[-1].key
+            first.set_edges(True, lower and last is first)
+            if last is not first:
+                last.set_edges(False, lower)
         self._list.open_block = self._blocks.get(self._part)
         self._list.update()
         current = self._current_row()

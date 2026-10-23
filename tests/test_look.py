@@ -6500,8 +6500,10 @@ def test_the_rail_lists_the_parts_in_order_with_the_chain_under_parameter_infere
 
 def test_the_rail_marks_exactly_one_row():
     """Standing: whatever place is open, the accent's tint and its bar stand in one row of the rail and in no
-    other, the bar as wide as the look's bar on whole device pixels down the whole row, the tint from the bar to
-    the rail's right edge; and with no place open the rail shows no tint and no accent at all. Every part is
+    other, the bar as wide as the look's bar on whole device pixels down the whole row but for the open part's
+    hairlines, which lie over the row's top or bottom edge where the row stands at the top or the bottom of the
+    open part, the tint from the bar to the rail's right edge; and with no place open the rail shows no tint and
+    no accent at all. Every part is
     tried, every step of parameter inference and that part with no step, at four scalings in both themes; then
     once with the steps' states shown, where the step in hand wears the accent in its marker."""
     with _railed() as held:
@@ -6517,9 +6519,17 @@ def test_the_rail_marks_exactly_one_row():
                     rail.set_place(part, step)
                     _settle()
                     current = rail.row(step or part)
+                    block = rail.row(part).parentWidget()
+                    above = current.mapTo(block, QPoint(0, 0)).y()
+                    under = block.height() - above - current.height()
                     for ratio in _SCALINGS:
                         image = _rendered(rail, ratio)
                         first, last = _device_rows(current, rail, ratio)
+                        # The open part's hairlines lie over the rows at the edges of its band, so a current row at
+                        # the band's top or bottom wears its tint and bar from just under the line to just above the
+                        # other. The last part's lower line is the foot's own, over no row.
+                        first += _HAIR_RULE[ratio] if above == 0 else 0
+                        last -= _HAIR_RULE[ratio] if under == 0 and part != "help" else 0
                         tint, bar = _spots(image, "accent_tint")[1], _spots(image, "accent")
                         where = (dark, part, step, ratio)
                         assert (tint.left(), tint.right(), tint.top(), tint.bottom()) == (
@@ -6722,11 +6732,38 @@ def test_the_rows_keep_their_heights_and_lettering_through_a_change_of_place_and
                         "Inter", design.scaled(18), 600, 104.0), (factor, dark)
 
 
+def test_the_rails_rows_stay_put_when_another_part_is_opened():
+    """Whichever part is open, every part's row stands where it stands with nothing open, at the ordinary text size
+    and at one and a half times it: the open part's two hairlines are drawn over its own first and last row and take
+    no room between the rows. Parameter inference is left out, since the chain of steps it unfolds moves the rows
+    under it."""
+    for factor in (1.0, 1.5):
+        with text_size(factor), _railed() as held:
+            rail, kit = held.rail, held.kit
+            parts = [place.key for place in kit.keys.PARTS]
+
+            def standing():
+                _settle()
+                return {key: rail.row(key).mapTo(rail, QPoint(0, 0)).y() for key in parts}
+
+            nothing_open = standing()
+            assert rail._scroll.verticalScrollBar().maximum() == 0, "the list scrolls, which moves every row"
+            moved = {}
+            for part in parts:
+                if part == "inference":
+                    continue
+                rail.set_place(part)
+                found = standing()
+                if found != nothing_open:
+                    moved[part] = {key: (nothing_open[key], at) for key, at in found.items() if at != nothing_open[key]}
+            assert moved == {}, (factor, moved)
+
+
 def test_the_small_rail_shortens_its_rows_and_keeps_two_steps_whole(monkeypatch):
     """In a low window the name and the rows are shorter, and a step keeps its second line only when it is the
     step in hand, the first that cannot start or the open one; back in a high window everything is as before.
-    With every part's row and the six steps showing and the step in hand open, the rail needs 756 pixels in the
-    usual layout and 654 in the low one at the ordinary text size; a step of one line writes no words."""
+    With every part's row and the six steps showing and the step in hand open, the rail needs 754 pixels in the
+    usual layout and 652 in the low one at the ordinary text size; a step of one line writes no words."""
     with _railed() as held:
         rail, kit = held.rail, held.kit
 
@@ -6740,7 +6777,7 @@ def test_the_small_rail_shortens_its_rows_and_keeps_two_steps_whole(monkeypatch)
         rail.set_place("inference", "prior")
         _settle()
         usual = heights()
-        assert usual == (58, [36] * 9, [46] * 6) and needed() == 756
+        assert usual == (58, [36] * 9, [46] * 6) and needed() == 754
         rail.set_small(True)
         _settle()
         assert heights() == (48, [32] * 9, [32, 46, 32, 32, 32, 32])    # no state shown: the open step alone
@@ -6748,14 +6785,14 @@ def test_the_small_rail_shortens_its_rows_and_keeps_two_steps_whole(monkeypatch)
         assert (kit.chain.step_in_hand(states), [s.key for s in states if not s.can_start][0]) == ("prior", "training")
         rail.set_step_states(states)
         _settle()
-        assert heights() == (48, [32] * 9, [32, 46, 46, 32, 32, 32]) and needed() == 654
+        assert heights() == (48, [32] * 9, [32, 46, 46, 32, 32, 32]) and needed() == 652
         assert [len(_painted_words(monkeypatch, rail.row(p.key))) for p in kit.keys.STEPS] == [2, 3, 3, 2, 2, 2]
         rail.set_place("inference", "infer")                           # a step opened that can wait keeps its words
         _settle()
-        assert heights()[2] == [32, 46, 46, 32, 46, 32] and needed() == 654 + 46 - 32
+        assert heights()[2] == [32, 46, 46, 32, 46, 32] and needed() == 652 + 46 - 32
         rail.set_small(False)
         _settle()
-        assert heights() == usual and needed() == 756
+        assert heights() == usual and needed() == 754
     with text_size(1.5), _railed() as held:
         rail, kit = held.rail, held.kit
         rail.set_step_states(kit.chain.step_states(session()))
@@ -6784,7 +6821,7 @@ def test_the_rail_scrolls_its_list_under_a_fixed_name_and_above_a_fixed_foot():
             assert scroll.geometry().top() == fixed[0].bottom() + 1 and scroll.geometry().bottom() + 1 == fixed[1].top()
             assert bar.maximum() > 0 and bar.isVisibleTo(rail), factor
             if factor == 1.0:
-                assert bar.maximum() == 654 - 600
+                assert bar.maximum() == 652 - 600
             for value in (bar.maximum(), 0, bar.maximum() // 2):
                 bar.setValue(value)
                 _settle()
@@ -7027,7 +7064,8 @@ def test_the_rail_ignores_a_place_it_does_not_list():
         image = _rendered(rail, 1.0)
         first, last = _device_rows(rail.row("temperature"), rail, 1.0)
         tint = _spots(image, "accent_tint")[1]
-        assert (tint.top(), tint.bottom()) == (first, last)
+        hair = _HAIR_RULE[1.0]                  # the open part's two lines lie over its row's top and bottom
+        assert (tint.top(), tint.bottom()) == (first + hair, last - hair)
         assert [row.text() for row in rail.visible_rows()] == [place.name for place in kit.keys.PARTS]
         rail.set_place("nowhere", "sweep")
         _settle()
@@ -7037,7 +7075,7 @@ def test_the_rail_ignores_a_place_it_does_not_list():
         _settle()
         first, last = _device_rows(rail.row("inference"), rail, 1.0)
         tint = _spots(_rendered(rail, 1.0), "accent_tint")[1]
-        assert (tint.top(), tint.bottom()) == (first, last) and len(rail.visible_rows()) == 15
+        assert (tint.top(), tint.bottom()) == (first + hair, last) and len(rail.visible_rows()) == 15
 
 
 def _written_with_fonts(monkeypatch, widget):
