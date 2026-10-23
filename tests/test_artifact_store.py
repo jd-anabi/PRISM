@@ -5856,11 +5856,12 @@ def test_load_observation_refuses_a_payload_that_disagrees_with_its_manifest(sto
 
 def test_a_name_taken_during_the_run_is_refused_or_dropped_as_asked(store):
     """By default the write refuses a name another record of the kind holds, as every stage's entry
-    does. Asked to drop it, it makes the record without a name, saved under its id, and says so in one
-    warning naming the name, the kind and the id; a name that is no name at all is still refused, a free
-    one is kept, and nothing is said. The choice is the calling code's, never a person's, so one it does
-    not know is refused with no field to name; and a record written as its run goes holds its name from
-    its first moment, so dropping that name at its end is refused too."""
+    does. Asked to drop it, it makes the record without a name, saved under its id with the note it was
+    given (once its name is gone, the note is what says what the record is), and says so in one warning
+    naming the name, the kind and the id; a name that is no name at all is still refused, a free one is
+    kept, and nothing is said. The choice is the calling code's, never a person's, so one it does not know
+    is refused with no field to name; and a record written as its run goes holds its name from its first
+    moment, so dropping that name at its end is refused too."""
     import warnings
     from core.refusals import PreflightWarning
     held = _make(store, "posterior", name="taken", body=_post_body())
@@ -5869,7 +5870,7 @@ def test_a_name_taken_during_the_run_is_refused_or_dropped_as_asked(store):
             store.create("posterior", None, name="taken", **asked)
         assert refused.value.field == "name", asked
     with pytest.warns(PreflightWarning) as said:
-        w = store.create("posterior", None, name="taken", if_name_taken="unnamed")
+        w = store.create("posterior", None, name="taken", note="the long training", if_name_taken="unnamed")
     assert [str(x.message) for x in said] == [
         f"the name 'taken' was taken by another posterior while this run was going, so this posterior is saved "
         f"without a name, under its id {w.id}; it can be named afterwards."]
@@ -5878,6 +5879,7 @@ def test_a_name_taken_during_the_run_is_refused_or_dropped_as_asked(store):
         w.payload("results.json").write_text("{}", encoding="utf-8")
     assert (w.name, w.dir.name) == ("", f"_unnamed__{w.id}")
     assert store.get("posterior", w.id).name == "" and store.get("posterior", "taken").id == held.id
+    assert store.get("posterior", w.id).note == "the long training"
     for bad, why in (("no spaces", "bad artifact name"), (held.id, "shaped like an artifact id")):
         with pytest.raises(st.StoreError, match=why) as refused:
             store.create("posterior", None, name=bad, if_name_taken="unnamed")
@@ -6026,8 +6028,9 @@ def test_a_loss_figure_that_cannot_be_drawn_saved_or_shown_costs_the_posterior_n
     failing) costs one warning naming the posterior and what failed, never the trained posterior: it is
     written and loads, its manifest lists only figures on its disk, loss.npz is there, and the warning is in
     its log.txt. A figure saved whole and then not shown stays with it. A stop raised while the figure is
-    shown is no ordinary failure: it passes, and no posterior is written. Every other figure keeps the
-    writer's default, where a figure that fails fails its stage (the test of the writer's sink)."""
+    drawn, saved or shown is no ordinary failure: it passes the guard of each, and no posterior is written.
+    Every other figure keeps the writer's default, where a figure that fails fails its stage (the test of
+    the writer's sink)."""
     from core import orchestrator
     from core.gui.streams import WorkerCancelled
     from core.Helpers import visualizers
@@ -6046,7 +6049,7 @@ def test_a_loss_figure_that_cannot_be_drawn_saved_or_shown_costs_the_posterior_n
     def unshowable(title, fig):
         raise RuntimeError("the window's figure was deleted")
 
-    def stopped(title, fig):
+    def stopped(*args, **kwargs):
         raise WorkerCancelled()
 
     without = "the posterior is saved without it, and loss.npz holds its curves."
@@ -6071,7 +6074,12 @@ def test_a_loss_figure_that_cannot_be_drawn_saved_or_shown_costs_the_posterior_n
         assert (f" warning PreflightWarning: The figure 'Training loss' of posterior {post.id} could not be {what} "
                 f"({then}") in (post.path / "log.txt").read_text(encoding="utf-8"), what
     before = {s.id for s in store.list("posterior")}
-    with pytest.raises(WorkerCancelled):
-        orchestrator.build_posterior(tr.cfg, tr.prior, None, True, name="loss_stopped", num_runs=2,
-                                     **{**tr.budget, "fig_sink": stopped})
-    assert {s.id for s in store.list("posterior")} == before
+    for what, patched, sink in (("drawn", "plot_training_loss", shown), ("saved", "save_figure", shown),
+                                ("shown", None, stopped)):
+        with monkeypatch.context() as patch:
+            if patched is not None:
+                patch.setattr(visualizers, patched, stopped)
+            with pytest.raises(WorkerCancelled):
+                orchestrator.build_posterior(tr.cfg, tr.prior, None, True, name=f"loss_stopped_while_{what}",
+                                             num_runs=2, **{**tr.budget, "fig_sink": sink})
+        assert {s.id for s in store.list("posterior")} == before, what

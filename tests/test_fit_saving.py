@@ -574,15 +574,18 @@ def test_a_fit_stopped_after_a_pass_and_resumed_in_a_fresh_trainer_ends_as_the_u
 
 
 def test_saving_every_pass_changes_nothing_the_fit_computes(monkeypatch, tmp_path):
-    """The save only reads: a fit saved after every pass computes what the same fit computes unsaved, the
-    same losses and weights, and leaves the random stream where the unsaved one leaves it. The saver is
-    handed every pass, numbered from one, in order, and the trainer gets its own per-pass summary back
-    once the fit ends. sbi's training method is handed exactly the settings the kept fit records for
-    it, and nothing else, so a kept fit's settings are the ones it trained with."""
+    """The save only reads: a fit saved after every pass computes what the same fit computes unsaved in
+    sbi's own loop, its per-pass summary not wrapped at all, the same losses and weights, and leaves the
+    random stream where that one leaves it. The saver is handed every pass, numbered from one, in order,
+    and the trainer gets its own per-pass summary back once the fit ends. sbi's training method is handed
+    exactly the settings the kept fit records for it, and nothing else, so a kept fit's settings are the
+    ones it trained with."""
     toy = _toy(monkeypatch, tmp_path)
     torch.manual_seed(0)
     plain = toy.prepare(hooks=False)
-    toy.fit(plain)
+    with monkeypatch.context() as patch:
+        patch.setattr(train, "_wrap_summary", lambda infer, saver: False)      # sbi's own loop
+        toy.fit(plain)
     stream_plain = torch.get_rng_state()
 
     asked, real_train = [], SNPE.train
@@ -2033,12 +2036,20 @@ def test_the_epoch_record_comes_without_a_saver_too(tiny_run, fits_left):
 
 
 def test_the_epoch_record_changes_nothing_the_fit_computes(monkeypatch, tmp_path, caplog):
-    """The record of each epoch only reads: from the same seed, a fit that says its epochs and the same fit
-    with the record replaced by nothing end with the same weights, the same best weights and the same loss
-    histories, and leave the random stream in the same place -- saved as it goes or not. So a fit never
-    interrupted computes exactly what it computed before the record was said."""
+    """The record of each epoch only reads, and so does the wrapper that says it: from the same seed, a fit
+    that says its epochs, saved as it goes or not, ends with the same weights, the same best weights and the
+    same loss histories as the same fit run by sbi's own loop, its per-pass summary not wrapped at all, and
+    leaves the random stream in the same place. So a fit never interrupted computes exactly what it computed
+    before the record was said. Each record's seconds are the trainer's own for its epoch, to one decimal:
+    every epoch of so small a fit takes well under a tenth of a second, so here each is given seconds of its
+    own once sbi has timed it, half a second more for each epoch."""
     toy = _toy(monkeypatch, tmp_path)
     caplog.set_level(logging.INFO, logger="core")
+    summarize = SNPE._summarize_epoch
+
+    def timed(self, *args, **kwargs):
+        summarize(self, *args, **kwargs)
+        self._summary["epoch_durations_sec"][-1] += 0.5 * (self.epoch + 1)
 
     def fit(saving: bool):
         torch.manual_seed(0)
@@ -2046,17 +2057,22 @@ def test_the_epoch_record_changes_nothing_the_fit_computes(monkeypatch, tmp_path
         toy.fit(prepared, saver=_Saves() if saving else None)
         return prepared.infer, torch.get_rng_state()
 
+    with monkeypatch.context() as patch:
+        patch.setattr(train, "_wrap_summary", lambda infer, saver: False)      # sbi's own loop
+        plain, plain_stream = fit(False)
+    assert _epoch_records(caplog) == []
     for saving in (True, False):
-        said, said_stream = fit(saving)
-        assert len(_epoch_records(caplog)) == said._summary["epochs_trained"][-1], saving
         with monkeypatch.context() as patch:
-            patch.setattr(train, "_announce", lambda infer: None)
-            silent, silent_stream = fit(saving)
-        assert _epoch_records(caplog) == [], saving
-        assert _history(said) == _history(silent), saving
-        assert _unequal(said._neural_net.state_dict(), silent._neural_net.state_dict()) == [], saving
-        assert _unequal(said._best_model_state_dict, silent._best_model_state_dict) == [], saving
-        assert torch.equal(said_stream, silent_stream), f"the record drew a random number (saving={saving})"
+            patch.setattr(SNPE, "_summarize_epoch", timed)
+            said, said_stream = fit(saving)
+        took = [_EPOCH_LINE.match(rec.getMessage()).group(4) for rec in caplog.records
+                if rec.name == "core.SBI.train" and rec.getMessage().startswith("[fit] epoch ")]
+        assert took == [f"{d:.1f}" for d in said._summary["epoch_durations_sec"]], saving
+        assert len(_epoch_records(caplog)) == said._summary["epochs_trained"][-1], saving
+        assert _history(said) == _history(plain), saving
+        assert _unequal(said._neural_net.state_dict(), plain._neural_net.state_dict()) == [], saving
+        assert _unequal(said._best_model_state_dict, plain._best_model_state_dict) == [], saving
+        assert torch.equal(said_stream, plain_stream), f"the fit drew a random number (saving={saving})"
 
 
 def test_epochs_since_the_best_is_read_from_the_history_and_holds_across_a_resume(monkeypatch, tmp_path, caplog):
