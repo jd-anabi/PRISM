@@ -1984,9 +1984,11 @@ def test_a_window_stop_during_the_fit_keeps_every_pass_saved_before_it(tiny_run,
     that pass is saved, as a click lands while the pass runs. Under the window every record is where a
     requested stop is taken, so any record said between the summary and the save -- the epoch's own above
     all -- would stop the training with its second pass unsaved. The record that carries the stop is never
-    delivered: the window hears the first pass's saved line and its epoch line, then the line that says
-    the training is kept, and neither line of the second pass. Driven through the window's own channel, as
-    the test of a Cancel pressed during a save is."""
+    delivered: the window hears the first pass's saved line and its epoch line, never the second pass's
+    saved line. The second epoch's own record, which would have followed that line, is said once the stop
+    is taken, from the numbers the pass was saved with, just before the line that says the training is
+    kept, so the run's text and the kept training's log hold every epoch it kept. Driven through the
+    window's own channel, as the test of a Cancel pressed during a save is."""
     from core.gui.streams import CancelToken, WorkerCancelled, _PumpLogHandler
     r = tiny_run
     token = CancelToken()
@@ -2020,7 +2022,55 @@ def test_a_window_stop_during_the_fit_keeps_every_pass_saved_before_it(tiny_run,
     assert any(text.startswith(f"[fit] the training stopped after pass 2 and is kept as fit {row.id}")
                for text in said), said
     assert "[fit] saved after pass 2." not in said, said
-    assert not any(text.startswith("[fit] epoch 2: ") for text in said), said
+    summary = torch.load(row.path / STATE, weights_only=False)["summary"]
+    losses = summary["validation_loss"]
+    second = train.fit_epoch_line(2, summary["training_loss"][-1], losses[-1], summary["epoch_durations_sec"][-1],
+                                  train.epochs_since_best(losses))
+    kept = next(i for i, text in enumerate(said) if text.startswith("[fit] the training stopped after pass 2"))
+    assert [text for text in said if text.startswith("[fit] epoch 2: ")] == [second] and said[kept - 1] == second, said
+    assert _epochs_in(_log(row)) == [1, 2]
+
+
+def _epochs_in(text: str) -> list:
+    """The numbers of the epoch records in the log ``text``, in order."""
+    return [int(_EPOCH_LINE.match(record).group(1)) for record in _said(text, "info", "[fit] epoch ")]
+
+
+def test_a_training_kept_at_a_stop_says_every_epoch_it_kept_once_and_so_does_its_resume(tiny_run, fits_left,
+                                                                                       monkeypatch):
+    """A stop taken right after a pass is saved -- at the save's own line, as the window's Stop is, or by a
+    Ctrl-C arriving there -- comes before the record of that pass's epoch. The training stage, handling the
+    stop, says that record once, from the numbers the pass was saved with, before the line that says the
+    training is kept; so the kept training's log holds every epoch it kept, once, and the posterior a
+    resume writes holds every epoch of the fit, once each, in order. A stop that comes once the epoch is
+    said, while the next pass trains, adds nothing: the record is not said twice."""
+    r = tiny_run
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 2, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            _train(r, 7, 3, name="fit_epochs_kept")
+    row, = _new_fits(r, fits_left)
+    text = _log(row)
+    assert _epochs_in(text) == [1, 2], text
+    lines = text.splitlines()
+    kept = next(i for i, line in enumerate(lines) if " info [fit] the training stopped after pass 2 " in line)
+    assert " info [fit] epoch 2: " in lines[kept - 1], lines[kept - 2:kept + 1]
+    post = _resume(r, row.id)
+    epochs = post.manifest.body["training"]["epochs_trained"]
+    assert epochs > 2 and _epochs_in(_log(post)) == list(range(1, epochs + 1)), _log(post)
+
+    summarize = SNPE._summarize_epoch
+
+    def stopped_while_training(self, *args, **kwargs):
+        if self.epoch + 1 == 3:
+            raise KeyboardInterrupt                     # the third pass trains; the second is saved and said
+        summarize(self, *args, **kwargs)
+
+    monkeypatch.setattr(SNPE, "_summarize_epoch", stopped_while_training)
+    with pytest.raises(KeyboardInterrupt):
+        _train(r, 7, 5, name="fit_epochs_kept_once")
+    row, = _new_fits(r, fits_left)                      # the first was removed once its posterior was written
+    assert row.fit_passes == 2 and _epochs_in(_log(row)) == [1, 2], _log(row)
 
 
 def test_the_epoch_record_says_each_epochs_numbers_once(tiny_run, fits_left):

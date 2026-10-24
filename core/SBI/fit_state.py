@@ -542,6 +542,9 @@ class FitSession:
         self.resume_pair: "tuple[dict, dict] | None" = None
         self._saved_here = False
         self._newest_unreadable = False
+        # The pass this process saved last and the histories it was saved with, for the record of its
+        # epoch a stop can come before (``_say_kept_epoch``).
+        self._kept_epoch: "tuple[int, dict] | None" = None
 
     @classmethod
     def reopen(cls, store, kept: "KeptFit", *, cfg) -> "FitSession":
@@ -720,6 +723,7 @@ class FitSession:
                 # saved: a resumed training killed afterwards reads as stopped unexpectedly.
                 self._write_manifest(progress=progress, stopped=None, save_error=None)
                 self._progress, self._stopped, self._save_error = progress, None, None
+                self._kept_epoch = (progress["passes"], snapshot["summary"])
                 self.passes, self._kept, self._saved_here = progress["passes"], True, True
                 self.id = self.path.name.rpartition("__")[2]
             except Exception as e:                  # noqa: BLE001 -- a failed save never stops the fit
@@ -759,6 +763,7 @@ class FitSession:
             on_purpose = not isinstance(exc, Exception)
             reason = _reason(exc)
             self._stopped = {"on_purpose": on_purpose, "at": _utc_now(), "reason": reason}
+            self._say_kept_epoch()
             # Said first, so that the record's own log says how its training stopped.
             log.info(f"[fit] the training stopped after pass {self.passes} and is kept as fit {self.id} "
                      f"({'stopped on purpose' if on_purpose else 'stopped by ' + reason}).")
@@ -772,6 +777,29 @@ class FitSession:
             pass
         finally:
             self._release()
+
+    def _say_kept_epoch(self) -> None:
+        """Say the record of the epoch this process saved last, when this run has not said it. That record
+        follows the pass's save, so a stop taken at the save's own line (where the window takes its Stop,
+        and where a Ctrl-C can land) ends the fit before it: the run's text, the kept training's log and
+        the log of a posterior resumed from it would hold every epoch but the one kept. Said once, while
+        the stop is handled, from the numbers the pass was saved with, under the training call's own
+        logger as every epoch's record is; nothing when this run's log holds it already or when there is
+        no run's log to read. Never raises."""
+        try:
+            kept, run_log = self._kept_epoch, runs.current_run_log()
+            if kept is None or run_log is None or kept[0] != self.passes:
+                return
+            said = f"info [fit] epoch {self.passes}: "
+            if any(line.split(" ", 1)[-1].startswith(said) for line in run_log.lines):
+                return
+            from core.SBI import train
+            summary = kept[1]
+            train.log.info(train.fit_epoch_line(self.passes, summary["training_loss"][-1],
+                                                summary["validation_loss"][-1], summary["epoch_durations_sec"][-1],
+                                                train.epochs_since_best(summary["validation_loss"])))
+        except Exception:                           # noqa: BLE001 -- the stop that is propagating comes first
+            pass
 
     def finished(self) -> None:
         """The fit has ended: the record says so until the posterior is written. Never raises."""
