@@ -199,8 +199,8 @@ def test_a_cpu_seeded_block_leaves_every_cuda_generator_alone():
     the CPU generator and numpy only.
 
     The context lives in core/rng.py, and core.diagnostics.rng re-exports the SAME object, so the
-    diagnostics and `smoke` -- which a tool test patches through core.diagnostics.rng -- keep their
-    import."""
+    diagnostics and the card test step the `smoke` command calls -- whose seeding the tool tests patch
+    through core.diagnostics.rng -- keep reading it there."""
     import core.diagnostics.rng
     import core.rng
     from core import config

@@ -44,8 +44,9 @@ only a CRASH means anything.
 
 Every knob is an ARGUMENT: this module rebinds no module constant (``scripts/smoke_train.py``
 rebound four on ``orchestrator`` and leaked a default store; both are gone). The whole stage
-sequence runs inside one ``seeded(seed, device)`` context -- one seed, streams running on, as the
-script did: per-stage seeding would replay the training strata in the calibration set.
+sequence runs inside one ``seeded(seed, device)`` context, which the card test step this command
+calls (``core.diagnostics.card_test``) opens -- one seed, streams running on, as the script did:
+per-stage seeding would replay the training strata in the calibration set.
 Seeded runs are NOT bitwise-reproducible on CUDA or across devices.
 """
 import argparse
