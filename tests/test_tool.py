@@ -855,6 +855,34 @@ def test_ctrl_c_mid_simulation_keeps_the_committed_batches(tool_run, monkeypatch
     assert "resuming at batch 2/4" in capsys.readouterr().out
 
 
+def test_the_training_stages_two_refusals_of_a_continuation_end_with_the_resume_flag(tool_run, capsys):
+    """A training told to continue a simulation set it cannot continue is refused before anything is
+    spent: the policy set to 'require' with no set kept at all (checkpointing off), and 'require' where
+    no set of these settings is kept. Either line ends with the flag of the policy, the setting that was
+    moved off its default; the first sentence names the cadence by its keyword. Nothing is written."""
+    from core.artifacts import ArtifactStore
+    bounds, cell, root = tool_run
+    store = ArtifactStore(root)
+    before = ({s.id for s in store.list("simulation")}, {s.id for s in store.list("posterior")})
+    argv = ["train", *_cfg(bounds), "--prior", "tp", "--run-size", "8", "--hidden-features", "8",
+            "--num-transforms", "1", "--stop-after-epochs", "1", "--resume", "require"]
+
+    capsys.readouterr()
+    assert main([*argv, "--num-runs", "2", "--checkpoint-every", "0"]) == 1
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism train: refused:")]
+    assert len(lines) == 1, err
+    assert "resume='require' needs checkpointing on" in lines[0] and "checkpoint_every=0" in lines[0], lines[0]
+    assert lines[0].endswith(" (--resume)"), lines[0]
+
+    assert main([*argv, "--num-runs", "5", "--checkpoint-every", "1"]) == 1
+    err = capsys.readouterr().err
+    assert "prism train: refused: resume='require' but there is no resumable cache at" in err, err
+    assert err.rstrip().endswith(" (--resume)"), err
+    assert "raised at" not in err and "Traceback" not in err, err
+    assert ({s.id for s in store.list("simulation")}, {s.id for s in store.list("posterior")}) == before
+
+
 def test_every_validate_infer_and_tsnpe_flag_reaches_its_stage_as_a_keyword(tool_round, monkeypatch):
     """A flag's dest IS the stage's keyword name, for the three subcommands the prior and train tests
     do not cover. Pins the WHOLE keyword mapping each call produces -- ``set(kw) ==`` the exact set, as

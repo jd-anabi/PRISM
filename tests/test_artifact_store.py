@@ -2339,7 +2339,9 @@ def test_resume_is_validated_and_refused_before_any_spend(store, monkeypatch):
     with pytest.raises(Refusal, match="checkpointing on") as e:
         orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
                                      checkpoint_every=0, resume="require")
-    assert e.value.field is None and "--checkpoint-every" not in str(e.value), str(e.value)
+    # The policy is the setting moved off its default, so it is the one named; the sentence names the
+    # cadence by its keyword, and no flag.
+    assert e.value.field == "resume" and "--" not in str(e.value), str(e.value)
     assert spent == [], "a refused resume policy started the run anyway"
     assert _inspect.signature(orchestrator.build_posterior).parameters["resume"].default == "auto"
     # The flow and training knobs are refused with the cadence, not after every simulation: a
@@ -2483,7 +2485,7 @@ def test_a_near_miss_cache_is_refused_before_the_fisher(store, monkeypatch):
     with pytest.raises(Refusal, match="no resumable cache") as e:
         orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
                                      checkpoint_every=1, resume="require")
-    assert e.value.field is None, "two controls answer a require with no cache; no single field"
+    assert e.value.field == "resume", "the policy asked for a set that is not there: it is the setting named"
 
     # (d) with checkpointing off there is nothing to be near: no read, no write, no question
     with pytest.raises(AssertionError, match="Fisher reached"):

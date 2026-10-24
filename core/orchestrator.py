@@ -1076,11 +1076,12 @@ def build_posterior(
     if resume != "auto" and not ck_every and train_new:
         # Without this, a `resume='require'` drill with checkpointing off exits 0 having tested
         # nothing: there is no cache for the policy to act on, so the policy is silently ignored.
-        # field=None: two controls answer it (the cadence and the policy), so no front end appends one.
+        # Two settings could answer it, the cadence and the policy. The policy is the one moved off its
+        # default, so it is the field named; the sentence names the cadence.
         raise Refusal(
             f"resume={resume!r} needs checkpointing on: with checkpoint_every=0 no simulation cache "
             f"is read or written, so the policy has nothing to act on. Pass checkpoint_every=N, or "
-            f"leave resume at 'auto'.")
+            f"leave resume at 'auto'.", field="resume")
     # Above BOTH branches, and the load branch is the subtle half. store.load_posterior compares the
     # posterior against cfg -- so a STALE cfg loading the posterior trained under that same stale cfg
     # agrees with itself and says nothing, while every inference it serves is at a retired band. This
@@ -1286,7 +1287,7 @@ def build_posterior(
             # expensive thing this run does before it simulates; it stays there as a second line.
             near = training_checkpoint.near_miss_siblings(ident, store.kind_dir("simulation"))
             if resume == "require":
-                raise Refusal(_no_cache_message(ckpt_dir, near))
+                raise Refusal(_no_cache_message(ckpt_dir, near), field="resume")
             if near and not new_run:
                 raise Refusal(_near_miss_message(ckpt_dir, near), field="new_run")
 
