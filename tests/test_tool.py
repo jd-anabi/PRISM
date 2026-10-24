@@ -1198,9 +1198,16 @@ def test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud(tool_env, tmp_p
     started a new cache and exited 0, and is now a refusal before the Fisher. Leg (d) is the
     stage banner: a stage that raises names itself before the traceback.
     """
+    import re
+
     from core import orchestrator
     from core.artifacts import ArtifactStore, default_store
     from core.tool import main
+
+    def framed(out):
+        """The lines that frame each stage on the console, in order, each one's seconds left out."""
+        return [re.sub(r" in \d+\.\ds$", " in _s", line) for line in out.splitlines()
+                if line.startswith(("=== ", "[ok] ", "[skip] "))]
 
     # tool_env is what installs SBITEST as real input files and points PRISM_ARTIFACTS at a temp
     # root; --store-root then puts this run's own store beside it.
@@ -1211,23 +1218,27 @@ def test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud(tool_env, tmp_p
     common = ["smoke", *SCFG, "--store-root", str(root), "--run-size", "8", "--t-obs", "1.0",
               "--checkpoint"]
 
-    # (a) the full run: four stages, six artifacts.
+    # (a) the full run: four stages, six artifacts. Each stage is framed on the console by its banner
+    # before it and its seconds after it, the lines the card gate is read by.
     assert main([*common, "--num-runs", "2", "--n-cal", "60", "--max-epochs", "2", "--save"]) == 0
     out = capsys.readouterr().out
-    for line in ("=== prior ===", "=== posterior ===", "=== validate ===", "=== infer ===",
-                 "[smoke] ALL STAGES COMPLETED"):
-        assert line in out, line
+    assert "[smoke] ALL STAGES COMPLETED" in out, out[-2000:]
+    assert framed(out) == ["=== prior ===", "[ok] prior in _s", "=== posterior ===", "[ok] posterior in _s",
+                           "=== validate ===", "[ok] validate in _s", "=== infer ===", "[ok] infer in _s"], out[-3000:]
     s = ArtifactStore(root)
     assert [r.name for r in s.list("prior")] == ["smoke_prior"]
     assert [r.name for r in s.list("posterior")] == ["smoke_posterior"]
     for kind in ("simulation", "observation", "calibration", "inference"):
         assert len(s.list(kind)) == 1, kind
 
-    # (b) the drill: same store, same budget, the prior loaded by name -> a resume, in seconds.
+    # (b) the drill: same store, same budget, the prior loaded by name -> a resume, in seconds. The two
+    # stages it does not ask for are each said to be skipped, after the two it runs.
     drill = [*common, "--num-runs", "2", "--prior", "smoke_prior", "--stages", "prior,posterior"]
     assert main([*drill, "--resume", "require"]) == 0
     out = capsys.readouterr().out
     assert "resuming at batch 2/2" in out, out[-2000:]
+    assert framed(out) == ["=== prior ===", "[ok] prior in _s", "=== posterior ===", "[ok] posterior in _s",
+                           "[skip] validate", "[skip] infer"], out[-3000:]
     assert len(ArtifactStore(root).list("simulation")) == 1, "a resume must not key a new cache"
 
     # (c) one field away: refused before any simulation, naming the field and both values.
@@ -1311,10 +1322,10 @@ def test_every_smoke_flag_reaches_its_stage_as_a_keyword(tool_env, tmp_path, mon
     # (a loaded prior is never renamed); build_posterior still gets "smoke_posterior" -- --save names
     # whatever THIS run builds, independent of whether the prior was loaded. --store-root keeps the
     # run out of %TEMP%: a successful run never removes the root main created for it.
-    assert main(["smoke", *_cfg(bounds), "--cell", cell, "--num-runs", "3", "--run-size", "9",
+    assert main(["smoke", *_cfg(bounds), "--cell", cell, "--num-runs", "8", "--run-size", "9",
                  "--n-cal", "17", "--max-epochs", "6", "--checkpoint", "--new-run",
                  "--resume", "require", "--t-obs", "2.5", "--seed", "5", "--prior", "smoke_prior",
-                 "--hidden-features", "11", "--num-transforms", "3",
+                 "--hidden-features", "11", "--num-transforms", "2",
                  "--save", "--store-root", str(tmp_path / "smoke")]) == 0
 
     (cfg1, ref1, build_new1), kw1 = prior_rec.calls[0]
@@ -1328,11 +1339,11 @@ def test_every_smoke_flag_reaches_its_stage_as_a_keyword(tool_env, tmp_path, mon
     assert kw2["name"] == "smoke_posterior"
     assert set(kw2) == {"fig_sink", "store", "name", "num_runs", "run_size_cap", "max_num_epochs",
                         "checkpoint_every", "new_run", "resume", "hidden_features", "num_transforms"}
-    assert kw2["hidden_features"] == 11 and kw2["num_transforms"] == 3
-    assert kw2["num_runs"] == 3
+    assert kw2["hidden_features"] == 11 and kw2["num_transforms"] == 2
+    assert kw2["num_runs"] == 8
     assert kw2["run_size_cap"] == 9
     assert kw2["max_num_epochs"] == 6
-    assert kw2["checkpoint_every"] == 1, "ck_every = max(1, num_runs // 2) = max(1, 3 // 2)"
+    assert kw2["checkpoint_every"] == 4, "ck_every = max(1, num_runs // 2) = max(1, 8 // 2)"
     assert kw2["new_run"] is True
     assert kw2["resume"] == "require"
 
@@ -1596,8 +1607,8 @@ def test_the_card_test_step_calls_the_four_stages_with_the_smoke_commands_keywor
     calls, made, want = _card_stages(monkeypatch, cfg)
     cell = _weak_cell()
     sink, store = object(), object()
-    result = card.card_test(cfg, cell=cell, t_obs_s=2.5, seed=5, num_runs=3, run_size_cap=9, n_cal=17,
-                            max_num_epochs=6, hidden_features=11, num_transforms=3, checkpoint=True, save=True,
+    result = card.card_test(cfg, cell=cell, t_obs_s=2.5, seed=5, num_runs=8, run_size_cap=9, n_cal=17,
+                            max_num_epochs=6, hidden_features=11, num_transforms=2, checkpoint=True, save=True,
                             prior_ref="smoke_prior", resume="require", new_run=True, fig_sink=sink, store=store)
 
     ((cfg1, ref1, build_new1), kw1), = calls["prior"]
@@ -1606,9 +1617,10 @@ def test_the_card_test_step_calls_the_four_stages_with_the_smoke_commands_keywor
     assert (ref1, build_new1) == ("smoke_prior", False) and kw1 == {"fig_sink": sink, "store": store, "name": ""}
     ((cfg2, prior2, ref2, train_new2), kw2), = calls["posterior"]
     assert cfg2 is cfg1 and (prior2, ref2, train_new2) == ("PRIOR", None, True)
-    assert kw2 == {"fig_sink": sink, "store": store, "name": "smoke_posterior", "num_runs": 3, "run_size_cap": 9,
-                   "max_num_epochs": 6, "checkpoint_every": 1, "new_run": True, "resume": "require",
-                   "hidden_features": 11, "num_transforms": 3}
+    # The simulation set is committed every half of its batches: 4 of the 8, a value no setting here has.
+    assert kw2 == {"fig_sink": sink, "store": store, "name": "smoke_posterior", "num_runs": 8, "run_size_cap": 9,
+                   "max_num_epochs": 6, "checkpoint_every": 4, "new_run": True, "resume": "require",
+                   "hidden_features": 11, "num_transforms": 2}
     ((cfg3, post3, prior3), kw3), = calls["validate"]
     assert cfg3 is cfg1 and (post3, prior3) == ("POST", "PRIOR")
     assert kw3 == {"fig_sink": sink, "store": store, "n_cal": 17}
@@ -1620,19 +1632,26 @@ def test_the_card_test_step_calls_the_four_stages_with_the_smoke_commands_keywor
     assert (result.prior, result.posterior, result.calibration, result.inference) == ("PRIOR", "POST", "CAL", "INF")
     assert result.observation is made["infer"][0] and result.conditioning_width == want
 
-    # At its defaults the step forwards no network size and no policy, so each stays the stage's own; a
-    # prior it builds is named only when it is told to save; and every default is the smoke command's.
+    # At its defaults the step forwards no network size and no policy, so each stays the stage's own; it names
+    # neither the prior it builds nor the posterior it trains; and every default is the smoke command's.
     for name in calls:
         calls[name].clear()
-    card.card_test(cfg, cell=cell, save=True)
+    card.card_test(cfg, cell=cell)
     (_c, ref, build_new), kw = calls["prior"][0]
-    assert (ref, build_new, kw["name"]) == (None, True, "smoke_prior")
+    assert (ref, build_new, kw["name"]) == (None, True, ""), kw
     kw = calls["posterior"][0][1]
-    assert not {"resume", "hidden_features", "num_transforms"} & set(kw), kw
+    assert kw["name"] == "" and not {"resume", "hidden_features", "num_transforms"} & set(kw), kw
     assert (kw["num_runs"], kw["run_size_cap"], kw["max_num_epochs"], kw["checkpoint_every"], kw["new_run"]) == \
         (4, 32, 5, 0, False)
     assert calls["validate"][0][1]["n_cal"] == 40 and calls["infer"][0][0][2] == config.T_MIN_EXP_S
     assert calls["seeds"][0][0] == 0
+    # Told to save, it names both: the prior it builds and the posterior it trains.
+    for name in calls:
+        calls[name].clear()
+    card.card_test(cfg, cell=cell, save=True)
+    (_c, ref, build_new), kw = calls["prior"][0]
+    assert (ref, build_new, kw["name"], calls["posterior"][0][1]["name"]) == \
+        (None, True, "smoke_prior", "smoke_posterior")
     smoke = build_parser().subcommands["smoke"]
     step = inspect.signature(card.card_test).parameters
     for dest, keyword in (("seed", "seed"), ("num_runs", "num_runs"), ("run_size_cap", "run_size_cap"),

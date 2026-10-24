@@ -2073,6 +2073,29 @@ def test_a_training_kept_at_a_stop_says_every_epoch_it_kept_once_and_so_does_its
     assert row.fit_passes == 2 and _epochs_in(_log(row)) == [1, 2], _log(row)
 
 
+def test_the_kept_epochs_record_is_said_whole_from_the_numbers_it_was_saved_with_and_once():
+    """The record of the epoch a stop came before is said from the histories its pass was saved with, whole:
+    the pass's number, the last training loss, the last validation loss and the last seconds, and the epochs
+    since the best one counted over the whole validation history. A second stop handled in the same run
+    finds it said and adds nothing. A pass kept with histories that cannot be read says nothing and raises
+    nothing, since the stop being handled comes first. Read with no training, on a stand-in holding a pass
+    number and the histories it was saved with, every number in them a different one."""
+    histories = {"training_loss": [3.25, 2.5, 1.75], "validation_loss": [1.125, 0.5, 0.625],
+                 "epoch_durations_sec": [9.0, 8.0, 7.3]}
+    kept = types.SimpleNamespace(passes=3, _kept_epoch=(3, histories))
+    with runs.capture_run() as run_log:
+        fit_state.FitSession._say_kept_epoch(kept)
+        said = [line.split(" ", 1)[1] for line in run_log.lines]
+        fit_state.FitSession._say_kept_epoch(kept)
+        again = [line.split(" ", 1)[1] for line in run_log.lines]
+    assert said == ["info [fit] epoch 3: training loss 1.75, validation loss 0.625, took 7.3 s, "
+                    "epochs since the best 1"], said
+    assert again == said, again
+    with runs.capture_run() as run_log:
+        fit_state.FitSession._say_kept_epoch(types.SimpleNamespace(passes=3, _kept_epoch=(3, {})))
+    assert run_log.lines == [], run_log.lines
+
+
 def test_the_epoch_record_says_each_epochs_numbers_once(tiny_run, fits_left):
     """A training saved after every pass says each epoch in one record of its log, numbered from one, on
     the line right after the one that says its pass is saved: the training and the validation loss as the
