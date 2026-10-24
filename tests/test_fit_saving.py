@@ -343,6 +343,34 @@ def test_the_named_code_is_the_code_that_builds_or_trains_the_network():
     assert [rel for rel in SBI_TRAINER_FILES if not (installed / rel).is_file()] == []
 
 
+def test_the_named_training_code_is_as_recorded():
+    """The code that builds or trains the network is held to the digests it had once each epoch's record
+    was added to the fit. A kept training is resumed only by the code it was trained with, so an edit
+    inside any of the seventeen named functions and classes -- a comment or a docstring included -- makes
+    every training kept before it unresumable. Such an edit, when it is meant, changes the digests below in
+    the same commit and says so there; one that is not meant fails here first. An edit outside them, or
+    lines added above them, moves nothing."""
+    assert code_digests() == {
+        "core.SBI.chi.band_norm": "4c840c4007eba80b",
+        "core.SBI.chi.n_chi_features": "972304c5ef59acee",
+        "core.SBI.chi_encoder.ChiSetEncoder": "9d6313ca9c5bca10",
+        "core.SBI.embedded_network.EmbeddedNet": "828f05f8093a2d41",
+        "core.SBI.embedded_network._column_quantiles": "68cfa160cbd35d71",
+        "core.SBI.embedded_network._probit": "0702084a0af1e7cf",
+        "core.SBI.summaries.winsorize_summary_block": "85ef9d1071d23560",
+        "core.SBI.train._capped_zscore_check": "8ecc6471b985829f",
+        "core.SBI.train.build_trainer": "a2dd52444b51f20a",
+        "core.SBI.train.fit_settings": "cd193d63abdeb68b",
+        "core.SBI.train.prepare_fit": "dc6cde65a46d9e69",
+        "core.SBI.train.restore_trainer": "5a17377fb8a9ede6",
+        "core.SBI.train.run_fit": "2b7a0bce64570300",
+        "core.SBI.train.take_snapshot": "dbb919bbe095bb54",
+        "core.SBI.train.train_nn": "2cf84a17feb813e0",
+        "core.orchestrator.build_embedding_net": "45bb3140bcebcfc7",
+        "core.orchestrator.expected_forcing_dim": "d27f2a643829e111",
+    }
+
+
 def _copy_trainer_files(root: Path, *, crlf: bool = False, change_base: bool = False) -> Path:
     installed = Path(sbi.__file__).parent
     for rel in SBI_TRAINER_FILES:
