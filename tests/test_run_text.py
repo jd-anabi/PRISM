@@ -10,7 +10,9 @@ off a clock the test holds, and a child process is waited for by reading what it
 
 Run: pytest tests/test_run_text.py
 """
+import json
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -475,3 +477,284 @@ def test_another_threads_record_that_cannot_be_written_writes_nothing_on_the_run
         assert heard == [], heard
         if err is not None:
             assert "--- Logging error ---" in err.getvalue() and "UnicodeEncodeError" in err.getvalue(), err.getvalue()
+
+
+# ── the history file ─────────────────────────────────────────────────────────────────────────────
+FIELDS = ("id", "word", "name", "place", "records_root", "started", "ended", "last_heard", "outcome", "stage",
+          "acknowledged", "tries", "plan", "settings", "memory_limit", "simulation_set", "health", "fit", "check",
+          "result", "failure", "text")
+
+
+def _at(day, hour=12, minute=0, second=0):
+    """A local moment of October 2026."""
+    return datetime(2026, 10, day, hour, minute, second).astimezone()
+
+
+def _ids(records):
+    return [record["id"] for record in records]
+
+
+def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
+    """A run's history file holds every field of the history, in its order, None where the run has nothing, its
+    times local with their offset; it reads back as it was written. It is written whole: to a temporary file that is
+    then renamed over the run's file, so a write that fails leaves the last whole file and no temporary one, and a
+    temporary file or a torn file is never read as a run. What the history does not keep, and a time with no zone,
+    are refused before anything is written."""
+    from core.gui.run import history
+
+    started, ended = _at(8, 19, 2, 11), _at(14, 14, 10)
+    record = {
+        "id": "20261008T190211-training", "word": "Training", "name": "retrain_3", "place": ["inference", "posterior"],
+        "records_root": str(tmp_path / "records"), "started": started, "ended": ended, "last_heard": None,
+        "outcome": "stopped", "stage": "Fit", "acknowledged": False,
+        "tries": [{"started": started, "ended": ended, "outcome": "stopped", "failure": None, "batches_before": 0,
+                   "batches_after": 10000, "epochs_before": 0, "epochs_after": 62}],
+        "plan": "retrain", "settings": {"num_runs": 10000, "hidden_features": 128, "num_transforms": 5},
+        "memory_limit": "The graphics card's memory limit in force is 6 GiB, set in Settings.",
+        "simulation_set": {"folder": "eda5c2a1e468", "batches": 10000, "at_start": 0, "at_end": 10000,
+                           "per_batch": 2048, "seconds_per_batch": 9.7},
+        "health": {"failed_simulations": 3, "memory_peak_gib": 5.8},
+        "fit": {"epochs": 62, "best_epoch": 58, "best_validation_loss": -3.39812, "seconds_per_epoch": 3780.0,
+                "ended_by": "stopped", "network": [128, 5], "simulations": 20480000, "kept_id": "20261014T141000-1",
+                "passes": 62, "resumed": False, "processes": 1, "wall_seconds": 234360.0, "save_error": None},
+        "check": None, "result": [], "failure": None, "text": "20261008T190211-training.txt"}
+    replaced, real_replace = [], os.replace
+
+    def replace(source, target):
+        replaced.append((Path(source).name, Path(target).name))
+        real_replace(source, target)
+
+    monkeypatch.setattr(history.os, "replace", replace)
+    folder = tmp_path / "runs"
+    path = history.write(folder, record)
+    assert path == folder / "20261008T190211-training.json"
+    assert replaced == [("20261008T190211-training.json.tmp", "20261008T190211-training.json")], replaced
+    assert sorted(p.name for p in folder.iterdir()) == ["20261008T190211-training.json"]
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert tuple(on_disk) == history.FIELDS == FIELDS
+    assert history.read(path) == on_disk == {**record, "started": started.isoformat(), "ended": ended.isoformat(),
+                                             "tries": [{**record["tries"][0], "started": started.isoformat(),
+                                                        "ended": ended.isoformat()}]}
+    assert on_disk["started"].startswith("2026-10-08T19:02:11") and datetime.fromisoformat(
+        on_disk["started"]).utcoffset() == started.utcoffset(), on_disk["started"]
+
+    history.write(folder, {"id": "20261009T080000-prior", "word": "Prior", "started": _at(9, 8)})
+    sparse = history.read(folder / "20261009T080000-prior.json")
+    assert tuple(sparse) == FIELDS and (sparse["word"], sparse["outcome"], sparse["fit"]) == ("Prior", None, None)
+
+    before = path.read_bytes()
+    for refused in ({**record, "colour": "red"}, {**record, "fit": {**record["fit"], "pace": 1.0}},
+                    {**record, "started": datetime(2026, 10, 8, 19, 2, 11)}, {**record, "id": ""}):
+        try:
+            history.write(folder, refused)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"written: {refused}")
+    try:
+        history.write(folder, {**record, "text": {"a set, which the history cannot write"}})
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("a record the history cannot write was written")
+    assert path.read_bytes() == before, "a failed write touched the run's file"
+    assert sorted(p.name for p in folder.iterdir()) == ["20261008T190211-training.json", "20261009T080000-prior.json"]
+
+    (folder / "20261010T090000-training.json.tmp").write_text('{"id": "20261010T0900', encoding="utf-8")
+    (folder / "20261011T090000-training.json").write_text('{"id": "20261011T09', encoding="utf-8")
+    assert history.read(folder / "20261011T090000-training.json") is None
+    assert _ids(history.latest(folder, records_root=str(tmp_path / "records"), n=9)) == ["20261008T190211-training"]
+
+
+def test_the_runs_folder_sits_beside_the_settings_file(tmp_path):
+    """The runs' files sit in the folder ``runs`` beside the settings file: here the test's own, which the suites'
+    guard hands every test, so a test never writes beside the person's. Naming the folder makes nothing."""
+    from core.gui import settings
+    from core.gui.run import history
+
+    assert Path(settings.settings().fileName()) == tmp_path / "prism.ini", "the suites' settings guard is not in force"
+    assert history.runs_folder() == tmp_path / "runs"
+    assert not (tmp_path / "runs").exists()
+
+
+def test_a_run_id_is_its_local_start_and_its_word(tmp_path):
+    """A run's id is its local start, to the second, and its word lower-cased with its spaces as hyphens. A second
+    run of the same word in the same second takes ``-2``, then ``-3``, so no run's files are written over."""
+    from core.gui.run import history
+
+    started = _at(8, 19, 2, 11)
+    assert history.run_id("Training", started, tmp_path) == "20261008T190211-training"
+    assert history.run_id("Narrowing round", started, tmp_path) == "20261008T190211-narrowing-round"
+    (tmp_path / "20261008T190211-training.json").write_text("{}", encoding="utf-8")
+    assert history.run_id("Training", started, tmp_path) == "20261008T190211-training-2"
+    (tmp_path / "20261008T190211-training-2.txt").write_text("", encoding="utf-8")
+    assert history.run_id("Training", started, tmp_path) == "20261008T190211-training-3"
+    assert history.run_id("Training", _at(8, 19, 2, 12), tmp_path) == "20261008T190212-training"
+
+
+def test_the_latest_runs_are_those_of_the_records_folder_in_use(tmp_path):
+    """Home's last runs are read for the records folder in use: a run of another records folder is not among them,
+    however new. Newest first, as many as asked for; the same folder spelled another way is the same folder."""
+    from core.gui.run import history
+
+    here, there, folder = tmp_path / "records", tmp_path / "elsewhere", tmp_path / "runs"
+    for run, day, root in (("20261001T120000-training", 1, here), ("20261002T120000-prior", 2, there),
+                           ("20261003T120000-prior", 3, here), ("20261004T120000-training", 4, here),
+                           ("20261005T120000-training", 5, there)):
+        history.write(folder, {"id": run, "word": "Training", "started": _at(day), "outcome": "finished",
+                               "records_root": str(root)})
+    assert _ids(history.latest(folder, records_root=str(here), n=2)) == [
+        "20261004T120000-training", "20261003T120000-prior"]
+    assert _ids(history.latest(folder, records_root=str(here), n=9)) == [
+        "20261004T120000-training", "20261003T120000-prior", "20261001T120000-training"]
+    assert _ids(history.latest(folder, records_root=str(there), n=9)) == [
+        "20261005T120000-training", "20261002T120000-prior"]
+    assert _ids(history.latest(folder, records_root=str(there / ".." / "records"), n=1)) == [
+        "20261004T120000-training"]
+    assert history.latest(tmp_path / "nothing", records_root=str(here), n=3) == []
+
+
+_LOADS = """
+import sys
+sys.path.insert(0, sys.argv[1])
+import core.gui.run.history
+print(sorted(name for name in ("torch", "core.SBI.training_checkpoint") if name in sys.modules))
+"""
+
+
+def test_a_failed_training_can_be_continued_from_its_sets_last_saved_batch(tmp_path, monkeypatch):
+    """A training of the records folder in use that failed or was not seen to end can be continued while its
+    simulation set is unfinished: from the set's last saved batch, read off the set's folder once the run has
+    ended. Not a run that was stopped (its own page offers that), nor one still running (the engine rewrites the
+    set's state as it goes), nor one whose set is complete or holds no saved batch, nor once a later training of
+    the records folder in use has started, nor a run of another records folder. The set's state is read by a module
+    that loads torch, imported only when it is asked for: the history itself loads no torch, as a fresh interpreter
+    shows."""
+    from core.SBI import training_checkpoint
+    from core.artifacts.store import ArtifactStore
+    from core.gui.run import history
+
+    states = {"eda5c2a1e468": {"batches_done": 6150, "complete": False},
+              "0a1b2c3d4e5f": {"batches_done": 10000, "complete": True},
+              "5f4e3d2c1b0a": {"batches_done": 0, "complete": False}}
+    read = []
+
+    def peek(path):
+        read.append(Path(path))
+        return states.get(Path(path).name)
+
+    monkeypatch.setattr(training_checkpoint, "peek", peek)
+    store, folder = ArtifactStore(tmp_path / "records"), tmp_path / "runs"
+
+    def training(run, day, outcome, set_folder="eda5c2a1e468", root=None):
+        record = {"id": run, "word": "Training", "started": _at(day), "outcome": outcome,
+                  "records_root": str(root or store.root), "simulation_set": {"folder": set_folder}}
+        history.write(folder, record)
+        return record
+
+    failed = training("20261003T120000-training", 3, "failed")
+    assert history.continuable(failed, store=store, folder=folder) == 6150
+    assert read == [store.kind_dir("simulation") / "eda5c2a1e468"], read
+    assert history.continuable({**failed, "outcome": "not seen to end"}, store=store, folder=folder) == 6150
+    read.clear()
+    for outcome in ("stopped", "finished", "running"):
+        assert history.continuable({**failed, "outcome": outcome}, store=store, folder=folder) is None, outcome
+    assert history.continuable({**failed, "records_root": str(tmp_path / "elsewhere")}, store=store,
+                               folder=folder) is None
+    assert read == [], f"the set was read for a run that cannot be continued: {read}"
+    for set_folder in ("0a1b2c3d4e5f", "5f4e3d2c1b0a", "ffffffffffff"):
+        assert history.continuable({**failed, "simulation_set": {"folder": set_folder}}, store=store,
+                                   folder=folder) is None, set_folder
+    training("20261004T120000-training", 4, "running", root=tmp_path / "elsewhere")
+    history.write(folder, {"id": "20261004T130000-prior", "word": "Prior", "started": _at(4, 13),
+                           "outcome": "finished", "records_root": str(store.root)})
+    assert history.continuable(failed, store=store, folder=folder) == 6150, "a later run of another kind or folder"
+    training("20261005T120000-training", 5, "finished", set_folder="0a1b2c3d4e5f")
+    assert history.continuable(failed, store=store, folder=folder) is None, "a later training has started"
+
+    fresh = subprocess.run([sys.executable, "-c", _LOADS, str(REPO)], cwd=REPO, capture_output=True, text=True,
+                           timeout=120)
+    assert (fresh.returncode, fresh.stdout.strip()) == (0, "[]"), fresh.stdout + fresh.stderr
+
+
+def test_the_estimate_is_the_newest_pace_of_a_run_of_the_same_word_and_size(tmp_path):
+    """Until a run has its own pace, its page borrows the newest pace of an ended run of the same word and size,
+    and says whose it is. Per batch: the same simulations per batch. Per epoch: the same network fitted on the same
+    number of simulations. A run still going, one of another size or word, and one that ended before any pace, are
+    passed over; with none left, there is no estimate."""
+    from core.gui.run import history
+
+    folder = tmp_path / "runs"
+
+    def run(run_id, day, *, word="Training", name="", outcome="finished", per_batch=2048, seconds=None,
+            network=(128, 5), simulations=20480000, per_epoch=None):
+        history.write(folder, {"id": run_id, "word": word, "name": name, "started": _at(day), "outcome": outcome,
+                               "simulation_set": {"folder": "eda5c2a1e468", "per_batch": per_batch,
+                                                  "seconds_per_batch": seconds},
+                               "fit": {"network": list(network), "simulations": simulations,
+                                       "seconds_per_epoch": per_epoch}})
+
+    run("20261001T120000-training", 1, name="retrain_2", seconds=10.4, per_epoch=3600.0)
+    run("20261002T120000-training", 2, name="retrain_aug", outcome="stopped", seconds=9.7, per_epoch=3780.0)
+    run("20261003T120000-training", 3, name="retrain_3", outcome="running", seconds=8.8, per_epoch=3000.0)
+    run("20261004T120000-training", 4, per_batch=1024, seconds=5.1, network=(64, 5), simulations=1024000,
+        per_epoch=50.0)
+    run("20261005T120000-narrowing-round", 5, word="Narrowing round", seconds=7.7, per_epoch=1800.0)
+    run("20261006T120000-training", 6, name="no_pace", outcome="failed")
+    by_batch, by_epoch = {"per_batch": 2048}, {"network": [128, 5], "simulations": 20480000}
+    assert history.estimate(folder, word="Training", per="batch", size=by_batch) == (
+        9.7, "the last training of this size, retrain_aug, took 9.7 s per batch")
+    assert history.estimate(folder, word="Training", per="epoch", size=by_epoch) == (
+        3780.0, "the last training of this size, retrain_aug, took about 63 minutes per epoch")
+    assert history.estimate(folder, word="Training", per="epoch", size={"network": (64, 5), "simulations": 1024000}) \
+        == (50.0, "the last training of this size took about 50 seconds per epoch")
+    assert history.estimate(folder, word="Narrowing round", per="batch", size=by_batch) == (
+        7.7, "the last narrowing round of this size took 7.7 s per batch")
+    for word, per, size in (("Training", "batch", {"per_batch": 4096}), ("Prior", "batch", by_batch),
+                            ("Training", "epoch", {"network": [256, 10], "simulations": 20480000}),
+                            ("Training", "epoch", {"network": [128, 5], "simulations": 10240000}),
+                            ("Training", "batch", {}), ("Training", "epoch", {"network": [128, 5]})):
+        assert history.estimate(folder, word=word, per=per, size=size) is None, (word, per, size)
+    assert history.estimate(tmp_path / "nothing", word="Training", per="batch", size=by_batch) is None
+
+
+def test_the_runs_of_a_simulation_set_are_found_by_its_folder(tmp_path):
+    """Records and a run's page find the runs that wrote to a simulation set by the set's folder, oldest first; a
+    run of another set, or of none, is not among them."""
+    from core.gui.run import history
+
+    folder = tmp_path / "runs"
+    for run, day, set_folder in (("20261003T120000-training", 3, "eda5c2a1e468"),
+                                 ("20261001T120000-training", 1, "eda5c2a1e468"),
+                                 ("20261002T120000-narrowing-round", 2, "0a1b2c3d4e5f"),
+                                 ("20261004T120000-prior", 4, None)):
+        history.write(folder, {"id": run, "word": "Training", "started": _at(day), "outcome": "finished",
+                               "simulation_set": {"folder": set_folder} if set_folder else None})
+    assert _ids(history.runs_for(folder, "eda5c2a1e468")) == ["20261001T120000-training", "20261003T120000-training"]
+    assert _ids(history.runs_for(folder, "0a1b2c3d4e5f")) == ["20261002T120000-narrowing-round"]
+    assert history.runs_for(folder, "ffffffffffff") == []
+
+
+def test_a_run_still_marked_running_is_closed_as_not_seen_to_end(tmp_path):
+    """A history file that still says "running" when PRISM opens is a run that ended unseen (one PRISM runs at a
+    time): it is rewritten as not seen to end, heard last when its file was last written, and its id is handed
+    back. A run that ended is left as it is, byte for byte, and a second closing finds nothing."""
+    from core.gui.run import history
+
+    folder = tmp_path / "runs"
+    died = history.write(folder, {"id": "20261003T010000-training", "word": "Training", "started": _at(3, 1),
+                                  "outcome": "running", "stage": "Simulation"})
+    also = history.write(folder, {"id": "20261004T090000-prior", "word": "Prior", "started": _at(4, 9),
+                                  "outcome": "running"})
+    ended = history.write(folder, {"id": "20261005T090000-training", "word": "Training", "started": _at(5, 9),
+                                   "outcome": "finished"})
+    for path, heard in ((died, _at(3, 3, 12)), (also, _at(4, 10))):
+        os.utime(path, (heard.timestamp(), heard.timestamp()))
+    kept = ended.read_bytes(), ended.stat().st_mtime_ns
+    assert history.close_unseen(folder) == ("20261003T010000-training", "20261004T090000-prior")
+    closed = history.read(died)
+    assert (closed["outcome"], closed["last_heard"], closed["stage"]) == (
+        "not seen to end", _at(3, 3, 12).isoformat(), "Simulation"), closed
+    assert history.read(also)["last_heard"] == _at(4, 10).isoformat()
+    assert (ended.read_bytes(), ended.stat().st_mtime_ns) == kept
+    assert history.close_unseen(folder) == ()
