@@ -1850,10 +1850,11 @@ def test_the_windows_root_sink_prefixes_a_library_record_and_resolves_its_stream
 
 # ── the deferred-cancel critical section ─────────────────────────────────────────────────────────
 def test_cancel_deferred_defers_a_cancel_and_never_discards_it():
-    """Inside the section neither cancel checkpoint fires -- ``_SignalStream.write`` (every print and
-    every tqdm redraw) and ``_PumpLogHandler.emit`` (every ``core`` record) -- and the records still
-    flow. What must NOT happen is the cancel being lost: the token stays REQUESTED, its latch stays
-    unfired, and the very next check OUTSIDE the block raises exactly as it would have.
+    """Inside the section none of the three cancel checkpoints fires -- ``_SignalStream.write`` (every
+    print and every tqdm redraw), ``_PumpLogHandler.emit`` (every ``core`` record) and
+    ``_SignalStream.record`` (every library's record, which the window's root sink hands the run) --
+    and the lines still flow. What must NOT happen is the cancel being lost: the token stays REQUESTED,
+    its latch stays unfired, and the very next check OUTSIDE the block raises exactly as it would have.
 
     Re-entrant, because the section nests: the pipeline's rescue block sits inside one and the
     ``training_checkpoint.save`` it calls opens another, so a plain boolean would be cleared by the
@@ -1886,6 +1887,7 @@ def test_cancel_deferred_defers_a_cancel_and_never_discards_it():
         with runs.cancel_deferred():           # nested: the section must count, not toggle
             stream.write("a line written mid-commit\n")
             handler.emit(record)
+            stream.record("a library's record mid-commit", "warning")
         assert runs.cancel_is_deferred() is True, "the inner block's exit ended the outer section"
         stream.write("and another, still inside the outer section\n")
         assert token.fired is False and token.requested.is_set(), \
@@ -1893,6 +1895,7 @@ def test_cancel_deferred_defers_a_cancel_and_never_discards_it():
     assert runs.cancel_is_deferred() is False
 
     assert ("log", ("inside the commit", "info")) in fake.logs, fake.logs
+    assert ("log", ("a library's record mid-commit", "warning")) in fake.logs, fake.logs
     assert any(kind == "log" and "a line written mid-commit" in payload[0]
                for kind, payload in fake.logs), fake.logs
 
@@ -2165,9 +2168,10 @@ def test_cancel_deferred_applies_only_to_the_thread_that_entered_it():
 
 # ── a cancel waits out an exception handler; a crash stays a crash ───────────────────────────────
 def test_a_cancel_waits_out_an_exception_handler_and_never_waits_in_normal_flow():
-    """The raise-time deferral at the unit level (``core.runs.cancel_is_deferred``), on both cancel
-    checkpoints -- ``_SignalStream.write`` (every print and tqdm redraw) and ``_PumpLogHandler.emit``
-    (every ``core`` record).
+    """The raise-time deferral at the unit level (``core.runs.cancel_is_deferred``), on all three cancel
+    checkpoints -- ``_SignalStream.write`` (every print and tqdm redraw), ``_PumpLogHandler.emit``
+    (every ``core`` record) and ``_SignalStream.record`` (every library's record, which the window's
+    root sink hands the run).
 
     (c) THE KEY REGRESSION: in NORMAL flow a requested cancel is taken at the very next check, and it
     raises BEFORE the line is sunk, as it always has. Checked plain and right after the three things a
@@ -2176,8 +2180,8 @@ def test_a_cancel_waits_out_an_exception_handler_and_never_waits_in_normal_flow(
 
     (d) DELAYED, NEVER LOST: inside each of the four ways a thread can be handling an exception -- an
     ``except``, a ``finally`` reached by one, an ``__exit__`` leaving by one, a generator's teardown
-    (tqdm's ``finally: self.close()``) -- both checkpoints carry their line instead of raising, the
-    token stays REQUESTED with its latch unfired, and the first check after the handler has exited
+    (tqdm's ``finally: self.close()``) -- all three checkpoints carry their line instead of raising,
+    the token stays REQUESTED with its latch unfired, and the first check after the handler has exited
     raises."""
     import logging
 
@@ -2224,15 +2228,17 @@ def test_a_cancel_waits_out_an_exception_handler_and_never_waits_in_normal_flow(
 
     for before in (nothing_before, after_a_recovered_except, after_a_finally_reached_normally,
                    after_a_with_that_exited_normally):
-        for channel in ("record", "print"):
+        for channel in ("record", "print", "library's record"):
             token, fake, stream, handler = rigged()
             before()
             assert runs.cancel_is_deferred() is False, (before.__name__, channel)
             with pytest.raises(WorkerCancelled):
                 if channel == "record":
                     handler.emit(record("the very next record"))
-                else:
+                elif channel == "print":
                     stream.write("the very next print\n")
+                else:
+                    stream.record("the very next library's record", "warning")
             assert token.fired is True and fake.logs == [], (before.__name__, channel, fake.logs)
 
     # (d) inside a handler: carried; after it: taken
@@ -2285,6 +2291,7 @@ def test_a_cancel_waits_out_an_exception_handler_and_never_waits_in_normal_flow(
             inside["deferred"] = runs.cancel_is_deferred()
             handler.emit(record("a record inside the handler"))
             stream.write("a print inside the handler\n")
+            stream.record("a library's record inside the handler", "warning")
 
         shape(speak)
         assert inside["deferred"] is True, shape.__name__
@@ -2293,6 +2300,7 @@ def test_a_cancel_waits_out_an_exception_handler_and_never_waits_in_normal_flow(
         said = [payload[0] for kind, payload in fake.logs if kind == "log"]
         assert "a record inside the handler" in said, (shape.__name__, fake.logs)
         assert any("a print inside the handler" in t for t in said), (shape.__name__, fake.logs)
+        assert "a library's record inside the handler" in said, (shape.__name__, fake.logs)
         assert runs.cancel_is_deferred() is False, f"{shape.__name__}: the deferral outlived the handler"
         with pytest.raises(WorkerCancelled):
             handler.emit(record("the first record after the handler"))

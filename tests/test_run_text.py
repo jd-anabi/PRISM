@@ -90,6 +90,7 @@ def test_every_finished_line_of_the_three_channels_reaches_the_file_as_it_happen
         _run(run, text)
     finally:
         logging_root.remove()
+        text.close()
     assert seen == [[f"{STAMP} info Simulating batch 1 of 4"]], seen
     assert _lines(text.path) == [
         f"{STAMP} info Simulating batch 1 of 4",
@@ -104,14 +105,21 @@ def test_the_line_format_names_the_date_the_level_and_indents_a_traceback(tmp_pa
     """A line is the clock's local date and time, the level and the text, one space between each. The head names
     the run, its name left out when it has none, and the memory limit in force, left out when none is handed; a try
     after the first opens with a line of its own; the further lines of a text written whole are indented by the
-    stamp's width, under its text."""
+    stamp's width, under its text. The file is UTF-8 whatever the machine's own encoding, so a line of the reduction
+    map's symbols reads back as it was written, and a character no encoding can hold (a lone surrogate a library let
+    through) is written escaped instead of breaking the file. Once closed, the writer writes nothing more."""
     text = RunTextFile(tmp_path / "run.txt", clock=_Clock())
     text.head(word="Training", name="retrain_3", run="20261008T190211-training",
               memory_limit="The graphics card's memory limit in force is 6 GiB, set in Settings.")
     text.separator(2)
     text.line('Traceback (most recent call last):\n  File "pipeline.py", line 12, in run\nRuntimeError: the batch '
               'failed', "error")
+    text.line("ξ* = 0.5 χ", "info")
+    text.line("a library's stray \udcff", "err")
     text.close()
+    closed = text.path.read_bytes()
+    text.line("a line after the end", "info")
+    assert text.path.read_bytes() == closed, "the writer wrote after it was closed"
     unnamed = RunTextFile(tmp_path / "prior.txt", clock=_Clock())
     unnamed.head(word="Prior", name="", run="20261008T190211-prior", memory_limit="")
     unnamed.close()
@@ -123,7 +131,9 @@ def test_the_line_format_names_the_date_the_level_and_indents_a_traceback(tmp_pa
         f"{STAMP} window Try 2 begins here.",
         f"{STAMP} error Traceback (most recent call last):",
         f'{INDENT}  File "pipeline.py", line 12, in run',
-        f"{INDENT}RuntimeError: the batch failed"], _lines(text.path)
+        f"{INDENT}RuntimeError: the batch failed",
+        f"{STAMP} info ξ* = 0.5 χ",
+        f"{STAMP} err a library's stray \\udcff"], _lines(text.path)
     assert _lines(unnamed.path) == [f"{STAMP} window Prior, run 20261008T190211-prior."], _lines(unnamed.path)
 
 
@@ -199,7 +209,7 @@ def _every_kind_of_line(writer):
 
 
 def test_the_text_files_writer_never_raises_into_a_run_and_says_nothing_inside_a_save(tmp_path, monkeypatch):
-    """STANDING. The run's line sink is called on the thread that wrote the line, under the stream pump's lock, and
+    """The run's line sink is called on the thread that wrote the line, under the stream pump's lock, and
     the engine writes lines inside a save that must not be interrupted (the simulation set's commit, a pass of the
     fit being saved). So the writer never raises into the run, never prints, never logs, and is never a point where
     a requested stop is taken: a raise there would stop the run halfway through a save, and a line it printed or
@@ -266,11 +276,12 @@ def test_the_text_files_writer_never_raises_into_a_run_and_says_nothing_inside_a
 def test_the_disk_is_synced_at_most_every_thirty_seconds_and_at_the_end(tmp_path, monkeypatch):
     """A line is handed to the operating system as it is written but never waits for the disk: only ``sync``, which
     the window calls from a timer, asks the disk to hold the file, at most every thirty seconds of the run's clock;
-    ``close`` always does."""
-    synced = []
-    monkeypatch.setattr(textfile.os, "fsync", synced.append)
+    ``close`` always does. ``sync`` asks the disk outside the writer's lock: a line takes that lock while the stream
+    pump's lock is held, so a request made under it would stall the run's every print for the disk's time."""
     clock = _Clock()
     text = RunTextFile(tmp_path / "run.txt", clock=clock)
+    synced = []                                   # for each request of the disk, whether the writer's lock was held
+    monkeypatch.setattr(textfile.os, "fsync", lambda handle: synced.append(text._lock.locked()))
     for n in range(40):
         text.line(f"Simulating batch {n + 1} of 40", "info")
     assert synced == [], "a line waited for the disk"
@@ -285,14 +296,51 @@ def test_the_disk_is_synced_at_most_every_thirty_seconds_and_at_the_end(tmp_path
     assert len(synced) == 2, "not synced after 30 seconds"
     text.close()
     assert len(synced) == 3, "the end was not synced"
+    assert synced[:2] == [False, False], "sync asked the disk under the writer's lock"
     assert textfile.FSYNC_EVERY_S == 30.0
     assert len(_lines(text.path)) == 41
 
 
+def test_a_sync_that_cannot_be_made_raises_nothing_and_is_made_again_when_due(tmp_path, monkeypatch):
+    """``sync`` runs on the window's timer, not in the run, so nothing it meets may reach the window: a request that
+    cannot be made (the file's handle cannot be copied) and one the disk refuses are each dropped without a word, the
+    writer goes on writing, and the next request is made when it falls due."""
+    clock = _Clock()
+    text = RunTextFile(tmp_path / "run.txt", clock=clock)
+    copied, asked, real_dup = [], [], os.dup
+
+    def dup(handle):
+        copied.append(handle)
+        if len(copied) == 1:
+            raise OSError(24, "Too many open files")
+        return real_dup(handle)
+
+    def fsync(handle):
+        asked.append(handle)
+        if len(asked) == 1:
+            raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(textfile.os, "dup", dup)
+    monkeypatch.setattr(textfile.os, "fsync", fsync)
+    text.line("Simulating batch 1 of 4", "info")
+    text.sync()                                             # the handle cannot be copied
+    clock.advance(30)
+    text.sync()                                             # the disk refuses
+    assert (len(copied), len(asked)) == (2, 1), (copied, asked)
+    text.line("Simulating batch 2 of 4", "info")
+    clock.advance(30)
+    text.sync()
+    assert (len(copied), len(asked)) == (3, 2), "the request after the refused one was never made"
+    text.close()
+    assert text.broken is False
+    assert _lines(text.path) == [f"{STAMP} info Simulating batch 1 of 4",
+                                 "2026-10-08 19:02:41 info Simulating batch 2 of 4"], _lines(text.path)
+
+
 def test_a_pump_whose_window_is_gone_keeps_no_more_lines_but_the_file_still_gets_them(tmp_path):
     """A run whose window has gone (its signals deleted while it goes on) stops the pump at the first signal it
-    cannot emit, and from then on the pump keeps no line for the window: they would pile up unread for the rest of
-    the run. The run's text file still gets every line."""
+    cannot emit: its thread ends by itself. From then on the pump keeps no line for the window: they would pile up
+    unread for the rest of the run. The run's text file still gets every line the run writes."""
     import shiboken6
 
     qt_app()
@@ -301,20 +349,24 @@ def test_a_pump_whose_window_is_gone_keeps_no_more_lines_but_the_file_still_gets
     pump = streams._Pump(signals, line_sink=text.line)
     shiboken6.delete(signals)
     pump.sink("log", ("Simulating batch 1 of 4", "info"))
-    pump.stop()                                              # its last emit meets the deleted signals
+    pump._thread.join(timeout=60)                           # its next publish meets the deleted signals
+    assert not pump._thread.is_alive(), "the pump went on after its window had gone"
     pump.sink("log", ("Simulating batch 2 of 4", "info"))
     pump.sink("log", ("[checkpoint] writing batches 0 to 2 of 4", "warning"))
     assert pump._logs == [], f"a pump with no window kept {pump._logs}"
+    pump.stop()
+    text.close()
     assert _lines(text.path) == [f"{STAMP} info Simulating batch 1 of 4", f"{STAMP} info Simulating batch 2 of 4",
                                  f"{STAMP} warning [checkpoint] writing batches 0 to 2 of 4"], _lines(text.path)
 
 
 def test_the_worker_writes_its_outcome_before_it_says_anything(tmp_path):
     """How a run ended is in its text file before the worker says anything to the window: a slot on each signal
-    reads the file as the signal arrives. A failure is its kind and its message, at error, its traceback indented
-    under it; a stop and a finish are one line each, the window's own. The lines the worker says itself, outside the
-    pump, are written too, each before it is said: the failure a stop may have replaced and its traceback, a stop
-    that came too late to stop anything, and the redirect declined because another run holds the streams."""
+    reads the file as the signal arrives. A failure is its kind and its message, at error (its kind alone when it
+    has no message), its traceback indented under it; a stop and a finish are one line each, the window's own. The
+    lines the worker says itself, outside the pump, are written too, each before it is said: the failure a stop may
+    have replaced and its traceback, a stop that came too late to stop anything, and the redirect declined because
+    another run holds the streams."""
     qt_app()
 
     def watched(fn, name, cancel=None):
@@ -325,6 +377,7 @@ def test_the_worker_writes_its_outcome_before_it_says_anything(tmp_path):
             return lambda *args: said.append((signal, _lines(text.path)))
 
         _run(fn, text, cancel=cancel, **{signal: slot(signal) for signal in ("log", "error", "cancelled", "result")})
+        text.close()
         return said
 
     def fails():
@@ -337,6 +390,13 @@ def test_the_worker_writes_its_outcome_before_it_says_anything(tmp_path):
     assert held[1] == f"{INDENT}Traceback (most recent call last):", held
     assert held[-1] == f"{INDENT}ValueError: the batch failed", held
     assert all(line.startswith(INDENT) for line in held[1:]), held
+
+    def fails_with_no_message():
+        raise ValueError()
+
+    said = watched(fails_with_no_message, "failed-bare")
+    assert [signal for signal, _ in said] == ["error"], said
+    assert said[0][1][0] == f"{STAMP} error The run failed: ValueError", said
 
     def stops():
         raise streams.WorkerCancelled()
@@ -392,6 +452,7 @@ def test_a_run_whose_output_cannot_be_captured_fails_and_says_why(tmp_path, monk
     said, ran = [], []
     _run(lambda: ran.append("ran"), text, **{signal: (lambda *args, signal=signal: said.append((signal, args)))
                                              for signal in ("error", "cancelled", "result", "finished")})
+    text.close()
     assert [signal for signal, _ in said] == ["error", "finished"], said
     exc, trace, noted, kept = said[0][1]
     words = "The run could not start: PRISM could not capture its output (can't start new thread)."
@@ -497,9 +558,10 @@ def _ids(records):
 def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
     """A run's history file holds every field of the history, in its order, None where the run has nothing, its
     times local with their offset; it reads back as it was written. It is written whole: to a temporary file that is
-    then renamed over the run's file, so a write that fails leaves the last whole file and no temporary one, and a
-    temporary file or a torn file is never read as a run. What the history does not keep, and a time with no zone,
-    are refused before anything is written."""
+    made to reach the disk and then renamed over the run's file, so a write that fails, even at the rename, leaves
+    the last whole file and no temporary one, and a temporary file or a torn file is never read as a run. What the
+    history does not keep, at the top or inside the set, the fit or a try, and a time with no zone, are refused
+    before anything is written."""
     from core.gui.run import history
 
     started, ended = _at(8, 19, 2, 11), _at(14, 14, 10)
@@ -518,17 +580,21 @@ def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
                 "ended_by": "stopped", "network": [128, 5], "simulations": 20480000, "kept_id": "20261014T141000-1",
                 "passes": 62, "resumed": False, "processes": 1, "wall_seconds": 234360.0, "save_error": None},
         "check": None, "result": [], "failure": None, "text": "20261008T190211-training.txt"}
-    replaced, real_replace = [], os.replace
+    replaced, synced, refusals, real_replace = [], [], [], os.replace
 
     def replace(source, target):
-        replaced.append((Path(source).name, Path(target).name))
+        replaced.append((Path(source).name, Path(target).name, len(synced)))
+        if refusals:
+            raise refusals.pop()
         real_replace(source, target)
 
     monkeypatch.setattr(history.os, "replace", replace)
+    monkeypatch.setattr(history.os, "fsync", synced.append)
     folder = tmp_path / "runs"
     path = history.write(folder, record)
     assert path == folder / "20261008T190211-training.json"
-    assert replaced == [("20261008T190211-training.json.tmp", "20261008T190211-training.json")], replaced
+    assert replaced == [("20261008T190211-training.json.tmp", "20261008T190211-training.json", 1)], (
+        f"renamed (source, target, requests of the disk before it): {replaced}")
     assert sorted(p.name for p in folder.iterdir()) == ["20261008T190211-training.json"]
     on_disk = json.loads(path.read_text(encoding="utf-8"))
     assert tuple(on_disk) == history.FIELDS == FIELDS
@@ -544,6 +610,8 @@ def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
 
     before = path.read_bytes()
     for refused in ({**record, "colour": "red"}, {**record, "fit": {**record["fit"], "pace": 1.0}},
+                    {**record, "simulation_set": {**record["simulation_set"], "secs_per_batch": 9.7}},
+                    {**record, "tries": [{**record["tries"][0], "epochs_kept": 62}]},
                     {**record, "started": datetime(2026, 10, 8, 19, 2, 11)}, {**record, "id": ""}):
         try:
             history.write(folder, refused)
@@ -557,6 +625,13 @@ def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
         pass
     else:
         raise AssertionError("a record the history cannot write was written")
+    refusals.append(OSError(28, "No space left on device"))
+    try:
+        history.write(folder, {**record, "outcome": "finished"})
+    except OSError:
+        pass
+    else:
+        raise AssertionError("a rename that failed was not raised")
     assert path.read_bytes() == before, "a failed write touched the run's file"
     assert sorted(p.name for p in folder.iterdir()) == ["20261008T190211-training.json", "20261009T080000-prior.json"]
 

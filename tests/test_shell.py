@@ -2217,8 +2217,9 @@ def test_a_record_the_console_cannot_take_during_a_run_is_reported_and_not_raise
     """While a run is live a record logged on another thread -- the window's own word -- goes to the console the
     run's log stands in front of. A console that cannot take it, whose encoding has no letter for a word of it, does
     not raise where the record was logged: the failed write is reported on that console's own error stream, as
-    logging reports one, and the program goes on. The report never goes to the process's error stream of the
-    moment, which during a run is the run's own: it would land in the run's text from the window's thread."""
+    logging reports one, with the record's words escaped, so the console that could not take them can take the
+    report, and the program goes on. The report never goes to the process's error stream of the moment, which
+    during a run is the run's own: it would land in the run's text from the window's thread."""
     import io
     import logging
     import threading
@@ -2236,6 +2237,8 @@ def test_a_record_the_console_cannot_take_during_a_run_is_reported_and_not_raise
     said = narrow.buffer.getvalue().decode("ascii")
     assert "--- Logging error ---" in said and "UnicodeEncodeError" in said, (
         f"the failed write was not reported on the console: {said!r}")
+    assert "Message: 'the \\u03c7 probe table holds no row'" in said, (
+        f"the record's words were not written escaped: {said!r}")
     assert capsys.readouterr().err == "", "the failed write was reported on the process's error stream"
 
 
