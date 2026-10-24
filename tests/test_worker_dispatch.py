@@ -1516,8 +1516,8 @@ def test_a_posteriors_amortization_is_spelled_out_and_the_norm_is_named_too():
 
 def test_an_unnamed_artifact_shows_its_label():
     """``Summary.label`` is ``(unnamed <id>)``, which is what the pickers show, so the table and the
-    dropdowns name the same artifact the same way. Every simulation cache is unnamed by construction
-    (``write_simulation_manifest`` always writes ``name=""``)."""
+    dropdowns name the same artifact the same way. A simulation cache is made unnamed
+    (``write_simulation_manifest`` writes ``name=""`` for a new set) and reads so until it is named."""
     s = _row("prior", name="")
     assert s.label == "(unnamed 20260914T102231)"
     assert cells_for("prior", s)[0] == "(unnamed 20260914T102231)"

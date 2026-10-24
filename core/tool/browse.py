@@ -149,8 +149,9 @@ def _fdt_points(s) -> str:
 
 def _cells(kind: str, s) -> tuple:
     """One complete row's cells, in ``COLUMNS[kind]`` order. ``label`` is the name, or
-    ``(unnamed <id>)`` -- as the pickers show it, and as a simulation cache and a kept training always
-    read, because write_simulation_manifest and write_fit_manifest always write ``name=""``."""
+    ``(unnamed <id>)`` -- as the pickers show it. A simulation cache and a kept training are written
+    unnamed and read so until they are given a name through the store's rename, which
+    write_simulation_manifest and write_fit_manifest then keep."""
     head = (_flat(s.label), _flat(s.created))
     if kind == "simulation":
         return head + (_progress(s), "yes" if s.finished else "no", _flat(s.note))
@@ -230,8 +231,9 @@ def _show(args, store) -> int:
     if args.kind != "simulation" and sub.name != m.dir_name:
         # A rename whose directory move was refused leaves exactly this, and the browser's detail
         # pane says so too. The manifest is what resolves an artifact, so nothing is broken. Never
-        # for a simulation cache: it is never renamed, and a cache folder placed or renamed by hand is
-        # legitimate, so the note would report a half-failed rename that never happened.
+        # for a simulation cache: its folder is its digest whatever its name, so a rename never moves
+        # it, and a cache folder placed or renamed by hand is legitimate, so the note would report a
+        # half-failed rename that never happened.
         print(f"\nthe directory is named {sub.name!r} while its manifest says {m.dir_name!r}: a "
               f"rename whose directory move was refused leaves that. The manifest is what resolves "
               f"the artifact, so nothing here is broken.")

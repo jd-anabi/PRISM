@@ -1152,6 +1152,85 @@ def test_simulation_manifest_written_at_create_and_refreshed_on_save_and_complet
     assert store.simulation_for(ident) == d and store.list("simulation")[0].complete
 
 
+def test_a_simulation_sets_name_lasts_through_its_saves_its_completion_and_its_reuse(tiny_run, tmp_path,
+                                                                                   monkeypatch, capsys):
+    """A simulation set named through the store keeps its name. Its manifest is written again at every save
+    of its rows, at its completion and whenever a training reuses it, and each of those writes keeps the
+    name as it keeps the note and the day the set was made. The name is in neither the set's identity nor
+    the digest that names its folder, so naming a set moves nothing a training reads: its folder, its
+    digest and the identity it was made for stay as they were. A set nobody names stays unnamed, and the
+    command line lists a named set by its name. Named here between its first save and its second, as a
+    person would name a set while it is still being made; each training ends once its rows are made,
+    since the fit is not what is under test."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore, default_store
+    from core.SBI import pipeline
+    from core.SBI import training_checkpoint as tc
+    from core.tool import main
+    r = tiny_run
+    s = ArtifactStore(tmp_path / "named_set")
+    real_save, real_complete, real_generate = tc.save, tc.mark_complete, pipeline.gen_training_data
+    seen, named = [], []
+
+    class _RowsMade(Exception):
+        """Ends a training once its rows are made."""
+
+    def save(path, **kw):
+        real_save(path, **kw)
+        if not named:
+            named.append(s.rename("simulation", Path(path).name, "kept_rows").id)
+        seen.append(("save", kw["batch_k"], s.get("simulation", Path(path).name).name))
+
+    def mark_complete(path, batch_k, rows=None):
+        real_complete(path, batch_k, rows=rows)
+        seen.append(("complete", batch_k, s.get("simulation", Path(path).name).name))
+
+    def generate(*a, **k):
+        real_generate(*a, **k)
+        raise _RowsMade
+
+    monkeypatch.setattr(tc, "save", save)
+    monkeypatch.setattr(tc, "mark_complete", mark_complete)
+    monkeypatch.setattr(pipeline, "gen_training_data", generate)
+    train = dict(fig_sink=r.sink, store=s, num_runs=2, run_size_cap=4, checkpoint_every=1, fisher_m=4,
+                 fisher_points=1)
+
+    with pytest.raises(_RowsMade):
+        orchestrator.build_posterior(r.cfg, r.prior, None, True, **train)
+    assert seen == [("save", 1, "kept_rows"), ("save", 2, "kept_rows"), ("complete", 2, "kept_rows")], seen
+    made = s.get("simulation", "kept_rows")
+    identity = dict(made.body["identity"])
+    folder = s.path("simulation", "kept_rows")
+    assert named == [made.id] and folder.name == made.id == tc.identity_digest(identity)
+
+    seen.clear()
+    with pytest.raises(_RowsMade):
+        orchestrator.build_posterior(r.cfg, r.prior, None, True, **train)
+    assert seen == [("complete", 2, "kept_rows")], \
+        f"a training that reuses the set completes it again and keeps its name: {seen}"
+    again = s.get("simulation", "kept_rows")
+    assert (again.id, again.body["digest"], again.body["identity"], again.config) == \
+        (made.id, made.id, identity, made.config)
+    assert s.path("simulation", "kept_rows") == folder == tc.resolve_dir(identity, s.kind_dir("simulation"))
+    assert (again.created, again.note, again.parents) == (made.created, made.note, made.parents)
+
+    seen.clear()
+    with pytest.raises(_RowsMade):
+        orchestrator.build_posterior(r.cfg, r.prior, None, True, **{**train, "run_size_cap": 2, "new_run": True})
+    fresh = [m for m in (s.get("simulation", row.id) for row in s.list("simulation")) if m.id != made.id]
+    assert [m.name for m in fresh] == [""] and seen[-1] == ("complete", 2, ""), seen
+    assert sorted(p.name for p in s.kind_dir("simulation").iterdir()) == sorted([made.id, fresh[0].id])
+
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(s.root))
+    sandbox = default_store()
+    capsys.readouterr()
+    assert main(["artifacts", "list", "simulation"]) == 0
+    out = capsys.readouterr().out
+    assert "kept_rows" in out and f"(unnamed {made.id})" not in out, out
+    assert f"(unnamed {fresh[0].id})" in out, out
+    assert default_store() is sandbox
+
+
 def test_load_prior_refuses_model_param_order_and_box_and_returns_a_wrapper(store):
     cfg = _nad_cfg()
     ok = _prior_artifact(store, cfg, name="ok")

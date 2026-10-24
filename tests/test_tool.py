@@ -3460,9 +3460,9 @@ def test_artifacts_show_names_a_directory_the_manifest_disagrees_with(browse_sto
     what resolves an artifact), which leaves a folder whose name disagrees with ``Manifest.dir_name``.
     ``show`` is the first place that is visible.
 
-    A simulation cache is never renamed, and its manifest names no folder of its own beyond its digest,
-    so a cache folder placed or renamed by hand is legitimate and gets no such note -- the browser's
-    detail pane leaves it out for the same reason."""
+    A simulation cache's folder is its digest whatever its name -- a rename writes its manifest and never
+    moves its folder -- so a cache folder placed or renamed by hand is legitimate and gets no such note;
+    the browser's detail pane leaves it out for the same reason."""
     from core.artifacts import ArtifactStore
     root, ids = browse_store
     sub = ArtifactStore(root).path("calibration", ids["calibration"])

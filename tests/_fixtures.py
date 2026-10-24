@@ -565,8 +565,8 @@ def build_browse_store(root):
     ``git`` subprocesses per artifact.
 
     Each artifact is named ``browse_<kind>`` and carries a note, so the name and note columns have
-    content. The simulation cache is the exception: it is ALWAYS unnamed
-    (``write_simulation_manifest`` writes ``name=""``), so its row also covers ``Summary.label``'s
+    content. The simulation cache is the exception: it is left unnamed, as every set is made
+    (``write_simulation_manifest`` writes ``name=""`` for a new set), so its row also covers ``Summary.label``'s
     ``(unnamed <id>)`` form. It is written at 3 of 4 batches and NOT complete, so its row carries real
     progress and ``finished`` is False while ``complete`` is True -- a valid manifest that is not a
     finished run, on disk. The 4 is the identity's ``n_runs``, which is where
@@ -576,7 +576,7 @@ def build_browse_store(root):
     records them. A fixture that handed rows to an unfinished cache would be a shape no run
     produces, and would hide every "rows only once it finished" branch in both front ends.
 
-    The kept training (``fit``) is unnamed too, like the simulation cache, and always: its posterior's
+    The kept training (``fit``) is unnamed too, as the training stage writes every one: its posterior's
     name-to-be is in its body, never its own name. It is written by ``build_fit_record`` at 3 passes,
     stopped on purpose, with the note "the fit row", so it has a manifest and no header or state, and
     its ``finished`` is False while ``complete`` is True.

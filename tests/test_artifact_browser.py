@@ -77,7 +77,7 @@ def test_the_browser_lists_the_seven_kinds_with_the_incomplete_directories_last(
         assert screen.table.topLevelItemCount() >= 1, f"{kind} listed nothing"
         first = _row_text(screen.table, 0)
         if kind == "simulation":
-            # a cache is always unnamed, so its label is "(unnamed <digest>)"
+            # the fixture's cache is unnamed, as a set is made, so its label is "(unnamed <digest>)"
             assert ids["simulation"] in first and "unnamed" in first, first
         elif kind == "fit":
             # a kept training is always unnamed too: its posterior's name-to-be is in its body

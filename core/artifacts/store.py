@@ -1697,9 +1697,10 @@ class ArtifactStore:
 def write_simulation_manifest(path, identity: dict, *, parents=None, inputs=None, hw=None,
                               batches_done: int = 0, complete: bool = False, rows=None, V=None) -> mf.Manifest:
     """The simulation cache's manifest, written by training_checkpoint at create and refreshed on every
-    save and at completion. Keeps id, created, note, prism, env, inputs and parents from an existing
-    manifest (a resume must not rewrite who started the run); ``wall_seconds`` is the span from
-    ``created`` to completion, across resumes."""
+    save and at completion. Keeps id, name, created, note, prism, env, inputs and parents from an
+    existing manifest (a resume must not rewrite who started the run, nor drop the name the set was
+    given through the store's rename); ``wall_seconds`` is the span from ``created`` to completion,
+    across resumes. The name is in neither the identity nor its digest, so keeping it moves nothing."""
     from core.SBI.training_checkpoint import identity_digest
     path = Path(path)
     digest = identity_digest(identity)
@@ -1715,7 +1716,7 @@ def write_simulation_manifest(path, identity: dict, *, parents=None, inputs=None
         wall = old.body.get("wall_seconds") if old else None
     v_digest = mf.tensor_digest(V) if V is not None else (old.fingerprints.get("V") if old else None)
     d = dict(
-        schema=mf.SCHEMA, kind="simulation", id=digest, name="", created=created,
+        schema=mf.SCHEMA, kind="simulation", id=digest, name=old.name if old else "", created=created,
         note=old.note if old else "",
         prism=old.prism if old else prov.git_info(config.REPO_ROOT),
         env=old.env if old else prov.env_info(hw if hw is not None else config.cpu_device()),
