@@ -276,7 +276,7 @@ def test_the_text_files_writer_never_raises_into_a_run_and_says_nothing_inside_a
 def test_the_disk_is_synced_at_most_every_thirty_seconds_and_at_the_end(tmp_path, monkeypatch):
     """A line is handed to the operating system as it is written but never waits for the disk: only ``sync``, which
     the window calls from a timer, asks the disk to hold the file, at most every thirty seconds of the run's clock;
-    ``close`` always does. ``sync`` asks the disk outside the writer's lock: a line takes that lock while the stream
+    ``close`` always does. Both ask the disk outside the writer's lock: a line takes that lock while the stream
     pump's lock is held, so a request made under it would stall the run's every print for the disk's time."""
     clock = _Clock()
     text = RunTextFile(tmp_path / "run.txt", clock=clock)
@@ -296,7 +296,7 @@ def test_the_disk_is_synced_at_most_every_thirty_seconds_and_at_the_end(tmp_path
     assert len(synced) == 2, "not synced after 30 seconds"
     text.close()
     assert len(synced) == 3, "the end was not synced"
-    assert synced[:2] == [False, False], "sync asked the disk under the writer's lock"
+    assert synced == [False, False, False], "the disk was asked under the writer's lock"
     assert textfile.FSYNC_EVERY_S == 30.0
     assert len(_lines(text.path)) == 41
 
@@ -363,10 +363,10 @@ def test_a_pump_whose_window_is_gone_keeps_no_more_lines_but_the_file_still_gets
 def test_the_worker_writes_its_outcome_before_it_says_anything(tmp_path):
     """How a run ended is in its text file before the worker says anything to the window: a slot on each signal
     reads the file as the signal arrives. A failure is its kind and its message, at error (its kind alone when it
-    has no message), its traceback indented under it; a stop and a finish are one line each, the window's own. The
-    lines the worker says itself, outside the pump, are written too, each before it is said: the failure a stop may
-    have replaced and its traceback, a stop that came too late to stop anything, and the redirect declined because
-    another run holds the streams."""
+    has no message, or a message that cannot be had: it is still said), its traceback indented under it; a stop and
+    a finish are one line each, the window's own. The lines the worker says itself, outside the pump, are written
+    too, each before it is said: the failure a stop may have replaced and its traceback, a stop that came too late
+    to stop anything, and the redirect declined because another run holds the streams."""
     qt_app()
 
     def watched(fn, name, cancel=None):
@@ -397,6 +397,17 @@ def test_the_worker_writes_its_outcome_before_it_says_anything(tmp_path):
     said = watched(fails_with_no_message, "failed-bare")
     assert [signal for signal, _ in said] == ["error"], said
     assert said[0][1][0] == f"{STAMP} error The run failed: ValueError", said
+
+    class _Wordless(Exception):
+        def __str__(self):
+            raise RuntimeError("an exception whose words cannot be had")
+
+    def fails_without_words():
+        raise _Wordless()
+
+    said = watched(fails_without_words, "failed-wordless")
+    assert [signal for signal, _ in said] == ["error"], said
+    assert said[0][1][0] == f"{STAMP} error The run failed: _Wordless", said
 
     def stops():
         raise streams.WorkerCancelled()
@@ -462,6 +473,48 @@ def test_a_run_whose_output_cannot_be_captured_fails_and_says_why(tmp_path, monk
     assert _lines(text.path)[0] == f"{STAMP} error The run failed: RuntimeError: {words}", _lines(text.path)
     assert streams._REDIRECT.acquire(blocking=False), "the capture's lock was kept"
     streams._REDIRECT.release()
+
+
+def test_a_run_that_ends_with_no_outcome_says_so_before_it_is_finished(tmp_path):
+    """A run can end with none of its three outcomes: a library that ends the process its own way
+    (``SystemExit``) passes every handler of the run. Its text file still says that the run ended without saying
+    how, in the window's words, before ``finished`` is said, and nothing else is said."""
+    qt_app()
+    text = RunTextFile(tmp_path / "run.txt", clock=_Clock())
+    said = []
+
+    def exits():
+        print("Simulating batch 1 of 4")
+        raise SystemExit(3)
+
+    try:
+        _run(exits, text, **{signal: (lambda *args, signal=signal: said.append((signal, _lines(text.path))))
+                             for signal in ("log", "error", "cancelled", "result", "finished")})
+    except SystemExit:
+        pass
+    text.close()
+    assert said == [("finished", [f"{STAMP} info Simulating batch 1 of 4",
+                                  f"{STAMP} window The run ended without saying how."])], said
+
+
+def test_a_line_written_to_the_runs_streams_after_the_run_is_not_in_its_file(tmp_path):
+    """Once the run has ended its streams are no longer the run's, though something the run made may still write to
+    them: a handler a library made during the run, a progress bar the collector closes later. Such a line is not
+    the run's, and it does not reach the run's text file after its outcome."""
+    qt_app()
+    text = RunTextFile(tmp_path / "run.txt", clock=_Clock())
+    kept = []
+
+    def run():
+        kept.append(sys.stderr)                     # as a handler a library makes during the run holds it
+        print("Simulating batch 1 of 4")
+        return "done"
+
+    _run(run, text)
+    kept[0].write("a library's late line, written after the run\n")
+    written = _lines(text.path)
+    text.close()
+    assert written == [f"{STAMP} info Simulating batch 1 of 4", f"{STAMP} window The run finished."], written
 
 
 def test_the_worker_hands_on_the_kept_training_named_by_a_stop_or_a_failure():
@@ -639,6 +692,46 @@ def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
     (folder / "20261011T090000-training.json").write_text('{"id": "20261011T09', encoding="utf-8")
     assert history.read(folder / "20261011T090000-training.json") is None
     assert _ids(history.latest(folder, records_root=str(tmp_path / "records"), n=9)) == ["20261008T190211-training"]
+
+
+def test_a_rename_another_program_holds_up_is_tried_again(tmp_path, monkeypatch):
+    """On Windows a rename over a file that another program holds open (a scanner, an indexer, an editor) is
+    refused for a moment. The history tries it again, ``REPLACE_TRIES`` times in all, ``REPLACE_PAUSE_S`` seconds
+    apart, so the run's end is still recorded; a refusal that outlasts every try is raised, the run's file left as
+    it was and no temporary file left behind."""
+    from core.gui.run import history
+
+    tries, paused, refusing, real_replace = [], [], [0], os.replace
+
+    def replace(source, target):
+        tries.append(Path(target).name)
+        if refusing[0]:
+            refusing[0] -= 1
+            raise PermissionError(13, "The process cannot access the file because it is being used by another "
+                                      "process")
+        real_replace(source, target)
+
+    monkeypatch.setattr(history.os, "replace", replace)
+    monkeypatch.setattr(history, "_pause", paused.append)
+    folder = tmp_path / "runs"
+    record = {"id": "20261008T190211-training", "word": "Training", "started": _at(8, 19, 2, 11)}
+    refusing[0] = 2
+    path = history.write(folder, {**record, "outcome": "finished"})
+    assert (len(tries), paused) == (3, [history.REPLACE_PAUSE_S] * 2), (tries, paused)
+    assert history.read(path)["outcome"] == "finished"
+    before, refusing[0] = path.read_bytes(), history.REPLACE_TRIES
+    tries.clear()
+    paused.clear()
+    try:
+        history.write(folder, {**record, "outcome": "failed"})
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("a refusal that outlasted every try was not raised")
+    assert (len(tries), len(paused)) == (history.REPLACE_TRIES, history.REPLACE_TRIES - 1), (tries, paused)
+    assert path.read_bytes() == before, "a refused write touched the run's file"
+    assert sorted(p.name for p in folder.iterdir()) == ["20261008T190211-training.json"]
+    assert (history.REPLACE_TRIES, history.REPLACE_PAUSE_S) == (5, 0.2)
 
 
 def test_the_runs_folder_sits_beside_the_settings_file(tmp_path):

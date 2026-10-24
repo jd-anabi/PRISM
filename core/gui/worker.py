@@ -27,6 +27,9 @@ STOPPED_TEXT = "The run stopped: a stop was asked for."
 FAILED_TEXT = "The run failed: {}"
 # The failure of a run whose output could not be captured; filled with the reason the capture gave.
 NO_CAPTURE_TEXT = "The run could not start: PRISM could not capture its output ({})."
+# A run that ended with none of the three outcomes (a library's SystemExit passed every handler, or the capture's
+# own exit failed): written before ``finished`` is said, so the run's text file never stops without an ending.
+UNSAID_TEXT = "The run ended without saying how."
 
 
 def _drop_tracebacks(exc: BaseException) -> None:
@@ -80,8 +83,12 @@ def _pending_failure(cancel: BaseException) -> "BaseException | None":
 
 
 def _failed_text(exc: BaseException) -> str:
-    """A failure as the run's text file says it: its kind always, then its message when it has one."""
-    message = str(exc)
+    """A failure as the run's text file says it: its kind always, then its message when it has one. A message that
+    cannot be had (the exception's ``str`` raises) is left out, so the failure is still written and said."""
+    try:
+        message = str(exc)
+    except Exception:                         # noqa: BLE001 -- the failure is said by its kind alone
+        message = ""
     return FAILED_TEXT.format(f"{type(exc).__name__}: {message}" if message else type(exc).__name__)
 
 
@@ -116,9 +123,10 @@ class Worker(QRunnable):
 
     ``run_text`` (the run's ``core.gui.run.textfile.RunTextFile``), when given, is the run's line sink:
     every finished line of the run reaches it as it is written; the lines this worker says itself
-    reach it too, and how the run ended, each written before any signal says it. ``cancelled`` and
-    ``error`` carry the kept training a stop or a failure in the fit names (``kept_fit`` on the
-    exception the training stage raises), or None.
+    reach it too, and how the run ended, each written before any signal says it (a run that ended
+    with none of the three outcomes is written as one that ended without saying how, before
+    ``finished``). ``cancelled`` and ``error`` carry the kept training a stop or a failure in the
+    fit names (``kept_fit`` on the exception the training stage raises), or None.
     """
 
     def __init__(self, fn, *args, cancel=None, run_text=None, **kwargs):
@@ -133,7 +141,7 @@ class Worker(QRunnable):
     @Slot()
     def run(self):
         payload, failure, cancelled, in_flight, cancel_noted = None, None, False, None, False
-        kept_fit, entered, text = None, False, self.run_text
+        kept_fit, entered, text, ended = None, False, self.run_text, False
         try:
             try:
                 with redirect_streams(self.signals, self.cancel, line_sink=text.line if text is not None else None):
@@ -232,6 +240,7 @@ class Worker(QRunnable):
                         text.line(IN_FLIGHT_TEXT, "warning")
                         text.line(in_flight, "error")
                     text.outcome(STOPPED_TEXT, "window")
+                    ended = True
                 if in_flight is not None:
                     self.signals.log.emit(IN_FLIGHT_TEXT, "warning")
                     self.signals.log.emit(in_flight, "error")
@@ -250,12 +259,14 @@ class Worker(QRunnable):
                     if too_late:
                         text.line(CANCEL_TOO_LATE_TEXT, "warning")
                     text.outcome(FINISHED_TEXT, "window")
+                    ended = True
                 if too_late:
                     self.signals.log.emit(CANCEL_TOO_LATE_TEXT, "warning")
                 self.signals.result.emit(payload)
             else:
                 if text is not None:
                     text.outcome(_failed_text(failure[0]), "error", failure[1])
+                    ended = True
                 self.signals.error.emit(failure[0], failure[1], cancel_noted, kept_fit)
                 failure = None                       # the queued signal holds its own reference
         except RuntimeError:
@@ -263,6 +274,11 @@ class Worker(QRunnable):
             # so the QApplication and our WorkerSignals are already gone. Nothing to report to.
             return
         finally:
+            # None of the three outcomes was written: a BaseException no clause above takes (a library's
+            # SystemExit) left the callable, or the capture's exit raised. The file still says the run ended,
+            # before `finished` says it; whatever is propagating goes on as it would have.
+            if text is not None and not ended:
+                text.outcome(UNSAID_TEXT, "window")
             try:
                 self.signals.finished.emit()
             except RuntimeError:

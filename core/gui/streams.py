@@ -120,7 +120,7 @@ class _Pump:
     save that must not be interrupted, and a line it printed or logged would come back into this sink,
     under this lock. It returns None, or once a sentence of the window's own saying it can write no more,
     which the pump queues at warning. Once the pump has stopped on a dead signal (the window is gone), it
-    keeps no line for the window; the line sink still gets every one.
+    keeps no line for the window; the line sink still gets every one, until ``stop``, which lets go of it.
     """
 
     def __init__(self, signals, line_sink=None):
@@ -187,15 +187,22 @@ class _Pump:
                 return
 
     def stop(self):
-        """Publish whatever is left, then shut down.
+        """Publish whatever is left, then shut down, and let go of the line sink.
 
         The final publish runs ON THE PUMP THREAD (we set the flag and join) rather than inline on the
         caller's thread. That matters: if the caller is the GUI thread, Qt resolves a same-thread emit
         as a DirectConnection and its slots run IMMEDIATELY -- ahead of every tick still sitting in the
         event queue -- which silently scrambles the log into teardown-first order.
+
+        The line sink goes last: redirect_streams settles both routers before it stops the pump, so every
+        line of the run has reached the sink by then. A line written to the run's streams after the run (a
+        handler a library made during it, a bar the collector closes later) is not the run's, and does not
+        reach its text file after the outcome.
         """
         self._stop.set()
         self._thread.join(timeout=5.0)
+        with self._lock:
+            self._line_sink = None
 
 
 class _SignalStream:

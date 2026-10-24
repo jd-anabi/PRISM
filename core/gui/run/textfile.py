@@ -17,8 +17,8 @@ writer holds a lock of its own for all of them.
 
 Every line is flushed to the operating system as it is written, so a run whose process is killed loses no finished
 line. The disk itself is asked to hold the file (``os.fsync``) only by ``sync``, at most every ``FSYNC_EVERY_S``
-seconds, which the window calls from a timer, and by ``close``: the disk's time must never stall the run's own print
-or record. A power cut loses at most that interval's lines.
+seconds, which the window calls from a timer, and by ``close``, each outside the writer's lock: the disk's time must
+never stall the run's own print or record. A power cut loses at most that interval's lines.
 
 The standard library alone: no torch, nothing of the toolkit.
 """
@@ -106,24 +106,26 @@ class RunTextFile:
 
     def close(self) -> None:
         """Write what is left, ask the disk to hold it and close the file. Never raises; once closed, the writer
-        writes nothing more."""
+        writes nothing more. The file is taken from the writer under its lock and finished outside it: nothing
+        else can reach the file once it is taken, and a line arriving meanwhile is turned away at once instead of
+        waiting for the disk."""
         with self._lock:
             if self._closed:
                 return
             self._closed = True
             file, self._file = self._file, None
-            if file is None:
-                return
+        if file is None:
+            return
+        try:
+            file.flush()
+            os.fsync(file.fileno())
+        except Exception:                     # noqa: BLE001 -- a file that cannot be closed cleanly is still let go
+            pass
+        finally:
             try:
-                file.flush()
-                os.fsync(file.fileno())
-            except Exception:                 # noqa: BLE001 -- a file that cannot be closed cleanly is still let go
+                file.close()
+            except Exception:                 # noqa: BLE001
                 pass
-            finally:
-                try:
-                    file.close()
-                except Exception:             # noqa: BLE001
-                    pass
 
     def _write(self, text: str, level: str) -> str | None:
         """One line, stamped, its further lines indented; flushed. Called under the writer's lock."""

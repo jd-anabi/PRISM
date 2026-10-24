@@ -36,6 +36,7 @@ it is asked.
 """
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -52,6 +53,13 @@ FIT_FIELDS = ("epochs", "best_epoch", "best_validation_loss", "seconds_per_epoch
 #: What each entry of ``tries`` holds.
 TRY_FIELDS = ("started", "ended", "outcome", "failure", "batches_before", "batches_after", "epochs_before",
               "epochs_after")
+#: How many times in all, and how many seconds apart, a rename refused while another program holds the file open is
+#: tried before the refusal is raised.
+REPLACE_TRIES = 5
+REPLACE_PAUSE_S = 0.2
+
+#: The pause between two tries of a refused rename.
+_pause = time.sleep
 
 
 def runs_folder() -> Path:
@@ -73,9 +81,9 @@ def run_id(word: str, started: datetime, folder: Path) -> str:
 def write(folder: Path, record: dict) -> Path:
     """Write ``record`` as its run's history file in ``folder``, which is made when missing, and return the file's
     path. Every name of ``FIELDS`` is written, in that order; a time with its offset. Written whole: to a temporary
-    file, made to reach the disk, then renamed over the old file. Raises ValueError, writing nothing, for a record
-    with no id, a name the history does not keep, or a time with no zone; an error of the disk is raised as it
-    comes, the temporary file removed."""
+    file, made to reach the disk, then renamed over the old file (``_replace``). Raises ValueError, writing nothing,
+    for a record with no id, a name the history does not keep, or a time with no zone; an error of the disk is
+    raised as it comes, the temporary file removed."""
     _check(record)
     text = json.dumps({name: record.get(name) for name in FIELDS}, default=_time_text, ensure_ascii=False,
                       indent=1)
@@ -88,7 +96,7 @@ def write(folder: Path, record: dict) -> Path:
             file.write(text)
             file.flush()
             os.fsync(file.fileno())
-        os.replace(temporary, path)
+        _replace(temporary, path)
     except Exception:
         try:
             temporary.unlink(missing_ok=True)
@@ -191,6 +199,21 @@ def close_unseen(folder: Path) -> tuple[str, ...]:
         write(folder, {**record, "outcome": "not seen to end", "last_heard": heard})
         closed.append(record["id"])
     return tuple(closed)
+
+
+def _replace(source: Path, target: Path) -> None:
+    """Rename ``source`` over ``target``. Windows refuses the rename (``PermissionError``) while another program, a
+    scanner, an indexer or an editor, holds ``target`` open, mostly for a moment: such a refusal is tried again,
+    ``REPLACE_TRIES`` times in all, ``REPLACE_PAUSE_S`` seconds apart, and the last one raised. Any other error is
+    raised at once."""
+    for tried in range(1, REPLACE_TRIES + 1):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if tried == REPLACE_TRIES:
+                raise
+            _pause(REPLACE_PAUSE_S)
 
 
 def _records(folder: Path) -> list[dict]:
