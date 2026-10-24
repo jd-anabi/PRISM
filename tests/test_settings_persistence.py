@@ -1132,7 +1132,7 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
              "HomeScreen", "SettingsScreen", "TemperatureScreen", "RecordViewer", "Shell", "HelpScreen",
              "ModelsScreen", "PartError"}
     # The list is kept closed over the program. Every class with a base that a file of the window's own
-    # folder, of its screens or of its panels defines under a public name is named above, or here among
+    # folder, of its screens, of its panels or of its runs defines under a public name is named above, or here among
     # those a suite still builds itself, or among the classes of the window's folder that are no window,
     # part or step. So a class a later change adds, or a folder it adds beside the window's, fails here
     # until it is placed.
@@ -1143,11 +1143,11 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
     gui = Path(__file__).resolve().parents[1] / "core" / "gui"
     folders = sorted(p.name for p in gui.iterdir() if p.is_dir() and p.name != "__pycache__")
     defined = {node.name for path in (*sorted(gui.glob("*.py")), *sorted((gui / "screens").rglob("*.py")),
-                                      *sorted((gui / "panels").rglob("*.py")))
+                                      *sorted((gui / "panels").rglob("*.py")), *sorted((gui / "run").rglob("*.py")))
                for node in ast.parse(path.read_text(encoding="utf-8")).body
                if isinstance(node, ast.ClassDef) and node.bases and not node.name.startswith("_")}
     assert (folders, sorted(defined - placed), sorted(placed - defined)) == (
-        ["assets", "panels", "screens", "widgets"], [], []), (
+        ["assets", "panels", "run", "screens", "widgets"], [], []), (
         "the window's folders; then the classes it defines that this scan names nowhere; then the names "
         "this scan holds that are defined no longer")
 

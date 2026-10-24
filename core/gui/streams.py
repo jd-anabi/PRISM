@@ -9,6 +9,9 @@ Three layers:
     a print is what a library says, a record is what the pipeline says.
   * _Pump coalesces those events on a daemon thread and emits them to Qt at PUMP_HZ.
 
+Every finished line the pump receives can also go, as it arrives and on the thread that wrote it, to a line sink
+handed to redirect_streams: the run's dated text file (core/gui/run/textfile.py).
+
 The pump is load-bearing, not a nicety. tqdm's own `mininterval` does NOT bound the redraw rate here:
 set_description() (tqdm/std.py:1382) and reset() (:1360) both call refresh() -> display() with no time
 gate at all, and core/SBI/Priors/{bp,hopf,nadrowski}_prior.py call both on EVERY sweep iteration. Left
@@ -18,6 +21,7 @@ import logging
 import sys
 import threading
 import time
+import traceback
 import warnings
 from contextlib import contextmanager
 
@@ -33,6 +37,9 @@ _TICK = 1.0 / PUMP_HZ
 # inner one's restore would leave sys.stdout pointing at the outer worker's dead stream forever.
 # Second and later redirects decline and let their output go to the real console.
 _REDIRECT = threading.Lock()
+
+# Said, at warning, by a run whose redirect is declined because another run owns the process's streams.
+DECLINED_TEXT = "Another task already owns the console; this run's output is not captured."
 
 
 class WorkerCancelled(BaseException):
@@ -106,14 +113,24 @@ class _Pump:
 
     Progress rows are last-wins (a dict): intermediate frames within a tick are dropped, not queued --
     progress is idempotent state, not a log. Log lines are order-preserving and never dropped.
+
+    ``line_sink(text, level)``, when given, receives every finished line as it arrives, on the thread that
+    wrote it and still under the pump's lock, so it gets the lines in the order the pump keeps them. It
+    must never raise, print, log or take a requested stop: it is reached while the engine writes inside a
+    save that must not be interrupted, and a line it printed or logged would come back into this sink,
+    under this lock. It returns None, or once a sentence of the window's own saying it can write no more,
+    which the pump queues at warning. Once the pump has stopped on a dead signal (the window is gone), it
+    keeps no line for the window; the line sink still gets every one.
     """
 
-    def __init__(self, signals):
+    def __init__(self, signals, line_sink=None):
         self._signals = signals
+        self._line_sink = line_sink
         self._lock = threading.Lock()
         self._rows: dict[tuple, object] = {}
         self._logs: list[tuple[str, str]] = []
         self._dirty = False
+        self._dead = False                    # stopped on a dead signal: nothing is kept for the window
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="gui-progress-pump", daemon=True)
         self._thread.start()
@@ -126,7 +143,12 @@ class _Pump:
             elif kind == "retire":
                 self._rows.pop(payload, None)
             elif kind == "log":
-                self._logs.append(payload)
+                if not self._dead:
+                    self._logs.append(payload)
+                if self._line_sink is not None:
+                    said = self._line_sink(*payload)
+                    if said is not None and not self._dead:
+                        self._logs.append((said, "warning"))
             self._dirty = True
 
     def _take(self):
@@ -151,7 +173,10 @@ class _Pump:
             self._signals.rows.emit(rows)
         except RuntimeError:
             # "Signal source has been deleted" -- the window was closed while this run was still going,
-            # so the QApplication (and our WorkerSignals) are gone. There is nobody left to tell.
+            # so the QApplication (and our WorkerSignals) are gone. There is nobody left to tell, and no
+            # line is kept for anybody from now on: it would pile up unread for the rest of the run.
+            with self._lock:
+                self._dead = True
             self._stop.set()
 
     def _loop(self):
@@ -216,6 +241,14 @@ class _SignalStream:
             self._pump.sink("log", ("[progress parser disabled after an internal error]", "warning"))
         return len(text)
 
+    def record(self, text: str, level: str) -> None:
+        """A library's log record, handed to the run whole at its own level: the window's root sink calls this
+        during a run in place of writing the record's text, which would read at this stream's own level. A
+        point where a requested stop is taken, as ``write`` is."""
+        if self._cancel is not None and not runs.cancel_is_deferred():
+            self._cancel.check()
+        self._pump.sink("log", (text, level))
+
     def flush(self):
         pass
 
@@ -246,7 +279,8 @@ class _PumpLogHandler(logging.Handler):
     records the run's log.txt keeps too. A record logged on another thread while the run is live -- the
     window's own word, a part that could not be opened among them -- is not the run's: it goes to the
     console the run's redirect stands in front of, as the root's sink writes a record between runs; a console
-    that cannot take it is reported as logging reports a failed write, and nothing is raised where it was logged.
+    that cannot take it is reported on that console's own error stream (``handleError``), never on the run's,
+    and nothing is raised where it was logged.
     """
 
     def __init__(self, pump, cancel: "CancelToken | None", console=(None, None)):
@@ -271,6 +305,24 @@ class _PumpLogHandler(logging.Handler):
         except Exception:                     # noqa: BLE001 -- logging's contract: emit never raises
             self.handleError(record)
 
+    def handleError(self, record):
+        """Report a record this handler could not write on the error stream in force before the run, never on
+        the run's own. Logging's own report goes to ``sys.stderr``, which during the run is the run's stream: it
+        would land in the run's text from whatever thread failed, and pass a point where a requested stop is
+        taken. With no such stream (a start with no console) the report is dropped, as logging drops one when
+        the process has no error stream. The record's words are written escaped, so a console that could not
+        take them can take the report. Never raises."""
+        err = self._console[1]
+        if err is None or not logging.raiseExceptions:
+            return
+        try:
+            err.write("--- Logging error ---\n")
+            traceback.print_exc(file=err)
+            err.write(f"Message: {ascii(record.msg)}\nArguments: {ascii(record.args)}\n")
+            err.flush()
+        except Exception:                     # noqa: BLE001 -- a report that cannot be written is dropped
+            pass
+
 
 def _to_console(record, console) -> None:
     """Write ``record`` to ``console``, the output and error streams in force before a run's redirect, as the
@@ -284,7 +336,7 @@ def _to_console(record, console) -> None:
 
 
 @contextmanager
-def redirect_streams(signals, cancel: "CancelToken | None" = None):
+def redirect_streams(signals, cancel: "CancelToken | None" = None, line_sink=None):
     """Swap sys.stdout/stderr for signal-emitting streams, route warnings.warn to the log, and feed the
     ``core`` logger's records of this run's own thread to the same pane at their own level.
 
@@ -293,10 +345,16 @@ def redirect_streams(signals, cancel: "CancelToken | None" = None):
     WorkerCancelled. Yields the _Pump (or None if another redirect already owns the process's streams)
     so the caller can drain() it before emitting its result. The logger's LEVEL is never touched here:
     core/runs.py set it once at import.
+
+    `line_sink(text, level)`, when given, gets every finished line the pump gets (see _Pump), and the
+    line said when the redirect is declined, before it is said. A print on the error stream reads at
+    level ``err``: what a library writes there, a bar's last frame among it, is no warning (a library's
+    log RECORD reaches the run at its own level, through _SignalStream.record).
     """
     if not _REDIRECT.acquire(blocking=False):
-        signals.log.emit("Another task already owns the console; this run's output is not captured.",
-                         "warning")
+        if line_sink is not None:
+            line_sink(DECLINED_TEXT, "warning")
+        signals.log.emit(DECLINED_TEXT, "warning")
         yield None
         return
 
@@ -309,9 +367,9 @@ def redirect_streams(signals, cancel: "CancelToken | None" = None):
     if cancel is not None:
         cancel.arm()                          # this runs on the worker thread -> the only one that raises
     try:
-        pump = _Pump(signals)
+        pump = _Pump(signals, line_sink)
         out = _SignalStream(pump, "out", "info", cancel)
-        err = _SignalStream(pump, "err", "warning", cancel)
+        err = _SignalStream(pump, "err", "err", cancel)
         sys.stdout, sys.stderr = out, err
         # The third channel. Installed AFTER the streams and removed FIRST in the finally below, so a
         # record can never reach a pump that has stopped.

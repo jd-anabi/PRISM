@@ -887,8 +887,9 @@ def test_the_run_page_draws_with_no_figure_library():
     still say "corner"; and the window's figure stack, which shows pictures, may be imported. What importing
     the package loads is not read here: the run's controller, its history and its retry reach the engine,
     whose imports load the figure library anyway; the package's modules that must load neither the toolkit
-    nor the engine are held to it by a test of their own, in a fresh interpreter. The package is read when
-    it exists; the scanner is checked on a snippet first, so the walk cannot pass by reading nothing."""
+    nor the engine are held to it by a test of their own, in a fresh interpreter. The package must exist
+    and hold a module, and the scanner is checked on a snippet first, so the walk cannot pass by reading
+    nothing."""
     snippet = ast.parse("\n".join([
         "def draw(self):",
         "    from matplotlib.figure import Figure",                       # 2: a late import, its module and name
@@ -928,8 +929,10 @@ def test_the_run_page_draws_with_no_figure_library():
 
     repo = Path(__file__).resolve().parents[1]
     package = repo / "core" / "gui" / "run"
+    modules = sorted(package.rglob("*.py"))
+    assert modules, f"the run's package {package} holds no module, so the scan would read nothing"
     found = {}
-    for py in sorted(package.rglob("*.py")) if package.is_dir() else []:
+    for py in modules:
         names = _figure_library_names(ast.parse(py.read_text(encoding="utf-8")))
         if names:
             found[py.relative_to(repo).as_posix()] = names

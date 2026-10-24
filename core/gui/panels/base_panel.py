@@ -284,7 +284,7 @@ class BasePanel(QWidget):
         worker.signals.rows.connect(self.progress_pane.set_rows)
         worker.signals.figure.connect(self.figure_stack.add_figure)
         worker.signals.error.connect(self._on_error)
-        worker.signals.cancelled.connect(lambda: self.log_pane.append_line("Run cancelled.", "warning"))
+        worker.signals.cancelled.connect(lambda _kept_fit=None: self.log_pane.append_line("Run cancelled.", "warning"))
         if on_result is not None:
             worker.signals.result.connect(on_result)
 
@@ -449,7 +449,7 @@ class BasePanel(QWidget):
         self.log_pane.append_line(f"{exc.message} {fix}".rstrip(), "warning")
         show_refusal(self, exc)
 
-    def _on_error(self, exc_or_message, tb: str, cancel_noted: bool = False) -> None:
+    def _on_error(self, exc_or_message, tb: str, cancel_noted: bool = False, kept_fit=None) -> None:
         """Show a failure. A Refusal goes to the yellow box (_refusal); anything else is a bug and
         gets the red one, with the traceback in a collapsible Details panel rather than pasted whole
         into the body (which produced an unscrollable, un-copyable wall of text stretched to the
@@ -464,6 +464,9 @@ class BasePanel(QWidget):
         is reported, appended AFTER the crash itself: the box's informative text (below the one-line
         summary, above Details) and the pane, at warning, after the error line. Never shown for a
         Refusal -- that box is about fixing an input, not about a run.
+
+        ``kept_fit``: the training a failure in the fit kept, as the worker hands it on (the training
+        stage's note, or None). This box does not show it.
         """
         if isinstance(exc_or_message, Refusal):
             return self._refusal(exc_or_message)

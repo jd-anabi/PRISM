@@ -1771,8 +1771,10 @@ def test_the_windows_root_sink_prefixes_a_library_record_and_resolves_its_stream
     library record arriving on the WORKER thread never touches a widget (a ``log_pane.append_line``
     from the handler would have), and outside a run they are the real console.
 
-    The level split is not cosmetic: ``_SignalStream`` on err is hard-wired to the pane's ``warning``
-    level, so routing an information record through stderr would put a warning triangle on it.
+    During a run a record reaches the run at its OWN level: the sink hands it whole to the run's stream's
+    ``record``, ``info`` below WARNING, ``warning`` at it, ``error`` from ERROR on, so a library's warning
+    is a warning on the run's page. What a library PRINTS on the error stream is no record: it reads
+    ``err``, the error stream's own level, which carries no warning mark.
 
     ``logging.warning`` (the module-level function, on the ROOT logger) is sbi's own shape -- its
     leakage warnings at sbi/samplers/rejection/rejection.py:336,359 are that call -- and its logger
@@ -1830,10 +1832,14 @@ def test_the_windows_root_sink_prefixes_a_library_record_and_resolves_its_stream
         with redirect_streams(signals):
             lib.warning("a leaky posterior")
             lib.info("and a quiet note")
+            lib.error("a draw that failed")
+            print("the library's own print on the error stream", file=sys.stderr)
             logging.getLogger("core.probe").warning("the pipeline's own voice, during a run")
         pump(app)
         assert ("library: a_library: a leaky posterior", "warning") in lines, lines
         assert ("library: a_library: and a quiet note", "info") in lines, lines
+        assert ("library: a_library: a draw that failed", "error") in lines, lines
+        assert ("the library's own print on the error stream", "err") in lines, lines
         # during a run: the pump's own handler emitted it -- once, at its level, and nothing else did
         mine = [ln for ln in lines if "the pipeline's own voice, during a run" in ln[0]]
         assert mine == [("the pipeline's own voice, during a run", "warning")], lines

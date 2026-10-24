@@ -114,11 +114,20 @@ def _library_record_sink(record) -> None:
     a widget, which a ``log_pane.append_line`` from the handler would have done -- and outside a run
     they are the real console.
 
-    The level split exists because ``_SignalStream`` on err is hard-wired to the pane's ``warning``
-    level: routing an information record through stderr would put a warning triangle on it.
+    During a run the record is handed to the stream's ``record`` whole, at its own level: ``info`` below
+    WARNING, ``warning`` at WARNING, ``error`` at ERROR and above. So a library's warning (sbi's, that few
+    of its proposals were accepted) reaches the run as the warning it is, while what a library PRINTS on
+    the error stream reads ``err``, that stream's own level, which carries no warning mark. Outside a run
+    the record is written to the console: below WARNING on the output stream, from WARNING on the error
+    stream.
     """
     stream = sys.stderr if record.levelno >= logging.WARNING else sys.stdout
-    stream.write(logging_root.render(record) + "\n")
+    text = logging_root.render(record)
+    if hasattr(stream, "record"):
+        stream.record(text, "error" if record.levelno >= logging.ERROR
+                      else "warning" if record.levelno >= logging.WARNING else "info")
+        return
+    stream.write(text + "\n")
     stream.flush()
 
 

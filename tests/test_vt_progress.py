@@ -37,8 +37,9 @@ from tests._fixtures import qt_app, pump                          # noqa: E402
 import contextlib                                                  # noqa: E402
 
 # ── the router, driven by REAL tqdm (no Qt) ──────────────────────────────────────────────────────
-def _drive(fn, level="warning"):
-    """Run `fn` with sys.stderr routed through a StreamRouter; return its event list."""
+def _drive(fn, level="err"):
+    """Run `fn` with sys.stderr routed through a StreamRouter at the error stream's own level, as the
+    window's redirect routes it; return its event list."""
     events = []
 
     class Stream:
