@@ -135,12 +135,12 @@ them two `[fit]` lines the plan's table lacks (the epoch's record that could not
 kept yet), the scan and the fixed-word check read from the syntax tree (a raw-text check failed 23 of 49 rows), seven
 `[checkpoint]` lines on a text-only list, the chi warning arriving as a `UserWarning`, `[patho]` batches counted from 0
 (shown plus one), a row for the text file's own warning, the registry's additions, and the design's sentence for a
-save of the simulations "put off to the next batch" proposed as "to the next save" (NOT built). Ruled at 21:27 to be
+save of the simulations "put off to the next batch" (the plan's sentence, in Task 6's section) proposed as "to the next save" (NOT built). Ruled at 21:27 to be
 prepared here and not built: the bar stood at 86 % and building it would have crossed 90 %. **The hand-off prompt**
 `docs/superpowers/prompts/2026-10-23-window-redesign-stage-3-from-task-6.md`, checked by one reader (sonnet; findings
 folded). **Cost:** the weekly bar 81 % to 87 % (Task 4 about three points, Task 5 about two, Task 6's preparation about
 one; about 5 M tokens in background agents: Task 4 about 2.2, Task 5 about 2.2, Task 6's preparation 0.64); this chat
-at about 46 % of its room. **Unpushed:** `07a3fff`..this session's last commit (the owner pushed up to `1ad02f5`).
+at about 46 % of its room. **Unpushed:** the commits after `20eb415` (the owner pushed up to `20eb415` at 16:24 on 23 October, a minute before this session began).
 
 **THE BUILD OF STAGE 3, TASKS 0 TO 3 (2026-10-23, about 09:35 to 16:15 by `date`; a session started from the owner's pasted
 prompt `docs/superpowers/prompts/2026-10-23-window-redesign-stage-3-build.md`; the ledger's section "## Stage 3 — the run
