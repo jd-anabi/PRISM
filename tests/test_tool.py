@@ -1541,6 +1541,264 @@ def test_smoke_refuses_a_bad_cell_and_an_impossible_resume_before_the_prior(tool
     assert rec.calls == [], "an impossible --resume was refused only after the prior"
 
 
+# ── the card test as a step of its own: the smoke command's four stages, called as the window will ──
+def _card_stages(monkeypatch, cfg, *, writes=False):
+    """Recorder stages on the orchestrator for the card test, each returning a stand-in of its record, and
+    the seeding context replaced where the step reads it. With ``writes`` each stage first writes on the
+    configuration it is handed, as a real stage writes on its own. Returns the calls by stage (and
+    "seeds", the seeding context's), what each stage returns, and the width the mode conditions on."""
+    import contextlib
+
+    import torch
+
+    import core.diagnostics.rng
+    from core import orchestrator
+    from core.SBI.statistics import SUMMARY_WIDTH
+    want = SUMMARY_WIDTH + 1 + orchestrator.expected_forcing_dim(cfg)
+    calls = {"prior": [], "posterior": [], "validate": [], "infer": [], "seeds": []}
+    made = {"prior": "PRIOR", "posterior": "POST", "validate": "CAL",
+            "infer": (SimpleNamespace(width=want, x_obs=torch.zeros(1)), "INF")}
+
+    def stage(name):
+        def call(*a, **k):
+            calls[name].append((a, k))
+            if writes:
+                a[0].T_obs = 4242.0
+                a[0].sources["cell"] = "written by the stage"
+            return made[name]
+        return call
+
+    for name, attr in (("prior", "build_prior"), ("posterior", "build_posterior"),
+                       ("validate", "validate_calibration"), ("infer", "simulated_inference")):
+        monkeypatch.setattr(orchestrator, attr, stage(name))
+    monkeypatch.setattr(core.diagnostics.rng, "seeded",
+                        lambda seed, device: calls["seeds"].append((seed, device)) or contextlib.nullcontext())
+    return calls, made, want
+
+
+def _weak_cell() -> str:
+    return str(config.CELL_PATH / "nadrowski" / "master_weak.txt")
+
+
+def test_the_card_test_step_calls_the_four_stages_with_the_smoke_commands_keywords(monkeypatch):
+    """The card test as one step, called as the window's screen will call it: the smoke command's four
+    stages, each looked up on the orchestrator when it is called, with the keywords the command hands them
+    (the sets the command's own keyword test pins), one distinct value per setting; the one seeding
+    context, read where the command reads it; the command's defaults; and a result that holds what each
+    stage returned, the seconds each took and the width the network conditions on. Every stage is handed
+    the step's one working copy of the configuration, never the caller's, and no truth on it: the cell is
+    checked on a copy of its own."""
+    import inspect
+
+    from core.diagnostics import card
+    from tests._fixtures import _nad_cfg
+    cfg = _nad_cfg()
+    calls, made, want = _card_stages(monkeypatch, cfg)
+    cell = _weak_cell()
+    sink, store = object(), object()
+    result = card.card_test(cfg, cell=cell, t_obs_s=2.5, seed=5, num_runs=3, run_size_cap=9, n_cal=17,
+                            max_num_epochs=6, hidden_features=11, num_transforms=3, checkpoint=True, save=True,
+                            prior_ref="smoke_prior", resume="require", new_run=True, fig_sink=sink, store=store)
+
+    ((cfg1, ref1, build_new1), kw1), = calls["prior"]
+    assert cfg1 is not cfg and not cfg1.has_ground_truth and "cell" not in cfg1.sources
+    assert calls["seeds"] == [(5, cfg1.hw.device)]
+    assert (ref1, build_new1) == ("smoke_prior", False) and kw1 == {"fig_sink": sink, "store": store, "name": ""}
+    ((cfg2, prior2, ref2, train_new2), kw2), = calls["posterior"]
+    assert cfg2 is cfg1 and (prior2, ref2, train_new2) == ("PRIOR", None, True)
+    assert kw2 == {"fig_sink": sink, "store": store, "name": "smoke_posterior", "num_runs": 3, "run_size_cap": 9,
+                   "max_num_epochs": 6, "checkpoint_every": 1, "new_run": True, "resume": "require",
+                   "hidden_features": 11, "num_transforms": 3}
+    ((cfg3, post3, prior3), kw3), = calls["validate"]
+    assert cfg3 is cfg1 and (post3, prior3) == ("POST", "PRIOR")
+    assert kw3 == {"fig_sink": sink, "store": store, "n_cal": 17}
+    ((cfg4, post4, t_obs4), kw4), = calls["infer"]
+    assert cfg4 is cfg1 and (post4, t_obs4) == ("POST", 2.5)
+    assert kw4 == {"cell": cell, "prior": "PRIOR", "fig_sink": sink, "store": store}
+    assert result.stages_run == card.STAGES and set(result.seconds) == set(card.STAGES)
+    assert all(s >= 0.0 for s in result.seconds.values()), result.seconds
+    assert (result.prior, result.posterior, result.calibration, result.inference) == ("PRIOR", "POST", "CAL", "INF")
+    assert result.observation is made["infer"][0] and result.conditioning_width == want
+
+    # At its defaults the step forwards no network size and no policy, so each stays the stage's own; a
+    # prior it builds is named only when it is told to save; and every default is the smoke command's.
+    for name in calls:
+        calls[name].clear()
+    card.card_test(cfg, cell=cell, save=True)
+    (_c, ref, build_new), kw = calls["prior"][0]
+    assert (ref, build_new, kw["name"]) == (None, True, "smoke_prior")
+    kw = calls["posterior"][0][1]
+    assert not {"resume", "hidden_features", "num_transforms"} & set(kw), kw
+    assert (kw["num_runs"], kw["run_size_cap"], kw["max_num_epochs"], kw["checkpoint_every"], kw["new_run"]) == \
+        (4, 32, 5, 0, False)
+    assert calls["validate"][0][1]["n_cal"] == 40 and calls["infer"][0][0][2] == config.T_MIN_EXP_S
+    assert calls["seeds"][0][0] == 0
+    smoke = build_parser().subcommands["smoke"]
+    step = inspect.signature(card.card_test).parameters
+    for dest, keyword in (("seed", "seed"), ("num_runs", "num_runs"), ("run_size_cap", "run_size_cap"),
+                          ("n_cal", "n_cal"), ("max_num_epochs", "max_num_epochs"), ("t_obs_s", "t_obs_s"),
+                          ("hidden_features", "hidden_features"), ("num_transforms", "num_transforms"),
+                          ("checkpoint", "checkpoint"), ("save", "save"), ("prior", "prior_ref"),
+                          ("resume", "resume"), ("new_run", "new_run")):
+        assert smoke.get_default(dest) == step[keyword].default, (dest, smoke.get_default(dest), step[keyword].default)
+    assert ",".join(step["stages"].default) == smoke.get_default("stages")
+
+
+def test_the_card_test_refuses_a_missing_cell_before_the_prior(monkeypatch, tmp_path):
+    """The cell the inference simulates is read last, after the prior, the training and the calibration;
+    the step checks it first, on a copy of its configuration, so a cell that names no file, or none at
+    all, is refused before anything is spent, under the cell's own field. So is a list of stages naming one
+    the card test does not have. A cell is read only when the inference is asked for, as the smoke command
+    reads it."""
+    from core.diagnostics import card
+    from core.refusals import Refusal
+    from tests._fixtures import _nad_cfg
+    cfg = _nad_cfg()
+    calls, _made, _want = _card_stages(monkeypatch, cfg)
+    missing = str(tmp_path / "no_such_cell.txt")
+    for cell in (missing, "", "   "):
+        with pytest.raises(Refusal) as e:
+            card.card_test(cfg, cell=cell)
+        assert e.value.field == "cell", (cell, e.value.field, str(e.value))
+    with pytest.raises(Refusal) as e:
+        card.card_test(cfg, cell=_weak_cell(), stages=("prior", "bogus"))
+    assert "bogus" in str(e.value) and e.value.field is None, str(e.value)
+    assert all(v == [] for v in calls.values()), calls
+    card.card_test(cfg, cell=missing, stages=("prior",))
+    assert len(calls["prior"]) == 1, "a cell was read for a card test that does not infer"
+
+
+def test_the_card_test_leaves_its_callers_configuration_as_it_found_it(monkeypatch, tmp_path):
+    """The window's screen will hand the step a configuration it keeps. Each stage writes on the one it is
+    handed; the step hands them a working copy of its own, so the caller's is as it was however the step
+    ends: run through, refused before the prior, or failed in a stage."""
+    from core import orchestrator
+    from core.diagnostics import card
+    from core.refusals import Refusal
+    from tests._fixtures import _nad_cfg, assert_cfg_unchanged, snapshot_cfg
+    cfg = _nad_cfg()
+    calls, _made, _want = _card_stages(monkeypatch, cfg, writes=True)
+    snap = snapshot_cfg(cfg)
+    card.card_test(cfg, cell=_weak_cell())
+    assert calls["infer"][0][0][0].T_obs == 4242.0, "the stages wrote nothing: this test would read nothing"
+    assert_cfg_unchanged(cfg, snap)
+    with pytest.raises(Refusal):
+        card.card_test(cfg, cell=str(tmp_path / "no_such_cell.txt"))
+    assert_cfg_unchanged(cfg, snap)
+
+    def fail(c, *a, **k):
+        c.T_obs = 4242.0
+        raise RuntimeError("the calibration failed")
+
+    monkeypatch.setattr(orchestrator, "validate_calibration", fail)
+    with pytest.raises(RuntimeError, match="the calibration failed"):
+        card.card_test(cfg, cell=_weak_cell())
+    assert_cfg_unchanged(cfg, snap)
+
+
+def test_the_card_test_tells_each_stage_once_in_order(monkeypatch, capsys, caplog):
+    """The step tells its caller, on the calling thread, each stage once, in the order the stages run:
+    "started" and then "finished" with the seconds it took, or "skipped" for a stage not asked for. A stage
+    that fails is told as "failed", with its seconds, before the failure passes on, and nothing after it is
+    told. With no prior there is nothing to train, and with no posterior nothing to calibrate or infer
+    from: the step stops there, as the smoke command does, and tells nothing of the stages after. The step
+    itself says nothing: no print and no record."""
+    import logging
+    import threading
+
+    from core import orchestrator
+    from core.diagnostics import card
+    from tests._fixtures import _nad_cfg
+    cfg = _nad_cfg()
+    calls, _made, _want = _card_stages(monkeypatch, cfg)
+    here, told = threading.get_ident(), []
+
+    def on_stage(stage, event, seconds):
+        assert threading.get_ident() == here
+        told.append((stage, event, seconds))
+
+    def run(**given):
+        told.clear()
+        result = card.card_test(cfg, cell=_weak_cell(), on_stage=on_stage, **given)
+        for stage, event, seconds in told:
+            assert (seconds is None) == (event in ("started", "skipped")), (stage, event, seconds)
+            assert seconds is None or seconds >= 0.0, (stage, event, seconds)
+        return result, [(stage, event) for stage, event, _ in told]
+
+    caplog.set_level(logging.INFO, logger="core")
+    caplog.clear()
+    capsys.readouterr()
+    result, events = run()
+    assert events == [(s, e) for s in card.STAGES for e in ("started", "finished")], events
+    assert [seconds for _s, e, seconds in told if e == "finished"] == [result.seconds[s] for s in card.STAGES]
+    assert run(stages=("prior", "posterior"))[1] == [
+        ("prior", "started"), ("prior", "finished"), ("posterior", "started"), ("posterior", "finished"),
+        ("validate", "skipped"), ("infer", "skipped")]
+    result, events = run(stages=("posterior", "validate"))
+    assert events == [("prior", "skipped")] and result.prior is None and result.stages_run == ()
+    result, events = run(stages=("prior",))
+    assert events == [("prior", "started"), ("prior", "finished"), ("posterior", "skipped")]
+    assert result.posterior is None and result.stages_run == ("prior",)
+
+    def fail(*a, **k):
+        raise RuntimeError("the calibration failed")
+
+    monkeypatch.setattr(orchestrator, "validate_calibration", fail)
+    told.clear()
+    inferred = len(calls["infer"])
+    with pytest.raises(RuntimeError, match="the calibration failed"):
+        card.card_test(cfg, cell=_weak_cell(), on_stage=on_stage)
+    assert [(s, e) for s, e, _ in told][-2:] == [("validate", "started"), ("validate", "failed")], told
+    assert told[-1][2] >= 0.0 and len(calls["infer"]) == inferred, "a stage after the failure was run"
+    assert capsys.readouterr() == ("", ""), "the step printed"
+    assert [r.getMessage() for r in caplog.records] == [], "the step said something of its own"
+
+
+def test_the_card_tests_stages_are_the_commands_stages():
+    """The smoke command lists its stages without the step, so that reading its flags imports no torch: an
+    unknown stage is refused while the flags are read, before anything is loaded. The two lists are one
+    list, in one order. Checked in a fresh interpreter, since this one imported torch long ago."""
+    import subprocess
+    import sys
+
+    from core.diagnostics import card
+    from core.tool import smoke
+    assert card.STAGES == smoke.STAGES == ("prior", "posterior", "validate", "infer")
+    probe = ("import sys\n"
+             "from core.tool import main\n"
+             "rc = [main(['smoke', '--help']),\n"
+             "      main(['smoke', '--bounds', 'b.txt', '--cell', 'c.txt', '--stages', 'prior,bogus'])]\n"
+             "bad = sorted(m for m in sys.modules if m == 'torch' or m.startswith('torch.'))\n"
+             "sys.exit(0 if rc == [0, 2] and not bad else repr((rc, bad[:3])))\n")
+    r = subprocess.run([sys.executable, "-c", probe], cwd=str(config.REPO_ROOT),
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "--stages" in r.stdout and "bogus" in r.stderr, r.stdout + r.stderr
+
+
+def test_the_card_test_refuses_a_continuation_it_cannot_make(monkeypatch):
+    """A caller that did not check them first is refused, before the prior, the two continuations that can
+    never work when the training is among the stages: a policy of 'require' or 'never' with no simulation
+    set kept (no checkpoint), under the policy's field, and 'require' with a prior built afresh, whose new
+    fit no kept set can match, under the prior's. Neither sentence names a flag. Without the training among
+    the stages there is nothing to continue, and nothing is refused."""
+    from core.diagnostics import card
+    from core.refusals import Refusal
+    from tests._fixtures import _nad_cfg
+    cfg = _nad_cfg()
+    calls, _made, _want = _card_stages(monkeypatch, cfg)
+    for given, field in ((dict(resume="require", prior_ref="p"), "resume"), (dict(resume="never"), "resume"),
+                         (dict(resume="require", checkpoint=True), "prior")):
+        with pytest.raises(Refusal) as e:
+            card.card_test(cfg, cell=_weak_cell(), **given)
+        assert e.value.field == field, (given, e.value.field, str(e.value))
+        assert "--" not in str(e.value), str(e.value)
+    assert all(v == [] for v in calls.values()), calls
+    card.card_test(cfg, cell=_weak_cell(), resume="require", checkpoint=True, prior_ref="p")
+    card.card_test(cfg, cell=_weak_cell(), resume="never", stages=("prior",))
+    assert len(calls["prior"]) == 2 and len(calls["posterior"]) == 1, calls
+
+
 def _fdt_cfg_stub():
     """What a recorder standing in for an FDT config builder hands back: the fields the FDT branch of
     ``manifest.config_from_cfg`` reads (``_fdt_config_from_cfg``), plus ``sources``, and NO

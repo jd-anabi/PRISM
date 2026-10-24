@@ -137,22 +137,24 @@ def register(subparsers):
 
 
 def run_smoke(args, store):
-    """The stage sequence. A composition of its own, not a chain of ``main`` calls: one process, one
-    store, one cfg -- the resume run (same store, same --num-runs, the prior loaded by name) loads its
-    prior into that cfg, and --stages can stop early."""
+    """The stage sequence: the card test (``core.diagnostics.card_test``), one step over one process, one
+    store and one cfg -- the resume run (same store, same --num-runs, the prior loaded by name) loads its
+    prior into that cfg, and --stages can stop early. What stays here is the command line's own: the
+    flags' checks, the configuration and its banner, and every line of the console, framed from what the
+    step tells of each stage and from what it returns."""
     from core import cli, config, orchestrator
-    from core.diagnostics.rng import seeded
+    from core.diagnostics import card_test
     from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH, VALID_FLAG_LABELS
     from core.tool import UsageError
-    from core.tool.config_args import build_cfg, close_sink, knobs, make_cfg
+    from core.tool.config_args import build_cfg, close_sink, make_cfg
 
     stages = [s.strip() for s in args.stages.split(",") if s.strip()]
     unknown = [s for s in stages if s not in STAGES]
     if unknown:
         raise UsageError(f"--stages: unknown stage(s) {unknown}; choose from {list(STAGES)}")
     if "posterior" in stages:
-        # Two --resume settings that can never work, refused before the prior build -- not after it,
-        # by the stage's refusal, which names train's --checkpoint-every rather than smoke's flag.
+        # Two --resume settings that can never work, refused before the prior build in this command's
+        # own words, naming its own flags; the step refuses the same two after these, naming its keywords.
         if args.resume in ("require", "never") and not args.checkpoint:
             raise UsageError(f"--resume {args.resume} needs --checkpoint: without it no simulation "
                              f"cache is read or written, so the policy has nothing to act on.")
@@ -167,9 +169,9 @@ def run_smoke(args, store):
     if "infer" in stages:
         # The cell is first read by the infer stage, after the prior, the training and the calibration.
         # Checked here against a THROWAWAY config, so a mistyped --cell (or one outside --bounds) costs
-        # nothing, while the training cfg stays truth-free.
+        # nothing, while the training cfg stays truth-free. Before the banner, so the console reads as
+        # it always has; the step checks it again, for a caller that has not.
         cli.load_and_validate_gt(make_cfg(args), args.cell)
-    t_obs_s = config.T_MIN_EXP_S if args.t_obs_s is None else float(args.t_obs_s)
     fdim = orchestrator.expected_forcing_dim(cfg)
     want = SUMMARY_WIDTH + 1 + fdim
 
@@ -188,70 +190,36 @@ def run_smoke(args, store):
     print(f"[smoke] --run-size caps the training batch; the prior sweep keeps the hardware batch "
           f"({cfg.hw.batch_size}).", flush=True)
 
-    ck_every = max(1, args.num_runs // 2) if args.checkpoint else 0
-    t0, done = time.time(), {}
+    t0 = time.time()
 
-    def _stage(name, fn):
-        if name not in stages:
+    def _framed(name, event, seconds):
+        if event == "skipped":
             print(f"[skip] {name}", flush=True)
-            return None
-        t = time.time()
-        print(f"\n=== {name} ===", flush=True)
-        try:
-            out = fn()
-        except BaseException:
+        elif event == "started":
+            print(f"\n=== {name} ===", flush=True)
+        elif event == "finished":
+            print(f"[ok] {name} in {seconds:.1f}s", flush=True)
+        elif event == "failed":
             # The stage banner, before the traceback: a failure an hour into a simulation log must
             # not be findable only by scrolling.
             print(f"\n[smoke] *** FAILED in stage {name} ***", flush=True)
-            raise
-        done[name] = time.time() - t
-        print(f"[ok] {name} in {done[name]:.1f}s", flush=True)
-        return out
 
-    with seeded(args.seed, cfg.hw.device):
-        prior = _stage("prior", lambda: orchestrator.build_prior(
-            cfg, args.prior, args.prior is None, fig_sink=close_sink, store=store,
-            name="smoke_prior" if (args.save and args.prior is None) else ""))
-        if prior is None:
-            print("\n[smoke] nothing further to run without a prior.")
-            return 0
-
-        post = _stage("posterior", lambda: orchestrator.build_posterior(
-            cfg, prior, None, True, fig_sink=close_sink, store=store,
-            name="smoke_posterior" if args.save else "",
-            num_runs=args.num_runs, run_size_cap=args.run_size_cap,
-            max_num_epochs=args.max_num_epochs, checkpoint_every=ck_every,
-            new_run=args.new_run, **knobs(args, "resume", "hidden_features", "num_transforms")))
-        if post is None:
-            print("\n[smoke] prior only; stopping before training.")
-            return 0
-
-        _stage("validate", lambda: orchestrator.validate_calibration(
-            cfg, post, prior, fig_sink=close_sink, store=store, n_cal=args.n_cal))
-        _stage("infer", lambda: _infer(cfg, post, prior, t_obs_s, args.cell, store, want))
+    done = card_test(cfg, cell=args.cell, t_obs_s=args.t_obs_s, seed=args.seed, stages=tuple(stages),
+                     num_runs=args.num_runs, run_size_cap=args.run_size_cap, n_cal=args.n_cal,
+                     max_num_epochs=args.max_num_epochs, hidden_features=args.hidden_features,
+                     num_transforms=args.num_transforms, checkpoint=args.checkpoint, save=args.save,
+                     prior_ref=args.prior, resume=args.resume, new_run=args.new_run, on_stage=_framed,
+                     fig_sink=close_sink, store=store)
+    if done.prior is None:
+        print("\n[smoke] nothing further to run without a prior.")
+        return 0
+    if done.posterior is None:
+        print("\n[smoke] prior only; stopping before training.")
+        return 0
 
     print(f"\n[smoke] ALL STAGES COMPLETED in {time.time() - t0:.1f}s "
-          f"({', '.join(f'{k} {v:.0f}s' for k, v in done.items())})")
+          f"({', '.join(f'{k} {v:.0f}s' for k, v in done.seconds.items())})")
     print("[smoke] This says the chain RUNS. It says nothing about calibration -- SBC at these "
           "sizes has no power (t_scale's effective sample size is the batch count). Read the "
           "masked-probe and OOD warnings above.")
     return 0
-
-
-def _infer(cfg, posterior, prior, t_obs_s, cell, store, want):
-    """The infer stage: the composition, then the two shape checks the script carried.
-
-    The checks run AFTER the inference rather than between the two stages, because the composition
-    is one call -- and they are cheap assertions on an artifact that is already on disk, so nothing
-    is lost by asking a second later.
-    """
-    import torch
-    from core import orchestrator
-    from core.tool.config_args import close_sink
-    obs, inf = orchestrator.simulated_inference(cfg, posterior, t_obs_s, cell=cell, prior=prior,
-                                                fig_sink=close_sink, store=store)
-    if obs.width != want:
-        raise RuntimeError(f"observation width {obs.width} != the mode's {want}")
-    if not torch.isfinite(obs.x_obs).all():
-        raise RuntimeError("the observation carries non-finite conditioning")
-    return obs, inf

@@ -8,7 +8,9 @@ could not be tested, and wrote nothing the store could describe. The five functi
 submodules all of them share. So are the probe checks (``probes``), which re-measure the chi probe
 settings and change none of them: ``probe_band`` asks whether the configured band and drive hold for
 a cell, ``probe_mask`` why training probes are thrown out over a prior, and ``probe_drive`` how hard a
-lab can drive a cell. Their shared geometry and spectrum helpers are ``probe_math``.
+lab can drive a cell. Their shared geometry and spectrum helpers are ``probe_math``. So is the card
+test (``card``): ``card_test`` runs the smoke command's four stages end to end at tiny sizes as one
+step, which the command line's ``smoke`` calls and the window will.
 
 ``feature_sets`` answers "which features does THIS config's posterior actually condition on", which
 is what makes a Jacobian diagnostic a statement about the experiment that was run rather than about
@@ -22,3 +24,4 @@ from .identifiability import (identifiability_jacobian, identifiability_laplace,
 from .sbc import sbc_repeats  # noqa: F401
 from .ablation import channel_ablation  # noqa: F401
 from .probes import probe_band, probe_drive, probe_mask  # noqa: F401
+from .card import card_test  # noqa: F401

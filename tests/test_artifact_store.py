@@ -3816,6 +3816,27 @@ def _leg_compare(case, monkeypatch, tmp_path):
     return cfg, lambda: comparisons.compare("cells", refs, store=store)
 
 
+def _leg_card_test(case, monkeypatch, tmp_path):
+    """The card test's leg. It hands its stages its working config, so the seam is its first stage: the
+    prior, standing in, writes on the config it is handed and, for "boom", raises after that write. Its
+    own pre-spend refusal is a cell that names no file, checked before the prior when the inference is
+    among the stages; the other two cases ask for the prior alone, so no cell is read."""
+    from core import orchestrator
+    from core.diagnostics import card
+    cfg = _nad_cfg()
+
+    def _prior(c, *a, **k):
+        _leak(c)
+        if case == "boom":
+            _raise_injected()
+        return "PRIOR"
+
+    monkeypatch.setattr(orchestrator, "build_prior", _prior)
+    if case == "refusal":
+        return cfg, lambda: card.card_test(cfg, cell=str(tmp_path / "no_such_cell.txt"), store=_EntryStore(case))
+    return cfg, lambda: card.card_test(cfg, cell="", stages=("prior",), store=_EntryStore(case))
+
+
 _UNTOUCHED_LEGS = {
     "generate_observations": _leg_generate_observations,
     "build_experiment_observation": _leg_build_experiment_observation,
@@ -3838,6 +3859,7 @@ _UNTOUCHED_LEGS = {
     "run_fdt": _leg_run_fdt,
     "run_param_study_cli": _leg_run_param_study_cli,
     "compare": _leg_compare,
+    "card_test": _leg_card_test,
 }
 
 # The field each "refusal" leg's refusal carries, for EVERY entry. The leg used to accept any
@@ -3868,6 +3890,7 @@ _REFUSAL_FIELDS = {
     "run_fdt": "cell",                               # a cell with no FDT normalisation constant
     "run_param_study_cli": "cell",                   # the same check, before the first phase's spend
     "compare": "compare_records",                    # one record, for a mode that draws at least two
+    "card_test": "cell",                             # a cell that names no file, checked before the prior
 }
 
 
@@ -3875,8 +3898,8 @@ def test_the_public_entries_carry_public_entry_and_nothing_else_does():
     """Every public stage works on a private copy of its config, and that copy is kept by ONE
     decorator on exactly the functions named below: the ten stages and compositions of
     core/orchestrator.py, the five diagnostics and the probe checks' band, mask and drive modes, core/FDT's
-    single-cell measurement, its two-record sweep study, and the comparison facility's one entry,
-    core/FDT/compare.py. Read off the source
+    single-cell measurement, its two-record sweep study, the comparison facility's one entry,
+    core/FDT/compare.py, and the card test, core/diagnostics/card.py. Read off the source
     (every `@public_entry` in CODE_ROOTS and CODE_FILES), not off `__wrapped__`, which any
     functools.wraps decorator sets: a public stage added without it hands its body the caller's config,
     and a helper given it (`_write_observation`, `_draw_calibration_set`, `training_identity`, ...)
@@ -3911,6 +3934,9 @@ def test_the_public_entries_carry_public_entry_and_nothing_else_does():
     # in log.txt like every other entry's -- and ONE entry for all four modes, so this set and
     # its two companions name it once.
     want |= {("core/FDT/compare.py", "compare")}
+    # The card test runs four of the stages above as one step: as an entry of its own it shares one run
+    # log with them, so each record it writes carries the lines since the card test began.
+    want |= {("core/diagnostics/card.py", "card_test")}
     assert found == want, f"missing {sorted(want - found)}; unexpected {sorted(found - want)}"
     assert set(_UNTOUCHED_LEGS) == {name for _, name in want}, sorted(set(_UNTOUCHED_LEGS) ^ {n for _, n in want})
 
