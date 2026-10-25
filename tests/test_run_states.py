@@ -256,28 +256,45 @@ def _strings(tree) -> list:
 
 
 def _source(module: str) -> Path:
-    """Where a module of the engine, or of the training library, is, without importing it."""
+    """Where a module's source is: an engine module's by its path, never imported; the training library's by its
+    spec, which imports the packages above it."""
     path = REPO / (module.replace(".", "/") + ".py")
     return path if path.is_file() else Path(importlib.util.find_spec(module).origin)
 
 
-def _pieces(form: str) -> list:
-    """The fixed words of a row's form: the text between its placeholders."""
-    return [piece for piece in re.split(r"<\w+>", form) if piece]
-
-
 def _holds(text: str, form: str) -> bool:
-    """Whether ``text`` holds the fixed words of a row's form, in order, beginning with them unless the form begins
-    with a placeholder."""
-    text, at, pieces = text.lstrip(), 0, _pieces(form)
-    if not pieces or (not form.startswith("<") and not text.startswith(pieces[0])):
-        return False
-    for piece in pieces:
-        found = text.find(piece, at)
-        if found < 0:
-            return False
-        at = found + len(piece)
-    return True
+    """Whether ``text``, a string the engine's source writes, is a row's line whole: the form's fixed words exactly,
+    each whole or real number one value put in (``{}``, or a ``%`` code), any other placeholder any text, from the
+    first character to the last."""
+    one = r"(?:\{\}|%[-+ #0-9.]*[a-zA-Z])"
+    parts = []
+    for part in re.split(r"(<\w+>)", form):
+        named = re.fullmatch(r"<(\w+)>", part)
+        if named is None:
+            parts.append(re.escape(part))
+        elif named.group(1) in readings._WHOLES | readings._REALS:
+            parts.append(one)
+        else:
+            parts.append(r".*?")
+    return re.fullmatch("".join(parts), text.lstrip(), re.DOTALL) is not None
+
+
+def _calls(tree) -> list:
+    """``(name, text)`` for every string a call is handed: the called function's own name ("info", "warning",
+    "warn", "print") and each text the string can give."""
+    return [(node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", ""), text)
+            for node in ast.walk(tree) if isinstance(node, ast.Call)
+            for arg in node.args if _stringy(arg) for text in _templates(arg)]
+
+
+# What a row's message may be, by the call that writes its line: a logger's warning or a Python warning, an error,
+# a line of information (none, or one of the two that say a training is not saved as it goes), a print (none).
+_MESSAGES = {"warning": {"warning"}, "warn": {"warning"}, "error": {"error"}, "info": {None, "information"},
+             "print": {None}}
+# The rows whose line is built before the call that writes it (assigned, or returned by a function), so no call is
+# read for them, each with the message it has: the window's own line of its text file is handed on as a warning.
+_BUILT_FIRST = {"fit_epoch": None, "chi_total": None, "chi_none": None, "mem": None, "mem_unavailable": None,
+                "text_file_broken": "warning"}
 
 
 def _formatted(name):
@@ -314,22 +331,30 @@ def _resolve(dotted: str):
 
 @pytest.mark.parametrize("name", (*readings.NAMES, None), ids=lambda name: name or "every-engine-line")
 def test_every_reading_matches_the_line_the_engine_writes(name):
-    """Each row of the window's table is held to the engine: the fixed words of its line (the text between its
-    placeholders) are a string the module it names writes, in order, read off that module's syntax tree, so a line
-    reworded in the engine fails here; a line of its form, as the engine writes it, is read by that row and by no
-    other; and a row whose line the engine builds with a function of its own reads that function's line, with the
-    values the function was handed (an epoch's record beside the window's literal copy of it).
+    """Each row of the window's table is held to the engine: its line's whole shape (its fixed words exactly, a
+    number's place one value, from the first character to the last) is a string the module it names writes, read
+    off that module's syntax tree, so a line reworded in the engine, or given more words, fails here; its message is
+    what the call that writes the line makes it (a warning, an error, information or none); a line of its form, as
+    the engine writes it, is read by that row and by no other; and a row whose line the engine builds with a
+    function of its own reads that function's line, with the values the function was handed (an epoch's record
+    beside the window's literal copy of it).
 
     And the other way round (the last case): every string under core/ but the window's own folder that begins as
     the run's lines do ([fit], [checkpoint], [patho], [chi], [mem]), as a call's argument, an assignment or a value
     returned, is the line of a row of the module that writes it, or is named on this test's short list of lines the
     window reads as text, each with its reason. So a line added to the engine with neither fails here. The scanner
-    is tried on a snippet first, and every entry of the list must still name a line."""
+    and the matcher are tried on a snippet first, and every entry of the list must still name a line."""
     if name is not None:
         row = next(r for r in readings.ROWS if r.name == name)
-        written = [text for _, text in _strings(ast.parse(_source(row.module).read_text(encoding="utf-8")))]
-        assert any(_holds(text, row.form) for text in written), (
+        tree = ast.parse(_source(row.module).read_text(encoding="utf-8"))
+        assert any(_holds(text, row.form) for _, text in _strings(tree)), (
             f"{row.module} no longer writes the line of {name}: {row.form!r}")
+        called = {call for call, text in _calls(tree) if _holds(text, row.form)}
+        if name in _BUILT_FIRST:
+            assert not called and row.message == _BUILT_FIRST[name], (name, sorted(called), row.message)
+        else:
+            assert called and all(row.message in _MESSAGES.get(call, ()) for call in called), (
+                f"{name} is said by {sorted(called)}; its message is {row.message!r}")
         line = _LINES[name]
         reading = readings.read(line, "info")
         assert reading is not None and reading.name == name, (name, reading)
@@ -355,6 +380,10 @@ def test_every_reading_matches_the_line_the_engine_writes(name):
     assert sorted(_strings(snippet)) == sorted([
         (3, "[fit] saved after pass {}."), (4, "[mem] {}: peak a"), (4, "[mem] {}: peak b"),
         (5, "[chi] masked: {}; done"), (6, "plain"), (6, "{}")]), _strings(snippet)
+    form = "[fit] saved after pass <passes>."
+    assert _holds("[fit] saved after pass {}.", form), "a string that holds the form"
+    assert not _holds("[fit] saved after pass {}. Kept.", form), "words appended"
+    assert not _holds("[fit] saved after epoch {}.", form), "a word changed"
     seen, unread = [], []
     for path in sorted((REPO / "core").rglob("*.py")):
         relative = path.relative_to(REPO).as_posix()
@@ -376,6 +405,25 @@ def test_every_reading_matches_the_line_the_engine_writes(name):
     for owner, start in _TEXT_ONLY:
         written = [text for _, text in _strings(ast.parse(_source(owner).read_text(encoding="utf-8")))]
         assert any(text.lstrip().startswith(start) for text in written), f"{owner} no longer writes {start!r}"
+
+
+def test_the_engine_words_the_model_reads_beside_its_table_are_still_the_engines():
+    """Three more copies of the engine's words, read by the model outside its table, are held to the engine as its
+    rows are, off the syntax tree of the module that writes them: the name of a training batch inside a line, from
+    which four rows read their batch; the description of the progress row that counts a training's simulation; and
+    the training library's counter of the epochs it has trained, the fit's only sign when the library writes no
+    record per epoch (read from the library's installed source)."""
+    pipeline = ast.parse(_source("core.SBI.pipeline").read_text(encoding="utf-8"))
+    tags = [text for _, text in _strings(pipeline) if text.startswith("training batch {}/{} [")]
+    assert tags, "core.SBI.pipeline no longer names a training batch as the window reads it"
+    for tag in tags:
+        assert re.fullmatch(readings._BATCH_TAG, tag.replace("{}", "7")), tag
+    descriptions = [keyword.value.value for node in ast.walk(pipeline) if isinstance(node, ast.Call)
+                    for keyword in node.keywords if keyword.arg == "desc" and isinstance(keyword.value, ast.Constant)]
+    assert SIMULATION_ROW in descriptions, descriptions
+    library = ast.parse(_source("sbi.inference.trainers.base").read_text(encoding="utf-8"))
+    assert any(model._COUNTER.fullmatch(text.replace("{}", "7")) for _, text in _strings(library)), (
+        "the training library no longer writes its counter of epochs as the window reads it")
 
 
 def test_a_line_no_row_matches_is_text_and_never_an_error():
@@ -427,9 +475,10 @@ def test_a_training_reads_through_its_stages_with_their_words():
     words when done: the rotation "Done", or "Reused from the saved simulation set" when a continued set carries it,
     "The parent posterior's" for a narrowing round, "Off" when the page says the training is not rotated or the
     rotation is passed over; the simulation "Done, 20,480,000 simulations", or "Not needed: the saved simulations
-    are used" when the set was complete; the fit "Now, about 63 minutes per epoch" once it has a pace. Saving
-    begins at the record whose count since the best reaches the patience, at the record past the epoch limit, or
-    at the training library's own word that it converged."""
+    are used" when the set was complete; the fit "Now, about 63 minutes per epoch" once it has a pace, from its
+    records or, when the training library writes none, from the gaps between its counter's values. Saving begins at
+    the record whose count since the best reaches the patience, at the record past the epoch limit, or at the
+    training library's own word that it converged."""
     clock = _Clock(_at(8, 19, 2, 11))
     run = RunModel(_training(), clock=clock)
     assert (run.state, run.stage) == ("starting", None)
@@ -488,7 +537,10 @@ def test_a_training_reads_through_its_stages_with_their_words():
     converged = RunModel(_training(patience=None), clock=clock)
     _fitting(converged, clock)
     converged.rows([_status("Training neural network. Epochs trained: 1")])
-    assert converged.stage == "Fitting"
+    assert converged.stage == "Fitting" and _status_line(converged)[2] == ("Fitting", "now", "Now")
+    clock.advance(3780)                              # the library's counter, with no record: its pace from the gaps
+    converged.rows([_status("Training neural network. Epochs trained: 2")])
+    assert _status_line(converged)[2] == ("Fitting", "now", "Now, about 63 minutes per epoch")
     converged.rows([_status("Neural network successfully converged after 131 epochs.")])
     assert converged.stage == "Saving"
 
@@ -498,6 +550,7 @@ def test_a_training_reads_through_its_stages_with_their_words():
     _feed(sweep, "--- Phase A (s sweep): spontaneous PSD + omega_0 detection ---", "  [A 1/8] s=0 (temp=1)",
           "--- Phase B (s sweep): forced response on common grid ---", "  [B 1/8] s=0")
     assert _status_line(sweep) == [("S sweep", "now", "Now"), ("T_a/T sweep", "later", "To come")]
+    assert (sweep.axis().end_by, sweep.axis().unknown) == (None, "No end time yet: the first steps are being timed.")
     _feed(sweep, _LINES["sweep_phase"])
     assert _status_line(sweep) == [("S sweep", "done", "Done"), ("T_a/T sweep", "now", "Now")]
 
@@ -507,7 +560,8 @@ def test_each_state_says_its_sentence():
     with its pace and its end, the fit before its first epoch (with the pace of an earlier training of this size
     when there is one), the fit with its epoch of the expected ones, past the estimate, and the saving. A time
     within seven days carries its weekday and no year, any other its year. A run of another kind says its stage, and
-    one that counts for itself says its count; a stop asked for and an end each say theirs."""
+    one that counts for itself says its count; a stop asked for and an end each say theirs, and the stage an end
+    cuts short is drawn half done, with the end's word."""
     clock = _Clock(_at(8, 19, 2, 11))
     run = RunModel(_training(), clock=clock)
     assert run.sentence() == "Training retrain_3 is starting."
@@ -545,12 +599,15 @@ def test_each_state_says_its_sentence():
         return (3780.0, "the last training of this size, retrain_aug, took about 63 minutes per epoch") \
             if per == "epoch" else None
 
-    for given, said in ((None, ""), (estimate, " At this size an epoch last took about 63 minutes.")):
+    for given, said, bound in ((None, "", "."), (estimate, " At this size an epoch last took about 63 minutes.",
+                                                 ", up to about 63 minutes.")):
         clock = _Clock(_at(8, 19, 2, 11))
         fitting = RunModel(_training(), clock=clock, estimate=given)
         _fitting(fitting, clock)
         assert fitting.sentence() == ("The simulations are done. The fit has started; its first epoch has not "
                                       "finished." + said)
+        fitting.stopping(True)                       # no epoch measured: the bound is the history's, or none
+        assert fitting.sentence() == "Stopping: takes effect when this epoch ends" + bound
 
     for expected, of in ((_EXPECTED, " of about 130"), (None, "")):
         clock = _Clock(_at(8, 19, 2, 11))
@@ -610,11 +667,16 @@ def test_each_state_says_its_sentence():
     card.set_stage("Simulation")
     assert (card.stage, card.sentence()) == ("Simulation", "Card test is running: Simulation.")
 
-    for outcome, said in (("finished", "Training retrain_3 finished."), ("stopped", "Training retrain_3 was stopped."),
-                          ("failed", "Training retrain_3 failed.")):
+    for outcome, said, simulation in (
+            ("finished", "Training retrain_3 finished.", ("done", "Done, 20,480,000 simulations")),
+            ("stopped", "Training retrain_3 was stopped.", ("half", "Stopped")),
+            ("failed", "Training retrain_3 failed.", ("half", "Failed")),
+            ("not seen to end", "Training retrain_3 was not seen to end.", ("half", "Not seen to end"))):
         ending = RunModel(_training(), clock=clock)
+        _feed(ending, _LINES["budget"], _LINES["simulation_writing"])
         ending.ended(outcome)
         assert (ending.state, ending.outcome, ending.sentence()) == ("ended", outcome, said)
+        assert _status_line(ending)[:2] == [("Rotation", "none", "Off"), ("Simulation", *simulation)], outcome
     with pytest.raises(ValueError):
         RunModel(_training(), clock=clock).ended("vanished")
     assert model.IDLE.state == "idle" and not model.IDLE.live and not model.IDLE.unacknowledged_end
@@ -631,8 +693,8 @@ def test_each_state_says_its_sentence():
 def test_the_simulations_end_is_firm_and_paced_on_the_last_two_hundred_batches():
     """The simulation's end is firm: earliest and latest both now plus the batches left at the pace of the newest
     200 batches of this try, recomputed at every look, so it is never late. Until 20 batches are timed the pace is
-    the history's for this size, and with none no end is known. A continued set times from where it resumed. Every
-    moment carries its zone, so the time axis can draw them."""
+    the history's for this size, and with none no end is known. A continued set times from where it resumed, and
+    counts the saves it passes from there. Every moment carries its zone, so the time axis can draw them."""
     from core.gui.widgets.time_axis import axis_layout
     clock = _Clock(_at(8, 19, 3, 50))
     run = RunModel(_training(), clock=clock)
@@ -647,11 +709,13 @@ def test_the_simulations_end_is_firm_and_paced_on_the_last_two_hundred_batches()
     clock.advance(30)
     run.rows([_frame(20)])
     assert run.axis().end_by == clock() + timedelta(seconds=9_980 * 30.0)
-    clock.advance(280 * 20)                          # 300 batches at 20 s a batch, then 200 at 9.7 s
+    clock.advance(279 * 20)                          # to 299 at 20 s a batch, one of 100 s, then 200 at 9.7 s
+    run.rows([_frame(299)])
+    clock.advance(100)
     run.rows([_frame(300)])
     clock.advance(1_940)
     run.rows([_frame(500)])
-    axis = run.axis()
+    axis = run.axis()                                # batches 300 to 500 exactly: one more would take in the slow one
     assert axis.end_from == axis.end_by == clock() + timedelta(seconds=9_500 * 9.7) and axis.unknown == ""
     clock.advance(600)                               # no batch for ten minutes: the end moves on with the clock
     later = run.axis()
@@ -665,7 +729,7 @@ def test_the_simulations_end_is_firm_and_paced_on_the_last_two_hundred_batches()
         asked.append((per, size))
         return (9.7, "the last training of this size, retrain_aug, took 9.7 s per batch") if per == "batch" else None
 
-    continued = RunModel(_training(), clock=clock, estimate=estimate)
+    continued = RunModel(_training(facts={**_training().facts, "cadence": 50}), clock=clock, estimate=estimate)
     _feed(continued, _LINES["budget"], _LINES["simulation_resuming"])
     continued.rows([_frame(236)])
     assert continued.axis().end_by == clock() + timedelta(seconds=(10_000 - 236) * 9.7), "the history's pace"
@@ -676,7 +740,7 @@ def test_the_simulations_end_is_firm_and_paced_on_the_last_two_hundred_batches()
     clock.advance(5)
     continued.rows([_frame(256)])
     assert continued.axis().end_by == clock() + timedelta(seconds=(10_000 - 256) * 5.0), "its own pace from 236"
-    assert (continued.batches_done(), continued.saves_passed()) == (256, 0)
+    assert (continued.batches_done(), continued.saves_passed()) == (256, 1), "resumed at 236: the save at 250"
     assert len([a for a in asked if a[0] == "batch"]) == 1, "the history is read once for a size"
     _feed(run, _LINES["stopping"])
     assert run.axis() is not None and run.saves_passed() == 10, "a save passed at each 50 batches"
@@ -687,7 +751,8 @@ def test_the_fits_end_is_a_range_one_patience_either_side_of_the_expected_epochs
     reaches the patience; with the expected epochs, the range runs from the later of that and the expected epochs
     less one patience to the expected epochs plus one patience; never past the epoch limit plus one. Before the
     first epoch the pace is the history's for this size (none: no end is known); with no expected epochs only when
-    it cannot end before is said; past the range the axis is late, due at the record that closed it."""
+    it cannot end before is said; past the range the axis is late, due at the record that closed it, or, with that
+    record missing, when it should have come."""
     clock = _Clock(_at(8, 19, 2, 11))
     bare = RunModel(_training(), clock=clock)
     _fitting(bare, clock)
@@ -749,6 +814,15 @@ def test_the_fits_end_is_a_range_one_patience_either_side_of_the_expected_epochs
     assert axis.end_from == axis.end_by == clock() + 11 * hour, "never past epoch 61"
 
     clock = _Clock(_at(8, 19, 2, 11))
+    paced = RunModel(_training(), clock=clock)
+    _fitting(paced, clock)
+    for n, took in enumerate((100.0, *[3000.0] * 5, *[4000.0] * 5), start=1):
+        clock.advance(took)
+        _feed(paced, _epoch(n, took=took))
+    assert paced.axis().end_from == clock() + timedelta(seconds=20 * 3500), (
+        "the median of the newest ten, 3,000 s and 4,000 s five times each: one epoch fewer or more moves it")
+
+    clock = _Clock(_at(8, 19, 2, 11))
     late = RunModel(_training(), clock=clock, expected=_EXPECTED)
     _fitting(late, clock)
     for n in range(1, 153):
@@ -760,6 +834,15 @@ def test_the_fits_end_is_a_range_one_patience_either_side_of_the_expected_epochs
     assert axis.end_from == axis.end_by == closed and axis.now > axis.end_by
     from core.gui.widgets.time_axis import axis_layout
     assert axis_layout(axis.start, axis.now, axis.end_from, axis.end_by, 600, len)["late"] is True
+
+    clock = _Clock(_at(8, 19, 2, 11))
+    skipped = RunModel(_training(), clock=clock, expected=_EXPECTED)
+    _fitting(skipped, clock)
+    for n in (*range(1, 150), 151, 152):             # the record of epoch 150, which closes the range, is missing
+        clock.advance(3780 * (2 if n == 151 else 1))
+        _feed(skipped, _epoch(n, since=n % 3))
+    axis = skipped.axis()
+    assert axis.end_from == axis.end_by == clock() - 2 * hour < axis.now, "due when epoch 150 should have ended"
 
 
 def test_the_axis_names_what_follows_the_stage_running():
@@ -856,8 +939,8 @@ def test_the_health_table_reads_its_four_measures():
     _feed(continued, _LINES["budget"], _LINES["simulation_resuming"], _LINES["patho_batch"])
     assert _health(continued)[0] == ("Failed simulations", "0.15 % since batch 236", "Fine")
     assert [measure for measure, _, _ in _health(continued)] == ["Failed simulations", "Graphics-card memory"]
-    continued.set_earlier(((300, 485_376), (1_000, 100_000)))
-    assert _health(continued)[0] == ("Failed simulations", "0.15 % over 3 runs", "Fine")
+    continued.set_earlier(((30_000, 485_376), (1_000, 100_000)))
+    assert _health(continued)[0] == ("Failed simulations", "0.38 % over 3 runs", "Fine"), "49,450 of 13,180,576"
     assert RunModel(RunSpec("Measurement", ("temperature", "cell")), clock=clock).health() == ()
 
 
@@ -950,8 +1033,8 @@ def test_messages_are_the_windows_own_sentences_newest_first_and_the_rest_from_t
 def test_silence_is_said_in_minutes_and_needs_you_after_its_limit():
     """A run that says nothing, and whose solver does not move, is told: outside the fit "Attention" after 45 s and
     "needs you" after 10 minutes; in the fit it is information while the silence is shorter than twice the last
-    epoch's time, and needs you from there. Always in minutes or longer, never in seconds. The next line, row or
-    step of the solver clears it, and an ended run is never silent."""
+    epoch's time, and needs you from there, never while no epoch's time is known. Always in minutes or longer, never
+    in seconds. The next line, row or step of the solver clears it, and an ended run is never silent."""
     clock = _Clock(_at(11, 12, 0, 0))
     run = RunModel(_training(), clock=clock)
     _simulating(run, clock)
@@ -1005,6 +1088,13 @@ def test_silence_is_said_in_minutes_and_needs_you_after_its_limit():
     assert [(m.kind, m.sentence) for m in fit.messages()] == [
         ("warn", "No output for 2 hours 6 minutes, twice as long as the last epoch took.")]
     assert fit.needs_you() == "No output for 2 hours 6 minutes, twice as long as the last epoch took."
+    waiting = RunModel(_training(), clock=clock)     # in the fit, before any epoch's time is known
+    _fitting(waiting, clock)
+    clock.advance(11 * 60)
+    waiting.tick()
+    assert [(m.kind, m.sentence) for m in waiting.messages()] == [
+        ("info", "No output for 11 minutes. This is normal during an epoch.")]
+    assert waiting.needs_you() is None, "never, while no epoch's time is known"
     for quiet in range(45, 4 * 3600, 37):
         assert "second" not in model._quiet_words(quiet), quiet
     fit.ended("stopped")
