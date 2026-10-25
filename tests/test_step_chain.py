@@ -1,5 +1,6 @@
 """The rules and tables with no widget: the window's places and keys, the six steps' states, Home's one next step
-and first-time test, and what a record is called; and the six steps as the built window holds them.
+and first-time test, and what a record is called; that the run's model loads no widget; and the six steps as the
+built window holds them.
 
 Torch-free at its module level: the modules under test load neither the toolkit (the record words aside) nor the
 engine, and a fresh interpreter proves it, since this process already holds both. A session is the window's own
@@ -82,6 +83,113 @@ bad = sorted(name for name in sys.modules if any(name == root or name.startswith
 sys.exit(repr(bad) if bad else 0)
 """
 
+_FRESH_RUN = """
+import importlib
+import sys
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace as held
+for name in sys.argv[2].split(","):
+    try:
+        importlib.import_module(name)
+    except ImportError:
+        pass
+from core.gui import texts
+from core.gui.run import model, readings
+moment = [datetime(2026, 10, 8, 19, 2, 11, tzinfo=timezone(timedelta(hours=2)))]
+def clock():
+    return moment[0]
+def estimate(per, size):
+    return (0.5, "a batch") if per == "batch" else (30.0, "an epoch")
+def row(desc, stats="", total=None, depth=0, solver=False):
+    return held(desc=desc, stats=stats, total=total, row=depth, informative=bool(total and total > 1), is_solver=solver)
+def epoch(n, since):
+    return (f"[fit] epoch {n}: training loss -1.5, validation loss -1.25, took 30.0 s, epochs since the best {since}",
+            "info")
+stages = (model.Stage("Rotation", ("rotation_begins",)),
+          model.Stage("Simulation", ("simulation_writing",), model.SIMULATION_ROW),
+          model.Stage("Fitting", ("simulation_complete",), "fit_epoch"),
+          model.Stage("Saving", (model.FIT_ENDED, "sbi_converged")))
+facts = {"network": (8, 2), "observation": "chi", "memory_limit": 6.0, "cadence": 10}
+runs = [model.RunModel(model.RunSpec("Training", ("inference", "training"), name="t", stages=stages, patience=2,
+                                     epoch_limit=9, facts=facts).with_call(len, (), {}),
+                       clock=clock, estimate=estimate, expected=expected)
+        for expected in ((5, "about 5 epochs: given"), None)]
+def look(run):
+    run.tick()
+    said = (run.state, run.stage, run.outcome, run.sentence(), run.stage_line(), run.axis(), run.health(),
+            run.messages(), run.needs_you(), run.epochs(), run.best_epoch(), run.batches_done(),
+            run.simulation_folder(), run.began_after_first(), run.fit_not_saved(), run.saves_passed())
+    moment[0] += timedelta(seconds=50)
+    return said
+tag = "training batch 3/40 [t_scale=1, T=1, n_fine=8, N_points=8, rows=8]"
+for run in runs:
+    look(run)
+    for line in ("[budget] 40 batches x 8 rows = 320 training rows",
+                 "Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)...",
+                 "[fisher] eigenvalue spread (best/worst direction): 3",
+                 "[checkpoint] writing to /scratch/set every 10 batches (~0.1 GiB total, 9.0 GiB free)"):
+        run.feed([(line, "info")])
+        look(run)
+    for done in range(0, 41, 4):
+        run.rows([row(model.SIMULATION_ROW, f"{done}/40 [00:01<00:02]", 40), row("step (batch=8)", "1/9", 9, 1, True)])
+        run.solver(done)
+        look(run)
+    run.stopping(True)
+    look(run)
+    run.stopping(False)
+    run.set_earlier(((1, 80),))
+    run.feed([("[patho] batch 2: 1 new pathological trajectorie(s) -- 1 non-finite, 0 exactly constant, 0 over 1e+06 "
+               "in magnitude, of 24 simulated", "warning"),
+              (f"[mem] {tag}: peak allocated 1.00 GiB, peak reserved 1.50 GiB, 9.00/16.00 GiB reported free "
+               "(optimistic on Windows), learned cap none", "info"),
+              (f"{tag}: OOM at simulation batch 8; retrying in chunks of 4. Original: out of memory", "warning"),
+              (f"UserWarning: {tag}: chi: 3/16 probes masked (below 3 drive cycles, at/above Nyquist, out of band, "
+               "or a non-finite lock-in).", "warning"),
+              ("library: rejection: Only 0.5% proposal samples were accepted.", "warning"),
+              ("[chi] masked probes: 3 of 16 (18.8%) over 1 batches, this process only (no simulation cache); per "
+               "batch 18.8-18.8%, median 18.8%", "info"),
+              ("[checkpoint] complete: 40 batches in /scratch/set. Safe to delete once the posterior is saved; "
+               "keeping it lets you retrain the flow without re-simulating.", "info"),
+              ("[fit] saving is switched off: this training is not saved as it goes and cannot be resumed.", "info")])
+    look(run)
+    moment[0] += timedelta(hours=2)
+    look(run)
+    for n in range(1, 10):
+        run.feed([epoch(n, 0 if n < 8 else n - 7), ("[fit] saved after pass %d." % n, "info")])
+        look(run)
+    run.rows([row("Training neural network. Epochs trained: 8")])
+    look(run)
+    run.ended("stopped", kept_fit=held(id="x", passes=8, resumed=False, saved_here=True, processes=1))
+    look(run)
+cell = model.RunModel(model.RunSpec("Measurement", ("temperature", "cell"), name="c",
+                                    stages=(model.Stage("Checks"), model.Stage("Spontaneous",
+                                                                               ("fdt_campaign_spontaneous",)))),
+                      clock=clock)
+for line in ("Writing", "Skipping sanity checks.", "Campaign 1: spontaneous fluctuations -> PSD"):
+    cell.feed([(line, "info")])
+    look(cell)
+own = model.RunModel(model.RunSpec("Live simulation", ("live", None)), clock=clock)
+own.set_count(1, 9, "samples")
+look(own)
+own.set_stage("Watching")
+look(own)
+counted = model.RunModel(model.RunSpec("Check", ("inference", "checks")), clock=clock)
+counted.rows([row("Calibrating", "3/9 [00:01<00:02]", 9)])
+look(counted)
+counted.ended("finished")
+look(counted)
+said = [readings.sentence(readings.read(text, "warning"), count=2) for text in (
+    "[fit] saved after pass 3.",
+    f"{tag}: batch FAILED after both halving retries (1/3). Waiting 6s and re-running the whole batch. Original: x")]
+said += [texts.duration_text(s) for s in (0, 61, 3700, 200000)] + [texts.number_text(2048.5)]
+said += [texts.date_text(clock()), texts.date_text(clock(), clock())]
+said += [model.driving_row([row("a", "1/3", 3)]), model.fit_counter([row("b")]), model.moved(1, 2)]
+said += [model.IDLE.live, model.RunStatus(state="ended").unacknowledged_end]
+roots = sys.argv[1].split(",")
+bad = sorted(name for name in sys.modules if any(name == root or name.startswith(root + ".") for root in roots))
+sys.exit(repr(bad) if bad else 0)
+"""
+
 
 def _imports(module: str) -> set:
     """Every module an import statement names, in ``module`` and in every module of this repository it reaches
@@ -140,6 +248,24 @@ def test_the_rules_and_tables_import_no_toolkit_and_no_engine():
         r = subprocess.run([sys.executable, "-c", code, ",".join(forbidden), ",".join(sorted(named))],
                            cwd=str(REPO), capture_output=True, text=True, timeout=120)
         assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_run_model_and_its_readings_import_no_toolkit_and_no_engine():
+    """The run's model, the table of the engine's lines it reads and the date and number words load neither the
+    toolkit, nor the engine, nor its settings: the window's thread reads a run's lines through them while the run
+    holds the engine, and they are tested with no window. Every import statement of each module is read, wherever
+    it stands, with every statement of each module of this repository it imports; then a fresh interpreter imports
+    every module those statements name, builds a training's model and models of runs of other kinds, feeds them
+    their lines, rows, solver counts and clock, and reads every read-out at each step."""
+    modules = ("core.gui.texts", "core.gui.run.readings", "core.gui.run.model")
+    for module in modules:
+        assert (REPO / (module.replace(".", "/") + ".py")).is_file(), f"{module} is not there to be read"
+        found = _reaching(_imports(module), _RULES_FORBIDDEN)
+        assert not found, f"{module} imports {found}, itself or through a module of this repository it imports"
+    named = set().union(*(_imports(module) for module in modules))
+    r = subprocess.run([sys.executable, "-c", _FRESH_RUN, ",".join(_RULES_FORBIDDEN), ",".join(sorted(named))],
+                       cwd=str(REPO), capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 # the places and the keys

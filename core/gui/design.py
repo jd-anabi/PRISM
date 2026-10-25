@@ -11,12 +11,14 @@ and a sheet does not feed it: ``QPalette.Mid`` (the sparkline's baseline in widg
 old layout: ``INTERIM_SELECTORS`` names them, and each leaves with its widget.
 """
 import math
-import numbers
 import sys
-from datetime import datetime, timedelta
 from string import Template
 
 from PySide6.QtGui import QColor, QPalette
+
+# The date and number words live where no toolkit is loaded, so that the run's model writes them as the look does;
+# every reader of the look finds them here as before.
+from .texts import MONTHS, WEEKDAYS, date_text, number_text  # noqa: F401
 
 # ── the look's table: colours, type, sizes ──
 #   name              light      dark
@@ -131,9 +133,6 @@ UNSCALED = frozenset({
     "SIZE.rule", "SIZE.hair", "SIZE.bar", "SIZE.focus_ring", "SIZE.focus_gap", "SIZE.row_ring_inset", "SIZE.radius",
     "SIZE.hatch_step", "SIZE.scroll_bar", "SIZE.scroll_gap", "SIZE.scroll_handle",
     "AXIS.mark_w", "AXIS.mark_halo", "FIGURE.axis_w", "FIGURE.line_w", "FIGURE.tick"})
-# English letters on every computer: a date is written from these, never from Windows' regional setting
-MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 _dark = False                     # the theme in force: light until a caller says otherwise
 
@@ -311,36 +310,6 @@ def _registry_text_scale():
     except FileNotFoundError:
         return 1.0
     return int(stored) / 100.0
-
-
-def number_text(value) -> str:
-    """A quantity as the window writes it on every computer, whatever Windows' regional setting: a comma between
-    thousands, a full stop for the decimal mark, the keyboard's hyphen for a minus, so the text reads back in a
-    field. A whole number is written whole ("20,480,000"); any other real number in the shortest form that reads
-    back the same ("2,048.0", "0.05").
-
-    The unit is the caller's: ``number_text(40.1) + " %"``. An identifier (a seed, a record's id) is not a
-    quantity and is never handed to this. A truth value, a text, None or anything else raises TypeError."""
-    if isinstance(value, bool):                             # asked first: Python counts True among the whole numbers
-        raise TypeError("a truth value is not a quantity")
-    if isinstance(value, numbers.Integral):
-        return format(int(value), ",")
-    if isinstance(value, numbers.Real):
-        return format(float(value), ",")
-    raise TypeError(f"not a quantity: {type(value).__name__}")
-
-
-def date_text(when: datetime, now: datetime | None = None) -> str:
-    """A date and time as the window writes it on every computer: "3 Oct 2026, 14:02", the hours on the 24-hour
-    clock and the seconds dropped. Handed the present moment, a date less than seven days from it, ahead of it or
-    behind it, carries its weekday and no year: "Sun 4 Oct, 12:10".
-
-    The letters are English whatever Windows' regional setting. The fields of ``when`` are written as handed in:
-    nothing is converted between zones."""
-    clock = f"{when.hour:02d}:{when.minute:02d}"
-    if now is not None and abs(when - now) < timedelta(days=7):
-        return f"{WEEKDAYS[when.weekday()]} {when.day} {MONTHS[when.month - 1]}, {clock}"
-    return f"{when.day} {MONTHS[when.month - 1]} {when.year}, {clock}"
 
 
 SPACE = (4, 8, 12, 16, 20, 24)
