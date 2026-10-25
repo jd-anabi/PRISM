@@ -24,6 +24,10 @@ from . import readings
 PACE_BATCHES = 200
 #: The batches a simulation times before its own pace is taken over the history's estimate.
 TIMED_BATCHES = 20
+#: Any other count is timed over its total divided by SHORT_COUNT_PARTS when that is fewer than TIMED_BATCHES, and
+#: over SHORT_COUNT_LEAST steps at the least: a study of eight points gets its end time from its third.
+SHORT_COUNT_PARTS = 4
+SHORT_COUNT_LEAST = 2
 #: The epochs whose median time is the fit's pace.
 FIT_PACE_RECORDS = 10
 #: Seconds with no line and no step of the solver after which the run says so.
@@ -52,6 +56,7 @@ _ENDED_SENTENCES = {"finished": "{who} finished.", "stopped": "{who} was stopped
                     "not seen to end": "{who} was not seen to end."}
 _ROTATION_WORDS = {"reused": "Reused from the saved simulation set", "parent": "The parent posterior's"}
 _COUNTER = re.compile(r"Training neural network\. Epochs trained: (\d+)")
+_SINCE = re.compile(r"(\d+) passes since the best")      # in a resumed training's line, when a loss was finite
 _DONE_OF = re.compile(r"\s*(\d+)/(\d+)")
 _DIGITS = re.compile(r"\d+(?:[.,]\d+)*")
 _OWN = "own"        # the samples of a run counted by its driving row or by set_count, not by a stage
@@ -251,6 +256,7 @@ class RunModel:
         self._not_needed = False
         self._records: dict[int, EpochRecord] = {}
         self._counter: list[tuple[datetime, int]] = []
+        self._resumed_fit: tuple[int, int | None] | None = None     # the pass resumed after, its count since the best
         self._fit_ended_after: int | None = None
         self._failed: tuple[int, int] | None = None
         self._earlier: tuple[tuple[int, int], ...] | None = None
@@ -359,13 +365,15 @@ class RunModel:
             self._state = "stopping" if on else "running"
 
     def ended(self, outcome: str, *, kept_fit=None) -> None:
-        """The run has ended: one of ``OUTCOMES``, with the kept training's note when the run kept one."""
+        """The run has ended: one of ``OUTCOMES``, with the kept training's note when the run kept one. A finished
+        run's stages are all done but those passed over; after any end nothing begins or moves a stage."""
         if outcome not in OUTCOMES:
             raise ValueError(f"{outcome!r} is not how a run ends: {OUTCOMES}")
         self._state, self._outcome, self.kept_fit = "ended", outcome, kept_fit
         self._silence, self._silence_needs_you = None, False
         if outcome == "finished":
-            self._done.update(self._began)
+            latest = max(self._began, default=-1)
+            self._done.update(index for index in range(len(self._stages)) if index in self._began or index > latest)
 
     # ── read-outs ──
     @property
@@ -420,9 +428,10 @@ class RunModel:
                     f"posterior is being saved.")
         if self._current is not None:
             return f"{who} is running: {self._stages[self._current].name}."
-        if _OWN in self._samples and self._unit:
+        if _OWN in self._samples:
             done, total = self._numbers(_OWN)
-            return f"{self.spec.word} is running: {number_text(done)} of {number_text(total)} {self._unit}."
+            unit = f" {self._unit}" if self._unit else ""
+            return f"{who} is running: {number_text(done)} of {number_text(total)}{unit}."
         return f"{who} is starting." if self._stages or self._state == "starting" else f"{who} is running."
 
     def stage_line(self) -> tuple[StageWord, ...]:
@@ -436,12 +445,12 @@ class RunModel:
             passed = index not in self._began and latest > index
             if passed or (kind == "rotation" and self.spec.facts.get("rotated") is False):
                 out.append(StageWord(stage.name, "none", "Off"))
-            elif index not in self._began:
+            elif index not in self._began and index not in self._done:
                 out.append(StageWord(stage.name, "later", "To come"))
             elif index in self._done or index < latest:
                 out.append(StageWord(stage.name, "done", self._done_word(index, kind)))
             elif self._state == "ended":
-                out.append(StageWord(stage.name, "half", _ENDED_WORDS[self._outcome]))
+                out.append(StageWord(stage.name, "half", _ENDED_WORDS.get(self._outcome, "Done")))
             else:
                 pace = self._epoch_pace() if kind == "fit" else None
                 out.append(StageWord(stage.name, "now",
@@ -449,25 +458,24 @@ class RunModel:
         return tuple(out)
 
     def axis(self) -> AxisTimes | None:
-        """The time axis of the stage running, or None when that stage has no axis (it counts nothing and is not
-        the fit, it is done, or the run has ended)."""
-        if self._state == "ended" or self._current is None or self._current in self._done:
+        """The time axis of the stage running, or of the count of a run with no stages, from the run's start; None
+        when there is none (the stage counts nothing and is not the fit, it is done, or the run has ended)."""
+        if self._state == "ended":
             return None
-        now, kind = self._clock(), self._kind_of(self._current)
+        now = self._clock()
+        if self._current is None:
+            if self._stages or _OWN not in self._samples:
+                return None
+            return self._counted_axis(_OWN, self.started, now, "")
+        if self._current in self._done:
+            return None
+        kind = self._kind_of(self._current)
         if kind == "fit":
             return self._fit_axis(now)
         if kind != "simulation" and self._stages[self._current].counts is None:
             return None
-        start = self._began[self._current]
-        done, total = self._numbers(self._current)
-        pace = self._pace(self._current)
-        follows = self._follows() if kind == "simulation" else ""
-        if total is None or pace is None:
-            unknown = ("No end time yet: the first batches are being timed." if kind == "simulation"
-                       else "No end time yet: the first steps are being timed.")
-            return AxisTimes(start, now, None, None, unknown, follows)
-        end = now + timedelta(seconds=(total - done) * pace)
-        return AxisTimes(start, now, end, end, "", follows)
+        return self._counted_axis(self._current, self._began[self._current], now,
+                                  self._follows() if kind == "simulation" else "")
 
     def health(self) -> tuple[HealthRow, ...]:
         """The training's health, for a run that simulates training rows; nothing for any other run."""
@@ -552,7 +560,7 @@ class RunModel:
         if counted is not None:
             self._begin(counted)
             self._add_sample(counted, values["i"], values["n"])
-        if name in LEAVES_OUT and self._current is not None:
+        if name in LEAVES_OUT and self._current is not None and self._state != "ended":
             self._left_out.add(self._current)
         if name == "budget":
             self._budget = values
@@ -561,10 +569,7 @@ class RunModel:
         elif name in ("rotation_done", "rotation_reused", "rotation_parent"):
             self._rotation = {"rotation_done": "done", "rotation_reused": "reused",
                               "rotation_parent": "parent"}[name]
-            rotation = self._kind_index("rotation")
-            if rotation is not None:
-                self._begin(rotation)
-                self._done.add(rotation)
+            self._close(self._kind_index("rotation"), begin=True)
             if name == "rotation_reused" and values["complete"]:
                 self._not_needed = True
         elif name == "simulation_writing":
@@ -573,9 +578,7 @@ class RunModel:
             self._folder, self._resumed_at = values["dir"], values["k"]
             self._not_needed = self._not_needed or values["k"] >= values["n"]
         elif name == "simulation_complete":
-            simulation = self._kind_index("simulation")
-            if simulation is not None:
-                self._done.add(simulation)
+            self._close(self._kind_index("simulation"))
         elif name == "fit_epoch":
             self._record(values)
         elif name == "sbi_converged":
@@ -600,6 +603,9 @@ class RunModel:
             self._not_saved = True
         elif name in ("fit_saved", "fit_resuming"):
             self._saved, self._save_failed, self._saving_shown = values["passes"], False, True
+            if name == "fit_resuming":
+                since = _SINCE.search(values["progress"])
+                self._resumed_fit = (values["passes"], None if since is None else int(since.group(1)))
         elif name in ("fit_stopped_kept", "fit_stopped_not_saved_here"):
             self._saved, self._saving_shown = values["passes"], True
         elif name == "fit_save_failed":
@@ -653,7 +659,7 @@ class RunModel:
 
     # ── the stages ──
     def _begin(self, index: int) -> None:
-        if index in self._began:
+        if index in self._began or self._state == "ended":
             return
         for earlier in self._began:
             if earlier < index:
@@ -664,13 +670,22 @@ class RunModel:
         if self._state == "starting":
             self._state = "running"
 
+    def _close(self, index: int | None, *, begin: bool = False) -> None:
+        """A stage is done, begun first when ``begin``; once the run has ended nothing moves."""
+        if index is None or self._state == "ended":
+            return
+        if begin:
+            self._begin(index)
+        self._done.add(index)
+
     def _hear(self) -> None:
         self._heard = self._clock()
         self._silence, self._silence_needs_you = None, False
         if self._state == "starting":
             self._state = "running"
-            if self._stages and not self._stages[0].begins:
-                self._begin(0)
+        if (self._state in ("running", "stopping", "retrying") and not self._began and self._stages
+                and not self._stages[0].begins):
+            self._begin(0)                  # with the run's first output, a stop already asked for or not
 
     def _kind_of(self, index) -> str | None:
         """What a stage is, read off what begins and counts it: the rotation, the simulation, the fit, the saving
@@ -737,10 +752,10 @@ class RunModel:
         return (samples[-1][1] if samples else 0), total
 
     def _pace(self, key) -> float | None:
-        """Seconds per count over the newest ``PACE_BATCHES`` once ``TIMED_BATCHES`` are timed; before that, for the
-        simulation, the history's estimate."""
+        """Seconds per count over the newest ``PACE_BATCHES`` once enough are timed (``_timed``); before that, for
+        the simulation, the history's estimate."""
         samples = self._samples.get(key) or []
-        if samples and samples[-1][1] - samples[0][1] >= TIMED_BATCHES:
+        if samples and samples[-1][1] - samples[0][1] >= self._timed(key):
             last_at, last = samples[-1]
             first_at, first = next((at, done) for at, done in samples if done >= last - PACE_BATCHES)
             if last > first:
@@ -749,6 +764,26 @@ class RunModel:
             estimated = self._estimated("batch")
             return None if estimated is None else estimated[0]
         return None
+
+    def _timed(self, key) -> int:
+        """The steps a count times before its own pace is taken: the simulation's ``TIMED_BATCHES``; any other
+        count's total divided by ``SHORT_COUNT_PARTS`` when that is fewer, ``SHORT_COUNT_LEAST`` at the least."""
+        total = self._totals.get(key)
+        if self._kind_of(key) == "simulation" or not total:
+            return TIMED_BATCHES
+        return min(TIMED_BATCHES, max(SHORT_COUNT_LEAST, total // SHORT_COUNT_PARTS))
+
+    def _counted_axis(self, key, start: datetime, now: datetime, follows: str) -> AxisTimes:
+        """The axis of a count by the simulation's rule: firm, now plus what is left at its own pace, or no end while
+        too few of its steps are timed."""
+        done, total = self._numbers(key)
+        pace = self._pace(key)
+        if total is None or pace is None:
+            unknown = ("No end time yet: the first batches are being timed." if self._kind_of(key) == "simulation"
+                       else "No end time yet: the first steps are being timed.")
+            return AxisTimes(start, now, None, None, unknown, follows)
+        end = now + timedelta(seconds=(total - done) * pace)
+        return AxisTimes(start, now, end, end, "", follows)
 
     def _size(self) -> dict:
         budget = self._budget or {}
@@ -769,7 +804,9 @@ class RunModel:
     def _last_epoch(self) -> int:
         if self._records:
             return max(self._records)
-        return self._counter[-1][1] if self._counter else 0
+        if self._counter:
+            return self._counter[-1][1]
+        return self._resumed_fit[0] if self._resumed_fit is not None else 0
 
     def _epoch_seconds(self) -> float | None:
         """The last epoch's time, or the history's pace before the first."""
@@ -792,15 +829,18 @@ class RunModel:
         return None if estimated is None else estimated[0]
 
     def _fit_numbers(self):
-        """``(n, since, newest, start)``: the epochs finished, the epochs since the best (None before the first),
-        when the newest epoch was read, and when the fit began: the first record's time less its own, else when
-        the stage began."""
+        """``(n, since, newest, start)``: the epochs finished, the epochs since the best (None before the first, or
+        when no loss of a resumed fit was finite), when the newest epoch was read, and when the fit began in this
+        process: the first record's time less its own, else when the stage began. Before its first record here, a
+        resumed fit counts from the pass it resumed after."""
         began = self._began[self._kind_index("fit")]
         if self._records:
             first, newest = self._records[min(self._records)], self._records[max(self._records)]
             return newest.epoch, newest.since_best, newest.at, first.at - timedelta(seconds=first.seconds)
         if self._counter:
             return self._counter[-1][1], 0, self._counter[-1][0], began
+        if self._resumed_fit is not None:
+            return *self._resumed_fit, began, began
         return 0, None, began, began
 
     def _fit_ends(self):
@@ -810,7 +850,7 @@ class RunModel:
         pace = self._epoch_pace()
         if pace is None:
             return None, None, None
-        n, since, newest, _ = self._fit_numbers()
+        n, since, newest, start = self._fit_numbers()
         patience, limit = self.spec.patience or 0, self.spec.epoch_limit
 
         def at(epochs):
@@ -825,8 +865,8 @@ class RunModel:
             return at(left), None, None
         expected = self._expected[0]
         if n > expected + patience:                                    # due when the range ran out
-            closed = self._records.get(expected + patience)
-            due = closed.at if closed is not None else at(expected + patience - n)
+            closed = self._records.get(expected + patience)            # not read here: no earlier than the start
+            due = closed.at if closed is not None else max(at(expected + patience - n), start)
             return at(left), due, due
         earliest, latest = max(left, expected - patience - n), expected + patience - n
         if cap is not None:
@@ -929,9 +969,10 @@ def _running_words(elapsed: timedelta) -> str:
 
 
 def _quiet_words(seconds: float) -> str:
-    """A silence's length: whole minutes, one at the least, under an hour; as a length is written above."""
+    """A silence's length: whole minutes under an hour, one at the least and 59 at the most; as a length is written
+    above."""
     if seconds < 3600:
-        minutes = max(1, round(seconds / 60))
+        minutes = min(59, max(1, round(seconds / 60)))
         return f"{minutes} minute{'' if minutes == 1 else 's'}"
     return duration_text(seconds)
 

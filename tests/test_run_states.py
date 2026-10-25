@@ -31,6 +31,9 @@ _TRAINING = (Stage("Rotation", ("rotation_begins",)),
              Stage("Simulation", ("simulation_writing", "simulation_resuming"), SIMULATION_ROW),
              Stage("Fitting", ("simulation_complete", "patho_total", "chi_total", "chi_none"), "fit_epoch"),
              Stage("Saving", (FIT_ENDED, "sbi_converged")))
+# One cell's stages, as its page hands them to its run
+_CELL = (Stage("Checks"), Stage("Spontaneous", ("fdt_campaign_spontaneous",)),
+         Stage("Driven", ("fdt_campaign_driven",)))
 # what the window is told of a training's expected epochs, and where the number comes from
 _EXPECTED = (130, "about 130 epochs: the last training of this kind, retrain_aug, ran 130")
 
@@ -211,6 +214,18 @@ def _fitting(run, clock):
     """A training brought to its fit: simulated, the set complete."""
     _simulating(run, clock)
     clock.advance(60)
+    run.rows([_frame(10_000)])
+    _feed(run, _LINES["simulation_complete"])
+
+
+def _resumed(run, clock, progress="best validation loss -3.412, 2 passes since the best", passes=40):
+    """A kept training resumed and brought to its fit: its resume line, its complete simulation set read back (four
+    minutes) with the rotation it carries."""
+    _feed(run, f"[fit] resuming the kept training 20261011T121000 after pass {passes} ({progress}); its simulation "
+               f"set is read back first.", _LINES["budget"],
+          _LINES["rotation_reused"].replace("batches)", "batches — COMPLETE, so generation will be skipped)"),
+          f"[checkpoint] resuming at batch 10000/10000 from {_FOLDER} (reusing the stored rotation V)")
+    clock.advance(240)
     run.rows([_frame(10_000)])
     _feed(run, _LINES["simulation_complete"])
 
@@ -408,11 +423,12 @@ def test_every_reading_matches_the_line_the_engine_writes(name):
 
 
 def test_the_engine_words_the_model_reads_beside_its_table_are_still_the_engines():
-    """Three more copies of the engine's words, read by the model outside its table, are held to the engine as its
+    """Four more copies of the engine's words, read by the model outside its table, are held to the engine as its
     rows are, off the syntax tree of the module that writes them: the name of a training batch inside a line, from
-    which four rows read their batch; the description of the progress row that counts a training's simulation; and
-    the training library's counter of the epochs it has trained, the fit's only sign when the library writes no
-    record per epoch (read from the library's installed source)."""
+    which four rows read their batch; the description of the progress row that counts a training's simulation; the
+    training library's counter of the epochs it has trained, the fit's only sign when the library writes no record
+    per epoch (read from the library's installed source); and the epochs since the best that a resumed training's
+    line gives, from which its end is counted before its first record."""
     pipeline = ast.parse(_source("core.SBI.pipeline").read_text(encoding="utf-8"))
     tags = [text for _, text in _strings(pipeline) if text.startswith("training batch {}/{} [")]
     assert tags, "core.SBI.pipeline no longer names a training batch as the window reads it"
@@ -424,6 +440,10 @@ def test_the_engine_words_the_model_reads_beside_its_table_are_still_the_engines
     library = ast.parse(_source("sbi.inference.trainers.base").read_text(encoding="utf-8"))
     assert any(model._COUNTER.fullmatch(text.replace("{}", "7")) for _, text in _strings(library)), (
         "the training library no longer writes its counter of epochs as the window reads it")
+    resuming = next(row.form for row in readings.ROWS if row.name == "fit_resuming")
+    fit_state = ast.parse(_source("core.SBI.fit_state").read_text(encoding="utf-8"))
+    assert any(_holds(text, resuming) and model._SINCE.search(text.replace("{}", "7"))
+               for _, text in _strings(fit_state)), "a resumed training no longer says its epochs since the best so"
 
 
 def test_a_line_no_row_matches_is_text_and_never_an_error():
@@ -553,6 +573,106 @@ def test_a_training_reads_through_its_stages_with_their_words():
     assert (sweep.axis().end_by, sweep.axis().unknown) == (None, "No end time yet: the first steps are being timed.")
     _feed(sweep, _LINES["sweep_phase"])
     assert _status_line(sweep) == [("S sweep", "done", "Done"), ("T_a/T sweep", "now", "Now")]
+
+
+def test_a_short_counted_stage_gets_an_end_time_from_a_quarter_of_its_count():
+    """A counted stage that is not the simulation takes its own pace once a quarter of its count is timed: a sweep of
+    eight points has a firm end from its third point and not before. The second of two sweeps counted alike is
+    counted, and timed, from its own phase line."""
+    clock = _Clock(_at(8, 19, 2, 11))
+    sweep = RunModel(RunSpec("Sweep study", ("temperature", "sweep"), name="sweep",
+                             stages=(Stage("S sweep", ("sweep_phase",), "sweep_point_b"),
+                                     Stage("T_a/T sweep", ("sweep_phase",), "sweep_point_b"))), clock=clock)
+    for param, other, step in (("s", "temp=1", 1800), ("temp", "s=0", 900)):
+        _feed(sweep, f"--- Phase A ({param} sweep): spontaneous PSD + omega_0 detection ---")
+        began = clock()
+        for i in range(1, 9):
+            clock.advance(600)
+            _feed(sweep, f"  [A {i}/8] {param}={i} ({other})")
+        _feed(sweep, f"--- Phase B ({param} sweep): forced response on common grid ---")
+        for i in range(1, 4):
+            clock.advance(step)
+            _feed(sweep, f"  [B {i}/8] {param}={i}")
+            axis = sweep.axis()
+            if i < 3:
+                assert (axis.start, axis.end_by, axis.unknown) == (
+                    began, None, "No end time yet: the first steps are being timed."), (param, i)
+        assert (axis.start, axis.end_from, axis.end_by, axis.unknown) == (
+            began, clock() + timedelta(seconds=5 * step), clock() + timedelta(seconds=5 * step), ""), param
+
+
+def test_a_run_with_no_stages_says_and_times_the_count_of_its_driving_row():
+    """A run with no stages whose progress row counts says its count, "<done> of <total>", and has a time axis from
+    its start by the simulation's rule on that row: no end until enough steps are timed, then a firm one at its own
+    pace. A count other than the simulation's is timed over a quarter of it, two steps at the least and twenty, the
+    simulation's, at the most."""
+    clock = _Clock(_at(8, 19, 2, 11))
+    check = RunModel(RunSpec("Check", ("inference", "checks"), name="sbc_1"), clock=clock)
+    assert (check.sentence(), check.axis()) == ("Check sbc_1 is starting.", None)
+    clock.advance(5)
+    check.rows([_frame(0, 40, desc="Calibrating")])
+    assert check.sentence() == "Check sbc_1 is running: 0 of 40."
+    axis = check.axis()
+    assert (axis.start, axis.end_by, axis.unknown, axis.follows) == (
+        _at(8, 19, 2, 11), None, "No end time yet: the first steps are being timed.", "")
+    for done in range(1, 11):
+        clock.advance(30)
+        check.rows([_frame(done, 40, desc="Calibrating")])
+    assert check.sentence() == "Check sbc_1 is running: 10 of 40."
+    axis = check.axis()
+    assert axis.end_from == axis.end_by == clock() + timedelta(seconds=30 * 30)
+    for total, timed in ((5, 2), (40, 10), (100, 20)):
+        counted = RunModel(RunSpec("Check", ("inference", "checks"), name="sbc_2"), clock=clock)
+        for done in range(timed + 1):
+            counted.rows([_frame(done, total, desc="Calibrating")])
+            assert (counted.axis().end_by is None) == (done < timed), (total, done)
+            clock.advance(30)
+
+
+def test_once_a_run_has_ended_nothing_begins_or_moves_a_stage():
+    """An end is the last word on the stage line. A finished run's stages all read done but those passed over,
+    among them the saving after a fit the training library counted without a record and ended at its limit
+    without a word; and a line, a row or a record that would begin, end or leave out a stage, read after any end,
+    moves nothing and raises nothing."""
+    clock = _Clock(_at(8, 19, 2, 11))
+    finished = RunModel(_training(patience=None), clock=clock)
+    _fitting(finished, clock)
+    finished.rows([_status("Training neural network. Epochs trained: 300")])
+    finished.ended("finished")
+    before = (finished.stage, _status_line(finished))
+    _feed(finished, "Neural network successfully converged after 131 epochs.", _LINES["simulation_complete"])
+    finished.rows([_status("Neural network successfully converged after 131 epochs.")])
+    assert (finished.stage, _status_line(finished)) == before, "nothing moves after the end"
+    assert before == ("Fitting", [("Rotation", "done", "Done"), ("Simulation", "done", "Done, 20,480,000 simulations"),
+                                  ("Fitting", "done", "Done"), ("Saving", "done", "Done")])
+    for outcome, word in (("stopped", "Stopped"), ("failed", "Failed")):
+        cut = RunModel(_training(), clock=clock)
+        _simulating(cut, clock)
+        cut.ended(outcome)
+        _feed(cut, _LINES["simulation_complete"], _epoch(1, since=20))
+        assert (cut.stage, _status_line(cut)) == ("Simulation", [
+            ("Rotation", "done", "Done"), ("Simulation", "half", word), ("Fitting", "later", "To come"),
+            ("Saving", "later", "To come")]), outcome
+    cell = RunModel(RunSpec("Measurement", ("temperature", "cell"), name="cell_a", stages=_CELL), clock=clock)
+    _feed(cell, "Writing fdt record 20261008T190211 at C:\\x")
+    cell.ended("stopped")
+    _feed(cell, _LINES["fdt_sanity_skipped"], _LINES["fdt_campaign_spontaneous"])
+    assert _status_line(cell) == [("Checks", "half", "Stopped"), ("Spontaneous", "later", "To come"),
+                                  ("Driven", "later", "To come")]
+
+
+def test_a_stop_asked_while_starting_still_lets_the_first_stage_begin():
+    """A stop asked for before the run's first line (the window closed while the run starts) does not keep its first
+    stage from beginning with that line, so the stage the stop cuts short is the one drawn stopped."""
+    clock = _Clock(_at(8, 19, 2, 11))
+    cell = RunModel(RunSpec("Measurement", ("temperature", "cell"), name="cell_a", stages=_CELL), clock=clock)
+    cell.stopping(True)
+    assert (cell.state, cell.stage) == ("stopping", None)
+    _feed(cell, "Writing fdt record 20261008T190211 at C:\\x")
+    assert (cell.state, cell.stage, cell.sentence()) == ("stopping", "Checks", "Measurement cell_a is stopping.")
+    cell.ended("stopped")
+    assert _status_line(cell) == [("Checks", "half", "Stopped"), ("Spontaneous", "later", "To come"),
+                                  ("Driven", "later", "To come")]
 
 
 def test_each_state_says_its_sentence():
@@ -845,6 +965,53 @@ def test_the_fits_end_is_a_range_one_patience_either_side_of_the_expected_epochs
     assert axis.end_from == axis.end_by == clock() - 2 * hour < axis.now, "due when epoch 150 should have ended"
 
 
+def test_a_resumed_fit_counts_from_the_pass_it_resumed_after():
+    """A kept training resumed says the pass it resumes after and its epochs since the best. Before the first record
+    of this process its sentence and its end count from there, as its records then do: resumed after pass 40, two
+    passes since the best, the range runs from epoch 110 to 150; with no expected epochs it cannot end before 18
+    more, or 21 when no loss so far was a finite number, as before a fit's first epoch."""
+    def estimate(per, size):
+        return (3780.0, "the last training of this size took about 63 minutes per epoch") if per == "epoch" else None
+
+    hour = timedelta(seconds=3780)
+    clock = _Clock(_at(8, 19, 2, 11))
+    run = RunModel(_training(), clock=clock, estimate=estimate, expected=_EXPECTED)
+    _resumed(run, clock)
+    began = clock()
+    assert run.stage == "Fitting" and run.epochs() == ()
+    assert run.sentence() == "Now: Thu 8 Oct, 19:06, running 4 minutes, epoch 40 of about 130."
+    axis = run.axis()
+    assert (axis.start, axis.end_from, axis.end_by) == (began, began + 70 * hour, began + 110 * hour)
+    for n in (41, 42):
+        clock.advance(3780)
+        _feed(run, _epoch(n, since=n - 38))
+    assert run.sentence() == "Now: Thu 8 Oct, 21:12, running 2 hours, epoch 42 of about 130."
+    axis = run.axis()
+    assert (axis.start, axis.end_from, axis.end_by) == (began, clock() + 68 * hour, clock() + 108 * hour)
+    for progress, least in (("best validation loss -3.412, 2 passes since the best", 18),
+                            ("no finite validation loss yet", 21)):
+        clock = _Clock(_at(8, 19, 2, 11))
+        alone = RunModel(_training(), clock=clock, estimate=estimate)
+        _resumed(alone, clock, progress)
+        assert alone.sentence() == "Now: Thu 8 Oct, 19:06, running 4 minutes, epoch 40.", progress
+        assert alone.axis().end_from == clock() + least * hour, progress
+
+
+def test_a_resumed_fit_past_its_range_is_due_no_earlier_than_its_start_here():
+    """A fit resumed past its expected range has no record, in this process, of the epoch that closed the range: its
+    axis is late, due no earlier than the fit began here, never before the axis starts."""
+    from core.gui.widgets.time_axis import axis_layout
+    clock = _Clock(_at(8, 19, 2, 11))
+    run = RunModel(_training(), clock=clock, expected=_EXPECTED)
+    _resumed(run, clock, "best validation loss -3.412, 3 passes since the best", passes=155)
+    for n in (156, 157):
+        clock.advance(3780)
+        _feed(run, _epoch(n, since=n - 152))
+    axis = run.axis()
+    assert axis.end_from == axis.end_by == axis.start == clock() - timedelta(seconds=2 * 3780) < axis.now
+    assert axis_layout(axis.start, axis.now, axis.end_from, axis.end_by, 600, len)["late"] is True
+
+
 def test_the_axis_names_what_follows_the_stage_running():
     """Under the simulation's axis, the fit that follows it, from the history's pace of an epoch at this size and
     the expected epochs, one patience either side, in the unit of the shorter: "Then the fit: about 5 to 7 days.";
@@ -1100,6 +1267,19 @@ def test_silence_is_said_in_minutes_and_needs_you_after_its_limit():
     fit.ended("stopped")
     fit.tick()
     assert fit.messages() == () and fit.needs_you() is None
+
+
+def test_a_silence_under_an_hour_never_reads_sixty_minutes():
+    """Under an hour a silence is said in whole minutes, 59 at the most, as a pace guards its own edge; from the
+    hour on, as a length is written."""
+    clock = _Clock(_at(11, 12, 0, 0))
+    run = RunModel(_training(), clock=clock)
+    _simulating(run, clock)
+    heard = clock()
+    for quiet, said in ((3569, "59 minutes"), (3570, "59 minutes"), (3599.9, "59 minutes"), (3600, "1 hour")):
+        clock.set(heard + timedelta(seconds=quiet))
+        run.tick()
+        assert [m.sentence for m in run.messages()] == [f"No output for {said}."], quiet
 
 
 def test_the_progress_panes_three_rules_live_on_as_functions():
