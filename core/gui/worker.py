@@ -228,7 +228,7 @@ class Worker(QRunnable):
             # modal dialog that _on_error opens cannot spin a nested event loop while the process's
             # streams are still swapped out from under it. The in-flight note and its traceback are
             # emitted HERE, not inside the `with`, for the same ordering reason -- and BEFORE
-            # cancelled.emit(), so the panel's "Run cancelled." stays the last line of the run. The
+            # cancelled.emit(), so that how the run ended stays the last line of the run. The
             # run's text file gets each of them, and how the run ended, before any of it is said.
             if cancelled:
                 # HEDGED, deliberately, the in-flight note: what is chained under a WorkerCancelled

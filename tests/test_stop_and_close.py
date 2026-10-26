@@ -1,0 +1,565 @@
+"""Stopping a run: the question the stop button asks for each kind of run and each stage, what the page, the foot
+and Home say while the stop is pending, withdrawing it, keeping or discarding a training the stop kept, and where
+the keyboard goes meanwhile.
+
+A live run here is the stand-in run of tests/_runs.py, started through a real panel's own dispatch; the window's
+clock is moved by hand, and every question is answered through the session's guard or ``choose``.
+"""
+import threading
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from core.gui.run import questions
+from core.gui.run.controller import controller
+from core.gui.run.model import SIMULATION_ROW, RunSpec
+from tests._fixtures import (all_asked, asked, build_fit_record, build_run_host, build_window, choose,
+                             forget_asked, qt_app)
+from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+
+# local time with its zone, as the window's clock gives it
+_ZONE = timezone(timedelta(hours=-7))
+# a simulation set's folder as the engine names it
+_FOLDER = r"C:\Users\J\PRISM\Artifacts\simulations\_unnamed__20261008T190211"
+# a training's lines, as the engine writes them
+_BUDGET = "[budget] 10,000 batches x 2,048 rows = 20,480,000 training rows"
+_ROTATING = "Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)..."
+_ROTATED = "[fisher] eigenvalue spread (best/worst direction): 412"
+_WRITING = f"[checkpoint] writing to {_FOLDER} every 50 batches (~10.3 GiB total, 120.5 GiB free)"
+_COMPLETE = (f"[checkpoint] complete: 10000 batches in {_FOLDER}. Safe to delete once the posterior is saved; keeping "
+             f"it lets you retrain the flow without re-simulating.")
+_NOT_SAVED = "[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."
+# what the stop of a training in its fit says while it is pending, an epoch having taken 63 minutes
+_STOPPING_FIT = "Stopping: takes effect when this epoch ends, up to about 63 minutes."
+
+
+def _at(day, hour, minute, second=0) -> datetime:
+    """A moment of October 2026 in the test's local time (the 8th is a Thursday)."""
+    return datetime(2026, 10, day, hour, minute, second, tzinfo=_ZONE)
+
+
+def _epoch(epoch, since=0, took=3780.0) -> str:
+    """An epoch's record, as the training call writes it."""
+    return (f"[fit] epoch {epoch}: training loss -3, validation loss -3.1, took {took:.1f} s, epochs since the best "
+            f"{since}")
+
+
+def _controller_on(tmp_path, clock):
+    """The process's run controller, its clock and its folder of runs this test's own; the end of the test puts
+    both back."""
+    held = controller()
+    held.use_clock(clock)
+    held.use_folder(tmp_path / "runs")
+    return held
+
+
+def _training(word="Training", **changed) -> RunSpec:
+    """A training as its page hands it to its run: its stages, its patience and its epoch limit."""
+    from core.gui.panels.inference.base import TRAINING_STAGES
+    button = "Stop training…" if word == "Training" else "Stop the narrowing round…"
+    return RunSpec(**{"word": word, "place": ("inference", "training"), "name": "retrain_3", "stop_button": button,
+                      "stages": TRAINING_STAGES, "kinds": ("posterior", "simulation", "fit"), "simulation_set": True,
+                      "retries": True, "patience": 20, "epoch_limit": 300,
+                      "facts": {"model": "NADROWSKI", "observation": "chi", "narrowed": word != "Training",
+                                "network": (256, 10)}, **changed})
+
+
+def _say(app, stand_in, text, *lines, level="info") -> None:
+    """Have the stand-in run say ``lines``, and turn the event loop until the run's full text holds the last."""
+    for line in lines:
+        stand_in.say(line, level)
+    turn_until(app, lambda: lines[-1] in text.texts())
+
+
+def _to_the_simulation(app, stand_in, text, held, done=6_150) -> None:
+    """A training brought to its simulation, ``done`` of its 10,000 batches simulated."""
+    _say(app, stand_in, text, _BUDGET, _ROTATING, _ROTATED, _WRITING)
+    stand_in.row(SIMULATION_ROW, done, 10_000)
+    turn_until(app, lambda: held.model.batches_done() == done)
+
+
+def _to_the_fit(app, stand_in, text, clock, epochs, *, saved=True) -> None:
+    """A training brought to its fit, one epoch's time later, its records ``epochs`` ((epoch, since the best), ...)
+    said; its fit not saved as it goes when not ``saved``."""
+    _say(app, stand_in, text, _BUDGET, _ROTATING, _ROTATED, _WRITING, *(() if saved else (_NOT_SAVED,)), _COMPLETE)
+    clock.advance(3780)
+    if epochs:
+        _say(app, stand_in, text, *(_epoch(epoch, since) for epoch, since in epochs))
+
+
+def _note(kept_id, passes=62, resumed=False, saved_here=True, processes=1):
+    from core.SBI.fit_state import KeptNote
+    return KeptNote(kept_id, passes, resumed, saved_here, processes)
+
+
+def _ended(app, held) -> None:
+    turn_until(app, lambda: not held.is_live(), 10)
+
+
+# ── the stop's question ──
+# The table of what each stop asks, by kind of run and stage: the spec, how the run is brought to its stage, and the
+# question: its title, its sentence, what stands beneath it, the other answer, the safe one, and whether the other
+# loses work.
+_THREE_EPOCHS = ((1, 0), (2, 1), (3, 2))
+_CASES = {
+    "training, its rotation": (
+        _training(), "rotation", ("Stop training?", "Nothing has been simulated yet. The rotation will be computed "
+                                  "again next time.", "", "Stop training", "Keep training", False)),
+    "training, its simulation": (
+        _training(), "simulation", ("Stop training?", "The 6,150 batches simulated so far are kept; the batch in "
+                                    "progress is not. You can continue from batch 6,150.", "",
+                                    "Stop and keep the simulations", "Keep training", False)),
+    "training, its fit": (
+        _training(), "fit", ("Stop training?", "The simulations are kept. The fit stops when the epoch in progress "
+                             "ends, up to about 63 minutes from now; every epoch finished so far is kept.", "",
+                             "Stop training", "Keep training", False)),
+    "training, its fit, an epoch that may be its last": (
+        _training(), "last epoch", ("Stop training?", "The simulations are kept. The fit stops when the epoch in "
+                                    "progress ends, up to about 63 minutes from now; every epoch finished so far is "
+                                    "kept.", "This epoch may be the last: if validation does not improve, the fit ends "
+                                    "by itself at about Thu 8 Oct, 21:08.", "Stop training", "Keep training", False)),
+    "training, its fit not saved as it goes": (
+        _training(), "fit not saved", ("Stop training?", "The simulations are kept. The fit stops when the epoch in "
+                                       "progress ends; this training is not saved as it goes, so the fit so far is "
+                                       "lost.", "", "Stop and lose the fit", "Keep training", True)),
+    "narrowing round": (
+        _training("Narrowing round"), "rotation", ("Stop the narrowing round?", "Nothing has been simulated yet. The "
+                                                   "rotation will be computed again next time.", "", "Stop training",
+                                                   "Keep training", False)),
+    "prior build": (
+        RunSpec("Prior build", ("inference", "prior"), stop_button="Stop the prior build…"), None,
+        ("Stop the prior build?", "Nothing of the prior is kept; it is built again from the start next time.", "",
+         "Stop the build", "Keep building", True)),
+    "check": (
+        RunSpec("Check", ("inference", "checks"), name="Calibration", stop_button="Stop the calibration…"), None,
+        ("Stop the calibration?", "A check writes its record only when it finishes, so nothing of this one is kept.",
+         "", "Stop and discard it", "Keep it running", True)),
+    "inference": (
+        RunSpec("Inference", ("inference", "infer"), stop_button="Stop the inference…"), None,
+        ("Stop the inference?", "The inference is not kept. An observation it has already written stays in Records.",
+         "", "Stop the inference", "Keep it running", True)),
+    "measurement": (
+        RunSpec("Measurement", ("temperature", "one_cell"), name="cell_a_3oct", stop_button="Stop measurement…"),
+        4_320, ("Stop measurement?", "It has run for 1 hour 12 minutes. The record cell_a_3oct is kept, marked "
+                "unfinished, with what it has measured so far. A measurement cannot be continued; to finish it, it is "
+                "measured again from the start.", "", "Stop and keep what is measured", "Keep measuring", True)),
+    "sweep study": (
+        RunSpec("Sweep study", ("temperature", "sweep"), name="study", stop_button="Stop sweep study…"), 20_400,
+        ("Stop sweep study?", "It has run for 5 hours 40 minutes. What the study has measured is kept, marked "
+         "unfinished; a study cannot be continued.", "", "Stop the study", "Keep measuring", True)),
+    "comparison": (
+        RunSpec("Comparison", ("temperature", "one_cell"), stop_button="Stop the comparison…"), None,
+        ("Stop the comparison?", "A comparison writes its record only when it finishes, so nothing of this one is "
+         "kept.", "", "Stop the comparison", "Keep comparing", True)),
+    "reduction map": (
+        RunSpec("Reduction map", ("reduction", None), stop_button="Stop computing…"), None,
+        ("Stop computing the map?", "The map will not be shown. If its table is already written, that file stays in "
+         "the reduction folder.", "", "Stop computing", "Keep computing", True)),
+    "video": (
+        RunSpec("Video", ("live", None), stop_button="Stop saving…", keeps_files=False), None,
+        ("Stop saving the video?", "The unfinished file is removed. The trace stays and can be saved again.", "",
+         "Stop saving", "Keep saving", True)),
+}
+
+
+@pytest.mark.parametrize("case", list(_CASES))
+def test_the_stop_button_names_the_run_and_asks_what_its_stage_keeps(case, tmp_path):
+    """The run page's stop button names the run, and asks before it stops anything, in the words of the run and of
+    the stage it is in: what is kept and what is lost, the safe answer first (the default, Enter's and Escape's, the
+    answer a question nobody answers gives), and the other drawn as losing work only where it loses what cannot be
+    had again. Left unanswered, nothing is stopped."""
+    spec, stage, (title, sentence, beneath, other, safe, loses) = _CASES[case]
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, host, stand_in = _controller_on(tmp_path, clock), build_run_host(), StandIn()
+    text = RunText(held)
+    start_run(host, stand_in, spec=spec)
+    if stage == "rotation":
+        _say(app, stand_in, text, _BUDGET, _ROTATING)
+    elif stage == "simulation":
+        _to_the_simulation(app, stand_in, text, held)
+    elif stage == "fit":
+        _to_the_fit(app, stand_in, text, clock, _THREE_EPOCHS)
+    elif stage == "last epoch":
+        _to_the_fit(app, stand_in, text, clock, [(epoch, epoch - 1) for epoch in range(1, 21)])
+    elif stage == "fit not saved":
+        _to_the_fit(app, stand_in, text, clock, _THREE_EPOCHS, saved=False)
+    elif stage is not None:
+        clock.advance(stage)
+    view = host.run_view
+    assert view.stop_button.text() == spec.stop_button, "the stop button does not name the run"
+    forget_asked()
+    view.stop_button.click()
+    question = asked()
+    assert (question.kind, question.title, question.sentence, question.beneath) == ("question", title, sentence,
+                                                                                    beneath), question
+    assert (question.answers, question.default, question.safe, question.loses_work) == ((other, safe), safe, safe,
+                                                                                        loses), question
+    assert (len(all_asked()), held.is_live(), held.status.stop_requested, held._run.token.requested.is_set()) == (
+        1, True, False, False), "the stop asked more than once, or stopped the run with no answer"
+    stand_in.release()
+    _ended(app, held)
+
+
+# ── stopping, and withdrawing a stop ──
+def test_a_stop_during_the_fit_lands_when_the_epoch_ends_and_says_so_meanwhile(tmp_path, monkeypatch, store):
+    """A stop asked for during the fit is taken when the epoch in progress ends: the record that would carry it is
+    never said. Meanwhile the run is stopping, and says when the stop is taken -- before the fit's first epoch, at
+    that epoch's end; once an epoch is measured, at that epoch's end, up to about the time an epoch takes -- on its
+    page, where the stop button is greyed and "Don't stop after all" stands beside it, at the rail's foot, whose
+    title is that the run is stopping, and on Home, which says the run is stopping."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.widgets.page import Sentence
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    build_fit_record(store)                         # a record: Home states its next step, not its first page
+    clock = Clock(_at(8, 19, 2, 11))
+    held, window = _controller_on(tmp_path, clock), build_window()
+    shown_off_screen(window)
+    host, text = window.panel(ReductionPanel), RunText(held)
+    choose(monkeypatch, words="Stop training")
+    young = StandIn()
+    start_run(host, young, spec=_training())
+    _to_the_fit(app, young, text, clock, ())
+    host.run_view.stop_button.click()
+    assert host.run_view.sentence.text() == "Stopping: takes effect when this epoch ends.", (
+        "no epoch measured, and the stop's line names a time")
+    _ended(app, held)
+
+    stand_in = StandIn(takes_stops=False)
+    start_run(host, stand_in, spec=_training())
+    _to_the_fit(app, stand_in, text, clock, _THREE_EPOCHS)
+    view = host.run_view
+    view.stop_button.click()
+    assert (held.status.state, held.status.stop_requested, held._run.token.requested.is_set()) == (
+        "stopping", True, True)
+    assert (view.sentence.text(), view.stop_button.isEnabled(), view.withdraw_button.isVisibleTo(view),
+            view.withdraw_button.text()) == (_STOPPING_FIT, False, True, "Don't stop after all")
+    foot = window.shell.rail.foot
+    assert (foot._marker, foot._title, foot._words, foot.is_button()) == (
+        "now", "Training is stopping", _STOPPING_FIT, True), "the foot does not say the run is stopping"
+    window.go_to("home")
+    home = window.part("home")
+    sentences = [label.plain_text() for label in home.findChildren(Sentence) if label.isVisibleTo(home)]
+    assert ("Training retrain_3 is stopping, and no other run can start until it ends. You can still move around and "
+            "read results. Keep PRISM open; you can minimise it.") in sentences, sentences
+    last = _epoch(4, 3)
+    stand_in.say(last)
+    _ended(app, held)
+    assert (stand_in.stopped_at, last in text.texts(), [status.outcome for status in text.ended][-1]) == (
+        last, False, "stopped"), "the stop was not taken at the epoch's record, or the record was said"
+
+
+def test_a_stop_can_be_withdrawn_until_it_lands(tmp_path, monkeypatch):
+    """"Don't stop after all" withdraws a stop until it is taken: the run goes on, its stop no longer asked, the page
+    says so in the run's own word, and the stop button can be pressed again. Once the run has begun to stop, a
+    withdraw changes nothing and the page says it came too late; the run stops. The stop button is greyed, with no
+    question, while the posterior is saved after the fit has ended."""
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    stand_in = StandIn(takes_stops=False)
+    start_run(host, stand_in, spec=_training())
+    _to_the_simulation(app, stand_in, text, held)
+    choose(monkeypatch, words="Stop and keep the simulations")
+    view.stop_button.click()
+    token = held._run.token
+    assert (held.status.state, token.requested.is_set(), view.withdraw_button.isVisibleTo(view)) == (
+        "stopping", True, True)
+    view.withdraw_button.click()
+    assert (held.status.state, held.status.stop_requested, token.requested.is_set(), token.fired) == (
+        "running", False, False, False), "the stop was not withdrawn"
+    assert (view.notice.text(), view.notice.isVisibleTo(view), view.withdraw_button.isVisibleTo(view),
+            view.stop_button.isEnabled()) == ("The stop was withdrawn. The training goes on.", True, False, True)
+    _say(app, stand_in, text, "a line after the withdraw")
+    assert held.is_live() and stand_in.stopped_at is None, "a withdrawn stop was taken"
+
+    view.stop_button.click()
+    assert view.notice.text() == "", "the earlier withdraw was still said once a stop was asked again"
+    stand_in.say("the line at which the stop is taken")
+    assert stand_in.stopped.wait(10), "the stop was not taken"
+    assert token.fired and held.is_live(), "the run's end was heard before the window turned"
+    view.withdraw_button.click()                    # the end not heard yet: the run has begun to stop
+    assert (token.fired, view.notice.text()) == (True, "Too late: the run had already begun to stop.")
+    _ended(app, held)
+    assert [status.outcome for status in text.ended][-1] == "stopped"
+
+    saving = StandIn()
+    start_run(host, saving, spec=_training())
+    _to_the_fit(app, saving, text, clock, [(1, 0), (2, 20)])          # 20 epochs since the best: the fit has ended
+    forget_asked()
+    assert (held.model.stage, view.stop_button.isVisibleTo(view), view.stop_button.isEnabled(),
+            view.sentence.text()) == (
+        "Saving", True, False, "The fit ended after 2 epochs. The posterior is being saved.")
+    view.stop_button.click()
+    assert (all_asked(), held.status.stop_requested) == ([], False), "a greyed stop button asked or stopped"
+    saving.release()
+    _ended(app, held)
+
+
+def test_a_withdraw_between_the_checks_two_readings_wins_every_time():
+    """The stop's token reads whether a stop is asked for twice before it is taken: once with no lock, then again
+    under its lock, which a withdraw takes too. Held, by a gate in place of the lock, between the two readings, the
+    run's thread meets a withdraw made meanwhile at the second reading: the withdraw says it came in time, nothing
+    is raised, and nothing fired. The other way round, a stop taken first is not withdrawn. The gate holds the run's
+    thread alone: the withdraw passes it."""
+    from core.gui.streams import CancelToken, WorkerCancelled
+
+    class Gate:
+        """The token's lock, holding the run's thread at its door until it is opened; any other thread passes."""
+
+        def __init__(self, held_thread_name):
+            self._inner, self._held = threading.Lock(), held_thread_name
+            self.reached, self.opened = threading.Event(), threading.Event()
+
+        def __enter__(self):
+            if threading.current_thread().name == self._held:
+                self.reached.set()
+                self.opened.wait(10)
+            self._inner.acquire()
+            return self
+
+        def __exit__(self, *exc):
+            self._inner.release()
+            return False
+
+    for withdraw_first in (True, False):
+        token, said = CancelToken(), {}
+        token._lock = gate = Gate("the run")
+        if not withdraw_first:
+            gate.opened.set()
+
+        def run():
+            token.arm()
+            try:
+                token.check()
+                said["raised"] = False
+            except WorkerCancelled:
+                said["raised"] = True
+
+        token.requested.set()
+        thread = threading.Thread(target=run, name="the run")
+        thread.start()
+        if withdraw_first:
+            assert gate.reached.wait(10), "the check took no lock before it fired"
+            said["withdrawn"] = token.withdraw()
+            gate.opened.set()
+            thread.join(10)
+            assert (said, token.fired, token.requested.is_set()) == (
+                {"withdrawn": True, "raised": False}, False, False), said
+        else:
+            thread.join(10)
+            said["withdrawn"] = token.withdraw()
+            assert (said, token.fired, token.requested.is_set()) == (
+                {"raised": True, "withdrawn": False}, True, True), said
+
+
+def test_live_simulations_and_a_loads_stop_ask_nothing_and_cannot_be_withdrawn(tmp_path):
+    """A live simulation's stop and a load's stop lose nothing, so they ask nothing: the stop is asked for at once,
+    no "Don't stop after all" is offered, and a withdraw is refused; each run ends stopped."""
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    host, text = build_run_host(), RunText(held)
+    view = host.run_view
+    live = StandIn(word="Live simulation", takes_stops=False)
+    start_run(host, live, spec=RunSpec("Live simulation", ("live", None), stop_button="Stop simulation",
+                                       keeps_files=False, stop_asks=False, own_view=True))
+    forget_asked()
+    view.stop_button.click()
+    assert (all_asked(), held.status.stop_requested, view.withdraw_button.isVisibleTo(view)) == ([], True, False)
+    assert (held.withdraw_stop(), held._run.token.requested.is_set(), held.status.stop_requested) == (
+        False, True, True), "a live simulation's stop was withdrawn"
+    live.say("the next frame")
+    _ended(app, held)
+    loads = StandIn(word="Prior load", takes_stops=False)
+    start_run(host, loads, spec=RunSpec("Prior load", ("inference", "prior"), stop_button="Stop loading",
+                                        loads_only=True, keeps_files=False, stop_asks=False))
+    assert questions.stop_question(held.status, held.model) is None, "a load's stop asks something"
+    held.request_stop()
+    assert (held.withdraw_stop(), held._run.token.requested.is_set()) == (False, True), "a load's stop was withdrawn"
+    loads.say("the next line")
+    _ended(app, held)
+    assert [status.outcome for status in text.ended] == ["stopped", "stopped"], text.ended
+    assert all_asked() == []
+
+
+# ── what a stop keeps ──
+def test_a_stop_during_the_simulation_keeps_no_training_and_says_so(tmp_path, monkeypatch):
+    """A training stopped during its simulation, before its fit saved anything, hands back no kept training: its page
+    asks nothing about keeping one, and says, under the sentence that it was stopped, that none was kept."""
+    app = qt_app()
+    held, host = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_run_host()
+    text, view = RunText(held), host.run_view
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=_training())
+    _to_the_simulation(app, stand_in, text, held)
+    choose(monkeypatch, words="Stop and keep the simulations")
+    view.stop_button.click()
+    _ended(app, held)
+    assert (view.mode, view.sentence.text(), view.notice.text(), view.notice.isVisibleTo(view),
+            view.keep_block.isVisibleTo(view)) == (
+        "ended", "Training retrain_3 was stopped.", "No training was kept: the fit had not begun.", True, False)
+    assert held.status.kept_fit is None
+
+
+def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_path, monkeypatch, store):
+    """Once a stop in the fit has landed with a note of the training it kept, the run's page itself -- never a box --
+    asks whether to keep it, from the note's numbers: "Keep" first, then "Discard", drawn as losing work. Unanswered
+    the training stays, and the question stays with the page. Discard deletes the kept training, says so, and asks
+    no more; Keep deletes nothing and asks no more; a training the store will not delete stays, the store's own
+    sentence saying why. A training kept by a run before the last is deleted by its id in that run's history."""
+    from core.gui.run import history
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    choose(monkeypatch, words="Stop training")
+
+    def stopped_in_the_fit(note):
+        stand_in = StandIn()
+        stand_in.kept_fit = note
+        start_run(host, stand_in, spec=_training())
+        _to_the_fit(app, stand_in, text, clock, _THREE_EPOCHS)
+        forget_asked()
+        view.stop_button.click()
+        _ended(app, held)
+        return held.status.run
+
+    def kept():
+        return [summary.id for summary in store.list("fit")]
+
+    first = build_fit_record(store, passes=62)
+    run = stopped_in_the_fit(_note(first))
+    assert [box.title for box in all_asked()] == ["Stop training?"], "a box asked to keep the training"
+    assert (view.mode, view.keep_block.isVisibleTo(view), view.keep_words.text(), view.keep_beneath.text()) == (
+        "ended", True, "Keep this training so you can resume it later?",
+        "It stopped after epoch 62; the 62 epochs are kept until you discard them.")
+    assert [(button.text(), button.property("cls")) for button in (view.keep_button, view.discard_button)] == [
+        ("Keep", "primary"), ("Discard", "danger")]
+    view.back_button.click()
+    view.how_link.click()
+    assert view.keep_block.isVisibleTo(view) and kept() == [first], "an unanswered question lost the training"
+    view.discard_button.click()
+    assert (kept(), view.notice.text(), view.keep_block.isVisibleTo(view)) == (
+        [], "The training was discarded.", False)
+    view.back_button.click()
+    view.how_link.click()
+    assert not view.keep_block.isVisibleTo(view), "the question was asked again"
+
+    second = build_fit_record(store, passes=62)
+    stopped_in_the_fit(_note(second))
+    view.keep_button.click()
+    assert (kept(), view.keep_block.isVisibleTo(view), view.notice.text()) == ([second], False, "")
+
+    stopped_in_the_fit(_note("20261011T121000"))           # a training the store does not hold
+    view.discard_button.click()
+    assert (view.notice.text(), view.keep_block.isVisibleTo(view)) == (
+        "no complete fit artifact named or id'd '20261011T121000'", True), "the store's refusal was not said"
+
+    third = build_fit_record(store, passes=62)
+    run = stopped_in_the_fit(_note(third))
+    assert history.read(tmp_path / "runs" / f"{run}.json")["fit"]["kept_id"] == third
+    later = StandIn()
+    start_run(build_run_host(), later, spec=RunSpec("Check", ("inference", "checks"), keeps_files=False))
+    later.release()
+    _ended(app, held)
+    view.discard_button.click()
+    assert (sorted(kept()), view.notice.text()) == ([second], "The training was discarded."), (
+        "the training an earlier run kept was not deleted by its history's id")
+
+
+def test_discard_of_a_resumed_training_says_it_deletes_every_epoch_kept_since_it_began(tmp_path, monkeypatch, store):
+    """A training that was resumed and kept nothing new in this process before it was stopped is the earlier
+    training as it was: the question says that Discard deletes the whole of it, its epochs and the sessions that
+    saved them, from the note; one resumed that saved, the same. Discard deletes it."""
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    choose(monkeypatch, words="Stop training")
+    for passes, saved_here, said in (
+            (62, False, "Nothing new was saved since it was resumed. Discard deletes the whole training: 62 epochs, "
+                        "saved over 2 sessions."),
+            (64, True, "Discard deletes the whole training: 64 epochs, saved over 2 sessions.")):
+        resumed = build_fit_record(store, passes=passes)
+        stand_in = StandIn()
+        stand_in.kept_fit = _note(resumed, passes=passes, resumed=True, saved_here=saved_here, processes=2)
+        start_run(host, stand_in, spec=_training())
+        _to_the_fit(app, stand_in, text, clock, _THREE_EPOCHS)
+        view.stop_button.click()
+        _ended(app, held)
+        assert (view.keep_block.isVisibleTo(view), view.keep_words.text(), view.keep_beneath.text()) == (
+            True, "Keep this training so you can resume it later?", said)
+        view.discard_button.click()
+        assert [summary.id for summary in store.list("fit")] == [] and view.notice.text() == (
+            "The training was discarded.")
+    assert questions.keep_question(_note("x", passes=1)) == (
+        "Keep this training so you can resume it later?", "It stopped after epoch 1; the 1 epoch is kept until you "
+                                                          "discard it.")
+
+
+# ── the keyboard ──
+def test_the_keyboard_stays_on_the_runs_page_through_a_stop(tmp_path, monkeypatch, store):
+    """After a start made with a click the keyboard is on the run page's stop button, and Space there asks first:
+    unanswered, nothing is stopped. A stop answered with Space hands the keyboard to "Don't stop after all", not
+    out of the page; Space there withdraws the stop and hands it back to the stop button. Once a stop has landed
+    the keyboard goes to "Keep" while the page asks about the training the stop kept, and from there, answered, to
+    the page's sentence; with nothing kept, to the sentence at once. A keyboard on a control that stays at the end
+    (the full text's own) stays there."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QPushButton
+    from tests._window_helpers import in_front, shown_off_screen
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    start, runs = QPushButton("Start the run"), []
+    host.controls_layout.addWidget(start)
+    start.clicked.connect(lambda: start_run(host, runs[-1], spec=_training()))
+    shown_off_screen(host, 1000, 700)
+
+    def focus():
+        return QApplication.focusWidget()
+
+    with in_front(host):
+        runs.append(StandIn(takes_stops=False))
+        runs[-1].kept_fit = _note(build_fit_record(store, passes=62))
+        QTest.mouseClick(start, Qt.LeftButton)          # a click: the keyboard goes to the stop button
+        assert focus() is view.stop_button
+        _to_the_fit(app, runs[-1], text, clock, _THREE_EPOCHS)
+        forget_asked()
+        QTest.keyClick(view.stop_button, Qt.Key_Space)
+        assert ([box.title for box in all_asked()], held.status.stop_requested, focus()) == (
+            ["Stop training?"], False, view.stop_button), "Space on the stop button stopped the run with no question"
+        choose(monkeypatch, words="Stop training")
+        QTest.keyClick(view.stop_button, Qt.Key_Space)
+        assert (held.status.stop_requested, focus()) == (True, view.withdraw_button), "the keyboard left the page"
+        QTest.keyClick(view.withdraw_button, Qt.Key_Space)
+        assert (held.status.stop_requested, focus()) == (False, view.stop_button)
+        QTest.keyClick(view.stop_button, Qt.Key_Space)
+        runs[-1].say("the line at which the stop is taken")
+        _ended(app, held)
+        assert focus() is view.keep_button, "the keyboard did not go to Keep"
+        QTest.keyClick(view.keep_button, Qt.Key_Space)
+        assert focus() is view.sentence, "the keyboard did not go to the page's sentence once Keep was answered"
+
+        view.back_button.click()
+        runs.append(StandIn())
+        QTest.mouseClick(start, Qt.LeftButton)          # a click: the keyboard goes to the stop button
+        _to_the_simulation(app, runs[-1], text, held)
+        choose(monkeypatch, words="Stop and keep the simulations")
+        QTest.keyClick(view.stop_button, Qt.Key_Space)
+        _ended(app, held)
+        assert focus() is view.sentence, "with nothing kept, the keyboard did not go to the page's sentence"
+
+        view.back_button.click()
+        runs.append(StandIn())
+        QTest.mouseClick(start, Qt.LeftButton)          # a click: the keyboard goes to the stop button
+        view.text_button.click()
+        view.find_button.click()
+        assert focus() is view.find_field
+        runs[-1].fail(RuntimeError("the run broke"))
+        _ended(app, held)
+        assert focus() is view.find_field, "the end took the keyboard from a control that stays"

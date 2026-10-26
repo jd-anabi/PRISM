@@ -55,13 +55,14 @@ class RecordRow:
 @dataclass(frozen=True)
 class HomeFacts:
     """What Home states, read at one moment: the inference session, its six steps' states, the part and page a
-    live run is in (None while nothing runs), every record of the store in use, and whether the records folder in
-    use has a run in its history."""
+    live run is in (None while nothing runs), every record of the store in use, whether the records folder in
+    use has a run in its history, and the live run's word and name while it is stopping ("" otherwise)."""
     session: object
     states: tuple
     live_place: tuple[str, str | None] | None
     records: tuple[RecordRow, ...]
     has_runs: bool = False
+    stopping: str = ""
 
 
 def _access_key(words: str) -> str:
@@ -268,7 +269,8 @@ class HomeScreen(QWidget):
         self._choices_block.setVisible(self._first)
         self._next_block.setVisible(not self._first)
         self._left.setVisible(not self._first)
-        self._next = chain.next_step(facts.session, facts.states, live_place=facts.live_place)
+        self._next = chain.next_step(facts.session, facts.states, live_place=facts.live_place,
+                                     stopping=facts.stopping)
         self.next_heading.set_text(self._next.heading)
         self._next_sentence.set_text(self._next.sentence)
         self._next_sentence.setVisible(bool(self._next.sentence))

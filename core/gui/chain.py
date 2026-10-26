@@ -177,17 +177,19 @@ _NEXT = {
 }
 
 
-def next_step(session, states, *, live_place: tuple[str, str | None] | None = None) -> Next:
+def next_step(session, states, *, live_place: tuple[str, str | None] | None = None, stopping: str = "") -> Next:
     """The one next step Home offers. The first that holds decides: a run is live (``live_place`` is the part
-    and page it runs in); then the step in hand among ``states``, which reads the steps in their order (no
-    model, no prior, no posterior, no observation); otherwise nothing is waiting, and the narrowing round is
-    offered, or Records once the posterior in use is a narrowed one."""
+    and page it runs in; ``stopping``, the run's word and name while it is stopping); then the step in hand among
+    ``states``, which reads the steps in their order (no model, no prior, no posterior, no observation); otherwise
+    nothing is waiting, and the narrowing round is offered, or Records once the posterior in use is a narrowed
+    one."""
     if live_place is not None:
         part, page = live_place
         where = keys.place_words(f"{part}/{page}" if page else part)
+        going = f"{stopping} is stopping" if stopping else f"A run is going in {where}"
         return Next("Next: nothing until the run ends",
-                    f"A run is going in {where}, and no other run can start until it ends. You can still move "
-                    "around and read results. Keep PRISM open; you can minimise it.", "Go to the run", part, page)
+                    f"{going}, and no other run can start until it ends. You can still move around and read results. "
+                    "Keep PRISM open; you can minimise it.", "Go to the run", part, page)
     in_hand = step_in_hand(states)
     if in_hand is not None:
         return _NEXT[in_hand]

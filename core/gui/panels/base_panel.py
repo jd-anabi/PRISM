@@ -20,11 +20,11 @@ from ..widgets.figure_stack import FigureStack
 from ..widgets.log_pane import LogPane
 from ..widgets.refusal_box import show_refusal
 
-# "The cancel noted": shown alongside an ordinary crash report when the cancel token had already
-# been REQUESTED at the moment the failure was caught. It never claims the cancel caused the
-# failure (the two are independent: the run crashed, and separately someone had clicked Cancel) --
-# only that both are true, which the person who clicked Cancel is owed.
-CANCEL_NOTED_TEXT = "A cancel was requested before the run failed."
+# "The stop noted": shown alongside an ordinary crash report when the run's stop had already been
+# ASKED FOR at the moment the failure was caught. It never claims the stop caused the failure (the two
+# are independent: the run crashed, and separately someone had asked it to stop) -- only that both are
+# true, which the person who asked for the stop is owed.
+CANCEL_NOTED_TEXT = "A stop was asked for before the run failed."
 
 
 def _png_fig_sink(figure_signal):

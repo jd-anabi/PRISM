@@ -26,6 +26,7 @@ from .panels.fdt_panel import FdtPanel
 from .panels.inference_tabs import ConfigPanel, InferPanel, PosteriorPanel, PriorPanel, TSNPEPanel, ValidatePanel
 from .panels.reduction_panel import ReductionPanel
 from .panels.simulate_panel import SimulatePanel
+from .run import questions
 from .run.controller import controller
 from .screens.artifact_screen import ArtifactScreen
 from .screens.help_screen import HelpScreen
@@ -235,6 +236,9 @@ class MainWindow(QMainWindow):
         # nowhere. Home reads what it states as it is built, this among it: none, at launch.
         self._live_place = None
         self._run_live = False
+        # While the live run is stopping: its word and name, which Home says is stopping, and the line that says when
+        # the stop is taken, which the foot says; "" otherwise.
+        self._run_stopping = self._stopping_line = ""
         self._build("home")
 
         # Every way to move is go_to: a row of the rail, Home's buttons and rows, the run's foot. Each handler
@@ -488,7 +492,8 @@ class MainWindow(QMainWindow):
         store in use."""
         inference = self._built.get("inference")
         session = inference.session if inference is not None else SbiSession()
-        return HomeFacts(session, self._step_states(), self._live_place, _home_records(default_store()))
+        return HomeFacts(session, self._step_states(), self._live_place, _home_records(default_store()),
+                         stopping=self._run_stopping)
 
     def _states_changed(self, states) -> None:
         """The six steps' states were worked out again: the rail shows them, and Home reads now while it is
@@ -683,16 +688,22 @@ class MainWindow(QMainWindow):
         other way round): the steps' states are worked out again, which shows the live step in the rail and has
         Home read, and the foot says what is running, from its place, and for how long. When the run ends with the
         keyboard on the foot, which is then no control, the rail takes the keyboard. Any other change of the
-        status, while the run goes on, changes nothing here.
+        status, while the run goes on, changes nothing here but what the last paragraph says.
 
         Connected to the process's run controller, which every window built in the process hears until it is
         deleted: this handler touches only its own window's widgets, and is safe to run on a window nobody is
         looking at. It builds no part. The run's title and the words of its place are worked out ONCE per run,
         not per tick.
+
+        While the run is stopping, the steps' states are worked out again too, the foot says that the run is
+        stopping and when the stop is taken, and Home that it is stopping.
         """
-        if status.live == self._run_live:
+        stopping = f"{status.word} {status.name}".strip() if status.live and status.state == "stopping" else ""
+        if status.live == self._run_live and stopping == self._run_stopping:
             return
-        self._run_live = status.live
+        began = status.live and not self._run_live
+        self._run_live, self._run_stopping = status.live, stopping
+        self._stopping_line = questions.stopping_line(status, controller().model) if stopping else ""
         self._live_place = status.place if status.live else None
         inference = self._built.get("inference")
         if inference is not None:
@@ -707,15 +718,21 @@ class MainWindow(QMainWindow):
             if held:
                 self.shell.rail.take_keyboard()
             return
-        place = self._live_place
-        if place is None:
-            self._run_title = self._run_place_words = "Running: a task"
-        else:
-            part, page = place
-            self._run_title = f"Running: {keys.step(page).name if part == 'inference' else keys.part(part).name}"
-            words = keys.place_words(page if part == "inference" else f"{part}/{page}" if page else part)
-            self._run_place_words = f"Running: {words}"
-        self._run_started = time.monotonic()
+        if began:
+            place = self._live_place
+            if place is None:
+                self._run_title = self._run_place_words = "Running: a task"
+            else:
+                part, page = place
+                self._run_title = f"Running: {keys.step(page).name if part == 'inference' else keys.part(part).name}"
+                words = keys.place_words(page if part == "inference" else f"{part}/{page}" if page else part)
+                self._run_place_words = f"Running: {words}"
+            self._run_started = time.monotonic()
+        if stopping:
+            self._run_timer.stop()                 # the stopping row has no clock
+            foot.set_state("now", f"{status.word} is stopping", self._stopping_line,
+                           button=self._live_place is not None)
+            return
         self._tick_running()                       # shown at once, not a second from now
         self._run_timer.start()
 

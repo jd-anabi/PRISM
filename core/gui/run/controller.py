@@ -18,6 +18,10 @@ as it shows one made at the click.
 A run that only loads a record, a live simulation and a video export keep no file and end straight into idle, with
 nothing to acknowledge.
 
+A stop asked for (``request_stop``) is taken at the run's next point where a stop is taken and can be withdrawn
+until then (``withdraw_stop``). A training a stop kept stays kept until its page's Discard deletes it (``discard``),
+once the run has ended.
+
 The run's page is its host's: the controller hands it the run at the start and draws it again from the run's model
 at every change the model hears and at each look; the run's full text reaches it through ``lines``. A run that only
 loads a record is handed no page: it never takes the page's place, nor the page of a run that shows there. Nothing
@@ -38,7 +42,7 @@ from core.refusals import Refusal
 
 from ..streams import CancelToken
 from ..worker import Worker
-from . import history
+from . import history, questions
 from .model import FIT_PACE_RECORDS, IDLE, RunModel, RunSpec, RunStatus, moved
 from .textfile import FSYNC_EVERY_S, RunTextFile
 
@@ -177,12 +181,14 @@ class RunController(QObject):
     status_changed = Signal(object)
     run_ended = Signal(object)
     lines = Signal(object)
-    # A stop asked for, heard on the window's thread, from whichever thread asked.
+    # A stop asked for, heard on the window's thread, from whichever thread asked; and one asked for too late.
     _stopping = Signal()
+    _late = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._stopping.connect(self._stop_heard)
+        self._late.connect(self._too_late)
         self.lines.connect(self._to_page)
         self._status: RunStatus = IDLE
         self._model: RunModel | None = None
@@ -355,12 +361,18 @@ class RunController(QObject):
 
     # ── a run's stop and its end ──
     def request_stop(self) -> None:
-        """Ask the live run to stop at its next point where a stop is taken: the run is Stopping from now on.
-        Nothing when no run is live, or a stop is asked for already. Safe from any thread: the run's token is set
-        at once, and the run's state and history follow on the window's thread (at once when asked there)."""
+        """Ask the live run to stop at its next point where a stop is taken: the run is Stopping from now on, and its
+        history says so. Nothing when a stop is asked for already. A stop asked of a run that has ended does nothing
+        and says so on its page; nothing at all before the process's first run. Safe from any thread: the run's token
+        is set at once, and the run's state, its history and its page follow on the window's thread (at once when
+        asked there)."""
         run = self._run
         token = None if run is None else run.token
-        if token is None or not self.is_live() or run.stop_requested:
+        if token is None or not self.is_live():
+            if run is not None and run.ended is not None:
+                self._late.emit()
+            return
+        if run.stop_requested:
             return
         run.stop_requested = True
         token.requested.set()
@@ -373,6 +385,53 @@ class RunController(QObject):
             self._model.stopping(True)
             self._refresh()
             self._draw()
+
+    def _too_late(self) -> None:
+        """A stop asked of a run that has ended, on the window's thread: its page says so."""
+        view = None if self._run is None else self._run.view
+        if _alive(view):
+            view.say(questions.FINISHED_TEXT)
+
+    def withdraw_stop(self) -> bool:
+        """Withdraw the stop asked of the live run, on the window's thread: True when the stop had not been taken,
+        and the run goes on; False when the run had already begun to stop, and for a run whose stop cannot be
+        withdrawn (one that asks nothing before it stops). The run's page says which."""
+        run = self._run
+        if run is None or run.token is None or not self.is_live() or not run.stop_requested or not run.spec.stop_asks:
+            return False
+        withdrawn = run.token.withdraw()
+        if withdrawn:
+            run.stop_requested = False
+            self._model.stopping(False)
+        self._refresh()
+        self._draw()
+        if _alive(run.view):
+            run.view.say(questions.WITHDRAWN_TEXT.format(run.spec.word.lower()) if withdrawn
+                         else questions.TOO_LATE_TEXT)
+        return withdrawn
+
+    def discard(self, run: str | None) -> str | None:
+        """Delete the training the stop of the run ``run`` kept, once that run has ended (the training's lock is let
+        go by then): the one the controller holds, by the note its stop handed back, or an earlier one, by the id its
+        history kept. None when it is deleted, or is no longer kept; else the store's own sentence of why it was not,
+        the training kept. Nothing while the run is live."""
+        from core.artifacts import default_store
+        held = self._run
+        if held is not None and held.id == run:
+            if self.is_live():
+                return None
+            store, kept = held.store, getattr(held.kept_fit, "id", None)
+        else:
+            folder = self._folder if self._folder is not None else history.runs_folder()
+            record = None if run is None else history.read(folder / f"{run}.json")
+            store, kept = default_store(), ((record or {}).get("fit") or {}).get("kept_id")
+        if not kept:
+            return None
+        try:
+            store.delete("fit", kept)
+        except Refusal as refused:
+            return refused.message
+        return None
 
     def acknowledge(self, run: str) -> None:
         """Someone has seen how the run ``run`` ended: its history file says so, and when it is the run the
@@ -467,12 +526,8 @@ class RunController(QObject):
 
     def _on_cancelled(self, kept_fit=None) -> None:
         run = self._run
-        if run is None:
-            return
-        run.outcome, run.kept_fit = "stopped", kept_fit
-        host = run.host
-        if _alive(host) and hasattr(host, "log_pane"):
-            host.log_pane.append_line("Run cancelled.", "warning")
+        if run is not None:
+            run.outcome, run.kept_fit = "stopped", kept_fit
 
     def _on_finished(self) -> None:
         """The run's end, in this order: how it ended said on ``lines``, after every line its worker said before

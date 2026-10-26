@@ -160,14 +160,20 @@ def test_a_spontaneous_built_in_cell_streams_with_no_drive():
 def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
     """dispatch(provide_stream=True) must inject the chunk emitter + stop flag, deliver frames to
     on_chunk, and a cancel of a streaming run must land as `cancelled` (not `error`): the live run holds
-    the token its stop goes through, and the run ends as stopped, once, and its text says so and holds no
-    failure."""
+    the token its stop goes through, its stop asks nothing (a live simulation keeps nothing its stop could
+    lose), and the run ends as stopped, once, its text saying so and holding no failure, its page's sentence
+    saying it was stopped, and nothing said among the page's own lines."""
     import numpy as np
+    from core.gui.run.model import RunSpec
     from core.gui.streams import WorkerCancelled
+    from tests._fixtures import all_asked, forget_asked
 
     app = qt_app()
 
     panel = build_run_host()
+    panel.run_spec = lambda fn, *args, **kwargs: RunSpec("Live simulation", ("live", None),
+                                                         stop_button="Stop simulation", keeps_files=False,
+                                                         stop_asks=False, own_view=True)
     text = RunText(controller())
     chunks = []
     started = {"v": False}
@@ -190,7 +196,9 @@ def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
     run = controller()._run                   # the run the controller holds: its worker, and the token it holds
     assert run.token is not None and run.worker.cancel is run.token, "a live run holds no token to stop it by"
 
+    forget_asked()
     panel.run_view.stop_button.click()
+    assert all_asked() == [], "a live simulation's stop asked something"
     turn_until(app, lambda: not controller().is_live(), 10)
     pump(app, 0.3)
 
@@ -198,7 +206,7 @@ def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
     assert [status.outcome for status in text.ended] == ["stopped"], text.ended
     assert "The run stopped: a stop was asked for." in text.texts("window"), text.lines
     assert not [line for line in text.texts() if line.startswith("The run failed")], text.lines
-    assert "Run cancelled." in panel.log_pane.toPlainText()
+    assert (panel.run_view.sentence.text(), panel.log_pane.toPlainText()) == ("Live simulation was stopped.", "")
 
 def test_simulate_panel_is_wired_and_navigable():
     """Live simulation is a part of the window: it opens, it is the Simulate panel itself, with nothing round

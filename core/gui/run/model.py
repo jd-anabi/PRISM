@@ -392,6 +392,34 @@ class RunModel:
         """The name of the stage the run is in, or None before its first."""
         return None if self._current is None else self._stages[self._current].name
 
+    def stage_kind(self) -> str | None:
+        """What the stage the run is in is: "rotation", "simulation", "fit" or "saving" (the saving of the
+        posterior), read off what begins and counts it; None before the run's first stage and for a stage of another
+        kind of run."""
+        return self._kind_of(self._current)
+
+    def now(self) -> datetime:
+        """The moment now, on the run's clock."""
+        return self._clock()
+
+    def stop_bound(self) -> str | None:
+        """How long a stop asked for during the fit may take to be taken, in words ("63 minutes"): the fit's pace, as
+        the stage line says it; None while no pace is known."""
+        pace = self._epoch_pace()
+        return None if pace is None else _pace_words(pace)
+
+    def last_epoch_ends(self) -> datetime | None:
+        """When the fit ends by itself if validation does not improve, while the epoch in progress may be its last:
+        the newest epoch's count since the best is one short of the patience. None otherwise, and while no pace of
+        the fit is known."""
+        patience = self.spec.patience
+        if not self._in_fit() or not self._records or not patience:
+            return None
+        newest, pace = self._records[max(self._records)], self._epoch_pace()
+        if newest.since_best != patience - 1 or pace is None:
+            return None
+        return newest.at + timedelta(seconds=pace)
+
     def sentence(self) -> str:
         """The one sentence that says where the run stands."""
         who = f"{self.spec.word} {self.spec.name}".strip()
@@ -402,10 +430,9 @@ class RunModel:
             if kind == "simulation":
                 return "Stopping: the finished batches are being saved."
             if kind == "fit":
-                pace = self._epoch_pace()
-                return ("Stopping: takes effect when this epoch ends"
-                        + (f", up to about {_pace_words(pace)}." if pace is not None else "."))
-            return f"{who} is stopping."
+                bound = self.stop_bound()
+                return "Stopping: takes effect when this epoch ends" + (f", up to about {bound}." if bound else ".")
+            return "Stopping: takes effect at the run's next line of output."
         now = self._clock()
         if kind == "rotation":
             if self._rotation == "computing":

@@ -174,12 +174,13 @@ class InferenceScreen(QWidget):
 
     def recompute_states(self) -> None:
         """Work out again where each of the six steps stands, from the session, the step the live run is in
-        (its place, as the run's status gives it) and whether the narrowing round has an observation to choose,
-        and say so through ``states_changed``. No panel's gate is run: ``refresh_gates`` runs them first."""
+        (its place, as the run's status gives it) and whether it is stopping, and whether the narrowing round has
+        an observation to choose, and say so through ``states_changed``. No panel's gate is run:
+        ``refresh_gates`` runs them first."""
         status = controller().status
         place = status.place if status.live else None
         live = place[1] if place is not None and place[0] == "inference" else None
-        self._states = chain.step_states(self.session, live=live,
+        self._states = chain.step_states(self.session, live=live, stopping=status.state == "stopping",
                                          observation_on_offer=self.tsnpe_panel.obs_picker.has_entries(),
                                          label=record_words.label_of)
         self.states_changed.emit(self._states)

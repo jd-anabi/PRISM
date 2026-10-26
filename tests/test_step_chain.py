@@ -43,6 +43,7 @@ for session, options in ((some, dict(live="prior", ended=3, pending=frozenset({"
     said = [state.spoken for state in states]
     chain.next_step(session, states)
     chain.next_step(session, states, live_place=("temperature", "sweep"))
+    chain.next_step(session, states, live_place=("inference", "training"), stopping="Training retrain_3")
     chain.first_time(has_records=False, has_runs=False, session=session)
 said = [chain.model_label("HOPF"), keys.places_words(("training", "narrowing")), keys.place_words("inference/infer")]
 early = held(draft=held(model=""), cfg=None, inf_prior=held(name="p"), posterior=None, observation=None)
@@ -94,7 +95,7 @@ for name in sys.argv[2].split(","):
     except ImportError:
         pass
 from core.gui import texts
-from core.gui.run import model, readings
+from core.gui.run import model, questions, readings
 moment = [datetime(2026, 10, 8, 19, 2, 11, tzinfo=timezone(timedelta(hours=2)))]
 def clock():
     return moment[0]
@@ -118,7 +119,13 @@ def look(run):
     run.tick()
     said = (run.state, run.stage, run.outcome, run.sentence(), run.stage_line(), run.axis(), run.health(),
             run.messages(), run.needs_you(), run.epochs(), run.best_epoch(), run.batches_done(),
-            run.simulation_folder(), run.began_after_first(), run.fit_not_saved(), run.saves_passed())
+            run.simulation_folder(), run.began_after_first(), run.fit_not_saved(), run.saves_passed(),
+            run.stage_kind(), run.now(), run.stop_bound(), run.last_epoch_ends())
+    status = model.RunStatus(state="running", word=run.spec.word, name=run.spec.name)
+    said += (questions.stop_question(status, run), questions.close_question(status, run))
+    if run.state == "stopping":
+        stopping = model.RunStatus(state="stopping", word=run.spec.word, stop_requested=True)
+        said += (questions.stopping_line(stopping, run), questions.close_question(stopping, run))
     moment[0] += timedelta(seconds=50)
     return said
 tag = "training batch 3/40 [t_scale=1, T=1, n_fine=8, N_points=8, rows=8]"
@@ -178,7 +185,13 @@ counted.rows([row("Calibrating", "3/9 [00:01<00:02]", 9)])
 look(counted)
 counted.ended("finished")
 look(counted)
-said = [readings.sentence(readings.read(text, "warning"), count=2) for text in (
+for others in ("Prior build", "Check", "Inference", "Measurement", "Sweep study", "Comparison", "Reduction map",
+               "Video", "Run", "Narrowing round"):
+    look(model.RunModel(model.RunSpec(others, ("inference", "checks"), name="n"), clock=clock))
+look(model.RunModel(model.RunSpec("Prior load", ("inference", "prior"), stop_asks=False), clock=clock))
+said = [questions.keep_question(held(passes=n, resumed=resumed, saved_here=here, processes=2))
+        for n, resumed, here in ((1, False, True), (62, True, False), (64, True, True))]
+said += [readings.sentence(readings.read(text, "warning"), count=2) for text in (
     "[fit] saved after pass 3.",
     f"{tag}: batch FAILED after both halving retries (1/3). Waiting 6s and re-running the whole batch. Original: x")]
 said += [texts.duration_text(s) for s in (0, 61, 3700, 200000)] + [texts.number_text(2048.5)]
@@ -251,13 +264,14 @@ def test_the_rules_and_tables_import_no_toolkit_and_no_engine():
 
 
 def test_the_run_model_and_its_readings_import_no_toolkit_and_no_engine():
-    """The run's model, the table of the engine's lines it reads and the date and number words load neither the
-    toolkit, nor the engine, nor its settings: the window's thread reads a run's lines through them while the run
-    holds the engine, and they are tested with no window. Every import statement of each module is read, wherever
-    it stands, with every statement of each module of this repository it imports; then a fresh interpreter imports
-    every module those statements name, builds a training's model and models of runs of other kinds, feeds them
-    their lines, rows, solver counts and clock, and reads every read-out at each step."""
-    modules = ("core.gui.texts", "core.gui.run.readings", "core.gui.run.model")
+    """The run's model, the table of the engine's lines it reads, the words a stop and a close ask, and the date and
+    number words load neither the toolkit, nor the engine, nor its settings: the window's thread reads a run's lines
+    through them while the run holds the engine, and they are tested with no window. Every import statement of each
+    module is read, wherever it stands, with every statement of each module of this repository it imports; then a
+    fresh interpreter imports every module those statements name, builds a training's model and models of runs of
+    other kinds, feeds them their lines, rows, solver counts and clock, and reads every read-out at each step, the
+    questions of a stop and a close among them, and the question of keeping a training a stop kept."""
+    modules = ("core.gui.texts", "core.gui.run.readings", "core.gui.run.model", "core.gui.run.questions")
     for module in modules:
         assert (REPO / (module.replace(".", "/") + ".py")).is_file(), f"{module} is not there to be read"
         found = _reaching(_imports(module), _RULES_FORBIDDEN)

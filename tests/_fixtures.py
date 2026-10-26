@@ -144,7 +144,7 @@ def calls_that_speak(source: str) -> list[str]:
 
 class PaneCapture:
     """Records the lines a page writes itself to its log pane -- a refusal's sentence, "Model applied",
-    a record written, "Run cancelled." -- as ``(level, text)`` in order, INSTEAD of rendering them:
+    a record written -- as ``(level, text)`` in order, INSTEAD of rendering them:
     ``PaneCapture(panel)`` replaces that one pane's ``LogPane.append_line(text, level="info")``. A run's
     own lines never reach the pane: they are the run's full text, which ``tests/_runs.RunText`` reads
     from the run's controller. The widget receives nothing, and the panel is a throwaway built by the

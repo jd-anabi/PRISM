@@ -683,7 +683,8 @@ def test_a_stop_asked_while_starting_still_lets_the_first_stage_begin():
     cell.stopping(True)
     assert (cell.state, cell.stage) == ("stopping", None)
     _feed(cell, "Writing fdt record 20261008T190211 at C:\\x")
-    assert (cell.state, cell.stage, cell.sentence()) == ("stopping", "Checks", "Measurement cell_a is stopping.")
+    assert (cell.state, cell.stage, cell.sentence()) == (
+        "stopping", "Checks", "Stopping: takes effect at the run's next line of output.")
     cell.ended("stopped")
     assert _status_line(cell) == [("Checks", "half", "Stopped"), ("Spontaneous", "later", "To come"),
                                   ("Driven", "later", "To come")]
@@ -2141,7 +2142,7 @@ def test_a_stop_over_a_failure_and_a_stop_too_late_leave_the_full_text_in_the_fi
         assert written == text.lines, (written, text.lines)
 
 
-def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_and_no_file(tmp_path):
+def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_and_no_file(tmp_path, monkeypatch):
     """A start that raises once every panel is locked and before its worker is queued -- here a page hands its
     run a folder to watch of a shape no folder has -- raises to the page as it came, and is taken back: no run is
     live, the status is published idle again, every panel is free, the page's results are given back from the
@@ -2149,7 +2150,7 @@ def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_an
     stopped run's page where it was."""
     from core.gui.panels.base_panel import BasePanel
     from core.gui.run.model import IDLE
-    from tests._fixtures import build_run_host, qt_app
+    from tests._fixtures import build_run_host, choose, qt_app
     from tests._runs import Clock, RunText, StandIn, start_run, turn_until
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
@@ -2163,6 +2164,7 @@ def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_an
         True, False), "the run's page kept the page's results for a run that never started"
     assert list((tmp_path / "runs").iterdir()) == [], "a start taken back left a file"
     start_run(host, StandIn(), spec=_training())
+    choose(monkeypatch, words="Stop training")
     host.run_view.stop_button.click()
     turn_until(app, lambda: not held.is_live())
     with pytest.raises(TypeError):
@@ -2253,7 +2255,7 @@ def _model_says(model, now, right) -> dict:
                          for message in model.messages()]}
 
 
-def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path):
+def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, monkeypatch):
     """While a page's run shows, the run's page stands in the right-hand column in the place of the page's
     figures, which it holds in sight under its messages; the form stays at the left, in sight and locked. A run
     that finishes gives the column back, the figures in their place at the heights they had and "How the run went"
@@ -2266,7 +2268,7 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path):
     from core.refusals import Refusal
     from core.gui import settings
     from core.gui.run import history
-    from tests._fixtures import asked, build_run_host, qt_app
+    from tests._fixtures import asked, build_run_host, choose, qt_app
     from tests._runs import Clock, RunText, StandIn, start_run, turn_until
     from tests._window_helpers import shown_off_screen
     app = qt_app()
@@ -2315,6 +2317,7 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path):
     heights = split.sizes()
     host.save_layout(store)
     saved = store.value(key)
+    choose(monkeypatch, words="Stop training")                # the stop's question, answered
     for how, said, load in ((lambda stand_in: view.stop_button.click(), "Training retrain_3 was stopped.", True),
                             (lambda stand_in: stand_in.fail(RuntimeError("the run broke")),
                              "Training retrain_3 failed.", False)):

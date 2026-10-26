@@ -55,23 +55,28 @@ class WorkerCancelled(BaseException):
 class CancelToken:
     """The cancel flag for one run, shared by the run's stdout and stderr streams.
 
-    `requested` is set from the GUI thread (the Cancel button); `fired` is the LATCH -- once the raise
-    has happened once, later writes pass through normally. The latch matters because tqdm's __iter__
-    does `finally: self.close()`, which re-enters write() DURING the unwind; raising again there would
-    replace the clean traceback with a chained one and abort the teardown writes that carry a
-    leave=True bar's final frame into the log. One raise, then quiet.
+    `requested` is set from the GUI thread (the run page's stop button, or the window's close); `fired` is the
+    LATCH -- once the raise has happened once, later writes pass through normally. The latch matters because
+    tqdm's __iter__ does `finally: self.close()`, which re-enters write() DURING the unwind; raising again there
+    would replace the clean traceback with a chained one and abort the teardown writes that carry a leave=True
+    bar's final frame into the log. One raise, then quiet.
 
     The raise is restricted to the OWNER (worker) thread. tqdm runs a TMonitor DAEMON thread that
     force-refreshes a bar gone quiet for >=maxinterval (10s) -- that refresh writes to our stream too.
     Without the owner guard, the monitor thread would reach check() first, consume the latch, raise
     WorkerCancelled where nobody catches it (killing the monitor), and leave the worker thread to sail
     past a fired latch -- silently losing the cancel for the whole run.
+
+    A stop asked for can be WITHDRAWN until it is taken (``withdraw``). The lock makes the two one decision:
+    ``check`` reads ``requested`` again under it before it fires, so a withdraw that came between its first,
+    lock-free reading and its firing wins, and a withdraw that comes after the firing is refused.
     """
 
     def __init__(self):
         self.requested = threading.Event()
         self.fired = False
         self._owner: int | None = None
+        self._lock = threading.Lock()
 
     def arm(self) -> None:
         """Bind the token to the calling thread as the only one allowed to raise. Called from
@@ -83,8 +88,20 @@ class CancelToken:
             return
         if self._owner is not None and threading.get_ident() != self._owner:
             return                            # a non-worker writer (tqdm's monitor) -- do not consume
-        self.fired = True
+        with self._lock:
+            if not self.requested.is_set():   # withdrawn since the reading above: the run goes on
+                return
+            self.fired = True
         raise WorkerCancelled()
+
+    def withdraw(self) -> bool:
+        """Withdraw the stop asked for, on the window's thread: True when it had not been taken, and the run goes
+        on; False when the run has already begun to stop."""
+        with self._lock:
+            if self.fired:
+                return False
+            self.requested.clear()
+            return True
 
 
 def reset_tqdm_lock() -> None:
@@ -231,7 +248,7 @@ class _SignalStream:
         # ...except inside a runs.cancel_deferred() section, where raising would land between two
         # writes that must both happen, OR while this thread is handling an exception
         # (runs.cancel_is_deferred() also reads sys.exc_info()), where raising would REPLACE
-        # whatever is unwinding with a false "Run cancelled.". The token is NOT cleared either way:
+        # whatever is unwinding with a false stop. The token is NOT cleared either way:
         # it stays requested and the next write in normal flow raises.
         if self._cancel is not None and not runs.cancel_is_deferred():
             self._cancel.check()
@@ -274,7 +291,8 @@ class _PumpLogHandler(logging.Handler):
     still stop at its next message, and the token's latch (one raise, then quiet) holds here as
     well. That is why training_checkpoint's ordering rule reads "do not print() or log between steps
     1 and 3". That rule is also a MECHANISM: the commit runs inside runs.cancel_deferred(), a
-    deferred-cancel section, and both checkpoints consult it before raising, so a record emitted
+    deferred-cancel section, and every checkpoint consults it before raising (a stream's write, a
+    library's record the stream hands on, and this handler's record), so a record emitted
     between a shard's fsync and the state replace is carried rather than fatal. And a record reached
     while this thread is handling an exception (any ``except``, any ``finally`` or ``__exit__`` an
     exception entered, any generator teardown) is carried the same way, with no section needed --

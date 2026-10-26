@@ -176,18 +176,23 @@ def test_cancel_token_latches_and_leaves_tqdm_usable():
     th.join(3.0)
     assert made == [True], "tqdm deadlocked after a cancel -- the write lock was not recovered"
 
-def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
+def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works(monkeypatch):
     """End to end: a run stopped mid-flight ends as stopped (the worker said `cancelled`, not `error`),
-    the stop button of the run's page shown and pressable while the run goes, greyed and the page's sentence
-    saying so while it stops, and gone with the page at its end; the run is stopping from the ask, the token
-    the run holds asked, and at the end the token is let go, with stray figures closed and no run live; and a
-    fresh run afterwards completes. How it ended is read off the run's text and its end, as the controller
-    says them."""
+    the stop button of the run's page shown, named for the run and pressable while the run goes, asking what the
+    stop keeps before it stops anything, greyed and the page's sentence saying when the stop is taken while it
+    stops, and gone with the page at its end; the run is stopping from the answer, the token the run holds asked,
+    and at the end the token is let go, with stray figures closed and no run live; the page's ended sentence says
+    the run was stopped, and the stop says nothing among the page's own lines; and a fresh run afterwards
+    completes. How it ended is read off the run's text and its end, as the controller says them."""
     import matplotlib.pyplot as plt
+    from core.gui.run.model import RunSpec
+    from tests._fixtures import asked, choose
 
     app = qt_app()
 
     panel = build_run_host()
+    panel.run_spec = lambda fn, *args, **kwargs: RunSpec("Training", None, stop_button="Stop training…",
+                                                         keeps_files=False)
     text = RunText(controller())
     started = {"v": False}
     outcome = {"result": []}
@@ -209,12 +214,15 @@ def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
     assert run.token is not None and run.worker.cancel is run.token and not run.token.requested.is_set()
     page = panel.run_view
     assert (page.stop_button.isVisibleTo(panel), page.stop_button.isEnabled(), page.stop_button.text()) == (
-        True, True, "Stop"), "the stop button is not there to press while the run goes"
+        True, True, "Stop training…"), "the stop button is not there to press while the run goes"
 
+    choose(monkeypatch, words="Stop training")
     page.stop_button.click()
+    assert asked().title == "Stop training?", "the stop asked nothing first"
     assert controller().status.stop_requested and run.token.requested.is_set()
     assert (controller().status.state, controller().status.state_word) == ("stopping", "stopping")
-    assert (page.stop_button.isEnabled(), page.sentence.text()) == (False, "Run is stopping.")
+    assert (page.stop_button.isEnabled(), page.sentence.text()) == (
+        False, "Stopping: takes effect at the run's next line of output.")
 
     turn_until(app, lambda: not controller().is_live(), 10)
     pump(app, 0.3)
@@ -228,7 +236,8 @@ def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
     assert not controller().is_live() and run.token is None, "the run's end did not let go of its token"
     assert (panel.results.currentWidget() is panel.figures, page.stop_button.isHidden()) == (True, True), (
         "the stop button stayed on the page after its run ended")
-    assert "Run cancelled." in panel.log_pane.toPlainText()
+    assert (page.sentence.text(), panel.log_pane.toPlainText()) == ("Training was stopped.", ""), (
+        "the stop's end was not said on the run's page, or was said among the page's own lines")
 
     later = []
     panel.dispatch(lambda: "SECOND OK", on_result=later.append)
@@ -604,7 +613,7 @@ def test_asked_reads_each_shape_of_box_into_one_record():
     assert "exec" in B.__dict__, \
         "the session guard is not in force: a raw exec() would stall the run"
     tb = "Traceback (most recent call last):\n  ...\nRuntimeError: it failed"
-    noted = "A cancel was requested before the run failed."
+    noted = "A stop was asked for before the run failed."
     held = "This session holds:\n  a prior\n\nEvery one of them STAYS ON DISK."
     two = (("Apply and start a new session", B.DestructiveRole), ("Keep this session", B.RejectRole))
     one = dict(items=(), answers=("OK",), default="OK", safe="OK", loses_work=False)
@@ -2293,8 +2302,8 @@ def test_a_cancel_waits_out_an_exception_handler_and_never_waits_in_normal_flow(
         assert token.fired is True, f"{shape.__name__}: the deferred cancel was lost"
 
 
-_STOP = ("warning", "Run cancelled.")
-_NOTED = "A cancel was requested before the run failed"
+_STOP = ("window", "The run stopped: a stop was asked for.")
+_NOTED = "A stop was asked for before the run failed"
 
 
 def _run_leg(app, panel, pane, text, fn, wait_for_dialog):
@@ -2333,7 +2342,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     (a2) THE RACE THE FIRST DESIGN CALLED RESIDUAL, and it is not rare: ``sdeint.euler_compiled``'s
     ``try ... finally: bar.close()`` sits on the graphed CUDA solver, the likeliest GPU crash site,
     and the bar's closing write is a checkpoint reached while the crash unwinds. It used to raise
-    WorkerCancelled chained to the crash, and the crash was told as "Run cancelled.". Now it is a
+    WorkerCancelled chained to the crash, and the crash was told as a stop. Now it is a
     crash, reported as one, with the cancel noted.
 
     (b) A RECOVERED GUARD. The three best-effort guards in core/SBI/pipeline.py --
@@ -2407,7 +2416,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
             raise WorkerCancelled()
 
     def reported_as_a_crash(message):
-        assert _STOP not in pane.lines, ("a run that CRASHED was reported as a cancellation", pane.lines)
+        assert _STOP not in text.lines, ("a run that CRASHED was reported as a cancellation", text.lines)
         box = asked()
         assert (box.kind, box.title) == ("error", "Error")
         assert box.sentence == message, box.sentence
@@ -2433,22 +2442,21 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     del reached[:]
     _run_leg(app, panel, pane, text, recovered_guard_then_normal_flow, False)
     assert all_asked() == [], "a recovered exception behind a cancel opened a dialog"
-    assert pane.lines == [_STOP], pane.lines
-    assert text.lines == [("warning", "empty_cache() failed during recovery and was ignored"),
-                          ("window", "The run stopped: a stop was asked for.")], text.lines
+    assert pane.lines == [], ("a stop was said among the page's own lines", pane.lines)
+    assert text.lines == [("warning", "empty_cache() failed during recovery and was ignored"), _STOP], text.lines
     assert reached == ["after the guard"], reached
 
     # (c) normal flow: the very next check
     del reached[:]
     _run_leg(app, panel, pane, text, cancel_in_normal_flow, False)
-    assert pane.lines == [_STOP] and all_asked() == [] and reached == [], \
+    assert pane.lines == [] and all_asked() == [] and reached == [], \
         (pane.lines, all_asked(), reached)
-    assert text.lines == [("window", "The run stopped: a stop was asked for.")], text.lines
+    assert text.lines == [_STOP], text.lines
 
     # (f) the fallback: a cancel that still carries a context stays a cancel; the context is kept
     _run_leg(app, panel, pane, text, cancel_raised_inside_a_handler, False)
     assert all_asked() == [], "an exception behind a cancel opened a dialog"
-    assert pane.lines.count(_STOP) == 1 and pane.lines[-1] == _STOP, pane.lines
+    assert pane.lines == [] and text.lines.count(_STOP) == 1 and text.lines[-1] == _STOP, (pane.lines, text.lines)
     assert any(lv == "warning" and "may be a failure that was still in flight" in t
                for lv, t in text.lines), text.lines
     assert any(lv == "error" and "RuntimeError: an error the run may already have dealt with" in t
@@ -2466,7 +2474,7 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
 
     The run really DID finish, so it must not be reported as cancelled: nothing on disk is wrong and
     the payload is correct. It is reported as a SUCCESS with the fact said out loud in the run's text --
-    the missing counterpart of the failure path's "A cancel was requested before the run failed.",
+    the missing counterpart of the failure path's "A stop was asked for before the run failed.",
     which the window already had.
 
     A run that finishes with NO cancel pending says nothing extra: the sentence has to be the answer
@@ -2501,8 +2509,8 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
     _drive(finishes_with_a_cancel_pending)
     assert results == ["the payload"], "the run's result was not delivered"
     assert all_asked() == [], "a completed run opened a dialog"
-    assert ("warning", "Run cancelled.") not in pane.lines, \
-        ("a run that FINISHED was reported as a cancellation", pane.lines)
+    assert _STOP not in text.lines and pane.lines == [], \
+        ("a run that FINISHED was reported as a cancellation", text.lines, pane.lines)
     assert any(lv == "warning" and CANCEL_TOO_LATE_TEXT in line for lv, line in text.lines), \
         ("the person who pressed Cancel was told nothing", text.lines)
     assert ("info", "the last thing the run writes") in text.lines, text.lines
@@ -2543,7 +2551,7 @@ def test_a_crash_under_a_live_bar_is_a_crash_and_leaves_no_ignored_exception(mon
                 raise RuntimeError("the batch failed under a live bar")
 
     _run_leg(app, panel, pane, text, crash_under_a_live_bar, True)
-    assert _STOP not in pane.lines, ("a run that CRASHED was reported as a cancellation", pane.lines)
+    assert _STOP not in text.lines, ("a run that CRASHED was reported as a cancellation", text.lines)
     box = asked()
     assert box.sentence == "the batch failed under a live bar", box.sentence
     assert _NOTED in box.text, box.text

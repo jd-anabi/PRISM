@@ -34,6 +34,10 @@ STOP_LINE = "The stand-in run reaches its next line."
 #: How long a stand-in run waits, with nothing told it, before it gives up and raises: a run its test never
 #: released ends, and holds no thread of the pool when the process ends.
 WAIT_LIMIT_S = 60.0
+#: How long a stand-in run that does not take a stop by itself holds one with no line told it before it takes it
+#: anyway: a test that failed before it had the run say its line still sees the run stop at its end, as the end of
+#: every test asks.
+HELD_STOP_S = 5.0
 _LEVELS = {"info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR}
 
 
@@ -54,11 +58,17 @@ class Clock:
 
 class StandIn:
     """The stand-in run. ``started`` is set when the run begins; ``stopped_at`` is the line at which a stop was
-    taken, or None."""
+    taken, or None, and ``stopped`` is set as the stop is taken. ``kept_fit`` is the note of a kept training its stop
+    or its failure hands back, as the training stage hands one back (None for none). With ``takes_stops`` False it
+    says no line of its own when a stop is asked for: the stop is taken at the next line its test has it say, or,
+    with none said within ``HELD_STOP_S`` of the ask, at its own line."""
 
-    def __init__(self, *, word: str = "Training", lines=()):
+    def __init__(self, *, word: str = "Training", lines=(), takes_stops: bool = True):
         self.word = word
+        self.takes_stops = takes_stops
+        self.kept_fit = None
         self.started = threading.Event()
+        self.stopped = threading.Event()
         self.stopped_at: str | None = None
         self._lock = threading.Lock()
         self._queue = deque(("say", text, level) for text, level in lines)
@@ -108,7 +118,7 @@ class StandIn:
         from core.gui.run.controller import controller
         from core.gui.streams import WorkerCancelled
         self.started.set()
-        log, saying, framed = logging.getLogger("core"), None, False
+        log, saying, framed, asked_at = logging.getLogger("core"), None, False, None
         heard = time.monotonic()
         try:
             while True:
@@ -125,16 +135,26 @@ class StandIn:
                     raise RuntimeError(f"the stand-in run was told nothing for {WAIT_LIMIT_S:g} s and never released")
                 if end is not None:
                     if end[0] == "fail":
+                        if self.kept_fit is not None:
+                            end[1].kept_fit = self.kept_fit
                         raise end[1]
                     return end[1]
-                if controller().status.stop_requested and not self._said_stop:
+                asked = controller().status.stop_requested
+                asked_at = (asked_at or time.monotonic()) if asked else None
+                held = asked and time.monotonic() - asked_at < HELD_STOP_S
+                if asked and (self.takes_stops or not held) and not self._said_stop:
                     self._said_stop, saying = True, STOP_LINE
                     log.info(STOP_LINE)
                     saying = None
+                elif not asked:
+                    self._said_stop = False          # a stop withdrawn: the next one is taken at its line again
                 self._wake.wait(0.01)
                 self._wake.clear()
-        except WorkerCancelled:
+        except WorkerCancelled as stop:
             self.stopped_at = saying
+            if self.kept_fit is not None:
+                stop.kept_fit = self.kept_fit
+            self.stopped.set()
             raise
         finally:
             if framed:

@@ -8,6 +8,10 @@ the figures the page that started the run holds and lends it while it shows. "Sh
 line the run wrote, which the run's controller hands over as it says them; "Open the file" and "Open its folder"
 open the run's text file and the folder of runs, whose path is never written on the page.
 
+The stop button asks what the run's stage keeps before it stops the run (a run whose stop loses nothing is stopped
+with no question); while the stop is pending, "Don't stop after all" withdraws it. Once a stop of a training has
+landed, the page asks whether to keep the training it kept, never in a box of its own.
+
 It is live while the run is, ended once it has ended, and past when it is drawn from a run's files alone. A run
 with a view of its own shows the page in its compact form: the sentence and the stop button. The page lives
 inside the page that started the run, never in the window's own stack of places. Nothing here draws with the
@@ -23,6 +27,7 @@ from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel, Q
 
 from .. import design, fonts, style
 from ..reported import reported
+from ..widgets.ask import ask
 from ..widgets.log_pane import LINES_KEPT, LogPane
 from ..widgets.marker import Marker, painted_icon
 from ..widgets.message_row import MessageRow, opening
@@ -30,6 +35,7 @@ from ..widgets.page import Scroller
 from ..widgets.rule_table import Column, RuleTable, StateCell, TextCell, ValueCell
 from ..widgets.ruled import Ruled, SectionHead
 from ..widgets.time_axis import AxisCaption, TimeAxis
+from . import questions
 from .loss import LossCurve
 from .model import LEADS, OUTCOMES, RunModel, RunSpec
 
@@ -186,6 +192,8 @@ class RunView(QWidget):
         self._compact = False
         self._model: RunModel | None = None
         self._stopping = False
+        self._run: str | None = None             # the run's id, as its status names it
+        self._answered = False                   # whether Keep or Discard was answered for the training it kept
         self._clock = _local_now
         self._text: Path | None = None
         self._folder: Path | None = None
@@ -216,13 +224,15 @@ class RunView(QWidget):
                                            + design.scaled(design.SIZE["icon_gap"]),
                                            design.scaled(design.SIZE["marker"])))
         self.stop_button.clicked.connect(self._stop)
+        self.withdraw_button = QPushButton(questions.WITHDRAW_TEXT)
+        self.withdraw_button.clicked.connect(self._withdraw)
         self.back_button = QPushButton(BACK_TEXT)
         self.back_button.clicked.connect(self.back.emit)
         head.addWidget(self.title, 1)
         # The room the buttons leave goes to the title, or, in the compact form, where the title is not shown, to
         # this stretch: never to a button, which keeps its own width at the right.
         head.addStretch(0)
-        for button in (self.text_button, self.stop_button, self.back_button):
+        for button in (self.text_button, self.stop_button, self.withdraw_button, self.back_button):
             head.addWidget(button, 0, Qt.AlignTop)
 
         # where the run stands: its stages, its sentence, the time axis with its line, and what follows
@@ -243,10 +253,46 @@ class RunView(QWidget):
         self.follows = QLabel()
         self.follows.setTextFormat(Qt.PlainText)
         self.follows.setFont(fonts.inter("body", tabular=True))
+        # under the sentence: what the page says of a stop, and the question of keeping a training a stop kept, which
+        # the page asks itself once the stop has landed
+        self.notice = QLabel()
+        self.notice.setTextFormat(Qt.PlainText)
+        self.notice.setWordWrap(True)
+        self.keep_block = QWidget()
+        keep = QVBoxLayout(self.keep_block)
+        keep.setContentsMargins(0, 0, 0, 0)
+        keep.setSpacing(design.scaled(design.GAP["head_table"]))
+        self.keep_words = QLabel()
+        self.keep_words.setFont(fonts.inter("strong"))
+        self.keep_beneath = style.set_class(QLabel(), cls="quiet")
+        for label in (self.keep_words, self.keep_beneath):
+            label.setTextFormat(Qt.PlainText)
+            label.setWordWrap(True)
+        self.keep_button = style.set_class(QPushButton(questions.KEEP_TEXT), cls="primary")
+        self.keep_button.clicked.connect(self._keep)
+        self.discard_button = style.set_class(QPushButton(questions.DISCARD_TEXT), cls="danger")
+        self.discard_button.setIcon(painted_icon("stop"))
+        self.discard_button.setIconSize(self.stop_button.iconSize())
+        self.discard_button.clicked.connect(self._discard)
+        answers = QHBoxLayout()
+        answers.setSpacing(design.scaled(design.GAP["action"]))
+        answers.addWidget(self.keep_button)
+        answers.addWidget(self.discard_button)
+        answers.addStretch(1)
+        keep.addWidget(self.keep_words)
+        keep.addWidget(self.keep_beneath)
+        keep.addLayout(answers)
+        self.said = QWidget()
+        said = QVBoxLayout(self.said)
+        said.setContentsMargins(0, design.scaled(design.GAP["now"][1]), 0, 0)
+        said.setSpacing(design.scaled(design.GAP["head_table"]))
+        for part in (self.notice, self.keep_block):
+            said.addWidget(part)
         box = self.status.box
         box.addWidget(self.stage_line)
         box.addSpacing(design.scaled(design.GAP["now"][0]))
         box.addWidget(self.sentence)
+        box.addWidget(self.said)
         box.addSpacing(design.scaled(design.GAP["now"][1]))
         for part in (self.axis, self.axis_caption, self.follows):
             box.addWidget(part)
@@ -351,6 +397,8 @@ class RunView(QWidget):
         (None for a run that keeps none), and the clock its moments are read from; its full text emptied. The
         page is live, in its compact form for a run with a view of its own."""
         self._mode, self._compact, self._model, self._stopping = "live", spec.own_view, None, False
+        self._run, self._answered = None, False
+        self.notice.setText("")
         self._axis_shown = self._text_shown = False
         self.text_button.setText(SHOW_TEXT)
         self._text = None if text is None else Path(text)
@@ -378,17 +426,23 @@ class RunView(QWidget):
         self.full_text.append_lines(batch)
 
     def show_status(self, status, model: RunModel | None) -> None:
-        """Draw the run as ``model`` reads it now, live or ended as ``status`` says. A page that holds the keyboard
-        when its run ends gives it to "Back to the form", for no key of its own: the stop button that held it is
-        gone."""
-        focus = QApplication.focusWidget()
-        keys = self._mode == "live" and not status.live and focus is not None and self.isAncestorOf(focus)
+        """Draw the run as ``model`` reads it now, live or ended as ``status`` says. What the page said of an earlier
+        stop goes when a stop is asked for; at a stopped end of a training that kept nothing, the page says so."""
+        ending = self._mode == "live" and not status.live
+        if (status.stop_requested and not self._stopping) or ending:
+            self.notice.setText("")
         self._model = model
         self._mode = "live" if status.live else "ended"
         self._stopping = status.stop_requested
+        self._run = status.run
+        if ending and model is not None and self._kept_nothing(model):
+            self.notice.setText(questions.NOT_KEPT_TEXT)
         self._draw()
-        if keys and self.back_button.isVisibleTo(self):
-            self.back_button.setFocus(Qt.OtherFocusReason)
+
+    def say(self, text: str) -> None:
+        """Say ``text`` on the page, under its sentence, in place of what it said before ("" says nothing)."""
+        self.notice.setText(text)
+        self._arrange()
 
     def show_past(self, record: dict, text: Path | None) -> None:
         """Draw a run that is over from its two files alone: ``record``, its history, and ``text``, its text
@@ -463,6 +517,10 @@ class RunView(QWidget):
         self.loss.set_epochs(epochs, best=model.best_epoch(), patience=model.spec.patience)
         self._fit_shown = bool(epochs)
         self._set_messages(model.messages(), now)
+        if model.outcome == "stopped" and model.kept_fit is not None:
+            words, beneath = questions.keep_question(model.kept_fit)
+            self.keep_words.setText(words)
+            self.keep_beneath.setText(beneath)
         self._arrange()
 
     def _set_messages(self, messages, now) -> None:
@@ -485,14 +543,35 @@ class RunView(QWidget):
         return list(self._message_rows)
 
     def _arrange(self) -> None:
-        """What is in sight in the page's mode and form."""
+        """What is in sight in the page's mode and form. A control of the page that holds the keyboard and goes, or
+        is greyed, first hands it on, for no key of its own (its ring shows while the keyboard has the turn): the
+        stop button to "Don't stop after all" while a stop can be withdrawn, and back; at a stopped end to "Keep"
+        while the training the stop kept is asked about, else to the sentence; at any other end to "Back to the
+        form". A keyboard on a control that stays (the full text's, "Show the full text") stays where it is."""
         live, full = self._mode == "live", not self._compact
         axis = self._axis_shown and live and full
+        stops = live and not self._stopping and not self._saving()
+        withdraws = live and self._stopping and self._model is not None and self._model.spec.stop_asks
+        keeps = self._keeps()
+        notice = bool(self.notice.text())
+        shown = ((self.said, notice or keeps), (self.notice, notice), (self.keep_block, keeps),
+                 (self.stop_button, live), (self.withdraw_button, withdraws), (self.back_button, not live and full))
+        for widget, on in shown:                 # what takes the keyboard is in sight before what holds it goes
+            if on:
+                widget.setVisible(True)
+        if stops:
+            self.stop_button.setEnabled(True)
+        focus = QApplication.focusWidget()
+        going = ((self.stop_button, stops), (self.withdraw_button, withdraws), (self.keep_button, keeps),
+                 (self.discard_button, keeps))
+        if any(focus is widget and not stays for widget, stays in going):
+            self._hand_on(stops, withdraws, keeps)
+        for widget, on in shown:
+            if not on:
+                widget.setVisible(False)
+        self.stop_button.setEnabled(stops)
         self.title.setVisible(full)
         self.text_button.setVisible(full)
-        self.stop_button.setVisible(live)
-        self.stop_button.setEnabled(live and not self._stopping)
-        self.back_button.setVisible(not live and full)
         self.stage_line.setVisible(full and bool(self.stage_line.words()))
         self.axis.setVisible(axis)
         self.axis_caption.setVisible(axis)
@@ -510,12 +589,71 @@ class RunView(QWidget):
         self.body.setVisible(full)
         self.text_block.setVisible(full and self._text_shown)
 
+    def _hand_on(self, stops: bool, withdraws: bool, keeps: bool) -> None:
+        """The keyboard, held by a control of the page that goes or is greyed, to where the page's state now puts
+        it (``_arrange`` says where)."""
+        if self._mode == "live":
+            target = self.withdraw_button if withdraws else self.stop_button if stops else self.sentence
+        elif keeps:
+            target = self.keep_button
+        elif self._compact or (self._model is not None and self._model.outcome == "stopped"):
+            target = self.sentence
+        else:
+            target = self.back_button
+        target.setFocus(Qt.OtherFocusReason)
+
+    def _saving(self) -> bool:
+        """Whether the run is saving its posterior, its fit ended: the stop button is greyed then."""
+        return self._model is not None and self._model.stage_kind() == "saving"
+
+    def _keeps(self) -> bool:
+        """Whether the page asks to keep the training its run's stop kept: once the stop has landed with a note of
+        one, until it is answered."""
+        model = self._model
+        return (self._mode == "ended" and not self._compact and not self._answered and model is not None
+                and model.outcome == "stopped" and model.kept_fit is not None)
+
+    @staticmethod
+    def _kept_nothing(model: RunModel) -> bool:
+        """Whether a training stopped before its fit began, so that its stop kept no training."""
+        return (model.outcome == "stopped" and model.kept_fit is None and model.spec.word in questions.TRAINING_WORDS
+                and not model.epochs() and model.stage_kind() not in ("fit", "saving"))
+
     # ── the page's own actions ──
     def _stop(self) -> None:
-        """The stop button: the live run is asked to stop at its next point where a stop is taken."""
-        if self._mode == "live":
-            from .controller import controller
-            controller().request_stop()
+        """The stop button: the run's question first, for the stage it is in (none for a run whose stop loses
+        nothing), then, on its other answer, the live run is asked to stop at its next point where a stop is
+        taken. A run that ended while the question was open is not stopped: the page says it was too late."""
+        if self._mode != "live" or self._model is None or not self.stop_button.isEnabled():
+            return
+        from .controller import controller
+        held = controller()
+        question = questions.stop_question(held.status, self._model)
+        if question is not None and not ask(self.window(), question.title, question.sentence, question.safe,
+                                            question.other, loses_work=question.loses_work,
+                                            beneath=question.beneath or None):
+            return
+        held.request_stop()
+
+    def _withdraw(self) -> None:
+        """"Don't stop after all": the stop asked for is withdrawn."""
+        from .controller import controller
+        controller().withdraw_stop()
+
+    def _keep(self) -> None:
+        """"Keep": the training the stop kept stays kept, as a question nobody answers leaves it, and the question
+        goes."""
+        self._answered = True
+        self._arrange()
+
+    def _discard(self) -> None:
+        """"Discard": the training the stop kept is deleted, and the page says so; or the store's own sentence says
+        why it was not, and the question stays."""
+        from .controller import controller
+        refused = controller().discard(self._run)
+        if refused is None:
+            self._answered = True
+        self.say(questions.DISCARDED_TEXT if refused is None else refused)
 
     def _toggle_text(self) -> None:
         """Show the full text, or hide it again."""
