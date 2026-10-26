@@ -179,6 +179,12 @@ def _training(**changed) -> RunSpec:
                                 "memory_limit": 6.0}, **changed})
 
 
+def _load() -> RunSpec:
+    """A run that only loads a record, as the prior's page describes one."""
+    return RunSpec("Prior load", ("inference", "prior"), stop_button="Stop loading", loads_only=True,
+                   keeps_files=False, stop_asks=False)
+
+
 def _feed(run, *texts_, level="info"):
     run.feed([(text, level) for text in texts_])
 
@@ -2159,18 +2165,23 @@ def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_an
 
 # ── the run's page: in the place of a page's results, drawn from the run's model ──
 def _page_says(view) -> dict:
-    """What the run's page shows, read off its parts: its sentence, its stages as markers and words, the four
-    moments of its time axis and the two sides of the line under it, the line that names what follows, the rows of
-    its health table as written in their cells, and its messages, each a marker and its words."""
-    shown = view.axis.isVisibleTo(view)
+    """What the run's page shows, read off its parts, each only while it is in sight: its sentence, its stages as
+    markers and words, the four moments of its time axis and the two sides of the line under it, the line that names
+    what follows, the rows of its health table as written in their cells, and its messages, each a marker and its
+    words."""
+    def shown(part):
+        return part.isVisibleTo(view)
+
     table = view.health.view.model()
-    return {"sentence": view.sentence.text(), "stages": view.stage_line.words(),
-            "axis": view.axis._times if shown else None,
-            "caption": (view.axis_caption.started.text(), view.axis_caption.words.text()) if shown else None,
-            "follows": view.follows.text() if view.follows.isVisibleTo(view) else "",
+    return {"sentence": view.sentence.text(), "stages": view.stage_line.words() if shown(view.stage_line) else (),
+            "axis": view.axis._times if shown(view.axis) else None,
+            "caption": ((view.axis_caption.started.text(), view.axis_caption.words.text())
+                        if shown(view.axis_caption) else None),
+            "follows": view.follows.text() if shown(view.follows) else "",
             "health": [tuple(table.index(row, column).data().strip() for column in range(3))
-                       for row in range(table.rowCount())] if view.health.isVisibleTo(view) else [],
-            "messages": [(row.kind, row.sentence.plain_text()) for row in view.message_rows()]}
+                       for row in range(table.rowCount())] if shown(view.health) else [],
+            "messages": ([(row.kind, row.sentence.plain_text()) for row in view.message_rows()]
+                         if shown(view.messages) else [])}
 
 
 def _model_says(model, now, right) -> dict:
@@ -2190,24 +2201,31 @@ def _model_says(model, now, right) -> dict:
 
 def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path):
     """While a page's run shows, the run's page stands in the right-hand column in the place of the page's
-    figures, which it holds under its messages; the form stays at the left, in sight and locked. A run that
-    finishes gives the column back, the figures in their place and "How the run went" above them, which opens the
-    run's page again, ended. A run that is stopped or fails keeps its page, ended, until "Back to the form". A run
-    that only loads a record never takes the column, and a refusal made before anything was spent gives it back
-    with no link. A run that is over is drawn again from its two files alone, past."""
+    figures, which it holds in sight under its messages; the form stays at the left, in sight and locked. A run
+    that finishes gives the column back, the figures in their place at the heights they had and "How the run went"
+    above them, which opens the run's page again, ended. A run that is stopped or fails keeps its page, ended, until
+    "Back to the form", and the layout saved meanwhile keeps the heights the figures had in their place. A run that
+    only loads a record never takes the column, and a refusal made before anything was spent gives it back with no
+    link. A run that is over is drawn again from its two files alone, past."""
     from core.refusals import Refusal
+    from core.gui import settings
     from core.gui.run import history
     from tests._fixtures import asked, build_run_host, qt_app
     from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
     host = build_run_host()
-    view, text = host.run_view, RunText(held)
+    view, text, split = host.run_view, RunText(held), host.results_split
+    host.figure_stack.add_figure("a figure", b"")
+    shown_off_screen(host, 1000, 800)
+    store, key = settings.settings(), f"layout/{host.layout_key()}/results"
 
     def column():
-        """Which page the column shows, whether the run's page holds the figures, the link above the figures,
-        and the form's state: in sight, and free."""
-        return (host.results.currentWidget().objectName(), view.isAncestorOf(host.figure_stack),
+        """Which page the column shows, whether the run's page holds the figures in sight under its messages, the
+        link above the figures, and the form's state: in sight, and free."""
+        return (host.results.currentWidget().objectName(),
+                view.isAncestorOf(host.figure_stack) and view.figures.isVisibleTo(view),
                 view.how_link.isVisibleTo(host), host.controls_scroll.isVisibleTo(host), host.controls.isEnabled())
 
     def page():
@@ -2225,13 +2243,17 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path):
     assert view.stop_button.text() == "Stop training…" and host.results_split.indexOf(host.figure_stack) == -1
     ended(finished, StandIn.release)
     assert column() == ("figures", False, True, True, True), "a finished run kept the column"
-    assert host.results_split.indexOf(host.figure_stack) == 0, "the figures did not go back to their place"
+    assert split.indexOf(host.figure_stack) == 0, "the figures did not go back to their place"
     view.how_link.click()
     assert column() == ("run", True, False, True, True)
     assert page() == ("ended", False, True, "Training retrain_3 finished.")
     view.back_button.click()
     assert column() == ("figures", False, True, True, True)
 
+    split.setSizes([sum(split.sizes()) - 150, 150])         # the figures and the page's own lines, as a person set them
+    heights = split.sizes()
+    host.save_layout(store)
+    saved = store.value(key)
     for how, said in ((lambda stand_in: view.stop_button.click(), "Training retrain_3 was stopped."),
                       (lambda stand_in: stand_in.fail(RuntimeError("the run broke")), "Training retrain_3 failed.")):
         stand_in = StandIn()
@@ -2241,8 +2263,12 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path):
         ended(stand_in, how)
         assert column() == ("run", True, False, True, True), f"the page went before 'Back to the form': {said}"
         assert page() == ("ended", False, True, said)
+        host.save_layout(store)
+        assert store.value(key) == saved, f"the layout saved while the run's page held the figures lost them: {said}"
         view.back_button.click()
         assert column() == ("figures", False, True, True, True), said
+        assert (split.indexOf(host.figure_stack), split.sizes()) == (0, heights), (
+            f"the figures did not go back to their place at the heights they had: {said}")
     assert asked().kind == "error", "the failure was not shown"
     last = held.status.run
     record = history.read(tmp_path / "runs" / f"{last}.json")
@@ -2268,7 +2294,11 @@ def test_the_run_page_shows_what_the_model_says(tmp_path, monkeypatch):
     """A training's lines and rows, fed through the stand-in run with the window's clock moved by hand, are drawn
     on its page as its model reads them, at each moment: the sentence, the stages with their markers and words, the
     time axis's four moments and the line under it, the line that names what follows, the health table's rows and
-    the messages, newest first, each opening with its marker's word and its date."""
+    the messages, newest first, each opening with its marker's word and its date; each part read only while it is in
+    sight. The health table's cells are drawn as the look draws a value and a state: a figure's number apart from
+    what follows it, words alone plain, a state's marker beside its word."""
+    from PySide6.QtCore import Qt
+    from core.gui.widgets.rule_table import StateCell, TextCell, ValueCell
     from tests._fixtures import build_run_host, qt_app
     from tests._runs import Clock, RunText, StandIn, start_run, turn_until
     app = qt_app()
@@ -2313,6 +2343,14 @@ def test_the_run_page_shows_what_the_model_says(tmp_path, monkeypatch):
     assert page == _model_says(held.model, clock(), held.model.axis().unknown)
     assert [stage[1] for stage in page["stages"]] == ["done", "done", "now", "later"], page["stages"]
     assert len(page["health"]) == 3 and len(page["messages"]) == 2, page
+    table = view.health.view.model()
+    cells = [[table.index(row, column).data(Qt.UserRole) for column in range(3)] for row in range(table.rowCount())]
+    assert cells == [                       # a number set apart from what follows it; a state's marker beside its word
+        [TextCell("Failed simulations", wrap=True), ValueCell("0.15", "%"), StateCell("fine", "Fine")],
+        [TextCell("Unusable driven recordings", wrap=True), ValueCell("", "Counted when simulation ends"),
+         TextCell("")],
+        [TextCell("Graphics-card memory", wrap=True), ValueCell("10.4", "of 15.9 GiB, limit 6 GiB, during simulation"),
+         StateCell("fine", "Fine")]], cells
     stand_in.release()
     turn_until(app, lambda: not held.is_live())
 
@@ -2322,7 +2360,8 @@ def test_the_full_text_is_hidden_until_asked_and_follows_the_end_only_while_at_t
     one run's lines, the run's controller handing it each line as it says it, and the newest 5,000 of them,
     headed "Earlier lines are in the file." once older lines have gone. While it stands at its end it follows the
     end, also through lines that came while it was hidden; scrolled up, a line that arrives moves nothing, and
-    lines that go from the top leave the line in sight where it was."""
+    lines that go from the top leave the line in sight where it was, the first time, when the head comes above
+    them, as later."""
     from core.gui.widgets.log_pane import LINES_KEPT
     from tests._fixtures import build_run_host, qt_app
     from tests._runs import Clock, StandIn, start_run, turn_until
@@ -2364,7 +2403,16 @@ def test_the_full_text_is_hidden_until_asked_and_follows_the_end_only_while_at_t
     lines(10)
     assert (bar.value(), full.firstVisibleBlock().text()) == (5, top), "a line that arrived moved the text"
     bar.setValue(bar.maximum())
-    for _ in range(60):
+    for _ in range(49):
+        lines(100)
+        assert bar.value() == bar.maximum(), count
+    assert not full.is_cut()
+    bar.setValue(bar.maximum() // 2)                    # scrolled up when the first lines go and the head comes
+    top = full.firstVisibleBlock().text()
+    lines(100)
+    assert (full.is_cut(), full.firstVisibleBlock().text()) == (True, top), "the head's arrival moved the text"
+    bar.setValue(bar.maximum())
+    for _ in range(10):
         lines(100)
         assert bar.value() == bar.maximum(), count
     shown = full.toPlainText().split("\n")
@@ -2477,7 +2525,8 @@ def test_live_simulation_keeps_its_own_view_under_the_runs_sentence(tmp_path, mo
 def test_when_a_run_starts_from_the_keyboard_the_keyboard_goes_to_its_stop_button(tmp_path, monkeypatch):
     """A run started from a page's form with a key leaves the keyboard on the run page's stop button, where the
     form's lock would leave it on nothing; it is given for no key of its own, so its ring shows while the keyboard
-    has the turn. A run started while the keyboard is elsewhere leaves it where it was."""
+    has the turn. A run started while the keyboard is elsewhere leaves it where it was. A load started with a key,
+    whose page never takes the column, gives the keyboard to no stop button out of sight."""
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton
@@ -2513,6 +2562,18 @@ def test_when_a_run_starts_from_the_keyboard_the_keyboard_goes_to_its_stop_butto
             assert QApplication.focusWidget() is field and focus[given_before:] == [], focus[given_before:]
             second.release()
             turn_until(app, lambda: not held.is_live())
+    loads, load, third = build_run_host(), QPushButton("Load the record"), StandIn(word="Prior load")
+    loads.controls_layout.addWidget(load)
+    load.clicked.connect(lambda: start_run(loads, third, spec=_load()))
+    shown_off_screen(loads, 1000, 700)
+    with in_front(loads):
+        load.setFocus(Qt.TabFocusReason)
+        given_before = len(focus)
+        QTest.keyClick(load, Qt.Key_Space)
+        assert held.is_live() and loads.results.currentWidget() is loads.figures
+        assert focus[given_before:] == [], "a load's start gave the keyboard to a stop button out of sight"
+        third.release()
+        turn_until(app, lambda: not held.is_live())
 
 
 def test_the_run_page_draws_with_the_looks_devices_at_every_scaling(tmp_path):
@@ -2522,7 +2583,9 @@ def test_the_run_page_draws_with_the_looks_devices_at_every_scaling(tmp_path):
     places the look gives the present; the sentence in the lettering face at the heading's size and at weight 400,
     read from its font; the full text in the fixed-width face. Drawn as the look's suite draws, the page shown
     where no screen sees it and rendered into a picture at each scaling; no assertion reads the pixels of
-    lettering."""
+    lettering. Laid out: the head's title at its left takes the room its buttons leave, each button at its own
+    width and the stop button at the right; the stages stand on one line, two to a line when the page is too
+    narrow for them, and on one line again when it is wide."""
     import array
     import math
     from PySide6.QtCore import QPoint, QRect
@@ -2571,5 +2634,25 @@ def test_the_run_page_draws_with_the_looks_devices_at_every_scaling(tmp_path):
                          and not any(box.contains(QPoint(int((at % across) / ratio), int((at // across) / ratio)))
                                      for box in allowed)]
                 assert stray == [], (dark, ratio, stray[:5])
+            title, show, stop = view.title.geometry(), view.text_button.geometry(), view.stop_button.geometry()
+            gap = design.scaled(design.GAP["head_buttons"])
+            assert (title.left(), title.right() + 1 + gap, show.right() + 1 + gap, stop.right() + 1, show.width(),
+                    stop.width()) == (0, show.left(), stop.left(), view.head.width(),
+                                      view.text_button.sizeHint().width(), view.stop_button.sizeHint().width()), (
+                dark, title, show, stop, view.head.width())
+
+    def places():
+        grid = view.stage_line._grid
+        return [grid.getItemPosition(grid.indexOf(holder))[:2] for holder, *_parts in view.stage_line._items]
+
+    with _the_look(False):
+        _settle()
+        assert places() == [(0, 0), (0, 1), (0, 2), (0, 3)], places()
+        host.resize(700, 1000)                          # too narrow for the four stages on one line
+        _settle()
+        assert places() == [(0, 0), (0, 1), (1, 0), (1, 1)], places()
+        host.resize(1300, 1000)
+        _settle()
+        assert places() == [(0, 0), (0, 1), (0, 2), (0, 3)], places()
     stand_in.release()
     turn_until(app, lambda: not held.is_live())

@@ -3090,8 +3090,9 @@ def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch, w
         shown = [stack.png_path(i) for i in range(stack.count())]
         assert _tabs(panel) == own and str(earlier.dir) not in (shown[0] or ""), shown
         assert panel.record_picker.key() == earlier.id and "seed 1" in panel.record_line.text()
-        assert (panel.results.currentWidget() is panel.run_view, panel.run_view.isAncestorOf(stack)) == (
-            True, True), "the failed run's page let go of its figures before 'Back to the form'"
+        assert (panel.results.currentWidget() is panel.run_view, panel.run_view.isAncestorOf(stack),
+                panel.run_view.figures.isVisibleTo(panel.run_view)) == (True, True, True), (
+            "the failed run's page let go of its figures before 'Back to the form', or holds them out of sight")
         panel.run_view.back_button.click()
         assert (panel.results.currentWidget() is panel.figures, panel.results_split.indexOf(stack), _tabs(panel)) == (
             True, 0, own), "'Back to the form' did not hand the figures back to their place"
