@@ -152,12 +152,16 @@ class RecordViewer(QObject):
 
     ``busy`` answers "is this panel's run live?". While it is, nothing opens: the stack then holds
     what the run's watcher is landing.
+
+    ``to_figures``, when the panel hands one, is called before figures open: the panel then shows its
+    stack where a person sees it, which a stopped or failed run's page holds out of its place.
     """
 
-    def __init__(self, picker, label, stack, *, busy):
+    def __init__(self, picker, label, stack, *, busy, to_figures=None):
         # Parented to the picker, so the coalesced timer dies with the widget it reads.
         super().__init__(picker)
         self._picker, self._label, self._stack, self._busy = picker, label, stack, busy
+        self._to_figures = to_figures
         self._opened: list = []              # the pages this viewer opened and may close
         self._open_key = None                # the record those pages show, or None
         self._settle_queued = False
@@ -209,6 +213,8 @@ class RecordViewer(QObject):
             self.close_figures()
 
     def _open(self, ref) -> None:
+        if self._to_figures is not None:
+            self._to_figures()
         self.close_figures()
         if not ref:
             return

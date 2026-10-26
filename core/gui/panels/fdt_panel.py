@@ -123,7 +123,8 @@ class FdtPanel(BasePanel):
         # and opens none of its figures -- re-opening an old run's pictures on every start is
         # behaviour nobody asked for. Figures open only on a user's pick (record_view.RecordViewer).
         self._viewer = record_view.RecordViewer(self.record_picker, self.record_line,
-                                                self.figure_stack, busy=self.is_running)
+                                                self.figure_stack, busy=self.is_running,
+                                                to_figures=self._to_the_figures)
         # Every end of a run is heard by a method of this panel's own, so a deleted panel leaves no connection.
         controller().run_ended.connect(self._on_run_ended)
 

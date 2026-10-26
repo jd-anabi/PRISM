@@ -3098,6 +3098,38 @@ def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch, w
             True, 0, own), "'Back to the form' did not hand the figures back to their place"
 
 
+def test_a_record_picked_while_a_failed_runs_page_shows_opens_its_figures_in_their_place(tmp_path, monkeypatch):
+    """A failed measurement's page holds the page's figures under its messages until "Back to the form". A saved
+    record picked meanwhile gives the column back first, as "Back to the form" does, so that the record's figures
+    open where a person sees them, beside the failed run's own and under "How the run went"."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.panels import fdt_panel
+    from tests._fixtures import qt_app
+
+    app = qt_app()
+
+    def run_fdt(cfg, *, skip_sanity, confirm_production, writer, seed=None):
+        with writer:
+            writer.figure_path("x one").write_bytes(b"png")
+            raise RuntimeError("the measurement failed after its first figure")
+
+    monkeypatch.setattr(fdt_panel, "run_fdt", run_fdt)
+    store = ArtifactStore(tmp_path)
+    with use_store(store):
+        earlier = _saved_fdt_record(store, "earlier", "single", 1, ["x one", "x two"])
+        panel = build_part(fdt_panel.FdtPanel)
+        combo, stack = panel.record_picker.combo, panel.figure_stack
+        panel._run()
+        _wait_for_run(app, panel, limit=60.0)
+        _settle(app)
+        assert (panel.results.currentWidget() is panel.run_view, _tabs(panel)) == (True, ["x one"]), _tabs(panel)
+        _choose(combo, combo.findData(earlier.id))
+        assert (panel.results.currentWidget() is panel.figures, panel.results_split.indexOf(stack),
+                panel.run_view.how_link.isVisibleTo(panel)) == (True, 0, True), (
+            "a record picked while the failed run's page showed opened its figures out of sight")
+        assert sorted(_tabs(panel)) == ["x one", "x one", "x two"], _tabs(panel)
+
+
 def test_record_summary_never_prints_none():
     """A null in a record means "not recorded" or "does not apply", and the line must say nothing
     rather than print Python's ``None``. A real SWEEP's settings carry two nulls on every record --

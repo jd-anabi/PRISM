@@ -2145,12 +2145,13 @@ def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_an
     """A start that raises once every panel is locked and before its worker is queued -- here a page hands its
     run a folder to watch of a shape no folder has -- raises to the page as it came, and is taken back: no run is
     live, the status is published idle again, every panel is free, the page's results are given back from the
-    run's page, and the run's two files are removed."""
+    run's page, and the run's two files are removed. A load taken back so, which never took the column, leaves a
+    stopped run's page where it was."""
     from core.gui.panels.base_panel import BasePanel
     from core.gui.run.model import IDLE
     from tests._fixtures import build_run_host, qt_app
-    from tests._runs import Clock, RunText, StandIn, start_run
-    qt_app()
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
     text, host, other = RunText(held), build_run_host(), build_run_host()
     with pytest.raises(TypeError):
@@ -2161,6 +2162,59 @@ def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_an
     assert (host.results.currentWidget() is host.figures, host.run_view.isAncestorOf(host.figure_stack)) == (
         True, False), "the run's page kept the page's results for a run that never started"
     assert list((tmp_path / "runs").iterdir()) == [], "a start taken back left a file"
+    start_run(host, StandIn(), spec=_training())
+    host.run_view.stop_button.click()
+    turn_until(app, lambda: not held.is_live())
+    with pytest.raises(TypeError):
+        start_run(host, StandIn(word="Prior load"), spec=_load(), watch_dir=5)
+    assert (host.results.currentWidget() is host.run_view, host.run_view.mode, host.run_view.sentence.text()) == (
+        True, "ended", "Training retrain_3 was stopped."), "a load taken back lost the stopped run's page"
+
+
+@pytest.mark.parametrize("where", ["at its end", "as it is handed the run", "at its first drawing"])
+def test_a_run_page_that_cannot_be_drawn_holds_up_neither_the_runs_start_nor_its_end(where, tmp_path,
+                                                                                    monkeypatch):
+    """The run's page is drawn inside the run's own sequence and never in its way. A page that cannot be drawn
+    as its run ends leaves that end whole -- every panel free, the status published, the end said once, the run's
+    payload let go -- and the failure goes to the program's last-resort error. One that cannot be drawn as its run
+    starts, as it is handed the run or at its first drawing, fails the start, which is taken back like any other:
+    no run live, the status published idle, every panel free, the page's results given back, no file kept."""
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.run.model import IDLE
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text, host, other = RunText(held), build_run_host(), build_run_host()
+    view, hooked = host.run_view, []
+    monkeypatch.setattr("sys.excepthook", lambda kind, error, trace: hooked.append(str(error)))
+    drawn = view.show_status
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("the run's page cannot be drawn")
+
+    if where == "at its end":
+        monkeypatch.setattr(view, "show_status",
+                            lambda status, model: drawn(status, model) if status.live else broken())
+        stand_in = StandIn()
+        start_run(host, stand_in, spec=_training())
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())
+        app.processEvents()
+        run = held._run
+        assert ([status.state for status in text.statuses], [status.outcome for status in text.ended]) == (
+            ["starting", "ended"], ["finished"]), "a page that could not be drawn held up the run's end"
+        assert (run.worker, run.token, held.status.state) == (None, None, "ended"), "the run's payload was kept"
+        assert hooked == ["the run's page cannot be drawn"], hooked
+    else:
+        monkeypatch.setattr(view, "begin" if where == "as it is handed the run" else "show_status", broken)
+        with pytest.raises(RuntimeError, match="the run's page cannot be drawn"):
+            start_run(host, StandIn(), spec=_training())
+        assert (held.is_live(), held.status) == (False, IDLE), held.status
+        assert [status.state for status in text.statuses][-1:] == ["idle"], text.statuses
+        assert host.results.currentWidget() is host.figures, "the run's page kept the page's results"
+        assert list((tmp_path / "runs").glob("*")) == [], "a start taken back left a file"
+    assert all(panel.controls.isEnabled() for panel in BasePanel._instances) and other.controls.isEnabled()
 
 
 # ── the run's page: in the place of a page's results, drawn from the run's model ──
@@ -2205,8 +2259,10 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path):
     that finishes gives the column back, the figures in their place at the heights they had and "How the run went"
     above them, which opens the run's page again, ended. A run that is stopped or fails keeps its page, ended, until
     "Back to the form", and the layout saved meanwhile keeps the heights the figures had in their place. A run that
-    only loads a record never takes the column, and a refusal made before anything was spent gives it back with no
-    link. A run that is over is drawn again from its two files alone, past."""
+    only loads a record never takes the column nor the page that shows there: after a finish "How the run went"
+    stays above the figures and opens the finished run's page, and a stopped run's page stays, its sentence and its
+    full text with it, while a load runs and after. A refusal made before anything was spent gives the column back
+    with no link. A run that is over is drawn again from its two files alone, past."""
     from core.refusals import Refusal
     from core.gui import settings
     from core.gui.run import history
@@ -2244,6 +2300,11 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path):
     ended(finished, StandIn.release)
     assert column() == ("figures", False, True, True, True), "a finished run kept the column"
     assert split.indexOf(host.figure_stack) == 0, "the figures did not go back to their place"
+    loads = StandIn(word="Prior load")
+    start_run(host, loads, spec=_load())
+    assert column() == ("figures", False, True, True, False), "a load took the column, or hid 'How the run went'"
+    ended(loads, StandIn.release)
+    assert column() == ("figures", False, True, True, True), "a load's end hid 'How the run went'"
     view.how_link.click()
     assert column() == ("run", True, False, True, True)
     assert page() == ("ended", False, True, "Training retrain_3 finished.")
@@ -2254,8 +2315,9 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path):
     heights = split.sizes()
     host.save_layout(store)
     saved = store.value(key)
-    for how, said in ((lambda stand_in: view.stop_button.click(), "Training retrain_3 was stopped."),
-                      (lambda stand_in: stand_in.fail(RuntimeError("the run broke")), "Training retrain_3 failed.")):
+    for how, said, load in ((lambda stand_in: view.stop_button.click(), "Training retrain_3 was stopped.", True),
+                            (lambda stand_in: stand_in.fail(RuntimeError("the run broke")),
+                             "Training retrain_3 failed.", False)):
         stand_in = StandIn()
         start_run(host, stand_in, spec=_training())
         stand_in.say(_LINES["budget"])
@@ -2265,6 +2327,16 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path):
         assert page() == ("ended", False, True, said)
         host.save_layout(store)
         assert store.value(key) == saved, f"the layout saved while the run's page held the figures lost them: {said}"
+        if load:                                        # a load started from the same page, the run's page in sight
+            kept, loads = view.full_text.lines(), StandIn(word="Prior load")
+            start_run(host, loads, spec=_load())
+            during = (column(), page(), view.full_text.lines() == kept)
+            ended(loads, StandIn.release)
+            assert during == (("run", True, False, True, False), ("ended", False, True, said), True), (
+                "a load took the stopped run's page")
+            assert (column(), page(), view.full_text.lines() == kept) == (
+                ("run", True, False, True, True), ("ended", False, True, said), True), (
+                "a load's end lost the stopped run's page")
         view.back_button.click()
         assert column() == ("figures", False, True, True, True), said
         assert (split.indexOf(host.figure_stack), split.sizes()) == (0, heights), (
@@ -2277,17 +2349,38 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path):
     assert page() == ("past", False, True, "Training retrain_3 failed.")
     assert view.full_text.lines() == live_text, "the past page's full text is not its file's"
 
-    loads = StandIn(word="Prior load")
-    start_run(host, loads, spec=RunSpec("Prior load", ("inference", "prior"), stop_button="Stop loading",
-                                        loads_only=True, keeps_files=False, stop_asks=False))
-    assert column() == ("figures", False, False, True, False), "a load took the column"
-    ended(loads, StandIn.release)
     refused = StandIn()
     start_run(host, refused, spec=_training())
     assert column()[0] == "run"
     ended(refused, lambda stand_in: stand_in.fail(Refusal("The posterior name 'retrain_3' is taken.", field="name")))
     assert column() == ("figures", False, False, True, True), "a refusal before anything was spent kept the column"
-    assert [status.outcome for status in text.ended] == ["finished", "stopped", "failed", "finished", None]
+    assert [status.outcome for status in text.ended] == ["finished", "finished", "stopped", "finished", "failed", None]
+
+
+def test_how_the_run_went_stands_above_the_figures_at_the_looks_gap(tmp_path):
+    """"How the run went" stands above the figures it opens the run's page from at the gap the look sets between a
+    heading and the block under it, at the ordinary text size and at a larger one."""
+    from core.gui import design
+    from tests._fixtures import build_run_host, qt_app
+    from tests._look_helpers import text_size
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    gaps = []
+    for factor in (1.0, 1.5):
+        with text_size(factor):
+            host, stand_in = build_run_host(), StandIn()
+            shown_off_screen(host, 1000, 800)
+            start_run(host, stand_in, spec=_training())
+            stand_in.release()
+            turn_until(app, lambda: not held.is_live())
+            app.processEvents()
+            link, split = host.run_view.how_link, host.results_split
+            assert link.isVisibleTo(host), "a finished run left no 'How the run went'"
+            gaps.append((split.geometry().top() - link.geometry().bottom() - 1,
+                         design.scaled(design.GAP["head_table"])))
+    assert gaps == [(6, 6), (9, 9)], gaps
 
 
 def test_the_run_page_shows_what_the_model_says(tmp_path, monkeypatch):
@@ -2486,11 +2579,14 @@ def test_live_simulation_keeps_its_own_view_under_the_runs_sentence(tmp_path, mo
     """A live simulation, a run with a view of its own, keeps that view where it is: the run's page stands above it
     in its compact form, the sentence and the stop button alone, and its sentence counts the samples shown against
     the samples to come, as the page hands them over with each frame; a stage the run says it begins is named
-    there. At its end the page above the view goes."""
+    there. The stop button stands at the right of the page at its own width. At its end the page above the view
+    goes. When the samples to come cannot be worked out at the start, the run starts all the same, counting
+    none, and meets the failure itself."""
     import numpy as np
     from core.gui.panels import simulate_panel as live
-    from tests._fixtures import build_part, qt_app
+    from tests._fixtures import all_asked, build_part, forget_asked, qt_app
     from tests._runs import Clock, StandIn, turn_until
+    from tests._window_helpers import shown_off_screen
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
     cell = tmp_path / "cell.txt"
@@ -2502,9 +2598,11 @@ def test_live_simulation_keeps_its_own_view_under_the_runs_sentence(tmp_path, mo
     monkeypatch.setattr(live, "run_simulation_stream", stand_in)
     panel = build_part(live.SimulatePanel)
     panel.cell_picker.selected_path = lambda: str(cell)
+    shown_off_screen(panel, 1300, 900)
     view = panel.run_view
     assert not view.isVisibleTo(panel)
     panel._start()
+    app.processEvents()
     assert held.is_live() and held.model.spec.own_view and view.compact
     assert view.isVisibleTo(panel) and panel.results.currentWidget() is panel.figures
     assert panel.results_split.indexOf(panel.live_view) == 0 and panel.live_view.isVisibleTo(panel)
@@ -2513,6 +2611,9 @@ def test_live_simulation_keeps_its_own_view_under_the_runs_sentence(tmp_path, mo
              if getattr(view, name).isVisibleTo(view)]
     assert shown == ["stop_button", "sentence"], shown
     assert view.stop_button.text() == "Stop simulation"
+    stop = view.stop_button.geometry()
+    assert (stop.width(), stop.right() + 1) == (view.stop_button.sizeHint().width(), view.head.width()), (
+        "the compact page's stop button does not stand at the right at its own width", stop, view.head.width())
     panel._on_chunk(np.zeros((1_200, 2)))
     assert view.sentence.text() == "Live simulation is running: 1,200 of 4,000 samples."
     view.set_stage("Recording")                        # a run that says its stages itself
@@ -2520,6 +2621,21 @@ def test_live_simulation_keeps_its_own_view_under_the_runs_sentence(tmp_path, mo
     view.stop_button.click()
     turn_until(app, lambda: not held.is_live())
     assert not view.isVisibleTo(panel) and panel.live_view.isVisibleTo(panel)
+
+    def unplanned(cfg, t_obs):
+        raise RuntimeError("the samples to come cannot be worked out")
+
+    again = StandIn(word="Live simulation")
+    monkeypatch.setattr(live, "plan_stream", unplanned)
+    monkeypatch.setattr(live, "run_simulation_stream", again)
+    forget_asked()
+    panel._start()
+    assert (held.is_live(), all_asked()) == (True, []), (
+        "a count that could not be worked out kept the run from starting")
+    panel._on_chunk(np.zeros((1_200, 2)))
+    assert view.sentence.text() == "Live simulation is starting.", view.sentence.text()
+    again.release()
+    turn_until(app, lambda: not held.is_live())
 
 
 def test_when_a_run_starts_from_the_keyboard_the_keyboard_goes_to_its_stop_button(tmp_path, monkeypatch):
@@ -2574,6 +2690,48 @@ def test_when_a_run_starts_from_the_keyboard_the_keyboard_goes_to_its_stop_butto
         assert focus[given_before:] == [], "a load's start gave the keyboard to a stop button out of sight"
         third.release()
         turn_until(app, lambda: not held.is_live())
+
+
+def test_at_a_runs_end_the_keyboard_its_page_held_goes_to_a_named_place(tmp_path, monkeypatch):
+    """At a run's end a keyboard its page held goes to a named place, given for no key of its own so that its ring
+    shows while the keyboard has the turn: "How the run went" after a finish, which gives the column back to the
+    figures, and "Back to the form" after a failure, whose page stays. A keyboard the page did not hold stays where
+    it was."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    from tests._window_helpers import given, in_front, shown_off_screen
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    host, start, runs = build_run_host(), QPushButton("Start the run"), [StandIn(), StandIn()]
+    host.controls_layout.addWidget(start)
+    start.clicked.connect(lambda: start_run(host, runs[0], spec=_training()))
+    shown_off_screen(host, 1000, 700)
+    view = host.run_view
+    focus = given(monkeypatch)
+    with in_front(host):
+        for end, place in ((StandIn.release, view.how_link),
+                           (lambda run: run.fail(RuntimeError("the run broke")), view.back_button)):
+            start.setFocus(Qt.TabFocusReason)
+            QTest.keyClick(start, Qt.Key_Space)
+            assert QApplication.focusWidget() is view.stop_button
+            end(runs.pop(0))
+            turn_until(app, lambda: not held.is_live())
+            assert (QApplication.focusWidget(), focus[-1]) == (place, (place, Qt.OtherFocusReason)), (
+                f"at the run's end the keyboard did not go to '{place.text()}'")
+        view.back_button.click()
+        elsewhere, field = build_run_host(), QLineEdit()
+        elsewhere.figures_layout.addWidget(field)          # beside its figures: no run locks it
+        shown_off_screen(elsewhere)
+        with in_front(elsewhere):
+            field.setFocus(Qt.TabFocusReason)
+            given_before, third = len(focus), StandIn()
+            start_run(host, third, spec=_training())
+            third.release()
+            turn_until(app, lambda: not held.is_live())
+            assert QApplication.focusWidget() is field and focus[given_before:] == [], focus[given_before:]
 
 
 def test_the_run_page_draws_with_the_looks_devices_at_every_scaling(tmp_path):

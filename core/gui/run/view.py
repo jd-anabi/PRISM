@@ -18,8 +18,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
+                               QVBoxLayout, QWidget)
 
 from .. import design, fonts, style
 from ..reported import reported
@@ -210,12 +210,16 @@ class RunView(QWidget):
         self.stop_button = style.set_class(QPushButton(STOP_TEXT), cls="danger")
         self.stop_button.setIcon(painted_icon("stop"))
         # the glyph and the space after it, each scaled by itself and then added
-        self.stop_button.setIconSize(QSize(design.scaled(design.SIZE["marker"]) + design.scaled(design.SIZE["icon_gap"]),
+        self.stop_button.setIconSize(QSize(design.scaled(design.SIZE["marker"])
+                                           + design.scaled(design.SIZE["icon_gap"]),
                                            design.scaled(design.SIZE["marker"])))
         self.stop_button.clicked.connect(self._stop)
         self.back_button = QPushButton(BACK_TEXT)
         self.back_button.clicked.connect(self.back.emit)
         head.addWidget(self.title, 1)
+        # The room the buttons leave goes to the title, or, in the compact form, where the title is not shown, to
+        # this stretch: never to a button, which keeps its own width at the right.
+        head.addStretch(0)
         for button in (self.text_button, self.stop_button, self.back_button):
             head.addWidget(button, 0, Qt.AlignTop)
 
@@ -366,11 +370,17 @@ class RunView(QWidget):
         self.full_text.append_lines(batch)
 
     def show_status(self, status, model: RunModel | None) -> None:
-        """Draw the run as ``model`` reads it now, live or ended as ``status`` says."""
+        """Draw the run as ``model`` reads it now, live or ended as ``status`` says. A page that holds the keyboard
+        when its run ends gives it to "Back to the form", for no key of its own: the stop button that held it is
+        gone."""
+        focus = QApplication.focusWidget()
+        keys = self._mode == "live" and not status.live and focus is not None and self.isAncestorOf(focus)
         self._model = model
         self._mode = "live" if status.live else "ended"
         self._stopping = status.stop_requested
         self._draw()
+        if keys and self.back_button.isVisibleTo(self):
+            self.back_button.setFocus(Qt.OtherFocusReason)
 
     def show_past(self, record: dict, text: Path | None) -> None:
         """Draw a run that is over from its two files alone: ``record``, its history, and ``text``, its text

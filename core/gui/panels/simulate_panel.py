@@ -124,14 +124,17 @@ class SimulatePanel(BasePanel):
             frame_steps = require_at_least("frame_steps", self.frame_steps.value_or_none(), 1)
             fps = require_positive("fps", self.fps.value_or_none())
             cfg = build_stream_config(model, cell)
-            plan = plan_stream(cfg, t_obs)           # the samples the stream will show: one per subsampled step
-            samples = -(-plan.total_steps // plan.subsample_factor)
         except Refusal as e:                         # a box, a cell or a model problem: the yellow box
             self._refusal(e)
             return
         except Exception as e:                       # noqa: BLE001 -- a bug in the builder: the red box
             self._on_error(e, traceback.format_exc())
             return
+        try:
+            plan = plan_stream(cfg, t_obs)           # the samples the stream will show: one per subsampled step
+            samples = -(-plan.total_steps // plan.subsample_factor)
+        except Exception:                            # noqa: BLE001 -- the run works its plan out again, and says so
+            samples = 0                              # no count: the page then counts no samples
         self.live_view.set_displacement_unit(cfg.length_unit or "nm")   # label the trace y-axis in cell units
         self.live_view.reset()
         self._record = []                                    # a new run: drop the previous recording

@@ -114,7 +114,8 @@ class CrossValPanel(BasePanel):
         # The saved-sweep viewer, built AFTER the restore so a launch fills the line and opens no
         # figures -- FdtPanel.__init__ gives the reason.
         self._viewer = record_view.RecordViewer(self.record_picker, self.record_line,
-                                                self.figure_stack, busy=self.is_running)
+                                                self.figure_stack, busy=self.is_running,
+                                                to_figures=self._to_the_figures)
         # Every end of a run is heard by a method of this panel's own, so a deleted panel leaves no connection.
         controller().run_ended.connect(self._on_run_ended)
 

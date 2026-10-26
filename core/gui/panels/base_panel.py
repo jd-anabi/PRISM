@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 
 from core.refusals import Refusal
 
+from .. import design
 from .. import fields as gui_fields
 from ..design import CONTROLS_MIN_W, DEFAULT_RESULTS_SPLIT, DEFAULT_SPLIT
 from ..reported import reported
@@ -155,6 +156,8 @@ class BasePanel(QWidget):
         self.figures.setObjectName("figures")
         self.figures_layout = QVBoxLayout(self.figures)
         self.figures_layout.setContentsMargins(0, 0, 0, 0)
+        # the link over the figures as a heading over its block
+        self.figures_layout.setSpacing(design.scaled(design.GAP["head_table"]))
         self.figures_layout.addWidget(self.run_view.how_link, 0, Qt.AlignLeft)
         self.figures_layout.addWidget(self.results_split, 1)
         self.results = QStackedWidget()
@@ -257,17 +260,31 @@ class BasePanel(QWidget):
         """This page's run has ended, as ``status`` says. A run that finished gives the column back to the
         figures, "How the run went" above them; one that ended into idle (a refusal before anything was spent, a
         run that keeps no file) gives it back with no link; a stopped or a failed run keeps its page until "Back
-        to the form". Called by the run's controller, once every panel is free again."""
+        to the form"; a run that only loads a record leaves the column as it is. When the keyboard was on the run's
+        page, a finish gives it to "How the run went", for no key of its own. Called by the run's controller, once
+        every panel is free again and the run's page has been drawn ended."""
+        if status.loading:
+            return
+        focus = QApplication.focusWidget()
+        keys = focus is not None and self.run_view.isAncestorOf(focus)
         if status.state == "idle":
             self.show_figures()
         elif status.outcome == "finished":
             self.show_figures()
             self.run_view.how_link.setVisible(True)
+            if keys:
+                self.run_view.how_link.setFocus(Qt.OtherFocusReason)
 
     def _back_to_the_form(self) -> None:
         """"Back to the form": the figures again, "How the run went" above them."""
         self.show_figures()
         self.run_view.how_link.setVisible(True)
+
+    def _to_the_figures(self) -> None:
+        """The figures in sight before a saved record's are opened among them: a run's page that shows them gives
+        the column back, as "Back to the form" does."""
+        if self.results.currentWidget() is self.run_view:
+            self._back_to_the_form()
 
     def set_controls_enabled(self, enabled: bool):
         """Lock the whole left-hand column while a task runs.
