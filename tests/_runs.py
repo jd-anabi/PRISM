@@ -34,9 +34,10 @@ STOP_LINE = "The stand-in run reaches its next line."
 #: How long a stand-in run waits, with nothing told it, before it gives up and raises: a run its test never
 #: released ends, and holds no thread of the pool when the process ends.
 WAIT_LIMIT_S = 60.0
-#: How long a stand-in run that does not take a stop by itself holds one with no line told it before it takes it
-#: anyway: a test that failed before it had the run say its line still sees the run stop at its end, as the end of
-#: every test asks.
+#: How long a stand-in run that does not take a stop by itself holds one, once the end of its test has asked it to
+#: stop, before it takes it anyway at its own line: a test that failed before it had the run say its line still sees
+#: the run stop at its end, as the end of every test asks. Until the end of the test asks, a held stop waits for the
+#: test's own line however long that takes.
 HELD_STOP_S = 5.0
 _LEVELS = {"info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR}
 
@@ -61,9 +62,9 @@ class StandIn:
     taken, or None, and ``stopped`` is set as the stop is taken. ``kept_fit`` is the note of a kept training its stop
     or its failure hands back, as the training stage hands one back (None for none). With ``takes_stops`` False it
     says no line of its own when a stop is asked for: the stop is taken at the next line its test has it say, or,
-    with none said within ``HELD_STOP_S`` of the ask, at its own line. A stop is asked for when the controller's
-    status says so, and also when the run's own token is set with none asked through the controller, as the end of a
-    test sets it for a training saving its posterior."""
+    once the end of the test has asked and none is said within ``HELD_STOP_S``, at its own line. A stop is asked for
+    when the controller's status says so, and also when the run's own token is set with none asked through the
+    controller, as the end of a test sets it for a training saving its posterior."""
 
     def __init__(self, *, word: str = "Training", lines=(), takes_stops: bool = True):
         self.word = word
@@ -119,9 +120,10 @@ class StandIn:
     def __call__(self, *args, fig_sink=None, **kwargs):
         from core.gui.run.controller import controller
         from core.gui.streams import WorkerCancelled
+        from tests import _built
         self.started.set()
         token = getattr(getattr(controller(), "_run", None), "token", None)       # this run's own
-        log, saying, framed, asked_at = logging.getLogger("core"), None, False, None
+        log, saying, framed, ending_at = logging.getLogger("core"), None, False, None
         heard = time.monotonic()
         try:
             while True:
@@ -143,8 +145,9 @@ class StandIn:
                         raise end[1]
                     return end[1]
                 asked = controller().status.stop_requested or (token is not None and token.requested.is_set())
-                asked_at = (asked_at or time.monotonic()) if asked else None
-                held = asked and time.monotonic() - asked_at < HELD_STOP_S
+                # the held stop's fallback, armed only once the end of the test has asked
+                ending_at = (ending_at or time.monotonic()) if asked and _built.ENDING.is_set() else None
+                held = asked and (ending_at is None or time.monotonic() - ending_at < HELD_STOP_S)
                 if asked and (self.takes_stops or not held) and not self._said_stop:
                     self._said_stop, saying = True, STOP_LINE
                     log.info(STOP_LINE)

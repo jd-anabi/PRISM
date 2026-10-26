@@ -99,6 +99,25 @@ def _ended(app, held) -> None:
     turn_until(app, lambda: not held.is_live(), 10)
 
 
+def _note_the_release(monkeypatch, folder, run, text, view) -> list:
+    """Note, as the one-PRISM claim is let go, what the history of the run ``run`` in ``folder`` says of its end, the
+    ends the run's controller has said (heard by ``text``, the last one) and the mode of the run's page ``view``; the
+    list the note is put in."""
+    from core.gui import one_instance
+    from core.gui.run import history
+    released, real = [], one_instance.release
+
+    def release():
+        if not released:
+            record = history.read(folder / f"{run}.json")
+            released.append((None if record is None else record["outcome"],
+                             [status.outcome for status in text.ended][-1:], view.mode))
+        real()
+
+    monkeypatch.setattr(one_instance, "release", release)
+    return released
+
+
 # ── the stop's question ──
 # The table of what each stop asks, by kind of run and stage: the spec, how the run is brought to its stage, and the
 # question: its title, its sentence, what stands beneath it, the other answer, the safe one, and whether the other
@@ -112,6 +131,17 @@ _CASES = {
         _training(), "simulation", ("Stop training?", "The 6,150 batches simulated so far are kept; the batch in "
                                     "progress is not. You can continue from batch 6,150.", "",
                                     "Stop and keep the simulations", "Keep training", False)),
+    "training, its simulation, no batch yet": (
+        _training(), "no batch", ("Stop training?", "Nothing has been simulated yet; the batch in progress is not "
+                                  "kept.", "", "Stop and keep the simulations", "Keep training", False)),
+    "training, its simulation, one batch": (
+        _training(), "one batch", ("Stop training?", "The 1 batch simulated so far is kept; the batch in progress is "
+                                   "not. You can continue from batch 1.", "", "Stop and keep the simulations",
+                                   "Keep training", False)),
+    "training, its rotation off": (
+        _training(facts={"model": "NADROWSKI", "observation": "chi", "narrowed": False, "network": (256, 10),
+                         "rotated": False}), "budget",
+        ("Stop training?", "Nothing has been simulated yet.", "", "Stop training", "Keep training", False)),
     "training, its fit": (
         _training(), "fit", ("Stop training?", "The simulations are kept. The fit stops when the epoch in progress "
                              "ends, up to about 63 minutes from now; every epoch finished so far is kept.", "",
@@ -179,8 +209,14 @@ def test_the_stop_button_names_the_run_and_asks_what_its_stage_keeps(case, tmp_p
     start_run(host, stand_in, spec=spec)
     if stage == "rotation":
         _say(app, stand_in, text, _BUDGET, _ROTATING)
+    elif stage == "budget":
+        _say(app, stand_in, text, _BUDGET)
     elif stage == "simulation":
         _to_the_simulation(app, stand_in, text, held)
+    elif stage == "no batch":
+        _say(app, stand_in, text, _BUDGET, _ROTATING, _ROTATED, _WRITING)
+    elif stage == "one batch":
+        _to_the_simulation(app, stand_in, text, held, done=1)
     elif stage == "fit":
         _to_the_fit(app, stand_in, text, clock, _THREE_EPOCHS)
     elif stage == "last epoch":
@@ -210,8 +246,9 @@ def test_a_stop_during_the_fit_lands_when_the_epoch_ends_and_says_so_meanwhile(t
     never said. Meanwhile the run is stopping, and says when the stop is taken -- before the fit's first epoch, at
     that epoch's end; once an epoch is measured, at that epoch's end, up to about the time an epoch takes -- on its
     page, where the stop button is greyed and "Don't stop after all" stands beside it, at the rail's foot, whose
-    title is that the run is stopping, and on Home, which says the run is stopping."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    title is that the run is stopping, on Home, which says the run is stopping, and on the run's step in the rail.
+    "Don't stop after all" puts each back as the run says it while running, the foot's time counted from the run's
+    start."""
     from core.gui.widgets.page import Sentence
     from tests._window_helpers import shown_off_screen
     app = qt_app()
@@ -219,7 +256,7 @@ def test_a_stop_during_the_fit_lands_when_the_epoch_ends_and_says_so_meanwhile(t
     clock = Clock(_at(8, 19, 2, 11))
     held, window = _controller_on(tmp_path, clock), build_window()
     shown_off_screen(window)
-    host, text = window.panel(ReductionPanel), RunText(held)
+    host, text = window.part("inference").posterior_panel, RunText(held)
     choose(monkeypatch, words="Stop training")
     young = StandIn()
     start_run(host, young, spec=_training())
@@ -231,21 +268,34 @@ def test_a_stop_during_the_fit_lands_when_the_epoch_ends_and_says_so_meanwhile(t
 
     stand_in = StandIn(takes_stops=False)
     start_run(host, stand_in, spec=_training())
+    window._run_started -= 3600                     # the run began an hour ago by the foot's own clock
     _to_the_fit(app, stand_in, text, clock, _THREE_EPOCHS)
-    view = host.run_view
+    view, foot, home = host.run_view, window.shell.rail.foot, window.part("home")
+    step = window.shell.rail.row("training")
+
+    def home_says():
+        return [label.plain_text() for label in home.findChildren(Sentence) if label.isVisibleTo(home)]
+
     view.stop_button.click()
     assert (held.status.state, held.status.stop_requested, held._run.token.requested.is_set()) == (
         "stopping", True, True)
     assert (view.sentence.text(), view.stop_button.isEnabled(), view.withdraw_button.isVisibleTo(view),
             view.withdraw_button.text()) == (_STOPPING_FIT, False, True, "Don't stop after all")
-    foot = window.shell.rail.foot
     assert (foot._marker, foot._title, foot._words, foot.is_button()) == (
         "now", "Training is stopping", _STOPPING_FIT, True), "the foot does not say the run is stopping"
+    assert step.accessibleName() == "Step 3, Training. Now: stopping", "the rail does not say the run is stopping"
     window.go_to("home")
-    home = window.part("home")
-    sentences = [label.plain_text() for label in home.findChildren(Sentence) if label.isVisibleTo(home)]
     assert ("Training retrain_3 is stopping, and no other run can start until it ends. You can still move around and "
-            "read results. Keep PRISM open; you can minimise it.") in sentences, sentences
+            "read results. Keep PRISM open; you can minimise it.") in home_says(), home_says()
+    view.withdraw_button.click()
+    assert (held.status.state, foot._title, foot._words[:5], step.accessibleName()) == (
+        "running", "Running: Training", "1:00:", "Step 3, Training. Now: running"), (
+        "after 'Don't stop after all' the foot or the rail still says the run is stopping, or the foot's time began "
+        "again", foot._title, foot._words)
+    assert ("A run is going in step 3, Training, and no other run can start until it ends. You can still move around "
+            "and read results. Keep PRISM open; you can minimise it.") in home_says(), home_says()
+    view.stop_button.click()
+    assert (held.status.state, foot._title) == ("stopping", "Training is stopping")
     last = _epoch(4, 3)
     stand_in.say(last)
     _ended(app, held)
@@ -306,17 +356,21 @@ def test_a_withdraw_between_the_checks_two_readings_wins_every_time():
     under its lock, which a withdraw takes too. Held, by a gate in place of the lock, between the two readings, the
     run's thread meets a withdraw made meanwhile at the second reading: the withdraw says it came in time, nothing
     is raised, and nothing fired. The other way round, a stop taken first is not withdrawn. The gate holds the run's
-    thread alone: the withdraw passes it."""
+    thread alone: the withdraw passes it, and takes the lock all the same, each way round (the gate notes the thread
+    of each who enters)."""
     from core.gui.streams import CancelToken, WorkerCancelled
 
     class Gate:
-        """The token's lock, holding the run's thread at its door until it is opened; any other thread passes."""
+        """The token's lock, holding the run's thread at its door until it is opened; any other thread passes. The
+        name of each thread that enters is noted, in the order they came."""
 
         def __init__(self, held_thread_name):
             self._inner, self._held = threading.Lock(), held_thread_name
             self.reached, self.opened = threading.Event(), threading.Event()
+            self.entered = []
 
         def __enter__(self):
+            self.entered.append(threading.current_thread().name)
             if threading.current_thread().name == self._held:
                 self.reached.set()
                 self.opened.wait(10)
@@ -327,6 +381,7 @@ def test_a_withdraw_between_the_checks_two_readings_wins_every_time():
             self._inner.release()
             return False
 
+    mine = threading.current_thread().name
     for withdraw_first in (True, False):
         token, said = CancelToken(), {}
         token._lock = gate = Gate("the run")
@@ -349,13 +404,13 @@ def test_a_withdraw_between_the_checks_two_readings_wins_every_time():
             said["withdrawn"] = token.withdraw()
             gate.opened.set()
             thread.join(10)
-            assert (said, token.fired, token.requested.is_set()) == (
-                {"withdrawn": True, "raised": False}, False, False), said
+            assert (said, token.fired, token.requested.is_set(), mine in gate.entered) == (
+                {"withdrawn": True, "raised": False}, False, False, True), (said, gate.entered)
         else:
             thread.join(10)
             said["withdrawn"] = token.withdraw()
-            assert (said, token.fired, token.requested.is_set()) == (
-                {"raised": True, "withdrawn": False}, True, True), said
+            assert (said, token.fired, token.requested.is_set(), gate.entered) == (
+                {"raised": True, "withdrawn": False}, True, True, ["the run", mine]), (said, gate.entered)
 
 
 def test_live_simulations_and_a_loads_stop_ask_nothing_and_cannot_be_withdrawn(tmp_path):
@@ -573,7 +628,8 @@ def test_closing_during_a_run_asks_and_keeps_running_by_default(tmp_path, monkey
     """Closing the window while a run is live asks first, naming the run, how long it has run, where it is and what
     a stop keeps; "Keep running", the safe answer, is what a question nobody answers gives: the window stays, and
     the run goes on. With a stop asked for already, it asks whether to close once the run has stopped, "Wait" the
-    safe answer. The second answer is drawn as losing work where the stop's own is."""
+    safe answer. The second answer is drawn as losing work where the stop's own is. A training in its simulation
+    is said to be there, at the batch it has reached; a measurement says once how long it has run."""
     from core.gui.panels.reduction_panel import ReductionPanel
     from tests._window_helpers import shown_off_screen
     app = qt_app()
@@ -616,6 +672,28 @@ def test_closing_during_a_run_asks_and_keeps_running_by_default(tmp_path, monkey
                                          "when it finishes, so nothing of this one is kept.", True)
     check.release()
     _ended(app, held)
+    measuring = StandIn()
+    start_run(host, measuring, spec=RunSpec("Measurement", ("temperature", "one_cell"), name="cell_a_3oct",
+                                            stop_button="Stop measurement…"))
+    clock.advance(4_320)
+    window.close()
+    assert (asked().sentence, asked().beneath, asked().loses_work) == (
+        "Measurement cell_a_3oct is running.", "It has been running for 1 hour 12 minutes. The record cell_a_3oct is "
+                                               "kept, marked unfinished, with what it has measured so far. A "
+                                               "measurement cannot be continued; to finish it, it is measured again "
+                                               "from the start.", True)
+    measuring.release()
+    _ended(app, held)
+    simulating = StandIn()
+    start_run(host, simulating, spec=_training())
+    _to_the_simulation(app, simulating, text, held)
+    window.close()
+    assert (asked().sentence, asked().beneath, asked().loses_work) == (
+        "Training retrain_3 is running.", "It has been running for less than a minute and is in its simulation, at "
+                                          "batch 6,150. The 6,150 batches simulated so far are kept; the batch in "
+                                          "progress is not. You can continue from batch 6,150.", False)
+    simulating.release()
+    _ended(app, held)
     window.hide()
 
 
@@ -623,11 +701,10 @@ def test_stop_the_run_and_close_waits_for_the_end_then_closes_every_window(tmp_p
     """"Stop the run and close" asks the run to stop and keeps the window open, on the run's page, which says that
     PRISM closes when the run has stopped; "Don't stop after all" withdraws the stop and the close both. Asked again,
     the window waits: when the run has ended its history is written, then the one-PRISM claim is let go, the figure
-    window a page opened is closed, and the window closes. The whole program then leaves no run to acknowledge and no
-    close waiting for one."""
+    window a page opened is closed, and the window closes, once all of the run's end has been said: its history, its
+    end heard and its page drawn ended. The whole program then leaves no run to acknowledge and no close waiting for
+    one."""
     from core.gui import one_instance
-    from core.gui.panels.reduction_panel import ReductionPanel
-    from core.gui.run import history
     from tests._fixtures import whole_program
     from tests._window_helpers import shown_off_screen
     app = qt_app()
@@ -638,7 +715,7 @@ def test_stop_the_run_and_close_waits_for_the_end_then_closes_every_window(tmp_p
         claim = one_instance.current()
         assert claim is not None, "the whole program holds no claim"
         shown_off_screen(window)
-        host, text = window.panel(ReductionPanel), RunText(held)
+        host, text = window.part("inference").posterior_panel, RunText(held)
         host.figure_stack.add_figure("a figure", _picture())
         host.figure_stack._pop_out(host.figure_stack.widget(0))
         figure = next(iter(host.figure_stack._windows))
@@ -668,21 +745,13 @@ def test_stop_the_run_and_close_waits_for_the_end_then_closes_every_window(tmp_p
         app.processEvents()
         assert (silent is not None, window.isVisible(), one_instance.current() is claim) == (True, True, True), (
             "the window closed, or let go of the claim, before its stopping run had ended")
-        run, released = held.status.run, []
-        real = one_instance.release
-
-        def release():
-            if not released:
-                record = history.read(tmp_path / "runs" / f"{run}.json")
-                released.append(None if record is None else record["outcome"])
-            real()
-
-        monkeypatch.setattr(one_instance, "release", release)
+        released = _note_the_release(monkeypatch, tmp_path / "runs", held.status.run, text, view)
         stand_in.say("the line at which the stop is taken")
         turn_until(app, lambda: not window.isVisible(), 10)
         assert (released, one_instance.current(), _open(figure), held.is_live()) == (
-            ["stopped"], None, False, False), ("the claim was let go before the run's history said how it ended, or a "
-                                              "window outlived the close")
+            [("stopped", ["stopped"], "ended")], None, False, False), (
+            "the claim was let go before the run's history, its end and its page said how it ended, or a window "
+            "outlived the close")
     assert (held.is_live(), held.status.state, held.status.closing) == (False, "idle", False)
 
 
@@ -691,7 +760,6 @@ def test_the_window_does_not_close_under_a_retry_pause_or_a_pending_stop(tmp_pat
     short of the close's second answer, and the window keeps the one-PRISM claim; a stopping run's close waits for
     its end, the claim held until then."""
     from core.gui import one_instance
-    from core.gui.panels.reduction_panel import ReductionPanel
     from tests._fixtures import whole_program
     from tests._window_helpers import shown_off_screen
     app = qt_app()
@@ -700,7 +768,7 @@ def test_the_window_does_not_close_under_a_retry_pause_or_a_pending_stop(tmp_pat
         held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
         claim = one_instance.current()
         shown_off_screen(window)
-        host, text = window.panel(ReductionPanel), RunText(held)
+        host, text = window.part("inference").posterior_panel, RunText(held)
         stand_in, seen = StandIn(takes_stops=False), []
 
         def closed_now():
@@ -772,15 +840,14 @@ def test_a_close_while_the_posterior_is_saved_stops_nothing_and_closes_once_it_i
     saved: "Keep running" the safe answer, "Close when it is saved" not drawn as losing work. That answer asks no stop
     of the run, its token never set, and keeps the window open on the run's page, which says that PRISM closes when
     the posterior is saved and offers "Keep PRISM open" where a stop offers "Don't stop after all". "Keep PRISM open",
-    pressed with Space, withdraws the close and hands the keyboard to the page's sentence: the run finishes and the
-    window stays. Asked again, the window waits: the run finishes, its history written, then the one-PRISM claim is
-    let go, the figure window a page opened is closed, and the window closes."""
+    pressed with Space, withdraws the close and hands the keyboard to the page's sentence: the run finishes, the
+    window stays, and what the page said goes with the run's end. Asked again, the window waits: the run finishes,
+    all of its end said, then the one-PRISM claim is let go, the figure window a page opened is closed, and the
+    window closes."""
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
     from core.gui import one_instance
-    from core.gui.panels.reduction_panel import ReductionPanel
-    from core.gui.run import history
     from tests._fixtures import whole_program
     from tests._window_helpers import in_front, shown_off_screen
     app = qt_app()
@@ -790,7 +857,7 @@ def test_a_close_while_the_posterior_is_saved_stops_nothing_and_closes_once_it_i
         held = _controller_on(tmp_path, clock)
         claim = one_instance.current()
         shown_off_screen(window)
-        host = window.panel(ReductionPanel)
+        host = window.part("inference").posterior_panel
         view = host.run_view
         host.figure_stack.add_figure("a figure", _picture())
         host.figure_stack._pop_out(host.figure_stack.widget(0))
@@ -836,26 +903,19 @@ def test_a_close_while_the_posterior_is_saved_stops_nothing_and_closes_once_it_i
         _ended(app, held)
         app.processEvents()
         assert (window.isVisible(), one_instance.current() is claim, token.requested.is_set(),
-                [status.outcome for status in text.ended][-1]) == (True, True, False, "finished"), (
-            "a withdrawn close closed the window, or the save was stopped")
+                [status.outcome for status in text.ended][-1], view.notice.text()) == (
+            True, True, False, "finished", ""), (
+            "a withdrawn close closed the window, the save was stopped, or the page still said PRISM stays open")
 
         stand_in, token, text = saving()
         window.close()                                # answered "Close when it is saved" again
-        run, released = held.status.run, []
-        real = one_instance.release
-
-        def release():
-            if not released:
-                record = history.read(tmp_path / "runs" / f"{run}.json")
-                released.append(None if record is None else record["outcome"])
-            real()
-
-        monkeypatch.setattr(one_instance, "release", release)
+        released = _note_the_release(monkeypatch, tmp_path / "runs", held.status.run, text, view)
         stand_in.release()
         turn_until(app, lambda: not window.isVisible(), 10)
         assert (released, token.requested.is_set(), one_instance.current(), _open(figure), held.is_live()) == (
-            ["finished"], False, None, False, False), ("the save was stopped, the claim was let go before the run's "
-                                                        "history said it finished, or a window outlived the close")
+            [("finished", ["finished"], "ended")], False, None, False, False), (
+            "the save was stopped, the claim was let go before the run's history, its end and its page said it "
+            "finished, or a window outlived the close")
     assert (held.is_live(), held.status.state, held.status.closing) == (False, "idle", False)
 
 
@@ -864,7 +924,6 @@ def test_an_answer_given_once_the_save_has_begun_stops_nothing(tmp_path, monkeyp
     button's "Stop training" stops nothing, and the page says that the save cannot be stopped; the close's "Stop the
     run and close" stops nothing either, and the window waits for the save, then closes."""
     from core.gui import one_instance
-    from core.gui.panels.reduction_panel import ReductionPanel
     from tests._fixtures import whole_program
     from tests._window_helpers import shown_off_screen
     app = qt_app()
@@ -873,7 +932,7 @@ def test_an_answer_given_once_the_save_has_begun_stops_nothing(tmp_path, monkeyp
     with whole_program() as (_app, window):
         held = _controller_on(tmp_path, clock)
         shown_off_screen(window)
-        host = window.panel(ReductionPanel)
+        host = window.part("inference").posterior_panel
         view = host.run_view
         for answer, ask in (("Stop training", view.stop_button.click), ("Stop the run and close", window.close)):
             stand_in, text = StandIn(), RunText(held)

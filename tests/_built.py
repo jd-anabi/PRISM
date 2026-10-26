@@ -13,13 +13,18 @@ _fixtures keeps nothing it built. What tests/_runs.py's ``RunText`` hears of the
 too, so that it hears no run after its test.
 
 The end of every test also puts the process's run controller back as the next test must find it: a run left live
-is stopped and waited for, and a run that ended is acknowledged (``end_of_test``, ``put_back_the_run``).
+is stopped and waited for, and a run that ended is acknowledged (``end_of_test``, ``put_back_the_run``). While it
+asks a run left live to stop, ``ENDING`` is set, which tests/_runs.py's stand-in run reads: a stand-in that holds a
+stop takes it at its own line only then.
 """
 import sys
+import threading
 import time
 import weakref
 
 BUILT: list = []             # one weak reference for each thing a builder made, the oldest first
+# Set from the moment the end of a test asks a run it left live to stop until the next test is set up.
+ENDING = threading.Event()
 
 # How long the end of a test waits, at most, for a run the test left live to stop once it is asked to. A run
 # stops at its next line of output: the slowest the suites start, a simulated inference on the tiny posterior,
@@ -80,7 +85,9 @@ def put_back_the_run() -> None:
 
 def noted() -> tuple:
     """What the end of the test now set up is held to: how many entries the record holds, and whether a run is
-    live already (one an earlier test left live, which failed for it)."""
+    live already (one an earlier test left live, which failed for it). The end of the last test asks nothing any
+    more."""
+    ENDING.clear()
     return len(BUILT), a_run_is_live()
 
 
@@ -89,11 +96,11 @@ def end_of_test(at_start: tuple, within: float = STOPS_WITHIN) -> None:
     controller back as the next test must find it (``put_back_the_run``), and fail the test, by raising, when it
     left a run live.
 
-    Such a run is asked to stop first, through the controller (a training saving its posterior, which takes no stop
-    asked so, through its own token), and the event loop is turned until its end has been handled, ``within``
-    seconds at most: a run whose end came after its panel was deleted would end without the page it was started
-    from. If it has not stopped by then, what the test made is taken out of the record and kept alive, not deleted,
-    so that the run's end still finds its panel, and every later run is refused until it stops.
+    Such a run is asked to stop first, ``ENDING`` set, through the controller (a training saving its posterior, which
+    takes no stop asked so, through its own token), and the event loop is turned until its end has been handled,
+    ``within`` seconds at most: a run whose end came after its panel was deleted would end without the page it was
+    started from. If it has not stopped by then, what the test made is taken out of the record and kept alive, not
+    deleted, so that the run's end still finds its panel, and every later run is refused until it stops.
     A run that was live already when the test was set up is an earlier test's, and is not waited for again."""
     since, live_before = at_start
     left_live = a_run_is_live() and not live_before
@@ -101,6 +108,7 @@ def end_of_test(at_start: tuple, within: float = STOPS_WITHIN) -> None:
     if left_live:
         from PySide6.QtCore import QCoreApplication
         held = _controller()
+        ENDING.set()
         held.request_stop()
         token = getattr(getattr(held, "_run", None), "token", None)
         if token is not None and not token.requested.is_set():
