@@ -2821,33 +2821,47 @@ def test_the_run_page_shows_the_loss_curve_during_the_fit_and_after_it(tmp_path)
     not before the fit, nor in the fit before its first record. Each record is drawn as its line arrives, the best
     epoch marked as the model counts it, and the caption names the run's patience. It stays when the run has ended,
     and on the page drawn again from the run's two files, where the patience is not known and the caption leaves out
-    when the fit ends. The page's next run starts with no curve."""
+    when the fit ends. It stands between the health table and the messages. The page's next run starts with no
+    curve."""
+    from PySide6.QtCore import QPoint
     from core.gui.run import history
     from tests._fixtures import build_run_host, qt_app
+    from tests._look_helpers import _settle
     from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
     app = qt_app()
     clock = Clock(_at(8, 19, 2, 11))
     held, host, stand_in = _controller_on(tmp_path, clock), build_run_host(), StandIn()
     view, text = host.run_view, RunText(held)
     start_run(host, stand_in, spec=_training())
+    shown_off_screen(host, 1300, 1000)
 
-    def said(line):
-        stand_in.say(line)
+    def said(line, level="info"):
+        stand_in.say(line, level)
         turn_until(app, lambda: line in text.texts())
 
     def curve():
         """Whether the curve is in the page, the epochs it draws, and what its accessible description says."""
         return view.loss.isVisibleTo(view), view.loss.drawn()["epochs"], view.loss.accessibleDescription()
 
+    def spans():
+        """Where the health table, the curve and the messages' head stand down the page: each one's top and bottom."""
+        _settle()
+        return [(part.mapTo(view, QPoint(0, 0)).y(), part.mapTo(view, QPoint(0, part.height())).y())
+                for part in (view.health, view.loss, view.messages_head)]
+
     assert curve() == (False, [], ""), "the curve stood at the start"
     said(_LINES["budget"])
     said(_LINES["simulation_complete"])
+    said(_LINES["patho_batch"], "warning")                    # a message, so that the messages stand under the curve
     assert (held.model.stage, curve()) == ("Fitting", (False, [], "")), "the curve stood before the fit's first record"
     for epoch, since, validation in ((1, 0, -3.0), (2, 0, -3.4), (3, 1, -3.2)):
         clock.advance(3780)
         said(_epoch(epoch, since=since, validation=validation))
         assert curve()[:2] == (True, list(range(1, epoch + 1))), epoch
     assert held.model.best_epoch() == 2 and curve()[2] == "epochs 1 to 3; best so far: epoch 2"
+    health, fit, head = spans()
+    assert view.messages_head.isVisibleTo(view) and health[1] < fit[0] and fit[1] < head[0], (health, fit, head)
     assert view.loss.caption.plain_text().endswith("Fitting ends when validation has not improved for 20 epochs.")
     stand_in.release()
     turn_until(app, lambda: not held.is_live())

@@ -7533,8 +7533,9 @@ def test_the_loss_curve_draws_validation_in_ink_and_training_dashed_in_the_secon
 def test_the_loss_curve_marks_and_names_the_best_epoch():
     """The best epoch so far is an open ring where its validation loss was: the page's colour inside, the ink in its
     ring, and under it a dotted drop to the epoch axis in the second ink. Its words, "best so far: epoch 58", are
-    semibold in the ink, where no line runs through them, and the curve's accessible description says them too.
-    With "Recent" chosen the ring stands at its epoch's place on the shorter axis."""
+    semibold in the ink, where no line runs through them, and the curve's accessible description says them too,
+    read again as soon as a choice is made. With "Recent" chosen the ring stands at its epoch's place on the shorter
+    axis. The drop stops at the axis: under it, clear of the tick labels, it leaves nothing."""
     loss = _lc()
     records, best = _fit(_LOSS_VALIDATION, _LOSS_TRAINING)
     assert best == 58
@@ -7543,6 +7544,9 @@ def test_the_loss_curve_marks_and_names_the_best_epoch():
         radius = design.FIGURE["best_mark"] / 2
         for recent in (False, True):
             curve.set_recent(recent)
+            assert curve.accessibleDescription() == (
+                "epochs 10 to 62; best so far: epoch 58; epochs 1 to 9 are left out" if recent
+                else "epochs 1 to 62; best so far: epoch 58"), recent
             lay = curve.drawn()
             left, top, right, bottom = lay["plot"]
             first = lay["epochs"][0]
@@ -7554,7 +7558,6 @@ def test_the_loss_curve_marks_and_names_the_best_epoch():
             assert len(said) == 1 and said[0][5:] == (True, "ink"), said
             box = QRectF(*said[0][1:5])
             assert not any(loss._meets(box, run) for run in lay["validation"] + lay["training"]), recent
-            assert "best so far: epoch 58" in curve.accessibleDescription(), curve.accessibleDescription()
             crossed = next(y for x, y in lay["training"][0] if x == ring_x)       # the training line, under the ring
             for ratio in _SCALINGS:
                 image = _screen_of(curve.plot, ratio)
@@ -7569,14 +7572,22 @@ def test_the_loss_curve_marks_and_names_the_best_epoch():
                         if abs(dy / ratio - crossed) > 4]
                 assert set(drop) == {ink_2, paper} and drop.count(ink_2) >= len(drop) / 4, (recent, ratio, drop)
                 assert drop.count(paper) >= len(drop) / 3, (recent, ratio, "the drop is not dotted")
+                past = [image.pixelColor(column, dy).name().upper()       # under the axis, clear of the labels
+                        for dy in range(math.ceil((bottom + design.FIGURE["axis_w"]) * ratio),
+                                        math.floor((bottom + 20) * ratio))
+                        if not any(x - 1 <= column / ratio <= x + w + 1 and y - 1 <= dy / ratio <= y + h + 1
+                                   for _words, x, y, w, h, _semibold, _colour in lay["words"])]
+                assert len(past) >= 8 and ink_2 not in past, (recent, ratio, "the drop runs past the axis", past)
 
 
 def test_recent_starts_at_epoch_ten_and_is_greyed_until_epoch_twelve():
     """"All epochs" is set at first. "Recent" is greyed while the newest epoch is before the twelfth, and choosing it
     then chooses nothing; chosen, it draws the epochs from the tenth on, on a scale fitted to them, and says "epochs
-    1 to 9 are left out". When a new run's records are fewer it is greyed again and "All epochs" set. A fit resumed
-    after its fortieth pass holds no epoch before the tenth, so "Recent" stays greyed: its epochs and its ticks begin
-    at the 41st, and a best epoch from before the resume is not marked."""
+    1 to 9 are left out". A best epoch it leaves out is not marked and not said. When a new run's records are fewer
+    it is greyed again and "All epochs" set. A fit resumed after its fifth or its eighth pass is offered "Recent",
+    which says what it leaves out ("epochs 6 to 9", "epoch 9"); one resumed after its ninth pass or later holds no
+    epoch before the tenth, so "Recent" stays greyed: after its fortieth, its epochs and its ticks begin at the 41st,
+    and a best epoch from before the resume is not marked."""
     loss = _lc()
     fresh = loss.LossCurve()                                          # as built, before any record
     assert (fresh.all_button.isChecked(), fresh.recent_button.isEnabled(), fresh.recent) == (True, False, False)
@@ -7607,10 +7618,28 @@ def test_recent_starts_at_epoch_ten_and_is_greyed_until_epoch_twelve():
         assert (min(heights), max(heights)) == pytest.approx((top + (bottom - top) / 22, bottom - (bottom - top) / 22))
         assert curve.accessibleDescription() == "epochs 10 to 62; best so far: epoch 58; epochs 1 to 9 are left out"
         assert [entry[0] for entry in lay["words"] if entry[6] == "ink_2" and not entry[5]][0] == lay["note"]
+        # a fit that got worse after its eighth epoch: "Recent" leaves its best out, and neither marks nor says it
+        worse, best = _fit(_LOSS_VALIDATION[:8] + [_LOSS_VALIDATION[7] + 0.05 * k for k in range(1, 13)],
+                           _LOSS_TRAINING[:20])
+        assert best == 8
+        curve.set_epochs(worse, best=best, patience=20)
+        lay = curve.drawn()
+        assert (curve.recent, lay["epochs"][0], lay["best"]) == (True, 10, None)
+        assert not any(entry[0].startswith("best so far") for entry in lay["words"]), lay["words"]
+        assert curve.accessibleDescription() == "epochs 10 to 20; epochs 1 to 9 are left out"
         five, best = _fit(_LOSS_VALIDATION[:5], _LOSS_TRAINING[:5])
         curve.set_epochs(five, best=best, patience=20)                    # a new run's
         assert (curve.all_button.isChecked(), curve.recent_button.isEnabled(), curve.drawn()["epochs"]) == (
             True, False, [1, 2, 3, 4, 5])
+        # fits resumed after their fifth, eighth and ninth passes: "Recent" offered while it leaves something out
+        for first, offered, note in ((6, True, "epochs 6 to 9 are left out"), (9, True, "epoch 9 is left out"),
+                                     (10, False, "")):
+            later, best = _fit(_LOSS_VALIDATION[first - 1:20], _LOSS_TRAINING[first - 1:20], first=first)
+            curve.set_epochs(later, best=best, patience=20)
+            curve.set_recent(True)
+            lay = curve.drawn()
+            assert (curve.recent_button.isEnabled(), curve.recent, lay["note"], lay["epochs"][0]) == (
+                offered, offered, note, 10 if offered else first), first
         resumed, _best = _fit(_LOSS_VALIDATION[40:60], _LOSS_TRAINING[40:60], first=41)
         curve.set_epochs(resumed, best=38, patience=20)
         curve.set_recent(True)
@@ -7624,8 +7653,9 @@ def test_recent_starts_at_epoch_ten_and_is_greyed_until_epoch_twelve():
 
 def test_the_loss_curve_follows_the_theme_and_draws_once_per_record():
     """The curve reads every colour when it paints: its ground is the page's and its validation line the ink, in the
-    theme in force. It is painted once more for a record that arrives and once for a change of theme, and not at all
-    while nothing changes: the same records handed again ask for nothing, and it holds no timer."""
+    theme in force. It is painted once more for a record that arrives, once and whole for a choice made (not only
+    where the choice's own button stands) and once for a change of theme, and not at all while nothing changes: the
+    same records handed again ask for nothing, and it holds no timer."""
     from PySide6.QtCore import QTimer
     loss = _lc()
     records, best = _fit(_LOSS_VALIDATION, _LOSS_TRAINING)
@@ -7634,7 +7664,7 @@ def test_the_loss_curve_follows_the_theme_and_draws_once_per_record():
     class Counted(QObject):
         def eventFilter(self, watched, event):
             if event.type() == QEvent.Paint:
-                paints.append(event.type())
+                paints.append(QRect(event.rect()))
             return False
 
     def settled():
@@ -7652,6 +7682,11 @@ def test_the_loss_curve_follows_the_theme_and_draws_once_per_record():
         assert settled() == 0, "the same records handed again painted the curve"
         curve.set_epochs(records, best=best, patience=20)
         assert settled() == 1, "a record that arrived did not paint the curve once"
+        for recent in (True, False):
+            del paints[:]
+            curve.set_recent(recent)
+            assert settled() == 1 and paints == [curve.plot.rect()], (
+                recent, paints, "a choice made did not paint the whole curve once")
         lay = curve.drawn()
         left, top, right, bottom = lay["plot"]
         ground = (left + (right - left) / 2, top + (bottom - top) / 4)
@@ -7714,15 +7749,18 @@ def test_a_loss_that_is_not_finite_leaves_a_gap():
 def test_the_loss_curves_caption_names_the_patience():
     """The caption under the curve, in the book face and the second ink with its lead bold: "Loss by epoch. Loss is
     the negative log-probability; lower is better. Fitting ends when validation has not improved for 20 epochs.",
-    with the patience the run was handed; one epoch is said so, and with no patience known (a run drawn again from
-    its files) the last sentence is left out. It stands under the plot, the look's gap between them."""
+    with the patience the run was handed; one epoch is said so, a thousand with its comma, and with no patience known
+    (a run drawn again from its files) the last sentence is left out. It stands under the plot, the look's gap
+    between them."""
     loss = _lc()
     records, best = _fit(_LOSS_VALIDATION, _LOSS_TRAINING)
     said = "Loss by epoch. Loss is the negative log-probability; lower is better."
     with _the_look(False), _loss_standing(loss, records, best) as curve:
         for patience, more in ((20, " Fitting ends when validation has not improved for 20 epochs."),
                                (7, " Fitting ends when validation has not improved for 7 epochs."),
-                               (1, " Fitting ends when validation has not improved for 1 epoch."), (None, "")):
+                               (1, " Fitting ends when validation has not improved for 1 epoch."),
+                               (1000, " Fitting ends when validation has not improved for 1,000 epochs."),
+                               (None, "")):
             curve.set_epochs(records, best=best, patience=patience)
             assert curve.caption.plain_text() == said + more, patience
         caption = curve.caption
@@ -7739,10 +7777,12 @@ def test_the_loss_curve_has_two_axes_with_round_ticks_outward_and_its_words_from
     pixels, their ticks outward a tick's length from the axis, and no top or right axis and no grid. The epoch axis
     is ticked at the first epoch drawn, at round epochs between and at the newest, a round one that would crowd an
     end left out; the loss axis at round values: this fit of 62 epochs reads 1, 10, 20, 30, 40, 50, 62 and -10
-    to 0 by 2. Every word is the small Inter and is painted as laid out: the tick labels in the second ink but the
-    newest epoch's, in the ink and semibold; the axes' names in the ink; the lines' names and the best epoch's words
-    in the ink and semibold. No two labels of an axis stand closer than the look's gap, at the least width and a
-    larger text, and every round tick is a multiple of one round step."""
+    to 0 by 2. Every word is the small Inter and is painted as laid out, its letters on the baseline of its box: the
+    tick labels in the second ink but the newest epoch's, in the ink and semibold; the axes' names in the ink; the
+    lines' names and the best epoch's words in the ink and semibold. No two labels of an axis stand closer than the
+    look's gap, at the least width and a larger text, and every round tick is a multiple of one round step. Two lines
+    that end within a line's height of each other have their names a line apart about the middle of their ends, and
+    an epoch of four digits is written with its comma."""
     loss = _lc()
     records, best = _fit(_LOSS_VALIDATION, _LOSS_TRAINING)
     painted = []
@@ -7750,8 +7790,8 @@ def test_the_loss_curve_has_two_axes_with_round_ticks_outward_and_its_words_from
     class Noted(QPainter):
         def drawText(self, *told):
             font = self.font()
-            painted.append((told[-1], font.family(), font.pixelSize(), font.weight() == QFont.Weight.DemiBold,
-                            self.pen().color().name().upper()))
+            painted.append((told[-1], told[0].x(), told[0].y(), font.family(), font.pixelSize(),
+                            font.weight() == QFont.Weight.DemiBold, self.pen().color().name().upper()))
             return super().drawText(*told)
 
     monkeypatch.setattr(loss, "QPainter", Noted)
@@ -7774,8 +7814,9 @@ def test_the_loss_curve_has_two_axes_with_round_ticks_outward_and_its_words_from
             for ratio in _SCALINGS:
                 del painted[:]
                 image = _screen_of(curve.plot, ratio)
-                assert painted == [(words, "Inter", 12, semibold, design.hex_colour(colour))
-                                   for words, _x, _y, _w, _h, semibold, colour in lay["words"]], (dark, ratio)
+                assert painted == [(words, x, y + loss._measure(words, semibold)[1], "Inter", 12, semibold,
+                                    design.hex_colour(colour))
+                                   for words, x, y, _w, _h, semibold, colour in lay["words"]], (dark, ratio)
                 hair = _HAIR_RULE[ratio]
 
                 def colours(xs, ys):
@@ -7854,6 +7895,19 @@ def test_the_loss_curve_has_two_axes_with_round_ticks_outward_and_its_words_from
     names = [entry for entry in loss.loss_layout(level, None, False, width, height, wide)["words"]
              if entry[0] in ("validation", "training")]
     assert len(names) == 2 and names[1][2] - names[0][2] == pytest.approx(names[0][4]), names
+    # two lines that end half a line's height apart: their names a line apart, about the middle of the two ends
+    near = loss.loss_layout(_fit([-2.0] * 19 + [-2.5], [-3.0] * 19 + [-2.625])[0], None, False, width, height, wide)
+    ends = [near[key][-1][-1][1] for key in ("validation", "training")]
+    names = [entry for entry in near["words"] if entry[0] in ("validation", "training")]
+    middles = [top + high / 2 for _words, _x, top, _w, high, _semibold, _colour in names]
+    assert abs(ends[1] - ends[0]) == pytest.approx(names[0][4] / 2, abs=1), (ends, names)
+    assert (abs(middles[1] - middles[0]), sum(middles) / 2) == pytest.approx((names[0][4], sum(ends) / 2)), (
+        ends, middles)
+    # an epoch of four digits, on the axis and in the best epoch's words
+    thousandth, best = _fit([-3.0], [-3.2], first=1000)
+    lay = loss.loss_layout(thousandth, best, False, width, height, loss._measure)
+    assert [words for _x, words, _newest in lay["x_ticks"]] == ["1,000"], lay["x_ticks"]
+    assert "best so far: epoch 1,000" in [entry[0] for entry in lay["words"]], lay["words"]
 
 
 def test_a_loss_curve_whose_paint_fails_draws_nothing_ends_its_painter_and_reports_it(monkeypatch):
