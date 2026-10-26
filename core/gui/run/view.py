@@ -260,6 +260,8 @@ class RunView(QWidget):
         self.health = RuleTable([Column("Measure"), Column("Now", "fit", right=True), Column("State", "fit")],
                                 selectable=False)
         self.loss = LossCurve()
+        self._loss_gap = QWidget()                  # the gap after the curve, which comes and goes with it
+        self._loss_gap.setFixedHeight(design.scaled(design.GAP["block"]))
         self.messages_head = SectionHead(MESSAGES_TEXT)
         self.messages = QWidget()
         self._rows = QVBoxLayout(self.messages)
@@ -269,8 +271,9 @@ class RunView(QWidget):
         self._figures = QVBoxLayout(self.figures)
         self._figures.setContentsMargins(0, design.scaled(design.GAP["block"]), 0, 0)
         self.figures.setMinimumHeight(design.scaled(FIGURES_LEAST_H))
-        for part, after in ((self.health_head, "head_table"), (self.health, "block"), (self.loss, "block"),
-                            (self.messages_head, "head_table"), (self.messages, None), (self.figures, None)):
+        for part, after in ((self.health_head, "head_table"), (self.health, "block"), (self.loss, None),
+                            (self._loss_gap, None), (self.messages_head, "head_table"), (self.messages, None),
+                            (self.figures, None)):
             column.addWidget(part)
             if after:
                 column.addSpacing(design.scaled(design.GAP[after]))
@@ -498,6 +501,7 @@ class RunView(QWidget):
         self.health_head.setVisible(health)
         self.health.setVisible(health)
         self.loss.setVisible(full and self._fit_shown)
+        self._loss_gap.setVisible(full and self._fit_shown)
         messages = bool(self._message_rows) and full
         self.messages_head.setVisible(messages)
         self.messages.setVisible(messages)

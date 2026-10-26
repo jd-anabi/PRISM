@@ -3,10 +3,12 @@
 It is drawn as a journal draws a curve: a left and a bottom axis, their ticks outward, no grid and no box round the
 names of the lines; the validation loss in the ink and the training loss dashed in a figure's second colour, so the
 two differ without their colours; each line named where it ends, in semibold; the best epoch an open ring named
-"best so far: epoch 58", with a dotted drop to the epoch axis; the newest epoch's tick in the ink and in semibold.
-Two choices sit in the empty top-right corner: "Recent", which draws the epochs from the tenth on, on a scale
-fitted to them, and "All epochs", set at first. A loss that is not a finite number leaves a gap in its line. The
-caption under it, in the book face, says what the loss is and when the fit ends.
+"best so far: epoch 58", with a dotted drop to the epoch axis, its words set where no line runs through them, or,
+when no place near the ring is clear, on a ground of the page's colour; the newest epoch's tick in the ink and in
+semibold. Two choices sit in the top-right corner, the axes under them: "Recent", which draws the epochs from the
+tenth on, on a scale fitted to them, and "All epochs", set at first. A loss that is not a finite number leaves a gap
+in its line. The caption under it, in the book face, says what the loss is and when the fit ends. Given less room
+than its least width, the plot keeps that width and is cut at its right, and the page it stands on keeps its own.
 
 ``loss_layout`` works out where everything goes, as plain numbers, so it is tested without a painter; the curve
 paints only what it returns. Every colour, length and face is read from the look's table when the curve paints, so
@@ -120,34 +122,42 @@ def _meets(box: QRectF, points: Sequence) -> bool:
 
 
 def loss_layout(records: Sequence[EpochRecord], best: int | None, recent: bool, width: float, height: float,
-                measure: Callable[[str, bool], tuple[float, float, float]]) -> dict:
+                measure: Callable[[str, bool], tuple[float, float, float]],
+                corner: tuple[float, float, float, float] | None = None) -> dict:
     """Where everything on the loss curve goes, as plain numbers: no painter and no widget, so it is tested without
     a screen. ``records`` are the fit's epoch records in order, ``best`` the best epoch so far, ``recent`` whether
     "Recent" is chosen (taken only while ``recent_offered``), ``width`` and ``height`` the plot's size in pixels,
-    and ``measure(words, semibold)`` the width of words in the curve's lettering, and its ascent and descent.
+    ``measure(words, semibold)`` the width of words in the curve's lettering, and its ascent and descent, and
+    ``corner`` the box the two choices take in the plot's top-right corner (its left, top, width and height), or
+    None. The axes then start under the choices, a label's gap below them, so that no line runs through them.
 
     Keys: ``plot`` (the left, top, right and bottom of the axes' box); ``epochs`` (the epochs drawn); ``x_ticks``
     (each an x, its words and whether it is the newest epoch's) and ``y_ticks`` (each a y and its words);
     ``validation`` and ``training`` (each a list of runs of points: a loss that is not finite ends a run); ``best``
-    (the centre of the best epoch's ring, or None); ``note`` (the words "Recent" shows, or ""); ``words`` (every
-    text drawn, in the order drawn: its words, the left and the top of its box, its width and its height, whether
-    it is semibold and the name of its colour in the look's table). A text's baseline is its box's top and its
-    ascent."""
+    (the centre of the best epoch's ring, or None); ``ground`` (the left, top, width and height of the page's colour
+    laid over the lines under the best epoch's words when no place near the ring is clear of them, or None);
+    ``note`` (the words "Recent" shows, or ""); ``words`` (every text drawn, in the order drawn: its words, the left
+    and the top of its box, its width and its height, whether it is semibold and the name of its colour in the
+    look's table). A text's baseline is its box's top and its ascent. A loss tick whose label would crowd the loss
+    axis's name is left out, and the best epoch's words stand inside the axes, on no other words."""
     spec, shared = design.FIGURE["loss"], design.FIGURE
-    left, top = design.scaled(spec["left"]), design.scaled(spec["top"])
-    right, bottom = width - design.scaled(spec["right"]), height - design.scaled(spec["bottom"])
     gap = design.scaled(shared["line_label_gap"])
+    left, top = design.scaled(spec["left"]), design.scaled(spec["top"])
+    if corner is not None:
+        top = max(top, corner[1] + corner[3] + gap)
+    right, bottom = width - design.scaled(spec["right"]), height - design.scaled(spec["bottom"])
     axis, tick, pad = shared["axis_w"], shared["tick"], design.scaled(spec["tick_pad"])
     chosen = recent and recent_offered([record.epoch for record in records])
     shown = [record for record in records if record.epoch >= RECENT_FROM] if chosen else list(records)
     out = {"plot": (left, top, right, bottom), "epochs": [record.epoch for record in shown], "x_ticks": [],
-           "y_ticks": [], "validation": [], "training": [], "best": None,
+           "y_ticks": [], "validation": [], "training": [], "best": None, "ground": None,
            "note": left_out_words(records[0].epoch) if chosen else "", "words": []}
 
     def say(words, x, baseline, colour, semibold=False):
-        """Words whose box has its left at ``x`` and whose letters stand on ``baseline``."""
+        """Words whose box has its left at ``x`` and whose letters stand on ``baseline``; their box."""
         w, ascent, descent = measure(words, semibold)
         out["words"].append((words, x, baseline - ascent, w, ascent + descent, semibold, colour))
+        return QRectF(x, baseline - ascent, w, ascent + descent)
 
     def middle_line(words, semibold, y):
         """The baseline that sets these words' box in the middle of ``y``."""
@@ -159,7 +169,8 @@ def loss_layout(records: Sequence[EpochRecord], best: int | None, recent: bool, 
     head = top + design.scaled(shared["y_name_sink"])
     say(EPOCH_NAME, (left + right - measure(EPOCH_NAME, False)[0]) / 2, bottom + design.scaled(spec["x_name_drop"]),
         "ink")
-    say(LOSS_NAME, left - design.scaled(shared["y_name_gap"]) - measure(LOSS_NAME, False)[0], head, "ink")
+    loss_name = say(LOSS_NAME, left - design.scaled(shared["y_name_gap"]) - measure(LOSS_NAME, False)[0], head,
+                    "ink")
     if out["note"]:
         say(out["note"], left + design.scaled(shared["note_x"]), head, "ink_2")
     if not shown:
@@ -207,17 +218,25 @@ def loss_layout(records: Sequence[EpochRecord], best: int | None, recent: bool, 
 
     _w, ascent, descent = measure("0", False)
     tall = ascent + descent
+    end = left - axis - tick - pad                       # where the loss labels end; none may begin left of the plot
+
+    def fits(values, step):
+        return all(measure(_loss_words(value, step), False)[0] <= end for value in values)
+
     step = _round_step(high - low, whole=False)
     while True:
         values = [k * step for k in range(math.ceil(low / step - 1e-9), math.floor(high / step + 1e-9) + 1)]
-        if len(values) < 2 or abs(at_y(values[0]) - at_y(values[1])) >= tall + gap:
+        if len(values) < 2 or (abs(at_y(values[0]) - at_y(values[1])) >= tall + gap and fits(values, step)):
             break
         step = _next_step(step)
+    crowded = loss_name.adjusted(-gap, -gap, gap, gap)   # a tick whose label is in here is left out: it crowds the name
     for value in values:
         words = _loss_words(value, step)
+        w, baseline = measure(words, False)[0], middle_line(words, False, at_y(value))
+        if QRectF(end - w, baseline - ascent, w, tall).intersects(crowded):
+            continue
         out["y_ticks"].append((at_y(value), words))
-        say(words, left - axis - tick - pad - measure(words, False)[0], middle_line(words, False, at_y(value)),
-            "ink_2")
+        say(words, end - w, baseline, "ink_2")
 
     # the lines, a loss that is not finite ending a run; each line's name where it ends, the two never one over
     # the other
@@ -244,8 +263,10 @@ def loss_layout(records: Sequence[EpochRecord], best: int | None, recent: bool, 
     for words, x, y in named:
         say(words, x, middle_line(words, True, y), "ink", True)
 
-    # the best epoch: its ring where its validation loss was; its words above the ring, or under it where a line
-    # runs through the place above
+    # the best epoch: its ring where its validation loss was; its words above the ring, or under it, or above it
+    # lifted a line at a time toward the axes' top: the first of these places inside the axes and on no other words
+    # that no line runs through (half a line's width counted). Where none is clear, the words stand at the first of
+    # them inside the axes and on no other words, on a ground of the page's colour laid over the lines.
     marked = next((record for record in shown if record.epoch == best and _finite(record.validation_loss)), None)
     if marked is not None:
         cx, cy = at_x(marked.epoch), at_y(marked.validation_loss)
@@ -253,14 +274,28 @@ def loss_layout(records: Sequence[EpochRecord], best: int | None, recent: bool, 
         words = best_words(marked.epoch)
         w, ascent, descent = measure(words, True)
         h, mark = ascent + descent, design.scaled(shared["best_mark"])
-        lines = out["validation"] + out["training"]
+        lines, half = out["validation"] + out["training"], shared["line_w"] / 2
+        taken = [QRectF(*entry[1:5]) for entry in out["words"]]
+
+        def at(x, y):
+            """The words' box with its right end at ``x`` and its top at ``y``, kept right of the loss axis."""
+            return QRectF(max(x - w, left), y, w, h)
+
+        def free(place):
+            return top <= place.top() and place.bottom() <= bottom and not any(place.intersects(box) for box in taken)
 
         def clear(place):
-            return place.top() >= 0 and place.bottom() <= bottom and not any(_meets(place, run) for run in lines)
+            wide = place.adjusted(-half, -half, half, half)
+            return free(place) and not any(_meets(wide, run) for run in lines)
 
-        above, below = QRectF(cx + mark / 2 - w, cy - mark - h, w, h), QRectF(cx - gap - w, cy + mark, w, h)
-        place = above if clear(above) or not clear(below) else below
-        say(words, max(place.left(), left), place.top() + ascent, "ink", True)
+        above, below = at(cx + mark / 2, cy - mark - h), at(cx - gap, cy + mark)
+        places = [above, below, *(above.translated(0, -k * h) for k in range(1, math.ceil((bottom - top) / h) + 1))]
+        place = next((one for one in places if clear(one)), None)
+        if place is None:
+            place = next((one for one in places if free(one)), above)
+            ground = place.adjusted(-pad, -pad, pad, pad)
+            out["ground"] = (ground.left(), ground.top(), ground.width(), ground.height())
+        say(words, place.left(), place.top() + ascent, "ink", True)
     return out
 
 
@@ -278,21 +313,27 @@ def _measure(words: str, semibold: bool) -> tuple[float, float, float]:
 
 class _Plot(QWidget):
     """The axes and the lines, painted from what ``loss_layout`` gives for the plot's size. The curve lays its two
-    choices in the plot's top-right corner."""
+    choices in the plot's top-right corner and names them in ``choices``, which the axes stand under."""
 
     def __init__(self) -> None:
         super().__init__()
         self.records: tuple = ()
         self.best: int | None = None
         self.recent = False
+        self.choices: tuple = ()
         spec = design.FIGURE["loss"]
         self.setFixedHeight(design.scaled(spec["h"]))
         self.setMinimumWidth(design.scaled(spec["min_w"]))
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
     def laid_out(self) -> dict:
-        """Where everything goes at the plot's size now, measured in the lettering it is painted in."""
-        return loss_layout(self.records, self.best, self.recent, self.width(), self.height(), _measure)
+        """Where everything goes at the plot's size now, measured in the lettering it is painted in, under the
+        choices where they stand now."""
+        corner = QRectF()
+        for button in self.choices:
+            corner = corner.united(QRectF(button.geometry()))
+        return loss_layout(self.records, self.best, self.recent, self.width(), self.height(), _measure,
+                           None if corner.isEmpty() else (corner.left(), corner.top(), corner.width(), corner.height()))
 
     @reported()
     def paintEvent(self, _event):
@@ -319,6 +360,8 @@ class _Plot(QWidget):
                     for point in run[1:]:
                         path.lineTo(QPointF(*point))
                     painter.drawPath(path)
+            if lay["ground"] is not None:           # the best epoch's words on the page's colour, over the lines
+                painter.fillRect(QRectF(*lay["ground"]), design.colour("paper"))
             if lay["best"] is not None:
                 cx, cy = lay["best"]
                 drop, ink_2 = cy, design.colour("ink_2")
@@ -365,6 +408,7 @@ class LossCurve(QWidget):
         for button in (self.recent_button, self.all_button):
             self._choice.addButton(button)
             corner.addWidget(button, 0, Qt.AlignTop)
+        self.plot.choices = (self.recent_button, self.all_button)
         self.all_button.setChecked(True)
         self.recent_button.setEnabled(False)
         self.recent_button.toggled.connect(self._chosen)
@@ -382,6 +426,9 @@ class LossCurve(QWidget):
         under.setContentsMargins(0, 0, design.scaled(design.GAP["caption_inset"]), 0)
         under.addWidget(self.caption)
         column.addLayout(under)
+        # As wide as the column it stands in, never wider: below the plot's least width the plot keeps that width
+        # and is cut at its right, and the column keeps its own.
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.setAccessibleName(CAPTION_LEAD.rstrip("."))
         self._describe()
 

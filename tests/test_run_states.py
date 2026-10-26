@@ -2821,9 +2821,11 @@ def test_the_run_page_shows_the_loss_curve_during_the_fit_and_after_it(tmp_path)
     not before the fit, nor in the fit before its first record. Each record is drawn as its line arrives, the best
     epoch marked as the model counts it, and the caption names the run's patience. It stays when the run has ended,
     and on the page drawn again from the run's two files, where the patience is not known and the caption leaves out
-    when the fit ends. It stands between the health table and the messages. The page's next run starts with no
-    curve."""
+    when the fit ends. It stands between the health table and the messages, the look's gap between blocks before it
+    and after it; with no curve the messages stand that gap under the health table. The page's next run starts with
+    no curve."""
     from PySide6.QtCore import QPoint
+    from core.gui import design
     from core.gui.run import history
     from tests._fixtures import build_run_host, qt_app
     from tests._look_helpers import _settle
@@ -2855,13 +2857,18 @@ def test_the_run_page_shows_the_loss_curve_during_the_fit_and_after_it(tmp_path)
     said(_LINES["simulation_complete"])
     said(_LINES["patho_batch"], "warning")                    # a message, so that the messages stand under the curve
     assert (held.model.stage, curve()) == ("Fitting", (False, [], "")), "the curve stood before the fit's first record"
+    block = design.scaled(design.GAP["block"])
+    health, _hidden, head = spans()
+    assert head[0] - health[1] == block, ("with no curve the messages do not stand a block's gap under the health "
+                                          "table", health, head)
     for epoch, since, validation in ((1, 0, -3.0), (2, 0, -3.4), (3, 1, -3.2)):
         clock.advance(3780)
         said(_epoch(epoch, since=since, validation=validation))
         assert curve()[:2] == (True, list(range(1, epoch + 1))), epoch
     assert held.model.best_epoch() == 2 and curve()[2] == "epochs 1 to 3; best so far: epoch 2"
     health, fit, head = spans()
-    assert view.messages_head.isVisibleTo(view) and health[1] < fit[0] and fit[1] < head[0], (health, fit, head)
+    assert view.messages_head.isVisibleTo(view) and (fit[0] - health[1], head[0] - fit[1]) == (block, block), (
+        health, fit, head)
     assert view.loss.caption.plain_text().endswith("Fitting ends when validation has not improved for 20 epochs.")
     stand_in.release()
     turn_until(app, lambda: not held.is_live())
@@ -2877,4 +2884,53 @@ def test_the_run_page_shows_the_loss_curve_during_the_fit_and_after_it(tmp_path)
     start_run(host, second, spec=_training())
     assert (view.mode, curve()) == ("live", (False, [], "")), "the page's next run kept the last run's curve"
     second.release()
+    turn_until(app, lambda: not held.is_live())
+
+
+def test_the_loss_curve_never_widens_the_run_pages_column(tmp_path):
+    """At the window's least size the run's page is 326 px wide, narrower than the loss curve's least width. The
+    curve does not widen the page's scrolling column: before the fit's first record and after three, the column is
+    as wide as the room it scrolls in, and the health table, the messages and the curve end inside it. The plot keeps
+    its least width there and is cut at its right."""
+    from PySide6.QtCore import QPoint
+    from core.gui import design
+    from tests._fixtures import build_run_host, qt_app
+    from tests._look_helpers import _settle
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, host, stand_in = _controller_on(tmp_path, clock), build_run_host(), StandIn()
+    view, text = host.run_view, RunText(held)
+    start_run(host, stand_in, spec=_training())
+    view.setFixedWidth(326)                                   # the run's page at the window's least size
+    shown_off_screen(host, 1300, 1000)
+    for line, level in ((_LINES["budget"], "info"), (_LINES["simulation_complete"], "info"),
+                        (_LINES["patho_batch"], "warning")):
+        stand_in.say(line, level)
+    turn_until(app, lambda: _LINES["patho_batch"] in text.texts())
+
+    def widths():
+        """The room the column scrolls in, the column's width, and where the health table, the messages and the
+        curve end across it, each while in sight."""
+        _settle()
+        column = view.body.widget()
+        ends = [part.mapTo(column, QPoint(part.width(), 0)).x() if part.isVisibleTo(view) else None
+                for part in (view.health, view.messages, view.loss)]
+        return view.body.viewport().width(), column.width(), ends
+
+    room, wide, (health, messages, curve) = widths()
+    assert (wide, curve) == (room, None) and None not in (health, messages), (room, wide, health, messages, curve)
+    assert max(health, messages) <= room, (room, health, messages)
+    for epoch in (1, 2, 3):
+        clock.advance(3780)
+        stand_in.say(_epoch(epoch, validation=-3.1 - epoch / 10))
+    turn_until(app, lambda: len(held.model.epochs()) == 3)
+    room, wide, (health, messages, curve) = widths()
+    assert wide == room, ("the loss curve widened the run page's column", room, wide)
+    assert None not in (health, messages, curve), (health, messages, curve)
+    assert max(health, messages, curve) <= room, (room, health, messages, curve)
+    least = design.scaled(design.FIGURE["loss"]["min_w"])
+    assert view.loss.plot.width() == least > view.loss.width(), (least, view.loss.plot.width(), view.loss.width())
+    stand_in.release()
     turn_until(app, lambda: not held.is_live())

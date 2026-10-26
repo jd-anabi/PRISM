@@ -7464,6 +7464,21 @@ def _along(run, every=0.5):
             yield x0 + (x1 - x0) * k / steps, y0 + (y1 - y0) * k / steps
 
 
+def _crossed(box, runs):
+    """Whether a line through any of these runs runs through ``box``, a left, a top, a width and a height: read off
+    points along each segment a quarter of a pixel apart, each run's last point with them, against the box widened
+    by half the line's width."""
+    half = design.FIGURE["line_w"] / 2
+    x0, y0, x1, y1 = box[0] - half, box[1] - half, box[0] + box[2] + half, box[1] + box[3] + half
+    return any(x0 <= x <= x1 and y0 <= y <= y1 for run in runs for x, y in (*_along(run, 0.25), *run[-1:]))
+
+
+def _meet(a, b):
+    """Whether two boxes, each a left, a top, a width and a height, share more than a hair of their area."""
+    (ax, ay, aw, ah), (bx, by, bw, bh) = a, b
+    return min(ax + aw, bx + bw) - max(ax, bx) > 1e-6 and min(ay + ah, by + bh) - max(ay, by) > 1e-6
+
+
 def _off_the_lines(x, y, runs, room):
     """Whether a point stands farther than ``room`` from every segment of these runs."""
     for run in runs:
@@ -7530,12 +7545,17 @@ def test_the_loss_curve_draws_validation_in_ink_and_training_dashed_in_the_secon
                 assert 10 <= _median(on) <= 13 and 6 <= _median(off) <= 9, (dark, ratio, on, off)
 
 
-def test_the_loss_curve_marks_and_names_the_best_epoch():
+def test_the_loss_curve_marks_and_names_the_best_epoch(monkeypatch):
     """The best epoch so far is an open ring where its validation loss was: the page's colour inside, the ink in its
     ring, and under it a dotted drop to the epoch axis in the second ink. Its words, "best so far: epoch 58", are
-    semibold in the ink, where no line runs through them, and the curve's accessible description says them too,
-    read again as soon as a choice is made. With "Recent" chosen the ring stands at its epoch's place on the shorter
-    axis. The drop stops at the axis: under it, clear of the tick labels, it leaves nothing."""
+    semibold in the ink, above the ring with "All epochs" chosen and under it with "Recent", where no line runs
+    through them, and the curve's accessible description says them too, read again as soon as a choice is made.
+    With "Recent" chosen the ring stands at its epoch's place on the shorter axis. The drop stops at the axis: under
+    it, clear of the tick labels, it leaves nothing. At every moment of the fit, from its first record to its 62nd,
+    at the run page's width and at the least, in both choices, at two text sizes, no line runs through the words, a
+    line's half width counted, and they need no ground; for a fit whose lines swing across the whole plot, where no
+    place near the ring is clear, the words stand on a ground of the page's colour that covers them, painted after
+    the lines and before the words."""
     loss = _lc()
     records, best = _fit(_LOSS_VALIDATION, _LOSS_TRAINING)
     assert best == 58
@@ -7556,8 +7576,8 @@ def test_the_loss_curve_marks_and_names_the_best_epoch():
             assert lay["validation"][0][58 - first] == (ring_x, ring_y), "the ring is not on its epoch's loss"
             said = [entry for entry in lay["words"] if entry[0] == "best so far: epoch 58"]
             assert len(said) == 1 and said[0][5:] == (True, "ink"), said
-            box = QRectF(*said[0][1:5])
-            assert not any(loss._meets(box, run) for run in lay["validation"] + lay["training"]), recent
+            assert not _crossed(said[0][1:5], lay["validation"] + lay["training"]), recent
+            assert (said[0][2] + said[0][4] <= ring_y, said[0][2] >= ring_y) == (not recent, recent), (recent, said)
             crossed = next(y for x, y in lay["training"][0] if x == ring_x)       # the training line, under the ring
             for ratio in _SCALINGS:
                 image = _screen_of(curve.plot, ratio)
@@ -7578,6 +7598,55 @@ def test_the_loss_curve_marks_and_names_the_best_epoch():
                         if not any(x - 1 <= column / ratio <= x + w + 1 and y - 1 <= dy / ratio <= y + h + 1
                                    for _words, x, y, w, h, _semibold, _colour in lay["words"])]
                 assert len(past) >= 8 and ink_2 not in past, (recent, ratio, "the drop runs past the axis", past)
+    # every moment of the fit; the ground read off the painter's own calls: a fill of the page's colour after the
+    # lines and before the words, which covers the words' box and half a line's width round it
+    drawn = []
+
+    class Noted(QPainter):
+        def fillRect(self, *told):
+            drawn.append(("fill", QRectF(told[0]), QColor(told[1]).name().upper()))
+            return super().fillRect(*told)
+
+        def drawPath(self, *told):
+            drawn.append(("line", None, None))
+            return super().drawPath(*told)
+
+        def drawText(self, *told):
+            drawn.append(("words", told[-1], None))
+            return super().drawText(*told)
+
+    monkeypatch.setattr(loss, "QPainter", Noted)
+
+    def looked_at(curve, best):
+        """Whether a line runs through the best epoch's words, and, for each fill of the page's colour painted after
+        the lines and before the words, whether it covers them with half a line's width round them."""
+        lay, words, half = curve.drawn(), loss.best_words(best), design.FIGURE["line_w"] / 2
+        box = next(entry[1:5] for entry in lay["words"] if entry[0] == words)
+        del drawn[:]
+        _screen_of(curve.plot, 1.0)
+        after = max(at for at, (kind, _what, _colour) in enumerate(drawn) if kind == "line")
+        wide = QRectF(*box).adjusted(-half, -half, half, half)
+        return _crossed(box, lay["validation"] + lay["training"]), [
+            what.contains(wide) for kind, what, colour in drawn[after:drawn.index(("words", words, None))]
+            if kind == "fill" and colour == design.hex_colour("paper")]
+
+    swing = [-5.0 + math.sin(epoch) for epoch in range(40)]
+    for factor in (1.0, 1.5):
+        with text_size(factor), _the_look(False):
+            least = design.scaled(design.FIGURE["loss"]["min_w"]) + design.scaled(design.GAP["figure_inset"])
+            for width in (design.scaled(_LOSS_W), least):
+                with _loss_standing(loss, (), None, width=width) as curve:
+                    for n in range(1, 63):
+                        prefix, best = _fit(_LOSS_VALIDATION[:n], _LOSS_TRAINING[:n])
+                        curve.set_epochs(prefix, best=best, patience=20)
+                        for recent in (False, True) if curve.recent_button.isEnabled() else (False,):
+                            curve.set_recent(recent)
+                            assert looked_at(curve, best) == (False, []), (
+                                factor, width, n, recent, "a line runs through the best epoch's words, or a ground")
+                        curve.set_recent(False)
+                    swinging, best = _fit(swing, [value - 0.3 for value in swing])
+                    curve.set_epochs(swinging, best=best, patience=20)
+                    assert looked_at(curve, best) == (True, [True]), (factor, width, "no ground under the words")
 
 
 def test_recent_starts_at_epoch_ten_and_is_greyed_until_epoch_twelve():
@@ -7782,7 +7851,11 @@ def test_the_loss_curve_has_two_axes_with_round_ticks_outward_and_its_words_from
     lines' names and the best epoch's words in the ink and semibold. No two labels of an axis stand closer than the
     look's gap, at the least width and a larger text, and every round tick is a multiple of one round step. Two lines
     that end within a line's height of each other have their names a line apart about the middle of their ends, and
-    an epoch of four digits is written with its comma."""
+    an epoch of four digits is written with its comma. No two words meet, none meets the two choices and none
+    begins left of the plot, at every moment of the fit, at the run page's width and at the least, in both choices,
+    and for one record, for losses all equal (a loss tick that would crowd the loss axis's name is left out), for a
+    span so narrow that its ticks need four decimals (fewer are taken until the labels fit) and for a loss that
+    spikes at the newest epoch, whose line keeps a label's gap from the choices (the axes stand under them)."""
     loss = _lc()
     records, best = _fit(_LOSS_VALIDATION, _LOSS_TRAINING)
     painted = []
@@ -7908,6 +7981,43 @@ def test_the_loss_curve_has_two_axes_with_round_ticks_outward_and_its_words_from
     lay = loss.loss_layout(thousandth, best, False, width, height, loss._measure)
     assert [words for _x, words, _newest in lay["x_ticks"]] == ["1,000"], lay["x_ticks"]
     assert "best so far: epoch 1,000" in [entry[0] for entry in lay["words"]], lay["words"]
+
+    # no two words meet, none meets the choices and none begins left of the plot, read off the words as laid out
+    def apart(curve, why):
+        lay = curve.drawn()
+        boxes = [(entry[0], entry[1:5]) for entry in lay["words"]]
+        boxes += [(button.text(), QRectF(button.geometry()).getRect()) for button in (curve.recent_button,
+                                                                                       curve.all_button)]
+        met = [(a, b) for at, (a, one) in enumerate(boxes) for b, other in boxes[at + 1:] if _meet(one, other)]
+        assert not met and min(box[0] for _words, box in boxes) >= 0, (why, met, boxes)
+        return lay
+
+    least = design.scaled(design.FIGURE["loss"]["min_w"]) + design.scaled(design.GAP["figure_inset"])
+    narrow = [-8.6 + 0.0004 * math.sin(k) for k in range(30)]
+    with _the_look(False):
+        for width in (_LOSS_W, least):
+            with _loss_standing(loss, (), None, width=width) as curve:
+                for n in range(1, 63):
+                    prefix, best = _fit(_LOSS_VALIDATION[:n], _LOSS_TRAINING[:n])
+                    curve.set_epochs(prefix, best=best, patience=20)
+                    for recent in (False, True) if curve.recent_button.isEnabled() else (False,):
+                        curve.set_recent(recent)
+                        apart(curve, (width, n, recent))
+                    curve.set_recent(False)
+                for why, validation, training, recent in (
+                        ("one record", [-3.0], [-3.2], False), ("equal losses", [-3.0] * 5, [-3.0] * 5, False),
+                        ("a narrow span", narrow, [value - 0.0003 for value in narrow], False),
+                        ("a spike at the newest epoch", _LOSS_VALIDATION[:30], _LOSS_TRAINING[:29] + [3.0], False),
+                        ("a fall at the eleventh epoch, \"Recent\" chosen: its words kept off the note",
+                         [-1.0] * 10 + [-6.5] + [-5.5] * 14, [-2.0] * 10 + [-7.5] + [-7.0] * 13 + [-0.5], True)):
+                    other, best = _fit(validation, training)
+                    curve.set_epochs(other, best=best, patience=20)
+                    curve.set_recent(recent)
+                    lay = apart(curve, (width, why))
+                    gap = design.scaled(design.FIGURE["line_label_gap"])
+                    for button in (curve.recent_button, curve.all_button):
+                        room = QRectF(button.geometry()).adjusted(-gap, -gap, gap, gap).getRect()
+                        assert not _crossed(room, lay["validation"] + lay["training"]), (width, why, button.text())
 
 
 def test_a_loss_curve_whose_paint_fails_draws_nothing_ends_its_painter_and_reports_it(monkeypatch):
