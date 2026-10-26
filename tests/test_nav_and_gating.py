@@ -3034,17 +3034,24 @@ def test_after_a_run_only_the_runs_own_figures_remain(tmp_path, monkeypatch, whi
         assert len(set(shown)) == len(shown) == len(titles), f"a figure is shown twice: {shown}"
         assert panel.record_picker.key() != earlier.id
         assert "seed 77" in panel.record_line.text(), panel.record_line.text()
+        assert (panel.results.currentWidget() is panel.figures, panel.results_split.indexOf(stack),
+                panel.run_view.how_link.isVisibleTo(panel)) == (True, 0, True), (
+            "a finished run's figures are not back in their place under 'How the run went'")
 
 
-def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch):
+@pytest.mark.parametrize("which", ["fdt", "crossval"])
+def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch, which):
     """Only the run's own figures remain, on the path where the picker does NOT move. A run that
     fails hands back no record, so the selection stays on the earlier record and nothing about the
     picker says the run happened -- yet its figures landed through the watcher under the same titles
-    as the earlier record's. The viewer's tabs close when the run finishes, whatever the outcome, so
-    what remains is the failed run's own partial figures; the line still describes the selection,
-    which is what the picker shows."""
+    as the earlier record's. The viewer's tabs close when the run ends, whatever the outcome, a
+    measurement's and a sweep study's alike, so what remains is the failed run's own partial figures,
+    which its run page holds under its messages until "Back to the form" hands them back to their place;
+    the line still describes the selection, which is what the picker shows."""
     from core.artifacts import ArtifactStore, use_store
+    from core.FDT import cross_validation
     from core.gui.panels import fdt_panel
+    from core.gui.panels.crossval_panel import CrossValPanel
     from tests._fixtures import all_asked, asked, forget_asked, qt_app
 
     app = qt_app()
@@ -3054,24 +3061,40 @@ def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch):
             writer.figure_path("x one").write_bytes(b"png")
             raise RuntimeError("the measurement failed after its first figure")
 
+    def sweep(cfg, sweep_param, sweep_grid, fixed_overrides=None, *, writer):
+        writer.body.update(settings={}, points={"param": sweep_param, "planned": len(sweep_grid),
+                                                "done": 0, "failed": 0})
+        with writer:
+            writer.figure_path(f"FDT ratio vs {sweep_param}").write_bytes(b"png")
+            raise RuntimeError("the sweep failed after its first figure")
+
     monkeypatch.setattr(fdt_panel, "run_fdt", run_fdt)
+    monkeypatch.setattr(cross_validation, "run_fdt_param_sweep", sweep)
+    cls, study, titles, own = {
+        "fdt": (fdt_panel.FdtPanel, "single", ["x one", "x two"], ["x one"]),
+        "crossval": (CrossValPanel, "sweep", ["FDT ratio vs s", "FDT ratio vs temp"], ["fdt ratio vs s"])}[which]
     store = ArtifactStore(tmp_path)
     with use_store(store):
-        earlier = _saved_fdt_record(store, "earlier", "single", 1, ["x one", "x two"])
-        panel = build_part(fdt_panel.FdtPanel)
+        earlier = _saved_fdt_record(store, "earlier", study, 1, titles)
+        panel = build_part(cls)
         combo = panel.record_picker.combo
         _choose(combo, combo.findData(earlier.id))
-        assert _tabs(panel) == ["x one", "x two"], _tabs(panel)
+        assert len(_tabs(panel)) == len(titles), _tabs(panel)
         forget_asked()
         panel._run()
         _wait_for_run(app, panel, limit=60.0)
         _settle(app)
 
-        assert all_asked() and "measurement failed" in asked().sentence, "the failure reached no box"
+        assert all_asked() and "failed after its first figure" in asked().sentence, "the failure reached no box"
         stack = panel.figure_stack
         shown = [stack.png_path(i) for i in range(stack.count())]
-        assert _tabs(panel) == ["x one"] and str(earlier.dir) not in (shown[0] or ""), shown
+        assert _tabs(panel) == own and str(earlier.dir) not in (shown[0] or ""), shown
         assert panel.record_picker.key() == earlier.id and "seed 1" in panel.record_line.text()
+        assert (panel.results.currentWidget() is panel.run_view, panel.run_view.isAncestorOf(stack)) == (
+            True, True), "the failed run's page let go of its figures before 'Back to the form'"
+        panel.run_view.back_button.click()
+        assert (panel.results.currentWidget() is panel.figures, panel.results_split.indexOf(stack), _tabs(panel)) == (
+            True, 0, own), "'Back to the form' did not hand the figures back to their place"
 
 
 def test_record_summary_never_prints_none():

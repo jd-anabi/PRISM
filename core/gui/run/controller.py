@@ -18,7 +18,9 @@ as it shows one made at the click.
 A run that only loads a record, a live simulation and a video export keep no file and end straight into idle, with
 nothing to acknowledge.
 
-Nothing here draws: a figure a run hands over goes to its page's stack of pictures as the picture it already is.
+The run's page is its host's: the controller hands it the run at the start and draws it again from the run's model
+at every change the model hears and at each look; the run's full text reaches it through ``lines``. Nothing here
+draws: a figure a run hands over goes to its page's stack of pictures as the picture it already is.
 """
 import json
 import math
@@ -158,6 +160,7 @@ class _Run:
         self.ended: datetime | None = None
         self.acknowledged = False
         self.set_named = False
+        self.view = None                           # its host's run page, which it draws on
         self.at_start: int | None = None
         self.saves = 0
         self.epochs = 0
@@ -179,6 +182,7 @@ class RunController(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._stopping.connect(self._stop_heard)
+        self.lines.connect(self._to_page)
         self._status: RunStatus = IDLE
         self._model: RunModel | None = None
         self._run: _Run | None = None
@@ -221,15 +225,17 @@ class RunController(QObject):
     def dispatch(self, fn, *args, spec: RunSpec, host=None, on_result=None, provide_fig_sink: bool = False,
                  provide_stream: bool = False, on_chunk=None, watch_dir=None, **kwargs) -> bool:
         """Start ``fn(*args, **kwargs)`` as the process's run, described by ``spec``, for the page ``host``. False,
-        and nothing started, while a run is live. Else, in this order: the spec is given the call; the memory limit
-        in force is read once; where the run keeps files, its id, its text file with its head, said on ``lines``,
-        and its history file; its model; the controls of every panel locked; the status published; the worker
-        queued. A start that raises after the lock and before its worker is queued is taken back -- every panel
-        free, the host's Cancel hidden, the status idle again, the run's two files removed -- and the error is
-        raised as it came. ``on_result`` hears the run's result while the run is still live; ``provide_fig_sink``
-        hands the call a sink for its figures, which go to the host's stack of pictures; ``provide_stream`` hands
-        it ``emit_chunk`` and ``should_stop``, and ``on_chunk`` hears each chunk; ``watch_dir`` is one folder, or
-        several, whose new pictures go to the host's stack. None of these is handed on to ``fn``."""
+        and nothing started, while a run is live. Else, in this order: the memory limit in force is read once; the
+        spec is given the call and the limit; its model; where the run keeps files, its id and its text file; the
+        host's run page handed the run; where the run keeps files, the text file's head, said on ``lines``, and its
+        history file; the controls of every panel locked; the run's page shown in its host; the status published;
+        the worker queued. A start that raises after the lock and before its worker is queued is taken back --
+        every panel free, the host's results given back, the status idle again, the run's two files removed -- and
+        the error is raised as it came. ``on_result`` hears the run's result while the run is still live;
+        ``provide_fig_sink`` hands the call a sink for its figures, which go to the host's stack of pictures;
+        ``provide_stream`` hands it ``emit_chunk`` and ``should_stop``, and ``on_chunk`` hears each chunk;
+        ``watch_dir`` is one folder, or several, whose new pictures go to the host's stack. None of these is handed
+        on to ``fn``."""
         if self.is_live():
             return False
         from core.artifacts import default_store
@@ -252,6 +258,12 @@ class RunController(QObject):
         if spec.keeps_files:
             run.id = history.run_id(spec.word, model.started, folder)
             run.text = RunTextFile(folder / f"{run.id}.txt", clock=clock)
+        # The host's run page is handed the run before anything is said on ``lines``: its full text holds the head.
+        run.view = getattr(host, "run_view", None) if _alive(host) else None
+        if run.view is not None:
+            run.view.begin(spec, text=None if run.text is None else run.text.path,
+                           folder=folder if spec.keeps_files else None, clock=clock)
+        if spec.keeps_files:
             said = [(f"{spec.word} {spec.name}, run {run.id}." if spec.name else f"{spec.word}, run {run.id}.",
                      "window"), (limit_text, "window")]
             broke = run.text.head(word=spec.word, name=spec.name, run=run.id, memory_limit=limit_text)
@@ -263,9 +275,10 @@ class RunController(QObject):
             self._write(run)
         for panel in list(BasePanel._instances):
             panel.set_controls_enabled(False)
-        if host is not None and hasattr(host, "_hosting"):
-            host._hosting(True)
+        if host is not None and hasattr(host, "_run_began"):
+            host._run_began(spec)
         self._status = self._live_status()
+        self._draw()
         if self._timer is None:
             self._timer = QTimer(self)
             self._timer.setInterval(TICK_MS)
@@ -319,8 +332,8 @@ class RunController(QObject):
 
     def _take_back(self, run: _Run) -> None:
         """A start that raised before its worker was queued, taken back: its watchers let go, the timer stopped,
-        the run's two files removed, every panel free, the host's Cancel hidden, and the status published idle
-        again."""
+        the run's two files removed, every panel free, the host's results given back, and the status published
+        idle again."""
         from ..panels.base_panel import BasePanel
         for watcher in run.watchers:
             watcher.deleteLater()
@@ -330,8 +343,8 @@ class RunController(QObject):
             self._remove_files(run)
         for panel in list(BasePanel._instances):
             panel.set_controls_enabled(True)
-        if _alive(run.host) and hasattr(run.host, "_hosting"):
-            run.host._hosting(False)
+        if _alive(run.host) and hasattr(run.host, "_run_over"):
+            run.host._run_over(IDLE)
         self._status = IDLE
         self.status_changed.emit(IDLE)
 
@@ -354,6 +367,7 @@ class RunController(QObject):
         if run is not None and run.stop_requested and self.is_live():
             self._model.stopping(True)
             self._refresh()
+            self._draw()
 
     def acknowledge(self, run: str) -> None:
         """Someone has seen how the run ``run`` ended: its history file says so, and when it is the run the
@@ -399,6 +413,7 @@ class RunController(QObject):
             run.synced = now
             threading.Thread(target=text.sync, name="run-text-sync", daemon=True).start()
         self._refresh()
+        self._draw()
 
     # ── what the worker says, on the window's thread ──
     def _on_line(self, text: str, level: str) -> None:
@@ -413,12 +428,28 @@ class RunController(QObject):
         self._model.feed(batch)
         self.lines.emit(list(batch))
         self._refresh()
+        self._draw()
 
     def _on_rows(self, rows) -> None:
         if self._run is None or not self.is_live():
             return
         self._model.rows(rows)
         self._refresh()
+        self._draw()
+
+    # ── the run's page ──
+    def _to_page(self, batch) -> None:
+        """Lines of the run's full text, handed to the page of the run they belong to: the live run's, or the
+        last one's, whose end and history are still being said."""
+        view = None if self._run is None else self._run.view
+        if _alive(view):
+            view.take_lines(batch)
+
+    def _draw(self) -> None:
+        """The run's page drawn again from the run's model, as the run's status now says."""
+        view = None if self._run is None else self._run.view
+        if _alive(view):
+            view.show_status(self._status, self._model)
 
     def _on_result(self, _payload) -> None:
         if self._run is not None and self._run.outcome is None:
@@ -475,9 +506,11 @@ class RunController(QObject):
                 run.text.close()
         for panel in list(BasePanel._instances):
             panel.set_controls_enabled(True)
+        if _alive(run.view):
+            run.view.show_status(last, model)
         host = run.host
-        if _alive(host) and hasattr(host, "_hosting"):
-            host._hosting(False)
+        if _alive(host) and hasattr(host, "_run_over"):
+            host._run_over(last)
         # The payload goes now: the worker's shell outlives the run (it is kept until the next run ends), and what it
         # points at -- the configuration, the prior, the posterior, tensors on the card -- must not.
         worker = run.worker

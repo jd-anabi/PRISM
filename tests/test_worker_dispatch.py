@@ -177,11 +177,12 @@ def test_cancel_token_latches_and_leaves_tqdm_usable():
     assert made == [True], "tqdm deadlocked after a cancel -- the write lock was not recovered"
 
 def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
-    """End to end: a run cancelled mid-flight ends as stopped (the worker said `cancelled`, not `error`),
-    the panel's Cancel button shown and pressable while the run goes, saying so while it stops, and hidden
-    at its end; the run is stopping from the ask, the token the run holds asked, and at the end the token
-    is let go, with stray figures closed and no run live; and a fresh run afterwards completes. How it
-    ended is read off the run's text and its end, as the controller says them."""
+    """End to end: a run stopped mid-flight ends as stopped (the worker said `cancelled`, not `error`),
+    the stop button of the run's page shown and pressable while the run goes, greyed and the page's sentence
+    saying so while it stops, and gone with the page at its end; the run is stopping from the ask, the token
+    the run holds asked, and at the end the token is let go, with stray figures closed and no run live; and a
+    fresh run afterwards completes. How it ended is read off the run's text and its end, as the controller
+    says them."""
     import matplotlib.pyplot as plt
 
     app = qt_app()
@@ -206,13 +207,14 @@ def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
     assert panel.is_running() and controller().is_live()
     run = controller()._run                   # the run the controller holds: its worker, and the token it holds
     assert run.token is not None and run.worker.cancel is run.token and not run.token.requested.is_set()
-    assert (not panel.btn_cancel.isHidden(), panel.btn_cancel.isEnabled(), panel.btn_cancel.text()) == (
-        True, True, "Cancel"), "the Cancel button is not there to press while the run goes"
+    page = panel.run_view
+    assert (page.stop_button.isVisibleTo(panel), page.stop_button.isEnabled(), page.stop_button.text()) == (
+        True, True, "Stop"), "the stop button is not there to press while the run goes"
 
-    panel._request_cancel()
+    page.stop_button.click()
     assert controller().status.stop_requested and run.token.requested.is_set()
     assert (controller().status.state, controller().status.state_word) == ("stopping", "stopping")
-    assert panel.btn_cancel.text() == "Cancelling…" and not panel.btn_cancel.isEnabled()
+    assert (page.stop_button.isEnabled(), page.sentence.text()) == (False, "Run is stopping.")
 
     turn_until(app, lambda: not controller().is_live(), 10)
     pump(app, 0.3)
@@ -224,8 +226,8 @@ def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
     assert not [line for line in text.texts() if line.startswith("The run failed")], text.lines
     assert plt.get_fignums() == [], "stray figures not closed on cancel"
     assert not controller().is_live() and run.token is None, "the run's end did not let go of its token"
-    assert (panel.btn_cancel.isHidden(), panel.btn_cancel.isEnabled()) == (True, False), (
-        "the Cancel button stayed on the page after its run ended")
+    assert (panel.results.currentWidget() is panel.figures, page.stop_button.isHidden()) == (True, True), (
+        "the stop button stayed on the page after its run ended")
     assert "Run cancelled." in panel.log_pane.toPlainText()
 
     later = []

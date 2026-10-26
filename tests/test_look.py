@@ -743,7 +743,8 @@ INTER_KINDS = ("small", "body", "strong", "head", "brand", "title")
 CLASSES_WITH_A_FONT = ("QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu", "QMenuBar", "QTipLabel",
                        "QStatusBar")
 CLASSES_WITH_EQUAL_DIGITS = ("QAbstractItemView", "QHeaderView")      # where numbers stand under one another
-FIXED_FACE_CALLERS = {"screens/artifact_screen.py", "screens/shell.py", "widgets/ask.py"}   # the record's text, a part's and a question's full error; each later caller joins by name
+FIXED_FACE_CALLERS = {"screens/artifact_screen.py", "screens/shell.py", "widgets/ask.py",
+                      "run/view.py"}   # the record's text, a part's and a question's full error, a run's full text; each later caller joins by name
 
 
 def _tabular():
@@ -2437,7 +2438,7 @@ _CALLED_WHILE_DRAWING = frozenset({
 # words, so these count only as a method of a class that has a class of the toolkit among its bases.
 _CALLED_IN_A_TOOLKIT_CLASS = frozenset({"paint", "paintSection", "pixmap", "data", "headerData", "flags", "rowCount",
                                         "columnCount", "showEvent", "hideEvent"})
-# Nine of them, each with the fallback its guard names as it is written (None: it names none). Typed out so
+# Ten of them, each with the fallback its guard names as it is written (None: it names none). Typed out so
 # that a guard taken off one of them, or a fallback changed, fails here by name; a new one need not join.
 _GUARDED_TODAY = {
     "screens/artifact_screen.py: ArtifactScreen.showEvent": "QWidget.showEvent",
@@ -2449,6 +2450,7 @@ _GUARDED_TODAY = {
     "style.py: FocusFollower.eventFilter": "False",
     "widgets/progress_pane.py: _Sparkline.paintEvent": None,
     "widgets/figure_stack.py: _FitLabel.resizeEvent": "QLabel.resizeEvent",
+    "run/view.py: _StageLine.resizeEvent": "QWidget.resizeEvent",
 }
 # The files the scan does not read, each with its reason.
 _NOT_GUARDED_FILES = {

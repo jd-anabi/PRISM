@@ -2693,7 +2693,7 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
     sight its first setting, as a shortcut gives it; on a page whose every setting a run has locked, the page's first
     control that is not a button, never the rail again, and from the run's foot the same. Escape anywhere else moves
     nothing: no page changes, the keyboard stays where it is and nothing is said; and a run goes on, its stop
-    asked by no Escape, in the rail or on its own Cancel button."""
+    asked by no Escape, in the rail or on its own page's stop button."""
     from PySide6.QtWidgets import QPushButton, QToolButton
     from core.gui.panels.reduction_panel import ReductionPanel
     qt_app()
@@ -2732,17 +2732,18 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
                 assert window.focusWidget() is rail.foot, "Tab from the rail did not reach the foot"
                 QTest.keyClick(rail.foot, Qt.Key_Escape)
                 assert window.part("reduction").isAncestorOf(window.focusWidget()), "Escape on the foot moved nothing"
+                stop = runner.run_view.stop_button
                 assert (controller().is_live(), controller().status.stop_requested,
-                        controller()._run.token.requested.is_set(), runner.btn_cancel.text()) == (
-                    True, False, False, "Cancel"), "Escape in the rail asked the run to stop"
-                runner.btn_cancel.setFocus(Qt.TabFocusReason)
+                        controller()._run.token.requested.is_set(), stop.isEnabled()) == (
+                    True, False, False, True), "Escape in the rail asked the run to stop"
+                stop.setFocus(Qt.TabFocusReason)
                 del said[:]
-                QTest.keyClick(runner.btn_cancel, Qt.Key_Escape)
+                QTest.keyClick(stop, Qt.Key_Escape)
                 assert (controller().is_live(), controller().status.stop_requested,
-                        controller()._run.token.requested.is_set(), runner.btn_cancel.text()) == (
-                    True, False, False, "Cancel"), "Escape asked the run to stop"
+                        controller()._run.token.requested.is_set(), stop.isEnabled()) == (
+                    True, False, False, True), "Escape asked the run to stop"
                 assert (window.current_place(), window.focusWidget(), said) == (
-                    ("reduction", None), runner.btn_cancel, []), "Escape on the Cancel button moved something"
+                    ("reduction", None), stop, []), "Escape on the stop button moved something"
     finally:
         window.hide()
 

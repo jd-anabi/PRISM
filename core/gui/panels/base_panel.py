@@ -1,10 +1,10 @@
-"""Shared panel scaffolding: a left controls column and a right results area (a figure stack over a
-progress pane + log pane), plus ``dispatch()``, which asks the process's run controller to run a callable on a
-background worker, described by the panel's own ``run_spec``."""
+"""Shared panel scaffolding: a left controls column and a right results column (a figure stack over the page's own
+lines, or, while a run of the page shows, the run's page in their place), plus ``dispatch()``, which asks the
+process's run controller to run a callable on a background worker, described by the panel's own ``run_spec``."""
 import weakref
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import (QHBoxLayout, QMessageBox, QPushButton, QScrollArea, QSplitter,
+from PySide6.QtWidgets import (QApplication, QHBoxLayout, QMessageBox, QScrollArea, QSplitter, QStackedWidget,
                                QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt
 
@@ -14,9 +14,9 @@ from .. import fields as gui_fields
 from ..design import CONTROLS_MIN_W, DEFAULT_RESULTS_SPLIT, DEFAULT_SPLIT
 from ..reported import reported
 from ..run.controller import LIVE_TEXT, controller
+from ..run.view import RunView
 from ..widgets.figure_stack import FigureStack
 from ..widgets.log_pane import LogPane
-from ..widgets.progress_pane import ProgressPane
 from ..widgets.refusal_box import show_refusal
 
 # "The cancel noted": shown alongside an ordinary crash report when the cancel token had already
@@ -125,30 +125,17 @@ class BasePanel(QWidget):
         # halves of the "input boxes are cut off" report. Width is now governed by the splitter, which
         # the user can drag and which now remembers where they put it.
 
-        # Right: figures over a progress pane over a log. Progress lives in its own widget -- one row
-        # per live tqdm bar -- and never touches the log, which only ever appends completed lines.
+        # Right: the page's figures over its own lines (a refusal's sentence, "Model applied", a record
+        # written). A run's lines never come here: they are the run's full text, on the run's page.
         self.figure_stack = FigureStack()
-        self.progress_pane = ProgressPane()
         self.log_pane = LogPane()
-
-        # Cancel sits on the progress row, hidden until a run starts. It is a "please stop": it sets a
-        # flag the pipeline's next print/redraw checks, so the run unwinds at its next checkpoint.
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setVisible(False)
-        self.btn_cancel.clicked.connect(self._request_cancel)
-        progress_row = QWidget()
-        progress_layout = QHBoxLayout(progress_row)
-        progress_layout.setContentsMargins(0, 0, 0, 0)
-        progress_layout.addWidget(self.progress_pane, 1)
-        progress_layout.addWidget(self.btn_cancel)
 
         # Stored as attributes so a subclass can insert its own primary view above the figure stack
         # (e.g. SimulatePanel mounts a live pyqtgraph view here and hides the static figure stack).
-        # The results column is a VERTICAL SPLITTER, not a fixed 3:0:1 stretch. The log pane used to
+        # The figures and the lines are a VERTICAL SPLITTER, not a fixed 3:1 stretch. The log pane used to
         # hold ~25% of the height whether it had one line in it or a thousand, with no handle to drag
         # -- that is the other half of "panes have to be dragged to show everything": here there was
-        # nothing to drag at all. The progress row stays outside the splitter (it is a fixed-height
-        # strip and a handle around it would be noise).
+        # nothing to drag at all.
         self.results_split = QSplitter(Qt.Vertical)
         self.results_split.addWidget(self.figure_stack)
         self.results_split.addWidget(self.log_pane)
@@ -157,15 +144,27 @@ class BasePanel(QWidget):
         self.results_split.setChildrenCollapsible(False)
         self.results_split.setSizes(list(DEFAULT_RESULTS_SPLIT))
 
-        self.right = QWidget()
-        self.right_layout = QVBoxLayout(self.right)
-        self.right_layout.setContentsMargins(0, 0, 0, 0)
-        self.right_layout.addWidget(self.results_split, 1)
-        self.right_layout.addWidget(progress_row)
+        # The right-hand column is a stack of two: the figures, with "How the run went" above them once a run
+        # of the page has ended, and the run's page, which takes their place while it shows and holds the
+        # figures under its messages. The form stays at the left, locked while a run is live.
+        self.run_view = RunView()
+        self.run_view.setObjectName("run")
+        self.run_view.back.connect(self._back_to_the_form)
+        self.run_view.how_link.clicked.connect(self.show_run)
+        self.figures = QWidget()
+        self.figures.setObjectName("figures")
+        self.figures_layout = QVBoxLayout(self.figures)
+        self.figures_layout.setContentsMargins(0, 0, 0, 0)
+        self.figures_layout.addWidget(self.run_view.how_link, 0, Qt.AlignLeft)
+        self.figures_layout.addWidget(self.results_split, 1)
+        self.results = QStackedWidget()
+        self.results.addWidget(self.figures)
+        self.results.addWidget(self.run_view)
+        self._split_sizes = None             # the figures' and the lines' heights, kept while the run's page holds them
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.controls_scroll)
-        self.splitter.addWidget(self.right)
+        self.splitter.addWidget(self.results)
         self.splitter.setStretchFactor(1, 1)
         # A drag past the left edge used to collapse the controls column to zero width, recoverable
         # only by finding a 5px handle at x=0.
@@ -198,14 +197,24 @@ class BasePanel(QWidget):
 
         ONE RUN AT A TIME IN THE WHOLE PROCESS, not merely per panel: redirect_streams swaps sys.stdout/stderr
         process-wide, so two concurrent runs would fight over the console. While a run is live this says so
-        among the page's own lines, starts nothing and returns False; True when the run was started."""
+        among the page's own lines, starts nothing and returns False; True when the run was started.
+
+        A run started from this page's form leaves the keyboard on the run page's stop button, where the
+        form's lock would leave it on nothing. Given for no key of its own, the focus shows its ring only
+        while the keyboard has the turn: after a start made with a key."""
         held = controller()
         if held.is_live():
             self.log_pane.append_line(LIVE_TEXT, "warning")
             return False
-        return held.dispatch(fn, *args, spec=self.run_spec(fn, *args, **kwargs), host=self, on_result=on_result,
-                             provide_fig_sink=provide_fig_sink, provide_stream=provide_stream, on_chunk=on_chunk,
-                             watch_dir=watch_dir, **kwargs)
+        focus = QApplication.focusWidget()
+        from_here = focus is not None and self.isAncestorOf(focus)
+        started = held.dispatch(fn, *args, spec=self.run_spec(fn, *args, **kwargs), host=self, on_result=on_result,
+                                provide_fig_sink=provide_fig_sink, provide_stream=provide_stream, on_chunk=on_chunk,
+                                watch_dir=watch_dir, **kwargs)
+        stop = self.run_view.stop_button
+        if started and from_here and stop.isVisibleTo(self) and stop.isEnabled():
+            stop.setFocus(Qt.OtherFocusReason)
+        return started
 
     def run_spec(self, fn, *args, **kwargs):
         """What this panel knows of the run ``fn(*args, **kwargs)`` would be, and the run does not say: its word,
@@ -218,23 +227,47 @@ class BasePanel(QWidget):
         held = controller()
         return held.is_live() and held.host() is self
 
-    def _hosting(self, on: bool) -> None:
-        """This panel's run has begun (True) or ended (False): its Cancel button shows, and can be pressed, while
-        the run is live. Called by the run's controller."""
-        self.btn_cancel.setVisible(on)
-        self.btn_cancel.setEnabled(on)
-        self.btn_cancel.setText("Cancel")
+    def show_run(self) -> None:
+        """The run's page in the right-hand column, holding this page's figures under its messages: while this
+        page's run is live, after a stop or a failure until "Back to the form", and again from "How the run
+        went"."""
+        if self.results_split.indexOf(self.figure_stack) >= 0:
+            self._split_sizes = self.results_split.sizes()
+        self.run_view.hold_figures(self.figure_stack)
+        self.run_view.how_link.setVisible(False)
+        self.results.setCurrentWidget(self.run_view)
 
-    def _request_cancel(self):
-        if not self.is_running():
-            return
-        controller().request_stop()
-        self.btn_cancel.setEnabled(False)
-        self.btn_cancel.setText("Cancelling…")
-        # A cancel is cooperative: it lands at the next print/tqdm redraw. That is ~1s almost
-        # everywhere, but a neural-network training epoch and the SBC C2ST block are silent for longer.
-        self.log_pane.append_line(
-            "Cancelling — will stop at the next checkpoint (up to ~1 min during training).", "warning")
+    def show_figures(self) -> None:
+        """The right-hand column back to this page's figures over its own lines, the figures the run's page held
+        handed back to their place, at the heights they had."""
+        stack = self.run_view.release_figures()
+        if stack is not None:
+            self.results_split.insertWidget(self.results_split.count() - 1, stack)
+            if self._split_sizes is not None:
+                self.results_split.setSizes(self._split_sizes)
+        self.results.setCurrentWidget(self.figures)
+
+    def _run_began(self, spec) -> None:
+        """This page's run has begun: its page takes the right-hand column, unless the run only loads a record.
+        Called by the run's controller, once the run's page has been handed the run."""
+        if not spec.loads_only:
+            self.show_run()
+
+    def _run_over(self, status) -> None:
+        """This page's run has ended, as ``status`` says. A run that finished gives the column back to the
+        figures, "How the run went" above them; one that ended into idle (a refusal before anything was spent, a
+        run that keeps no file) gives it back with no link; a stopped or a failed run keeps its page until "Back
+        to the form". Called by the run's controller, once every panel is free again."""
+        if status.state == "idle":
+            self.show_figures()
+        elif status.outcome == "finished":
+            self.show_figures()
+            self.run_view.how_link.setVisible(True)
+
+    def _back_to_the_form(self) -> None:
+        """"Back to the form": the figures again, "How the run went" above them."""
+        self.show_figures()
+        self.run_view.how_link.setVisible(True)
 
     def set_controls_enabled(self, enabled: bool):
         """Lock the whole left-hand column while a task runs.
@@ -259,11 +292,10 @@ class BasePanel(QWidget):
     def insert_result_widget(self, index: int, widget, stretch: int = 1) -> None:
         """Mount a panel-specific primary view in the results column, above the figure stack.
 
-        SimulatePanel puts a live pyqtgraph view here and hides the static figure stack. It used to
-        reach into ``right_layout`` with ``insertWidget(0, view, 5)`` directly; now that the results
-        column is a QSplitter that call would land the widget in the wrong parent, so this is the
-        supported seam. Going through it also means the live view gets a drag handle like everything
-        else in that column.
+        SimulatePanel puts a live pyqtgraph view here and hides the static figure stack. The figures
+        and the lines are a QSplitter, so a view inserted beside them by hand would land in the wrong
+        parent; this is the supported seam. Going through it also means the live view gets a drag
+        handle like everything else in that column.
         """
         self.results_split.insertWidget(index, widget)
         self.results_split.setStretchFactor(index, stretch)
@@ -283,7 +315,8 @@ class BasePanel(QWidget):
     def save_layout(self, qs) -> None:
         """Persist the splitter geometry. Called by MainWindow._save_state and the debounce timer."""
         qs.setValue(f"layout/{self.layout_key()}/splitter", self.splitter.saveState())
-        qs.setValue(f"layout/{self.layout_key()}/results", self.results_split.saveState())
+        if self.results_split.indexOf(self.figure_stack) >= 0:     # not while the run's page holds the figures
+            qs.setValue(f"layout/{self.layout_key()}/results", self.results_split.saveState())
 
     def restore_layout(self, qs=None) -> None:
         """Restore the splitter geometry, if any was stored.

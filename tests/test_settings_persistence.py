@@ -1135,7 +1135,7 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
              "ReductionPanel", "ModelBuilderScreen", "ArtifactScreen", "ConfigPanel", "PriorPanel",
              "PosteriorPanel", "ValidatePanel", "InferPanel", "TSNPEPanel", "BasePanel",
              "HomeScreen", "SettingsScreen", "TemperatureScreen", "RecordViewer", "Shell", "HelpScreen",
-             "ModelsScreen", "PartError"}
+             "ModelsScreen", "PartError", "RunView"}
     # The list is kept closed over the program. Every class with a base that a file of the window's own
     # folder, of its screens, of its panels or of its runs defines under a public name is named above, or here among
     # those a suite still builds itself, or among the classes of the window's folder that are no window,

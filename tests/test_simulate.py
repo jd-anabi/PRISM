@@ -190,7 +190,7 @@ def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
     run = controller()._run                   # the run the controller holds: its worker, and the token it holds
     assert run.token is not None and run.worker.cancel is run.token, "a live run holds no token to stop it by"
 
-    panel._request_cancel()
+    panel.run_view.stop_button.click()
     turn_until(app, lambda: not controller().is_live(), 10)
     pump(app, 0.3)
 

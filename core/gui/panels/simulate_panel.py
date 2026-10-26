@@ -3,7 +3,8 @@
 Pick a model + cell + observation time and press Start; a worker-thread chunked Euler-Maruyama loop
 (``simulate_runner.run_simulation_stream``) streams the redimensionalized hair-bundle displacement one
 frame at a time, and a pyqtgraph ``LiveHairBundleView`` renders a scrolling trace + a top-down heatmap
-on the GUI thread. The stream is finite (bounded by T_obs) and the shared Cancel button stops it early.
+on the GUI thread. The stream is finite (bounded by T_obs), and the stop button of the run page above the
+live view stops it early.
 
 This panel reuses BasePanel's dispatch rails verbatim; the only new machinery is dispatch(provide_stream)
 (which injects the chunk emitter + a stop-flag) and the live view mounted above the (hidden) figure
@@ -21,7 +22,7 @@ from core.refusals import Refusal, require_at_least, require_positive
 
 from .base_panel import BasePanel
 from .simulate_export import (estimate_frame_count, export_animation, export_stride, ffmpeg_available)
-from .simulate_runner import build_stream_config, run_simulation_stream
+from .simulate_runner import build_stream_config, plan_stream, run_simulation_stream
 from .. import fields as gui_fields
 from .. import settings
 from ..file_chooser import choose_file
@@ -61,12 +62,18 @@ class SimulatePanel(BasePanel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._record = []          # emitted (k,2) [t,x] frames of the last/current run, for video export
+        self._samples = (0, 0)     # the samples the live simulation has shown, and the samples it will show
         # The live view is this panel's primary surface: mount it above the (unused) static figure stack.
         self.live_view = LiveHairBundleView()
-        # Via the BasePanel seam: the results column is a QSplitter now, so inserting into
-        # right_layout would put this outside it (and give it no drag handle).
+        # Via the BasePanel seam: the figures and the lines are a QSplitter, so a view inserted beside
+        # them by hand would land outside it (and get no drag handle).
         self.insert_result_widget(0, self.live_view, stretch=5)
         self.figure_stack.setVisible(False)
+        # The run's page does not take the live view's place: it stands above it, in its compact form for
+        # the live simulation (the sentence and the stop button), whole for the export of its video.
+        self.results.removeWidget(self.run_view)
+        self.figures_layout.insertWidget(1, self.run_view)
+        self.run_view.setVisible(False)
         self._build_controls()
         self.restore_settings(settings.settings())
 
@@ -95,7 +102,7 @@ class SimulatePanel(BasePanel):
         add_help_row(form, gui_fields.label("t_obs"), self.tobs, HELP["tobs"])
         add_help_row(form, gui_fields.label("frame_steps"), self.frame_steps, HELP["frame"])
         add_help_row(form, gui_fields.label("fps"), self.fps, HELP["fps"])
-        form.addRow(QLabel("Streaming holds the app single-task until it finishes or you Cancel."))
+        form.addRow(QLabel("Streaming holds the app single-task until it finishes or you stop it."))
         form.addRow(self.btn_start)
         form.addRow(self.btn_save_video)
         self.controls_layout.addWidget(box)
@@ -117,6 +124,8 @@ class SimulatePanel(BasePanel):
             frame_steps = require_at_least("frame_steps", self.frame_steps.value_or_none(), 1)
             fps = require_positive("fps", self.fps.value_or_none())
             cfg = build_stream_config(model, cell)
+            plan = plan_stream(cfg, t_obs)           # the samples the stream will show: one per subsampled step
+            samples = -(-plan.total_steps // plan.subsample_factor)
         except Refusal as e:                         # a box, a cell or a model problem: the yellow box
             self._refusal(e)
             return
@@ -126,6 +135,7 @@ class SimulatePanel(BasePanel):
         self.live_view.set_displacement_unit(cfg.length_unit or "nm")   # label the trace y-axis in cell units
         self.live_view.reset()
         self._record = []                                    # a new run: drop the previous recording
+        self._samples = (0, samples)
         self.log_pane.append_line(
             f"Streaming {model} — {Path(cell).name} for {t_obs:g} s of observation…")
         self.dispatch(run_simulation_stream, cfg, t_obs, frame_steps, float(fps),
@@ -133,9 +143,23 @@ class SimulatePanel(BasePanel):
                       on_result=lambda _r: self.log_pane.append_line("Simulation complete."))
 
     def _on_chunk(self, chunk):
-        """Render the frame AND record it (a fresh (k,2) array per frame) for a later video export."""
+        """Render the frame AND record it (a fresh (k,2) array per frame) for a later video export; the run's
+        page counts the samples shown against the samples to come."""
         self.live_view.push(chunk)
         self._record.append(np.asarray(chunk))
+        shown, total = self._samples
+        self._samples = (shown + len(chunk), total)
+        if total:
+            self.run_view.set_count(self._samples[0], total, "samples")
+
+    def show_run(self):
+        """The run's page above the live view, which stays where it is."""
+        self.run_view.how_link.setVisible(False)
+        self.run_view.setVisible(True)
+
+    def show_figures(self):
+        """The live view alone again: the run's page above it goes."""
+        self.run_view.setVisible(False)
 
     def _save_video(self):
         if not self._record:
