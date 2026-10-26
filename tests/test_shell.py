@@ -3382,18 +3382,20 @@ def test_main_lets_go_of_the_claim_when_its_loop_ends_without_a_close(tmp_path, 
 
 
 def test_closing_the_window_lets_go_of_the_claim_while_a_figure_window_keeps_prism_running(tmp_path, monkeypatch):
-    """A figure popped out of the window is a window of its own, with no parent, and keeps the program's event loop
-    running after the window has closed. The lock and the listener are let go as the window's close is accepted,
-    not when the loop ends, so that the next start of PRISM on its settings file takes the lock and opens a window
-    of its own beside the figure left open. A close refused while a run is live keeps both, and the window. The run
-    that ended inside the whole program is put back as the program goes: no run is left to acknowledge."""
+    """A window of its own that the window does not own -- here one with no parent, shown nowhere on the screen,
+    which the close leaves open -- keeps the program's event loop running after the window has closed. The lock and
+    the listener are let go as the window's close is accepted, not when the loop ends, so that the next start of
+    PRISM on its settings file takes the lock and opens a window of its own beside the one left open. A close
+    refused while a run is live -- the close's question asked, and "Keep running" its answer -- keeps both, and the
+    window. The run that ended inside the whole program is put back as the program goes: no run is left to
+    acknowledge, and no close waits for one."""
     from PySide6.QtWidgets import QWidget
     from core.gui import one_instance, settings
     from core.gui.panels.reduction_panel import ReductionPanel
-    from tests._fixtures import choose, whole_program
+    from tests._fixtures import asked, choose, whole_program
     qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
-    figure = QWidget()                                # a figure popped out: a window of its own, with no parent
+    figure = QWidget()                                # a window of its own the window does not own, with no parent
     figure.setAttribute(Qt.WA_DontShowOnScreen)
     try:
         with whole_program() as (_app, window):
@@ -3402,11 +3404,12 @@ def test_closing_the_window_lets_go_of_the_claim_while_a_figure_window_keeps_pri
             _shown_off_screen(window)
             figure.show()
             with running(window.panel(ReductionPanel)):
-                choose(monkeypatch, words="Don't quit")
+                choose(monkeypatch, words="Keep running")
                 window.close()
-                refused = (window.isVisible(), one_instance.current() is held)
-            assert refused == (True, True), (
-                "a close refused while a run is live closed the window or let go of the claim")
+                refused = (window.isVisible(), one_instance.current() is held, asked().title, controller().is_live())
+            assert refused == (True, True, "Close PRISM?", True), (
+                "a close refused while a run is live closed the window, let go of the claim, asked no question, or "
+                "stopped the run")
             window.close()
             assert (window.isVisible(), figure.isVisible(), one_instance.current()) == (False, True, None), (
                 "the claim was not let go as the window's close was accepted, a figure window still open")
@@ -3415,8 +3418,8 @@ def test_closing_the_window_lets_go_of_the_claim_while_a_figure_window_keeps_pri
                 assert again.case == "start", f"the next start was {again.case}"
             finally:
                 again.release()
-        assert (controller().is_live(), controller().status.state) == (False, "idle"), (
-            "the whole program left the run's end to acknowledge")
+        assert (controller().is_live(), controller().status.state, controller().status.closing) == (
+            False, "idle", False), "the whole program left the run's end to acknowledge, or a close waiting for one"
     finally:
         figure.hide()
         figure.deleteLater()

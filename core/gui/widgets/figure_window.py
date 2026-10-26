@@ -15,9 +15,9 @@ Two window types, one per figure source (see FigureStack):
     missing or fails to load. A QGraphicsView gives wheel-zoom, drag-pan and fit-to-window over the
     static image.
 
-Both are parentless top-level windows. FigureStack holds the ONLY reference (a set) and drops it in
-each window's closeEvent -- without that pin, Python/Qt would GC the window the moment show() returns
-(the same lifetime trap BasePanel.dispatch handles for its workers).
+Both are top-level windows OWNED by the window they were opened from (a parent, with the flag that makes a
+widget a window of its own): they stand over it, go with it, and close with it. FigureStack holds them in a set,
+and drops each in its closeEvent.
 """
 import pickle
 
@@ -57,7 +57,7 @@ class InteractiveFigureWindow(QWidget):
     """A live matplotlib canvas for a (main-thread) figure, with the standard navigation toolbar."""
 
     def __init__(self, fig, title="Figure", on_close=None, parent=None):
-        super().__init__(parent)
+        super().__init__(parent, Qt.Window)
         # The Qt-agg backend is imported HERE -- lazily, and only when a figure is actually popped out --
         # so app start and the headless, non-pop-out tests never pull it in, and an import failure is
         # catchable at click time (FigureStack falls back to the image viewer) instead of breaking the
@@ -116,7 +116,7 @@ class ImageZoomWindow(QWidget):
     when a figure could not be unpickled."""
 
     def __init__(self, pixmap, title="Figure", on_close=None, parent=None):
-        super().__init__(parent)
+        super().__init__(parent, Qt.Window)
         self._on_close = on_close
         self._pixmap = pixmap
         self._fitted = False

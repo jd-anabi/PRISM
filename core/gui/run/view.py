@@ -9,8 +9,10 @@ line the run wrote, which the run's controller hands over as it says them; "Open
 open the run's text file and the folder of runs, whose path is never written on the page.
 
 The stop button asks what the run's stage keeps before it stops the run (a run whose stop loses nothing is stopped
-with no question); while the stop is pending, "Don't stop after all" withdraws it. Once a stop of a training has
-landed, the page asks whether to keep the training it kept, never in a box of its own.
+with no question); while the stop is pending, "Don't stop after all" withdraws it, and, when the window waits for
+the run before it closes, the page says so. A training saving its posterior is not stopped, and the window's close
+waits for the save with no stop: "Keep PRISM open" withdraws that close. Once a stop of a training has landed, the
+page asks whether to keep the training it kept, never in a box of its own.
 
 It is live while the run is, ended once it has ended, and past when it is drawn from a run's files alone. A run
 with a view of its own shows the page in its compact form: the sentence and the stop button. The page lives
@@ -192,6 +194,7 @@ class RunView(QWidget):
         self._compact = False
         self._model: RunModel | None = None
         self._stopping = False
+        self._closing = False
         self._run: str | None = None             # the run's id, as its status names it
         self._answered = False                   # whether Keep or Discard was answered for the training it kept
         self._clock = _local_now
@@ -226,13 +229,16 @@ class RunView(QWidget):
         self.stop_button.clicked.connect(self._stop)
         self.withdraw_button = QPushButton(questions.WITHDRAW_TEXT)
         self.withdraw_button.clicked.connect(self._withdraw)
+        self.keep_open_button = QPushButton(questions.KEEP_OPEN_TEXT)
+        self.keep_open_button.clicked.connect(self._keep_open)
         self.back_button = QPushButton(BACK_TEXT)
         self.back_button.clicked.connect(self.back.emit)
         head.addWidget(self.title, 1)
         # The room the buttons leave goes to the title, or, in the compact form, where the title is not shown, to
         # this stretch: never to a button, which keeps its own width at the right.
         head.addStretch(0)
-        for button in (self.text_button, self.stop_button, self.withdraw_button, self.back_button):
+        for button in (self.text_button, self.stop_button, self.withdraw_button, self.keep_open_button,
+                       self.back_button):
             head.addWidget(button, 0, Qt.AlignTop)
 
         # where the run stands: its stages, its sentence, the time axis with its line, and what follows
@@ -253,11 +259,13 @@ class RunView(QWidget):
         self.follows = QLabel()
         self.follows.setTextFormat(Qt.PlainText)
         self.follows.setFont(fonts.inter("body", tabular=True))
-        # under the sentence: what the page says of a stop, and the question of keeping a training a stop kept, which
-        # the page asks itself once the stop has landed
+        # under the sentence: what the page says of a stop and a close, and the question of keeping a training a
+        # stop kept, which the page asks itself once the stop has landed
         self.notice = QLabel()
-        self.notice.setTextFormat(Qt.PlainText)
-        self.notice.setWordWrap(True)
+        self.closing_line = QLabel(questions.CLOSING_TEXT)
+        for label in (self.notice, self.closing_line):
+            label.setTextFormat(Qt.PlainText)
+            label.setWordWrap(True)
         self.keep_block = QWidget()
         keep = QVBoxLayout(self.keep_block)
         keep.setContentsMargins(0, 0, 0, 0)
@@ -286,7 +294,7 @@ class RunView(QWidget):
         said = QVBoxLayout(self.said)
         said.setContentsMargins(0, design.scaled(design.GAP["now"][1]), 0, 0)
         said.setSpacing(design.scaled(design.GAP["head_table"]))
-        for part in (self.notice, self.keep_block):
+        for part in (self.notice, self.closing_line, self.keep_block):
             said.addWidget(part)
         box = self.status.box
         box.addWidget(self.stage_line)
@@ -397,7 +405,7 @@ class RunView(QWidget):
         (None for a run that keeps none), and the clock its moments are read from; its full text emptied. The
         page is live, in its compact form for a run with a view of its own."""
         self._mode, self._compact, self._model, self._stopping = "live", spec.own_view, None, False
-        self._run, self._answered = None, False
+        self._closing, self._run, self._answered = False, None, False
         self.notice.setText("")
         self._axis_shown = self._text_shown = False
         self.text_button.setText(SHOW_TEXT)
@@ -434,6 +442,7 @@ class RunView(QWidget):
         self._model = model
         self._mode = "live" if status.live else "ended"
         self._stopping = status.stop_requested
+        self._closing = status.closing and status.live
         self._run = status.run
         if ending and model is not None and self._kept_nothing(model):
             self.notice.setText(questions.NOT_KEPT_TEXT)
@@ -545,25 +554,29 @@ class RunView(QWidget):
     def _arrange(self) -> None:
         """What is in sight in the page's mode and form. A control of the page that holds the keyboard and goes, or
         is greyed, first hands it on, for no key of its own (its ring shows while the keyboard has the turn): the
-        stop button to "Don't stop after all" while a stop can be withdrawn, and back; at a stopped end to "Keep"
-        while the training the stop kept is asked about, else to the sentence; at any other end to "Back to the
-        form". A keyboard on a control that stays (the full text's, "Show the full text") stays where it is."""
+        stop button to "Don't stop after all" while a stop can be withdrawn, and back; "Keep PRISM open", once it has
+        withdrawn its close, to the sentence, the stop button being greyed while the posterior is saved; at a stopped
+        end to "Keep" while the training the stop kept is asked about, else to the sentence; at any other end to "Back
+        to the form". A keyboard on a control that stays (the full text's, "Show the full text") stays where it is."""
         live, full = self._mode == "live", not self._compact
         axis = self._axis_shown and live and full
         stops = live and not self._stopping and not self._saving()
         withdraws = live and self._stopping and self._model is not None and self._model.spec.stop_asks
         keeps = self._keeps()
-        notice = bool(self.notice.text())
-        shown = ((self.said, notice or keeps), (self.notice, notice), (self.keep_block, keeps),
-                 (self.stop_button, live), (self.withdraw_button, withdraws), (self.back_button, not live and full))
+        closing, notice = self._closing and live, bool(self.notice.text())
+        keeps_open = closing and not self._stopping          # a close that waits for a save, no stop asked
+        self.closing_line.setText(questions.CLOSING_SAVED_TEXT if keeps_open else questions.CLOSING_TEXT)
+        shown = ((self.said, closing or notice or keeps), (self.notice, notice), (self.closing_line, closing),
+                 (self.keep_block, keeps), (self.stop_button, live), (self.withdraw_button, withdraws),
+                 (self.keep_open_button, keeps_open), (self.back_button, not live and full))
         for widget, on in shown:                 # what takes the keyboard is in sight before what holds it goes
             if on:
                 widget.setVisible(True)
         if stops:
             self.stop_button.setEnabled(True)
         focus = QApplication.focusWidget()
-        going = ((self.stop_button, stops), (self.withdraw_button, withdraws), (self.keep_button, keeps),
-                 (self.discard_button, keeps))
+        going = ((self.stop_button, stops), (self.withdraw_button, withdraws), (self.keep_open_button, keeps_open),
+                 (self.keep_button, keeps), (self.discard_button, keeps))
         if any(focus is widget and not stays for widget, stays in going):
             self._hand_on(stops, withdraws, keeps)
         for widget, on in shown:
@@ -636,9 +649,15 @@ class RunView(QWidget):
         held.request_stop()
 
     def _withdraw(self) -> None:
-        """"Don't stop after all": the stop asked for is withdrawn."""
+        """"Don't stop after all": the stop asked for is withdrawn, and the close that waits for it."""
         from .controller import controller
         controller().withdraw_stop()
+
+    def _keep_open(self) -> None:
+        """"Keep PRISM open": the close that waits for the posterior to be saved is withdrawn; the run goes on as it
+        would have."""
+        from .controller import controller
+        controller().withdraw_close()
 
     def _keep(self) -> None:
         """"Keep": the training the stop kept stays kept, as a question nobody answers leaves it, and the question

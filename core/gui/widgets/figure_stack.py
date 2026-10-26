@@ -5,7 +5,7 @@ lock. Static PNGs sidestep that entirely and unify with the FDT/Reduction/CrossV
 already save PNGs to disk.
 
 Each tab carries a "Pop out" button that re-opens the figure in its own window where it CAN be zoomed,
-panned and saved (core/gui/widgets/figure_window.py):
+panned and saved (core/gui/widgets/figure_window.py), a window owned by the one the stack stands in:
   * SBI-panel figures also arrive as a pickled Figure -> a true interactive matplotlib window,
     reconstructed on the GUI thread (never painting the worker's original -- see above).
   * disk-PNG figures (and any figure whose pickle is missing / unloadable) -> a pan/zoom image viewer.
@@ -55,8 +55,8 @@ class FigureStack(QTabWidget):
         self.setTabsClosable(True)
         self.setMovable(True)
         self.tabCloseRequested.connect(self._close_tab)
-        # Pop-out windows are parentless top-levels; hold them or Python/Qt GCs them the instant show()
-        # returns (the lifetime trap BasePanel.dispatch handles for its workers). Dropped on close.
+        # The pop-out windows, owned by the window the stack stands in: held here as well, so that each is reached
+        # while it is open. Dropped on close.
         self._windows = set()
 
     def add_figure(self, title: str, png_bytes: bytes, fig_pickle=None):
@@ -113,13 +113,17 @@ class FigureStack(QTabWidget):
         self.setCurrentIndex(idx)
 
     def _pop_out(self, container):
+        """Open the figure of ``container`` in a window of its own, owned by the window this stack stands in: an
+        interactive copy when its pickle loads, else its picture in the image viewer."""
         from .figure_window import ImageZoomWindow, build_interactive_window
 
         title = getattr(container, "_title", "Figure")
+        owner = self.window()
         window = None
         if getattr(container, "_fig_pickle", None) is not None:
             try:
-                window = build_interactive_window(container._fig_pickle, title, on_close=self._drop_window)
+                window = build_interactive_window(container._fig_pickle, title, on_close=self._drop_window,
+                                                  parent=owner)
             except Exception:      # noqa: BLE001 -- a version-skewed / unloadable pickle: fall back
                 window = None
         if window is None:
@@ -128,7 +132,7 @@ class FigureStack(QTabWidget):
                 disk = QPixmap(container._png_path)
                 if not disk.isNull():
                     pix = disk
-            window = ImageZoomWindow(pix, title, on_close=self._drop_window)
+            window = ImageZoomWindow(pix, title, on_close=self._drop_window, parent=owner)
         self._windows.add(window)
         window.show()
         window.raise_()

@@ -19,8 +19,10 @@ A run that only loads a record, a live simulation and a video export keep no fil
 nothing to acknowledge.
 
 A stop asked for (``request_stop``) is taken at the run's next point where a stop is taken and can be withdrawn
-until then (``withdraw_stop``). A training a stop kept stays kept until its page's Discard deletes it (``discard``),
-once the run has ended.
+until then (``withdraw_stop``); asked by the window's close, it carries the close, and the window closes once the
+run has ended. A training saving its posterior is not stopped, the save being a thing no stop interrupts: the
+window's close then waits for the save with no stop, and can be withdrawn until the run ends (``withdraw_close``). A
+training a stop kept stays kept until its page's Discard deletes it (``discard``), once the run has ended.
 
 The run's page is its host's: the controller hands it the run at the start and draws it again from the run's model
 at every change the model hears and at each look; the run's full text reaches it through ``lines``. A run that only
@@ -162,6 +164,7 @@ class _Run:
         self.failure = None                        # (exception, traceback, cancel noted) of a failed run
         self.kept_fit = None
         self.stop_requested = False
+        self.closing = False                       # the window closes once the run has ended
         self.ended: datetime | None = None
         self.acknowledged = False
         self.set_named = False
@@ -181,14 +184,17 @@ class RunController(QObject):
     status_changed = Signal(object)
     run_ended = Signal(object)
     lines = Signal(object)
-    # A stop asked for, heard on the window's thread, from whichever thread asked; and one asked for too late.
+    # A stop asked for, heard on the window's thread, from whichever thread asked; one asked for too late; and one
+    # asked of a training saving its posterior.
     _stopping = Signal()
     _late = Signal()
+    _unstoppable = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._stopping.connect(self._stop_heard)
         self._late.connect(self._too_late)
+        self._unstoppable.connect(self._cannot_stop)
         self.lines.connect(self._to_page)
         self._status: RunStatus = IDLE
         self._model: RunModel | None = None
@@ -360,29 +366,38 @@ class RunController(QObject):
         self.status_changed.emit(IDLE)
 
     # ── a run's stop and its end ──
-    def request_stop(self) -> None:
+    def request_stop(self, *, closing: bool = False) -> None:
         """Ask the live run to stop at its next point where a stop is taken: the run is Stopping from now on, and its
-        history says so. Nothing when a stop is asked for already. A stop asked of a run that has ended does nothing
-        and says so on its page; nothing at all before the process's first run. Safe from any thread: the run's token
-        is set at once, and the run's state, its history and its page follow on the window's thread (at once when
-        asked there)."""
+        history says so. With ``closing`` the window closes once the run has ended; a stop asked for already gains
+        that. A training saving its posterior is not stopped: with ``closing`` the window closes once the posterior is
+        saved and the run has ended, and a stop asked for without it comes too late and says so on the run's page. A
+        stop asked of a run that has ended does nothing and says so on its page; nothing at all before the process's
+        first run. Safe from any thread: the run's token is set at once, and the run's state, its history and its page
+        follow on the window's thread (at once when asked there)."""
         run = self._run
         token = None if run is None else run.token
         if token is None or not self.is_live():
             if run is not None and run.ended is not None:
                 self._late.emit()
             return
-        if run.stop_requested:
+        saving = self._model is not None and self._model.stage_kind() == "saving"
+        if closing:
+            run.closing = True
+        elif saving and not run.stop_requested:
+            self._unstoppable.emit()
             return
-        run.stop_requested = True
-        token.requested.set()
+        if not run.stop_requested and not saving:
+            run.stop_requested = True
+            token.requested.set()
         self._stopping.emit()
 
     def _stop_heard(self) -> None:
-        """A stop asked for, on the window's thread: the model is told, and the run's state worked out again."""
+        """A stop or a close asked for, on the window's thread: the model is told of a stop, and the run's state
+        worked out again."""
         run = self._run
-        if run is not None and run.stop_requested and self.is_live():
-            self._model.stopping(True)
+        if run is not None and (run.stop_requested or run.closing) and self.is_live():
+            if run.stop_requested:
+                self._model.stopping(True)
             self._refresh()
             self._draw()
 
@@ -392,13 +407,20 @@ class RunController(QObject):
         if _alive(view):
             view.say(questions.FINISHED_TEXT)
 
+    def _cannot_stop(self) -> None:
+        """A stop asked of a training saving its posterior, on the window's thread: its page says it came too late."""
+        view = None if self._run is None else self._run.view
+        if _alive(view):
+            view.say(questions.SAVING_TEXT)
+
     def withdraw_stop(self) -> bool:
-        """Withdraw the stop asked of the live run, on the window's thread: True when the stop had not been taken,
-        and the run goes on; False when the run had already begun to stop, and for a run whose stop cannot be
-        withdrawn (one that asks nothing before it stops). The run's page says which."""
+        """Withdraw the stop asked of the live run, and the close that waits for it, on the window's thread: True
+        when the stop had not been taken, and the run goes on; False when the run had already begun to stop, and for
+        a run whose stop cannot be withdrawn (one that asks nothing before it stops). The run's page says which."""
         run = self._run
         if run is None or run.token is None or not self.is_live() or not run.stop_requested or not run.spec.stop_asks:
             return False
+        run.closing = False
         withdrawn = run.token.withdraw()
         if withdrawn:
             run.stop_requested = False
@@ -409,6 +431,20 @@ class RunController(QObject):
             run.view.say(questions.WITHDRAWN_TEXT.format(run.spec.word.lower()) if withdrawn
                          else questions.TOO_LATE_TEXT)
         return withdrawn
+
+    def withdraw_close(self) -> bool:
+        """Withdraw the close that waits for the live run with no stop asked of it (a training saving its posterior),
+        on the window's thread: True when there was one, and the window then stays open at the run's end, which the
+        run's page says; False when there was none."""
+        run = self._run
+        if run is None or not self.is_live() or not run.closing or run.stop_requested:
+            return False
+        run.closing = False
+        self._refresh()
+        self._draw()
+        if _alive(run.view):
+            run.view.say(questions.KEPT_OPEN_TEXT)
+        return True
 
     def discard(self, run: str | None) -> str | None:
         """Delete the training the stop of the run ``run`` kept, once that run has ended (the training's lock is let
@@ -557,7 +593,8 @@ class RunController(QObject):
         last = RunStatus(state="idle" if idle else "ended", word=spec.word, name=spec.name,
                          run=None if refused_early else run.id, place=spec.place, loading=spec.loads_only,
                          stage=model.stage, outcome=None if refused_early else run.outcome, started=model.started,
-                         ended=run.ended, kept_fit=run.kept_fit, kinds=spec.kinds, records=spec.records)
+                         ended=run.ended, kept_fit=run.kept_fit, closing=run.closing, kinds=spec.kinds,
+                         records=spec.records)
         self._status = IDLE if idle else last
         if spec.keeps_files:
             if refused_early:
@@ -629,7 +666,8 @@ class RunController(QObject):
                          state_word=("loading" if spec.loads_only else "stopping" if state == "stopping"
                                      else "running"),
                          stage=stage, stage_words=words, needs_you=model.needs_you(), started=model.started,
-                         stop_requested=run.stop_requested, kinds=spec.kinds, records=spec.records)
+                         stop_requested=run.stop_requested, closing=run.closing, kinds=spec.kinds,
+                         records=spec.records)
 
     def _refresh(self) -> None:
         """The run's state worked out again after the model heard something: the history written at a change of

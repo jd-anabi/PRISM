@@ -89,17 +89,22 @@ def end_of_test(at_start: tuple, within: float = STOPS_WITHIN) -> None:
     controller back as the next test must find it (``put_back_the_run``), and fail the test, by raising, when it
     left a run live.
 
-    Such a run is asked to stop first, through the controller, and the event loop is turned until its end has been
-    handled, ``within`` seconds at most: a run whose end came after its panel was deleted would end without the
-    page it was started from. If it has not stopped by then, what the test made is taken out of the record and kept
-    alive, not deleted, so that the run's end still finds its panel, and every later run is refused until it stops.
+    Such a run is asked to stop first, through the controller (a training saving its posterior, which takes no stop
+    asked so, through its own token), and the event loop is turned until its end has been handled, ``within``
+    seconds at most: a run whose end came after its panel was deleted would end without the page it was started
+    from. If it has not stopped by then, what the test made is taken out of the record and kept alive, not deleted,
+    so that the run's end still finds its panel, and every later run is refused until it stops.
     A run that was live already when the test was set up is an earlier test's, and is not waited for again."""
     since, live_before = at_start
     left_live = a_run_is_live() and not live_before
     waited = 0.0
     if left_live:
         from PySide6.QtCore import QCoreApplication
-        _controller().request_stop()
+        held = _controller()
+        held.request_stop()
+        token = getattr(getattr(held, "_run", None), "token", None)
+        if token is not None and not token.requested.is_set():
+            token.requested.set()                # a training saving its posterior: no stop the controller is asked for
         began = time.monotonic()
         while a_run_is_live() and time.monotonic() - began < within:
             QCoreApplication.processEvents()

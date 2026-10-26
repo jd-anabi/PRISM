@@ -929,8 +929,8 @@ def process_state(app) -> dict:
         "one-PRISM lock": one_instance.current(),
         "local servers": tuple(sorted(server.serverName() for server in app.findChildren(QLocalServer)
                                       if server.isListening())),
-        # The process's one run: none live, and no end left to acknowledge.
-        "run": (controller().is_live(), controller().status.state),
+        # The process's one run: none live, no end left to acknowledge, and no close waiting for one.
+        "run": (controller().is_live(), controller().status.state, controller().status.closing),
     }
 
 

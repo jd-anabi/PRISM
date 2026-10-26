@@ -598,10 +598,10 @@ def _raw_box(icon, title, text, *, beneath="", detail="", standard=None, added=(
     return box
 
 
-def _close_answers():
+def _three_answers():
     from PySide6.QtWidgets import QMessageBox as B
-    return (("Cancel task && quit", B.AcceptRole), ("Quit anyway", B.DestructiveRole),
-            ("Don't quit", B.RejectRole))
+    return (("Save && close", B.AcceptRole), ("Close without saving", B.DestructiveRole),
+            ("Keep editing", B.RejectRole))
 
 
 def test_asked_reads_each_shape_of_box_into_one_record():
@@ -650,14 +650,14 @@ def test_asked_reads_each_shape_of_box_into_one_record():
          Asked(default="Keep this session", **session)),
         (_raw_box(B.Warning, "Start a new session?", "Replace it?", beneath=held, added=two),
          Asked(default=None, **session)),                                # never a guessed default
-        (_raw_box(B.Warning, "A task is still running", "A task is still running.",
-                  beneath="Cancelling stops it at its next checkpoint.", added=_close_answers(),
-                  default="Cancel task && quit"),
-         Asked(kind="question", title="A task is still running", marker="warn",
-               sentence="A task is still running.",
-               beneath="Cancelling stops it at its next checkpoint.", items=(), detail="",
-               answers=("Cancel task & quit", "Quit anyway", "Don't quit"),
-               default="Cancel task & quit", safe="Don't quit", loses_work=True)),
+        (_raw_box(B.Warning, "Unsaved changes", "The model has changes that are not saved.",
+                  beneath="Saving keeps them for the next launch.", added=_three_answers(),
+                  default="Save && close"),
+         Asked(kind="question", title="Unsaved changes", marker="warn",
+               sentence="The model has changes that are not saved.",
+               beneath="Saving keeps them for the next launch.", items=(), detail="",
+               answers=("Save & close", "Close without saving", "Keep editing"),
+               default="Save & close", safe="Keep editing", loses_work=True)),
     ]
     forget_asked()
     for box, _want in shapes:
@@ -667,7 +667,7 @@ def test_asked_reads_each_shape_of_box_into_one_record():
     for (_box, want), have in zip(shapes, got):
         assert have == want, (want.title, have)
     assert asked() == shapes[-1][1]
-    assert asked().text == "Cancelling stops it at its next checkpoint."
+    assert asked().text == "Saving keeps them for the next launch."
     assert got[1].text == "" and got[8].text == held
 
 
@@ -721,9 +721,9 @@ def test_choose_clicks_the_answer_it_was_given_and_a_box_without_it_takes_its_sa
     def clicked(which):
         if which == "yes or no":
             box = _raw_box(B.Warning, "Delete model", "Delete 'M'?", standard=B.Yes | B.No, default=B.No)
-        elif which == "close":
-            box = _raw_box(B.Warning, "A task is still running", "A task is still running.",
-                           added=_close_answers(), default="Cancel task && quit")
+        elif which == "three":
+            box = _raw_box(B.Warning, "Unsaved changes", "The model has changes that are not saved.",
+                           added=_three_answers(), default="Save && close")
         elif which == "refused":
             box = _raw_box(B.Warning, "Check your inputs", "It is blank.", standard=B.Ok, default=B.Ok)
         else:
@@ -739,22 +739,22 @@ def test_choose_clicks_the_answer_it_was_given_and_a_box_without_it_takes_its_sa
     assert clicked("yes or no") == (B.Yes, "&Yes"), "the window reads this box as exec() == Yes"
     assert clicked("refused") == (0, None), "one answer: there is no other, so it stays unanswered"
     assert clicked("failed") == (0, None)
-    assert clicked("close") == (0, None), "three answers: 'the other' names none of them"
+    assert clicked("three") == (0, None), "three answers: 'the other' names none of them"
     assert counts == [1, 2, 3, 4], "recorded first, then `during`, then the click"
 
     # by its words as shown: no mnemonic mark, a doubled one read as one
-    for words, raw in (("Cancel task & quit", "Cancel task && quit"), ("Quit anyway", "Quit anyway"),
-                       ("Don't quit", "Don't quit")):
+    for words, raw in (("Save & close", "Save && close"), ("Close without saving", "Close without saving"),
+                       ("Keep editing", "Keep editing")):
         choose(monkeypatch, words=words)
-        assert clicked("close")[1] == raw, words
+        assert clicked("three")[1] == raw, words
     choose(monkeypatch, words="No such answer")
-    assert clicked("close") == (0, None)
+    assert clicked("three") == (0, None)
     choose(monkeypatch, words="Yes")
     assert clicked("yes or no")[0] == B.Yes
 
     # the default, as Enter presses it; a box whose code set none stays unanswered
     choose(monkeypatch, default=True)
-    assert clicked("yes or no") == (B.No, "&No") and clicked("close")[1] == "Cancel task && quit"
+    assert clicked("yes or no") == (B.No, "&No") and clicked("three")[1] == "Save && close"
     assert clicked("failed") == (0, None)
 
     # nothing chosen is the unanswered guard again, still recorded; and one way of choosing at most

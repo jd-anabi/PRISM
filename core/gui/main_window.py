@@ -13,7 +13,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplication, QMainWindow, QMessageBox,
+from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplication, QMainWindow,
                                QPlainTextEdit, QPushButton, QTabBar, QTextEdit, QToolButton, QWidget)
 
 from core.artifacts import KIND_DIRS, StoreError, default_store
@@ -38,6 +38,7 @@ from .screens.shell import PartError, Shell, clock_words
 from .screens.temperature_screen import TemperatureScreen
 from .session import SbiSession
 from .widgets.artifact_picker import StorePicker
+from .widgets.ask import ask
 from .widgets.page_names import PageNames
 
 log = logging.getLogger(__name__)
@@ -239,6 +240,7 @@ class MainWindow(QMainWindow):
         # While the live run is stopping: its word and name, which Home says is stopping, and the line that says when
         # the stop is taken, which the foot says; "" otherwise.
         self._run_stopping = self._stopping_line = ""
+        self._close_at_end = False               # the close was asked for: the window closes once the run has ended
         self._build("home")
 
         # Every way to move is go_to: a row of the rail, Home's buttons and rows, the run's foot. Each handler
@@ -696,8 +698,16 @@ class MainWindow(QMainWindow):
         not per tick.
 
         While the run is stopping, the steps' states are worked out again too, the foot says that the run is
-        stopping and when the stop is taken, and Home that it is stopping.
+        stopping and when the stop is taken, and Home that it is stopping. When the window's close waits for the
+        run, the run's end closes the window, once all of the end has been said; a close withdrawn with its stop
+        waits no more.
         """
+        if self._close_at_end:
+            if not status.live:
+                self._close_at_end = False
+                QTimer.singleShot(0, self, self.close)
+            elif not status.closing:
+                self._close_at_end = False
         stopping = f"{status.word} {status.name}".strip() if status.live and status.state == "stopping" else ""
         if status.live == self._run_live and stopping == self._run_stopping:
             return
@@ -779,40 +789,34 @@ class MainWindow(QMainWindow):
         return super().event(event)
 
     def closeEvent(self, event):
-        """On close, offer to cancel a running task first; otherwise close normally.
+        """The window never closes under a live run (starting, running, stopping or waiting to try again): the close
+        is refused, then asked about. "Stop the run and close" asks the run to stop, and "Close when it has stopped",
+        for a run already stopping, keeps the window waiting too: the window stays on the run's page, which says that
+        PRISM closes when the run has stopped and offers to withdraw the stop and the close, and the run's end
+        closes it. A training saving its posterior is not stopped: "Close when it is saved" asks no stop, and the window
+        waits for the save, its run's page offering to keep PRISM open. An answer given after the run ended is too
+        late: nothing is stopped, and the window stays.
 
-        A cancel is cooperative (it lands at the run's next checkpoint), so even "Cancel & quit" does
-        not stop the process instantly -- but it does stop it, instead of leaving it holding the CPU/GPU
-        invisibly after the window is gone, which is what "Quit anyway" still does.
-        """
-        if controller().is_live():
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Warning)
-            box.setWindowTitle("A task is still running")
-            box.setText("A task is still running.")
-            box.setInformativeText(
-                "Cancelling stops it at its next checkpoint (up to ~1 min during training). "
-                "Quitting anyway closes the window now, but the task keeps running in the background "
-                "until it finishes on its own.")
-            cancel_quit = box.addButton("Cancel task && quit", QMessageBox.AcceptRole)
-            quit_anyway = box.addButton("Quit anyway", QMessageBox.DestructiveRole)
-            box.addButton("Don't quit", QMessageBox.RejectRole)
-            box.setDefaultButton(cancel_quit)
-            box.exec()
-            clicked = box.clickedButton()
-            if clicked is cancel_quit:
-                controller().request_stop()
-            elif clicked is not quit_anyway:
-                event.ignore()
-                return
-
+        A close accepted, with no run live, writes the window's own settings, closes every other window of the
+        program (the figure windows the pages opened among them), so that the program's event loop ends, and lets
+        go of the one-PRISM claim last, in a ``finally``: after the run's last history write, and also when the
+        settings cannot be written, since a window that has closed must not keep the claim."""
+        held = controller()
+        if held.is_live():
+            event.ignore()
+            question = questions.close_question(held.status, held.model)
+            if ask(self, question.title, question.sentence, question.safe, question.other,
+                   loses_work=question.loses_work, beneath=question.beneath or None):
+                held.request_stop(closing=True)
+                self._close_at_end = held.is_live() and held.status.closing
+            return
         try:
             self._save_state()
         finally:
-            # The close is accepted: the lock and the listener are let go now, not when the event loop ends, which a
-            # figure popped out of the window keeps running, so that the next start of PRISM opens a window of its
-            # own. Also when the settings cannot be written: a window that has closed must not keep the claim.
-            one_instance.release()
+            try:
+                QApplication.closeAllWindows()
+            finally:
+                one_instance.release()
         super().closeEvent(event)
 
     def _save_state(self):

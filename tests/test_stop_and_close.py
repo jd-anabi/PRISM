@@ -1,6 +1,7 @@
-"""Stopping a run: the question the stop button asks for each kind of run and each stage, what the page, the foot
-and Home say while the stop is pending, withdrawing it, keeping or discarding a training the stop kept, and where
-the keyboard goes meanwhile.
+"""Stopping a run, and closing the window during one: the question the stop button asks for each kind of run and
+each stage, what the page, the foot and Home say while the stop is pending, withdrawing it, keeping or discarding a
+training the stop kept, where the keyboard goes meanwhile, and the close's question and the window that waits for
+its run to end before it closes with every window it opened.
 
 A live run here is the stand-in run of tests/_runs.py, started through a real panel's own dispatch; the window's
 clock is moved by hand, and every question is answered through the session's guard or ``choose``.
@@ -12,7 +13,7 @@ import pytest
 
 from core.gui.run import questions
 from core.gui.run.controller import controller
-from core.gui.run.model import SIMULATION_ROW, RunSpec
+from core.gui.run.model import SILENCE_NEEDS_YOU_S, SIMULATION_ROW, RunSpec
 from tests._fixtures import (all_asked, asked, build_fit_record, build_run_host, build_window, choose,
                              forget_asked, qt_app)
 from tests._runs import Clock, RunText, StandIn, start_run, turn_until
@@ -563,3 +564,416 @@ def test_the_keyboard_stays_on_the_runs_page_through_a_stop(tmp_path, monkeypatc
         runs[-1].fail(RuntimeError("the run broke"))
         _ended(app, held)
         assert focus() is view.find_field, "the end took the keyboard from a control that stays"
+
+
+# ── closing during a run ──
+def test_closing_during_a_run_asks_and_keeps_running_by_default(tmp_path, monkeypatch):
+    """Closing the window while a run is live asks first, naming the run, how long it has run, where it is and what
+    a stop keeps; "Keep running", the safe answer, is what a question nobody answers gives: the window stays, and
+    the run goes on. With a stop asked for already, it asks whether to close once the run has stopped, "Wait" the
+    safe answer. The second answer is drawn as losing work where the stop's own is."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, window = _controller_on(tmp_path, clock), build_window()
+    shown_off_screen(window)
+    host, text = window.panel(ReductionPanel), RunText(held)
+    stand_in = StandIn(takes_stops=False)
+    start_run(host, stand_in, spec=_training())
+    _say(app, stand_in, text, _BUDGET, _ROTATING, _ROTATED, _WRITING, _COMPLETE)
+    clock.advance(62 * 3780)                          # 62 epochs of 63 minutes: 2 days 17 hours
+    _say(app, stand_in, text, *(_epoch(epoch, epoch % 5) for epoch in range(1, 63)))
+    forget_asked()
+    window.close()
+    question = asked()
+    assert (question.title, question.sentence, question.beneath) == (
+        "Close PRISM?", "Training retrain_3 is running.",
+        "It has been running for 2 days 17 hours and is in its fit, at epoch 62. The simulations are kept. The fit "
+        "stops when the epoch in progress ends, up to about 63 minutes from now; every epoch finished so far is kept.")
+    assert (question.answers, question.default, question.safe, question.loses_work) == (
+        ("Stop the run and close", "Keep running"), "Keep running", "Keep running", False)
+    assert (window.isVisible(), held.is_live(), held.status.stop_requested, held.status.closing) == (
+        True, True, False, False), "a close nobody answered closed the window or stopped the run"
+    choose(monkeypatch, words="Stop training")
+    host.run_view.stop_button.click()
+    choose(monkeypatch)                               # the guard again: nobody answers
+    window.close()
+    question = asked()
+    assert (question.sentence, question.beneath, question.answers, question.default, question.loses_work) == (
+        "Training retrain_3 is stopping.", _STOPPING_FIT, ("Close when it has stopped", "Wait"), "Wait", False)
+    assert (window.isVisible(), held.is_live(), held.status.closing) == (True, True, False)
+    stand_in.say("the line at which the stop is taken")
+    _ended(app, held)
+    check = StandIn()
+    start_run(host, check, spec=RunSpec("Check", ("inference", "checks"), name="Calibration",
+                                        stop_button="Stop the calibration…"))
+    window.close()
+    assert (asked().sentence, asked().beneath, asked().loses_work) == (
+        "Check Calibration is running.", "It has been running for less than a minute. A check writes its record only "
+                                         "when it finishes, so nothing of this one is kept.", True)
+    check.release()
+    _ended(app, held)
+    window.hide()
+
+
+def test_stop_the_run_and_close_waits_for_the_end_then_closes_every_window(tmp_path, monkeypatch):
+    """"Stop the run and close" asks the run to stop and keeps the window open, on the run's page, which says that
+    PRISM closes when the run has stopped; "Don't stop after all" withdraws the stop and the close both. Asked again,
+    the window waits: when the run has ended its history is written, then the one-PRISM claim is let go, the figure
+    window a page opened is closed, and the window closes. The whole program then leaves no run to acknowledge and no
+    close waiting for one."""
+    from core.gui import one_instance
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.run import history
+    from tests._fixtures import whole_program
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    clock = Clock(_at(8, 19, 2, 11))
+    with whole_program() as (_app, window):
+        held = _controller_on(tmp_path, clock)
+        claim = one_instance.current()
+        assert claim is not None, "the whole program holds no claim"
+        shown_off_screen(window)
+        host, text = window.panel(ReductionPanel), RunText(held)
+        host.figure_stack.add_figure("a figure", _picture())
+        host.figure_stack._pop_out(host.figure_stack.widget(0))
+        figure = next(iter(host.figure_stack._windows))
+        stand_in = StandIn(takes_stops=False)
+        start_run(host, stand_in, spec=_training())
+        _say(app, stand_in, text, _BUDGET)
+        view = host.run_view
+        choose(monkeypatch, words="Stop the run and close")
+        window.close()
+        assert (window.isVisible(), held.status.state, held.status.closing, one_instance.current() is claim) == (
+            True, "stopping", True, True)
+        assert (view.closing_line.text(), view.closing_line.isVisibleTo(view),
+                view.withdraw_button.isVisibleTo(view)) == (
+            "PRISM closes when the run has stopped.", True, True)
+        view.withdraw_button.click()
+        assert (held.status.state, held.status.closing, window._close_at_end, view.closing_line.isVisibleTo(view),
+                window.isVisible()) == (
+            "running", False, False, False, True), "'Don't stop after all' did not withdraw the close"
+        _say(app, stand_in, text, "a line after the withdraw")
+        assert held.is_live() and window.isVisible()
+
+        window.close()
+        app.processEvents()                           # what the run said before is heard
+        clock.advance(SILENCE_NEEDS_YOU_S + 1)        # then a long silence while the run stops: its status changes
+        held.tick()
+        silent = held.status.needs_you
+        app.processEvents()
+        assert (silent is not None, window.isVisible(), one_instance.current() is claim) == (True, True, True), (
+            "the window closed, or let go of the claim, before its stopping run had ended")
+        run, released = held.status.run, []
+        real = one_instance.release
+
+        def release():
+            if not released:
+                record = history.read(tmp_path / "runs" / f"{run}.json")
+                released.append(None if record is None else record["outcome"])
+            real()
+
+        monkeypatch.setattr(one_instance, "release", release)
+        stand_in.say("the line at which the stop is taken")
+        turn_until(app, lambda: not window.isVisible(), 10)
+        assert (released, one_instance.current(), _open(figure), held.is_live()) == (
+            ["stopped"], None, False, False), ("the claim was let go before the run's history said how it ended, or a "
+                                              "window outlived the close")
+    assert (held.is_live(), held.status.state, held.status.closing) == (False, "idle", False)
+
+
+def test_the_window_does_not_close_under_a_retry_pause_or_a_pending_stop(tmp_path, monkeypatch):
+    """A run starting, running or stopping is live: a close asked for meanwhile is refused, whatever is answered
+    short of the close's second answer, and the window keeps the one-PRISM claim; a stopping run's close waits for
+    its end, the claim held until then."""
+    from core.gui import one_instance
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._fixtures import whole_program
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    with whole_program() as (_app, window):
+        held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+        claim = one_instance.current()
+        shown_off_screen(window)
+        host, text = window.panel(ReductionPanel), RunText(held)
+        stand_in, seen = StandIn(takes_stops=False), []
+
+        def closed_now():
+            window.close()
+            seen.append((held.status.state, window.isVisible(), one_instance.current() is claim))
+
+        start_run(host, stand_in, spec=_training())
+        closed_now()                                 # nobody answers
+        _say(app, stand_in, text, _BUDGET)
+        closed_now()
+        choose(monkeypatch, words="Stop training")
+        host.run_view.stop_button.click()
+        choose(monkeypatch, words="Wait")
+        closed_now()
+        assert seen == [("starting", True, True), ("running", True, True), ("stopping", True, True)], (
+            "the window closed, or let go of the claim, under a live run")
+        choose(monkeypatch, words="Close when it has stopped")
+        closed_now()
+        app.processEvents()
+        assert (seen[-1], held.status.closing, window.isVisible(), one_instance.current() is claim) == (
+            ("stopping", True, True), True, True, True), "the window did not wait for a stopping run"
+        stand_in.say("the line at which the stop is taken")
+        _ended(app, held)
+        turn_until(app, lambda: one_instance.current() is None and not window.isVisible(), 10)
+
+
+def test_an_answer_given_after_the_run_ended_is_taken_as_too_late(tmp_path, monkeypatch):
+    """A run that ends while one of its questions is open: the training finishes by itself while "Stop training?" is
+    open, and the run fails while the close's question is open. The answer, given after, is too late: nothing raises,
+    nothing is stopped, the close is not carried out, and the page shows the run's end and says the stop came too
+    late."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    held, window = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_window()
+    shown_off_screen(window)
+    host, text = window.panel(ReductionPanel), RunText(held)
+    view = host.run_view
+    for how, answer, ask in (("finishes", "Stop training", view.stop_button.click),
+                             ("fails", "Stop the run and close", window.close)):
+        stand_in, done = StandIn(), []
+
+        def ends(stand_in=stand_in, how=how, done=done):
+            if done:
+                return
+            done.append(how)
+            if how == "finishes":
+                stand_in.release()
+            else:
+                stand_in.fail(RuntimeError("the run broke"))
+            _ended(app, held)
+
+        start_run(host, stand_in, spec=_training())
+        _say(app, stand_in, text, _BUDGET)
+        choose(monkeypatch, words=answer, during=ends)
+        ask()
+        outcome = "finished" if how == "finishes" else "failed"
+        assert (done, [status.outcome for status in text.ended][-1], held.is_live()) == ([how], outcome, False)
+        assert (window.isVisible(), window._close_at_end, held.status.closing) == (True, False, False), (
+            "a close answered after the run ended was carried out")
+        assert (view.notice.text(), "The run stopped: a stop was asked for." in text.texts()) == (
+            "Too late: the run had already finished.", False), how
+    assert (view.mode, view.sentence.text()) == ("ended", "Training retrain_3 failed.")
+    window.hide()
+
+
+def test_a_close_while_the_posterior_is_saved_stops_nothing_and_closes_once_it_is_saved(tmp_path, monkeypatch):
+    """While a training saves its posterior, which no stop interrupts, the close asks whether to close once it is
+    saved: "Keep running" the safe answer, "Close when it is saved" not drawn as losing work. That answer asks no stop
+    of the run, its token never set, and keeps the window open on the run's page, which says that PRISM closes when
+    the posterior is saved and offers "Keep PRISM open" where a stop offers "Don't stop after all". "Keep PRISM open",
+    pressed with Space, withdraws the close and hands the keyboard to the page's sentence: the run finishes and the
+    window stays. Asked again, the window waits: the run finishes, its history written, then the one-PRISM claim is
+    let go, the figure window a page opened is closed, and the window closes."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from core.gui import one_instance
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.run import history
+    from tests._fixtures import whole_program
+    from tests._window_helpers import in_front, shown_off_screen
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    clock = Clock(_at(8, 19, 2, 11))
+    with whole_program() as (_app, window):
+        held = _controller_on(tmp_path, clock)
+        claim = one_instance.current()
+        shown_off_screen(window)
+        host = window.panel(ReductionPanel)
+        view = host.run_view
+        host.figure_stack.add_figure("a figure", _picture())
+        host.figure_stack._pop_out(host.figure_stack.widget(0))
+        figure = next(iter(host.figure_stack._windows))
+
+        def saving():
+            """A training brought to the saving of its posterior, its fit ended after two epochs, its lines heard by a
+            text of its own; a stop asked of it would be taken at once."""
+            stand_in, text = StandIn(), RunText(held)
+            start_run(host, stand_in, spec=_training())
+            _to_the_fit(app, stand_in, text, clock, [(1, 0), (2, 20)])
+            assert held.model.stage == "Saving"
+            return stand_in, held._run.token, text
+
+        stand_in, token, text = saving()
+        forget_asked()
+        window.close()                                # nobody answers
+        question = asked()
+        assert (question.title, question.sentence, question.beneath) == (
+            "Close PRISM?", "Training retrain_3 is running.",
+            "It has been running for 1 hour 3 minutes and is saving its posterior.")
+        assert (question.answers, question.default, question.loses_work) == (
+            ("Close when it is saved", "Keep running"), "Keep running", False)
+        assert (window.isVisible(), held.status.closing, token.requested.is_set()) == (True, False, False)
+        choose(monkeypatch, words="Close when it is saved")
+        window.close()
+        assert (window.isVisible(), held.status.state, held.status.closing, token.requested.is_set(),
+                window._close_at_end) == (True, "running", True, False, True), (
+            "the close during the save asked a stop, or the window did not wait")
+        assert (view.closing_line.text(), view.closing_line.isVisibleTo(view), view.keep_open_button.isVisibleTo(view),
+                view.withdraw_button.isVisibleTo(view), view.stop_button.isEnabled()) == (
+            "PRISM closes when the posterior is saved.", True, True, False, False)
+        with in_front(window):
+            view.keep_open_button.setFocus(Qt.OtherFocusReason)
+            assert QApplication.focusWidget() is view.keep_open_button
+            QTest.keyClick(view.keep_open_button, Qt.Key_Space)
+            focus = QApplication.focusWidget()
+        assert (held.status.closing, window._close_at_end, view.closing_line.isVisibleTo(view),
+                view.keep_open_button.isVisibleTo(view), view.notice.text()) == (
+            False, False, False, False, "PRISM stays open."), "'Keep PRISM open' did not withdraw the close"
+        assert focus is view.sentence, "the keyboard did not go to the page's sentence once the close was withdrawn"
+        stand_in.release()
+        _ended(app, held)
+        app.processEvents()
+        assert (window.isVisible(), one_instance.current() is claim, token.requested.is_set(),
+                [status.outcome for status in text.ended][-1]) == (True, True, False, "finished"), (
+            "a withdrawn close closed the window, or the save was stopped")
+
+        stand_in, token, text = saving()
+        window.close()                                # answered "Close when it is saved" again
+        run, released = held.status.run, []
+        real = one_instance.release
+
+        def release():
+            if not released:
+                record = history.read(tmp_path / "runs" / f"{run}.json")
+                released.append(None if record is None else record["outcome"])
+            real()
+
+        monkeypatch.setattr(one_instance, "release", release)
+        stand_in.release()
+        turn_until(app, lambda: not window.isVisible(), 10)
+        assert (released, token.requested.is_set(), one_instance.current(), _open(figure), held.is_live()) == (
+            ["finished"], False, None, False, False), ("the save was stopped, the claim was let go before the run's "
+                                                        "history said it finished, or a window outlived the close")
+    assert (held.is_live(), held.status.state, held.status.closing) == (False, "idle", False)
+
+
+def test_an_answer_given_once_the_save_has_begun_stops_nothing(tmp_path, monkeypatch):
+    """A question asked during the fit and answered once the fit has ended and the posterior is being saved: the stop
+    button's "Stop training" stops nothing, and the page says that the save cannot be stopped; the close's "Stop the
+    run and close" stops nothing either, and the window waits for the save, then closes."""
+    from core.gui import one_instance
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._fixtures import whole_program
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    clock = Clock(_at(8, 19, 2, 11))
+    with whole_program() as (_app, window):
+        held = _controller_on(tmp_path, clock)
+        shown_off_screen(window)
+        host = window.panel(ReductionPanel)
+        view = host.run_view
+        for answer, ask in (("Stop training", view.stop_button.click), ("Stop the run and close", window.close)):
+            stand_in, text = StandIn(), RunText(held)
+            start_run(host, stand_in, spec=_training())
+            _to_the_fit(app, stand_in, text, clock, [(1, 0)])
+            token = held._run.token
+
+            def saves(stand_in=stand_in):
+                _say(app, stand_in, text, _epoch(2, 20))     # 20 epochs since the best: the fit ends, the save begins
+
+            choose(monkeypatch, words=answer, during=saves)
+            ask()
+            assert (held.model.stage, held.status.stop_requested, token.requested.is_set()) == (
+                "Saving", False, False), f"{answer!r}, answered once the save had begun, asked a stop"
+            if answer == "Stop training":
+                assert (view.notice.text(), held.status.closing, window._close_at_end) == (
+                    "Too late: the posterior was already being saved, which cannot be stopped.", False, False)
+                stand_in.release()
+                _ended(app, held)
+                assert [status.outcome for status in text.ended][-1] == "finished"
+        assert (held.status.closing, window._close_at_end, view.closing_line.text(),
+                view.keep_open_button.isVisibleTo(view)) == (
+            True, True, "PRISM closes when the posterior is saved.", True), "the window did not wait for the save"
+        stand_in.release()
+        turn_until(app, lambda: not window.isVisible(), 10)
+        assert ([status.outcome for status in text.ended][-1], token.requested.is_set(), one_instance.current()) == (
+            "finished", False, None), "the save was stopped, or the window did not close once it was saved"
+
+
+def test_the_end_of_a_test_stops_a_training_it_left_live_in_its_save(tmp_path):
+    """The end of a test stops a run it left live (tests/_built.py's end of a test) even while a training saves its
+    posterior, which takes no stop asked through the controller: the run's own token is set, the stand-in takes the
+    stop at its next line, and the end is handled within the end's wait, so that no later run is refused."""
+    from tests import _built
+    from tests._runs import STOP_LINE
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    at_start = _built.noted()
+    stand_in, text = StandIn(), RunText(held)
+    start_run(host, stand_in, spec=_training())
+    _to_the_fit(app, stand_in, text, clock, [(1, 0), (2, 20)])
+    assert held.model.stage == "Saving"
+    with pytest.raises(AssertionError, match="ended with a run still live; it was asked to stop, and its end was"):
+        _built.end_of_test(at_start)
+    assert (stand_in.stopped_at, held.is_live()) == (STOP_LINE, False), "the end of the test did not stop the save"
+
+
+# ── the figure windows ──
+def _picture() -> bytes:
+    """A small picture of a figure, as the run's figure sink hands one over."""
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    from PySide6.QtGui import QImage
+    image = QImage(40, 30, QImage.Format_RGB32)
+    image.fill(0xFFFFFF)
+    data = QByteArray()
+    buffer = QBuffer(data)
+    buffer.open(QIODevice.WriteOnly)
+    image.save(buffer, "PNG")
+    return bytes(data)
+
+
+def _figure_pickle() -> bytes:
+    """A figure of the figure library, built off any state machine of its own and pickled, as the sink ships one."""
+    import pickle
+    from matplotlib.figure import Figure
+    fig = Figure()
+    axes = fig.add_subplot()
+    axes.plot([0, 1, 2], [0, 1, 4])
+    return pickle.dumps(fig)
+
+
+def _pop(stack, index):
+    """Press "Pop out" on the figure at ``index`` of ``stack``; the window it opened."""
+    from PySide6.QtWidgets import QPushButton
+    before = set(stack._windows)
+    next(button for button in stack.widget(index).findChildren(QPushButton) if button.text() == "Pop out").click()
+    (opened,) = set(stack._windows) - before
+    return opened
+
+
+def _open(widget) -> bool:
+    """Whether ``widget`` is still there and in sight: a window closed with its own deferred delete is neither."""
+    import shiboken6
+    return shiboken6.isValid(widget) and widget.isVisible()
+
+
+def test_every_popped_out_figure_window_closes_with_the_main_one(tmp_path):
+    """A figure popped out of a page is a window of its own, owned by the main window, interactive or a picture;
+    when the main window closes, every such window closes with it, so that nothing keeps the program running unseen."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.widgets.figure_window import ImageZoomWindow, InteractiveFigureWindow
+    from tests._window_helpers import shown_off_screen
+    qt_app()
+    window = build_window()
+    shown_off_screen(window)
+    stack = window.panel(ReductionPanel).figure_stack
+    stack.add_figure("interactive", _picture(), _figure_pickle())
+    stack.add_figure("a picture", _picture())
+    opened = [_pop(stack, 0), _pop(stack, 1)]
+    assert [type(figure) for figure in opened] == [InteractiveFigureWindow, ImageZoomWindow]
+    assert all(figure.isWindow() and figure.parentWidget() is window and figure.isVisible() for figure in opened)
+    window.close()
+    assert (window.isVisible(), [_open(figure) for figure in opened]) == (False, [False, False]), (
+        "a figure window outlived the main window's close")

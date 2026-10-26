@@ -61,7 +61,9 @@ class StandIn:
     taken, or None, and ``stopped`` is set as the stop is taken. ``kept_fit`` is the note of a kept training its stop
     or its failure hands back, as the training stage hands one back (None for none). With ``takes_stops`` False it
     says no line of its own when a stop is asked for: the stop is taken at the next line its test has it say, or,
-    with none said within ``HELD_STOP_S`` of the ask, at its own line."""
+    with none said within ``HELD_STOP_S`` of the ask, at its own line. A stop is asked for when the controller's
+    status says so, and also when the run's own token is set with none asked through the controller, as the end of a
+    test sets it for a training saving its posterior."""
 
     def __init__(self, *, word: str = "Training", lines=(), takes_stops: bool = True):
         self.word = word
@@ -118,6 +120,7 @@ class StandIn:
         from core.gui.run.controller import controller
         from core.gui.streams import WorkerCancelled
         self.started.set()
+        token = getattr(getattr(controller(), "_run", None), "token", None)       # this run's own
         log, saying, framed, asked_at = logging.getLogger("core"), None, False, None
         heard = time.monotonic()
         try:
@@ -139,7 +142,7 @@ class StandIn:
                             end[1].kept_fit = self.kept_fit
                         raise end[1]
                     return end[1]
-                asked = controller().status.stop_requested
+                asked = controller().status.stop_requested or (token is not None and token.requested.is_set())
                 asked_at = (asked_at or time.monotonic()) if asked else None
                 held = asked and time.monotonic() - asked_at < HELD_STOP_S
                 if asked and (self.takes_stops or not held) and not self._said_stop:
