@@ -2732,13 +2732,15 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
                 assert window.focusWidget() is rail.foot, "Tab from the rail did not reach the foot"
                 QTest.keyClick(rail.foot, Qt.Key_Escape)
                 assert window.part("reduction").isAncestorOf(window.focusWidget()), "Escape on the foot moved nothing"
-                assert (controller().is_live(), controller().status.stop_requested, runner.btn_cancel.text()) == (
-                    True, False, "Cancel"), "Escape in the rail asked the run to stop"
+                assert (controller().is_live(), controller().status.stop_requested,
+                        controller()._run.token.requested.is_set(), runner.btn_cancel.text()) == (
+                    True, False, False, "Cancel"), "Escape in the rail asked the run to stop"
                 runner.btn_cancel.setFocus(Qt.TabFocusReason)
                 del said[:]
                 QTest.keyClick(runner.btn_cancel, Qt.Key_Escape)
-                assert (controller().is_live(), controller().status.stop_requested, runner.btn_cancel.text()) == (
-                    True, False, "Cancel"), "Escape asked the run to stop"
+                assert (controller().is_live(), controller().status.stop_requested,
+                        controller()._run.token.requested.is_set(), runner.btn_cancel.text()) == (
+                    True, False, False, "Cancel"), "Escape asked the run to stop"
                 assert (window.current_place(), window.focusWidget(), said) == (
                     ("reduction", None), runner.btn_cancel, []), "Escape on the Cancel button moved something"
     finally:

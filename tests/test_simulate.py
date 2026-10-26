@@ -159,8 +159,9 @@ def test_a_spontaneous_built_in_cell_streams_with_no_drive():
 
 def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
     """dispatch(provide_stream=True) must inject the chunk emitter + stop flag, deliver frames to
-    on_chunk, and a cancel of a streaming run must land as `cancelled` (not `error`): the run ends as
-    stopped, once, and its text says so and holds no failure."""
+    on_chunk, and a cancel of a streaming run must land as `cancelled` (not `error`): the live run holds
+    the token its stop goes through, and the run ends as stopped, once, and its text says so and holds no
+    failure."""
     import numpy as np
     from core.gui.streams import WorkerCancelled
 
@@ -186,6 +187,8 @@ def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
     turn_until(app, lambda: started["v"] and chunks, 5)
     assert chunks, "no streamed chunks were delivered to on_chunk"
     assert panel.is_running() and controller().is_live()
+    run = controller()._run                   # the run the controller holds: its worker, and the token it holds
+    assert run.token is not None and run.worker.cancel is run.token, "a live run holds no token to stop it by"
 
     panel._request_cancel()
     turn_until(app, lambda: not controller().is_live(), 10)

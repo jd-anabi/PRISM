@@ -89,8 +89,12 @@ def screen_run(tiny_run):
     the composition re-injects the very same cell on its copy.
 
     Module-scoped like tiny_run, so a file pays for one screen. Its panels restore from the session's
-    temporary settings file (_settings_home), never from the real PRISM.ini."""
+    temporary settings file (_settings_home), never from the real PRISM.ini. The screen is let go when
+    its module ends, by its own deferred delete: left alive, its panels would stay among the panels
+    every later run locks and frees, and a later module's run would refresh them at its end, reading
+    whatever store that module has in use."""
     from types import SimpleNamespace
+    from PySide6.QtCore import QCoreApplication, QEvent
     from tests._fixtures import build_inference, qt_app
     qt_app()
     cfg = tiny_run.cfg.copy_for_run()
@@ -99,7 +103,9 @@ def screen_run(tiny_run):
     inf.session.inf_prior = tiny_run.prior
     inf.session.posterior = tiny_run.posterior
     inf.refresh_gates()
-    return SimpleNamespace(screen=inf, run=tiny_run, cell=tiny_run.cfg.sources["cell"])
+    yield SimpleNamespace(screen=inf, run=tiny_run, cell=tiny_run.cfg.sources["cell"])
+    inf.deleteLater()
+    QCoreApplication.sendPostedEvents(inf, QEvent.DeferredDelete)
 
 
 @pytest.fixture(scope="session", autouse=True)

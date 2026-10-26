@@ -4125,8 +4125,9 @@ def test_a_sweep_claims_nothing_it_could_not_read_and_its_help_names_every_categ
 def test_a_loose_file_written_seconds_ago_is_refused_rather_than_swept(browse_store, capsys):
     """The recency guard, extended to the new categories. A file inside a kind directory can be a
     run in flight writing its own figure as easily as it can be a leftover -- and a sweep from a
-    second process has no ``BasePanel._running`` to consult. The removal refuses it, the tool
-    reports it, and the exit code says the sweep did not do everything it offered."""
+    second process cannot ask the window's run controller whether a run is live. The removal
+    refuses it, the tool reports it, and the exit code says the sweep did not do everything it
+    offered."""
     from tests._fixtures import backdate_tree
     root, ids = browse_store
     backdate_tree(root / "priors")            # every leftover directory is old; only the file is new

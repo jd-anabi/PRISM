@@ -178,9 +178,10 @@ def test_cancel_token_latches_and_leaves_tqdm_usable():
 
 def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
     """End to end: a run cancelled mid-flight ends as stopped (the worker said `cancelled`, not `error`),
-    the panel's Cancel button saying so while it stops, with stray figures closed and no run live, and a
-    fresh run afterwards completes. How it ended is read off the run's text and its end, as the
-    controller says them."""
+    the panel's Cancel button shown and pressable while the run goes, saying so while it stops, and hidden
+    at its end; the run is stopping from the ask, the token the run holds asked, and at the end the token
+    is let go, with stray figures closed and no run live; and a fresh run afterwards completes. How it
+    ended is read off the run's text and its end, as the controller says them."""
     import matplotlib.pyplot as plt
 
     app = qt_app()
@@ -203,9 +204,14 @@ def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
     panel.dispatch(heavy, on_result=lambda r: outcome["result"].append(r))
     turn_until(app, lambda: started["v"], 5)
     assert panel.is_running() and controller().is_live()
+    run = controller()._run                   # the run the controller holds: its worker, and the token it holds
+    assert run.token is not None and run.worker.cancel is run.token and not run.token.requested.is_set()
+    assert (not panel.btn_cancel.isHidden(), panel.btn_cancel.isEnabled(), panel.btn_cancel.text()) == (
+        True, True, "Cancel"), "the Cancel button is not there to press while the run goes"
 
     panel._request_cancel()
-    assert controller().status.stop_requested
+    assert controller().status.stop_requested and run.token.requested.is_set()
+    assert (controller().status.state, controller().status.state_word) == ("stopping", "stopping")
     assert panel.btn_cancel.text() == "Cancelling…" and not panel.btn_cancel.isEnabled()
 
     turn_until(app, lambda: not controller().is_live(), 10)
@@ -217,7 +223,9 @@ def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
     assert "The run stopped: a stop was asked for." in text.texts("window"), text.lines
     assert not [line for line in text.texts() if line.startswith("The run failed")], text.lines
     assert plt.get_fignums() == [], "stray figures not closed on cancel"
-    assert not controller().is_live()
+    assert not controller().is_live() and run.token is None, "the run's end did not let go of its token"
+    assert (panel.btn_cancel.isHidden(), panel.btn_cancel.isEnabled()) == (True, False), (
+        "the Cancel button stayed on the page after its run ended")
     assert "Run cancelled." in panel.log_pane.toPlainText()
 
     later = []
@@ -236,12 +244,16 @@ def test_the_end_of_a_test_stops_a_run_it_left_live_before_its_panel_goes_and_fa
     is heard as the controller says it. A stand-in run left live while it waits for its test is stopped the
     same way: asked, it says its next line, and the stop is taken there. And a run that ended with its end
     still to acknowledge (one that keeps its files) is acknowledged at the end of its test, so that the next
-    test finds the controller idle."""
+    test finds the controller idle, with the clock and the folder of runs that test handed it let go: the
+    next run keeps its files beside the settings file in use, from the computer's own clock. Each run that
+    ended has let go of its token."""
     import pytest
     import shiboken6
+    from datetime import datetime
+    from core.gui.run import history
     from core.gui.run.model import IDLE, RunSpec
     from tests import _built
-    from tests._runs import STOP_LINE, StandIn, running, start_run
+    from tests._runs import STOP_LINE, Clock, StandIn, running, start_run
 
     app = qt_app()
 
@@ -257,11 +269,21 @@ def test_the_end_of_a_test_stops_a_run_it_left_live_before_its_panel_goes_and_fa
         _built.end_of_test(at_start)
     assert waiting.stopped_at == STOP_LINE and not controller().is_live(), waiting.stopped_at
 
+    handed = datetime(2026, 10, 8, 19, 2, 11).astimezone()
+    controller().use_clock(Clock(handed))                 # as a test hands the controller a clock and a folder
+    controller().use_folder(tmp_path / "handed")
     with running(spec=RunSpec("Run", None)):
         pass
     assert controller().status.unacknowledged_end, controller().status
     _built.end_of_test(_built.noted())
     assert controller().status == IDLE, "the end of a test left a run's end to acknowledge"
+    with running(spec=RunSpec("Run", None)):
+        pass
+    kept = controller().status
+    _built.end_of_test(_built.noted())
+    assert kept.started != handed, "the end of a test left the next test a clock it was handed"
+    assert ((history.runs_folder() / f"{kept.run}.json").is_file(), len(list((tmp_path / "handed").glob("*")))) == (
+        True, 2), "the end of a test left the next test's runs in a folder an earlier test handed the controller"
 
     at_start = _built.noted()
     host, heard = build_run_host(), RunText(controller())
@@ -270,6 +292,7 @@ def test_the_end_of_a_test_stops_a_run_it_left_live_before_its_panel_goes_and_fa
         _built.end_of_test(at_start)
     assert [status.outcome for status in heard.ended] == ["stopped"] and not controller().is_live(), (
         "a run left live was not stopped, or its end not handled, before its panel went")
+    assert controller()._run.token is None, "the run's end did not let go of its token"
     assert not shiboken6.isValid(host), "a panel whose run had stopped was not let go"
     later, got = build_run_host(), []
     later.dispatch(lambda: "ok", on_result=got.append)
@@ -287,7 +310,7 @@ def test_the_end_of_a_test_stops_a_run_it_left_live_before_its_panel_goes_and_fa
     assert not shiboken6.isValid(beside) and controller().is_live(), (
         "the end of the next test waited for a run an earlier test left live, or kept what that test built")
     turn_until(app, lambda: not controller().is_live(), 10)
-    assert shiboken6.isValid(slow) and len(heard.ended) == 1, (
+    assert shiboken6.isValid(slow) and len(heard.ended) == 1 and controller()._run.token is None, (
         "a panel was deleted under a run that had not stopped, or that run's end did not find it")
     _built.keep(slow)                         # let go when this test ends, as the fixture lets go any host
     _built.keep(heard)
@@ -2409,8 +2432,8 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     _run_leg(app, panel, pane, text, recovered_guard_then_normal_flow, False)
     assert all_asked() == [], "a recovered exception behind a cancel opened a dialog"
     assert pane.lines == [_STOP], pane.lines
-    assert text.lines[0] == ("warning", "empty_cache() failed during recovery and was ignored"), text.lines
-    assert "the first record in normal flow" not in text.texts(), text.lines
+    assert text.lines == [("warning", "empty_cache() failed during recovery and was ignored"),
+                          ("window", "The run stopped: a stop was asked for.")], text.lines
     assert reached == ["after the guard"], reached
 
     # (c) normal flow: the very next check
@@ -2418,7 +2441,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     _run_leg(app, panel, pane, text, cancel_in_normal_flow, False)
     assert pane.lines == [_STOP] and all_asked() == [] and reached == [], \
         (pane.lines, all_asked(), reached)
-    assert "the first print after Cancel" not in text.texts(), text.lines
+    assert text.lines == [("window", "The run stopped: a stop was asked for.")], text.lines
 
     # (f) the fallback: a cancel that still carries a context stays a cancel; the context is kept
     _run_leg(app, panel, pane, text, cancel_raised_inside_a_handler, False)

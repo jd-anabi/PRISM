@@ -892,14 +892,19 @@ def test_code_only_strips_docstrings_and_comments_at_every_depth_and_accepts_a_m
 def _panel_built_at_module_scope(tmp_path_factory):
     """A panel built at MODULE scope, the way tiny_run builds its run and screen_run builds its
     screen. pytest sets module fixtures up before the function-scoped ones, so this runs with
-    whatever settings path the SESSION left -- the case a function-only isolation misses. It returns
-    the path it saw, the panel, and the session's temp root for the test to check against."""
+    whatever settings path the SESSION left -- the case a function-only isolation misses. It hands the
+    tests the panel, the path it saw, and the session's temp root for the test to check against, and
+    lets go of the panel when the module ends, by its own deferred delete, so that it outlives the
+    module in no set a run locks."""
+    from PySide6.QtCore import QCoreApplication, QEvent
     from core.gui import settings as st
     from core.gui.panels.reduction_panel import ReductionPanel
     qt_app()
     seen = st._override_path
     panel = build_part(ReductionPanel)        # __init__ ends with restore_settings(st.settings())
-    return panel, seen, tmp_path_factory.getbasetemp()
+    yield panel, seen, tmp_path_factory.getbasetemp()
+    panel.deleteLater()
+    QCoreApplication.sendPostedEvents(panel, QEvent.DeferredDelete)
 
 
 def test_a_module_scoped_fixture_reads_the_session_ini_and_never_the_real_one(_panel_built_at_module_scope):
