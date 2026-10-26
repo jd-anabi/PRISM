@@ -1,12 +1,14 @@
 """Stopping a run, and closing the window during one: the question the stop button asks for each kind of run and
 each stage, what the page, the foot and Home say while the stop is pending, withdrawing it, keeping or discarding a
-training the stop kept, where the keyboard goes meanwhile, and the close's question and the window that waits for
-its run to end before it closes with every window it opened.
+training the stop kept, where the keyboard goes meanwhile, the close's question and the window that waits for its
+run to end before it closes with every window it opened, a figure shown as its picture while a run is live, and a
+figure the window could not show.
 
 A live run here is the stand-in run of tests/_runs.py, started through a real panel's own dispatch; the window's
 clock is moved by hand, and every question is answered through the session's guard or ``choose``.
 """
 import threading
+import warnings
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -977,3 +979,150 @@ def test_every_popped_out_figure_window_closes_with_the_main_one(tmp_path):
     window.close()
     assert (window.isVisible(), [_open(figure) for figure in opened]) == (False, [False, False]), (
         "a figure window outlived the main window's close")
+
+
+# ── a figure while a run is live, and a figure the window could not show ──
+def _settled(app) -> None:
+    """Turn the event loop until what is due now has been done: two rounds of the loop's own zero-time timers, so
+    that a draw a resize put off to the next round has had its turn."""
+    from PySide6.QtCore import QTimer
+    for _ in range(2):
+        done = []
+        QTimer.singleShot(0, lambda: done.append(True))
+        turn_until(app, lambda: bool(done))
+
+
+def test_a_figure_popped_out_during_a_run_opens_as_its_picture(tmp_path):
+    """While a run is live, a figure popped out of a page opens as its picture, in the image viewer, even when an
+    interactive copy could be built: the window's thread lays out no figure while a run builds its own. Once the run
+    has ended, it opens interactive again."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.widgets.figure_window import ImageZoomWindow, InteractiveFigureWindow
+    app = qt_app()
+    held, window = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_window()
+    host = window.panel(ReductionPanel)
+    stack = host.figure_stack
+    stack.add_figure("interactive", _picture(), _figure_pickle())
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=RunSpec("Reduction map", ("reduction", None), stop_button="Stop computing…"))
+    during = _pop(stack, 0)
+    assert (type(during), during.parentWidget() is window) == (ImageZoomWindow, True)
+    stand_in.release()
+    _ended(app, held)
+    after = _pop(stack, 0)
+    assert type(after) is InteractiveFigureWindow
+    for figure in (during, after):
+        figure.close()
+
+
+def test_a_figure_window_open_when_a_run_starts_shows_its_picture_until_the_run_ends(tmp_path):
+    """An interactive figure window open when a run starts shows its figure's picture from the run's start, and
+    lays out nothing of its figure while the run is live: a resize or a key reaches no drawing of it. When the run
+    has ended it is interactive again, at the view it had. A window whose figure has no picture held says, in its
+    place, that the figure is drawn again when the run has ended."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.widgets.figure_window import WAIT_TEXT
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    held, window = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_window()
+    shown_off_screen(window)
+    host = window.panel(ReductionPanel)
+    stack = host.figure_stack
+    stack.add_figure("interactive", _picture(), _figure_pickle())
+    stack.add_figure("no picture", b"", _figure_pickle())
+    figure, bare = _pop(stack, 0), _pop(stack, 1)
+    axes = figure._fig.axes[0]
+    axes.set_xlim(0.5, 1.5)                          # zoomed in, as a person leaves it
+    figure.canvas.setFocus(Qt.MouseFocusReason)      # the keyboard on the figure, as a click on it leaves it
+    _settled(app)
+    drawn = []
+    real = figure.canvas.draw
+    figure.canvas.draw = lambda: drawn.append("drawn") or real()
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=RunSpec("Reduction map", ("reduction", None), stop_button="Stop computing…"))
+    assert (figure.picture.isVisibleTo(figure), figure.canvas.isVisibleTo(figure), figure.toolbar.isVisibleTo(figure),
+            figure.picture.pixmap().isNull()) == (True, False, False, False), "the run's start did not show the picture"
+    assert (bare.picture.text(), bare.picture.isVisibleTo(bare)) == (WAIT_TEXT, True)
+    figure.resize(figure.width() + 120, figure.height() + 80)
+    QTest.keyClick(figure.focusWidget() or figure, Qt.Key_H)    # where a person's key goes: "home", a redraw
+    _settled(app)
+    assert drawn == [], "the figure was drawn while the run was live"
+    stand_in.release()
+    _ended(app, held)
+    assert (figure.picture.isVisibleTo(figure), figure.canvas.isVisibleTo(figure), figure.toolbar.isVisibleTo(figure),
+            tuple(axes.get_xlim())) == (False, True, True, (0.5, 1.5)), (
+        "the window is not interactive again, at its view")
+    turn_until(app, lambda: bool(drawn))
+    for each in (figure, bare):
+        each.close()
+
+
+def test_a_figure_handed_over_after_the_window_is_gone_cannot_remove_a_finished_record(tmp_path):
+    """The window's figure sink is called inside the writer of the record the figure is saved in, and that writer
+    removes its record on any exception. A picture that cannot be made, a hand-over that fails, and a hand-over to a
+    window that is gone each become one warning, the figure's title and the error's kind and message in it, and the
+    record is written whole with its figure; the figure is closed. A stop still passes, as at any point where one is
+    taken, and the figure is closed then too."""
+    import io
+    import matplotlib.pyplot as plt
+    import shiboken6
+    from core.artifacts import ArtifactStore
+    from core.Helpers import visualizers
+    from core.gui.panels.base_panel import FigureNotShown, _png_fig_sink
+    from core.gui.streams import WorkerCancelled
+    from core.gui.worker import WorkerSignals
+    qt_app()
+    store = ArtifactStore(tmp_path / "Artifacts")
+    real = visualizers.save_figure
+
+    class Failing:
+        def emit(self, *args):
+            raise RuntimeError("the hand-over failed")
+
+    gone = WorkerSignals()
+    figure_signal = gone.figure
+    shiboken6.delete(gone)
+
+    def render_fails(fig, target, **kwargs):
+        if isinstance(target, io.BytesIO):              # the window's picture, never the record's own file
+            raise ValueError("the picture could not be made")
+        return real(fig, target, **kwargs)
+
+    legs = (("a render that fails", render_fails, WorkerSignals().figure, "ValueError: the picture could not be made"),
+            ("an emit that fails", real, Failing(), "RuntimeError: the hand-over failed"),
+            ("a window that is gone", real, figure_signal, "RuntimeError: Signal source has been deleted"))
+    for leg, save, signal, why in legs:
+        visualizers.save_figure = save
+        try:
+            fig, _axes = plt.subplots()
+            with warnings.catch_warnings(record=True) as said:
+                warnings.simplefilter("always")
+                with store.create("calibration", None) as writer:
+                    writer.body = {"results": {}}
+                    writer.fig_sink(_png_fig_sink(signal))("Training loss", fig)
+        finally:
+            visualizers.save_figure = real
+        assert [(warning.category, str(warning.message)) for warning in said] == [
+            (FigureNotShown,
+             f"The figure 'Training loss' could not be shown ({why}). The record is not affected.")], leg
+        assert plt.fignum_exists(fig.number) is False, f"{leg}: the figure was left open"
+    records = store.list("calibration")
+    assert len(records) == 3 and all(summary.complete for summary in records), "a record was removed"
+
+    def stopped(fig, target, **kwargs):
+        if isinstance(target, io.BytesIO):
+            raise WorkerCancelled()
+        return real(fig, target, **kwargs)
+
+    fig, _axes = plt.subplots()
+    visualizers.save_figure = stopped
+    try:
+        with pytest.raises(WorkerCancelled):
+            with store.create("calibration", None) as writer:
+                writer.body = {"results": {}}
+                writer.fig_sink(_png_fig_sink(WorkerSignals().figure))("Training loss", fig)
+    finally:
+        visualizers.save_figure = real
+    assert plt.fignum_exists(fig.number) is False and len(store.list("calibration")) == 3

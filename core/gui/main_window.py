@@ -698,7 +698,8 @@ class MainWindow(QMainWindow):
         not per tick.
 
         While the run is stopping, the steps' states are worked out again too, the foot says that the run is
-        stopping and when the stop is taken, and Home that it is stopping. When the window's close waits for the
+        stopping and when the stop is taken, and Home that it is stopping. From the run's start to its end every
+        figure window the window's pages opened shows its figure's picture. When the window's close waits for the
         run, the run's end closes the window, once all of the end has been said; a close withdrawn with its stop
         waits no more.
         """
@@ -714,6 +715,9 @@ class MainWindow(QMainWindow):
         began = status.live and not self._run_live
         self._run_live, self._run_stopping = status.live, stopping
         self._stopping_line = questions.stopping_line(status, controller().model) if stopping else ""
+        if began or not status.live:
+            for panel in self._all_panels():
+                panel.figure_stack.hold(status.live)
         self._live_place = status.place if status.live else None
         inference = self._built.get("inference")
         if inference is not None:

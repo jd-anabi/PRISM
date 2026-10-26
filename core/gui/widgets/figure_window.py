@@ -18,6 +18,11 @@ Two window types, one per figure source (see FigureStack):
 Both are top-level windows OWNED by the window they were opened from (a parent, with the flag that makes a
 widget a window of its own): they stand over it, go with it, and close with it. FigureStack holds them in a set,
 and drops each in its closeEvent.
+
+While a run is live the window's thread lays out no figure: the figure library keeps one parser of math-style text
+for the whole process, with no lock, and the run builds its own figures on its own thread. So an interactive window
+open when a run starts is told to HOLD: its figure's picture stands in its canvas's place, nothing of the figure is
+laid out or drawn until the run has ended, and then the canvas is back at the view it had.
 """
 import pickle
 
@@ -31,9 +36,11 @@ from ..file_chooser import choose_file
 _MIN_SCALE = 0.05
 _MAX_SCALE = 40.0
 _WHEEL_STEP = 1.15
+#: What a held window shows in its figure's place when no picture of the figure is held.
+WAIT_TEXT = "This figure is drawn again when the run has ended."
 
 
-def build_interactive_window(fig_pickle, title, on_close=None, parent=None):
+def build_interactive_window(fig_pickle, title, on_close=None, parent=None, picture=None):
     """Unpickle a figure on the GUI thread and wrap it in an InteractiveFigureWindow.
 
     THE Gcf DETACH -- do not remove. Every stage figure is pyplot-managed (visualizers.py uses
@@ -50,13 +57,15 @@ def build_interactive_window(fig_pickle, title, on_close=None, parent=None):
     fig = pickle.loads(fig_pickle)
     for num in set(pylab_helpers.Gcf.figs) - before:
         pylab_helpers.Gcf.destroy(num)
-    return InteractiveFigureWindow(fig, title=title, on_close=on_close, parent=parent)
+    return InteractiveFigureWindow(fig, title=title, on_close=on_close, parent=parent, picture=picture)
 
 
 class InteractiveFigureWindow(QWidget):
-    """A live matplotlib canvas for a (main-thread) figure, with the standard navigation toolbar."""
+    """A live matplotlib canvas for a (main-thread) figure, with the standard navigation toolbar. ``picture`` is the
+    figure's picture (a QPixmap, or None when none is held), which stands in the canvas's place while the window
+    holds (``hold``)."""
 
-    def __init__(self, fig, title="Figure", on_close=None, parent=None):
+    def __init__(self, fig, title="Figure", on_close=None, parent=None, picture=None):
         super().__init__(parent, Qt.Window)
         # The Qt-agg backend is imported HERE -- lazily, and only when a figure is actually popped out --
         # so app start and the headless, non-pop-out tests never pull it in, and an import failure is
@@ -67,18 +76,46 @@ class InteractiveFigureWindow(QWidget):
 
         self._on_close = on_close
         self._fig = fig
+        self._held = False
         self.setWindowTitle(title)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.resize(900, 650)
 
         self.canvas = FigureCanvasQTAgg(fig)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        # the figure's picture, in the canvas's place while the window holds
+        self.picture = QLabel()
+        self.picture.setAlignment(Qt.AlignCenter)
+        if picture is not None and not picture.isNull():
+            self.picture.setPixmap(picture)
+        else:
+            self.picture.setText(WAIT_TEXT)
+        self.picture.setVisible(False)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.toolbar)
         layout.addWidget(self.canvas, 1)
+        layout.addWidget(self.picture, 1)
         self.canvas.draw_idle()
+
+    def hold(self, on: bool) -> None:
+        """Hold the figure while a run is live (``on``): its picture in the canvas's place, the canvas and its
+        toolbar hidden, so that no resize, key or paint reaches the figure library; or let it go again, the canvas
+        back at the view it had. A window closed meanwhile is passed over. The canvas goes first: a canvas still in
+        sight while the toolbar goes and the picture comes would be resized, and would ask for a drawing of its
+        figure that comes after it has gone."""
+        if self.canvas is None or bool(on) == self._held:
+            return
+        self._held = bool(on)
+        if on:
+            self.canvas.setVisible(False)
+            self.toolbar.setVisible(False)
+            self.picture.setVisible(True)
+        else:
+            self.canvas.setVisible(True)
+            self.toolbar.setVisible(True)
+            self.picture.setVisible(False)
 
     def closeEvent(self, event):
         if self._on_close is not None:

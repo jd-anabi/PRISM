@@ -9,6 +9,9 @@ panned and saved (core/gui/widgets/figure_window.py), a window owned by the one 
   * SBI-panel figures also arrive as a pickled Figure -> a true interactive matplotlib window,
     reconstructed on the GUI thread (never painting the worker's original -- see above).
   * disk-PNG figures (and any figure whose pickle is missing / unloadable) -> a pan/zoom image viewer.
+While a run is live every figure pops out as its picture, in the image viewer, and an interactive window already
+open shows its picture until the run has ended (``hold``): the window's thread lays out no figure while a run
+builds its own.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
@@ -56,7 +59,7 @@ class FigureStack(QTabWidget):
         self.setMovable(True)
         self.tabCloseRequested.connect(self._close_tab)
         # The pop-out windows, owned by the window the stack stands in: held here as well, so that each is reached
-        # while it is open. Dropped on close.
+        # while it is open (``hold``). Dropped on close.
         self._windows = set()
 
     def add_figure(self, title: str, png_bytes: bytes, fig_pickle=None):
@@ -114,16 +117,18 @@ class FigureStack(QTabWidget):
 
     def _pop_out(self, container):
         """Open the figure of ``container`` in a window of its own, owned by the window this stack stands in: an
-        interactive copy when its pickle loads, else its picture in the image viewer."""
+        interactive copy when its pickle loads, else its picture in the image viewer. While a run is live it opens
+        as its picture: the window's thread lays out no figure while a run builds its own."""
+        from ..run.controller import controller
         from .figure_window import ImageZoomWindow, build_interactive_window
 
         title = getattr(container, "_title", "Figure")
         owner = self.window()
         window = None
-        if getattr(container, "_fig_pickle", None) is not None:
+        if getattr(container, "_fig_pickle", None) is not None and not controller().is_live():
             try:
                 window = build_interactive_window(container._fig_pickle, title, on_close=self._drop_window,
-                                                  parent=owner)
+                                                  parent=owner, picture=container._pix)
             except Exception:      # noqa: BLE001 -- a version-skewed / unloadable pickle: fall back
                 window = None
         if window is None:
@@ -136,6 +141,14 @@ class FigureStack(QTabWidget):
         self._windows.add(window)
         window.show()
         window.raise_()
+
+    def hold(self, on: bool) -> None:
+        """While a run is live (``on``), every interactive window this stack opened shows its figure's picture and
+        lays out nothing of its figure; off, each is interactive again, at the view it had."""
+        for window in list(self._windows):
+            held = getattr(window, "hold", None)
+            if callable(held):
+                held(on)
 
     def _drop_window(self, window):
         self._windows.discard(window)
