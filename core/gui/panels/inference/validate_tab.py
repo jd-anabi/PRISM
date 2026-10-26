@@ -7,6 +7,7 @@ from core.refusals import Refusal, require_at_least
 
 from ... import icons
 from ...fields import label
+from ...run.model import RunSpec
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
@@ -75,6 +76,13 @@ class ValidatePanel(_StagePanel):
         self.dispatch(orchestrator.validate_calibration, s.cfg, s.posterior, s.inf_prior, provide_fig_sink=True,
                       n_cal=v["n_cal"], cal_n_scales=v["cal_n_scales"], seed=random.randrange(2 ** 31),
                       on_result=self._on_calibration)
+
+    def run_spec(self, fn, *args, **kwargs) -> RunSpec:
+        """A check: the posterior's calibration, which writes a calibration record."""
+        if fn is not orchestrator.validate_calibration:
+            return super().run_spec(fn, *args, **kwargs)
+        return RunSpec("Check", ("inference", "checks"), name="Calibration", stop_button="Stop the calibration…",
+                       kinds=("calibration",))
 
     def _on_calibration(self, payload):
         res = payload.results

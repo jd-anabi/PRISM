@@ -9,7 +9,11 @@ test's teardown hands it to ``end_of_test``, which deletes what was made since (
 wider scope built (the screen of a module's run, a panel a module builds once) was made before that length was
 noted, so it is left alone and outlives the test, as it is meant to. tests/_fixtures.py reaches the record
 through this module and binds no container of its own, so that its builders' own test can still say that
-_fixtures keeps nothing it built.
+_fixtures keeps nothing it built. What tests/_runs.py's ``RunText`` hears of the run's controller is noted here
+too, so that it hears no run after its test.
+
+The end of every test also puts the process's run controller back as the next test must find it: a run left live
+is stopped and waited for, and a run that ended is acknowledged (``end_of_test``, ``put_back_the_run``).
 """
 import sys
 import time
@@ -48,11 +52,30 @@ def let_go(since: int) -> None:
         gc.collect()             # the wrappers of what went, and the cycles that held it, go now too
 
 
+def _controller():
+    """The process's run controller, reached where its module is kept; None when that module was never loaded."""
+    runs = sys.modules.get("core.gui.run.controller")
+    return None if runs is None else runs.controller()
+
+
 def a_run_is_live() -> bool:
-    """Whether a panel's run is live in this process: the flag every run sets while it goes, read where the
-    panels' module keeps it. False when that module was never loaded."""
-    panels = sys.modules.get("core.gui.panels.base_panel")
-    return panels is not None and panels.BasePanel._running
+    """Whether a run is live in this process, as its run controller says. False when the controller's module was
+    never loaded."""
+    held = _controller()
+    return held is not None and held.is_live()
+
+
+def put_back_the_run() -> None:
+    """The process's run controller as the next test must find it: a run that ended acknowledged, so that the
+    controller is idle, and the clock and the folder of runs a test handed it let go. Nothing while a run is
+    live, nor when the controller's module was never loaded."""
+    held = _controller()
+    if held is None or held.is_live():
+        return
+    if held.status.unacknowledged_end and held.status.run is not None:
+        held.acknowledge(held.status.run)
+    held.use_clock(None)
+    held.use_folder(None)
 
 
 def noted() -> tuple:
@@ -62,27 +85,28 @@ def noted() -> tuple:
 
 
 def end_of_test(at_start: tuple, within: float = STOPS_WITHIN) -> None:
-    """Let go what the builders made since ``at_start`` (what ``noted`` gave when the test was set up), and fail
-    the test, by raising, when it left a run live.
+    """Let go what the builders made since ``at_start`` (what ``noted`` gave when the test was set up), put the run
+    controller back as the next test must find it (``put_back_the_run``), and fail the test, by raising, when it
+    left a run live.
 
-    Such a run is asked to stop first, and the event loop is turned until its end has been handled, ``within``
-    seconds at most: the run's end, come after its panel was deleted, would raise on the panel before it put back
-    the flag that says a run is live, and every later run would be refused. If it has not stopped by then, what
-    the test made is taken out of the record and kept alive, not deleted, so that the run's end still finds its
-    panel. A run that was live already when the test was set up is an earlier test's, and is not waited for
-    again."""
+    Such a run is asked to stop first, through the controller, and the event loop is turned until its end has been
+    handled, ``within`` seconds at most: a run whose end came after its panel was deleted would end without the
+    page it was started from. If it has not stopped by then, what the test made is taken out of the record and kept
+    alive, not deleted, so that the run's end still finds its panel, and every later run is refused until it stops.
+    A run that was live already when the test was set up is an earlier test's, and is not waited for again."""
     since, live_before = at_start
     left_live = a_run_is_live() and not live_before
     waited = 0.0
     if left_live:
         from PySide6.QtCore import QCoreApplication
-        sys.modules["core.gui.panels.base_panel"].BasePanel.request_cancel_all()
+        _controller().request_stop()
         began = time.monotonic()
         while a_run_is_live() and time.monotonic() - began < within:
             QCoreApplication.processEvents()
             time.sleep(0.01)
         waited = time.monotonic() - began
     stopped = not (left_live and a_run_is_live())
+    put_back_the_run()
     if stopped:
         let_go(since)
     else:

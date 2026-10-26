@@ -143,45 +143,18 @@ def calls_that_speak(source: str) -> list[str]:
 
 
 class PaneCapture:
-    """Records what a panel writes to its log pane, as ``(level, text)`` in order, INSTEAD of
-    rendering it. ``PaneCapture(panel)`` replaces BOTH of that one pane's channels:
-
-      * ``LogPane.append_line(text, level="info")`` -- the panel's own GUI-thread messages (a refusal,
-        a warning, "Run cancelled.") and ``WorkerSignals.log``;
-      * ``LogPane.append_lines(batch)`` -- ``WorkerSignals.log_batch``, one pump tick of the RUN's
-        output, and therefore every print, every retired tqdm bar, every ``core`` record (through
-        ``streams._PumpLogHandler``) and every Python warning (through ``redirect_streams``'
-        ``showwarning``). That channel is the one the helper used to miss, so a test could assert on
-        what the pane said while being blind to almost everything in it.
-
-    TWO ORDERS, ONE LIST. A captured entry is ``(level, text)``: that is what the hand-written stubs
-    this helper replaced appended and what every assertion in the suites reads. A batch's pairs arrive
-    as ``(text, level)``, because that is the order ``WorkerSignals.log_batch`` carries
-    (``core/gui/worker.py:27``; ``tests/test_vt_progress.py``'s handler test pins that payload
-    directly). Each pair is therefore FLIPPED as it is appended, so ``.lines`` reads in one order --
-    the order a user sees the lines in -- whichever channel each line came from. A test that wants one
-    channel alone filters on what it knows only that channel says.
-
-    ``BasePanel.dispatch`` resolves both attributes AT CONNECT TIME, so a capture installed before the
-    dispatch sees both channels and one installed after sees neither. A batch is published by the
-    pump's daemon thread at 15 Hz as a queued cross-thread signal, so a test must drive the event loop
-    (``pump(app)``) before asserting on run output. The widget receives nothing, and the panel is a
-    throwaway built by the test."""
+    """Records the lines a page writes itself to its log pane -- a refusal's sentence, "Model applied",
+    a record written, "Run cancelled." -- as ``(level, text)`` in order, INSTEAD of rendering them:
+    ``PaneCapture(panel)`` replaces that one pane's ``LogPane.append_line(text, level="info")``. A run's
+    own lines never reach the pane: they are the run's full text, which ``tests/_runs.RunText`` reads
+    from the run's controller. The widget receives nothing, and the panel is a throwaway built by the
+    test."""
     def __init__(self, panel):
         self.lines: list[tuple[str, str]] = []
         panel.log_pane.append_line = self._append
-        panel.log_pane.append_lines = self._append_batch
 
     def _append(self, text: str, level: str = "info") -> None:
         self.lines.append((level, text))
-
-    def _append_batch(self, batch) -> None:
-        """One pump tick: each ``(text, level)`` appended as ``(level, text)``, in order. A falsy batch
-        appends nothing, which is what ``LogPane.append_lines`` renders for one."""
-        if not batch:
-            return
-        for text, level in batch:
-            self.lines.append((level, text))
 
 
 def _nad_cfg(**over):
@@ -870,17 +843,21 @@ def build_inference(*, session=None, cfg=None):
 
 def build_run_host(cls=None):
     """A bare run host: a panel with the shared run machinery and no controls of its own. With no
-    argument it is an instance of a new, empty subclass of ``BasePanel`` made at this call; with a
-    class, an instance of that class. The made class is always named ``P``: a panel stores its
-    layout under its class's name, and one test saves the layout with one host and restores it with
-    a second, so two hosts must share that name. It is let go when the test that built it ends."""
+    argument it is an instance of a new subclass of ``BasePanel`` made at this call, whose runs are any
+    call it is handed, described alike: a run with no place in the window, which keeps no file and
+    leaves nothing to acknowledge; with a class, an instance of that class. The made class is always
+    named ``P``: a panel stores its layout under its class's name, and one test saves the layout with
+    one host and restores it with a second, so two hosts must share that name. It is let go when the
+    test that built it ends."""
     qt_app()
     from core.gui.panels.base_panel import BasePanel
+    from core.gui.run.model import RunSpec
     if cls is not None:
         return _built.keep(cls())
 
     class P(BasePanel):
-        pass
+        def run_spec(self, fn, *args, **kwargs):
+            return RunSpec("Run", None, keeps_files=False)
 
     return _built.keep(P())
 
@@ -901,6 +878,7 @@ def process_state(app) -> dict:
     from core.artifacts import default_store
     from core.gui import design, one_instance, theming
     from core.gui import style as small_style
+    from core.gui.run.controller import controller
     gc.collect()
     palette = app.palette()
     style = app.style()
@@ -951,6 +929,8 @@ def process_state(app) -> dict:
         "one-PRISM lock": one_instance.current(),
         "local servers": tuple(sorted(server.serverName() for server in app.findChildren(QLocalServer)
                                       if server.isListening())),
+        # The process's one run: none live, and no end left to acknowledge.
+        "run": (controller().is_live(), controller().status.state),
     }
 
 
@@ -1010,6 +990,9 @@ def whole_program(*, held_by_another: bool = False):
             config.QUIET_SEGMENT_BAR = found["quiet"]
             design.set_text_scale(found["factor"])
             design.set_room(found["room"])
+            # The process's run controller as the next test must find it: a run that ended in the block
+            # acknowledged, and what the block handed it let go.
+            _built.put_back_the_run()
             # Then the lock and the server, before the window goes, so that no knock reaches it on its way out.
             one_instance.release()
             if held is not None:

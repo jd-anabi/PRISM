@@ -18,6 +18,7 @@ from core.Reduction.sweep import run_reduction_map
 
 from .base_panel import BasePanel
 from .. import settings
+from ..run.model import RunSpec
 from ..widgets.artifact_picker import ArtifactPicker
 from ..widgets.help_badge import add_help_row
 from ..widgets.labeled_inputs import FloatField
@@ -88,6 +89,12 @@ class ReductionPanel(BasePanel):
         # Part-A record, so the figure comes back via the plot watcher rather than the return value.
         watch = config.artifacts_root() / "reduction"
         self.dispatch(run_reduction_map, cfg, watch_dir=watch, on_result=self._on_result)
+
+    def run_spec(self, fn, *args, **kwargs) -> RunSpec:
+        """The reduction map, which saves its table and its figure where the panel watches for them."""
+        if fn is not run_reduction_map:
+            return super().run_spec(fn, *args, **kwargs)
+        return RunSpec("Reduction map", ("reduction", None), stop_button="Stop computing…")
 
     def _on_result(self, record):
         self.record = record

@@ -548,6 +548,25 @@ class RunModel:
             return 0
         return done // every - (self._resumed_at or 0) // every
 
+    def budget(self) -> dict | None:
+        """The run's budget as its line gave it: ``"batches"``, ``"rows"`` (simulations per batch) and
+        ``"simulations"`` in all; None before the line."""
+        return None if self._budget is None else dict(self._budget)
+
+    def failed(self) -> tuple[int, int] | None:
+        """The failed simulations and the simulations made, as this run has counted them so far; None before its
+        first count."""
+        return self._failed
+
+    def seconds_per_batch(self) -> float | None:
+        """The simulation's own pace, in seconds per batch, once its first ``TIMED_BATCHES`` are timed; None before,
+        and for a run with no simulation. Never the history's estimate."""
+        simulation = self._kind_index("simulation")
+        samples = self._samples.get(simulation) if simulation is not None else None
+        if not samples or samples[-1][1] - samples[0][1] < self._timed(simulation):
+            return None
+        return self._pace(simulation)
+
     # ── reading a line ──
     def _take(self, reading: readings.Reading) -> None:
         name, values = reading.name, reading.values

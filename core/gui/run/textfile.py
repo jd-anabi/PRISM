@@ -59,13 +59,15 @@ class RunTextFile:
         with self._lock:
             return self._write(text, level)
 
-    def head(self, *, word: str, name: str, run: str, memory_limit: str) -> None:
+    def head(self, *, word: str, name: str, run: str, memory_limit: str) -> str | None:
         """The run's first lines, the window's own: which run this is (its name left out when it has none), and
-        the memory limit in force as the window words it (left out when it hands none)."""
+        the memory limit in force as the window words it (left out when it hands none). Returns None; when a write
+        of them broke the file, the window's sentence saying so, as ``line`` returns it, for the window to say."""
         with self._lock:
-            self._write(f"{word} {name}, run {run}." if name else f"{word}, run {run}.", "window")
+            said = self._write(f"{word} {name}, run {run}." if name else f"{word}, run {run}.", "window")
             if memory_limit:
-                self._write(memory_limit, "window")
+                said = self._write(memory_limit, "window") or said
+            return said
 
     def separator(self, attempt: int) -> None:
         """The line that opens a try of the run after its first."""

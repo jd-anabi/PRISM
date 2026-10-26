@@ -878,12 +878,11 @@ def test_the_screens_sweep_claims_nothing_it_could_not_read(store, monkeypatch):
     assert "no legacy directory can be swept" in status, "the unread root is still reported"
     assert "legacy directory" in scr.btn_sweep_all.toolTip(), scr.btn_sweep_all.toolTip()
 
-    from core.gui.panels.base_panel import BasePanel
     from core.gui.screens.artifact_screen import KIND_LABELS
-    monkeypatch.setattr(BasePanel, "_running", True)
-    scr._sweep(all_kinds=True)
+    from tests._runs import running
+    with running():
+        scr._sweep(all_kinds=True)
     assert scr.status.text().endswith("before removing leftovers."), scr.status.text()
-    monkeypatch.setattr(BasePanel, "_running", False)
     # a comparison is a record of this kind, and the Kind picker says so
     assert KIND_LABELS["fdt"] == "FDT measurements, sweeps and comparisons"
     assert scr.kind_combo.findText(KIND_LABELS["fdt"]) >= 0
@@ -990,7 +989,7 @@ def test_a_directory_something_may_still_be_writing_is_reported_not_removed(stor
     """The recency guard, through the window. The manifest is written LAST, so a run in flight -- in
     this process or another -- is indistinguishable from a leftover by content alone. A sweep from a
     second process was found removing a live writer's directory: the run died at its commit, and a
-    running cache lost its committed shards. The window's ``BasePanel._running`` guard is
+    running cache lost its committed shards. The window's guard, its run controller's live run, is
     same-process only.
 
     The candidate is still LISTED (the table cannot know how old it is either), so what has to hold
@@ -1049,8 +1048,8 @@ def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_no
     number, which moved). Every WRITE is refused while a run is live; READING never is -- which is the
     whole reason the browser is a plain screen and not a BasePanel, so nothing here is greyed out
     either."""
-    from core.gui.panels.base_panel import BasePanel
     from tests._fixtures import all_asked, artifact_screen, qt_app
+    from tests._runs import running
     qt_app()
     cfg = _nad_cfg()
     p = _prior_artifact(store, cfg, name="busy")
@@ -1060,8 +1059,7 @@ def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_no
     _show_kind(scr, "prior")
     _select_ref(scr.table, p.id)
     scr.note_edit.setText("written during a train")
-    BasePanel._running = True
-    try:
+    with running():
         for action in (scr._set_note, scr._delete, lambda: scr._sweep(all_kinds=False)):
             scr._set_status("")
             action()
@@ -1074,8 +1072,6 @@ def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_no
         _select_ref(scr.table, p.id)
         assert scr.note_edit.isEnabled() and scr.btn_delete.isEnabled(), \
             "the browser is not a BasePanel: a live run greys nothing here"
-    finally:
-        BasePanel._running = False
     # _select above re-read the row's (empty) note into the box, as a selection change must; type it
     # again and the same click works now that nothing is running.
     scr.note_edit.setText("written after the train")
@@ -1141,8 +1137,8 @@ def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatc
     """
     from PySide6.QtWidgets import QMessageBox
     from core.Helpers import model_store
-    from core.gui.panels.base_panel import BasePanel
     from tests._fixtures import all_asked, forget_asked, qt_app
+    from tests._runs import running
     qt_app()
     statics = []
     for name in ("warning", "information"):
@@ -1160,11 +1156,8 @@ def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatc
         models._edit_user_model("BROKEN")   # site 1 -- a definition that will not load
         assert models.current_page() == "list", "a definition that will not load opened the builder"
         monkeypatch.setattr(model_store, "delete_user_model", boom)
-        BasePanel._running = True
-        try:
+        with running():
             models._delete_user_model("BROKEN")  # site 2 -- refused while a run is live, nothing asked
-        finally:
-            BasePanel._running = False
         choose(monkeypatch, other=True)
         models._delete_user_model("BROKEN")  # the confirmation, then site 3 -- the delete fails
     finally:
@@ -1466,8 +1459,8 @@ def test_the_lineage_report_is_a_read_and_needs_a_complete_row(store, monkeypatc
     note, the delete and the sweep. A leftover directory has no manifest and so no lineage. And a
     name the operator typed without an extension gets .txt rather than a file nothing opens."""
     from core.artifacts import render_lineage
-    from core.gui.panels.base_panel import BasePanel
     from tests._fixtures import CHOOSER_CALLS, answer_chooser, artifact_screen, asked, qt_app
+    from tests._runs import running
     qt_app()
     cfg = _nad_cfg()
     p = _prior_artifact(store, cfg, name="ancestor")
@@ -1482,11 +1475,8 @@ def test_the_lineage_report_is_a_read_and_needs_a_complete_row(store, monkeypatc
     out_dir.mkdir()
     bare = out_dir / "chain"
     answer_chooser(monkeypatch, str(bare))
-    BasePanel._running = True
-    try:
+    with running():
         scr._lineage_report()
-    finally:
-        BasePanel._running = False
     written = bare.with_suffix(".txt")
     assert written.read_bytes() == render_lineage(store, "prior", p.id).encode("utf-8")
     assert not bare.exists(), "an extension-less name must gain .txt, not be written as given"

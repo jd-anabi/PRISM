@@ -305,7 +305,9 @@ def _built_widgets_let_go(_isolated_settings, _drawing_code_raises_nothing, _lay
     test's own settings file and its room are in force and before the drawing record is read. What a
     fixture of wider scope built was made before this test was set up, so it is left alone. A test that ends
     with a run still live fails here, and its run is asked to stop and waited for before anything goes, so
-    that no panel is deleted under its run (tests/_built.py's end_of_test says how long, and why)."""
+    that no panel is deleted under its run (tests/_built.py's end_of_test says how long, and why). The
+    process's one run controller is put back as the next test must find it: a run that ended is acknowledged,
+    in this test's own folder of runs, and the clock and the folder the test handed it are let go."""
     from tests import _built
     at_start = _built.noted()
     yield

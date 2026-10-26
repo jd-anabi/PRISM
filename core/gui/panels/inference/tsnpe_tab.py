@@ -13,8 +13,11 @@ from ...widgets.artifact_picker import StorePicker
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
-from .base import _StagePanel, _TrainingBudgetMixin
+from .base import _StagePanel, _TrainingBudgetMixin, training_spec
 from .help_text import HELP
+
+# Where the window shows this step's runs: Parameter inference, its step Narrowing round.
+_PLACE = ("inference", "narrowing")
 
 
 # ── 6. TSNPE (truncated sequential NPE) ───────────────────────────────────────
@@ -162,6 +165,12 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
                       new_run=self.new_run.isChecked(), if_name_taken="unnamed",
                       provide_fig_sink=True, on_result=self._on_round)
         self.new_run.setChecked(False)
+
+    def run_spec(self, fn, *args, **kwargs):
+        """A narrowing round: a training of its own, on the region, so its run is a training's, narrowed."""
+        if fn is not orchestrator.tsnpe_round:
+            return super().run_spec(fn, *args, **kwargs)
+        return training_spec("Narrowing round", _PLACE, "Stop the narrowing round…", args[0], kwargs, narrowed=True)
 
     def _on_round(self, payload):
         """Install the round's LoadedPosterior -- it carries its own region and observation digest

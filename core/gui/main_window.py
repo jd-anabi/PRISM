@@ -20,12 +20,13 @@ from core.artifacts import KIND_DIRS, StoreError, default_store
 from core.config import VALID_MODELS
 
 from . import chain, design, keys, one_instance, record_words, settings, style
-from .panels.base_panel import RUN_STATE, BasePanel
+from .panels.base_panel import BasePanel
 from .panels.crossval_panel import CrossValPanel
 from .panels.fdt_panel import FdtPanel
 from .panels.inference_tabs import ConfigPanel, InferPanel, PosteriorPanel, PriorPanel, TSNPEPanel, ValidatePanel
 from .panels.reduction_panel import ReductionPanel
 from .panels.simulate_panel import SimulatePanel
+from .run.controller import controller
 from .screens.artifact_screen import ArtifactScreen
 from .screens.help_screen import HelpScreen
 from .screens.home_screen import HomeFacts, HomeScreen, RecordRow
@@ -226,13 +227,14 @@ class MainWindow(QMainWindow):
         # until then nothing of it exists, and when it is built its panels read the lists of models and the
         # records as they are then, and restore what they remembered.
         self._built: dict = {}                   # each part built, by its key: its top widget
-        # Where each panel of a part built lives: its part, and its page or step. The foot names a running panel's
-        # place from this and goes there, and Home reads where a run is live. A panel that is not here (the bare
-        # run host a test builds) is named by no place and leads nowhere.
+        # Where each panel of a part built lives: its part, and its page or step.
         self._places: dict = {}
         self._inference_opened = False           # Parameter inference opens at the step in hand the first time
-        # Home reads what it states as it is built, the running panel among it: none, at launch.
-        self._running_panel = None
+        # The place of the live run, as its status gives it, which the foot names and goes to and Home reads: none
+        # while no run is live, and none for a run with no place (the bare run host a test builds), which leads
+        # nowhere. Home reads what it states as it is built, this among it: none, at launch.
+        self._live_place = None
+        self._run_live = False
         self._build("home")
 
         # Every way to move is go_to: a row of the rail, Home's buttons and rows, the run's foot. Each handler
@@ -257,7 +259,9 @@ class MainWindow(QMainWindow):
         self._run_timer = QTimer(self)
         self._run_timer.setInterval(1000)
         self._run_timer.timeout.connect(self._tick_running)
-        RUN_STATE.changed.connect(self._on_run_state)
+        # The process's one run is heard through a method of this window's own, so that a deleted window leaves no
+        # connection behind.
+        controller().status_changed.connect(self._on_status)
 
         # ALWAYS open on Home, its row marked and the steps' states in the rail. Home has read what it states
         # as it was built, and reads nothing more at its first show.
@@ -277,6 +281,9 @@ class MainWindow(QMainWindow):
             if not self.restoreGeometry(geom) or not _on_a_visible_screen(self):
                 self.resize(*opening)
                 _centre_on_primary(self)
+        # A window built while a run is live shows it, as a part built then comes up locked.
+        if controller().is_live():
+            self._on_status(controller().status)
 
     def set_appearance_mode(self, mode):
         """Apply + persist an appearance mode, and show it on the Settings screen when that is built: one built
@@ -378,7 +385,7 @@ class MainWindow(QMainWindow):
         panels = self._panels_of(name, widget)
         for panel, page in zip(panels, _PAGES.get(name, (None,) * len(panels))):
             self._places[panel] = (name, page)
-        if BasePanel._running:
+        if controller().is_live():
             for panel in panels:
                 panel.set_controls_enabled(False)
 
@@ -481,12 +488,7 @@ class MainWindow(QMainWindow):
         store in use."""
         inference = self._built.get("inference")
         session = inference.session if inference is not None else SbiSession()
-        return HomeFacts(session, self._step_states(), self._run_place(self._running_panel),
-                         _home_records(default_store()))
-
-    def _run_place(self, panel):
-        """The part and page a panel's run is in: None for no panel, or for one with no place in the window."""
-        return self._places.get(panel) if panel is not None else None
+        return HomeFacts(session, self._step_states(), self._live_place, _home_records(default_store()))
 
     def _states_changed(self, states) -> None:
         """The six steps' states were worked out again: the rail shows them, and Home reads now while it is
@@ -539,14 +541,13 @@ class MainWindow(QMainWindow):
             QApplication.alert(self)
 
     def go_to_run(self) -> None:
-        """Go to the place of the live run. Nothing when no run is live, or its panel has no place."""
+        """Go to the place of the live run. Nothing when no run is live, or it has no place."""
         self._to_run(Qt.OtherFocusReason)
 
     def _to_run(self, keyboard) -> None:
         """The move to the live run's place, the page taking the keyboard for the reason ``keyboard``."""
-        place = self._run_place(self._running_panel)
-        if place is not None:
-            self._move(*place, keyboard=keyboard)
+        if self._live_place is not None:
+            self._move(*self._live_place, keyboard=keyboard)
 
     def _move(self, part: str, page, *, keyboard) -> None:
         """The move ``go_to`` makes. ``keyboard`` is the reason the page takes the keyboard for, or None for a move
@@ -677,31 +678,36 @@ class MainWindow(QMainWindow):
         self.place_changed.emit("temperature", page)
 
     # ── the live run, at the foot of the rail ─────────────────────────────────
-    def _on_run_state(self, panel) -> None:
-        """A run started (``panel``) or ended (None): the steps' states are worked out again, which shows the
-        live step in the rail and has Home read, and the foot says what is running and for how long. When the
-        run ends with the keyboard on the foot, which is then no control, the rail takes the keyboard.
+    def _on_status(self, status) -> None:
+        """The run's status changed. When a run has begun or ended (a status live after one that was not, or the
+        other way round): the steps' states are worked out again, which shows the live step in the rail and has
+        Home read, and the foot says what is running, from its place, and for how long. When the run ends with the
+        keyboard on the foot, which is then no control, the rail takes the keyboard. Any other change of the
+        status, while the run goes on, changes nothing here.
 
-        Connected to the module-level RUN_STATE in base_panel.py, which every window built in the process
-        hears until it is deleted: this handler touches only its own window's widgets, and is safe to run on
-        a window nobody is looking at. It builds no part. The run's title and the words of its place are worked
-        out ONCE per run, not per tick.
+        Connected to the process's run controller, which every window built in the process hears until it is
+        deleted: this handler touches only its own window's widgets, and is safe to run on a window nobody is
+        looking at. It builds no part. The run's title and the words of its place are worked out ONCE per run,
+        not per tick.
         """
-        self._running_panel = panel
+        if status.live == self._run_live:
+            return
+        self._run_live = status.live
+        self._live_place = status.place if status.live else None
         inference = self._built.get("inference")
         if inference is not None:
             inference.recompute_states()
         else:
             self._states_changed(self._step_states())
         foot = self.shell.rail.foot
-        if panel is None:
+        if not status.live:
             self._run_timer.stop()
             held = self.focusWidget() is foot
             foot.set_state("none", "Nothing is running", "Only one run at a time.")
             if held:
                 self.shell.rail.take_keyboard()
             return
-        place = self._run_place(panel)
+        place = self._live_place
         if place is None:
             self._run_title = self._run_place_words = "Running: a task"
         else:
@@ -717,7 +723,7 @@ class MainWindow(QMainWindow):
         """Write the elapsed time again: a divmod and the foot's words, once a second."""
         words = f"{clock_words(int(time.monotonic() - self._run_started))} so far. Settings are locked."
         foot = self.shell.rail.foot
-        foot.set_state("now", self._run_title, words, button=self._run_place(self._running_panel) is not None)
+        foot.set_state("now", self._run_title, words, button=self._live_place is not None)
         whole = f"{self._run_place_words}. {words}"   # the place in full: the title names only its part or step
         foot.setAccessibleName(whole)
         foot.setToolTip(whole)
@@ -762,7 +768,7 @@ class MainWindow(QMainWindow):
         not stop the process instantly -- but it does stop it, instead of leaving it holding the CPU/GPU
         invisibly after the window is gone, which is what "Quit anyway" still does.
         """
-        if BasePanel._running:
+        if controller().is_live():
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Warning)
             box.setWindowTitle("A task is still running")
@@ -778,7 +784,7 @@ class MainWindow(QMainWindow):
             box.exec()
             clicked = box.clickedButton()
             if clicked is cancel_quit:
-                BasePanel.request_cancel_all()
+                controller().request_stop()
             elif clicked is not quit_anyway:
                 event.ignore()
                 return

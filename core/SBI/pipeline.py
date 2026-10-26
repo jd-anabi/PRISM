@@ -1951,8 +1951,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     except BaseException:
         # WorkerCancelled (a BaseException by design, so `except Exception` would miss it) and
         # KeyboardInterrupt both land here, and a GUI cancel is the MOST likely way a multi-day run
-        # ends -- MainWindow.closeEvent reaches request_cancel_all(), so closing the window stops it.
-        # Before this, that discarded every completed batch.
+        # ends. Closing the window stops a live run first: the window asks, then waits for the run to
+        # end before it closes. Before this, that discarded every completed batch.
         # THE ROWS MATTER MORE THAN THE RESTORE POINT. If the snapshot for THIS batch failed or
         # belongs to another one, commit the completed batches with no RNG rather than skipping the
         # write: a checkpoint that resumes without restoring the streams draws fresh noise from

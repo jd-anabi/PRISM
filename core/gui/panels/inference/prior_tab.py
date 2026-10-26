@@ -11,6 +11,7 @@ from core.SBI import statistics
 
 from ... import icons, settings
 from ...fields import label
+from ...run.model import RunSpec
 from ...widgets.artifact_picker import ArtifactPicker, StorePicker
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
@@ -48,6 +49,10 @@ def _check_knob(key: str, value, minimum):
 def _rule_words(minimum) -> str:
     """The rule as the live note says it: the words the refusal's own message uses after "must be"."""
     return "greater than 0" if minimum is None else f"at least {minimum}"
+
+
+# Where the window shows this step's runs: Parameter inference, its step Prior.
+_PLACE = ("inference", "prior")
 
 
 # ── 2. Prior (also picks the BOUNDS file, which is what builds the config) ────
@@ -245,6 +250,17 @@ class PriorPanel(_StagePanel):
         # run says so, so the sweep is never lost to it.
         self.dispatch(orchestrator.build_prior, cfg, entry, is_new, if_name_taken="unnamed",
                       provide_fig_sink=True, on_result=self._on_prior, **knobs)
+
+    def run_spec(self, fn, *args, **kwargs) -> RunSpec:
+        """The prior's build, which writes a prior; or its load, which writes nothing, keeps no file and stops
+        without a question (its third argument says which, as the stage reads it)."""
+        if fn is not orchestrator.build_prior:
+            return super().run_spec(fn, *args, **kwargs)
+        if args[2]:
+            return RunSpec("Prior build", _PLACE, name=kwargs.get("name", ""), stop_button="Stop the prior build…",
+                           kinds=("prior",))
+        return RunSpec("Prior load", _PLACE, stop_button="Stop loading", loads_only=True, keeps_files=False,
+                       stop_asks=False)
 
     def _read_inputs(self, is_new: bool) -> dict:
         """The click-time half of the input rules for this tab: every knob box the chosen branch

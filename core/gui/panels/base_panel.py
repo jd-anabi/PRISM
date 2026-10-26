@@ -1,10 +1,9 @@
 """Shared panel scaffolding: a left controls column and a right results area (a figure stack over a
-progress pane + log pane), plus ``dispatch()`` to run a callable on a background worker with its
-output wired to those widgets."""
+progress pane + log pane), plus ``dispatch()``, which asks the process's run controller to run a callable on a
+background worker, described by the panel's own ``run_spec``."""
 import weakref
-from pathlib import Path
 
-from PySide6.QtCore import QObject, QThreadPool, QTimer, Signal
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (QHBoxLayout, QMessageBox, QPushButton, QScrollArea, QSplitter,
                                QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt
@@ -13,14 +12,12 @@ from core.refusals import Refusal
 
 from .. import fields as gui_fields
 from ..design import CONTROLS_MIN_W, DEFAULT_RESULTS_SPLIT, DEFAULT_SPLIT
-from ..plot_watcher import NewPngWatcher
 from ..reported import reported
-from ..streams import CancelToken
+from ..run.controller import LIVE_TEXT, controller
 from ..widgets.figure_stack import FigureStack
 from ..widgets.log_pane import LogPane
 from ..widgets.progress_pane import ProgressPane
 from ..widgets.refusal_box import show_refusal
-from ..worker import Worker
 
 # "The cancel noted": shown alongside an ordinary crash report when the cancel token had already
 # been REQUESTED at the moment the failure was caught. It never claims the cancel caused the
@@ -64,27 +61,6 @@ def _png_fig_sink(figure_signal):
     return _sink
 
 
-class _RunState(QObject):
-    """The app-wide "something is running" broadcast: ``changed`` carries the running BasePanel, or
-    None the moment it stops.
-
-    A module-level singleton rather than a signal on BasePanel, for the reason ``BasePanel._running``
-    is class-level (see its comment): redirect_streams swaps sys.stdout/stderr PROCESS-WIDE, so only
-    one panel may run at a time and "what is running" is ONE app-wide fact -- a second such fact
-    belongs beside the first. A per-panel signal would also make every listener subscribe to ten
-    senders and re-subscribe to any panel built later.
-
-    Constructed at import, before any QApplication exists: a plain QObject may be, and the emission
-    is a direct same-thread call, so no event loop is needed for the shell to be updated.
-    """
-    changed = Signal(object)
-
-
-# The one broadcaster. BasePanel._set_busy publishes here and nothing else may; core/gui/main_window.py
-# listens and fills the run's state at the foot of the rail, so the live run is shown app-wide.
-RUN_STATE = _RunState()
-
-
 class _Column(QVBoxLayout):
     """The column of a panel's controls, laid from its top.
 
@@ -110,31 +86,20 @@ class BasePanel(QWidget):
     Ten of these exist (Reduction, FDT, CrossVal, Simulate + the six inference tabs: Config, Prior,
     Posterior, Validate, Infer, TSNPE). The Artifacts screen is NOT one -- it is a plain QWidget on
     purpose, because a BasePanel enrols in _instances and every run anywhere would grey it out.
-    Three class attributes carry app-wide state and are class-level ON PURPOSE -- see their
-    comments: ``_running`` (only one panel may run at a time, because stream redirection is
-    process-wide), ``_active_cancel`` and ``_instances``.
+    ``_instances`` is class-level ON PURPOSE (see its comment): the run's controller locks every panel
+    in it while a run is live. What runs, and whether a run is live, is the controller's to say
+    (``core/gui/run/controller.py``): one run goes at a time in the whole process, because stream
+    redirection is process-wide. Each panel describes the runs it starts in ``run_spec``.
 
     Persists: nothing here. Subclasses override ``save_settings``/``restore_settings`` for their own
     selections; the splitter geometry goes through the separate ``save_layout``/``restore_layout``
     pair, because 9 of the 10 subclasses override save_settings without calling super().
     """
-    # Class-level, deliberately: redirect_streams swaps sys.stdout/stderr PROCESS-WIDE (see
-    # core/gui/streams.py), so only ONE panel may run at a time -- a per-panel guard would let the FDT
-    # tab start a run while the SBI tab is training, and the two would fight over the console. The
-    # _REDIRECT lock in streams.py is the backstop; this is the thing that keeps us away from it.
-    _running = False
-    # The one live run's cancel token (there is only ever one, per _running). MainWindow.closeEvent
-    # reaches it through request_cancel_all() to stop a run before quitting.
-    _active_cancel: "CancelToken | None" = None
-    # Every live panel, so a run in ANY panel can lock the controls of ALL of them (see _set_busy).
-    # Weak, and a panel leaves it as its object goes, though Python may hold the panel longer (see __init__).
+    # Every live panel, so a run in ANY panel can lock the controls of ALL of them: the run's controller walks
+    # this set at a run's start and at its end. Class-level, deliberately: one run goes at a time in the whole
+    # process. Weak, and a panel leaves it as its object goes, though Python may hold the panel longer (see
+    # __init__).
     _instances: "weakref.WeakSet" = weakref.WeakSet()
-
-    @classmethod
-    def request_cancel_all(cls) -> None:
-        """Ask the currently-running task (if any) to stop at its next checkpoint."""
-        if cls._active_cancel is not None:
-            cls._active_cancel.requested.set()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -144,9 +109,6 @@ class BasePanel(QWidget):
         # that is gone, that lock would raise, and no run could start again.
         held, enrolled = weakref.ref(self), BasePanel._instances
         self.destroyed.connect(lambda *_: enrolled.discard(held()) if held() is not None else None)
-        self._busy = False
-        self._cancel: "CancelToken | None" = None
-        self._workers = set()   # keep workers alive until 'finished' (else Qt purges its queued signals)
 
         # Left: subclasses fill self.controls (inside a scroll area so long forms stay usable).
         self.controls = QWidget()
@@ -228,121 +190,51 @@ class BasePanel(QWidget):
 
     # ── background dispatch ──────────────────────────────────────────────────
     def dispatch(self, fn, *args, provide_fig_sink: bool = False, provide_stream: bool = False,
-                 on_chunk=None, watch_dir=None, on_result=None, on_finished=None, **kwargs):
-        """Run ``fn`` on a worker thread. Its log records, print()s and warnings stream to the log
-        pane and its tqdm bars to the progress pane; figures (when ``provide_fig_sink``) embed in
-        the figure stack; the return value goes to ``on_result``.
+                 on_chunk=None, watch_dir=None, on_result=None, **kwargs) -> bool:
+        """Ask the process's run controller to run ``fn(*args, **kwargs)`` on a worker thread, described by this
+        panel's ``run_spec`` for it, this panel its host: figures (when ``provide_fig_sink``) and the pictures that
+        land in ``watch_dir`` (one folder, or several) go to the figure stack, and the return value to
+        ``on_result``. The run's lines go to its text, which the controller keeps.
 
-        ONE TASK AT A TIME APP-WIDE, not merely per panel -- redirect_streams swaps sys.stdout/stderr
-        process-wide, so two concurrent runs would fight over the console (see ``_running``).
+        ONE RUN AT A TIME IN THE WHOLE PROCESS, not merely per panel: redirect_streams swaps sys.stdout/stderr
+        process-wide, so two concurrent runs would fight over the console. While a run is live this says so
+        among the page's own lines, starts nothing and returns False; True when the run was started."""
+        held = controller()
+        if held.is_live():
+            self.log_pane.append_line(LIVE_TEXT, "warning")
+            return False
+        return held.dispatch(fn, *args, spec=self.run_spec(fn, *args, **kwargs), host=self, on_result=on_result,
+                             provide_fig_sink=provide_fig_sink, provide_stream=provide_stream, on_chunk=on_chunk,
+                             watch_dir=watch_dir, **kwargs)
 
-        ``watch_dir`` is for the FDT / Reduction / CrossVal runners, which save their figures to disk
-        instead of handing them back: any PNG appearing there during the run is picked up and shown
-        (see core/gui/plot_watcher.py). It is one path, or a SEQUENCE of them -- the sweep study
-        writes two records and its figures land in two ``figures/`` directories -- and every watcher
-        feeds the same figure stack, in the order the files land.
-        """
-        if BasePanel._running:
-            where = "in this tab" if self._busy else "in another tab"
-            self.log_pane.append_line(
-                f"A task is already running ({where}); please wait for it to finish.", "warning")
-            return
+    def run_spec(self, fn, *args, **kwargs):
+        """What this panel knows of the run ``fn(*args, **kwargs)`` would be, and the run does not say: its word,
+        its place, its stop button, its stages, the records it writes, whether it keeps files. Each panel that starts
+        runs answers for its own; a call this panel does not start fails loudly here."""
+        raise NotImplementedError(f"{type(self).__name__} has no run spec for {fn!r}")
 
-        # ONE watcher per directory. NewPngWatcher globs a single directory and does not recurse,
-        # and the sweep study writes into TWO records, so a sequence is a real shape here -- a lone
-        # path stays a lone path, which is what every other caller passes.
-        watchers = []
-        for one_dir in ([] if watch_dir is None else
-                        [watch_dir] if isinstance(watch_dir, (str, Path)) else list(watch_dir)):
-            watcher = NewPngWatcher(one_dir, self)
-            watcher.png_ready.connect(self.figure_stack.add_png)
-            watcher.start()
-            watchers.append(watcher)
+    def is_running(self) -> bool:
+        """Whether the live run is this panel's own."""
+        held = controller()
+        return held.is_live() and held.host() is self
 
-        self._cancel = CancelToken()
-        BasePanel._active_cancel = self._cancel
-        worker = Worker(fn, *args, cancel=self._cancel, **kwargs)
-        # Retain the worker (and thus its WorkerSignals sender) until it reports finished, and stop the
-        # thread pool from auto-deleting the C++ QRunnable underneath it -- otherwise the sender is
-        # destroyed as soon as run() returns and Qt discards its still-queued result/finished events.
-        worker.setAutoDelete(False)
-        self._workers.add(worker)
-        if provide_fig_sink:
-            worker.kwargs["fig_sink"] = _png_fig_sink(worker.signals.figure)
-        if provide_stream:
-            # A long-lived streaming runner (e.g. SimulatePanel) emits numpy frames through the `chunk`
-            # signal and polls should_stop() to unwind cooperatively -- the same injection trick as
-            # provide_fig_sink, but for a continuous stream rather than one-shot figures. should_stop is
-            # the cancel token's flag: the runner raises WorkerCancelled between frames when it flips.
-            worker.kwargs["emit_chunk"] = worker.signals.chunk.emit
-            worker.kwargs["should_stop"] = self._cancel.requested.is_set
-            if on_chunk is not None:
-                worker.signals.chunk.connect(on_chunk)
-        worker.signals.log.connect(self.log_pane.append_line)
-        worker.signals.log_batch.connect(self.log_pane.append_lines)
-        worker.signals.log_batch.connect(lambda _b: self.progress_pane.heartbeat())
-        worker.signals.rows.connect(self.progress_pane.set_rows)
-        worker.signals.figure.connect(self.figure_stack.add_figure)
-        worker.signals.error.connect(self._on_error)
-        worker.signals.cancelled.connect(lambda _kept_fit=None: self.log_pane.append_line("Run cancelled.", "warning"))
-        if on_result is not None:
-            worker.signals.result.connect(on_result)
-
-        def _finished():
-            for w in watchers:
-                w.stop()                # one last scan: the final figure often lands right at the end
-                w.deleteLater()
-            self._set_busy(False)
-            self._workers.discard(worker)
-            # Release the PAYLOAD explicitly. discard() is not a lifetime bound: QThreadPool.start()
-            # hands the QRunnable to C++, and setAutoDelete(False) (above) means C++ never frees it, so
-            # the Worker shell outlives the run -- as does the _finished closure, which captures it and
-            # is never disconnected. Both are tiny; what is NOT tiny is what the Worker still points at
-            # (cfg, prior, posterior, CUDA tensors). Without this, every posterior you build stays
-            # pinned for the life of the process even after SbiSession.reset_downstream drops it.
-            worker.fn = None
-            worker.args = ()
-            worker.kwargs = {}
-            self._cancel = None
-            BasePanel._active_cancel = None
-            if on_finished is not None:
-                on_finished()
-
-        worker.signals.finished.connect(_finished)
-        self._set_busy(True)
-        QThreadPool.globalInstance().start(worker)
+    def _hosting(self, on: bool) -> None:
+        """This panel's run has begun (True) or ended (False): its Cancel button shows, and can be pressed, while
+        the run is live. Called by the run's controller."""
+        self.btn_cancel.setVisible(on)
+        self.btn_cancel.setEnabled(on)
+        self.btn_cancel.setText("Cancel")
 
     def _request_cancel(self):
-        if self._cancel is None:
+        if not self.is_running():
             return
-        self._cancel.requested.set()
+        controller().request_stop()
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.setText("Cancelling…")
         # A cancel is cooperative: it lands at the next print/tqdm redraw. That is ~1s almost
         # everywhere, but a neural-network training epoch and the SBC C2ST block are silent for longer.
         self.log_pane.append_line(
             "Cancelling — will stop at the next checkpoint (up to ~1 min during training).", "warning")
-
-    def _set_busy(self, busy: bool):
-        self._busy = busy
-        BasePanel._running = busy
-        self.btn_cancel.setVisible(busy)
-        self.btn_cancel.setEnabled(busy)
-        self.btn_cancel.setText("Cancel")
-        if busy:
-            self.progress_pane.begin()
-        else:
-            self.progress_pane.end()   # authoritative: drops any row a crashed worker left behind
-        # Lock EVERY panel's controls while a run is live, not just this one: a model combo on a
-        # sibling tab changed mid-run repoints its pickers and re-seeds its inputs under the running
-        # worker -- the hazard set_controls_enabled documents, spread across the inference tabs.
-        # Only this panel keeps its Cancel button live (it lives outside `controls`).
-        for panel in list(BasePanel._instances):
-            panel.set_controls_enabled(not busy)
-        # Publish app-wide, LAST: every panel's controls are in their final state before anything
-        # listening can look at them. The foot of the rail is filled from this, and it is the only
-        # thing that knows WHICH panel -- _running is a bare bool.
-        RUN_STATE.changed.emit(self if busy else None)
 
     def set_controls_enabled(self, enabled: bool):
         """Lock the whole left-hand column while a task runs.
@@ -453,7 +345,8 @@ class BasePanel(QWidget):
         """Show a failure. A Refusal goes to the yellow box (_refusal); anything else is a bug and
         gets the red one, with the traceback in a collapsible Details panel rather than pasted whole
         into the body (which produced an unscrollable, un-copyable wall of text stretched to the
-        widest stack frame). Connected to WorkerSignals.error, which carries the exception object;
+        widest stack frame). Called by the run's controller once a run of this panel that failed has
+        ended, with the exception object WorkerSignals.error carried and what came with it;
         a click handler that catches on the GUI thread passes what it caught the same way (omitting
         ``cancel_noted``, which defaults to False -- a GUI-thread click has no worker cancel token to
         ask). A plain string is still accepted and is still a bug.

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 from .. import chain, keys, record_words
 from ..panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel,
                                      TSNPEPanel, ValidatePanel)
+from ..run.controller import controller
 from ..session import SbiSession
 from ..widgets.adaptive_stack import AdaptiveStack
 
@@ -172,10 +173,12 @@ class InferenceScreen(QWidget):
         self.recompute_states()
 
     def recompute_states(self) -> None:
-        """Work out again where each of the six steps stands, from the session, the step whose panel has a
-        run live and whether the narrowing round has an observation to choose, and say so through
-        ``states_changed``. No panel's gate is run: ``refresh_gates`` runs them first."""
-        live = next((place.key for place, panel in zip(keys.STEPS, self.panels()) if panel._busy), None)
+        """Work out again where each of the six steps stands, from the session, the step the live run is in
+        (its place, as the run's status gives it) and whether the narrowing round has an observation to choose,
+        and say so through ``states_changed``. No panel's gate is run: ``refresh_gates`` runs them first."""
+        status = controller().status
+        place = status.place if status.live else None
+        live = place[1] if place is not None and place[0] == "inference" else None
         self._states = chain.step_states(self.session, live=live,
                                          observation_on_offer=self.tsnpe_panel.obs_picker.has_entries(),
                                          label=record_words.label_of)

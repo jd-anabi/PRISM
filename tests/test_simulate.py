@@ -28,8 +28,9 @@ matplotlib.use("Agg")                                            # match the app
 import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
-from core.gui.panels.base_panel import BasePanel                  # noqa: E402
+from core.gui.run.controller import controller                    # noqa: E402
 from tests._fixtures import build_part, build_run_host, build_window, qt_app, pump  # noqa: E402
+from tests._runs import RunText, turn_until                       # noqa: E402
 import contextlib                                                  # noqa: E402
 
 # ── Simulate section: "Save video…" export ───────────────────────────────────────────────────────
@@ -158,16 +159,17 @@ def test_a_spontaneous_built_in_cell_streams_with_no_drive():
 
 def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
     """dispatch(provide_stream=True) must inject the chunk emitter + stop flag, deliver frames to
-    on_chunk, and a cancel of a streaming run must land as `cancelled` (not `error`)."""
+    on_chunk, and a cancel of a streaming run must land as `cancelled` (not `error`): the run ends as
+    stopped, once, and its text says so and holds no failure."""
     import numpy as np
     from core.gui.streams import WorkerCancelled
 
     app = qt_app()
 
     panel = build_run_host()
+    text = RunText(controller())
     chunks = []
     started = {"v": False}
-    outcome = {"cancelled": 0, "error": 0}
 
     def streamer(emit_chunk=None, should_stop=None):
         i = 0
@@ -181,26 +183,18 @@ def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
             i += 1
 
     panel.dispatch(streamer, provide_stream=True, on_chunk=chunks.append)
-    for w in panel._workers:
-        w.signals.cancelled.connect(lambda: outcome.__setitem__("cancelled", outcome["cancelled"] + 1))
-        w.signals.error.connect(lambda *_a: outcome.__setitem__("error", outcome["error"] + 1))
-
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < 5 and not (started["v"] and chunks):
-        app.processEvents()
-        time.sleep(0.005)
+    turn_until(app, lambda: started["v"] and chunks, 5)
     assert chunks, "no streamed chunks were delivered to on_chunk"
-    assert panel._busy and BasePanel._active_cancel is not None
+    assert panel.is_running() and controller().is_live()
 
     panel._request_cancel()
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < 10 and panel._busy:
-        app.processEvents()
-        time.sleep(0.005)
+    turn_until(app, lambda: not controller().is_live(), 10)
     pump(app, 0.3)
 
-    assert not panel._busy, "panel stuck busy after cancelling a stream"
-    assert outcome["cancelled"] == 1 and outcome["error"] == 0, outcome
+    assert not panel.is_running(), "panel stuck busy after cancelling a stream"
+    assert [status.outcome for status in text.ended] == ["stopped"], text.ended
+    assert "The run stopped: a stop was asked for." in text.texts("window"), text.lines
+    assert not [line for line in text.texts() if line.startswith("The run failed")], text.lines
     assert "Run cancelled." in panel.log_pane.toPlainText()
 
 def test_simulate_panel_is_wired_and_navigable():

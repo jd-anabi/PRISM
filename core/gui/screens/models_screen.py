@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QFrame, QGroupBox, QHBoxLayout, QLabel, QMessageB
 from core import registry
 from core.Helpers import model_store
 
-from ..panels.base_panel import BasePanel
+from ..run.controller import controller
 from .model_builder_screen import ModelBuilderScreen
 
 # the keys of the two pages, the list's first: the window refuses any other page by them, before the part is built
@@ -113,7 +113,7 @@ class ModelsScreen(QWidget):
         self._turn_to("builder")
 
     def _delete_user_model(self, name: str):
-        if BasePanel._running:
+        if controller().is_live():
             self._tell("A task is running",
                        "Wait for the running task to finish before deleting a model.",
                        QMessageBox.Information)

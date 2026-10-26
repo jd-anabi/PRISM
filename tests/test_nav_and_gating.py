@@ -237,21 +237,20 @@ def test_dispatch_watches_every_directory_it_is_given(tmp_path):
 
     A single path still means one watcher, because every other caller passes one."""
     from pathlib import Path
-    from core.gui.panels.base_panel import BasePanel
     from tests._fixtures import qt_app
 
     app = qt_app()
     a, b = tmp_path / "a", tmp_path / "b"
     a.mkdir(); b.mkdir()
-    panel = build_run_host(BasePanel)
+    panel = build_run_host()
     seen = []
     panel.figure_stack.add_png = lambda title, path: seen.append((title, Path(path).name))
     panel.dispatch(lambda: None, watch_dir=[a, b])
     (a / "fdt3d_vs_S_20260922_120000.png").write_bytes(b"s")
     (b / "fdt3d_vs_T_20260922_130000.png").write_bytes(b"t")
-    # `finished` is QUEUED to this thread; `_finished` stops BOTH watchers and each stop() does the
-    # final scan that ignores the settle delay. Wait for it as the module's other dispatch tests do,
-    # so BasePanel._running is False again before the next test dispatches anything.
+    # `finished` is QUEUED to this thread; the run's controller stops BOTH watchers at the run's end and
+    # each stop() does the final scan that ignores the settle delay. Wait for it as the module's other
+    # dispatch tests do, so no run is live before the next test dispatches anything.
     _wait_for_run(app, panel, limit=30.0)
     assert sorted(n for _t, n in seen) == ["fdt3d_vs_S_20260922_120000.png",
                                            "fdt3d_vs_T_20260922_130000.png"], seen
@@ -2726,6 +2725,7 @@ def test_selecting_a_saved_run_describes_it_and_re_opens_its_figures(tmp_path):
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.panels.fdt_panel import FdtPanel
     from tests._fixtures import qt_app
+    from tests._runs import running
 
     qt_app()
     store = ArtifactStore(tmp_path)
@@ -2753,11 +2753,8 @@ def test_selecting_a_saved_run_describes_it_and_re_opens_its_figures(tmp_path):
 
             # (1) a live run owns the figure stack
             panel.figure_stack.clear_all()
-            panel._busy = True
-            try:
+            with running(panel):
                 panel._show_record()
-            finally:
-                panel._busy = False
             assert panel.figure_stack.count() == 0, f"{key}: a live run's figures were cleared"
             assert "seed 4242" in panel.record_line.text(), "the LINE still follows the selection"
 
@@ -4189,15 +4186,15 @@ def _pick_simulated(panel, cell: str, t_obs: str) -> None:
 
 
 def _wait_for_run(app, panel, limit: float = 300.0) -> None:
-    """Spin the event loop until the panel's run has finished, then deliver the queued signals.
-    `finished` is emitted after `result`/`error`, and `_set_busy(False)` hangs off it, so once `_busy`
-    drops the outcome has already been handled on this thread."""
+    """Turn the event loop until the run has ended, then deliver the queued signals. `finished` is
+    emitted after `result`/`error`, and the run's controller says the run is no longer live from it,
+    so once it is not the outcome has already been handled on this thread, the page's own word on it
+    among it."""
     import time
-    t0 = time.monotonic()
-    while panel._busy and time.monotonic() - t0 < limit:
-        app.processEvents()
-        time.sleep(0.01)
-    assert not panel._busy, f"the run did not finish within {limit:.0f} s"
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    turn_until(app, lambda: not controller().is_live(), limit)
+    assert not panel.is_running(), f"the run did not finish within {limit:.0f} s"
     for _ in range(30):
         app.processEvents()
         time.sleep(0.01)
@@ -4282,38 +4279,38 @@ def test_a_dispatched_inference_leaves_the_session_config_pristine(screen_run):
 
 
 # ── a live run is visible app-wide ───────────────────────────────────────────────────────────────
-def test_run_state_publishes_the_running_panel_and_none_on_idle():
-    """The app-wide broadcast. `_set_busy` already sets the class flag every panel's controls hang
-    off; it now also says WHICH panel, so the shell can name it. A module-level singleton, for the
-    reason ``BasePanel._running`` is class-level: the stream swap is process-wide, so "what is
-    running" is one app-wide fact and the second one belongs beside the first.
-
-    The payload is the panel itself on a run and None on idle -- not a bool, because the listener has
-    to name the panel, and not a title, because a BasePanel carries none (MainWindow's destination
-    map supplies it). Published LAST in _set_busy, after every panel's controls have reached their
-    final state, so a listener cannot see a half-locked window."""
-    from core.gui.panels.base_panel import RUN_STATE, BasePanel
+def test_the_run_status_is_published_last_after_every_lock_is_final():
+    """The process's one run, said to every window: ``status_changed`` carries the run's status at each
+    change of it, the run's place among it, so that a window can name it (a page carries no title of its
+    own), and the controller says the same through ``is_live``. The status is published LAST: at the
+    start after every panel's controls are locked, at the end after every one is free again, so a
+    listener -- here a method of an object the window holds -- never sees a half-locked window."""
+    from PySide6.QtCore import QObject
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.run.controller import controller
     from tests._fixtures import qt_app
+    from tests._runs import StandIn, start_run, turn_until
 
-    qt_app()
-
-    panel = build_run_host()
+    app = qt_app()
+    window = build_window()
+    runner = window.panel(ReductionPanel)
+    window.part("inference")                                # the six steps' panels, locked with the rest
     seen = []
 
-    def record(p):
-        seen.append(p)
+    class Reader(QObject):
+        def read(self, status):
+            seen.append((status.state, status.place, controller().is_live(),
+                         sorted({panel.controls.isEnabled() for panel in BasePanel._instances})))
 
-    RUN_STATE.changed.connect(record)
-    try:
-        panel._set_busy(True)
-        assert seen == [panel], seen
-        assert BasePanel._running, "the class flag and the broadcast must agree"
-        panel._set_busy(False)
-        assert seen == [panel, None], seen
-    finally:
-        panel._set_busy(False)
-        RUN_STATE.changed.disconnect(record)
-    assert not BasePanel._running
+    reader = Reader(window)
+    controller().status_changed.connect(reader.read)
+    stand_in = StandIn()
+    start_run(runner, stand_in)
+    stand_in.release()
+    turn_until(app, lambda: not controller().is_live())
+    assert seen == [("starting", ("reduction", None), True, [False]),
+                    ("ended", ("reduction", None), False, [True])], seen
 
 
 def test_the_foots_clock_reads_minutes_and_seconds_and_hours_from_an_hour():

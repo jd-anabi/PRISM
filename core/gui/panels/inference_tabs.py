@@ -7,8 +7,9 @@ that draft into the SimConfig, because the bounds file declares the inferred par
 observation mode), so a config cannot exist before it.
 
 Each tab is its own BasePanel (its own FigureStack/ProgressPane/LogPane), so dispatch()/cancel/the
-figure-sink/progress plumbing are reused verbatim; BasePanel._running is class-level, so the tabs can
-never run concurrently. The screen owns the SbiSession and holds the tabs as pages, none disabled; every tab
+figure-sink/progress plumbing are reused verbatim; the run controller lets one run go at a time in the
+process, so the tabs can never run concurrently. The screen owns the SbiSession and holds the tabs as
+pages, none disabled; every tab
 reads/writes the session through ``self._screen`` and calls ``self._screen.refresh_gates()`` after a
 stage completes.
 """

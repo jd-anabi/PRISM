@@ -22,6 +22,8 @@ from core.artifacts import default_store
 from . import record_view
 from .base_panel import BasePanel
 from .. import settings
+from ..run.controller import controller
+from ..run.model import RunSpec, Stage
 from ..widgets.artifact_picker import ArtifactPicker, StorePicker
 from ..widgets.compare_list import CompareList
 from ..widgets.help_badge import add_help_row, with_badge
@@ -61,6 +63,14 @@ HELP = {
                     "Leave it blank for an unnamed record.",
     "compare_note": "Kept with the comparison's record and shown in the Artifacts browser.",
 }
+
+# Where the window shows this page's runs: Effective temperature, its page One cell.
+_PLACE = ("temperature", "one_cell")
+# The word of this page's measurement, which its viewer closes its earlier figures after.
+_MEASUREMENT = "Measurement"
+# A measurement's stages: its checks, then its two campaigns, each begun by the line that opens it.
+_STAGES = (Stage("Checks"), Stage("Spontaneous", ("fdt_campaign_spontaneous",)),
+           Stage("Driven", ("fdt_campaign_driven",)))
 
 
 def _run_fdt_guarded(cfg, *, skip_sanity, confirm_production, writer, seed=None):
@@ -113,7 +123,27 @@ class FdtPanel(BasePanel):
         # and opens none of its figures -- re-opening an old run's pictures on every start is
         # behaviour nobody asked for. Figures open only on a user's pick (record_view.RecordViewer).
         self._viewer = record_view.RecordViewer(self.record_picker, self.record_line,
-                                                self.figure_stack, busy=lambda: self._busy)
+                                                self.figure_stack, busy=self.is_running)
+        # Every end of a run is heard by a method of this panel's own, so a deleted panel leaves no connection.
+        controller().run_ended.connect(self._on_run_ended)
+
+    def run_spec(self, fn, *args, **kwargs) -> RunSpec:
+        """A measurement of one cell, which writes its record as it goes (the record is made at the click,
+        before the run); or a comparison of saved runs, which writes a record of its own."""
+        if fn is _run_fdt_guarded:
+            writer = kwargs.get("writer")
+            return RunSpec(_MEASUREMENT, _PLACE, name=getattr(writer, "name", ""), stop_button="Stop measurement…",
+                           stages=_STAGES, kinds=("fdt",), records=() if writer is None else (writer.id,))
+        if fn is compare:
+            return RunSpec("Comparison", _PLACE, name=kwargs.get("name", ""), stop_button="Stop the comparison…",
+                           kinds=("fdt",))
+        return super().run_spec(fn, *args, **kwargs)
+
+    def _on_run_ended(self, status) -> None:
+        """A run has ended, whatever its outcome: when it was this panel's measurement, as ``_on_run_finished``
+        says."""
+        if status.word == _MEASUREMENT and controller().host() is self:
+            self._on_run_finished()
 
     def _build_controls(self):
         box = QGroupBox("FDT analysis")
@@ -315,13 +345,13 @@ class FdtPanel(BasePanel):
                        "complete": False, "results": None}
         # Explicit bools, never None -- see the module docstring. The watcher is pointed at the
         # record's own figures/; it globs ONE directory and does not recurse, which is
-        # exactly that shape, and a directory that does not exist yet lists nothing.
+        # exactly that shape, and a directory that does not exist yet lists nothing. When the run has ended,
+        # whatever its outcome, ``_on_run_ended`` hears it.
         self.dispatch(_run_fdt_guarded, cfg, writer=writer, seed=seed,
                       watch_dir=writer.dir / "figures",
                       skip_sanity=self.skip_sanity.isChecked(),
                       confirm_production=self.confirm_production.isChecked(),
-                      on_result=self._on_record,
-                      on_finished=self._on_run_finished)
+                      on_result=self._on_record)
 
     def _on_record(self, record):
         """The ``LoadedFdt`` run_fdt returned (the run now says what it wrote, where it used to

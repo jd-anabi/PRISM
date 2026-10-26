@@ -12,6 +12,7 @@ from core.refusals import Refusal, require_file, require_finite, require_positiv
 
 from ... import icons, settings
 from ...fields import label
+from ...run.model import RunSpec
 from ...widgets.adaptive_stack import AdaptiveStack
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
@@ -489,6 +490,13 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             rec = RecordingSet(spont=v["recording_spont"], forced=((v["recording_forced"], None),),
                                T_obs_s=v["t_obs"], forcing_params_si=v["drive"])
         self.dispatch(orchestrator.experimental_inference, cfg, post, rec, **common)
+
+    def run_spec(self, fn, *args, **kwargs) -> RunSpec:
+        """An inference, simulated or on recordings: it writes an observation and the inference made on it."""
+        if fn not in (orchestrator.simulated_inference, orchestrator.experimental_inference):
+            return super().run_spec(fn, *args, **kwargs)
+        return RunSpec("Inference", ("inference", "infer"), name=kwargs.get("name", ""),
+                       stop_button="Stop the inference…", kinds=("observation", "inference"))
 
     def _accept(self):
         """The Accept this run opts in with, or None for the default (refuse everything).

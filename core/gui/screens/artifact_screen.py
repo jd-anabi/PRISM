@@ -1,10 +1,10 @@
 """The Artifacts screen: read the artifact store from inside the app.
 
 The window's part Records, and a PLAIN QWidget -- deliberately NOT a BasePanel. A BasePanel enrols itself in
-``BasePanel._instances`` and ``_set_busy`` disables every instance's controls column while ANY run is
-live, so a browser built on one would grey out the moment a training started and you could not read
+``BasePanel._instances``, and the run's controller disables every instance's controls column while ANY run
+is live, so a browser built on one would grey out the moment a training started and you could not read
 the log of the thing you were waiting for. Reading is never blocked here; the actions that CHANGE the
-store check ``BasePanel._running`` for themselves.
+store ask the run's controller for themselves whether a run is live.
 
 The store is reached through ``_resolved_store()`` -- ``store or the process default``, the same seam
 ``StorePicker`` uses -- so a test hands one in and no process default is swapped.
@@ -31,7 +31,7 @@ from core.refusals import NOTE_MAX_CHARS, Refusal, require_note
 from .. import fonts, settings
 from ..design import SPACE
 from ..file_chooser import choose_file
-from ..panels.base_panel import BasePanel
+from ..run.controller import controller
 from ..reported import reported
 from ..widgets.artifact_table import DEFAULT_SORT, ArtifactTable, columns_for
 from ..widgets.refusal_box import show_refusal
@@ -460,7 +460,7 @@ class ArtifactScreen(QWidget):
         ``python -m core artifacts summary --out`` writes, so the document cannot say which front end
         made it.
 
-        NOT guarded by ``BasePanel._running``: this is a read, and reading is never refused.
+        NOT refused while a run is live: this is a read, and reading is never refused.
 
         The two checks below duplicate what keeps ``btn_lineage`` disabled in ``_sync_actions``
         (nothing selected, or a leftover with no manifest) -- deliberately: a disabled button is a
@@ -607,7 +607,7 @@ class ArtifactScreen(QWidget):
         own, from the two model-builder sites (ModelBuilderScreen._validate and _save); the status
         line is this screen's surface, so there is no dialog to dismiss either.
         """
-        if BasePanel._running:
+        if controller().is_live():
             self._set_status(f"A task is running -- wait for it to finish before {doing}.", error=True)
             return True
         return False

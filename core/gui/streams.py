@@ -32,7 +32,7 @@ from .vt import StreamRouter
 PUMP_HZ = 15.0
 _TICK = 1.0 / PUMP_HZ
 
-# redirect_streams swaps sys.stdout/stderr PROCESS-WIDE. BasePanel._busy only guards one panel, and
+# redirect_streams swaps sys.stdout/stderr PROCESS-WIDE. The run controller lets one run go at a time, and
 # every tab dispatches onto the same QThreadPool -- two concurrent redirects would nest, and the
 # inner one's restore would leave sys.stdout pointing at the outer worker's dead stream forever.
 # Second and later redirects decline and let their output go to the real console.

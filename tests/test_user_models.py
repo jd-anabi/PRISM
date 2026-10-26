@@ -1015,8 +1015,8 @@ def test_combo_refresh_preserves_picker_selections():
 def test_builder_validate_refuses_while_a_task_runs():
     """The smoke integration writes tqdm frames to the process-wide redirected streams; it must not
     run on the GUI thread while a worker owns them."""
-    from core.gui.panels.base_panel import BasePanel
     from core.gui.screens.model_builder_screen import ModelBuilderScreen
+    from tests._runs import running
     qt_app()
     mb = build_part(ModelBuilderScreen)
     mb.vars_edit.setText("x")
@@ -1024,12 +1024,9 @@ def test_builder_validate_refuses_while_a_task_runs():
     mb._var_rows[0].drift.setText("-x")
     mb.name_edit.setText("UMTESTGUARD")
     mb._detect_params()
-    BasePanel._running = True
-    try:
+    with running():
         assert mb._validate() is None
         assert "task is running" in mb.status.text()
-    finally:
-        BasePanel._running = False
     assert mb._validate() is not None                              # and works again once idle
 
 

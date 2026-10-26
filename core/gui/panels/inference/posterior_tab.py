@@ -8,12 +8,16 @@ from core.refusals import Refusal, require_at_least, require_positive
 
 from ... import icons, settings
 from ...fields import label
+from ...run.model import RunSpec
 from ...widgets.artifact_picker import StorePicker
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
-from .base import _StagePanel, _TrainingBudgetMixin
+from .base import _StagePanel, _TrainingBudgetMixin, training_spec
 from .help_text import HELP
+
+# Where the window shows this step's runs: Parameter inference, its step Training.
+_PLACE = ("inference", "training")
 
 
 # ── 3. Posterior ──────────────────────────────────────────────────────────────
@@ -149,6 +153,17 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self.dispatch(orchestrator.build_posterior, cfg, self.session.inf_prior,
                       entry, is_new, accept=accept, new_run=new_run, if_name_taken="unnamed",
                       provide_fig_sink=True, on_result=self._on_posterior, **v)
+
+    def run_spec(self, fn, *args, **kwargs) -> RunSpec:
+        """A training, which writes a posterior, its simulation set and its kept training and may be tried again;
+        or a posterior's load, which writes nothing, keeps no file and stops without a question (its fourth
+        argument says which, as the stage reads it)."""
+        if fn is not orchestrator.build_posterior:
+            return super().run_spec(fn, *args, **kwargs)
+        if args[3]:
+            return training_spec("Training", _PLACE, "Stop training…", args[0], kwargs, narrowed=False)
+        return RunSpec("Posterior load", _PLACE, stop_button="Stop loading", loads_only=True, keeps_files=False,
+                       stop_asks=False)
 
     def _read_inputs(self, is_new: bool) -> dict:
         """Every box the chosen branch of build_posterior will read, as the stage's own keyword

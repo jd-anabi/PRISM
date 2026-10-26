@@ -3,6 +3,10 @@ progress rows are fed to it, and the window's clock is handed in, so a run of da
 
 A progress row is the window's own parse of a frame of the engine's progress bar; an epoch's record is the window's
 literal copy of the line the training call writes, which the first test holds to the engine's own function.
+
+The run's controller, which feeds the model on the window's thread and writes the run's files, is tested after
+them, through the stand-in run of tests/_runs.py: a page's own dispatch, the real worker, and the window's clock
+moved by hand; each test's folder of runs is its own.
 """
 import ast
 import importlib
@@ -1316,3 +1320,657 @@ def test_dates_numbers_and_durations_are_written_with_no_toolkit():
                           (5 * 86_400 + 19 * 3600 + 59 * 60, "5 days 19 hours"), (-5, "less than a minute"),
                           (float("nan"), "less than a minute")):
         assert texts.duration_text(seconds) == said, seconds
+
+
+# ── the run's controller: a run of the window, its files and its readers ──
+# The names a page's run flag went by, which nothing under the window or the suites may name now: the run's state
+# is the run controller's, and a test that wants a live run starts the stand-in run.
+_FLAG_NAMES = ("_running", "_set_busy", "_active_cancel", "request_cancel_all", "RUN_STATE")
+# The places that start a run under the window: the file, the class and the function each hands its dispatch.
+_DISPATCHES = {("core/gui/panels/crossval_panel.py", "CrossValPanel", "compare"),
+               ("core/gui/panels/crossval_panel.py", "CrossValPanel", "run_param_study_cli"),
+               ("core/gui/panels/fdt_panel.py", "FdtPanel", "compare"),
+               ("core/gui/panels/fdt_panel.py", "FdtPanel", "_run_fdt_guarded"),
+               ("core/gui/panels/inference/infer_tab.py", "InferPanel", "orchestrator.simulated_inference"),
+               ("core/gui/panels/inference/infer_tab.py", "InferPanel", "orchestrator.experimental_inference"),
+               ("core/gui/panels/inference/posterior_tab.py", "PosteriorPanel", "orchestrator.build_posterior"),
+               ("core/gui/panels/inference/prior_tab.py", "PriorPanel", "orchestrator.build_prior"),
+               ("core/gui/panels/inference/tsnpe_tab.py", "TSNPEPanel", "orchestrator.tsnpe_round"),
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "orchestrator.validate_calibration"),
+               ("core/gui/panels/reduction_panel.py", "ReductionPanel", "run_reduction_map"),
+               ("core/gui/panels/simulate_panel.py", "SimulatePanel", "run_simulation_stream"),
+               ("core/gui/panels/simulate_panel.py", "SimulatePanel", "export_animation")}
+
+
+def _controller_on(tmp_path, clock):
+    """The process's run controller, its clock and its folder of runs this test's own; the end of the test puts
+    both back."""
+    from core.gui.run.controller import controller
+    held = controller()
+    held.use_clock(clock)
+    held.use_folder(tmp_path / "runs")
+    return held
+
+
+def _entries(path) -> list:
+    """A run's text file as ``(level, text)`` for each line written, a text's further lines joined back under it."""
+    from core.gui.run.textfile import STAMP_WIDTH
+    out = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if line.startswith(" " * STAMP_WIDTH):
+            level, text = out[-1]
+            out[-1] = (level, f"{text}\n{line[STAMP_WIDTH:]}")
+        else:
+            _day, _time, level, text = line.split(" ", 3)
+            out.append((level, text))
+    return out
+
+
+def test_a_run_goes_from_starting_to_running_to_ended_and_its_files_say_so(tmp_path, monkeypatch):
+    """A training of the window, through a page's own dispatch and the stand-in run, from the start to its end.
+    Its status goes from starting, at the start, to running at its first line, through its stages, and is
+    published again at a save of the simulation set passed, to ended. Its history file is written at the start
+    (running), at each change of state or stage, at the save passed and at an epoch, with what each says, and at
+    the end; its text file holds the window's head (the run, and the memory limit in force with where it was
+    set), every line of the run and how it ended, and the run's full text holds every line the file holds, in the
+    file's order."""
+    from core.artifacts import default_store
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    monkeypatch.setenv("PRISM_VRAM_CEILING_GIB", "6")
+    clock = Clock(_at(8, 19, 2, 11))
+    held = _controller_on(tmp_path, clock)
+    folder, run = tmp_path / "runs", "20261008T190211-training"
+    text, stand_in = RunText(held), StandIn()
+
+    def record():
+        return history.read(folder / f"{run}.json")
+
+    start_run(build_run_host(), stand_in, spec=_training())
+    assert (held.status.state, held.status.run, held.status.place) == ("starting", run, ("inference", "training"))
+    first = record()
+    assert (first["outcome"], first["stage"], first["word"], first["name"], first["place"], first["memory_limit"],
+            first["records_root"], first["started"], first["text"]) == (
+        "running", None, "Training", "retrain_3", ["inference", "training"], 6.0, str(default_store().root),
+        "2026-10-08T19:02:11-07:00", f"{run}.txt")
+    head = [("window", f"Training retrain_3, run {run}."),
+            ("window", "Memory limit: 6 GiB for each batch of simulations (set by PRISM_VRAM_CEILING_GIB).")]
+    assert _entries(folder / f"{run}.txt") == head == text.lines
+
+    def said(line):
+        stand_in.say(line)
+        turn_until(app, lambda: line in text.texts())
+
+    clock.advance(5)
+    said(_LINES["budget"])
+    assert (held.status.state, held.status.stage, record()["stage"]) == ("running", None, None)
+    said(_LINES["rotation_begins"])
+    assert (held.status.stage, record()["stage"]) == ("Rotation", "Rotation")
+    clock.advance(90)
+    said(_LINES["simulation_writing"])
+    assert (held.status.stage, record()["stage"], record()["simulation_set"]["folder"]) == (
+        "Simulation", "Simulation", _FOLDER)
+    published = len(text.statuses)
+    clock.advance(500)
+    stand_in.row(SIMULATION_ROW, 50, 10_000)
+    turn_until(app, lambda: held.model.batches_done() == 50)
+    assert len(text.statuses) == published + 1 and text.statuses[-1].stage == "Simulation", "no status at the save"
+    assert record()["simulation_set"]["at_end"] == 50, record()["simulation_set"]
+    clock.advance(60)
+    said(_epoch(1, took=60.0))
+    fit = record()["fit"]
+    assert (held.status.stage, record()["stage"], fit["epochs"], fit["best_epoch"], fit["seconds_per_epoch"],
+            fit["network"]) == ("Fitting", "Fitting", 1, 1, 60.0, [256, 10])
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert [(status.state, status.stage) for status in text.statuses] == [
+        ("starting", None), ("running", None), ("running", "Rotation"), ("running", "Simulation"),
+        ("running", "Simulation"), ("running", "Fitting"), ("ended", "Fitting")]
+    assert [(status.state, status.outcome, status.run) for status in text.ended] == [("ended", "finished", run)]
+    last = record()
+    assert (last["outcome"], last["ended"], last["stage"]) == ("finished", "2026-10-08T19:13:06-07:00", "Fitting")
+    written = _entries(folder / f"{run}.txt")
+    assert written == text.lines, (written, text.lines)
+    assert written[-1] == ("window", "The run finished.") and _LINES["budget"] in [t for _l, t in written]
+
+
+def test_one_run_at_a_time_in_the_whole_program():
+    """While a run is live no other starts anywhere in the process: a second page's dispatch starts nothing,
+    returns False and says why among that page's own lines; the controller itself refuses one handed to it; and
+    the live run goes on, its status the first run's."""
+    from tests._fixtures import PaneCapture, build_run_host, qt_app
+    from tests._runs import StandIn, start_run, turn_until
+    from core.gui.run.controller import LIVE_TEXT, controller
+    app = qt_app()
+    first, other, stand_in = build_run_host(), build_run_host(), StandIn()
+    pane, called = PaneCapture(other), []
+    start_run(first, stand_in)
+    try:
+        assert other.dispatch(lambda: called.append("other")) is False
+        assert controller().dispatch(lambda: called.append("handed"), spec=RunSpec("Run", None)) is False
+        assert pane.lines == [("warning", LIVE_TEXT)], pane.lines
+        assert controller().host() is first and first.is_running() and not other.is_running()
+    finally:
+        stand_in.release()
+    turn_until(app, lambda: not controller().is_live())
+    assert called == [], "a second run was started beside the first"
+
+
+def test_a_refusal_before_anything_is_spent_is_no_run(tmp_path):
+    """A refusal the stage makes before anything is spent -- the solver has taken no step, no stage after the
+    run's first has begun, the store holds no record of a kind the run writes made since the start -- is no
+    run, though it came after the run's first line: the controller is idle again with nothing to acknowledge,
+    the run's two files are removed, so nothing of the refusal stays in a file, and the page shows the refusal
+    in its yellow box, as it shows one made at the click."""
+    from core.refusals import Refusal
+    from core.gui.run.model import IDLE
+    from tests._fixtures import asked, build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text, stand_in = RunText(held), StandIn()
+    start_run(build_run_host(), stand_in, spec=_training(kinds=("posterior", "simulation", "fit")))
+    assert sorted(path.name for path in (tmp_path / "runs").iterdir()) == [
+        "20261008T190211-training.json", "20261008T190211-training.txt"]
+    stand_in.say(_LINES["budget"])
+    turn_until(app, lambda: held.status.state == "running")
+    stand_in.fail(Refusal("The posterior name 'retrain_3' is taken.", field="name"))
+    turn_until(app, lambda: not held.is_live())
+    assert held.status == IDLE and not held.status.unacknowledged_end
+    assert list((tmp_path / "runs").iterdir()) == [], "a refusal before anything was spent left a file"
+    assert [(status.state, status.outcome) for status in text.ended] == [("idle", None)]
+    box = asked()
+    assert (box.kind, box.sentence) == ("refusal", "The posterior name 'retrain_3' is taken."), box
+
+
+@pytest.mark.parametrize("spent", ["the solver stepped", "a later stage began", "a record was written"])
+def test_a_refusal_after_something_was_spent_ends_the_run_as_failed(spent, tmp_path):
+    """A refusal that comes once something is spent -- the solver's count moved, a stage after the run's first
+    began, or a record of a kind the run writes was made since the start -- ends the run as failed: its files are
+    kept, saying so, and the page shows the refusal in its yellow box."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.run import history
+    from core.refusals import Refusal
+    from tests._fixtures import asked, build_fdt_record, build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    stand_in, run = StandIn(), "20261008T190211-training"
+    with use_store(ArtifactStore(tmp_path / "Artifacts")) as store:
+        start_run(build_run_host(), stand_in, spec=_training(kinds=("posterior", "simulation", "fit", "fdt")))
+        if spent == "the solver stepped":
+            stand_in.solver(5)
+        elif spent == "a later stage began":
+            stand_in.say(_LINES["rotation_begins"])
+            stand_in.say(_LINES["simulation_writing"])
+        else:
+            build_fdt_record(store)
+        stand_in.fail(Refusal("The read-back of the posterior was refused.", field="name"))
+        turn_until(app, lambda: not held.is_live())
+    assert (held.status.state, held.status.outcome, held.status.run) == ("ended", "failed", run), held.status
+    kept = history.read(tmp_path / "runs" / f"{run}.json")
+    assert (kept["outcome"], kept["failure"]["type"]) == ("failed", "Refusal"), kept
+    assert (tmp_path / "runs" / f"{run}.txt").is_file()
+    assert asked().kind == "refusal"
+
+
+def test_a_run_that_only_loads_shows_loading_and_leaves_nothing_to_acknowledge(tmp_path):
+    """A run that only loads a record is published as loading from its start to its end, and ends straight into
+    idle, with nothing to acknowledge."""
+    from core.gui.run.model import IDLE
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text, stand_in = RunText(held), StandIn(word="Prior load")
+    start_run(build_run_host(), stand_in, spec=RunSpec("Prior load", ("inference", "prior"), stop_button="Stop loading",
+                                                       loads_only=True, keeps_files=False, stop_asks=False))
+    assert (held.status.state, held.status.loading, held.status.state_word) == ("starting", True, "loading")
+    stand_in.say("the prior is read")
+    turn_until(app, lambda: held.status.state == "running")
+    assert (held.status.loading, held.status.state_word) == (True, "loading")
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert held.status == IDLE and not held.status.unacknowledged_end
+    assert [status.loading for status in text.statuses] == [True, True, False], text.statuses
+    assert [(status.state, status.outcome) for status in text.ended] == [("idle", "finished")]
+
+
+def test_a_load_a_live_simulation_and_a_video_export_leave_no_file(tmp_path):
+    """A prior's and a posterior's load, a live simulation and a video export, each with its own page's spec:
+    after each, the folder of runs holds no history file and no text file, and the controller is idle with
+    nothing to acknowledge."""
+    from core import orchestrator
+    from core.gui.panels.simulate_export import export_animation
+    from core.gui.panels.simulate_panel import SimulatePanel
+    from core.gui.panels.simulate_runner import run_simulation_stream
+    from core.gui.run.model import IDLE
+    from tests._fixtures import build_inference, build_part, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    folder, inference, live = tmp_path / "runs", build_inference(), build_part(SimulatePanel)
+    cfg = SimpleNamespace(model="NADROWSKI", observation_mode="chi", reparam_rotate=True)
+    for host, fn, args in ((inference.prior_panel, orchestrator.build_prior, (cfg, "p1", False)),
+                           (inference.posterior_panel, orchestrator.build_posterior, (cfg, None, "q1", False)),
+                           (live, run_simulation_stream, (cfg, 1.0, 10, 30.0)),
+                           (live, export_animation, (None, "bundle.gif"))):
+        spec = host.run_spec(fn, *args)
+        stand_in = StandIn(word=spec.word)
+        start_run(host, stand_in, spec=spec)
+        stand_in.say("a line of the run")
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())
+        assert (sorted(folder.glob("*.json")), sorted(folder.glob("*.txt"))) == ([], []), spec.word
+        assert held.status == IDLE and not held.status.unacknowledged_end, spec.word
+
+
+def test_the_model_is_handed_the_pace_of_the_last_run_of_the_same_size(tmp_path, monkeypatch):
+    """Before its first batches are timed, a training's sentence takes its pace, and its end, from the history:
+    the newest ended run of the same word and the same simulations per batch in the folder of runs in use, with
+    its source in words. A training that has timed its batches writes its own pace into its history, where the
+    next run of that size finds it."""
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    folder = tmp_path / "runs"
+    history.write(folder, {"id": "20261001T090000-training", "word": "Training", "name": "retrain_aug",
+                           "started": _at(1, 9, 0), "outcome": "finished",
+                           "simulation_set": {"folder": "other", "per_batch": 2048, "seconds_per_batch": 9.7}})
+    answers, real = [], history.estimate
+
+    def estimate(where, **asked):
+        said = real(where, **asked)
+        answers.append((where, asked["word"], asked["per"], said))
+        return said
+
+    monkeypatch.setattr(history, "estimate", estimate)
+    clock = Clock(_at(8, 19, 2, 11))
+    held, stand_in = _controller_on(tmp_path, clock), StandIn()
+    start_run(build_run_host(), stand_in, spec=_training())
+    stand_in.say(_LINES["budget"])
+    stand_in.say(_LINES["simulation_writing"])
+    stand_in.row(SIMULATION_ROW, 5, 10_000)
+    turn_until(app, lambda: held.model.batches_done() == 5)
+    now = clock()
+    assert held.model.sentence() == (
+        f"Simulating: batch 5 of 10,000, 9.7 s per batch; the simulations should be done by "
+        f"{texts.date_text(now + timedelta(seconds=9_995 * 9.7), now)}.")
+    assert (folder, "Training", "batch",
+            (9.7, "the last training of this size, retrain_aug, took 9.7 s per batch")) in answers, answers
+    clock.advance(80)
+    stand_in.row(SIMULATION_ROW, 25, 10_000)
+    turn_until(app, lambda: held.model.batches_done() == 25)
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    kept = history.read(folder / "20261008T190211-training.json")["simulation_set"]
+    assert (kept["per_batch"], kept["seconds_per_batch"]) == (2048, 4.0), kept
+    assert real(folder, word="Training", per="batch", size={"per_batch": 2048}) == (
+        4.0, "the last training of this size, retrain_3, took 4.0 s per batch")
+
+
+def test_the_fits_expected_epochs_are_read_once_from_the_newest_finished_training_of_its_kind(tmp_path):
+    """A training's expected epochs are read once, at its start, from the store's posteriors: the newest
+    finished one of the same model, kind of observation and narrowing, whose record holds its epochs, with its
+    label in the words; one of another kind of observation, of another model, or with no epochs is passed over,
+    and so is an older one of the kind. The store is listed once for each run."""
+    import json
+    from core.artifacts import use_store
+    from core.artifacts.store import MANIFEST, Summary
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    root = tmp_path / "Artifacts"
+
+    def posterior(name, mode, day, epochs, model="NADROWSKI"):
+        path = root / "posteriors" / f"{name}__x"
+        path.mkdir(parents=True)
+        (path / MANIFEST).write_text(json.dumps({"config": {"model": model}, "body": {
+            "mode": mode, "training": {"epochs_trained": epochs}}}), encoding="utf-8")
+        return Summary("posterior", name, name, _at(day, 10, 0).isoformat(), "", path, True, None, mode=mode,
+                       amortized=True)
+
+    listed = [posterior("no_epochs", "chi", 7, None), posterior("other_model", "chi", 6, 50, model="HOPF"),
+              posterior("forced_one", "forced", 6, 90), posterior("retrain_aug", "chi", 5, 130),
+              posterior("older", "chi", 1, 77)]
+    calls = []
+    store = SimpleNamespace(root=root, list=lambda kind: (calls.append(kind), listed if kind == "posterior" else [])[1])
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    with use_store(store):
+        for turn in (1, 2):
+            stand_in = StandIn()
+            start_run(build_run_host(), stand_in, spec=_training())
+            stand_in.say(_LINES["budget"])
+            stand_in.say(_epoch(1, took=60.0))
+            turn_until(app, lambda: held.model.stage == "Fitting")
+            assert held.model.axis().follows == (
+                "About 130 epochs: the last training of this kind, retrain_aug, ran 130."), held.model.axis()
+            stand_in.release()
+            turn_until(app, lambda: not held.is_live())
+            assert calls == ["posterior"] * turn, calls
+
+
+def test_a_continued_runs_failed_simulations_count_its_earlier_runs(tmp_path):
+    """A training that continues a simulation set counts its failed simulations over every run of that set: the
+    earlier runs' counts are read from their history files once the set's folder is named, and the health table
+    says "over 3 runs". The run writes its own counts into its history for the next."""
+    from core.gui.run import history
+    from core.gui.run.model import HealthRow
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    folder = tmp_path / "runs"
+    for name, day, failed in (("a", 1, 100), ("b", 3, 50)):
+        history.write(folder, {"id": f"2026100{day}T090000-training", "word": "Training", "started": _at(day, 9, 0),
+                               "outcome": "failed", "simulation_set": {"folder": _FOLDER},
+                               "health": {"failed": failed, "simulated": 10_000}})
+    held, stand_in = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), StandIn()
+    start_run(build_run_host(), stand_in, spec=_training())
+    stand_in.say(_LINES["simulation_resuming"])
+    stand_in.say(_LINES["patho_total"])
+    turn_until(app, lambda: held.model.failed() is not None)
+    assert held.model.health()[0] == HealthRow("Failed simulations", "0.15 % over 3 runs", "Fine")
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    kept = history.read(folder / "20261008T190211-training.json")
+    assert (kept["health"], kept["simulation_set"]["at_start"]) == (
+        {"failed": 30_720, "simulated": 20_480_000}, 236), kept
+
+
+def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
+    """Every call that starts a run under the window is a page's own ``self.dispatch`` (the base panel's one
+    forward to the controller aside), each in a class whose ``run_spec`` answers its function, read off the
+    files' syntax trees; and the spec of each kind of run, read off its own page's ``run_spec`` with arguments
+    of the call's shape, holds the run's word, its place, its stop button, the kinds of record it writes,
+    whether it only loads, whether it keeps files, whether it is tried again and whether its stop asks, with a
+    training's stages, patience, epoch limit and facts. The stand-in run's places are the window's own."""
+    import ast
+    from core import config, orchestrator
+    from core.FDT.compare import compare
+    from core.FDT.cross_validation import run_param_study_cli
+    from core.Reduction.sweep import run_reduction_map
+    from core.gui.panels import fdt_panel
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.simulate_export import export_animation
+    from core.gui.panels.simulate_runner import run_simulation_stream
+    from tests import _runs
+    from tests._fixtures import build_window, qt_app
+    qt_app()
+    found, forwards = set(), []
+    for path in sorted((REPO / "core" / "gui").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for cls in [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]:
+            answers = any(isinstance(item, ast.FunctionDef) and item.name == "run_spec" for item in cls.body)
+            for call in ast.walk(cls):
+                if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "dispatch"):
+                    continue
+                where = (path.relative_to(REPO).as_posix(), cls.name, ast.unparse(call.args[0]))
+                if ast.unparse(call.func) == "self.dispatch" and answers:
+                    found.add(where)
+                else:
+                    forwards.append(where)
+    assert found == _DISPATCHES, sorted(found ^ _DISPATCHES)
+    assert forwards == [("core/gui/panels/base_panel.py", "BasePanel", "fn")], forwards
+
+    window = build_window()
+    inference, temperature = window.part("inference"), window.part("temperature")
+    reduction, live = window.part("reduction"), window.part("live")
+    one_cell, sweep = temperature.panels()
+    cfg = SimpleNamespace(model="NADROWSKI", observation_mode="chi", reparam_rotate=True)
+    writer = SimpleNamespace(id="f1", name="cell_7")
+    writers = {"s": SimpleNamespace(id="s1", name="study-s"), "temp": SimpleNamespace(id="t1", name="study-temp")}
+    yes, no = True, False
+    kinds_of = {
+        "prior built": (inference.prior_panel, orchestrator.build_prior, (cfg, None, True), {},
+                        ("Prior build", ("inference", "prior"), "Stop the prior build…", ("prior",), no, yes, no,
+                         yes)),
+        "prior loaded": (inference.prior_panel, orchestrator.build_prior, (cfg, "p1", False), {},
+                         ("Prior load", ("inference", "prior"), "Stop loading", (), yes, no, no, no)),
+        "training": (inference.posterior_panel, orchestrator.build_posterior, (cfg, None, None, True), {},
+                     ("Training", ("inference", "training"), "Stop training…", ("posterior", "simulation", "fit"), no,
+                      yes, yes, yes)),
+        "posterior loaded": (inference.posterior_panel, orchestrator.build_posterior, (cfg, None, "q1", False), {},
+                             ("Posterior load", ("inference", "training"), "Stop loading", (), yes, no, no, no)),
+        "calibration": (inference.validate_panel, orchestrator.validate_calibration, (cfg, None, None), {},
+                        ("Check", ("inference", "checks"), "Stop the calibration…", ("calibration",), no, yes, no,
+                         yes)),
+        "inference, simulated": (inference.infer_panel, orchestrator.simulated_inference, (cfg, None, 1.5), {},
+                                 ("Inference", ("inference", "infer"), "Stop the inference…",
+                                  ("observation", "inference"), no, yes, no, yes)),
+        "inference, on recordings": (inference.infer_panel, orchestrator.experimental_inference, (cfg, None, None),
+                                     {}, ("Inference", ("inference", "infer"), "Stop the inference…",
+                                          ("observation", "inference"), no, yes, no, yes)),
+        "narrowing round": (inference.tsnpe_panel, orchestrator.tsnpe_round, (cfg, None, None, None), {},
+                            ("Narrowing round", ("inference", "narrowing"), "Stop the narrowing round…",
+                             ("posterior", "simulation", "fit"), no, yes, yes, yes)),
+        "one cell": (one_cell, fdt_panel._run_fdt_guarded, (cfg,), {"writer": writer},
+                     ("Measurement", ("temperature", "one_cell"), "Stop measurement…", ("fdt",), no, yes, no, yes)),
+        "sweep study": (sweep, run_param_study_cli, (cfg,), {"writers": writers},
+                        ("Sweep study", ("temperature", "sweep"), "Stop sweep study…", ("fdt",), no, yes, no, yes)),
+        "comparison, one cell": (one_cell, compare, ("cells", ["f1"]), {"name": "both"},
+                                 ("Comparison", ("temperature", "one_cell"), "Stop the comparison…", ("fdt",), no,
+                                  yes, no, yes)),
+        "comparison, sweeps": (sweep, compare, ("sweeps", ["s1"]), {"name": "both"},
+                               ("Comparison", ("temperature", "sweep"), "Stop the comparison…", ("fdt",), no, yes,
+                                no, yes)),
+        "reduction map": (reduction, run_reduction_map, (cfg,), {},
+                          ("Reduction map", ("reduction", None), "Stop computing…", (), no, yes, no, yes)),
+        "live simulation": (live, run_simulation_stream, (cfg, 1.0, 10, 30.0), {},
+                            ("Live simulation", ("live", None), "Stop simulation", (), no, no, no, no)),
+        "video": (live, export_animation, (None, "bundle.gif"), {},
+                  ("Video", ("live", None), "Stop saving…", (), no, no, no, yes)),
+    }
+    specs = {}
+    for kind, (panel, fn, args, kwargs, row) in kinds_of.items():
+        spec = specs[kind] = panel.run_spec(fn, *args, **kwargs)
+        assert (spec.word, spec.place, spec.stop_button, spec.kinds, spec.loads_only, spec.keeps_files, spec.retries,
+                spec.stop_asks) == row, kind
+        assert spec.expected_epochs is None and spec.fn is None, kind
+        trains = kind in ("training", "narrowing round")
+        assert (spec.simulation_set, spec.stages == _TRAINING) == (trains, trains), kind
+        if not trains and kind not in ("one cell", "sweep study"):
+            assert (spec.stages, spec.facts) == ((), {}), kind
+    assert specs["calibration"].name == "Calibration" and specs["one cell"].name == "cell_7"
+    assert (specs["sweep study"].name, specs["comparison, sweeps"].name) == ("study", "both")
+    assert (specs["one cell"].records, specs["sweep study"].records) == (("f1",), ("s1", "t1"))
+    assert specs["live simulation"].own_view and not specs["video"].own_view
+    assert [stage.name for stage in specs["one cell"].stages] == ["Checks", "Spontaneous", "Driven"]
+    assert specs["sweep study"].stages == (Stage("S sweep", ("sweep_phase",), "sweep_point_b"),
+                                           Stage("T_a/T sweep", ("sweep_phase",), "sweep_point_b"))
+    for kind, narrowed in (("training", False), ("narrowing round", True)):
+        spec = specs[kind]
+        assert (spec.patience, spec.epoch_limit) == (config.TRAINING_STOP_AFTER_EPOCHS, config.TRAINING_MAX_NUM_EPOCHS)
+        assert spec.facts == {"model": "NADROWSKI", "observation": "chi", "narrowed": narrowed,
+                              "network": (config.NSF_HIDDEN_FEATURES, config.NSF_NUM_TRANSFORMS), "rotated": True,
+                              "cadence": orchestrator.TRAINING_CHECKPOINT_EVERY}, kind
+    given = inference.posterior_panel.run_spec(orchestrator.build_posterior, cfg, None, None, True,
+                                               stop_after_epochs=7, max_num_epochs=40, hidden_features=64,
+                                               num_transforms=3, checkpoint_every=25)
+    assert (given.patience, given.epoch_limit, given.facts["network"], given.facts["cadence"]) == (7, 40, (64, 3), 25)
+    with pytest.raises(NotImplementedError, match="has no run spec for"):
+        sweep.run_spec(run_reduction_map, cfg)
+    assert isinstance(sweep, CrossValPanel)
+    held = {type(panel).__name__: window._places[panel] for panel in window._places}
+    assert held == _runs.PLACES, (held, _runs.PLACES)
+
+
+def test_no_test_and_no_part_of_the_window_reaches_a_run_through_a_panels_flag():
+    """Nothing under the program or the suites names a page's old run flag -- a name, an attribute, a name
+    defined or imported, a keyword, or a string that is one of them -- read off each file's syntax tree, its
+    docstrings and comments aside, this test's own names excepted: whether a run is live, and its stop, are the
+    run controller's, and a test that wants a live run starts the stand-in run."""
+    import ast
+    snippet = ast.parse("\n".join([
+        "BasePanel._running = True",                                     # 1: an attribute
+        "from core.gui.panels.base_panel import RUN_STATE as state",     # 2: a name imported
+        "monkeypatch.setattr(BasePanel, '_set_busy', None)",             # 3: a string that is one
+        "def request_cancel_all(_active_cancel=None): pass",             # 4: a name defined, a parameter
+        "f(_active_cancel=1)",                                           # 5: a keyword
+        "\"\"\"Says _running in its words, which is not code.\"\"\"",   #    a sentence: not read
+        "is_running = controller().is_live()"]))                         #    another name
+    assert [(line, name) for line, name in _flag_names(snippet)] == [
+        (1, "_running"), (2, "RUN_STATE"), (3, "_set_busy"), (4, "request_cancel_all"), (4, "_active_cancel"),
+        (5, "_active_cancel")], _flag_names(snippet)
+    found = []
+    for root in ("core", "tests"):
+        for path in sorted((REPO / root).rglob("*.py")):
+            for line, name in _flag_names(ast.parse(path.read_text(encoding="utf-8"))):
+                found.append(f"{path.relative_to(REPO).as_posix()}:{line} {name}")
+    assert found == [], found
+
+
+def _flag_names(tree) -> list:
+    """Each place in ``tree`` that names a page's old run flag, as ``(line, name)`` in the order of the lines: a
+    name, an attribute, a name defined or imported, a parameter, a keyword, or a string that is exactly one of
+    them. The scan of the program and the suites leaves out this module's list of the names and the test that
+    holds the scanner's own example."""
+    import ast
+    own = set()
+    for node in ast.walk(tree):
+        if ((isinstance(node, ast.Assign) and any(getattr(target, "id", None) == "_FLAG_NAMES"
+                                                  for target in node.targets))
+                or (isinstance(node, ast.FunctionDef)
+                    and node.name == "test_no_test_and_no_part_of_the_window_reaches_a_run_through_a_panels_flag")):
+            own |= {id(inner) for inner in ast.walk(node)}
+    found = []
+    for node in ast.walk(tree):
+        if id(node) in own:
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            own.add(id(node.value))                   # a docstring or a lone string: words, not code
+            continue
+        said = (node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute)
+                else node.name if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                else node.arg if isinstance(node, (ast.arg, ast.keyword))
+                else node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None)
+        names = ({said} if said else set()) | ({node.name.rsplit(".", 1)[-1], node.asname}
+                                                if isinstance(node, ast.alias) else set())
+        found += [(node.lineno, name) for name in sorted(names & set(_FLAG_NAMES)) if id(node) not in own]
+    return sorted(found, key=lambda place: place[0])
+
+
+def test_the_run_state_reaches_a_window_through_a_method_of_its_own_and_goes_with_it():
+    """The process's one run controller outlives every window; each window, and each page that hears a run's
+    end, connects to it through a method of its own object, so a window deleted leaves the controller exactly
+    the connections it had before the window was built."""
+    from PySide6.QtCore import QCoreApplication, QEvent, SIGNAL
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_window, qt_app
+    qt_app()
+    held = controller()
+
+    def counts():
+        return (held.receivers(SIGNAL("status_changed(PyObject)")), held.receivers(SIGNAL("run_ended(PyObject)")))
+
+    before = counts()
+    window = build_window()
+    window.part("temperature")
+    assert counts() == (before[0] + 1, before[1] + 2), (before, counts())
+    window.deleteLater()
+    QCoreApplication.sendPostedEvents(window, QEvent.DeferredDelete)
+    assert counts() == before, (before, counts())
+
+
+def test_a_part_built_during_a_run_asks_the_controller_and_comes_up_locked():
+    """A part, and a whole window, built while a run is live -- here the run of a host no window holds --
+    ask the process's run controller: the part comes up locked, and the window built then says at its foot
+    that a run is live. The run's end frees them."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._fixtures import build_run_host, build_window, qt_app
+    from tests._runs import running
+    qt_app()
+    with running(build_run_host()):
+        window = build_window()
+        panel = window.panel(ReductionPanel)
+        assert not panel.controls.isEnabled(), "a part built during a run is not locked"
+        assert window.shell.rail.foot._title == "Running: a task", window.shell.rail.foot._title
+    assert panel.controls.isEnabled() and window.shell.rail.foot._title == "Nothing is running"
+
+
+def test_the_runs_text_file_reaches_the_disk_on_a_thread_of_its_own(tmp_path, monkeypatch):
+    """At most every thirty seconds of the run's clock, the controller's look at the run asks the disk to hold
+    the run's text file, on a thread of its own: the window's thread does not wait for the disk, which the
+    engine may be writing gigabytes to."""
+    import os
+    import threading
+    from core.gui.run import textfile
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    asked, entered, go = [], threading.Event(), threading.Event()
+
+    def fsync(handle):
+        asked.append(threading.current_thread() is threading.main_thread())
+        entered.set()
+        go.wait(2)
+
+    monkeypatch.setattr(textfile, "os", SimpleNamespace(fsync=fsync, dup=os.dup, close=os.close))
+    clock = Clock(_at(8, 19, 2, 11))
+    held, stand_in = _controller_on(tmp_path, clock), StandIn()
+    start_run(build_run_host(), stand_in, spec=_training())
+    held.tick()
+    assert entered.wait(2) and asked == [False] and not go.is_set(), "the window's thread waited for the disk"
+    go.set()
+    clock.advance(29)
+    held.tick()
+    clock.advance(1)
+    held.tick()
+    turn_until(app, lambda: len(asked) == 2)
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert asked == [False, False, True], "the end's request is the window's, once: " + repr(asked)
+
+
+def test_a_text_file_that_breaks_at_its_head_is_said_and_the_run_goes_on(tmp_path, monkeypatch):
+    """A run whose text file cannot be written from its first line says so, as a line that breaks the file is
+    said: among the run's full text at warning, and as a message of its page, in the window's own words. The
+    run goes on, and ends as it ends."""
+    from core.gui.run import textfile
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+
+    def refused(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(textfile, "open", refused, raising=False)
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text, stand_in = RunText(held), StandIn()
+    start_run(build_run_host(), stand_in, spec=_training())
+    sentence = _LINES["text_file_broken"]
+    assert ("warning", sentence) in text.lines, text.lines
+    assert held.model.messages()[0].sentence == sentence
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert (held.status.state, held.status.outcome) == ("ended", "finished")
+
+
+def test_the_head_says_the_memory_limit_in_force_and_where_it_was_set(tmp_path, monkeypatch):
+    """The run's head names the memory limit in force for each batch of simulations, read once at its start, and
+    where it was set: by the variable of the environment, which wins, or in step 1 of the window; or says that
+    none is set. The limit is the page's fact the health table reads."""
+    from core import config
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    for variable, setting, said, limit in (
+            ("6", 2.5, "Memory limit: 6 GiB for each batch of simulations (set by PRISM_VRAM_CEILING_GIB).", 6.0),
+            (None, 2.5, "Memory limit: 2.5 GiB for each batch of simulations (set in step 1, Model and options).",
+             2.5),
+            (None, 0.0, "No memory limit is set on this computer.", None)):
+        if variable is None:
+            monkeypatch.delenv("PRISM_VRAM_CEILING_GIB", raising=False)
+        else:
+            monkeypatch.setenv("PRISM_VRAM_CEILING_GIB", variable)
+        monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", setting)
+        text, stand_in = RunText(held), StandIn()
+        start_run(build_run_host(), stand_in, spec=_training())
+        assert text.lines[1] == ("window", said), text.lines
+        assert held.model.spec.facts["memory_limit"] == limit
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())

@@ -25,11 +25,15 @@ from .simulate_runner import build_stream_config, run_simulation_stream
 from .. import fields as gui_fields
 from .. import settings
 from ..file_chooser import choose_file
+from ..run.model import RunSpec
 from ..widgets.artifact_picker import ArtifactPicker
 from ..widgets.help_badge import add_help_row
 from ..widgets.labeled_inputs import FloatField, IntField
 from ..widgets.live_hair_bundle import LiveHairBundleView
 from ..widgets.forms import make_form
+
+# Where the window shows this part's runs: Live simulation, a part of one page.
+_PLACE = ("live", None)
 
 HELP = {
     "model": "Which hair-cell model to simulate. The cell list follows this choice.",
@@ -169,6 +173,16 @@ class SimulatePanel(BasePanel):
                       sigma_x=v._sig_x, sigma_y=v._sig_y, aspect=v._aspect, margin=v._margin,
                       video_fps=fps, x_unit=v._x_unit,
                       on_result=lambda p: self.log_pane.append_line(f"Saved animation to {p}."))
+
+    def run_spec(self, fn, *args, **kwargs) -> RunSpec:
+        """A live simulation, shown in the panel's own view, or the export of its video: neither keeps a file of
+        its run, and the simulation stops without a question (its stop loses nothing it would keep)."""
+        if fn is run_simulation_stream:
+            return RunSpec("Live simulation", _PLACE, stop_button="Stop simulation", keeps_files=False,
+                           stop_asks=False, own_view=True)
+        if fn is export_animation:
+            return RunSpec("Video", _PLACE, stop_button="Stop saving…", keeps_files=False)
+        return super().run_spec(fn, *args, **kwargs)
 
     def refresh_local_gates(self):
         self.btn_start.setEnabled(self.cell_picker.has_entries())

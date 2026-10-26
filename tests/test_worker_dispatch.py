@@ -30,18 +30,21 @@ from tqdm import tqdm                                             # noqa: E402
 
 from core.artifacts.store import KIND_DIRS, Summary                # noqa: E402
 from core.gui.panels.base_panel import BasePanel                  # noqa: E402
+from core.gui.run.controller import controller                    # noqa: E402
 from core.gui.streams import redirect_streams                     # noqa: E402
 from core.gui.widgets import artifact_table as at                 # noqa: E402
 from core.gui.widgets.artifact_table import ArtifactTable, cells_for, columns_for   # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
 from tests._fixtures import build_inference, build_run_host, qt_app, pump  # noqa: E402
+from tests._runs import RunText, turn_until                       # noqa: E402
 import contextlib                                                  # noqa: E402
 
 
 def test_worker_payload_is_released_after_the_run():
-    """setAutoDelete(False) + the _finished closure keep the Worker shell alive forever. That is fine
-    for the shell, but NOT for what it points at -- without an explicit release every dispatch pins its
-    cfg / prior / posterior / CUDA tensors for the life of the process."""
+    """The run's controller keeps the Worker shell alive after the run, as the pool never deletes it. That is
+    fine for the shell, but NOT for what it points at -- without an explicit release every dispatch pins its
+    cfg / prior / posterior / CUDA tensors for the life of the process. The run's spec, which holds the call,
+    is let go of it too: the controller keeps the spec of the run that ended."""
     import gc
     import weakref
 
@@ -55,10 +58,7 @@ def test_worker_payload_is_released_after_the_run():
     ref = weakref.ref(big)
 
     panel.dispatch(lambda payload: None, big)
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and panel._busy:
-        app.processEvents()
-        time.sleep(0.01)
+    turn_until(app, lambda: not controller().is_live(), 10)
     pump(app, 0.2)
 
     del big
@@ -111,10 +111,7 @@ def test_a_failed_run_does_not_pin_its_frames():
         try:
             forget_asked()
             panel.dispatch(fn, big)
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline and panel._busy:
-                app.processEvents()
-                time.sleep(0.01)
+            turn_until(app, lambda: not controller().is_live(), 10)
             pump(app, 0.2)
             shown = all_asked()
             assert shown and (shown[-1].title, shown[-1].marker) == (title, marker), \
@@ -180,15 +177,18 @@ def test_cancel_token_latches_and_leaves_tqdm_usable():
     assert made == [True], "tqdm deadlocked after a cancel -- the write lock was not recovered"
 
 def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
-    """End to end: a run cancelled mid-flight emits `cancelled` (not `error`), ends not-busy with rows
-    dropped and stray figures closed, clears the active token, and a fresh run afterwards completes."""
+    """End to end: a run cancelled mid-flight ends as stopped (the worker said `cancelled`, not `error`),
+    the panel's Cancel button saying so while it stops, with stray figures closed and no run live, and a
+    fresh run afterwards completes. How it ended is read off the run's text and its end, as the
+    controller says them."""
     import matplotlib.pyplot as plt
 
     app = qt_app()
 
     panel = build_run_host()
+    text = RunText(controller())
     started = {"v": False}
-    outcome = {"cancelled": 0, "error": 0, "result": []}
+    outcome = {"result": []}
 
     def heavy(fig_sink=None):
         plt.figure()                          # a stray figure the cancel path must close
@@ -201,62 +201,49 @@ def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
         return "COMPLETED"
 
     panel.dispatch(heavy, on_result=lambda r: outcome["result"].append(r))
-    for w in panel._workers:
-        w.signals.cancelled.connect(lambda: outcome.__setitem__("cancelled", outcome["cancelled"] + 1))
-        w.signals.error.connect(lambda *_a: outcome.__setitem__("error", outcome["error"] + 1))
-
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < 5 and not started["v"]:
-        app.processEvents()
-        time.sleep(0.005)
-    assert panel._busy and BasePanel._active_cancel is not None
+    turn_until(app, lambda: started["v"], 5)
+    assert panel.is_running() and controller().is_live()
 
     panel._request_cancel()
-    assert panel._cancel.requested.is_set()
+    assert controller().status.stop_requested
     assert panel.btn_cancel.text() == "Cancelling…" and not panel.btn_cancel.isEnabled()
 
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < 10 and panel._busy:
-        app.processEvents()
-        time.sleep(0.005)
+    turn_until(app, lambda: not controller().is_live(), 10)
     pump(app, 0.3)
 
-    assert not panel._busy, "panel stuck busy after cancel"
+    assert not panel.is_running(), "panel stuck busy after cancel"
     assert outcome["result"] == [], "the run COMPLETED instead of cancelling"
-    assert outcome["cancelled"] == 1 and outcome["error"] == 0, outcome
-    assert not panel.progress_pane._rows, "rows leaked after cancel"
+    assert [status.outcome for status in text.ended] == ["stopped"], text.ended
+    assert "The run stopped: a stop was asked for." in text.texts("window"), text.lines
+    assert not [line for line in text.texts() if line.startswith("The run failed")], text.lines
     assert plt.get_fignums() == [], "stray figures not closed on cancel"
-    assert BasePanel._active_cancel is None and not BasePanel._running
+    assert not controller().is_live()
     assert "Run cancelled." in panel.log_pane.toPlainText()
 
     later = []
     panel.dispatch(lambda: "SECOND OK", on_result=later.append)
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < 5 and (panel._busy or not later):
-        app.processEvents()
-        time.sleep(0.005)
+    turn_until(app, lambda: later and not controller().is_live(), 5)
     assert later == ["SECOND OK"], f"a run after a cancel did not complete: {later}"
 
 def test_the_end_of_a_test_stops_a_run_it_left_live_before_its_panel_goes_and_fails_it(tmp_path):
     """A test that ends with a run still live fails at its end (tests/_built.py's end_of_test, which the
-    let-go fixture of tests/conftest.py calls), and the run is first asked to stop and waited for. Deleted
-    under its run, a panel that watches a figure folder raises at the run's end before the flag that says a
-    run is live is put back, and every later run is refused. Three ends, each held to what was noted just
-    before this test built its host, as the fixture notes it when a test is set up: a run that stops at its
-    next line once asked has its end handled on its own panel, the panel then goes, and a later run takes;
-    a run that cannot stop in time keeps its panel alive, so that its end still finds it; and at the end of
-    the next test, that run is an earlier test's: it is not waited for again, and what that test built goes."""
+    let-go fixture of tests/conftest.py calls), and the run is first asked to stop, through the run's
+    controller, and waited for, so that no panel is deleted under its run. Three ends, each held to what was
+    noted just before this test built its host, as the fixture notes it when a test is set up: a run that
+    stops at its next line once asked has its end handled, its panel then goes, and a later run takes; a run
+    that cannot stop in time keeps its panel alive, so that its end still finds it; and at the end of the next
+    test, that run is an earlier test's: it is not waited for again, and what that test built goes. Each end
+    is heard as the controller says it. A stand-in run left live while it waits for its test is stopped the
+    same way: asked, it says its next line, and the stop is taken there. And a run that ended with its end
+    still to acknowledge (one that keeps its files) is acknowledged at the end of its test, so that the next
+    test finds the controller idle."""
     import pytest
     import shiboken6
+    from core.gui.run.model import IDLE, RunSpec
     from tests import _built
+    from tests._runs import STOP_LINE, StandIn, running, start_run
 
     app = qt_app()
-
-    def turn_until(done, limit):
-        t0 = time.monotonic()
-        while not done() and time.monotonic() - t0 < limit:
-            app.processEvents()
-            time.sleep(0.01)
 
     def ticking():
         for i in range(3000):                 # thirty seconds at most, if the ask to stop never landed
@@ -264,32 +251,46 @@ def test_the_end_of_a_test_stops_a_run_it_left_live_before_its_panel_goes_and_fa
             time.sleep(0.01)
 
     at_start = _built.noted()
-    host, ended = build_run_host(), []
-    host.dispatch(ticking, watch_dir=tmp_path, on_finished=lambda: ended.append("its end"))
+    waiting = StandIn()
+    start_run(build_run_host(), waiting)
     with pytest.raises(AssertionError, match="ended with a run still live; it was asked to stop, and its end"):
         _built.end_of_test(at_start)
-    assert ended == ["its end"] and not BasePanel._running and BasePanel._active_cancel is None, (
+    assert waiting.stopped_at == STOP_LINE and not controller().is_live(), waiting.stopped_at
+
+    with running(spec=RunSpec("Run", None)):
+        pass
+    assert controller().status.unacknowledged_end, controller().status
+    _built.end_of_test(_built.noted())
+    assert controller().status == IDLE, "the end of a test left a run's end to acknowledge"
+
+    at_start = _built.noted()
+    host, heard = build_run_host(), RunText(controller())
+    host.dispatch(ticking, watch_dir=tmp_path)
+    with pytest.raises(AssertionError, match="ended with a run still live; it was asked to stop, and its end"):
+        _built.end_of_test(at_start)
+    assert [status.outcome for status in heard.ended] == ["stopped"] and not controller().is_live(), (
         "a run left live was not stopped, or its end not handled, before its panel went")
     assert not shiboken6.isValid(host), "a panel whose run had stopped was not let go"
     later, got = build_run_host(), []
     later.dispatch(lambda: "ok", on_result=got.append)
-    turn_until(lambda: got and not later._busy, 10)
+    turn_until(app, lambda: got and not controller().is_live(), 10)
     assert got == ["ok"], f"a later run was refused: {later.log_pane.toPlainText()!r}"
 
     at_start = _built.noted()
-    slow = build_run_host()
-    slow.dispatch(lambda: time.sleep(2), on_finished=lambda: ended.append("its end"))   # no line to stop at
+    slow, heard = build_run_host(), RunText(controller())
+    slow.dispatch(lambda: time.sleep(2))     # no line to stop at
     with pytest.raises(AssertionError, match="had not stopped 0.2 s later"):
         _built.end_of_test(at_start, within=0.2)
     at_start = _built.noted()
     beside = build_run_host()
     _built.end_of_test(at_start)
-    assert not shiboken6.isValid(beside) and BasePanel._running, (
+    assert not shiboken6.isValid(beside) and controller().is_live(), (
         "the end of the next test waited for a run an earlier test left live, or kept what that test built")
-    turn_until(lambda: not BasePanel._running, 10)
-    assert shiboken6.isValid(slow) and ended == ["its end"] * 2 and BasePanel._active_cancel is None, (
+    turn_until(app, lambda: not controller().is_live(), 10)
+    assert shiboken6.isValid(slow) and len(heard.ended) == 1, (
         "a panel was deleted under a run that had not stopped, or that run's end did not find it")
     _built.keep(slow)                         # let go when this test ends, as the fixture lets go any host
+    _built.keep(heard)
 
 def test_a_deleted_panel_leaves_the_set_a_run_locks_and_a_later_run_starts():
     """A run locks the controls of every panel in the set each panel enrols in, and a panel that ran something is
@@ -305,10 +306,7 @@ def test_a_deleted_panel_leaves_the_set_a_run_locks_and_a_later_run_starts():
         """Run a short function on ``host``, turn the event loop until its run has ended, and say what it gave."""
         got = []
         host.dispatch(lambda: "done", on_result=got.append)
-        t0 = time.monotonic()
-        while (host._busy or not got) and time.monotonic() - t0 < 10:
-            app.processEvents()
-            time.sleep(0.005)
+        turn_until(app, lambda: got and not controller().is_live(), 10)
         return got
 
     first = build_run_host()
@@ -319,7 +317,7 @@ def test_a_deleted_panel_leaves_the_set_a_run_locks_and_a_later_run_starts():
     assert [panel for panel in BasePanel._instances if not shiboken6.isValid(panel)] == [], (
         "a deleted panel is still among the panels a run locks")
     second = build_run_host()
-    assert run(second) == ["done"] and not BasePanel._running, "a run after a deleted panel did not complete"
+    assert run(second) == ["done"] and not controller().is_live(), "a run after a deleted panel did not complete"
 
 def test_cancel_is_not_consumed_by_a_non_worker_thread():
     """tqdm's TMonitor daemon force-refreshes a quiet bar, writing to our stream from ITS thread. If
@@ -1061,49 +1059,16 @@ def test_the_picture_viewer_saves_a_png_where_the_chooser_says(monkeypatch, tmp_
     QCoreApplication.sendPostedEvents(window, QEvent.DeferredDelete)
 
 
-# ── the pane recorder ────────────────────────────────────────────────────────────────────────────
-def test_pane_capture_records_level_and_text_and_the_pane_stays_blank():
-    """The window's refusals and warnings are asserted OFF THE PANE. PaneCapture stands in for BOTH of
-    ``log_pane``'s channels on one panel -- ``append_line``, the panel's own messages, and
-    ``append_lines``, one pump tick of the run's output -- and keeps ``(level, text)`` in order, with
-    LogPane's own default level, so the ``lambda text, kind="": lines.append((kind, text))`` stub that
-    five tests each wrote by hand becomes one helper that cannot drift from the real signatures.
+# ── the pane recorder and the run's text ─────────────────────────────────────────────────────────
+def test_a_runs_lines_reach_its_text_in_order_and_a_pages_own_lines_its_pane():
+    """End to end, through a page's real ``dispatch``: a print and a ``core`` record from the WORKER reach the
+    run's full text, which the run's controller says and ``tests/_runs.RunText`` records, as ``(level, text)``
+    and in the order they happened -- records and prints share one ordered sink (streams._Pump) -- and never
+    the page's pane. The lines a page writes itself are what ``PaneCapture`` records, at the pane's own default
+    level when none is given, and nothing either records reaches the widget.
 
-    ONE list, in the order the lines happened, because that is the order the user reads them in: a
-    batch's pairs arrive as ``(text, level)`` (WorkerSignals.log_batch, worker.py:27) and are flipped
-    into the helper's ``(level, text)`` as they are appended. An empty batch appends nothing, exactly
-    as LogPane.append_lines renders nothing for one."""
-    from tests._fixtures import PaneCapture, qt_app
-
-    qt_app()
-
-    panel = build_run_host()
-    before = panel.log_pane.toPlainText()
-    cap = PaneCapture(panel)
-    panel.log_pane.append_line("plain")
-    panel.log_pane.append_lines([("Config built: NADROWSKI", "info"),
-                                 ("[tsnpe] loaded a NON-AMORTIZED posterior", "warning")])
-    panel.log_pane.append_line("watch out", "warning")
-    panel.log_pane.append_lines([])
-    panel.log_pane.append_lines(None)
-    assert cap.lines == [("info", "plain"),
-                         ("info", "Config built: NADROWSKI"),
-                         ("warning", "[tsnpe] loaded a NON-AMORTIZED posterior"),
-                         ("warning", "watch out")]
-    assert panel.log_pane.toPlainText() == before, "a captured line must not also reach the widget"
-
-
-def test_pane_capture_sees_the_pumps_batch_channel_through_a_dispatch():
-    """End to end, through the machinery the helper exists for. ``BasePanel.dispatch`` resolves
-    ``self.log_pane.append_line`` AND ``self.log_pane.append_lines`` at CONNECT time, so a capture
-    installed before the dispatch sees both; the batch channel is the only way a print, a retired
-    tqdm bar, a ``core`` record or a Python warning from the WORKER reaches the pane, and it used to
-    go to the widget and nowhere a test could read it.
-
-    A batch is published by the pump's daemon thread at 15 Hz as a QUEUED cross-thread signal, so the
-    Qt loop has to be driven before asserting -- ``pump(app)``, as every other worker test here does.
-    The two lines must also keep their order relative to each other: records and prints share one
-    ordered sink (streams._Pump)."""
+    A run's lines are published by the pump's daemon thread at 15 Hz as QUEUED cross-thread signals, so the
+    Qt loop is turned until the run has ended before anything is read."""
     import logging
 
     from tests._fixtures import PaneCapture, qt_app
@@ -1111,7 +1076,8 @@ def test_pane_capture_sees_the_pumps_batch_channel_through_a_dispatch():
     app = qt_app()
 
     panel = build_run_host()
-    cap = PaneCapture(panel)                     # BEFORE the dispatch, or neither channel is captured
+    text = RunText(controller())
+    cap = PaneCapture(panel)
     before = panel.log_pane.toPlainText()
 
     def work():
@@ -1121,20 +1087,18 @@ def test_pane_capture_sees_the_pumps_batch_channel_through_a_dispatch():
 
     got = []
     panel.dispatch(work, on_result=got.append)
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and (panel._busy or not got):
-        app.processEvents()
-        time.sleep(0.01)
-    pump(app, 0.3)
+    panel.log_pane.append_line("plain")
+    panel.log_pane.append_line("watch out", "warning")
+    turn_until(app, lambda: got and not controller().is_live(), 10)
 
     assert got == ["done"], got
-    assert ("info", "Config built: NADROWSKI") in cap.lines, cap.lines
-    assert ("warning", "[tsnpe] loaded a NON-AMORTIZED posterior") in cap.lines, cap.lines
-    texts = [t for _level, t in cap.lines]
-    assert texts.index("Config built: NADROWSKI") < \
-        texts.index("[tsnpe] loaded a NON-AMORTIZED posterior"), cap.lines
-    assert panel.log_pane.toPlainText() == before, \
-        "a captured batch must not also reach the widget"
+    assert ("info", "Config built: NADROWSKI") in text.lines, text.lines
+    assert ("warning", "[tsnpe] loaded a NON-AMORTIZED posterior") in text.lines, text.lines
+    texts = text.texts()
+    assert texts.index("Config built: NADROWSKI") < texts.index("[tsnpe] loaded a NON-AMORTIZED posterior"), \
+        text.lines
+    assert cap.lines == [("info", "plain"), ("warning", "watch out")], cap.lines
+    assert panel.log_pane.toPlainText() == before, "a run's line, or a line the page wrote, reached the widget"
 
 
 def test_on_error_routes_a_refusal_to_the_yellow_box():
@@ -1203,12 +1167,9 @@ def test_a_refusal_opens_the_yellow_box_without_a_traceback_and_a_bug_the_red_on
     def _run_to_dialog(fn):
         forget_asked()
         panel.dispatch(fn)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and (panel._busy or not all_asked()):
-            app.processEvents()
-            time.sleep(0.01)
+        turn_until(app, lambda: not controller().is_live() and all_asked(), 10)
         pump(app, 0.2)
-        assert not panel._busy, "the panel stayed busy after the failure"
+        assert not panel.is_running(), "the panel stayed busy after the failure"
         assert all_asked(), "no dialog opened"
         return asked()
 
@@ -2311,27 +2272,26 @@ _STOP = ("warning", "Run cancelled.")
 _NOTED = "A cancel was requested before the run failed"
 
 
-def _run_leg(app, panel, pane, fn, wait_for_dialog):
-    """Dispatch ``fn`` on ``panel`` and drive the event loop until the run has settled: the panel is
-    idle and, when a dialog is expected, the box has been shown. Each leg reads only its own pane
-    lines and its own dialogs."""
+def _run_leg(app, panel, pane, text, fn, wait_for_dialog):
+    """Dispatch ``fn`` on ``panel`` and turn the event loop until the run has settled: no run is live and,
+    when a dialog is expected, the box has been shown. Each leg reads only its own pane lines, its own run's
+    text and its own dialogs."""
     from tests._fixtures import all_asked, forget_asked
 
     forget_asked()
     del pane.lines[:]
+    del text.lines[:]
     panel.dispatch(fn)
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and (panel._busy or (wait_for_dialog and not all_asked())):
-        app.processEvents()
-        time.sleep(0.01)
+    turn_until(app, lambda: not controller().is_live() and (not wait_for_dialog or all_asked()), 10)
     pump(app, 0.2)
-    assert not panel._busy, "the panel stayed busy"
+    assert not panel.is_running(), "the panel stayed busy"
 
 
 def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     """Every leg runs through the WINDOW'S OWN channels -- a real ``print`` and a real ``core`` record
-    under the ``redirect_streams`` the dispatch installs -- and requests the PANEL'S OWN token
-    (``panel._cancel``, which ``Worker.run`` holds as ``self.cancel``), so a Worker.run that decides
+    under the ``redirect_streams`` the dispatch installs -- and asks the run's controller for the stop
+    from inside the run (``controller().request_stop()``, which sets the run's own token, the one
+    ``Worker.run`` holds as ``self.cancel``, at once, from any thread), so a Worker.run that decides
     anything from its token is exercised for real.
 
     The rule under test is the raise-time deferral (``core.runs.cancel_is_deferred``): no cancel
@@ -2342,7 +2302,8 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     (a) THE COLLISION -- Cancel pressed in the moment before a crash, in the rescue block's shape: a
     record and a print inside the section, then a bare ``raise``. The ORIGINAL exception reaches
     Worker.run's generic handler: the red box, its traceback in Details, the message in the pane --
-    and, because the token had been requested, the cancel NOTED in the pane and in the box.
+    and, because the token had been requested, the cancel NOTED in the pane and in the box. The record
+    and the print are the run's text.
 
     (a2) THE RACE THE FIRST DESIGN CALLED RESIDUAL, and it is not rare: ``sdeint.euler_compiled``'s
     ``try ... finally: bar.close()`` sits on the graphed CUDA solver, the likeliest GPU crash site,
@@ -2356,15 +2317,15 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     handler and log after it has closed.) A cancel taken inside such a guard would carry the handled
     exception as its ``__context__``. Deferred, it is taken at the first check AFTER the guard, in
     normal flow, with nothing chained: a plain cancel, no dialog, no in-flight line -- and the guard's
-    own warning still reaches the pane.
+    own warning still reaches the run's text.
 
     (c) A CANCEL IN NORMAL FLOW is taken at the very next check: the print it lands on never reaches
-    the pane and the line after it never runs.
+    the run's text and the line after it never runs.
 
     (f) THE FALLBACK. A WorkerCancelled raised EXPLICITLY inside a handler -- no checkpoint does that
-    any more -- still carries a context. It stays a cancel, and what it carried is kept in the pane at
-    ERROR under a HEDGED line, because the chain cannot say whether that exception was still in flight
-    or had already been recovered from.
+    any more -- still carries a context. It stays a cancel, and what it carried is kept in the run's
+    text at ERROR under a HEDGED line, because the chain cannot say whether that exception was still
+    in flight or had already been recovered from.
 
     The live-bar collision, leg (e), is the next test.
     """
@@ -2377,12 +2338,12 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     app = qt_app()
 
     panel = build_run_host()
-    pane = PaneCapture(panel)
+    pane, text = PaneCapture(panel), RunText(controller())
     log = logging.getLogger("core.SBI.pipeline")
     reached = []
 
     def crash_behind_the_section():
-        panel._cancel.requested.set()          # Cancel pressed just before the failure
+        controller().request_stop()            # Cancel pressed just before the failure
         try:
             raise RuntimeError("the batch failed")
         except RuntimeError:
@@ -2392,7 +2353,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
             raise                              # the ORIGINAL exception, unconditionally
 
     def crash_through_a_finally_that_speaks():
-        panel._cancel.requested.set()
+        controller().request_stop()
         try:
             raise RuntimeError("the graphed solver failed")
         finally:                               # sdeint.euler_compiled: `finally: bar.close()`
@@ -2400,7 +2361,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
             logging.getLogger("core.Solvers.sdeint").info("closing the solver's bar")
 
     def recovered_guard_then_normal_flow():
-        panel._cancel.requested.set()
+        controller().request_stop()
         try:
             raise RuntimeError("empty_cache() on a starved card")
         except RuntimeError:
@@ -2410,7 +2371,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
         reached.append("past the first check")
 
     def cancel_in_normal_flow():
-        panel._cancel.requested.set()
+        controller().request_stop()
         print("the first print after Cancel")          # taken at this very write
         reached.append("past the first check")
 
@@ -2432,39 +2393,41 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
             ("the pane does not note the cancel", pane.lines)
 
     # (a) the collision: a crash, reported as a crash, with the cancel noted
-    _run_leg(app, panel, pane, crash_behind_the_section, True)
+    _run_leg(app, panel, pane, text, crash_behind_the_section, True)
     reported_as_a_crash("the batch failed")
-    assert ("info", "[checkpoint] stopping: saving 1 completed batches") in pane.lines, pane.lines
-    assert ("info", "a print beside the rescue write") in pane.lines, pane.lines
+    assert ("info", "[checkpoint] stopping: saving 1 completed batches") in text.lines, text.lines
+    assert ("info", "a print beside the rescue write") in text.lines, text.lines
 
     # (a2) the crash unwinding through a finally that speaks: a crash too
-    _run_leg(app, panel, pane, crash_through_a_finally_that_speaks, True)
+    _run_leg(app, panel, pane, text, crash_through_a_finally_that_speaks, True)
     reported_as_a_crash("the graphed solver failed")
-    assert ("info", "the bar's last frame") in pane.lines, pane.lines
-    assert ("info", "closing the solver's bar") in pane.lines, pane.lines
+    assert ("info", "the bar's last frame") in text.lines, text.lines
+    assert ("info", "closing the solver's bar") in text.lines, text.lines
 
     # (b) a recovered guard, then normal flow: a plain cancel, taken at the first check after it
     del reached[:]
-    _run_leg(app, panel, pane, recovered_guard_then_normal_flow, False)
+    _run_leg(app, panel, pane, text, recovered_guard_then_normal_flow, False)
     assert all_asked() == [], "a recovered exception behind a cancel opened a dialog"
-    assert pane.lines == [("warning", "empty_cache() failed during recovery and was ignored"), _STOP], \
-        pane.lines
+    assert pane.lines == [_STOP], pane.lines
+    assert text.lines[0] == ("warning", "empty_cache() failed during recovery and was ignored"), text.lines
+    assert "the first record in normal flow" not in text.texts(), text.lines
     assert reached == ["after the guard"], reached
 
     # (c) normal flow: the very next check
     del reached[:]
-    _run_leg(app, panel, pane, cancel_in_normal_flow, False)
+    _run_leg(app, panel, pane, text, cancel_in_normal_flow, False)
     assert pane.lines == [_STOP] and all_asked() == [] and reached == [], \
         (pane.lines, all_asked(), reached)
+    assert "the first print after Cancel" not in text.texts(), text.lines
 
     # (f) the fallback: a cancel that still carries a context stays a cancel; the context is kept
-    _run_leg(app, panel, pane, cancel_raised_inside_a_handler, False)
+    _run_leg(app, panel, pane, text, cancel_raised_inside_a_handler, False)
     assert all_asked() == [], "an exception behind a cancel opened a dialog"
     assert pane.lines.count(_STOP) == 1 and pane.lines[-1] == _STOP, pane.lines
     assert any(lv == "warning" and "may be a failure that was still in flight" in t
-               for lv, t in pane.lines), pane.lines
+               for lv, t in text.lines), text.lines
     assert any(lv == "error" and "RuntimeError: an error the run may already have dealt with" in t
-               for lv, t in pane.lines), pane.lines
+               for lv, t in text.lines), text.lines
 
 
 def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_success():
@@ -2477,9 +2440,9 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
     all.
 
     The run really DID finish, so it must not be reported as cancelled: nothing on disk is wrong and
-    the payload is correct. It is reported as a SUCCESS with the fact said out loud -- the missing
-    counterpart of the failure path's "A cancel was requested before the run failed.", which the
-    window already had.
+    the payload is correct. It is reported as a SUCCESS with the fact said out loud in the run's text --
+    the missing counterpart of the failure path's "A cancel was requested before the run failed.",
+    which the window already had.
 
     A run that finishes with NO cancel pending says nothing extra: the sentence has to be the answer
     to a question somebody asked."""
@@ -2489,26 +2452,24 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
     app = qt_app()
 
     panel = build_run_host()
-    pane = PaneCapture(panel)
+    pane, text = PaneCapture(panel), RunText(controller())
     results = []
 
     def _drive(fn):
         forget_asked()
         del pane.lines[:]
+        del text.lines[:]
         del results[:]
         panel.dispatch(fn, on_result=results.append)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and panel._busy:
-            app.processEvents()
-            time.sleep(0.01)
+        turn_until(app, lambda: not controller().is_live(), 10)
         pump(app, 0.2)
-        assert not panel._busy, "the panel stayed busy"
+        assert not panel.is_running(), "the panel stayed busy"
 
     def finishes_with_a_cancel_pending():
         try:
             raise RuntimeError("something the run recovered from")
         except RuntimeError:
-            panel._cancel.requested.set()          # Cancel, inside a deferral window
+            controller().request_stop()             # Cancel, inside a deferral window
             print("the last thing the run writes")  # deferred: no checkpoint fires here
         return "the payload"                        # ... and nothing checks the token again
 
@@ -2517,14 +2478,14 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
     assert all_asked() == [], "a completed run opened a dialog"
     assert ("warning", "Run cancelled.") not in pane.lines, \
         ("a run that FINISHED was reported as a cancellation", pane.lines)
-    assert any(lv == "warning" and CANCEL_TOO_LATE_TEXT in text for lv, text in pane.lines), \
-        ("the person who pressed Cancel was told nothing", pane.lines)
-    assert ("info", "the last thing the run writes") in pane.lines, pane.lines
+    assert any(lv == "warning" and CANCEL_TOO_LATE_TEXT in line for lv, line in text.lines), \
+        ("the person who pressed Cancel was told nothing", text.lines)
+    assert ("info", "the last thing the run writes") in text.lines, text.lines
 
     _drive(lambda: "a quiet payload")
     assert results == ["a quiet payload"], results
-    assert not any("cancel" in text.lower() for _lv, text in pane.lines), \
-        ("a run nobody cancelled was told about a cancel", pane.lines)
+    assert not any("cancel" in line.lower() for _lv, line in pane.lines + text.lines), \
+        ("a run nobody cancelled was told about a cancel", pane.lines, text.lines)
 
 
 def test_a_crash_under_a_live_bar_is_a_crash_and_leaves_no_ignored_exception(monkeypatch):
@@ -2532,13 +2493,13 @@ def test_a_crash_under_a_live_bar_is_a_crash_and_leaves_no_ignored_exception(mon
     generator while the crash unwinds, and tqdm's ``finally: self.close()`` writes the bar's last frame
     -- a cancel checkpoint. Before the raise-time deferral that write raised WorkerCancelled INSIDE a
     generator finalizer, where Python cannot propagate it: a ~20-line "Exception ignored in:
-    <generator object tqdm.__iter__>" block landed in the pane, and the latch was consumed by a raise
-    nobody could see. Now the teardown runs while GeneratorExit is being handled, so the write is
+    <generator object tqdm.__iter__>" block landed in the run's text, and the latch was consumed by a
+    raise nobody could see. Now the teardown runs while GeneratorExit is being handled, so the write is
     carried: the crash is reported as a crash with the cancel noted, the latch is never consumed, and
-    nothing is ignored.
+    nothing is ignored. The run's token is read off the run's own output stream, which holds it.
 
     ``sys.unraisablehook`` is put back to Python's own for the run. pytest installs a collecting hook,
-    which would keep the "Exception ignored" block out of the pane and make the last assertion
+    which would keep the "Exception ignored" block out of the run's text and make the last assertion
     vacuous; Python's own writes it to ``sys.stderr``, which under the run is the window's stream."""
     from tests._fixtures import PaneCapture, asked
 
@@ -2546,21 +2507,21 @@ def test_a_crash_under_a_live_bar_is_a_crash_and_leaves_no_ignored_exception(mon
     app = qt_app()
 
     panel = build_run_host()
-    pane = PaneCapture(panel)
+    pane, text = PaneCapture(panel), RunText(controller())
     tokens = []
 
     def crash_under_a_live_bar():
-        tokens.append(panel._cancel)           # the panel drops its token when the run finishes
+        tokens.append(sys.stdout._cancel)      # the run's own token, as its stream holds it
         for i in tqdm(range(1000), desc="a live bar"):
             if i == 3:
-                panel._cancel.requested.set()
+                controller().request_stop()
                 raise RuntimeError("the batch failed under a live bar")
 
-    _run_leg(app, panel, pane, crash_under_a_live_bar, True)
+    _run_leg(app, panel, pane, text, crash_under_a_live_bar, True)
     assert _STOP not in pane.lines, ("a run that CRASHED was reported as a cancellation", pane.lines)
     box = asked()
     assert box.sentence == "the batch failed under a live bar", box.sentence
     assert _NOTED in box.text, box.text
     assert tokens and tokens[0].requested.is_set() and tokens[0].fired is False, \
         "the bar's teardown consumed the cancel latch"
-    assert not any("Exception ignored" in t for _lv, t in pane.lines), pane.lines
+    assert not any("Exception ignored" in line for _lv, line in pane.lines + text.lines), (pane.lines, text.lines)

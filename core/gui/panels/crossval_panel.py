@@ -22,6 +22,8 @@ from core.artifacts import default_store
 from . import record_view
 from .base_panel import BasePanel
 from .. import settings
+from ..run.controller import controller
+from ..run.model import RunSpec, Stage
 from ..widgets.artifact_picker import ArtifactPicker, StorePicker
 from ..widgets.compare_list import CompareList
 from ..widgets.help_badge import add_help_row
@@ -31,6 +33,14 @@ from ..widgets.forms import make_form
 from .. import fields as gui_fields
 
 _MODEL = "NADROWSKI"
+# Where the window shows this page's runs: Effective temperature, its page Sweep study.
+_PLACE = ("temperature", "sweep")
+# The word of this page's study, which its viewer closes its earlier figures after.
+_STUDY = "Sweep study"
+# A study's two sweeps, each begun by the line that opens its first phase and counted by the points of its driven
+# phase.
+_STAGES = (Stage("S sweep", ("sweep_phase",), "sweep_point_b"),
+           Stage("T_a/T sweep", ("sweep_phase",), "sweep_point_b"))
 
 HELP = {
     "cell": "A cell whose S and T_a/T set the far end of each sweep (the FDT-violating extreme).",
@@ -104,7 +114,29 @@ class CrossValPanel(BasePanel):
         # The saved-sweep viewer, built AFTER the restore so a launch fills the line and opens no
         # figures -- FdtPanel.__init__ gives the reason.
         self._viewer = record_view.RecordViewer(self.record_picker, self.record_line,
-                                                self.figure_stack, busy=lambda: self._busy)
+                                                self.figure_stack, busy=self.is_running)
+        # Every end of a run is heard by a method of this panel's own, so a deleted panel leaves no connection.
+        controller().run_ended.connect(self._on_run_ended)
+
+    def run_spec(self, fn, *args, **kwargs) -> RunSpec:
+        """A sweep study, which writes its two records as it goes (both made at the click, before the run), named
+        by the study's name; or a comparison of saved sweeps, which writes a record of its own."""
+        if fn is run_param_study_cli:
+            writers = kwargs.get("writers") or {}
+            first = getattr(writers.get("s"), "name", "")
+            return RunSpec(_STUDY, _PLACE, name=first[:-len("-s")] if first.endswith("-s") else first,
+                           stop_button="Stop sweep study…", stages=_STAGES, kinds=("fdt",),
+                           records=tuple(writer.id for writer in writers.values()))
+        if fn is compare:
+            return RunSpec("Comparison", _PLACE, name=kwargs.get("name", ""), stop_button="Stop the comparison…",
+                           kinds=("fdt",))
+        return super().run_spec(fn, *args, **kwargs)
+
+    def _on_run_ended(self, status) -> None:
+        """A run has ended, whatever its outcome: when it was this panel's study, the viewer closes the tabs it
+        opened for an earlier sweep, so the stack holds this study's own figures alone."""
+        if status.word == _STUDY and controller().host() is self:
+            self._viewer.close_figures()
 
     def _build_controls(self):
         box = QGroupBox("FDT parameter-sweep study")
@@ -325,12 +357,12 @@ class CrossValPanel(BasePanel):
         # and the plots arrive through ONE WATCHER PER RECORD: the watcher globs one directory
         # and does not recurse, so both folders are handed over. A folder the T sweep never reached
         # simply lists nothing.
-        # on_finished: whatever the outcome, the viewer closes the tabs it opened for an earlier sweep,
-        # so the stack holds this study's own figures alone -- FdtPanel._on_run_finished.
+        # When the run has ended, whatever its outcome, the viewer closes the tabs it opened for an earlier
+        # sweep (``_on_run_ended``), so the stack holds this study's own figures alone.
         self.dispatch(run_param_study_cli, cfg, s_grid=s_grid, t_grid=temp_grid,
                       writers=writers, seed=seed,
                       watch_dir=[writers["s"].dir / "figures", writers["temp"].dir / "figures"],
-                      on_result=self._on_result, on_finished=self._viewer.close_figures)
+                      on_result=self._on_result)
 
     def _on_result(self, records):
         """The ``LoadedFdt`` records the study FINISHED, S first (it used to return two loose HDF5

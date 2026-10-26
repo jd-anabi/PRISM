@@ -29,7 +29,7 @@ from core.Solvers import sdeint
 
 from .. import fields as gui_fields
 from ..design import SPACE
-from ..panels.base_panel import BasePanel
+from ..run.controller import controller
 from ..widgets.refusal_box import show_refusal
 from ..widgets.help_badge import add_help_row
 from ..widgets.labeled_inputs import FloatField
@@ -391,7 +391,7 @@ class ModelBuilderScreen(QWidget):
         entries route to ``_refusal``; the problems no one box answers -- a task running, no
         variables, a bad name, a parse or integration failure -- stay status-line sentences and
         return None."""
-        if BasePanel._running:
+        if controller().is_live():
             # The smoke integration's tqdm writes to the process-wide redirected streams while a
             # worker runs -- it would interleave into that run's progress pane. Refuse instead.
             self._set_status("A task is running -- wait for it to finish before validating.", error=True)
@@ -507,7 +507,7 @@ class ModelBuilderScreen(QWidget):
                              f"{len(doc['params'])} parameter(s). Ready to save.")
 
     def _save(self):
-        if BasePanel._running:
+        if controller().is_live():
             self._set_status("A task is running -- wait for it to finish before saving.", error=True)
             return
         try:
