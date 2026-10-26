@@ -1,4 +1,4 @@
-"""The tqdm/VT100 router, the Qt progress stack, the solver meter and the overall-bar election. Split from test_gui_progress.py; run directly: pytest tests/test_vt_progress.py"""
+"""The tqdm/VT100 router, a run's bars read as its model's rows and its lines as its text, the solver's count as a sign of life and the row that measures a run. Split from test_gui_progress.py; run directly: pytest tests/test_vt_progress.py"""
 """Progress-rendering regression tests for the GUI.
 
 THE BUG THESE LOCK DOWN
@@ -17,6 +17,7 @@ import os
 import tempfile
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")   # must precede any PySide6 import
@@ -28,10 +29,9 @@ matplotlib.use("Agg")                                            # match the app
 import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
+from core.gui.run.model import RunModel, RunSpec, Stage, driving_row, fit_counter   # noqa: E402
 from core.gui.streams import redirect_streams                     # noqa: E402
 from core.gui.vt import StreamRouter, parse_bar                   # noqa: E402
-from core.gui.widgets.log_pane import LogPane                     # noqa: E402
-from core.gui.widgets.progress_pane import ProgressPane           # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
 from tests._fixtures import qt_app, pump                          # noqa: E402
 import contextlib                                                  # noqa: E402
@@ -176,105 +176,92 @@ def test_total_one_bar_is_not_informative():
     assert degenerate.total == 1 and not degenerate.informative
     assert real.total == 5000 and real.informative and real.pct == 42
 
-# ── the full Qt stack ────────────────────────────────────────────────────────────────────────────
-def test_end_to_end_log_pane_gains_zero_blocks():
-    """The whole stack: real nested tqdm -> redirect_streams -> pump -> ProgressPane / LogPane."""
+# ── a run of the window: its bars reach its model as rows, its lines its text ───────────────────────
+_ENDED = "The run finished."            # the last line of a run's text, how it ended
+
+
+def _run(fn, monkeypatch=None):
+    """Run ``fn`` as a run of the window, through a bare run host's own dispatch, and turn the event loop until it
+    has ended. Returns what the run's controller said of it (a ``RunText``) and every snapshot of progress rows the
+    run's model was handed, in order (when ``monkeypatch`` is handed, which records them)."""
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_run_host
+    from tests._runs import RunText, turn_until
     app = qt_app()
-    log, prog = LogPane(), ProgressPane()
-    signals = WorkerSignals()
-    signals.log.connect(log.append_line)
-    signals.log_batch.connect(log.append_lines)
-    signals.rows.connect(prog.set_rows)
+    handed, kept = [], RunModel.rows
 
-    peak_rows = 0
+    def rows(model, snapshot):
+        handed.append(tuple(snapshot))
+        return kept(model, snapshot)
 
-    def watch(snapshot):
-        nonlocal peak_rows
-        peak_rows = max(peak_rows, len(snapshot))
+    if monkeypatch is not None:
+        monkeypatch.setattr(RunModel, "rows", rows)
+    text = RunText(controller())
+    build_run_host().dispatch(fn)
+    turn_until(app, lambda: text.ended, 10)
+    return text, handed
 
-    signals.rows.connect(watch)
 
-    prog.begin()
-    with redirect_streams(signals):
+def test_end_to_end_a_runs_bars_reach_its_model_as_rows_and_never_its_text(monkeypatch):
+    """The whole stack: real nested tqdm in a run of the window -> redirect_streams -> pump -> the run's
+    controller -> its model and its text. The bars reach the model as progress rows, three at the deepest of the
+    nest and none once they have closed; not one line of the run's text comes from them: it holds how the run
+    ended and nothing else."""
+    def nest():
         for _ in tqdm(range(2), desc="Training neural posterior", leave=False):
             for _ in tqdm(range(4), desc="Generating training data", leave=False):
                 for _ in tqdm(range(3), desc="Running time segments", leave=False):
                     time.sleep(0.02)          # let the 15 Hz pump actually tick
-    pump(app)
 
-    assert log.blockCount() == 1 and not log.toPlainText().strip(), \
-        f"log pane gained {log.blockCount()} block(s):\n{log.toPlainText()[:500]}"
-    assert peak_rows == 3, f"expected 3 concurrent progress rows, got {peak_rows}"
-
-    prog.end()
-    assert not prog._rows, "ProgressPane.end() left rows behind"
-    assert not prog.caption.text(), "ProgressPane.end() left the caption behind"
-    assert prog.overall.maximum() == 0, "ProgressPane.end() left the overall bar determinate"
+    text, handed = _run(nest, monkeypatch)
+    assert text.texts() == [_ENDED], f"the run's text gained lines from its bars: {text.lines[:5]}"
+    assert max(len(rows) for rows in handed) == 3, f"expected 3 concurrent progress rows, got {handed}"
+    assert handed[-1] == (), f"the model was left holding rows after the bars closed: {handed[-1]}"
 
 def test_print_output_still_reaches_the_log():
-    """The bars must not swallow ordinary pipeline output."""
-    app = qt_app()
-    log = LogPane()
-    signals = WorkerSignals()
-    signals.log.connect(log.append_line)
-    signals.log_batch.connect(log.append_lines)
-    signals.rows.connect(lambda _s: None)
-
-    with redirect_streams(signals):
+    """The bars must not swallow ordinary pipeline output: a run's prints reach its text, and not one frame of a
+    bar nor any motion of the terminal does."""
+    def run():
         print("Config built: NADROWSKI")
         for _ in tqdm(range(3), desc="Generating training data", leave=False):
             time.sleep(0.02)
         print("Prior ready.")
-    pump(app)
 
-    text = log.toPlainText()
-    assert "Config built: NADROWSKI" in text
-    assert "Prior ready." in text
-    assert "\x1b" not in text
-    assert "it/s]" not in text, f"a bar frame leaked into the log:\n{text}"
+    lines = _run(run)[0].texts()
+    assert "Config built: NADROWSKI" in lines and "Prior ready." in lines, lines
+    assert not [line for line in lines if "\x1b" in line or "it/s]" in line], f"a bar frame leaked into the text:\n{lines}"
 
-def test_sbi_epoch_counter_becomes_a_progress_row_not_log_spam():
-    """sbi's training loop has NO tqdm bar. It prints, on STDOUT:
+def test_sbi_epoch_counter_becomes_a_progress_row_not_log_spam(monkeypatch):
+    """sbi's training loop has NO tqdm bar. Its trainer's training loop prints, on STDOUT:
            print("\\r", f"Training neural network. Epochs trained: {epoch}", end="")
-       (sbi/inference/trainers/base.py:1024) -- a LEADING '\\r' and no terminator, so it is an
-       overwrite-mode status line. It must render as one updating row, not one log line per epoch,
-       and its final value must not be stranded (the old reader dropped it with its buffer)."""
-    app = qt_app()
-    log = LogPane()
-    signals = WorkerSignals()
-    snapshots = []
-    signals.log.connect(log.append_line)
-    signals.log_batch.connect(log.append_lines)
-    signals.rows.connect(snapshots.append)
+       -- a LEADING '\\r' and no terminator, so it is an overwrite-mode status line. It must reach the run's model
+       as one updating row, which the model reads as the training library's epoch counter, and the run's text as one
+       line, its final value, never stranded (the old reader dropped it with its buffer); the closing line is read
+       as the fit's end."""
+    from core.gui.run import readings
 
-    with redirect_streams(signals):
+    def run():
         for epoch in range(1, 6):
             print("\r", f"Training neural network. Epochs trained: {epoch}", end="")
             time.sleep(0.03)
         print("\nNeural network successfully converged after 5 epochs.")
-    pump(app)
 
-    text = log.toPlainText()
-    assert text.count("Epochs trained") == 1, \
-        f"the epoch counter was appended per-epoch instead of overwriting:\n{text}"
-    assert "Epochs trained: 5" in text, "the FINAL epoch was stranded and never shown"
-    assert "successfully converged" in text
-    assert any(r.desc.startswith("Training neural network") for s in snapshots for r in s), \
-        "the epoch counter never rendered as a progress row"
-    assert all(r.pct is None for s in snapshots for r in s), "a status line faked a percentage"
+    text, handed = _run(run, monkeypatch)
+    lines = text.texts()
+    assert sum("Epochs trained" in line for line in lines) == 1, \
+        f"the epoch counter was appended per-epoch instead of overwriting:\n{lines}"
+    assert "Training neural network. Epochs trained: 5" in lines, "the FINAL epoch was stranded and never shown"
+    assert "Neural network successfully converged after 5 epochs." in lines
+    assert readings.read("Neural network successfully converged after 5 epochs.", "info").name == "sbi_converged"
+    assert any(fit_counter(rows) is not None for rows in handed), "the epoch counter never reached the model as a row"
+    assert all(row.pct is None for rows in handed for row in rows), "a status line faked a percentage"
 
 def test_plain_prints_are_not_eaten_by_the_cursor_logic():
     """A print() writes its text and its '\\n' as TWO chunks, so the '\\n' arrives alone -- byte-identical
     to a tqdm moveto(+1). Treating it as cursor motion strands the line forever and shifts the next
-    bar down a phantom row. Ordering and line boundaries must survive a print/bar/print interleave."""
-    app = qt_app()
-    log = LogPane()
-    signals = WorkerSignals()
-    signals.log.connect(log.append_line)
-    signals.log_batch.connect(log.append_lines)
-    signals.rows.connect(lambda _s: None)
-
-    with redirect_streams(signals):
+    bar down a phantom row. Ordering and line boundaries must survive a print/bar/print interleave, in the
+    run's text as it reaches the window."""
+    def run():
         print("Starting fake stage")
         print()                                   # a bare '\n' chunk, with nothing pending
         for _ in tqdm(range(3), desc="Generating training data", leave=False):
@@ -284,15 +271,15 @@ def test_plain_prints_are_not_eaten_by_the_cursor_logic():
             time.sleep(0.02)
         print("\nNeural network successfully converged.")
         print("Prior ready.")
-    pump(app)
 
-    lines = [ln for ln in log.toPlainText().splitlines() if ln.strip()]
+    lines = [line for line in _run(run)[0].texts() if line.strip()]
     assert lines == [
         "Starting fake stage",
         "Training neural network. Epochs trained: 3",
         "Neural network successfully converged.",
         "Prior ready.",
-    ], f"log lines mangled:\n{lines}"
+        _ENDED,
+    ], f"the run's lines mangled:\n{lines}"
 
 def test_quiet_segment_bar_collapses_the_nest():
     """config.QUIET_SEGMENT_BAR (set by core.gui.app.build_app) drops the per-time-segment bar, taking
@@ -347,77 +334,49 @@ def test_only_the_solver_bar_is_identified_as_the_solver():
         state = parse_bar(("err", 1), 1, f"{desc}:  50%|# | 1/2 [00:00<00:00, 9.0it/s]")
         assert not state.is_solver, f"{desc!r} must not be mistaken for the solver bar"
 
-def test_plus_meter_is_one_sign_per_order_of_magnitude():
-    from core.gui.widgets.progress_pane import plus_meter
+def _model(stages=()):
+    """A training's model, as a run of the window makes it, and the window's clock it reads, moved by hand."""
+    from tests._runs import Clock
+    clock = Clock(datetime(2026, 10, 8, 19, 2, 11, tzinfo=timezone(timedelta(hours=-7))))
+    return RunModel(RunSpec("Training", None, stages=stages), clock=clock), clock
 
-    assert plus_meter(10_000) == "++++"       # the user's worked example
-    assert plus_meter(13_267.85) == "++++"
-    assert plus_meter(1_000) == "+++"
-    assert plus_meter(999) == "++"
-    assert plus_meter(10) == "+"
-    assert plus_meter(5) == "·"               # under one order of magnitude: not an empty string
-    assert plus_meter(0.4) == "·"
-    assert plus_meter(None) == "—"
-
-def test_the_solver_bar_never_drives_the_overall_bar_and_is_not_the_caption():
-    """The solver bar must not decide the overall bar: its total is in the tens of thousands and it is
-    the deepest bar there is, so it would win the election every time and drag the bar through a full
-    0->100% sweep every second instead of showing the top-level count. It is also not a row
-    any more -- nothing is -- so it must not surface as the caption either."""
-    qt_app()
-    prog = ProgressPane()
-    prog.begin()
-
+def test_the_solver_bar_never_drives_and_never_counts_a_run():
+    """The solver bar must not decide what measures a run: its total is in the tens of thousands and it is the
+    deepest bar there is, so it would win every time and sweep through its count every second instead of the
+    top-level count. A run with no stages of its own says the top-level count, never the solver's."""
     top = parse_bar(("err", 1), 1, "Generating training data:  38%|### | 1902/5000 [05:12<13:41,  6.1it/s]")
     solver = parse_bar(("err", 2), 2, "step (batch=32):  88%|####| 13269/14999 [00:01<00:00, 13267.85it/s]")
-    prog.set_rows((top, solver))
+    assert driving_row((top, solver)) is top, "the solver bar measures the run"
+    assert driving_row((solver,)) is None, "the solver bar measures the run when it is the only row"
+    run, _clock = _model()
+    run.rows((top, solver))
+    assert run.sentence() == "Training is running: 1,902 of 5,000.", run.sentence()
 
-    assert prog._rows == (top,), f"the solver bar survived into the pane's row set: {prog._rows}"
-    assert prog.overall.maximum() == 100 and prog.overall.value() == 38, \
-        "the overall bar must track the top-level count, not the solver"
-    assert prog.caption.text().startswith("Generating training data"), prog.caption.text()
-    assert "step (batch=" not in prog.caption.text(), prog.caption.text()
-    assert "step (batch=" not in prog.overall.toolTip(), prog.overall.toolTip()
-    assert "1902/5000" in prog.overall.toolTip(), "the detail tooltip lost the live nest"
-    prog.end()
-
-def test_the_solver_meter_reads_the_step_counter_not_a_rendered_bar():
-    """THE REGRESSION THIS DESIGN EXISTS TO KILL. The meter used to be scraped from the rendered text
-    of the solver's tqdm bar, so a solver call SHORTER than that bar's own `mininterval` produced no
-    rate at all -- and CUDA graphs made every call shorter than it, so the meter read "-- (idle)" for
-    whole multi-day runs.
-
-    The property asserted here is the one the scrape could never have: a correct rate with ZERO tqdm
-    frames painted. Not one bar is created below.
-    """
+def test_a_moving_solver_count_is_a_sign_of_life_with_no_bar_drawn():
+    """THE REGRESSION THE OLD METER EXISTED TO KILL, kept as a rule of the run's model. The meter used to be scraped
+    from the rendered text of the solver's tqdm bar, so a solver call SHORTER than that bar's own `mininterval`
+    produced no rate at all -- and CUDA graphs made every call shorter than it. Whether the solver works is read
+    from the step count it publishes, core.progress.SOLVER: a run that integrates hard and prints nothing is not
+    silent, and a count that does not move is no sign of life. Not one bar is created below."""
     from core import progress
-    from core.gui.widgets import progress_pane as pp
+    from core.gui.run.model import moved
 
-    qt_app()
-    prog = ProgressPane()
-    prog.begin()
-    prog.set_rows(())                       # no bars at all, anywhere
-
-    assert "idle" in prog.solver_label.text(), "a fresh pane should not claim a rate"
-
-    # One second of solver, 120k steps. The clock is nudged rather than slept on: time.monotonic()
-    # has ~15ms granularity on Windows, so back-to-back ticks can measure dt == 0.
-    prog._steps_at = time.monotonic() - 1.0
+    run, clock = _model()
+    run.feed([("the run's first line", "info")])
+    run.solver(progress.SOLVER.steps)
+    clock.advance(60)
+    run.tick()
+    assert [message.sentence for message in run.messages()] == ["No output for 1 minute."]
+    before = progress.SOLVER.steps
+    run.solver(before)                      # a count that did not move
+    clock.advance(60)
+    run.tick()
+    assert [message.sentence for message in run.messages()] == ["No output for 2 minutes."]
     progress.SOLVER.add(120_000)
-    prog._tick()
-    assert "120.0k it/s" in prog.solver_label.text(), prog.solver_label.text()
-    assert "+++++" in prog.solver_label.text(), prog.solver_label.text()
-
-    # A tick with no new steps must NOT wipe the rate -- the gaps between solver calls are real work.
-    prog._tick()
-    assert "120.0k it/s" in prog.solver_label.text(), \
-        f"one quiet tick clobbered the held rate: {prog.solver_label.text()}"
-
-    # ...but once the counter has been still for SOLVER_IDLE_S, the meter must admit it is idle.
-    prog._rate_at -= pp.SOLVER_IDLE_S + 1
-    prog._tick()
-    assert "idle" in prog.solver_label.text(), prog.solver_label.text()
-    prog.end()
+    assert moved(before, progress.SOLVER.steps) and not moved(progress.SOLVER.steps, before)
+    run.solver(progress.SOLVER.steps)
+    run.tick()
+    assert run.messages() == (), "a solver count that moved did not count as a sign of life"
 
 def test_the_solver_bar_paints_a_rate_even_when_the_call_is_under_a_second():
     """The command-line half of the same regression, pinned at the tqdm layer.
@@ -467,51 +426,63 @@ def test_the_solver_bar_paints_a_rate_even_when_the_call_is_under_a_second():
     assert not render(mininterval=1.0), \
         "the counterfactual rendered a rate, so this test no longer proves anything"
 
-def test_spinner_animates_and_then_reports_a_stall():
-    """A spinner that keeps twirling on a wedged run asserts progress that is not happening."""
-    from core.gui.widgets import progress_pane as pp
-
-    qt_app()
-    prog = ProgressPane()
-    prog.begin()
-
-    frames = set()
-    for _ in range(4):
-        prog._tick()
-        frames.add(prog.spinner.text())
-    assert len(frames) == 4, f"the spinner did not advance: {frames}"
-
-    prog._beat_at -= pp.STALL_S + 62
-    prog._tick()
-    assert "no output for" in prog.spinner.text(), prog.spinner.text()
-
-    prog.heartbeat()                      # output resumes -> back to spinning
-    prog._tick()
-    assert "no output for" not in prog.spinner.text()
-    prog.end()
+def test_a_silent_run_says_so_on_its_page_and_its_next_line_clears_it(tmp_path):
+    """A run that writes nothing, its solver still, says so on its page after 45 seconds, in minutes and never in
+    raw seconds, as an "Attention" message with the moment it began; its next line clears it, with no answer
+    asked. The old spinner that twirled while the run lived went with the progress pane: a spinner that kept
+    twirling on a wedged run asserted progress that was not happening."""
+    from core.gui import texts
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_run_host
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    clock = Clock(datetime(2026, 10, 8, 19, 2, 11, tzinfo=timezone(timedelta(hours=-7))))
+    held = controller()
+    held.use_clock(clock)
+    held.use_folder(tmp_path / "runs")
+    host, stand_in = build_run_host(), StandIn()
+    view = host.run_view
+    start_run(host, stand_in, spec=RunSpec("Run", None, keeps_files=False))
+    stand_in.say("the run's first line")
+    turn_until(app, lambda: held.status.state == "running")
+    clock.advance(107)
+    held.tick()
+    said = [row.sentence.plain_text() for row in view.message_rows()]
+    assert said == [f"Attention, {texts.date_text(clock(), clock())}. No output for 2 minutes."], said
+    stand_in.say("the run goes on")
+    turn_until(app, lambda: not view.message_rows())
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
 
 def test_the_read_outs_keep_their_width_as_their_numbers_change():
-    """The pane's read-outs are numbers that change in place: a rate, a percentage, counts and clock times, and
-    the seconds a run has been silent. In the application's font a 1 is narrower than a 0, so a read-out would
-    change its width with its digits and move whatever stands after the number, at every tick. The four widgets
-    that show a number have the same lettering with its digits of equal width; the pane itself and its trend
-    line, which show none, are left as they were."""
+    """The run page's read-outs are numbers that change in place: the counts and the times of its sentence, a
+    stage's pace, the times under its time axis and what follows. In the lettering's ordinary digits a 1 is
+    narrower than a 0, so a read-out would change its width with its digits and move whatever stands after the
+    number, at every batch. Each of them has its lettering with its digits of equal width; the page's title and
+    its buttons, which show none, are left as they were."""
     from PySide6.QtGui import QFont, QFontMetricsF
+    from PySide6.QtWidgets import QLabel
     from core.gui import fonts
+    from core.gui.run.model import StageWord
+    from tests._fixtures import build_run_host
 
     qt_app()
-    prog = ProgressPane()
+    view = build_run_host().run_view
+    view.stage_line.show_words((StageWord("Fitting", "now", "Now, about 63 minutes per epoch"),))
+    pace, = [label for label in view.stage_line.findChildren(QLabel) if label.text().startswith("Now")]
     equal, body = QFont.Tag.fromString("tnum"), fonts.inter("body")
-    for name in ("solver_label", "overall", "spinner", "caption"):
-        font = getattr(prog, name).font()
+    for name, label, face in (("the sentence", view.sentence, fonts.inter("head", 400)), ("a stage's pace", pace, body),
+                              ("its start", view.axis_caption.started, body), ("its end", view.axis_caption.words, body),
+                              ("what follows", view.follows, body)):
+        font = label.font()
         assert font.isFeatureSet(equal), f"{name} shows its numbers in digits of unequal width"
-        assert (font.family(), font.pixelSize(), font.weight()) == (body.family(), body.pixelSize(), body.weight()), name
+        assert (font.family(), font.pixelSize(), font.weight()) == (face.family(), face.pixelSize(), face.weight()), name
         metrics = QFontMetricsF(font)
         assert metrics.horizontalAdvance("00:00:00") == metrics.horizontalAdvance("11:11:11"), name
     plain = QFontMetricsF(body)
     assert plain.horizontalAdvance("00:00:00") != plain.horizontalAdvance("11:11:11"), \
         "the digits have one width without the feature as well: the lines above prove nothing"
-    for untouched in (prog, prog.sparkline):
+    for untouched in (view.title, view.text_button, view.stop_button, view.back_button):
         assert not untouched.font().isFeatureSet(equal), "more than the read-outs was given the digits' feature"
 
 def test_the_solver_step_iterator_closes_its_bar_when_the_consumer_raises():
@@ -555,54 +526,45 @@ def test_the_solver_step_iterator_closes_its_bar_when_the_consumer_raises():
     assert after == before, \
         f"the solver bar was stranded by the generator wrapper ({before} -> {after} live tqdm instances)"
 
-def test_the_caption_falls_back_to_the_sbi_epoch_counter():
-    """THE REASON THE CAPTION EXISTS. sbi's neural-network training -- hours of a multi-day build --
-    emits no tqdm bar at all, only a printed epoch counter (an overwrite-mode row, pct and total both
-    None). The only other live row is `Training neural posterior -- 0/1`, which is degenerate. Render
-    "no rows, just the bar" literally and that whole phase is a blank indeterminate bar."""
-    qt_app()
-    prog = ProgressPane()
-    prog.begin()
-
+def test_the_fit_is_found_through_the_training_librarys_epoch_counter():
+    """THE REASON THE OLD CAPTION EXISTED, kept as a rule of the run's model. sbi's neural-network training --
+    hours of a multi-day build -- emits no tqdm bar at all, only a printed epoch counter (an overwrite-mode row,
+    pct and total both None). The only other live row is `Training neural posterior -- 0/1`, which is degenerate
+    and measures nothing. The model finds the fit through the counter: the fit begins, and the sentence counts its
+    epochs, where "no rows, just a bar" would say nothing for that whole phase."""
     degenerate = parse_bar(("err", 0), 0, "Training neural posterior:   0%|  | 0/1 [00:00<?, ?it/s]")
     epochs = parse_bar(("out", 0), 0, " Training neural network. Epochs trained: 812")
-    prog.set_rows((degenerate, epochs))
+    assert driving_row((degenerate, epochs)) is None, "a total=1 bar was allowed to measure the run"
+    assert fit_counter((degenerate, epochs)) == 812 and fit_counter((degenerate,)) is None
+    run, _clock = _model((Stage("Simulation", (), "Generating training data"),
+                          Stage("Fitting", ("simulation_complete",), "fit_epoch")))
+    run.rows((degenerate, epochs))
+    assert run.stage == "Fitting" and "epoch 812" in run.sentence(), (run.stage, run.sentence())
 
-    assert prog.overall.maximum() == 0, "a total=1 bar was allowed to drive the overall bar"
-    assert "Epochs trained: 812" in prog.caption.text(), \
-        f"the longest phase of the run has no caption: {prog.caption.text()!r}"
-    prog.end()
-
-def test_the_overall_bar_follows_the_largest_non_degenerate_total():
+def test_the_row_that_drives_is_the_largest_non_degenerate_total():
     """Largest total, not deepest. The per-time-segment bar wraps segs in {1,2,3}, so it is BOTH
     deeper and far coarser than "Generating training data" -- picking the deepest row would sweep the
-    overall bar 0->100% every couple of seconds. (config.QUIET_SEGMENT_BAR hides that bar under the
-    GUI today; the election should not depend on it still being set.)"""
-    qt_app()
-    prog = ProgressPane()
-    prog.begin()
-
+    run's count through 0 to 3 every couple of seconds. (config.QUIET_SEGMENT_BAR hides that bar under the
+    GUI today; the rule should not depend on it still being set.)"""
     rounds = parse_bar(("err", 0), 0, "Training neural posterior:   0%|  | 0/1 [00:00<?, ?it/s]")
     data = parse_bar(("err", 1), 1, "Generating training data:  38%|### | 1902/5000 [05:12<13:41]")
     segs = parse_bar(("err", 2), 2, "Running time segments:  66%|##  | 2/3 [00:01<00:00]")
     solver = parse_bar(("err", 3), 3, "step (batch=32):  88%|####| 13269/14999 [00:01<00:00, 13267.85it/s]")
-    prog.set_rows((rounds, data, segs, solver))
-
-    assert prog.overall.value() == 38, \
-        f"the overall bar followed the deepest bar ({prog.overall.value()}%), not the largest total"
-    assert prog.caption.text().startswith("Generating training data"), prog.caption.text()
-    prog.end()
+    assert driving_row((rounds, data, segs, solver)) is data, "the run is measured by the deepest bar"
+    run, _clock = _model()
+    run.rows((rounds, data, segs, solver))
+    assert run.sentence() == "Training is running: 1,902 of 5,000.", run.sentence()
 
 def test_leave_true_pos0_bar_is_retired_not_left_pegged_at_100():
     """close(leave=True) at pos 0 paints the final frame and then writes a bare '\\n' -- which is
-    byte-identical to a moveto(+1). Assuming "moveto" leaves the finished bar sitting in the pane at
-    100% AND, because it is `informative`, pegging the overall bar at 100% while the pipeline is still
-    working. Both real leave=True bars (core/SBI/Priors/prior.py:88 "Constructing latent prior...",
+    byte-identical to a moveto(+1). Assuming "moveto" leaves the finished bar live at 100% AND, because
+    it is `informative`, measuring the run at 100% while the pipeline is still working. Both real
+    leave=True bars (core/SBI/Priors/prior.py:88 "Constructing latent prior...",
     core/FDT/campaigns.py:214 "Campaign 2") are pos 0, so this is the common case, not a corner."""
     def bar_then_work():
         for _ in tqdm(range(5), desc="Constructing latent prior..."):
             pass
-        print("Prior constructed.")          # the pipeline carries on after the bar closes
+        print("Prior constructed.", file=sys.stderr)    # the pipeline carries on after the bar closes
 
     events = _drive(bar_then_work)
     rows, _ = _live(events)
@@ -611,17 +573,20 @@ def test_leave_true_pos0_bar_is_retired_not_left_pegged_at_100():
     assert rows == {}, f"the finished leave=True bar was never retired: {rows}"
     assert any("100%" in t for t in logs), "its final frame should graduate into the log"
 
-    # and the overall bar must not still be reading 100%
-    app = qt_app()
-    prog = ProgressPane()
-    live = {}
+    # and the bar that finished must not still measure the run while the pipeline carries on
+    live, measured = {}, []
     for kind, payload in events:
         if kind == "row":
             live[payload.key] = payload
         elif kind == "retire":
             live.pop(payload, None)
-        prog.set_rows(tuple(live.values()))
-    assert prog.overall.maximum() == 0, "the overall bar is still determinate after the bar finished"
+        elif kind == "log" and payload[0] == "Prior constructed.":
+            break
+        measured.append(driving_row(tuple(live.values())))
+    else:
+        raise AssertionError("the line the pipeline wrote after the bar never came")
+    assert any(row is not None for row in measured), "the bar never measured the run while it lived"
+    assert measured[-1] is None, "the finished bar still measures the run while the pipeline carries on"
 
 def test_the_window_handler_feeds_the_pane_at_the_records_level_and_checks_cancel():
     """Standard logging in the window. Severity used to come from the CHANNEL: stdout landed at info

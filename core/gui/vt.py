@@ -135,8 +135,8 @@ def parse_rate(stats: str) -> float | None:
 def parse_bar(key: tuple, row: int, raw: str) -> RowState:
     """Turn one tqdm frame into a RowState. A frame with no `NN%|...|` is indeterminate.
 
-    strip(), not rstrip(): a status line built by `print("\\r", text, end="")` (sbi's epoch counter,
-    base.py:1024) arrives with print's separator as a leading space.
+    strip(), not rstrip(): a status line built by `print("\\r", text, end="")` (sbi's epoch counter, which
+    its trainer's training loop prints) arrives with print's separator as a leading space.
     """
     text = _CSI.sub("", raw).strip()
     m = _PCT.search(text)
@@ -231,8 +231,8 @@ class StreamRouter:
 
         Not to be confused with a status line being OVERWRITTEN by the next bare '\\r', which just
         drops the text buffer and leaves the row to be re-published. Conflating the two logs one line
-        per update -- exactly what sbi's per-epoch counter would do (base.py:1024 reprints itself
-        every epoch with a leading '\\r').
+        per update -- exactly what sbi's per-epoch counter would do (its trainer's training loop
+        reprints it every epoch with a leading '\\r').
         """
         if self._over is None:
             return

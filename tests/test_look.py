@@ -2438,7 +2438,7 @@ _CALLED_WHILE_DRAWING = frozenset({
 # words, so these count only as a method of a class that has a class of the toolkit among its bases.
 _CALLED_IN_A_TOOLKIT_CLASS = frozenset({"paint", "paintSection", "pixmap", "data", "headerData", "flags", "rowCount",
                                         "columnCount", "showEvent", "hideEvent"})
-# Ten of them, each with the fallback its guard names as it is written (None: it names none). Typed out so
+# Nine of them, each with the fallback its guard names as it is written (None: it names none). Typed out so
 # that a guard taken off one of them, or a fallback changed, fails here by name; a new one need not join.
 _GUARDED_TODAY = {
     "screens/artifact_screen.py: ArtifactScreen.showEvent": "QWidget.showEvent",
@@ -2448,7 +2448,6 @@ _GUARDED_TODAY = {
     "style.py: PrismStyle.drawPrimitive": "QProxyStyle.drawPrimitive",
     "style.py: FocusRing.paintEvent": None,
     "style.py: FocusFollower.eventFilter": "False",
-    "widgets/progress_pane.py: _Sparkline.paintEvent": None,
     "widgets/figure_stack.py: _FitLabel.resizeEvent": "QLabel.resizeEvent",
     "run/view.py: _StageLine.resizeEvent": "QWidget.resizeEvent",
 }
