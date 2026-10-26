@@ -3,15 +3,15 @@ page's results while it runs and after it has stopped or failed.
 
 The page shows the run's stages with the chain's markers and words, the one sentence that says where the run
 stands, the time axis of the stage running with the line under it and the line that names what follows, the
-training's health, the messages newest first and, under them, the figures the page that started the run holds
-and lends it while it shows. "Show the full text" opens every line the run wrote, which the run's controller
-hands over as it says them; "Open the file" and "Open its folder" open the run's text file and the folder of
-runs, whose path is never written on the page.
+training's health, the fit's loss by epoch from its first record on, the messages newest first and, under them,
+the figures the page that started the run holds and lends it while it shows. "Show the full text" opens every
+line the run wrote, which the run's controller hands over as it says them; "Open the file" and "Open its folder"
+open the run's text file and the folder of runs, whose path is never written on the page.
 
 It is live while the run is, ended once it has ended, and past when it is drawn from a run's files alone. A run
 with a view of its own shows the page in its compact form: the sentence and the stop button. The page lives
 inside the page that started the run, never in the window's own stack of places. Nothing here draws with the
-figure library: the figures it holds are pictures already.
+figure library: the figures it holds are pictures already, and the loss by epoch is painted by the window itself.
 """
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +30,7 @@ from ..widgets.page import Scroller
 from ..widgets.rule_table import Column, RuleTable, StateCell, TextCell, ValueCell
 from ..widgets.ruled import Ruled, SectionHead
 from ..widgets.time_axis import AxisCaption, TimeAxis
+from .loss import LossCurve
 from .model import LEADS, OUTCOMES, RunModel, RunSpec
 
 SHOW_TEXT = "Show the full text"
@@ -192,6 +193,7 @@ class RunView(QWidget):
         self._axis_shown = False
         self._text_shown = False
         self._shown_health = None
+        self._fit_shown = False
         self._shown_messages = None
         self._message_rows: list = []
 
@@ -249,7 +251,7 @@ class RunView(QWidget):
         for part in (self.axis, self.axis_caption, self.follows):
             box.addWidget(part)
 
-        # what scrolls: the training's health, the messages, the figures
+        # what scrolls: the training's health, the fit's loss by epoch, the messages, the figures
         body = QWidget()
         column = QVBoxLayout(body)
         column.setContentsMargins(0, design.scaled(design.GAP["status_to_body"]), 0, 0)
@@ -257,6 +259,7 @@ class RunView(QWidget):
         self.health_head = SectionHead(HEALTH_TEXT)
         self.health = RuleTable([Column("Measure"), Column("Now", "fit", right=True), Column("State", "fit")],
                                 selectable=False)
+        self.loss = LossCurve()
         self.messages_head = SectionHead(MESSAGES_TEXT)
         self.messages = QWidget()
         self._rows = QVBoxLayout(self.messages)
@@ -266,7 +269,7 @@ class RunView(QWidget):
         self._figures = QVBoxLayout(self.figures)
         self._figures.setContentsMargins(0, design.scaled(design.GAP["block"]), 0, 0)
         self.figures.setMinimumHeight(design.scaled(FIGURES_LEAST_H))
-        for part, after in ((self.health_head, "head_table"), (self.health, "block"),
+        for part, after in ((self.health_head, "head_table"), (self.health, "block"), (self.loss, "block"),
                             (self.messages_head, "head_table"), (self.messages, None), (self.figures, None)):
             column.addWidget(part)
             if after:
@@ -359,6 +362,8 @@ class RunView(QWidget):
         self.find_field.setVisible(False)
         self._shown_health = self._shown_messages = None
         self.health.set_rows([])
+        self._fit_shown = False
+        self.loss.set_epochs((), patience=spec.patience)
         self._set_messages([], self._clock())
         self.stage_line.show_words(())
         self.sentence.setText("")
@@ -451,6 +456,9 @@ class RunView(QWidget):
         if health != self._shown_health:
             self.health.set_rows([_cells(row) for row in health])
             self._shown_health = health
+        epochs = model.epochs()
+        self.loss.set_epochs(epochs, best=model.best_epoch(), patience=model.spec.patience)
+        self._fit_shown = bool(epochs)
         self._set_messages(model.messages(), now)
         self._arrange()
 
@@ -489,6 +497,7 @@ class RunView(QWidget):
         health = bool(self._shown_health) and full
         self.health_head.setVisible(health)
         self.health.setVisible(health)
+        self.loss.setVisible(full and self._fit_shown)
         messages = bool(self._message_rows) and full
         self.messages_head.setVisible(messages)
         self.messages.setVisible(messages)

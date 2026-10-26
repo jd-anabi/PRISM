@@ -1143,7 +1143,7 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
     # until it is placed.
     by_hand_still = set()                    # none today
     no_window = {"Place", "Claim", "NewPngWatcher", "WorkerCancelled", "PrismStyle", "FocusRing",
-                 "FocusFollower", "Appearance", "WorkerSignals", "Worker", "RunController"}
+                 "FocusFollower", "Appearance", "WorkerSignals", "Worker", "RunController", "LossCurve"}
     placed = built | by_hand_still | no_window
     gui = Path(__file__).resolve().parents[1] / "core" / "gui"
     folders = sorted(p.name for p in gui.iterdir() if p.is_dir() and p.name != "__pycache__")

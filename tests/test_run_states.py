@@ -2814,3 +2814,53 @@ def test_the_run_page_draws_with_the_looks_devices_at_every_scaling(tmp_path):
         assert places() == [(0, 0), (0, 1), (0, 2), (0, 3)], places()
     stand_in.release()
     turn_until(app, lambda: not held.is_live())
+
+
+def test_the_run_page_shows_the_loss_curve_during_the_fit_and_after_it(tmp_path):
+    """The fit's loss by epoch stands on the run's page under the training's health from the fit's first record on:
+    not before the fit, nor in the fit before its first record. Each record is drawn as its line arrives, the best
+    epoch marked as the model counts it, and the caption names the run's patience. It stays when the run has ended,
+    and on the page drawn again from the run's two files, where the patience is not known and the caption leaves out
+    when the fit ends. The page's next run starts with no curve."""
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, host, stand_in = _controller_on(tmp_path, clock), build_run_host(), StandIn()
+    view, text = host.run_view, RunText(held)
+    start_run(host, stand_in, spec=_training())
+
+    def said(line):
+        stand_in.say(line)
+        turn_until(app, lambda: line in text.texts())
+
+    def curve():
+        """Whether the curve is in the page, the epochs it draws, and what its accessible description says."""
+        return view.loss.isVisibleTo(view), view.loss.drawn()["epochs"], view.loss.accessibleDescription()
+
+    assert curve() == (False, [], ""), "the curve stood at the start"
+    said(_LINES["budget"])
+    said(_LINES["simulation_complete"])
+    assert (held.model.stage, curve()) == ("Fitting", (False, [], "")), "the curve stood before the fit's first record"
+    for epoch, since, validation in ((1, 0, -3.0), (2, 0, -3.4), (3, 1, -3.2)):
+        clock.advance(3780)
+        said(_epoch(epoch, since=since, validation=validation))
+        assert curve()[:2] == (True, list(range(1, epoch + 1))), epoch
+    assert held.model.best_epoch() == 2 and curve()[2] == "epochs 1 to 3; best so far: epoch 2"
+    assert view.loss.caption.plain_text().endswith("Fitting ends when validation has not improved for 20 epochs.")
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    view.how_link.click()
+    assert (view.mode, curve()) == ("ended", (True, [1, 2, 3], "epochs 1 to 3; best so far: epoch 2"))
+    run = held.status.run
+    view.show_past(history.read(tmp_path / "runs" / f"{run}.json"), tmp_path / "runs" / f"{run}.txt")
+    assert (view.mode, curve()) == ("past", (True, [1, 2, 3], "epochs 1 to 3; best so far: epoch 2"))
+    assert view.loss.caption.plain_text() == "Loss by epoch. Loss is the negative log-probability; lower is better."
+    view.begin(_training())                                  # a new run of the page, before it is first drawn
+    assert curve() == (False, [], ""), "a new run of the page kept the last run's curve"
+    second = StandIn()
+    start_run(host, second, spec=_training())
+    assert (view.mode, curve()) == ("live", (False, [], "")), "the page's next run kept the last run's curve"
+    second.release()
+    turn_until(app, lambda: not held.is_live())
