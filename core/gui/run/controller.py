@@ -50,7 +50,8 @@ LIVE_TEXT = "A run is live. Only one runs at a time."
 LIMIT_TEXT = "Memory limit: {} GiB for each batch of simulations ({})."
 NO_LIMIT_TEXT = "No memory limit is set on this computer."
 #: Said in the run's full text when its history file cannot be written; filled with the error's kind and message.
-HISTORY_BROKEN_TEXT = "The run's history file could not be written ({}); the run goes on without it."
+HISTORY_BROKEN_TEXT = ("The run's history file could not be written ({}); the run goes on, and the file is tried "
+                       "again at the run's next change.")
 
 
 def _local_now() -> datetime:
@@ -116,14 +117,15 @@ def _expected(store, facts: dict) -> tuple[int, str] | None:
 
 
 class _Text:
-    """What the worker writes as the run's text: the run's text file, when the run keeps one, and the run's full
-    text in the window. ``line`` is the run's line sink, called under the stream pump's lock: it only writes the
-    file (the window hears the same line through the worker's own signals). ``outcome``, how the run ended, is
-    written to the file and said on the controller's ``lines`` too, from the worker's thread."""
+    """What the worker writes as the run's text: the run's text file, when the run keeps one. ``line`` is the run's
+    line sink, called under the stream pump's lock: it only writes the file (the window hears the same line through
+    the worker's own signals). ``outcome``, how the run ended, is written to the file and kept as ``ended``: the
+    controller says it on its ``lines`` when it hears the run's end, after every line the worker said before it,
+    so the run's full text holds it where the file does."""
 
-    def __init__(self, file: RunTextFile | None, say):
+    def __init__(self, file: RunTextFile | None):
         self._file = file
-        self._say = say
+        self.ended: tuple[str, str] | None = None
 
     def line(self, text: str, level: str) -> str | None:
         return None if self._file is None else self._file.line(text, level)
@@ -131,7 +133,7 @@ class _Text:
     def outcome(self, text: str, level: str, detail: str = "") -> None:
         if self._file is not None:
             self._file.outcome(text, level, detail)
-        self._say([(f"{text}\n{detail}" if detail else text, level)])
+        self.ended = (f"{text}\n{detail}" if detail else text, level)
 
 
 class _Run:
@@ -142,6 +144,8 @@ class _Run:
         self.id: str | None = None                 # its files' stem; None for a run that keeps none
         self.text: RunTextFile | None = None
         self.writes = spec.keeps_files             # whether its history file is still written
+        self.history_said = False                  # whether a failed write of its history file was said
+        self.sink: _Text | None = None             # what its worker writes its text to
         self.worker = None
         self.token: CancelToken | None = None
         self.watchers: list = []
@@ -218,12 +222,14 @@ class RunController(QObject):
                  provide_stream: bool = False, on_chunk=None, watch_dir=None, **kwargs) -> bool:
         """Start ``fn(*args, **kwargs)`` as the process's run, described by ``spec``, for the page ``host``. False,
         and nothing started, while a run is live. Else, in this order: the spec is given the call; the memory limit
-        in force is read once; where the run keeps files, its id, its history file and its text file with its head;
-        its model; the controls of every panel locked; the status published; the worker queued. ``on_result`` hears
-        the run's result while the run is still live; ``provide_fig_sink`` hands the call a sink for its figures,
-        which go to the host's stack of pictures; ``provide_stream`` hands it ``emit_chunk`` and ``should_stop``,
-        and ``on_chunk`` hears each chunk; ``watch_dir`` is one folder, or several, whose new pictures go to the
-        host's stack. None of these is handed on to ``fn``."""
+        in force is read once; where the run keeps files, its id, its text file with its head, said on ``lines``,
+        and its history file; its model; the controls of every panel locked; the status published; the worker
+        queued. A start that raises after the lock and before its worker is queued is taken back -- every panel
+        free, the host's Cancel hidden, the status idle again, the run's two files removed -- and the error is
+        raised as it came. ``on_result`` hears the run's result while the run is still live; ``provide_fig_sink``
+        hands the call a sink for its figures, which go to the host's stack of pictures; ``provide_stream`` hands
+        it ``emit_chunk`` and ``should_stop``, and ``on_chunk`` hears each chunk; ``watch_dir`` is one folder, or
+        several, whose new pictures go to the host's stack. None of these is handed on to ``fn``."""
         if self.is_live():
             return False
         from core.artifacts import default_store
@@ -243,10 +249,8 @@ class RunController(QObject):
         model = RunModel(spec, clock=clock, expected=expected,
                          estimate=lambda per, size: history.estimate(folder, word=word, per=per, size=size))
         self._model, self._run = model, run
-        said = []
         if spec.keeps_files:
             run.id = history.run_id(spec.word, model.started, folder)
-            self._write(run)
             run.text = RunTextFile(folder / f"{run.id}.txt", clock=clock)
             said = [(f"{spec.word} {spec.name}, run {run.id}." if spec.name else f"{spec.word}, run {run.id}.",
                      "window"), (limit_text, "window")]
@@ -254,6 +258,9 @@ class RunController(QObject):
             if broke is not None:
                 said.append((broke, "warning"))
                 model.feed([(broke, "warning")])
+            self.lines.emit(said)
+            # After the head, so that a history that cannot be written from the first moment is said in the file.
+            self._write(run)
         for panel in list(BasePanel._instances):
             panel.set_controls_enabled(False)
         if host is not None and hasattr(host, "_hosting"):
@@ -264,48 +271,69 @@ class RunController(QObject):
             self._timer.setInterval(TICK_MS)
             self._timer.timeout.connect(self.tick)
         self._timer.start()
-        if said:
-            self.lines.emit(said)
         self.status_changed.emit(self._status)
 
-        token = CancelToken()
-        worker = Worker(fn, *args, cancel=token, run_text=_Text(run.text, self.lines.emit), **kwargs)
-        # Kept until the run has ended and its signals have been heard, and never deleted by the pool: a worker the
-        # pool deleted as its run returned would take its still-queued signals with it.
-        worker.setAutoDelete(False)
-        signals = worker.signals
-        if provide_fig_sink:
-            worker.kwargs["fig_sink"] = _png_fig_sink(signals.figure)
-        if provide_stream:
-            # A long-lived streaming run hands each chunk to ``emit_chunk`` and polls ``should_stop`` to unwind.
-            worker.kwargs["emit_chunk"] = signals.chunk.emit
-            worker.kwargs["should_stop"] = token.requested.is_set
-            if on_chunk is not None:
-                signals.chunk.connect(on_chunk)
-        stack = getattr(host, "figure_stack", None)
-        if stack is not None:
-            signals.figure.connect(stack.add_figure)
-        signals.log.connect(self._on_line)
-        signals.log_batch.connect(self._on_lines)
-        signals.rows.connect(self._on_rows)
-        if on_result is not None:
-            signals.result.connect(on_result)
-        signals.result.connect(self._on_result)
-        signals.error.connect(self._on_error)
-        signals.cancelled.connect(self._on_cancelled)
-        signals.finished.connect(self._on_finished)
-        # One watcher for each folder: a watcher reads one folder and not the folders under it, and a sweep study
-        # writes two records. The controller holds them, so a page deleted during the run takes none with it.
-        for one in ([] if watch_dir is None else
-                    [watch_dir] if isinstance(watch_dir, (str, Path)) else list(watch_dir)):
-            watcher = NewPngWatcher(one, self)
+        try:
+            token, run.sink = CancelToken(), _Text(run.text)
+            worker = Worker(fn, *args, cancel=token, run_text=run.sink, **kwargs)
+            # Kept until the run has ended and its signals have been heard, and never deleted by the pool: a worker
+            # the pool deleted as its run returned would take its still-queued signals with it.
+            worker.setAutoDelete(False)
+            signals = worker.signals
+            if provide_fig_sink:
+                worker.kwargs["fig_sink"] = _png_fig_sink(signals.figure)
+            if provide_stream:
+                # A long-lived streaming run hands each chunk to ``emit_chunk`` and polls ``should_stop`` to unwind.
+                worker.kwargs["emit_chunk"] = signals.chunk.emit
+                worker.kwargs["should_stop"] = token.requested.is_set
+                if on_chunk is not None:
+                    signals.chunk.connect(on_chunk)
+            stack = getattr(host, "figure_stack", None)
             if stack is not None:
-                watcher.png_ready.connect(stack.add_png)
-            watcher.start()
-            run.watchers.append(watcher)
+                signals.figure.connect(stack.add_figure)
+            signals.log.connect(self._on_line)
+            signals.log_batch.connect(self._on_lines)
+            signals.rows.connect(self._on_rows)
+            if on_result is not None:
+                signals.result.connect(on_result)
+            signals.result.connect(self._on_result)
+            signals.error.connect(self._on_error)
+            signals.cancelled.connect(self._on_cancelled)
+            signals.finished.connect(self._on_finished)
+            # One watcher for each folder: a watcher reads one folder and not the folders under it, and a sweep
+            # study writes two records. The controller holds them, so a page deleted during the run takes none
+            # with it.
+            for one in ([] if watch_dir is None else
+                        [watch_dir] if isinstance(watch_dir, (str, Path)) else list(watch_dir)):
+                watcher = NewPngWatcher(one, self)
+                run.watchers.append(watcher)
+                if stack is not None:
+                    watcher.png_ready.connect(stack.add_png)
+                watcher.start()
+        except BaseException:
+            self._take_back(run)
+            raise
         run.worker, run.token = worker, token
         QThreadPool.globalInstance().start(worker)
         return True
+
+    def _take_back(self, run: _Run) -> None:
+        """A start that raised before its worker was queued, taken back: its watchers let go, the timer stopped,
+        the run's two files removed, every panel free, the host's Cancel hidden, and the status published idle
+        again."""
+        from ..panels.base_panel import BasePanel
+        for watcher in run.watchers:
+            watcher.deleteLater()
+        run.watchers = []
+        self._timer.stop()
+        if run.text is not None:
+            self._remove_files(run)
+        for panel in list(BasePanel._instances):
+            panel.set_controls_enabled(True)
+        if _alive(run.host) and hasattr(run.host, "_hosting"):
+            run.host._hosting(False)
+        self._status = IDLE
+        self.status_changed.emit(IDLE)
 
     # ── a run's stop and its end ──
     def request_stop(self) -> None:
@@ -411,14 +439,17 @@ class RunController(QObject):
             host.log_pane.append_line("Run cancelled.", "warning")
 
     def _on_finished(self) -> None:
-        """The run's end, in this order: its watchers' last look; its state (ended, or idle for a run that leaves
-        nothing to acknowledge); the history's end written and the text file closed, or both removed for a refusal
-        made before anything was spent; every panel unlocked; the payload let go; the status published; then
-        ``run_ended``; then the page's own word on a failure or a refusal."""
+        """The run's end, in this order: how it ended said on ``lines``, after every line its worker said before
+        it; its watchers' last look; its state (ended, or idle for a run that leaves nothing to acknowledge); the
+        history's end written and the text file closed, or both removed for a refusal made before anything was
+        spent; every panel unlocked; the payload let go; the status published; then ``run_ended``; then the page's
+        own word on a failure or a refusal."""
         from ..panels.base_panel import BasePanel
         run, model = self._run, self._model
         if run is None or run.worker is None:
             return
+        if run.sink.ended is not None:
+            self.lines.emit([run.sink.ended])
         for watcher in run.watchers:
             watcher.stop()                       # one last look: the last figure often lands right at the end
             watcher.deleteLater()
@@ -438,13 +469,7 @@ class RunController(QObject):
         self._status = IDLE if idle else last
         if spec.keeps_files:
             if refused_early:
-                run.writes = False
-                run.text.close()
-                for path in (run.folder / f"{run.id}.json", run.folder / f"{run.id}.txt"):
-                    try:
-                        path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
+                self._remove_files(run)
             else:
                 self._write(run)
                 run.text.close()
@@ -467,6 +492,18 @@ class RunController(QObject):
                 host._refusal(failure[0])
             else:
                 host._on_error(failure[0], failure[1], failure[2], run.kept_fit)
+
+    @staticmethod
+    def _remove_files(run: _Run) -> None:
+        """The run's two files removed, its text file closed first, and its history written no more. A file that
+        cannot be removed now (one another program holds open, which Windows will not let go of) stays."""
+        run.writes = False
+        run.text.close()
+        for path in (run.folder / f"{run.id}.json", run.folder / f"{run.id}.txt"):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _spent(self, run: _Run) -> bool:
         """Whether something was spent since the start: the solver took a step, a stage after the run's first has
@@ -539,14 +576,17 @@ class RunController(QObject):
             self._model.set_earlier(tuple(counts))
 
     def _write(self, run: _Run) -> None:
-        """Write the run's history file whole, while it is still written. One that cannot be written is not written
-        again, and the run's full text and its text file say so; the run goes on."""
+        """Write the run's history file whole, while it is still written. A write that fails is tried again at the
+        run's next moment that writes it, and the run goes on; the first failure is said, once, in the run's full
+        text and its text file."""
         if not run.writes:
             return
         try:
             history.write(run.folder, self._record(run))
         except Exception as error:               # noqa: BLE001 -- the history never stops a run
-            run.writes = False
+            if run.history_said:
+                return
+            run.history_said = True
             said = HISTORY_BROKEN_TEXT.format(f"{type(error).__name__}: {error}")
             if run.text is not None:
                 run.text.line(said, "window")

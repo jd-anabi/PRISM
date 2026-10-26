@@ -2045,3 +2045,108 @@ def test_an_end_acknowledged_is_written_and_a_runs_place_is_found_by_its_id(tmp_
     assert history.read(folder / f"{run}.json")["acknowledged"] is True, "the end acknowledged is not in its file"
     held.acknowledge(older)
     assert history.read(folder / f"{older}.json")["acknowledged"] is True, "the older run's file says nothing"
+
+
+@pytest.mark.parametrize("fails", ["at the start", "during the run", "at the end", "every time"])
+def test_a_history_file_that_cannot_be_written_is_said_once_and_tried_again(fails, tmp_path, monkeypatch):
+    """A write of the run's history file that fails stops nothing: the run goes on and ends as it ends, and no
+    panel stays locked. The failure is said once, in the window's words, in the run's full text and in its text
+    file, after the file's head, wherever the write failed, the run's first moment among them; the full text
+    holds the file's lines in the file's order. The history is tried again at the run's next moment that writes
+    it: a write that failed once leaves the run's end in its history, and the end's own failure is mended when
+    the end is acknowledged; a file that can never be written is said once all the same."""
+    from core.gui.run import history
+    from core.gui.run.controller import HISTORY_BROKEN_TEXT
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    real, calls = history.write, []
+    error = OSError(13, "Permission denied")
+    failing = {"at the start": (1,), "during the run": (2,), "at the end": (3,), "every time": None}[fails]
+
+    def write(folder, record):
+        calls.append(record.get("outcome"))
+        if failing is None or len(calls) in failing:
+            raise error
+        return real(folder, record)
+
+    monkeypatch.setattr(history, "write", write)
+    folder, run = tmp_path / "runs", "20261008T190211-training"
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text, stand_in, host = RunText(held), StandIn(), build_run_host()
+    start_run(host, stand_in, spec=_training())
+    stand_in.say(_LINES["rotation_begins"])
+    turn_until(app, lambda: held.status.stage == "Rotation")
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    said = ("window", HISTORY_BROKEN_TEXT.format(f"{type(error).__name__}: {error}"))
+    assert (held.status.state, held.status.outcome, len(text.ended)) == ("ended", "finished", 1), held.status
+    assert host.controls.isEnabled(), "a broken history left the panels locked"
+    assert calls == ["running", "running", "finished"], calls
+    written = _entries(folder / f"{run}.txt")
+    assert (text.lines.count(said), written.count(said)) == (1, 1), (text.lines, written)
+    assert written == text.lines, (written, text.lines)
+    kept = history.read(folder / f"{run}.json") or {}
+    assert kept.get("outcome") == {"at the end": "running", "every time": None}.get(fails, "finished"), kept
+    held.acknowledge(run)
+    kept = history.read(folder / f"{run}.json") or {}
+    assert (kept.get("outcome"), kept.get("acknowledged")) == (
+        (None, None) if fails == "every time" else ("finished", True)), kept
+
+
+def test_a_stop_over_a_failure_and_a_stop_too_late_leave_the_full_text_in_the_files_order(tmp_path):
+    """What the worker says itself once the run's function has ended -- the failure a stop may have replaced,
+    with its traceback, and a stop that came too late to stop anything -- reaches the run's full text where the
+    run's text file holds it: before how the run ended. The full text holds the file's lines in the file's
+    order."""
+    from core.gui.streams import WorkerCancelled
+    from core.gui.worker import CANCEL_TOO_LATE_TEXT, IN_FLIGHT_TEXT
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+
+    def stopped_over_a_failure():
+        try:
+            raise RuntimeError("a failure the run may already have dealt with")
+        except RuntimeError:
+            raise WorkerCancelled()
+
+    def finished_with_a_stop_too_late():
+        try:
+            raise RuntimeError("something the run recovered from")
+        except RuntimeError:
+            held.request_stop()                       # inside a handler: deferred, and nothing checks again
+            print("the last thing the run writes")
+        return "the payload"
+
+    for fn, outcome, note in ((stopped_over_a_failure, "stopped", IN_FLIGHT_TEXT),
+                              (finished_with_a_stop_too_late, "finished", CANCEL_TOO_LATE_TEXT)):
+        text = RunText(held)
+        start_run(build_run_host(), fn, spec=_training())
+        turn_until(app, lambda: not held.is_live())
+        written = _entries(tmp_path / "runs" / f"{held.status.run}.txt")
+        assert held.status.outcome == outcome, held.status
+        assert ("warning", note) in written[:-1], written
+        assert written == text.lines, (written, text.lines)
+
+
+def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_and_no_file(tmp_path):
+    """A start that raises once every panel is locked and before its worker is queued -- here a page hands its
+    run a folder to watch of a shape no folder has -- raises to the page as it came, and is taken back: no run is
+    live, the status is published idle again, every panel is free, the page's Cancel button is hidden, and the
+    run's two files are removed."""
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.run.model import IDLE
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run
+    qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text, host, other = RunText(held), build_run_host(), build_run_host()
+    with pytest.raises(TypeError):
+        start_run(host, StandIn(), spec=_training(), watch_dir=5)
+    assert (held.is_live(), held.status) == (False, IDLE), held.status
+    assert [status.state for status in text.statuses] == ["starting", "idle"], text.statuses
+    assert all(panel.controls.isEnabled() for panel in BasePanel._instances) and other.controls.isEnabled()
+    assert host.btn_cancel.isHidden(), "the page's Cancel button stayed for a run that never started"
+    assert list((tmp_path / "runs").iterdir()) == [], "a start taken back left a file"
