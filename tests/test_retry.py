@@ -5,10 +5,12 @@ reopening PRISM can help; and "Continue from batch N" and "Resume the training" 
 training.
 
 A live run here is the stand-in run of tests/_runs.py, started through a real panel's own dispatch and failing with
-the error a test hands it, the graphics card's lack of memory as an error chain the engine reads as one; a training's
+the error a test hands it, the graphics card's lack of memory as an error chain the engine reads as one, and the
+card's own errors, in the simulation, under the simulator's error as the simulation raises them; a training's
 simulation set is a folder of the test's own whose state, written as the engine writes it, holds the batches the test
-says; the window's clock is moved by hand, and a pause runs out when the test moves the clock past it and looks
-(``tick``), never by a real wait.
+says, which may be fewer than the run's text counted, as the engine saves the set only every so many batches; the
+window's clock is moved by hand, and a pause runs out when the test moves the clock past it and looks (``tick``),
+never by a real wait.
 """
 import gc
 import weakref
@@ -32,6 +34,12 @@ _BUDGET = "[budget] 10,000 batches x 2,048 rows = 20,480,000 training rows"
 _ROTATING = "Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)..."
 _ROTATED = "[fisher] eigenvalue spread (best/worst direction): 412"
 _NOT_SAVED = "[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."
+# the graphics card's own words for a failure that is no lack of memory, two lines of them; and the words the
+# simulator's error gives before the card's
+_ILLEGAL = ("CUDA error: an illegal memory access was encountered\nCUDA kernel errors might be asynchronously reported "
+            "at some other API call, so the stacktrace below might be incorrect.")
+_SOLVER = ("NadrowskiSDE euler_compiled failed after 4500 steps (batch=2048, segs=1, device=cuda:0, "
+           "dtype=torch.float32)")
 
 
 def _at(day, hour, minute, second=0) -> datetime:
@@ -142,10 +150,26 @@ def _out_of_memory(what="the simulation of batch 237"):
             return raised
 
 
-def _device_failure():
-    """The graphics card's library reporting a failure of the card that is no lack of memory."""
+def _card(message):
+    """The graphics card's library reporting a failure of the card itself, in ``message``."""
     import torch
-    return torch.AcceleratorError("CUDA error: an illegal memory access was encountered")
+    return torch.AcceleratorError(message)
+
+
+def _simulated(card):
+    """``card``, the graphics card's own error, as the simulation raises it: under the simulator's error, whose
+    message gives the solver's words, then the card's error's kind and whole message."""
+    from core.Simulator.simulator import SimulationError
+    error = SimulationError(f"{_SOLVER}: {type(card).__name__}: {card}")
+    error.__cause__ = card
+    return error
+
+
+def _device_failure(in_the_simulation=True):
+    """The graphics card's library reporting a failure of the card that is no lack of memory, in its own two lines:
+    as the simulation raises it, or, in the fit, as it is."""
+    card = _card(_ILLEGAL)
+    return _simulated(card) if in_the_simulation else card
 
 
 def _start_with(host, stand_in, spec, *args, **kwargs) -> None:
@@ -184,8 +208,9 @@ def test_a_failure_is_a_state_of_the_run_page_and_no_box(tmp_path):
     """A run that fails says so on its page, never in a box: beside the error's marker, what failed and when, what
     was saved and what was lost; under it the error's own message, quoted in the fixed-width face, and that the
     full error is in the run's file; the error's kind and traceback only behind "Show the full error", and in the
-    run's text file. A run of another kind says what failed and when, with the error's message. A run that only loads
-    a record has no page of its own: its failure is told in the box, as a failure at a click is."""
+    run's text file. A run of another kind says what failed and when, with the error's message: the sentence quotes
+    its first line alone, and the whole message stands beneath. A run that only loads a record has no page of its
+    own: its failure is told in the box, as a failure at a click is."""
     from core.gui import fonts
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
@@ -221,11 +246,12 @@ def test_a_failure_is_a_state_of_the_run_page_and_no_box(tmp_path):
                                         stop_button="Stop the calibration…"))
     assert not view.failure.isVisibleTo(view), "the earlier run's failure stayed on the page of the next"
     clock.advance(60)
-    check.fail(ValueError("the coverage could not be computed."))
+    check.fail(ValueError("the coverage could not be computed.\n12 of 200 rows were not finite."))
     _ended(app, held)
     assert (all_asked(), _failure(view), view.failure_message.text(), view.full_error.isVisibleTo(view)) == (
         [], "Error. Check failed on Sat 3 Oct, 03:13: the coverage could not be computed.",
-        "the coverage could not be computed.", False)
+        "the coverage could not be computed.\n12 of 200 rows were not finite.", False), (
+        "the sentence quotes more than the message's first line, or the message beneath is not whole")
 
     loads = StandIn(word="Prior load")
     start_run(host, loads, spec=RunSpec("Prior load", ("inference", "prior"), stop_button="Stop loading",
@@ -278,14 +304,17 @@ def test_a_failed_save_of_the_training_shows_on_its_health_line(tmp_path):
 # ── the tries ──
 def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_path, monkeypatch):
     """After the graphics card ran out of memory, the window tries the training again, the run waiting between the
-    tries, live, with nothing computing: after 1 minute, then, while each try keeps nothing more, after 3 minutes and
-    10 minutes, counted on the window's clock. Meanwhile the page says what failed, when it tries again and which of
-    the three tries that is, and what is saved, and "Stop trying" stands in the stop button's place. A try is the
-    run's own call in a new worker, its keywords as they were but the set's policy that must continue, its result
-    handed where the run's was, in the same text and history files, each try opened by its line in the text; a try
-    that keeps a batch more starts the count again. "Stop trying" ends the run failed, said last in its text, and
-    its page then offers to continue from the batches the set holds. A run whose stop was asked for before it ran
-    out of memory is not tried again."""
+    tries, live, with nothing computing and every panel's controls locked: after 1 minute, then, while each try keeps
+    nothing more, after 3 minutes and 10 minutes, counted on the window's clock. Meanwhile the page says what failed,
+    when it tries again and which of the three tries that is, and what is saved, and "Stop trying" stands in the stop
+    button's place. The card's own lack of memory, as the simulation raises it, is tried again too. A try is the run's
+    own call in a new worker, its keywords as they were but the set's policy that must continue, its result handed
+    where the run's was, in the same text and history files, each try opened by its line in the text; a try that
+    keeps a batch more in the simulation set starts the count again, one whose run's text counted batches the set
+    does not hold does not. The history keeps each try: when it began and ended, how, and what the set and the kept
+    training held before and after it. "Stop trying" ends the run failed, said last in its text, and its page then
+    offers to continue from the batches the set holds. A run whose stop was asked for before it ran out of memory is
+    not tried again."""
     from core.gui.run import history
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
@@ -307,8 +336,11 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
     def waits(pause, which, batch):
         return ("retrying", "trying again", True, _waits(pause, which, batch), True, False, False)
 
-    assert (page(), all_asked(), view.stop_trying_button.text()) == (waits("1 minute", "first", 236), [],
-                                                                     "Stop trying")
+    assert (retry.TRIES, retry.PAUSES_S) == (3, (60.0, 180.0, 600.0)), (
+        "the tries are not three, after 1, 3 and 10 minutes")
+    assert (page(), all_asked(), view.stop_trying_button.text(), host.controls.isEnabled()) == (
+        waits("1 minute", "first", 236), [], "Stop trying", False), (
+        "the run does not wait to be tried again, or a panel's controls were unlocked while it waits")
     clock.advance(59)
     held.tick()
     assert (len(stand_in.calls), page()) == (1, waits("1 minute", "first", 236)), "a try began before its pause"
@@ -328,18 +360,24 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
     clock.advance(60)
     held.tick()
     _tried(app, held, stand_in, 3)
-    stand_in.fail(_out_of_memory("the simulation of batch 301"))
+    stand_in.row(SIMULATION_ROW, 340, 10_000)           # the try simulated batches up to 340 and saved none of them
+    turn_until(app, lambda: held.model.batches_done() == 340)
+    stand_in.fail(_simulated(_card("CUDA error: out of memory")))       # the card's own lack of memory
     _waiting(app, held)
-    assert page() == waits("3 minutes", "second", 300)
+    assert page() == waits("3 minutes", "second", 300), (
+        "a try whose set holds no batch more started the count again, or the card's own lack of memory was not tried "
+        "again")
     clock.advance(61)
     held.tick()
     assert page() == waits("2 minutes", "second", 300), "the page did not count down to the next try"
-    clock.advance(59)
+    clock.advance(118)                                  # 179 s into the pause of 3 minutes
     held.tick()
-    assert (len(stand_in.calls), page()) == (3, waits("1 minute", "second", 300))
-    clock.advance(60)                                   # 03:17
+    assert (len(stand_in.calls), page()) == (3, waits("1 minute", "second", 300)), "a try began before its pause"
+    clock.advance(1)                                    # 03:17
     held.tick()
     _tried(app, held, stand_in, 4)
+    stand_in.row(SIMULATION_ROW, 300, 10_000)           # the try's bar, from the batches the set holds
+    turn_until(app, lambda: held.model.batches_done() == 300)
     stand_in.fail(_out_of_memory("the simulation of batch 301"))
     _waiting(app, held)
     assert page() == waits("10 minutes", "third", 300)
@@ -361,13 +399,28 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
     assert ([line[20:] for line in filed if " window Try " in line], filed[-1][20:]) == (
         [f"window {line}" for line in said], f"window {retry.STOPPED_TRYING_TEXT}"), filed[-3:]
     record = history.read(tmp_path / "runs" / f"{run}.json")
-    assert [(datetime.fromisoformat(one["started"]), one["outcome"], one["failure"], one["batches_before"],
-             one["batches_after"]) for one in record["tries"]] == [
-        (_at(3, 3, 2, 11), "failed", "RuntimeError", 0, 236), (_at(3, 3, 13, 11), "failed", "RuntimeError", 236, 300),
-        (_at(3, 3, 14, 11), "failed", "RuntimeError", 300, 300),
-        (_at(3, 3, 17, 11), "failed", "RuntimeError", 300, 300)], record["tries"]
+    assert [(datetime.fromisoformat(one["started"]), datetime.fromisoformat(one["ended"]), one["outcome"],
+             one["failure"], one["batches_before"], one["batches_after"], one["epochs_before"], one["epochs_after"])
+            for one in record["tries"]] == [
+        (_at(3, 3, 2, 11), _at(3, 3, 12, 11), "failed", "RuntimeError", 0, 236, None, 0),
+        (_at(3, 3, 13, 11), _at(3, 3, 13, 11), "failed", "RuntimeError", 236, 300, 0, 0),
+        (_at(3, 3, 14, 11), _at(3, 3, 14, 11), "failed", "SimulationError", 300, 300, 0, 0),
+        (_at(3, 3, 17, 11), _at(3, 3, 17, 11), "failed", "RuntimeError", 300, 300, 0, 0)], record["tries"]
     assert (record["outcome"], record["failure"]["kind"], record["failure"]["reopen"]) == (
         "failed", "out of memory", False)
+
+    finishing = StandIn()
+    start_run(host, finishing, spec=_training(), on_result=results.append)
+    _to_the_simulation(app, finishing, text, held, folder, 300)
+    finishing.fail(_out_of_memory("the simulation of batch 301"))
+    _waiting(app, held)
+    clock.advance(60)                                   # 03:18
+    held.tick()
+    _tried(app, held, finishing, 2)
+    finishing.release("the posterior")
+    _ended(app, held)
+    assert (held.status.outcome, results) == ("finished", ["the posterior"]), (
+        "a try's result was not handed where the run's was")
 
     asked_to_stop, before = StandIn(takes_stops=False), len(text.statuses)
     start_run(host, asked_to_stop, spec=_training())
@@ -428,10 +481,11 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     """When trying again in this copy of PRISM cannot help, the page says so, the run ended failed with no more
     tries and nothing to press: after three tries in a row that kept nothing more, each out of memory again; and at
     once after a failure in which the graphics card failed in a way that is no lack of memory, a first failure as
-    well as a try's, which is never tried again. The page says how the training goes on: started again once PRISM is
-    open again, it continues the simulation set from the batches it holds; a training kept in its fit is resumed
-    from the command line. Neither "Continue from batch N" nor "Resume the training" is offered: either would run in
-    this copy of PRISM."""
+    well as a try's, in the simulation, where the card's error comes under the simulator's own, as in the fit, which
+    is never tried again, and whose history says the card failed. The page says how the training goes on: started
+    again once PRISM is open again, it continues the simulation set from the batches it holds; a training kept in its
+    fit is resumed from the command line. Neither "Continue from batch N" nor "Resume the training" is offered:
+    either would run in this copy of PRISM."""
     from core.gui.run import history
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
@@ -471,24 +525,26 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     _tried(app, held, device, 2)
     device.fail(_device_failure())
     _ended(app, held)
-    assert (len(device.calls), reopened("CUDA error: an illegal memory access was encountered")) == (2, True), (
-        _failure(view))
+    simulated = f"{_SOLVER}: AcceleratorError: {_ILLEGAL}"
+    assert (len(device.calls), reopened(simulated)) == (2, True), _failure(view)
 
     first = StandIn()
     start_run(host, first, spec=_training())
     _to_the_simulation(app, first, text, held, folder, 236)
     first.fail(_device_failure())
     _ended(app, held)
-    assert (len(first.calls), reopened("CUDA error: an illegal memory access was encountered")) == (1, True), (
+    assert (len(first.calls), reopened(simulated)) == (1, True), (
         "a first failure of the graphics card that is no lack of memory was tried again, or offered to continue",
         _failure(view))
+    assert history.read(tmp_path / "runs" / f"{held.status.run}.json")["failure"]["kind"] == "device", (
+        "the history does not say the graphics card failed")
 
     kept = build_fit_record(store, passes=2)
     in_the_fit = StandIn()
     in_the_fit.kept_fit = _note(kept, 2)
     start_run(host, in_the_fit, spec=_training())
     _to_the_fit(app, in_the_fit, text, clock, _set(tmp_path, 10_000, complete=True), [(1, 0), (2, 1)])
-    in_the_fit.fail(_device_failure())
+    in_the_fit.fail(_device_failure(in_the_simulation=False))
     _ended(app, held)
     assert (len(in_the_fit.calls), held.status.reopen, _failure(view), view.resume_button.isVisibleTo(view),
             view.continue_button.isVisibleTo(view)) == (
@@ -501,7 +557,8 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
 def test_continue_from_batch_n_repeats_the_runs_own_call_with_the_must_continue_policy(tmp_path, monkeypatch):
     """"Continue from batch N" stands on the page of a training that failed, and of one that was stopped, while its
     simulation set is unfinished and holds a batch, N the batches the set holds as read from it once the run has
-    ended. Pressed, it starts the run's own call again as the page's next run, with files of its own: its keywords
+    ended, which may be fewer than the run's text counted, and the page says that the simulations up to N are
+    saved. Pressed, it starts the run's own call again as the page's next run, with files of its own: its keywords
     as they were, the policy that must continue (``resume="require"``) the one new argument and N in none of them,
     its result handed where the first run's was. A run stopped before its set held a batch offers nothing; neither
     does a page drawn from a run's files alone; and while another run is live, the press starts nothing and the page
@@ -512,7 +569,7 @@ def test_continue_from_batch_n_repeats_the_runs_own_call_with_the_must_continue_
     clock = Clock(_at(3, 3, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
     text, view = RunText(held), host.run_view
-    folder, results = _set(tmp_path, 236), []
+    folder, results = _set(tmp_path, 200), []          # the set holds 200 batches; the run's text counted 236
     base = {"name": "retrain_3", "note": "the retrain", "num_runs": 10_000}
     failed = StandIn()
     start_run(host, failed, spec=_training(), on_result=results.append, **base)
@@ -520,15 +577,16 @@ def test_continue_from_batch_n_repeats_the_runs_own_call_with_the_must_continue_
     failed.fail(OSError(28, "No space left on device"))
     _ended(app, held)
     first = held.status.run
-    assert (view.continue_button.isVisibleTo(view), view.continue_button.text(),
-            view.resume_button.isVisibleTo(view)) == (True, "Continue from batch 236", False)
+    assert (view.continue_button.isVisibleTo(view), view.continue_button.text(), view.resume_button.isVisibleTo(view),
+            _failure(view).endswith("Saved: the simulations up to batch 200. Lost: nothing else.")) == (
+        True, "Continue from batch 200", False, True), ("N is not the batches the set holds", _failure(view))
     record, path = history.read(tmp_path / "runs" / f"{first}.json"), tmp_path / "runs" / f"{first}.txt"
     view.continue_button.click()
     turn_until(app, lambda: len(failed.calls) == 2)
     assert (held.is_live(), held.status.run != first, held.status.name, view.mode,
             view.continue_button.isVisibleTo(view)) == (True, True, "retrain_3", "live", False)
     assert failed.calls == [((), base), ((), {**base, "resume": "require"})], failed.calls
-    assert "236" not in repr(failed.calls[1]), "the batch the set holds was handed to the stage"
+    assert "200" not in repr(failed.calls[1]), "the batch the set holds was handed to the stage"
     failed.release("the posterior")
     _ended(app, held)
     assert (results, held.status.outcome, sorted(p.name for p in (tmp_path / "runs").glob("*.json"))) == (
@@ -716,14 +774,16 @@ def test_a_failure_while_the_posterior_is_saved_says_the_finished_training_is_ke
 def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_path, store):
     """After the graphics card ran out of memory during the fit, a try is the run's own call with the training it
     kept named (``resume_fit``), as Resume is, and nothing else new: neither the set's policy nor anything of a
-    narrowing round's region; meanwhile the page says the epochs kept, the note's. The try resumes the kept training
-    from its kept epoch: an epoch an earlier try recorded past it, whose save did not hold, leaves the curve, and the
-    best epoch is counted again from the kept one. A try that keeps more epochs and then runs out of memory again
+    narrowing round's region; meanwhile the page and the history's fit say the epochs kept, the note's. The try
+    resumes the kept training from its kept epoch: an epoch an earlier try recorded past it, whose save did not
+    hold, leaves the curve, and the best epoch is counted again from the kept one. A try that keeps more epochs and
+    then runs out of memory again
     starts a new count; a try that fails before it names the kept training keeps the one named before; when three
     tries in a row keep none, the page says only reopening PRISM helps, and that the
     kept training is resumed from the command line until its page offers it: the tool's command for the run,
     ``train`` for a training, ``tsnpe`` for a narrowing round, with the flags of what the run's own call trained
     from, or, where the call does not tell them, words that say to give them as they were."""
+    from core.gui.run import history
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
@@ -745,7 +805,8 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
         return (f"The graphics card ran out of memory during the fit, at epoch {epoch}. Trying again in {pause}: the "
                 f"{which} of three tries. The epochs up to {epoch} are kept.")
 
-    assert view.sentence.text() == waits("1 minute", "first", 2)
+    assert (view.sentence.text(), history.read(tmp_path / "runs" / f"{held.status.run}.json")["fit"]["epochs"]) == (
+        waits("1 minute", "first", 2), 2), "while the run waits, the page or its history names the records' epochs"
     clock.advance(60)
     held.tick()
     _tried(app, held, stand_in, 2)
@@ -791,7 +852,7 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
     _tried(app, held, narrowing, 2)
     assert narrowing.calls[1] == ((typed, parent, prior, observation),
                                   {**narrowed, "n_directions": None, "level": None, "resume_fit": kept})
-    narrowing.fail(_device_failure())
+    narrowing.fail(_device_failure(in_the_simulation=False))
     _ended(app, held)
     assert _failure(view) == (f"{_REOPEN}. The training is kept up to epoch 2; until the Narrowing round page offers "
                               f"to resume it, it is resumed from the command line: python -m core tsnpe --resume-fit "

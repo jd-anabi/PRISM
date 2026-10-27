@@ -582,7 +582,8 @@ def test_the_keyboard_stays_on_the_runs_page_through_a_stop(tmp_path, monkeypatc
     out of the page; Space there withdraws the stop and hands it back to the stop button. Once a stop has landed
     the keyboard goes to "Keep" while the page asks about the training the stop kept, and from there, answered, to
     the page's sentence; with nothing kept, to the sentence at once. A keyboard on a control that stays at the end
-    (the full text's own) stays there."""
+    (the full text's own) stays there. While the run waits to be tried again, the keyboard on the stop button goes to
+    "Stop trying", which stands in its place, and comes back to it when the next try begins."""
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QPushButton
@@ -639,6 +640,19 @@ def test_the_keyboard_stays_on_the_runs_page_through_a_stop(tmp_path, monkeypatc
         runs[-1].fail(RuntimeError("the run broke"))
         _ended(app, held)
         assert focus() is view.find_field, "the end took the keyboard from a control that stays"
+
+        view.back_button.click()
+        runs.append(StandIn())
+        QTest.mouseClick(start, Qt.LeftButton)          # a click: the keyboard goes to the stop button
+        runs[-1].fail(RuntimeError("CUDA error: out of memory"))         # a failure the window tries again
+        turn_until(app, lambda: held.status.state == "retrying")
+        assert focus() is view.stop_trying_button, "while the run waits, the keyboard did not go to 'Stop trying'"
+        clock.advance(60)
+        held.tick()
+        turn_until(app, lambda: len(runs[-1].calls) == 2 and held.status.state == "running")
+        assert focus() is view.stop_button, "at the try, the keyboard did not come back to the stop button"
+        runs[-1].release()
+        _ended(app, held)
 
 
 # ── closing during a run ──
@@ -777,7 +791,8 @@ def test_the_window_does_not_close_under_a_retry_pause_or_a_pending_stop(tmp_pat
     """A run starting, running, waiting to be tried again or stopping is live: a close asked for meanwhile is
     refused, whatever is answered short of the close's second answer, and the window keeps the one-PRISM claim; a
     pause that runs out while the close's question is open lets the next try begin, and the answer that keeps the
-    run changes nothing; a stopping run's close waits for its end, the claim held until then."""
+    run changes nothing; a try of a run that saved no simulation yet is the run's own call as it was; a stopping run's
+    close waits for its end, the claim held until then."""
     from core.gui import one_instance
     from tests._fixtures import whole_program
     from tests._window_helpers import shown_off_screen
@@ -801,8 +816,9 @@ def test_the_window_does_not_close_under_a_retry_pause_or_a_pending_stop(tmp_pat
         tried.fail(RuntimeError("CUDA error: out of memory"))          # a failure the window tries again
         turn_until(app, lambda: held.status.state == "retrying")
         closed_now()                                 # nobody answers
-        assert (asked().sentence, seen) == ("Training retrain_3 is waiting to try again.",
-                                            [("retrying", True, True)]), "the window closed under a retry's pause"
+        assert (asked().sentence, asked().beneath.endswith("No simulation is saved yet."), seen) == (
+            "Training retrain_3 is waiting to try again.", True, [("retrying", True, True)]), (
+            "the window closed under a retry's pause, or its question does not say that nothing is saved yet")
 
         def the_pause_runs_out():
             clock.advance(60)
@@ -813,6 +829,8 @@ def test_the_window_does_not_close_under_a_retry_pause_or_a_pending_stop(tmp_pat
         turn_until(app, lambda: len(tried.calls) == 2)
         assert (seen[-1], held.is_live(), held.status.stop_requested) == (("running", True, True), True, False), (
             "a pause that ran out while the close's question was open stopped the run or closed the window")
+        assert tried.calls[1] == tried.calls[0], (
+            "a try of a run whose set held no batch did not repeat its call as it was")
         tried.release()
         _ended(app, held)
         seen.clear()
