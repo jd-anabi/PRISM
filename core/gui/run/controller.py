@@ -269,6 +269,7 @@ class RunController(QObject):
         self._window = None                        # the newest window built, held weakly: the reason goes on it
         self._awake = False                        # Windows is asked to keep the computer awake
         self._reason: tuple | None = None          # the live run's stage and the reason registered for it
+        self._training_kept: int | None = None     # the batch the latest training of this process kept
 
     # ── what the shell and the pages read ──
     @property
@@ -297,6 +298,11 @@ class RunController(QObject):
     def folder(self) -> Path:
         """The folder of runs in use: the one a test handed in, else the one beside the settings file in use."""
         return self._folder if self._folder is not None else history.runs_folder()
+
+    def training_kept(self) -> int | None:
+        """The batch the latest training of this process kept in its simulation set when it was stopped or failed,
+        which it can be continued from; None when it finished, kept no batch, or no training has ended."""
+        return self._training_kept
 
     def use_clock(self, clock) -> None:
         """The clock every moment of the next runs is read from, local time with its zone; None for the
@@ -329,9 +335,11 @@ class RunController(QObject):
         ``provide_fig_sink`` hands the call a sink for its figures, which go to the host's stack of pictures;
         ``provide_stream`` hands it ``emit_chunk`` and ``should_stop``, and ``on_chunk`` hears each chunk;
         ``watch_dir`` is one folder, or several, whose new pictures go to the host's stack. None of these is handed
-        on to ``fn``."""
+        on to ``fn``. An end that waits to be seen as the run starts is written seen in its history: from now on the
+        window says the new run, and it never says two (``_set_aside``)."""
         if self.is_live():
             return False
+        self._set_aside()
         from core.artifacts import default_store
         from core.progress import SOLVER
         from ..panels.base_panel import BasePanel
@@ -680,9 +688,11 @@ class RunController(QObject):
 
     def forget_offers(self) -> None:
         """Every call kept for a page's offer let go, and each offer withdrawn from its page, as though each such page
-        had started its next run: no page offers to continue or resume a run any more."""
+        had started its next run: no page offers to continue or resume a run any more, and the steps no longer say
+        the batch the latest training kept."""
         for run in list(self._offers):
             self._withdraw_offer(run)
+        self._training_kept = None
 
     def continue_run(self, run: str) -> bool:
         """"Continue from batch N" on the page of the training ``run``, which failed or was stopped with batches in
@@ -725,22 +735,76 @@ class RunController(QObject):
         return started
 
     def acknowledge(self, run: str) -> None:
-        """Someone has seen how the run ``run`` ended: its history file says so, and when it is the run the
-        controller holds, the controller is idle again."""
-        held = self._run
-        if held is not None and held.id == run and self._status.unacknowledged_end:
-            held.acknowledged = True
-            self._write(held)
+        """Someone has seen how the run ``run`` ended: its history file says so, and when its end is the one the
+        status says (the run the controller holds, or one of an earlier launch whose end the status was filled
+        with), the controller is idle again."""
+        self._write_seen(run)
+        if self._status.unacknowledged_end and self._status.run == run:
             self._status = IDLE
             self.status_changed.emit(IDLE)
+
+    def _set_aside(self) -> None:
+        """A run starts while an end waits to be seen: the window says the new run from now on, and never says two,
+        so that end is written seen in its history, as though it had been looked at, and is not said again at the
+        next launch. Nothing is published: the new run's status follows at once."""
+        status = self._status
+        if status.unacknowledged_end and status.run is not None:
+            self._write_seen(status.run)
+
+    def _write_seen(self, run: str) -> None:
+        """The run ``run`` written seen into its history: the run the controller holds, or else its history file in
+        the folder of runs, when it says otherwise. A file that cannot be written stays as it is."""
+        held = self._run
+        if held is not None and held.id == run:
+            if not held.acknowledged:
+                held.acknowledged = True
+                self._write(held)
             return
-        folder = self._folder if self._folder is not None else history.runs_folder()
+        folder = self.folder()
         record = history.read(folder / f"{run}.json")
         if record is not None and record.get("id") == run and not record.get("acknowledged"):
             try:
                 history.write(folder, {**record, "acknowledged": True})
             except Exception:                    # noqa: BLE001 -- an older run's file that cannot be written stays
                 pass
+
+    def recall(self, records_root: str) -> None:
+        """As a window is opened with no run live and no end waiting to be seen: the newest run of the records folder
+        ``records_root`` whose end nobody has seen, as its history file in the folder of runs says it, becomes the
+        status, so that the foot and Home say how it ended until it is seen. Nothing when there is none."""
+        if self._status != IDLE:
+            return
+        try:
+            record = history.newest_unseen(self.folder(), records_root=records_root)
+        except OSError:
+            record = None
+        if record is None or not isinstance(record.get("id"), str):
+            return
+        self._status = ends.status_of(record, self.now())
+        self.status_changed.emit(self._status)
+
+    def show_past(self, run: str, host) -> None:
+        """The run ``run`` on the run page of ``host``, the page of its place, which then shows it: as it stands when
+        it is the run the controller holds and ``host`` the page it ran on (a finished run's page leaves the figures
+        in sight, its result); else drawn in the past view from its two files alone, its history and its text.
+        Nothing is drawn while ``host`` holds a live run, nor when the run's history cannot be read."""
+        held = self._run
+        view = getattr(host, "run_view", None)
+        if view is None or not _alive(view):
+            return
+        if held is not None and held.id == run and held.host is host:
+            if held.outcome != "finished":
+                host.show_run()
+            return
+        if getattr(host, "is_running", lambda: False)():
+            return
+        folder = self.folder()
+        record = history.read(folder / f"{run}.json")
+        if record is None:
+            return
+        text = folder / f"{run}.txt"
+        view.show_past(record, text if text.is_file() else None, clock=self._clock or _local_now)
+        host.show_run()
 
     def where(self, run: str) -> tuple[str, str | None] | None:
         """The place of the run ``run``: the part and the page that show it, or None when it is not known."""
@@ -981,6 +1045,8 @@ class RunController(QObject):
                 sentence, kept = model.sentence(), ""
             last = replace(last, sentence=sentence if page is None else page[0], kept=kept)
         run.last = last
+        if spec.word == "Training" and not refused_early:
+            self._training_kept = run.continue_from if run.outcome in ("stopped", "failed") else None
         offers = (not refused_early and not idle and spec.simulation_set and run.outcome in ("failed", "stopped")
                   and not run.reopen and (run.continue_from is not None or run.kept_fit is not None)
                   and _alive(run.host))
@@ -1105,7 +1171,7 @@ class RunController(QObject):
         state = ("retrying" if waits else model.state if model.state in ("starting", "running", "stopping")
                  else "running")
         stage = model.stage
-        words = next((word.word for word in model.stage_line() if word.name == stage), "")
+        words = model.sentence() if state == "stopping" else model.doing()
         return RunStatus(state=state, word=spec.word, name=spec.name, run=run.id, place=spec.place,
                          loading=spec.loads_only,
                          state_word=("loading" if spec.loads_only else "stopping" if state == "stopping"
@@ -1262,6 +1328,7 @@ class RunController(QObject):
                 "ended": ended, "last_heard": (self._clock or _local_now)() if reason and run.ended is None else None,
                 "outcome": run.outcome or ("stopped" if reason else "running"), "stop_reason": reason,
                 "stage": model.stage,
+                "stages": [[stage.name, list(stage.begins), stage.counts] for stage in spec.stages],
                 "acknowledged": run.acknowledged, "tries": tries,
                 "plan": None, "settings": None, "memory_limit": spec.facts.get("memory_limit"),
                 "simulation_set": None if folder is None else {

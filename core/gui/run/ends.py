@@ -1,8 +1,11 @@
-"""How a run ended, in words.
+"""How a run ended, in words, and the foot of the rail in each state of a run.
 
-Once a run has ended, its page says how and when it ended, and what it kept: ``words`` reads both from the run's
-history (``core/gui/run/history.py``) and the moment now, never from the run's text, so that a run of an earlier
-launch can be said as one of this launch is. No sentence says "finished" after a stop or a failure.
+Once a run has ended, its page, the foot of the rail and Home say how and when it ended, and what it kept, until
+someone has seen it: ``words`` reads both from the run's history (``core/gui/run/history.py``) and the moment now,
+never from the run's text, so that a run of an earlier launch is said as one of this launch is. ``status_of`` is the
+status such a history file gives, which the foot and Home read after PRISM is opened again, and ``foot`` the foot's
+marker, title and words for any status, read from the status alone. No sentence says "finished" after a stop or a
+failure.
 
 Words only: no toolkit, no engine and none of the engine's settings are imported here, so the words are read and
 tested with no window.
@@ -10,15 +13,27 @@ tested with no window.
 from datetime import datetime
 
 from ..texts import date_text, duration_text, number_text
+from .model import OUTCOMES, RunStatus
 from .questions import TRAINING_WORDS, what_a_stop_keeps
-from .retry import NO_MESSAGE, OUT_OF_MEMORY
+from .retry import NO_MESSAGE, OUT_OF_MEMORY, WAITING_LINE, WAITING_TITLE
 
 #: Said after the sentence of a run that finished with a stop asked of it too late to stop anything; the run's text
 #: says it too, as the run ends.
 TOO_LATE_TEXT = "A stop was asked for, but the run had already finished."
+#: What the foot says while nothing runs and no end waits to be seen.
+IDLE_TITLE = "Nothing is running"
+IDLE_WORDS = "Only one run at a time."
+#: The foot's title while a run only loads a record.
+LOADING_TITLE = "Loading…"
+#: What the foot's words end with while a run is live.
+LOCKED_TEXT = "Settings are locked."
 #: What a stopped run kept when PRISM closed before the run's end was written, and what a run that was not seen to
 #: end kept.
 SAVED_BY_THEN_TEXT = "What it had saved by then is kept."
+#: How a run ended, as Home's "Last runs" marks it and says it in a word, by the outcome its history holds; a run
+#: still running is said so.
+HOW = {"finished": ("done", "Finished"), "stopped": ("half", "Stopped"), "failed": ("err", "Failed"),
+       "not seen to end": ("err", "Not seen to end"), "running": ("now", "Running")}
 
 # The word for the record a run wrote, by the store's kind, as the end's sentence names it.
 _RECORDS = {"prior": "prior", "posterior": "posterior", "observation": "observation", "calibration": "calibration",
@@ -70,6 +85,49 @@ def words(record: dict, now: datetime, *, too_late: bool = False) -> tuple[str, 
     at = _last_heard_at(record, word)
     kept = SAVED_BY_THEN_TEXT if word in TRAINING_WORDS else ""
     return f"PRISM closed while this {word.lower()} was running; last heard {when}{at}.", kept
+
+
+def status_of(record: dict, now: datetime) -> RunStatus:
+    """The status the history ``record`` of an ended run gives, as the foot and Home read it after PRISM is opened
+    again: ended, or not seen to end, with how and when, what it kept and its words written against ``now``."""
+    outcome = record.get("outcome") if record.get("outcome") in OUTCOMES else "not seen to end"
+    sentence, kept = words({**record, "outcome": outcome}, now)
+    place = record.get("place")
+    return RunStatus(state="not_seen" if outcome == "not seen to end" else "ended",
+                     word=str(record.get("word") or ""), name=str(record.get("name") or ""),
+                     run=record.get("id") if isinstance(record.get("id"), str) else None,
+                     place=tuple(place) if isinstance(place, (list, tuple)) and len(place) == 2 else None,
+                     stage=record.get("stage") if isinstance(record.get("stage"), str) else None,
+                     outcome=outcome, started=_moment(record.get("started")), ended=_moment(record.get("ended")),
+                     last_heard=_moment(record.get("last_heard")), kept=kept, sentence=sentence,
+                     acknowledged=bool(record.get("acknowledged")))
+
+
+def foot(status: RunStatus, now: datetime) -> tuple[str, str, str]:
+    """The foot's marker, title and words for ``status``, read from the status alone, ``now`` the moment a date is
+    written against: nothing running; a run live (loading, waiting to be tried again, needing someone, stopping, or
+    running with the stage in a few words); an end not yet seen (finished, stopped, or failed, a run not seen to end
+    among the failed, dated when it was last heard); and nothing running again once the end has been seen."""
+    word = status.word or "Run"
+    if status.live:
+        if status.loading:
+            return "now", LOADING_TITLE, ""
+        if status.state == "retrying":
+            return "now", WAITING_TITLE.format(word), WAITING_LINE
+        if status.needs_you:
+            return "warn", f"{word} needs you", status.needs_you
+        if status.state == "stopping":
+            return "now", f"{word} is stopping", status.stage_words
+        return "now", f"{word} is running", f"{status.stage_words or 'Running'}. {LOCKED_TEXT}"
+    if status.unacknowledged_end:
+        if status.outcome == "finished":
+            return "done", f"{word} finished", f"{date_text(status.ended, now)}." if status.ended else ""
+        when = status.last_heard if status.outcome == "not seen to end" else status.ended
+        said = " ".join(part for part in ((f"{date_text(when, now)}." if when else ""), status.kept) if part)
+        if status.outcome == "stopped":
+            return "half", f"{word} stopped", said
+        return "err", f"{word} failed", said
+    return "none", IDLE_TITLE, IDLE_WORDS
 
 
 # ── the parts ──

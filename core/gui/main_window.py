@@ -7,11 +7,10 @@ parts are reused unchanged in behaviour. ``go_to`` is the one way to move betwee
 stands at the rail's foot."""
 import logging
 import sys
-import time
 import traceback
 from datetime import datetime
 
-from PySide6.QtCore import QEventLoop, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QEventLoop, QTimer, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplication, QMainWindow,
                                QPlainTextEdit, QPushButton, QTabBar, QTextEdit, QToolButton, QWidget)
@@ -26,15 +25,16 @@ from .panels.fdt_panel import FdtPanel
 from .panels.inference_tabs import ConfigPanel, InferPanel, PosteriorPanel, PriorPanel, TSNPEPanel, ValidatePanel
 from .panels.reduction_panel import ReductionPanel
 from .panels.simulate_panel import SimulatePanel
-from .run import questions, retry
+from .reported import reported
+from .run import ends, history, questions
 from .run.controller import controller
 from .screens.artifact_screen import ArtifactScreen
 from .screens.help_screen import HelpScreen
-from .screens.home_screen import HomeFacts, HomeScreen, RecordRow
+from .screens.home_screen import LAST_RUNS, HomeFacts, HomeScreen, RecordRow, RunRow
 from .screens.inference_screen import InferenceScreen
 from .screens.models_screen import PAGES as MODEL_PAGES, ModelsScreen
 from .screens.settings_screen import SettingsScreen
-from .screens.shell import PartError, Shell, clock_words
+from .screens.shell import PartError, Shell
 from .screens.temperature_screen import TemperatureScreen
 from .session import SbiSession
 from .widgets.artifact_picker import StorePicker
@@ -196,6 +196,23 @@ def _home_records(store) -> tuple:
     return tuple(rows)
 
 
+def _last_runs(folder, records_root: str) -> tuple:
+    """The latest runs of the records folder ``records_root``, newest first, as Home lists them, read from the
+    history files in ``folder``: each with its word and name, when it started and ended, in local time, and how it
+    ended. None when the folder cannot be read."""
+    try:
+        records = history.latest(folder, records_root=records_root, n=LAST_RUNS)
+    except OSError:
+        return ()
+    rows = []
+    for record in records:
+        if isinstance(record.get("id"), str):
+            label = f"{record.get('word') or 'Run'} {record.get('name') or ''}".strip()
+            rows.append(RunRow(record["id"], label, _local(record.get("started")), _local(record.get("ended")),
+                               str(record.get("outcome") or "running")))
+    return tuple(rows)
+
+
 class MainWindow(QMainWindow):
     """The application's window: the rail and, beside it, the parts (``Shell``).
 
@@ -238,20 +255,28 @@ class MainWindow(QMainWindow):
         # Where each panel of a part built lives: its part, and its page or step.
         self._places: dict = {}
         self._inference_opened = False           # Parameter inference opens at the step in hand the first time
-        # The place of the live run, as its status gives it, which the foot names and goes to and Home reads: none
-        # while no run is live, and none for a run with no place (the bare run host a test builds), which leads
-        # nowhere. Home reads what it states as it is built, this among it: none, at launch.
-        self._live_place = None
-        self._run_live = False
-        # While the live run is stopping: its word and name, which Home says is stopping, and the line that says when
-        # the stop is taken, which the foot says; "" otherwise.
-        self._run_stopping = self._stopping_line = ""
-        # While the live run waits to be tried again: its word and name, which Home says is waiting; "" otherwise.
-        self._run_waiting = ""
+        self._run_live = False                   # whether the run's status said a run is live, as last heard
+        # What the steps' states read of the run's status, as they were last worked out from it: worked out again
+        # only when it changes.
+        self._run_key = None
+        # Every record of the store in use and the latest runs of its records folder, as Home last read them: read
+        # again only after a run has ended, as Home is opened and when the store changes (None: at Home's next reading).
+        self._stored = None
         self._close_at_end = False               # the close was asked for: the window closes once the run has ended
         self._ends_tries = False                 # ... asked while the run waited to be tried again: it ended the tries
         # From Windows' question to end the session until it is cancelled the close asks nothing.
         self._session_ending = False
+        # At a launch: a run whose history still says it is running ended unseen when an earlier PRISM closed, and is
+        # said so; only by the PRISM that holds the one-PRISM claim, since one started without the claim may stand
+        # beside a PRISM whose run is live. Then the newest run of the records folder in use whose end nobody has seen
+        # becomes the run's status, which the foot and Home say until it is seen.
+        held = controller()
+        if one_instance.current() is not None and not held.is_live():
+            try:
+                history.close_unseen(held.folder())
+            except (OSError, ValueError):
+                pass                             # a folder of runs that cannot be read or written closes nothing
+        held.recall(str(default_store().root))
         self._build("home")
 
         # Every way to move is go_to: a row of the rail, Home's buttons and rows, the run's foot. Each handler
@@ -269,17 +294,13 @@ class MainWindow(QMainWindow):
             shortcut.setProperty("does", does)
             shortcut.activated.connect(self._key_pressed)
 
-        # The run's clock, STOPPED at launch: the timer is constructed here but never started, and an
-        # unstarted QTimer registers nothing with the OS, so nothing on the launch path ticks.
-        self._run_title = self._run_place_words = ""
-        self._run_started = 0.0
-        self._run_timer = QTimer(self)
-        self._run_timer.setInterval(1000)
-        self._run_timer.timeout.connect(self._tick_running)
         # The process's one run is heard through a method of this window's own, so that a deleted window leaves no
-        # connection behind; and its reason against ending the session goes on this window, the newest built.
+        # connection behind; and its reason against ending the session goes on this window, the newest built. The
+        # foot runs no clock: it says what the run's status says, at each change of it. Every move is looked at for
+        # an end whose page has come into sight.
         controller().status_changed.connect(self._on_status)
         controller().use_window(self)
+        self.place_changed.connect(self._seen)
 
         # ALWAYS open on Home, its row marked and the steps' states in the rail. Home has read what it states
         # as it was built, and reads nothing more at its first show.
@@ -299,8 +320,9 @@ class MainWindow(QMainWindow):
             if not self.restoreGeometry(geom) or not _on_a_visible_screen(self):
                 self.resize(*opening)
                 _centre_on_primary(self)
-        # A window built while a run is live shows it, as a part built then comes up locked.
-        if controller().is_live():
+        # A window built while a run is live shows it, as a part built then comes up locked; and so does one built
+        # while an end waits to be seen.
+        if controller().status.state != "idle":
             self._on_status(controller().status)
 
     def set_appearance_mode(self, mode):
@@ -390,6 +412,7 @@ class MainWindow(QMainWindow):
             widget.setContentsMargins(margin, margin, margin, margin)
         if name == "home":
             widget.navigate.connect(self.go_to)
+            widget.open_run.connect(self._open_run)
         elif name == "inference":
             # The six steps' states go to the rail and to Home each time they are worked out again.
             widget.states_changed.connect(self._states_changed)
@@ -460,9 +483,10 @@ class MainWindow(QMainWindow):
 
     def _store_changed(self):
         """The records screen changed the store: every picker lists it again, then the gates and the steps'
-        states are worked out again, so that the rail and Home follow a record written or deleted. Before
-        Parameter inference is built, Home reads again."""
+        states are worked out again, so that the rail and Home follow a record written or deleted, Home reading the
+        store again. Before Parameter inference is built, Home reads again."""
         self._refresh_store_pickers()
+        self._stored = None
         inference = self._built.get("inference")
         if inference is not None:
             inference.refresh_gates()
@@ -502,12 +526,20 @@ class MainWindow(QMainWindow):
 
     def _home_facts(self) -> HomeFacts:
         """What Home states, read now: Parameter inference's session and its six steps as last worked out (before
-        it is built, a session that holds nothing), the part and page a live run is in, and every record of the
-        store in use."""
+        it is built, a session that holds nothing) and the run's status; and, as last read, every record of the store
+        in use and the latest runs of its records folder, which are read again only after a run has ended, as Home
+        is opened and when the store changes, never at a change of the run's status, which comes at every save and
+        every epoch of a training. A run in the history of the records folder in use, or a run live, ends the
+        first-time page."""
         inference = self._built.get("inference")
         session = inference.session if inference is not None else SbiSession()
-        return HomeFacts(session, self._step_states(), self._live_place, _home_records(default_store()),
-                         stopping=self._run_stopping, waiting=self._run_waiting)
+        if self._stored is None:
+            store = default_store()
+            self._stored = (_home_records(store), _last_runs(controller().folder(), str(store.root)))
+        records, runs = self._stored
+        status = controller().status
+        return HomeFacts(session, self._step_states(), status, records, has_runs=bool(runs) or status.live,
+                         runs=runs)
 
     def _states_changed(self, states) -> None:
         """The six steps' states were worked out again: the rail shows them, and Home reads now while it is
@@ -560,13 +592,38 @@ class MainWindow(QMainWindow):
             this_computer.flash(self)
 
     def go_to_run(self) -> None:
-        """Go to the place of the live run. Nothing when no run is live, or it has no place."""
+        """Go to the run the foot says, as a press of the foot does: the place of the live run; or the page of a run
+        whose end nobody has seen, which says how it ended, and its end is then seen (``_open_run``). Nothing while
+        nothing runs and no end waits to be seen, nor for a run with no place."""
         self._to_run(Qt.OtherFocusReason)
 
     def _to_run(self, keyboard) -> None:
-        """The move to the live run's place, the page taking the keyboard for the reason ``keyboard``."""
-        if self._live_place is not None:
-            self._move(*self._live_place, keyboard=keyboard)
+        """The move to the run the foot says, the page taking the keyboard for the reason ``keyboard``."""
+        status = controller().status
+        if status.place is None:
+            return
+        if status.live:
+            self._move(*status.place, keyboard=keyboard)
+        elif status.unacknowledged_end and status.run is not None:
+            self._open_run(status.run, keyboard)
+
+    def _open_run(self, run: str, keyboard=Qt.OtherFocusReason) -> None:
+        """Open the page of the run ``run`` at its place, as the foot, Home's next step and a row of Home's "Last runs"
+        do, and see its end: a run this window holds shows as its page stands; one of an earlier launch, or any run
+        this window no longer holds, is drawn in its page's past view from its two files. Nothing for a run whose
+        place is not known, or not one of the window's."""
+        held = controller()
+        place = held.where(run)
+        if place is None or place[0] not in _PARTS:
+            return
+        try:
+            self._move(*place, keyboard=keyboard)
+        except KeyError:
+            return                               # a place of an earlier PRISM this window no longer has
+        panel = next((panel for panel, at in self._places.items() if at == tuple(place)), None)
+        if panel is not None:
+            held.show_past(run, panel)
+        held.acknowledge(run)
 
     def _move(self, part: str, page, *, keyboard) -> None:
         """The move ``go_to`` makes. ``keyboard`` is the reason the page takes the keyboard for, or None for a move
@@ -594,6 +651,7 @@ class MainWindow(QMainWindow):
                 records.kind_combo.setCurrentIndex(found)
         home = self._built.get("home")
         if part == "home" and home is not None:
+            self._stored = None                      # opened: Home reads the store and the runs again
             if self.shell.stack.currentWidget() is home:
                 home.refresh()                       # in sight already: read now (nothing while the window is hidden)
             else:
@@ -696,28 +754,28 @@ class MainWindow(QMainWindow):
         is said, as go_to says one, and the rail keeps the part marked."""
         self.place_changed.emit("temperature", page)
 
-    # ── the live run, at the foot of the rail ─────────────────────────────────
+    # ── the run, at the foot of the rail ──────────────────────────────────────
     def _on_status(self, status) -> None:
-        """The run's status changed. When a run has begun or ended (a status live after one that was not, or the
-        other way round): the steps' states are worked out again, which shows the live step in the rail and has
-        Home read, and the foot says what is running, from its place, and for how long. When the run ends with the
-        keyboard on the foot, which is then no control, the rail takes the keyboard. Any other change of the
-        status, while the run goes on, changes nothing here but what the last paragraph says.
+        """The run's status changed. The foot says it, from the status alone and with no clock (``ends.foot``): what
+        runs and the stage it is in, that it is stopping, waits to be tried again or needs someone, how and when it
+        ended until that end has been seen, or that nothing runs; it is a button while a run is live and while an end
+        waits to be seen, for a run with a place, and a foot that held the keyboard and is a button no more hands it to
+        the rail. When what the steps read of the run changes (it began, ended or was seen to end, or began or ceased
+        to stop or to wait to be tried again), the steps' states are worked out again, which has Home read; at any
+        other change Home reads again, while it is shown, the run's status and not the store, which it reads again
+        only after a run has ended, as it is opened and when the store changes. An end is seen at once when the run's
+        page is in sight in the window in front (``_seen``).
 
         Connected to the process's run controller, which every window built in the process hears until it is
         deleted: this handler touches only its own window's widgets, and is safe to run on a window nobody is
-        looking at. It builds no part. The run's title and the words of its place are worked out ONCE per run,
-        not per tick.
+        looking at. It builds no part.
 
-        While the run is stopping, the steps' states are worked out again too, the foot says that the run is
-        stopping and when the stop is taken, and Home that it is stopping; while it waits to be tried again, the same,
-        the foot saying that it waits and that nothing runs meanwhile, with no clock. From the run's start to its end
-        every figure window the window's pages opened shows its figure's picture. When the window's close waits for the
-        run, a run that ends stopped or finished closes the window, once all of the end has been said
-        (``_close_at_the_end``); one that ends otherwise (a failure, a refusal) leaves the window open, its close
-        withdrawn, and its page and its box say how it ended, but for a close that ended the tries of a run that
-        waited to be tried again, which closes the window at the failed end it leaves, the failure being the one the
-        page said before the close was asked. A close withdrawn with its stop waits no more.
+        From the run's start to its end every figure window the window's pages opened shows its figure's picture.
+        When the window's close waits for the run, a run that ends stopped or finished closes the window, once all of
+        the end has been said (``_close_at_the_end``); one that ends otherwise (a failure, a refusal) leaves the window
+        open, its close withdrawn, and its page and its box say how it ended, but for a close that ended the tries of a
+        run that waited to be tried again, which closes the window at the failed end it leaves, the failure being the
+        one the page said before the close was asked. A close withdrawn with its stop waits no more.
         """
         if self._close_at_end:
             if not status.live:
@@ -728,52 +786,48 @@ class MainWindow(QMainWindow):
             elif not status.closing:
                 self._close_at_end = False
             self._ends_tries = self._ends_tries and self._close_at_end
-        stopping = f"{status.word} {status.name}".strip() if status.live and status.state == "stopping" else ""
-        waiting = f"{status.word} {status.name}".strip() if status.live and status.state == "retrying" else ""
-        if status.live == self._run_live and stopping == self._run_stopping and waiting == self._run_waiting:
-            return
-        began = status.live and not self._run_live
-        self._run_live, self._run_stopping, self._run_waiting = status.live, stopping, waiting
-        self._stopping_line = questions.stopping_line(status, controller().model) if stopping else ""
-        if began or not status.live:
+        began, ended = status.live and not self._run_live, self._run_live and not status.live
+        self._run_live = status.live
+        if began or ended:
             for panel in self._all_panels():
                 panel.figure_stack.hold(status.live)
-        self._live_place = status.place if status.live else None
-        inference = self._built.get("inference")
-        if inference is not None:
-            inference.recompute_states()
-        else:
-            self._states_changed(self._step_states())
-        foot = self.shell.rail.foot
-        if not status.live:
-            self._run_timer.stop()
-            held = self.focusWidget() is foot
-            foot.set_state("none", "Nothing is running", "Only one run at a time.")
-            if held:
-                self.shell.rail.take_keyboard()
-            return
-        if began:
-            place = self._live_place
-            if place is None:
-                self._run_title = self._run_place_words = "Running: a task"
+        if ended:
+            self._stored = None                  # what the run wrote: Home reads the store and the runs again
+        key = (status.live, status.state, status.place, status.outcome)
+        if key != self._run_key:
+            self._run_key = key
+            inference = self._built.get("inference")
+            if inference is not None:
+                inference.recompute_states()
             else:
-                part, page = place
-                self._run_title = f"Running: {keys.step(page).name if part == 'inference' else keys.part(part).name}"
-                words = keys.place_words(page if part == "inference" else f"{part}/{page}" if page else part)
-                self._run_place_words = f"Running: {words}"
-            self._run_started = time.monotonic()
-        if stopping:
-            self._run_timer.stop()                 # the stopping row has no clock
-            foot.set_state("now", f"{status.word} is stopping", self._stopping_line,
-                           button=self._live_place is not None)
-            return
-        if waiting:
-            self._run_timer.stop()                 # the waiting row has no clock: nothing runs
-            foot.set_state("now", retry.WAITING_TITLE.format(status.word), retry.WAITING_LINE,
-                           button=self._live_place is not None)
-            return
-        self._tick_running()                       # shown at once, not a second from now
-        self._run_timer.start()
+                self._states_changed(self._step_states())
+        else:
+            home = self._built.get("home")
+            if home is not None:
+                home.refresh()
+        foot = self.shell.rail.foot
+        held = self.focusWidget() is foot
+        button = status.place is not None and (status.live or status.unacknowledged_end)
+        foot.set_state(*ends.foot(status, controller().now()), button=button)
+        if held and not button:
+            self.shell.rail.take_keyboard()
+        self._seen()
+
+    def _seen(self, *_place) -> None:
+        """An end nobody has seen is seen once its run's page is in sight while the window is the one in front: looked
+        at as the run ends, at every move and when the window comes to the front; the run's controller then writes
+        it into the run's history and is idle again."""
+        status = controller().status
+        if (status.unacknowledged_end and status.run is not None and status.place is not None
+                and self.isActiveWindow() and self.current_place() == tuple(status.place)):
+            controller().acknowledge(status.run)
+
+    @reported()
+    def changeEvent(self, event):
+        """The window came to the front, or went from it: in front, an end whose page is in sight is seen."""
+        super().changeEvent(event)
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self._seen()
 
     def _close_at_the_end(self) -> None:
         """The close that waited for the run, the run having ended: carried out now, or, while a box or a question
@@ -811,15 +865,6 @@ class MainWindow(QMainWindow):
             held.request_stop(reason=questions.SHUT_DOWN_REASON)
         while held.is_live():
             QApplication.processEvents(QEventLoop.AllEvents | QEventLoop.WaitForMoreEvents)
-
-    def _tick_running(self) -> None:
-        """Write the elapsed time again: a divmod and the foot's words, once a second."""
-        words = f"{clock_words(int(time.monotonic() - self._run_started))} so far. Settings are locked."
-        foot = self.shell.rail.foot
-        foot.set_state("now", self._run_title, words, button=self._live_place is not None)
-        whole = f"{self._run_place_words}. {words}"   # the place in full: the title names only its part or step
-        foot.setAccessibleName(whole)
-        foot.setToolTip(whole)
 
     def panel(self, cls):
         """The first panel of type ``cls`` among the parts built (convenience for callers + tests); when none holds

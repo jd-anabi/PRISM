@@ -1912,7 +1912,7 @@ def test_the_run_state_reaches_a_window_through_a_method_of_its_own_and_goes_wit
 def test_a_part_built_during_a_run_asks_the_controller_and_comes_up_locked():
     """A part, and a whole window, built while a run is live -- here the run of a host no window holds --
     ask the process's run controller: the part comes up locked, and the window built then says at its foot
-    that a run is live. The run's end frees them."""
+    that a run is live. The run's end frees them, and the foot then says how it ended."""
     from core.gui.panels.reduction_panel import ReductionPanel
     from tests._fixtures import build_run_host, build_window, qt_app
     from tests._runs import running
@@ -1921,8 +1921,8 @@ def test_a_part_built_during_a_run_asks_the_controller_and_comes_up_locked():
         window = build_window()
         panel = window.panel(ReductionPanel)
         assert not panel.controls.isEnabled(), "a part built during a run is not locked"
-        assert window.shell.rail.foot._title == "Running: a task", window.shell.rail.foot._title
-    assert panel.controls.isEnabled() and window.shell.rail.foot._title == "Nothing is running"
+        assert window.shell.rail.foot._title == "Training is running", window.shell.rail.foot._title
+    assert panel.controls.isEnabled() and window.shell.rail.foot._title == "Training finished"
 
 
 def test_the_runs_text_file_reaches_the_disk_on_a_thread_of_its_own(tmp_path, monkeypatch):
@@ -2903,8 +2903,9 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
     last = held.status.run
     record = history.read(tmp_path / "runs" / f"{last}.json")
     live_text = view.full_text.lines()
-    view.show_past(record, tmp_path / "runs" / f"{last}.txt")
-    assert page() == ("past", False, True, "Training retrain_3 failed.")
+    view.show_past(record, tmp_path / "runs" / f"{last}.txt", clock=held.now)
+    assert page() == ("past", False, True, "Training failed on Thu 8 Oct, 19:02, before its simulation: the run broke. "
+                                           "No simulation was saved.")
     assert view.full_text.lines() == live_text, "the past page's full text is not its file's"
 
     refused = StandIn()

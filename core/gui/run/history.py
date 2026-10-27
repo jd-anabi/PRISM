@@ -15,7 +15,9 @@ A file holds every name of ``FIELDS``, in that order, None where its run has not
 - ``outcome`` ("running" until the end, then "finished", "stopped", "failed" or "not seen to end"; "stopped" from
   the moment a stop with a reason of its own is asked, Windows ending the session, so that a process Windows ends
   first leaves it said), ``stop_reason`` (that reason, "Windows shut down"; None for a stop the person asked for, for
-  none, and once the run has finished), ``stage``, ``acknowledged``.
+  none, and once the run has finished), ``stage`` (the name of the stage the run was in last), ``stages`` (the run's
+  stages, each its name, the readings that begin it and what counts it, so that its page in the past view draws them
+  from its text), ``acknowledged``.
 - ``tries``: one entry per try, each of ``TRY_FIELDS``: its start and end, how it ended, the kind of failure, and
   the batches and the epochs the run had kept before the try began and after it ended.
 - ``plan``, ``settings``, ``memory_limit``: what the run was started with; ``settings`` holds every argument, enough
@@ -47,8 +49,8 @@ from pathlib import Path
 from .. import settings
 
 FIELDS = ("id", "word", "name", "place", "records_root", "started", "ended", "last_heard", "outcome", "stop_reason",
-          "stage", "acknowledged", "tries", "plan", "settings", "memory_limit", "simulation_set", "health", "fit",
-          "check", "result", "failure", "text")
+          "stage", "stages", "acknowledged", "tries", "plan", "settings", "memory_limit", "simulation_set", "health",
+          "fit", "check", "result", "failure", "text")
 #: What ``simulation_set`` holds.
 SET_FIELDS = ("folder", "batches", "at_start", "at_end", "per_batch", "seconds_per_batch")
 #: What ``fit`` holds.
@@ -125,6 +127,16 @@ def latest(folder: Path, *, records_root: str, n: int) -> list[dict]:
     is not counted, however new."""
     return [record for record in reversed(_records(folder))
             if _same_folder(record.get("records_root"), records_root)][:n]
+
+
+def newest_unseen(folder: Path, *, records_root: str) -> dict | None:
+    """The newest run of the records folder ``records_root`` that has ended (or was not seen to end) and whose end
+    nobody has seen, or None. A run still marked "running" has not ended, and is passed over."""
+    for record in reversed(_records(folder)):
+        if (_same_folder(record.get("records_root"), records_root) and not record.get("acknowledged")
+                and record.get("outcome") in ("finished", "stopped", "failed", "not seen to end")):
+            return record
+    return None
 
 
 def continuable(record: dict, *, store, folder: Path) -> int | None:

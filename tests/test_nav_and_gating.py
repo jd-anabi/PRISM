@@ -4377,17 +4377,6 @@ def test_the_run_status_is_published_last_after_every_lock_is_final():
                     ("ended", ("reduction", None), False, [True])], seen
 
 
-def test_the_foots_clock_reads_minutes_and_seconds_and_hours_from_an_hour():
-    """The foot's time comes from a PURE helper, so this asserts every shape without waiting a
-    second: m:ss under an hour, h:mm:ss from an hour, 0:00 at the start. A negative age -- a
-    wall-clock jump -- reads as 0 rather than as a minus sign."""
-    from core.gui.screens.shell import clock_words
-
-    assert [clock_words(s) for s in (0, 59, 60, 247, 3599)] == ["0:00", "0:59", "1:00", "4:07", "59:59"]
-    assert [clock_words(s) for s in (3600, 3725, 36000)] == ["1:00:00", "1:02:05", "10:00:00"]
-    assert clock_words(-5) == "0:00"
-
-
 def test_the_config_tab_says_what_the_session_holds():
     """Apply's session line, the first half. ONE describer, ``InferenceScreen.session_contents()``,
     answers "what would a new draft throw away" -- in pipeline order, in plain phrases with no code

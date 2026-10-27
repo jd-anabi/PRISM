@@ -20,15 +20,6 @@ from ..widgets.page import Page, PageHead
 from ..widgets.rail import Rail
 
 
-def clock_words(seconds: int) -> str:
-    """How long a run has gone on, as the foot of the rail writes it: minutes and seconds, "4:07", and from an
-    hour the hours as well, "1:02:05". A time below nothing, as a jump of the computer's clock can give, reads
-    as nothing."""
-    hours, rest = divmod(max(0, int(seconds)), 3600)
-    minutes, secs = divmod(rest, 60)
-    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
-
-
 # What is said of an error that holds no word of its own: the whole sentence for one with no message, and before a
 # message that holds no word outside its quotations.
 NO_MESSAGE = "Something went wrong that PRISM did not expect."

@@ -158,12 +158,14 @@ def step_in_hand(states) -> str | None:
 @dataclass(frozen=True)
 class Next:
     """Home's one next step: its heading, the sentence under it (none when the heading says it all), its main
-    button's words, and the part and page the button opens."""
+    button's words, and the part and page the button opens; for a run whose end has not been seen, the run, whose
+    page the button opens and whose end it acknowledges."""
     heading: str
     sentence: str
     button: str
     part: str
     page: str | None
+    run: str | None = None
 
 
 # the next step while a step is in hand, by the step
@@ -178,22 +180,33 @@ _NEXT = {
 }
 
 
-def next_step(session, states, *, live_place: tuple[str, str | None] | None = None, stopping: str = "",
-              waiting: str = "") -> Next:
-    """The one next step Home offers. The first that holds decides: a run is live (``live_place`` is the part
-    and page it runs in; ``stopping``, the run's word and name while it is stopping, and ``waiting`` while it waits
-    to be tried again); then the step in hand among
-    ``states``, which reads the steps in their order (no model, no prior, no posterior, no observation); otherwise
-    nothing is waiting, and the narrowing round is offered, or Records once the posterior in use is a narrowed
-    one."""
-    if live_place is not None:
-        part, page = live_place
-        where = keys.place_words(f"{part}/{page}" if page else part)
-        going = (f"{stopping} is stopping" if stopping else f"{waiting} is waiting to try again" if waiting
-                 else f"A run is going in {where}")
-        return Next("Next: nothing until the run ends",
-                    f"{going}, and no other run can start until it ends. You can still move around and read results. "
-                    "Keep PRISM open; you can minimise it.", "Go to the run", part, page)
+def next_step(session, states, *, run=None) -> Next:
+    """The one next step Home offers. ``run`` is the run's status (read by its attributes: its state, word and name,
+    place, the reason it needs someone and how it ended, in words), None for none. The first that holds decides, for
+    a run with a place: a live run needs someone (its reason, and the button goes to it); a run is live (nothing
+    until it ends: it is running, stopping or waiting to be tried again); a run has ended and nobody has seen how
+    (how and when it ended and what it kept, and the button opens its page and acknowledges it: "See the result"
+    for a finished run, "Go to the run" for a stopped one, "See what happened" for a failure or a run not seen to
+    end). Then the step in hand among ``states``, which reads the steps in their order (no model, no prior, no
+    posterior, no observation); otherwise nothing is waiting, and the narrowing round is offered, or Records once
+    the posterior in use is a narrowed one."""
+    place = getattr(run, "place", None)
+    if place is not None:
+        part, page = place
+        what, who = run.word.lower(), f"{run.word} {run.name}".strip()
+        if run.live and run.needs_you:
+            return Next(f"Next: look at the {what}", run.needs_you, "See why", part, page)
+        if run.live:
+            doing = ("is stopping" if run.state == "stopping" else "is waiting to try again"
+                     if run.state == "retrying" else "is running")
+            return Next(f"Next: nothing until the {what} ends",
+                        f"{who} {doing}, and no other run can start until it ends. You can still move around and read "
+                        "results. Keep PRISM open; you can minimise it.", "Go to the run", part, page)
+        if run.unacknowledged_end:
+            if run.outcome == "finished":
+                return Next(f"Next: see the {what}", run.sentence, "See the result", part, page, run.run)
+            return Next(f"Next: see what happened to the {what}", run.sentence,
+                        "Go to the run" if run.outcome == "stopped" else "See what happened", part, page, run.run)
     in_hand = step_in_hand(states)
     if in_hand is not None:
         return _NEXT[in_hand]

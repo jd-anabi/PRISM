@@ -35,6 +35,16 @@ for name in sys.argv[2].split(","):
     except ImportError:
         pass
 from core.gui import chain, keys
+from core.gui.run.model import RunStatus
+run = "20261008T190211-training"
+runs = (RunStatus(state="running", word="Sweep study", place=("temperature", "sweep")),
+        RunStatus(state="stopping", word="Training", name="retrain_3", place=("inference", "training")),
+        RunStatus(state="retrying", word="Training", name="retrain_3", place=("inference", "training")),
+        RunStatus(state="running", word="Training", place=("inference", "training"), needs_you="Nothing heard."),
+        RunStatus(state="ended", word="Training", outcome="finished", run=run, place=("inference", "training")),
+        RunStatus(state="ended", word="Training", outcome="stopped", run=run, place=("inference", "training")),
+        RunStatus(state="not_seen", word="Training", outcome="not seen to end", run=run, place=("live", None)),
+        RunStatus(state="running", word="Run"), RunStatus())
 some = held(draft=held(model="NADROWSKI"), cfg=None, inf_prior=None, posterior=None, observation=None)
 every = held(draft=held(model="SHM"), cfg=None, inf_prior=held(name="p"), observation=held(name="o"),
              posterior=held(name="q", posterior=held(truncation=1)))
@@ -43,9 +53,8 @@ for session, options in ((some, dict(live="prior", ended=3, pending=frozenset({"
     states = chain.step_states(session, observation_on_offer=True, **options)
     said = [state.spoken for state in states]
     chain.next_step(session, states)
-    chain.next_step(session, states, live_place=("temperature", "sweep"))
-    chain.next_step(session, states, live_place=("inference", "training"), stopping="Training retrain_3")
-    chain.next_step(session, states, live_place=("inference", "training"), waiting="Training retrain_3")
+    for status in runs:
+        chain.next_step(session, states, run=status)
     chain.first_time(has_records=False, has_runs=False, session=session)
 said = [chain.model_label("HOPF"), keys.places_words(("training", "narrowing")), keys.place_words("inference/infer")]
 early = held(draft=held(model=""), cfg=None, inf_prior=held(name="p"), posterior=None, observation=None)
@@ -124,7 +133,7 @@ def look(run):
             run.messages(), run.needs_you(), run.epochs(), run.best_epoch(), run.batches_done(),
             run.simulation_folder(), run.began_after_first(), run.fit_not_saved(), run.saves_passed(),
             run.stage_kind(), run.now(), run.stop_bound(), run.last_epoch_ends(), run.fit_ended_by(),
-            run.expected_epochs())
+            run.expected_epochs(), run.doing())
     status = model.RunStatus(state="running", word=run.spec.word, name=run.spec.name)
     said += (questions.stop_question(status, run), questions.close_question(status, run),
              questions.shutdown_reason(status, run))
@@ -240,6 +249,14 @@ for outcome, stage, word in (("finished", "Saving", "Training"), ("stopped", "Si
               "failure": {"kind": "other", "message": "x."}}
     said += [ends.words(record, at, too_late=True),
              ends.words({**record, "stop_reason": "Windows shut down", "tries": [], "fit": None}, at)]
+    said += [ends.foot(ends.status_of(record, at), at)]
+for status in (model.IDLE, model.RunStatus(state="running", word="Training", stage_words="Simulating"),
+               model.RunStatus(state="running", word="Prior load", loading=True),
+               model.RunStatus(state="retrying", word="Training"),
+               model.RunStatus(state="running", word="Training", needs_you="Nothing heard."),
+               model.RunStatus(state="stopping", word="Training", stage_words="Stopping."),
+               model.RunStatus(state="ended", word="Training", outcome="finished", ended=at)):
+    said += [ends.foot(status, at)]
 roots = sys.argv[1].split(",")
 bad = sorted(name for name in sys.modules if any(name == root or name.startswith(root + ".") for root in roots))
 sys.exit(repr(bad) if bad else 0)
@@ -334,7 +351,8 @@ def test_the_run_model_and_its_readings_import_no_toolkit_and_no_engine():
     reads every read-out at each step, the questions of a stop and a close among them with the reason Windows is
     given against ending the session, the words of the run's failure and of its tries, the command line its page
     sets off, and the question of keeping a training a stop kept; the rules of the tries and of repeating a run's
-    call into its page's session; and how each kind of run's end is said, from its history."""
+    call into its page's session; and how each kind of run's end is said, from its history, and the foot of the
+    rail in each state of a run."""
     modules = ("core.gui.texts", "core.gui.run.readings", "core.gui.run.model", "core.gui.run.questions",
                "core.gui.run.retry", "core.gui.run.ends")
     for module in modules:
@@ -686,42 +704,50 @@ _LIVE = ("and no other run can start until it ends. You can still move around an
 
 
 def test_home_picks_its_one_next_step_in_order():
-    """A live run first, wherever it runs; then the steps in their order: no model, no prior, no posterior, no
+    """A live run first, wherever it runs, named by its word and its name; a run with no place leads nowhere and
+    is passed over, as nothing running is; then the steps in their order: no model, no prior, no posterior, no
     observation; otherwise nothing is waiting, with the narrowing round offered, or Records once narrowed."""
+    from core.gui.run.model import IDLE, RunStatus
+    training = RunStatus(state="running", word="Training", name="retrain_3", place=("inference", "training"))
     cases = [
-        (_EMPTY, {}, ("inference", "training"),
-         ("Next: nothing until the run ends", f"A run is going in step 3, Training, {_LIVE}", "Go to the run",
-          "inference", "training")),
-        (_OBSERVED, {}, ("temperature", "sweep"),
-         ("Next: nothing until the run ends", f"A run is going in Effective temperature, Sweep study, {_LIVE}",
-          "Go to the run", "temperature", "sweep")),
-        (_EMPTY, {}, ("live", None),
-         ("Next: nothing until the run ends", f"A run is going in Live simulation, {_LIVE}", "Go to the run",
-          "live", None)),
-        (_EMPTY, {}, None,
+        (_EMPTY, {}, training,
+         ("Next: nothing until the training ends", f"Training retrain_3 is running, {_LIVE}", "Go to the run",
+          "inference", "training", None)),
+        (_OBSERVED, {}, RunStatus(state="running", word="Sweep study", place=("temperature", "sweep")),
+         ("Next: nothing until the sweep study ends", f"Sweep study is running, {_LIVE}", "Go to the run",
+          "temperature", "sweep", None)),
+        (_EMPTY, {}, RunStatus(state="starting", word="Live simulation", place=("live", None)),
+         ("Next: nothing until the live simulation ends", f"Live simulation is running, {_LIVE}", "Go to the run",
+          "live", None, None)),
+        (_EMPTY, {}, RunStatus(state="running", word="Run"),
          ("Next: choose a model", "Nothing is loaded: PRISM starts every launch with nothing loaded.",
-          "Open Model and options", "inference", "model")),
-        (_MODEL, {}, None, ("Next: build or load a prior", "", "Open Prior", "inference", "prior")),
+          "Open Model and options", "inference", "model", None)),
+        (_EMPTY, {}, IDLE,
+         ("Next: choose a model", "Nothing is loaded: PRISM starts every launch with nothing loaded.",
+          "Open Model and options", "inference", "model", None)),
+        (_MODEL, {}, None, ("Next: build or load a prior", "", "Open Prior", "inference", "prior", None)),
         (_WITH_PRIOR, {}, None,
          ("Next: start a training", "The Training page says what it will cost before it starts.", "Set up training",
-          "inference", "training")),
+          "inference", "training", None)),
         (_WITH_PRIOR, {"ended": 4}, None,
          ("Next: start a training", "The Training page says what it will cost before it starts.", "Set up training",
-          "inference", "training")),
+          "inference", "training", None)),
         (_TRAINED, {}, None,
-         ("Next: run the posterior on a cell or on your recordings", "", "Open Inference", "inference", "infer")),
+         ("Next: run the posterior on a cell or on your recordings", "", "Open Inference", "inference", "infer",
+          None)),
         (_OBSERVED, {"observation_on_offer": True}, None,
          ("Next: nothing is waiting",
           "A narrowing round is optional: it trains a second posterior that is valid only near one observation.",
-          "Open Narrowing round", "inference", "narrowing")),
+          "Open Narrowing round", "inference", "narrowing", None)),
         (_ROUND, {"observation_on_offer": True}, None,
          ("Next: nothing is waiting", "A narrowing round was made: the posterior in use is the narrowed one.",
-          "Open Records", "records", None)),
+          "Open Records", "records", None, None)),
     ]
-    for held, options, live_place, expected in cases:
+    for held, options, run, expected in cases:
         session = _session(**held)
-        found = chain.next_step(session, chain.step_states(session, **options), live_place=live_place)
-        assert (found.heading, found.sentence, found.button, found.part, found.page) == expected, (held, live_place)
+        found = chain.next_step(session, chain.step_states(session, **options), run=run)
+        assert (found.heading, found.sentence, found.button, found.part, found.page, found.run) == expected, (
+            held, run)
 
 
 def test_the_first_time_holds_only_with_nothing_on_disk_and_nothing_loaded():

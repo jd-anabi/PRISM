@@ -52,11 +52,19 @@ def _under_way():
     return _session(draft=SimpleNamespace(model="NADROWSKI"), inf_prior=SimpleNamespace(name="retrain_prior"))
 
 
-def _facts(session=None, records=(), live_place=None, has_runs=False):
-    """What Home is handed: the steps' states worked out from the session as the rules work them out."""
+def _facts(session=None, records=(), run=None, has_runs=False, runs=()):
+    """What Home is handed: the steps' states worked out from the session as the rules work them out, the run's
+    status among them."""
     session = _session() if session is None else session
-    live = live_place[1] if live_place is not None and live_place[0] == "inference" else None
-    return HomeFacts(session, chain.step_states(session, live=live), live_place, tuple(records), has_runs)
+    place = run.place if run is not None and run.live else None
+    live = place[1] if place is not None and place[0] == "inference" else None
+    return HomeFacts(session, chain.step_states(session, live=live), run, tuple(records), has_runs, tuple(runs))
+
+
+def _live(word="Training", name="", place=("inference", "training"), **more):
+    """The status of a run live at ``place``, as the run's controller publishes it."""
+    from core.gui.run.model import RunStatus
+    return RunStatus(state="running", word=word, name=name, place=place, **more)
 
 
 def _records():
@@ -125,6 +133,78 @@ def _summary(kind, ident, name, created, parents=None):
 def _stand_in_store(listed):
     """A store whose listing gives the records handed in for each kind, and none of any other kind."""
     return SimpleNamespace(list=lambda kind: list(listed.get(kind, ())))
+
+
+# local time with its zone, as the window's clock gives it
+_ZONE = timezone(timedelta(hours=-7))
+# a training's lines, as the engine writes them
+_BUDGET = "[budget] 10,000 batches x 2,048 rows = 20,480,000 training rows"
+_ROTATING = "Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)..."
+_ROTATED = "[fisher] eigenvalue spread (best/worst direction): 412"
+_LIVE = ("and no other run can start until it ends. You can still move around and read results. Keep PRISM open; "
+         "you can minimise it.")
+
+
+def _at(day, hour, minute, second=0):
+    """A moment of October 2026 in the test's local time (the 8th is a Thursday)."""
+    return datetime(2026, 10, day, hour, minute, second, tzinfo=_ZONE)
+
+
+def _on_the_runs_clock(tmp_path, start=None):
+    """The process's run controller, its clock (from Thu 8 Oct, 19:02:11, unless ``start`` is handed) and its folder
+    of runs this test's own; the end of the test puts both back. The controller and the clock."""
+    from tests._runs import Clock
+    clock = Clock(start or _at(8, 19, 2, 11))
+    held = controller()
+    held.use_clock(clock)
+    held.use_folder(tmp_path / "runs")
+    return held, clock
+
+
+def _training_spec(**changed):
+    """A training as its page hands it to its run: its stages, its patience and its epoch limit."""
+    from core.gui.panels.inference.base import TRAINING_STAGES
+    from core.gui.run.model import RunSpec
+    return RunSpec(**{"word": "Training", "place": ("inference", "training"), "name": "retrain_3",
+                      "stop_button": "Stop training…", "stages": TRAINING_STAGES,
+                      "kinds": ("posterior", "simulation", "fit"), "simulation_set": True, "patience": 20,
+                      "epoch_limit": 300, "facts": {"model": "NADROWSKI", "observation": "chi", "narrowed": False,
+                                                    "network": (256, 10)}, **changed})
+
+
+def _writing(folder) -> str:
+    """The engine's line that names the simulation set's folder as the simulation begins."""
+    return f"[checkpoint] writing to {folder} every 50 batches (~10.3 GiB total, 120.5 GiB free)"
+
+
+def _epoch(epoch, since=0, took=3780.0) -> str:
+    """An epoch's record, as the training call writes it."""
+    return (f"[fit] epoch {epoch}: training loss -3, validation loss -3.1, took {took:.1f} s, epochs since the best "
+            f"{since}")
+
+
+def _foot(window):
+    """What the window's foot shows: its marker, its title, its words, and whether it is a button."""
+    foot = window.shell.rail.foot
+    return foot._marker, foot._title, foot._words, foot.is_button()
+
+
+def _ended_history(folder, run, records_root, **changed):
+    """A training's history file in ``folder``, as the window wrote it at the training's end: stopped on Sun 11 Oct
+    at 12:31 during its fit, its 20,480,000 simulations kept and its training kept up to epoch 62, its end not yet
+    seen; ``changed`` sets any field. The file's path."""
+    from core.gui.panels.inference.base import TRAINING_STAGES
+    from core.gui.run import history
+    ended = _at(11, 12, 31)
+    record = {"id": run, "word": "Training", "name": "retrain_3", "place": ["inference", "training"],
+              "records_root": str(records_root), "started": _at(8, 19, 2, 11), "ended": ended, "outcome": "stopped",
+              "stage": "Fitting", "acknowledged": False,
+              "stages": [[stage.name, list(stage.begins), stage.counts] for stage in TRAINING_STAGES],
+              "tries": [{"started": _at(8, 19, 2, 11), "ended": ended, "outcome": "stopped", "batches_after": 10_000}],
+              "simulation_set": {"folder": "eda5c2a1e468", "batches": 10_000, "at_end": 10_000, "per_batch": 2_048},
+              "fit": {"epochs": 62, "best_epoch": 60, "simulations": 20_480_000, "kept_id": "k1", "passes": 62}}
+    record.update(changed)
+    return history.write(folder, record)
 
 
 def test_home_with_nothing_on_disk_opens_on_what_do_you_want_to_do():
@@ -207,11 +287,11 @@ def test_home_mid_project_states_the_one_next_step_and_where_each_step_stands(mo
     assert (home.next_heading.label.text(), home.next_button.text()) == ("Next: build or load a prior", "&Open Prior")
     assert not [label for label in home.findChildren(Sentence) if _shown(home, label)
                 and label.plain_text() not in (HEAD[1], "No records yet.")], "a next step with no sentence shows one"
-    home = _home(_facts(_under_way(), live_place=("temperature", "sweep")))
-    assert home.next_heading.label.text() == "Next: nothing until the run ends"
+    home = _home(_facts(_under_way(), run=_live("Sweep study", "study", ("temperature", "sweep"))))
+    assert home.next_heading.label.text() == "Next: nothing until the sweep study ends"
     sentences = [label.plain_text() for label in home.findChildren(Sentence) if _shown(home, label)]
-    assert ("A run is going in Effective temperature, Sweep study, and no other run can start until it ends. You can "
-            "still move around and read results. Keep PRISM open; you can minimise it.") in sentences
+    assert ("Sweep study study is running, and no other run can start until it ends. You can still move around and "
+            "read results. Keep PRISM open; you can minimise it.") in sentences
     assert home.next_button.text() == "&Go to the run"
     long_name = "nadrowski_master_tier1_prior_2026_10_05"           # a record's name: one word, however long
     home = _home(_facts(_session(draft=SimpleNamespace(model="BP"), inf_prior=SimpleNamespace(name=long_name))))
@@ -375,7 +455,8 @@ def test_home_keeps_one_main_button_and_its_access_key():
     opens a place and starts nothing."""
     for facts, words, key in ((_facts(), "&Watch a live simulation", "Alt+W"),
                               (_facts(_under_way(), _records()), "&Set up training", "Alt+S"),
-                              (_facts(_under_way(), live_place=("live", None)), "&Go to the run", "Alt+G")):
+                              (_facts(_under_way(), run=_live("Live simulation", place=("live", None))),
+                               "&Go to the run", "Alt+G")):
         home = _home(facts)
         shown = [button for button in home.findChildren(QPushButton) if _shown(home, button)]
         main = [button for button in shown if button.property("cls") == "primary"]
@@ -386,11 +467,11 @@ def test_home_keeps_one_main_button_and_its_access_key():
 
 def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_store_in_use(tmp_path):
     """What the window hands Home: the inference screen's session and its six steps, once the screen is built, the
-    part and page a live run is in (the step whose run it is then reads "Now"), and every record of the store in
-    use that has a manifest,
-    of every kind, each with its label, the word for its kind and the moment it was made, in local time. A
-    simulation set is called by the prior it was simulated for, or said to have lost it. A folder with no manifest
-    is no record. A store with no record and nothing chosen opens Home on its first opening."""
+    run's status, live with its place while a run is live (the step whose run it is then reads "Now"), and every
+    record of the store in use that has a manifest, of every kind, each with its label, the word for its kind and
+    the moment it was made, in local time. A simulation set is called by the prior it was simulated for, or said to
+    have lost it. A folder with no manifest is no record. A store with no record and nothing chosen opens Home on
+    its first opening."""
     from core.artifacts import KIND_DIRS, ArtifactStore, use_store, write_simulation_manifest
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.SBI.training_checkpoint import identity_digest
@@ -407,7 +488,7 @@ def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_s
         window = build_window()
         inference = window.part("inference")
         facts = window._home_facts()
-        assert facts.session is inference.session and facts.live_place is None
+        assert facts.session is inference.session and facts.run == controller().status and not facts.run.live
         assert facts.states == chain.step_states(inference.session) and not facts.has_runs
         rows = {(row.kind, row.id): row for row in facts.records}
         wanted = {(kind, ids[kind]) for kind in KIND_DIRS} | {("simulation", held.id)}
@@ -424,12 +505,12 @@ def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_s
         assert rows[("fdt", ids["fdt"])].kind_word == "sweep"
         assert not window.part("home").is_first_time()
         with running(window.panel(CrossValPanel)):
-            assert window._home_facts().live_place == ("temperature", "sweep")
+            assert window._home_facts().run.place == ("temperature", "sweep") and window._home_facts().run.live
         with running(window.part("inference").posterior_panel):
             live = window._home_facts()
-            assert live.live_place == ("inference", "training")
+            assert (live.run.place, live.run.live) == (("inference", "training"), True)
             assert (live.states[2].marker, live.states[2].word, live.states[2].detail) == ("now", "Now", "Running")
-        assert window._home_facts().live_place is None
+        assert not window._home_facts().run.live
 
 
 def test_a_simulation_set_for_an_unnamed_prior_names_it_in_small_letters():
@@ -480,8 +561,8 @@ def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
     """Each place Home asks for is opened by ``go_to``: a part its own page (Help the help, Your own models their
     list), a page of Effective temperature its page with its name marked, a step its page, one that
     cannot start yet too, and a record's kind the records at that kind. Home reads again each time it is opened,
-    and while it is shown when the steps' states are worked out again and when a run starts or ends; never on its
-    own."""
+    and while it is shown when the steps' states are worked out again, when a run starts or ends and when its end is
+    seen; never on its own."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.session import SbiSession
@@ -530,8 +611,10 @@ def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
             assert home.next_heading.label.text() == "Next: start a training", (
                 "Home stated what it read when it was left")
             with running(window.panel(CrossValPanel)):
-                assert home.next_heading.label.text() == "Next: nothing until the run ends"
-            assert home.next_heading.label.text() == "Next: start a training"
+                assert home.next_heading.label.text() == "Next: nothing until the training ends"
+            assert home.next_heading.label.text() == "Next: see the training", "Home did not read as the run ended"
+            controller().acknowledge(controller().status.run)
+            assert home.next_heading.label.text() == "Next: start a training", "Home did not read as the end was seen"
         finally:
             window.hide()
 
@@ -569,6 +652,173 @@ def test_in_the_window_home_reads_nothing_while_another_place_is_shown(tmp_path,
             assert len(reads) == 2, "Home read at a move between two other places"
             home.navigate.emit("home", None)
             assert len(reads) == 3, "Home opened again did not read once"
+        finally:
+            window.hide()
+
+
+def test_homes_next_step_follows_the_run():
+    """Home's next step follows the run's status, the first that holds: a live run that needs someone (its reason,
+    and "See why" goes to it); a live run (nothing until it ends, while it runs, stops or waits to be tried again, and
+    "Go to the run" goes to it); an end nobody has seen (how and when it ended and what it kept, and the button opens
+    the run's page: "See the result" for a finished run, "Go to the run" for a stopped one, "See what happened" for a
+    failure or a run not seen to end); then the ordinary next step, once that end has been seen. Home never offers
+    to continue a run from its batch."""
+    from dataclasses import replace
+    from core.gui.run.model import IDLE, RunStatus
+    place, run = ("inference", "training"), "20261008T190211-training"
+    live = _live(name="retrain_3")
+    said = "Training was stopped on Sun 11 Oct, 12:31, during simulation. Nothing was simulated."
+    ended = RunStatus(state="ended", word="Training", name="retrain_3", run=run, place=place, outcome="stopped",
+                      sentence=said)
+    ordinary = ("Next: start a training", "The Training page says what it will cost before it starts.",
+                "&Set up training", ("navigate", place))
+    cases = [
+        (replace(live, needs_you="Nothing has been heard from the run for 10 minutes."), (
+            "Next: look at the training", "Nothing has been heard from the run for 10 minutes.", "&See why",
+            ("navigate", place))),
+        (live, ("Next: nothing until the training ends", f"Training retrain_3 is running, {_LIVE}", "&Go to the run",
+                ("navigate", place))),
+        (replace(live, state="stopping", stop_requested=True), (
+            "Next: nothing until the training ends", f"Training retrain_3 is stopping, {_LIVE}", "&Go to the run",
+            ("navigate", place))),
+        (replace(live, state="retrying"), (
+            "Next: nothing until the training ends", f"Training retrain_3 is waiting to try again, {_LIVE}",
+            "&Go to the run", ("navigate", place))),
+        (replace(ended, outcome="finished"), ("Next: see the training", said, "&See the result", ("open_run", run))),
+        (ended, ("Next: see what happened to the training", said, "&Go to the run", ("open_run", run))),
+        (replace(ended, outcome="failed"), (
+            "Next: see what happened to the training", said, "&See what happened", ("open_run", run))),
+        (replace(ended, state="not_seen", outcome="not seen to end"), (
+            "Next: see what happened to the training", said, "&See what happened", ("open_run", run))),
+        (replace(ended, acknowledged=True), ordinary),
+        (IDLE, ordinary),
+    ]
+    for status, (heading, sentence, button, opened) in cases:
+        home = _home(_facts(_under_way(), run=status))
+        heard = []
+        home.navigate.connect(lambda part, page: heard.append(("navigate", (part, page))))
+        home.open_run.connect(lambda ran: heard.append(("open_run", ran)))
+        sentences = [label.plain_text() for label in home.findChildren(Sentence) if _shown(home, label)]
+        assert (home.next_heading.label.text(), sentence in sentences, home.next_button.text()) == (
+            heading, True, button), (status, sentences)
+        home.next_button.click()
+        assert heard == [opened], (status, heard)
+        offers = [shown.text() for shown in home.findChildren(QPushButton) if _shown(home, shown)]
+        assert not [words for words in offers if "Continue" in words or "Resume" in words], offers
+
+
+def test_home_lists_the_last_runs_and_opens_one_in_its_past_view(tmp_path):
+    """Home lists the three latest runs of the records folder in use, newest first: the run's word and name, when it
+    started and when it ended, as a date is written, and how it ended, by its marker and its word. A row opens the
+    run's place, its page drawn in its past view from the run's two files alone: its stages as its history names
+    them, read again from its text, its sentence how and when it ended and what it kept, and its full text the
+    file's."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.run import history
+    qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path, _at(12, 9, 0))
+    root, folder = tmp_path / "Artifacts", tmp_path / "runs"
+    with use_store(ArtifactStore(root)):
+        _ended_history(folder, "20261001T120000-training", root, outcome="finished", acknowledged=True,
+                       started=_at(1, 12, 0), ended=_at(2, 12, 0))
+        history.write(folder, {"id": "20261002T120000-measurement", "word": "Measurement", "name": "cell_a",
+                               "place": ["temperature", "one_cell"], "records_root": str(root),
+                               "started": _at(2, 12, 0), "ended": _at(2, 13, 0), "outcome": "stopped",
+                               "acknowledged": True})
+        _ended_history(folder, "20261003T120000-training", root, outcome="failed", acknowledged=True,
+                       started=_at(3, 12, 0), ended=_at(3, 14, 0), failure={"type": "RuntimeError",
+                                                                             "message": "the run broke"})
+        newest = "20261004T120000-training"
+        _ended_history(folder, newest, root, acknowledged=True, started=_at(4, 12, 0), ended=_at(11, 12, 31),
+                       stage="Simulation", fit=None, tries=[{"ended": _at(11, 12, 31), "batches_after": 6_150}])
+        lines = ["2026-10-04 12:00:00 info " + _BUDGET, "2026-10-04 12:00:01 info " + _ROTATING,
+                 "2026-10-04 12:00:02 info " + _ROTATED, "2026-10-04 12:00:03 info " + _writing(folder)]
+        (folder / f"{newest}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _ended_history(folder, "20261005T120000-training", tmp_path / "elsewhere", acknowledged=True,
+                       started=_at(5, 12, 0))
+        window = build_window()
+        home = window.part("home")
+
+        def now(moment):
+            return design.date_text(moment.astimezone(), datetime.now(timezone.utc).astimezone())
+
+        assert _titles(home.runs_table) == ["Run", "Started", "Ended", "How it ended"]
+        assert _cells(home.runs_table) == [
+            ["Training retrain_3", now(_at(4, 12, 0)), now(_at(11, 12, 31)), ("half", "Stopped")],
+            ["Training retrain_3", now(_at(3, 12, 0)), now(_at(3, 14, 0)), ("err", "Failed")],
+            ["Measurement cell_a", now(_at(2, 12, 0)), now(_at(2, 13, 0)), ("half", "Stopped")]]
+        view = home.runs_table.view
+        QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier,
+                         view.visualRect(view.model().index(0, 0)).center())
+        host = window.part("inference").posterior_panel
+        page = host.run_view
+        assert (window.current_place(), host.results.currentWidget() is page, page.mode) == (
+            ("inference", "training"), True, "past")
+        assert page.sentence.text() == ("Training was stopped on Sun 11 Oct, 12:31, during simulation. The 6,150 "
+                                        "batches simulated so far are kept; you can continue from batch 6,150.")
+        assert [(name, marker) for name, marker, _words in page.stage_line.words()] == [
+            ("Rotation", "done"), ("Simulation", "half"), ("Fitting", "later"), ("Saving", "later")]
+        assert page.full_text.lines()[-len(lines):] == [line[20:].partition(" ")[2] for line in lines]
+
+
+def test_a_live_run_ends_the_first_time_page(tmp_path):
+    """On a computer where nothing has been made, Home opens on its first-time page. A run started from the window
+    ends that page at once, while Home is in sight, and Home does not go back to it once the run has ended: the run
+    is then in the history of the records folder in use."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.panels.crossval_panel import CrossValPanel
+    qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        window = build_window()
+        home = window.part("home")
+        try:
+            _shown_off_screen(window)
+            assert home.is_first_time()
+            with running(window.panel(CrossValPanel)):
+                assert not home.is_first_time(), "a live run left the first-time page"
+            assert not home.is_first_time()
+            held.acknowledge(held.status.run)
+            window.go_to("home")
+            assert not home.is_first_time(), "a run in the history left Home on its first-time page"
+        finally:
+            window.hide()
+
+
+def test_home_reads_the_store_only_when_a_run_ends_or_home_is_shown(tmp_path, monkeypatch):
+    """While Home is shown it states the run's status at every change of it, but reads the store's records and the
+    run history only as it is built, when a run has ended, as it is opened and when the store changes: a training's
+    status changes at each of its stages, every save of its simulation set and every epoch, and none of those reads
+    the store."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import main_window
+    from core.gui.run import history
+    from core.gui.run.model import SIMULATION_ROW
+    app = qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    reads, records, latest = [], main_window._home_records, history.latest
+    monkeypatch.setattr(main_window, "_home_records", lambda store: (reads.append("records"), records(store))[1])
+    monkeypatch.setattr(history, "latest", lambda *args, **kwargs: (reads.append("runs"), latest(*args, **kwargs))[1])
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        window = build_window()
+        home = window.part("home")
+        try:
+            _shown_off_screen(window)
+            assert reads == ["records", "runs"], reads
+            del reads[:]
+            text, stand_in = RunText(held), StandIn()
+            start_run(window.part("inference").posterior_panel, stand_in, spec=_training_spec())
+            for line in (_BUDGET, _ROTATING, _ROTATED, _writing(tmp_path / "simulations" / "_unnamed__set")):
+                stand_in.say(line)
+            for done in (50, 100, 150):
+                stand_in.row(SIMULATION_ROW, done, 10_000)
+                turn_until(app, lambda: held.model.batches_done() == done)
+            assert len(text.statuses) > 4 and home.next_heading.label.text() == (
+                "Next: nothing until the training ends"), [status.state for status in text.statuses]
+            assert reads == [], f"Home read the store at a change of the run's status: {reads}"
+            stand_in.release()
+            turn_until(app, lambda: not held.is_live())
+            assert (reads, home.next_heading.label.text()) == (["records", "runs"], "Next: see the training"), reads
         finally:
             window.hide()
 
@@ -973,87 +1223,81 @@ def test_a_step_names_a_held_record_by_the_name_its_save_box_gave_it(monkeypatch
     assert rail.row("training").accessibleName() == "Step 3, Training. Done: retrain"
 
 
-def test_the_foot_reads_nothing_is_running_at_start_and_names_the_running_place(monkeypatch):
-    """At the window's start the foot says nothing is running, is no control and no clock is ticking. While a
-    panel's run is live it names the place by its part ("Running: Effective temperature") or, for a step, by the
-    step, with the time it has gone on and that settings are locked; its tool tip and its accessible name name the
-    place in full, its page too. It is a button then, and the clock ticks once a second. When the run ends the
-    foot says nothing is running again and the clock stops; a foot that held the keyboard hands it to the rail.
-    The window's clock is read through a stand-in, so that each time is exact: a run's time starts at 0:00, that
-    of a run started a minute after another ended too."""
-    from core.gui import main_window
+def test_the_foot_reads_nothing_is_running_at_start_and_follows_each_run_to_its_end(tmp_path):
+    """At the window's start the foot says nothing is running and is no control, and the window keeps no clock.
+    While a panel's run is live the foot says the run's word, the stage it is in, in a few words, and that settings
+    are locked; it is a button then. When the run ends the foot says how and when, and stays a button, until the end
+    is seen; then it says nothing is running again, and a foot that held the keyboard hands it to the rail. At no
+    moment does the window keep a clock: what the foot says is the run's status alone."""
+    from PySide6.QtCore import QTimer
     from core.gui.panels.crossval_panel import CrossValPanel
     qt_app()
-    now = [1000.0]
-    monkeypatch.setattr(main_window, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    held, _clock = _on_the_runs_clock(tmp_path)
     window = build_window()
-    foot = window.shell.rail.foot
     idle = ("none", "Nothing is running", "Only one run at a time.", False)
-    assert (foot._marker, foot._title, foot._words, foot.is_button()) == idle
-    assert not window._run_timer.isActive(), "a clock is ticking before anything has run"
-    for panel, title, whole in ((window.panel(CrossValPanel), "Running: Effective temperature",
-                                 "Running: Effective temperature, Sweep study"),
-                                (window.part("inference").posterior_panel, "Running: Training",
-                                 "Running: step 3, Training")):
+
+    def foot():
+        clocks = [timer for timer in window.findChildren(QTimer, options=Qt.FindDirectChildrenOnly)
+                  if timer.isActive()]
+        assert clocks == [], f"the window keeps a clock: {clocks}"
+        return _foot(window)
+
+    assert foot() == idle and not hasattr(window, "_run_timer")
+    for panel in (window.panel(CrossValPanel), window.part("inference").posterior_panel):
         with running(panel):
-            assert (foot._marker, foot._title, foot.is_button()) == ("now", title, True)
-            assert foot._words == "0:00 so far. Settings are locked.", (
-                f"the run's time did not start at 0:00: {foot._words}")
-            assert foot.toolTip() == foot.accessibleName() == f"{whole}. {foot._words}"
-            assert window._run_timer.isActive() and window._run_timer.interval() == 1000
-            assert window._run_timer.parent() is window
-            now[0] += 247                                         # four minutes and seven seconds on, a tick
-            window._tick_running()
-            assert foot._words == "4:07 so far. Settings are locked.", f"the clock did not tick: {foot._words}"
-        now[0] += 60                                              # the next run starts a minute later
-        assert (foot._marker, foot._title, foot._words, foot.is_button()) == idle
-        assert not window._run_timer.isActive(), "the clock must stop when the run does"
-    with running(panel):
-        foot.setFocus(Qt.TabFocusReason)
-    assert window.focusWidget() is window.shell.rail.row("home"), "the run ended and the keyboard went nowhere"
+            assert foot() == ("now", "Training is running", "Running. Settings are locked.", True)
+        assert foot() == ("done", "Training finished", "Thu 8 Oct, 19:02.", True), "the run's end is not said"
+        window.shell.rail.foot.setFocus(Qt.TabFocusReason)
+        held.acknowledge(held.status.run)
+        assert foot() == idle
+        assert window.focusWidget() is window.shell.rail.row("home"), "the end was seen and the keyboard went nowhere"
 
 
-def test_the_foots_time_keeps_its_width_as_it_ticks(monkeypatch):
-    """The foot is written again every second while a run is live. Its words are laid out in the small lettering
-    with digits of equal width, so the time keeps its width as it ticks: 4:07 and 4:11 are one width, and so on
-    by the hour. Without the feature the same font gives two widths."""
+def test_the_foots_words_are_written_in_digits_of_equal_width(tmp_path):
+    """The foot's words are laid out in the small lettering with digits of equal width, so that a count among them
+    keeps its width as it moves: the batch a training's simulation is at, counted on, keeps the words' width.
+    Without the feature the same font gives two widths."""
     from PySide6.QtGui import QFont, QFontMetricsF
     from core.gui import fonts
-    from core.gui.panels.crossval_panel import CrossValPanel
-    from core.gui.screens import shell
-    qt_app()
+    from core.gui.run.model import SIMULATION_ROW
+    app = qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
     window = build_window()
-    foot, panel = window.shell.rail.foot, window.panel(CrossValPanel)
+    text, stand_in = RunText(held), StandIn()
+    start_run(window.part("inference").posterior_panel, stand_in, spec=_training_spec())
+    for line in (_BUDGET, _ROTATING, _ROTATED, _writing(tmp_path / "simulations" / "_unnamed__20261008T190211")):
+        stand_in.say(line)
     laid_out = []
-    kept = shell.clock_words
-    with running(panel):
-        for seconds in (247, 251, 600, 671, 36000, 40271):
-            monkeypatch.setattr(window, "_run_started", time.monotonic() - seconds)
-            window._tick_running()
-            laid_out.append(foot._words)
-    assert laid_out[:2] == ["4:07 so far. Settings are locked.", "4:11 so far. Settings are locked."]
-    assert kept(36000) == "10:00:00"
+    for done in (6_111, 6_888):
+        stand_in.row(SIMULATION_ROW, done, 10_000)
+        turn_until(app, lambda: held.model.batches_done() == done)
+        laid_out.append(_foot(window)[2])
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert laid_out == ["Simulating, batch 6,111 of 10,000. Settings are locked.",
+                        "Simulating, batch 6,888 of 10,000. Settings are locked."], laid_out
     font, equal, small = fonts.inter("small", tabular=True), QFont.Tag.fromString("tnum"), fonts.inter("small")
     assert font.isFeatureSet(equal)
     assert (font.family(), font.pixelSize(), font.weight()) == (small.family(), small.pixelSize(), small.weight())
     widths = [QFontMetricsF(font).horizontalAdvance(words) for words in laid_out]
-    assert widths[0] == widths[1] and widths[2] == widths[3] and widths[4] == widths[5], widths
+    assert widths[0] == widths[1], widths
     without = QFont(font)
     without.unsetFeature(equal)
-    one, other = (QFontMetricsF(without).horizontalAdvance(words) for words in laid_out[:2])
+    one, other = (QFontMetricsF(without).horizontalAdvance(words) for words in laid_out)
     assert one != other, "the digits have one width without the feature as well: the lines above prove nothing"
 
 
 def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowhere(monkeypatch):
     """While a run is live the foot is a button that goes to the run's place, its page or step too, as
-    ``go_to_run`` does, a step that cannot start among them, the place taking the keyboard as after a click. A panel
-    the window has no place for -- the bare run host a test builds -- is named "a task", in the foot's title, tool
-    tip and accessible name; the foot is no button and the window stays where it is."""
+    ``go_to_run`` does, a step that cannot start among them, the place taking the keyboard as after a click. Once the
+    run has ended the foot is a button still, until its end is seen: a click goes to the run's place and sees it. A
+    run of a panel the window has no place for -- the bare run host a test builds -- is named by its word in the
+    foot's title and its accessible name; the foot is no button, live or ended, and the window stays where it is."""
     from core.gui.panels.crossval_panel import CrossValPanel
     qt_app()
     given = _given(monkeypatch)
     window = build_window()
-    foot = window.shell.rail.foot
+    foot, held = window.shell.rail.foot, controller()
     for panel, place in ((window.panel(CrossValPanel), ("temperature", "sweep")),
                          (window.part("inference").validate_panel, ("inference", "checks"))):
         window.go_to("home")
@@ -1064,14 +1308,23 @@ def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowh
             assert window.current_place() == place
             assert given[-1:] == [(window.focusWidget(), Qt.OtherFocusReason)], (
                 f"{place}: a click on the foot gave the keyboard otherwise than as a click gives it")
+        window.go_to("home")
+        assert (held.status.unacknowledged_end, foot.is_button()) == (True, True), place
+        QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
+        assert (window.current_place(), held.status.state, foot.is_button()) == (place, "idle", False), (
+            f"{place}: a click on the foot of an ended run did not go to it and see its end")
     orphan = build_run_host()
     window.go_to("live")
     with running(orphan):
-        assert (foot._title, foot.is_button()) == ("Running: a task", False)
-        assert foot.toolTip() == foot.accessibleName() == f"Running: a task. {foot._words}"
+        assert (foot._title, foot.is_button()) == ("Training is running", False)
+        assert (foot.accessibleName(), foot.toolTip()) == ("Training is running. Running. Settings are locked.", "")
         QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
         window.go_to_run()
         assert window.current_place() == ("live", None), "a panel with no place moved the window"
+    assert (foot._title, foot.is_button(), held.status.unacknowledged_end) == ("Training finished", False, True)
+    QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
+    window.go_to_run()
+    assert window.current_place() == ("live", None), "an ended run with no place moved the window"
 
 
 def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
@@ -1098,7 +1351,7 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
         """A run of ``panel`` live, started while Home is in sight; ``where`` is the run's place."""
         window.go_to("home")
         with running(panel):
-            assert home.next_heading.label.text() == "Next: nothing until the run ends", "Home did not read"
+            assert home.next_heading.label.text() == "Next: nothing until the training ends", "Home did not read"
             assert seen() == before, "a row carries a mark of the run"
             assert [name.text() for name in names] == page_words
             home.next_button.click()
@@ -1123,6 +1376,358 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
             during(panel, where)
     finally:
         window.hide()
+
+
+def test_the_foot_says_each_state_of_a_run_in_its_words(tmp_path, monkeypatch):
+    """The foot says each state of a run from the run's status alone, with no clock: nothing running, and no
+    control; a run live, titled by its word, with the stage it is in, in a few words, and that settings are locked;
+    a run that needs someone, with why; a run stopping, with when its stop is taken; a run that only loads a record;
+    and an end nobody has seen: finished with its date, stopped and failed with the date and what was kept, and a
+    run PRISM did not see end, as a failure dated when it was last heard. A date within seven days carries its
+    weekday. Every state but the first is a button. No word the window writes there holds a hyphen, which the
+    words' digits of equal width would widen."""
+    from PySide6.QtCore import QTimer
+    from core.artifacts import default_store
+    from core.gui.run.model import SILENCE_NEEDS_YOU_S, SIMULATION_ROW, RunModel, RunSpec
+    from core.SBI.fit_state import KeptNote
+    from tests._fixtures import choose
+    app = qt_app()
+    held, clock = _on_the_runs_clock(tmp_path)
+    window = build_window()
+    host, text = window.part("inference").posterior_panel, RunText(held)
+    folder = tmp_path / "simulations" / "_unnamed__20261008T190211"
+    written = []
+
+    def foot():
+        clocks = [timer for timer in window.findChildren(QTimer, options=Qt.FindDirectChildrenOnly)
+                  if timer.isActive()]
+        assert clocks == [], f"the window keeps a clock: {clocks}"
+        written.append(_foot(window)[2])
+        return _foot(window)
+
+    def said(stand_in, *lines):
+        before = text.texts().count(lines[-1])
+        for line in lines:
+            stand_in.say(line)
+        turn_until(app, lambda: text.texts().count(lines[-1]) > before)
+
+    def seen():
+        held.acknowledge(held.status.run)
+        assert foot() == ("none", "Nothing is running", "Only one run at a time.", False)
+
+    def running_words(words):
+        return "now", "Training is running", f"{words}. Settings are locked.", True
+
+    assert foot() == ("none", "Nothing is running", "Only one run at a time.", False)
+    choose(monkeypatch, words="Stop training")
+    stand_in = StandIn(takes_stops=False)
+    stand_in.kept_fit = KeptNote("k1", 3, False, True, 1)
+    start_run(host, stand_in, spec=_training_spec())
+    assert foot() == running_words("Running")
+    said(stand_in, _BUDGET, _ROTATING)
+    assert foot() == running_words("Computing the rotation")
+    said(stand_in, _ROTATED, _writing(folder))
+    stand_in.row(SIMULATION_ROW, 6_150, 10_000)
+    turn_until(app, lambda: held.model.batches_done() == 6_150)
+    assert foot() == running_words("Simulating, batch 6,150 of 10,000")
+    clock.advance(SILENCE_NEEDS_YOU_S + 1)
+    held.tick()
+    assert held.status.needs_you and foot() == ("warn", "Training needs you", held.status.needs_you, True)
+    said(stand_in, f"[checkpoint] complete: 10000 batches in {folder}. Safe to delete once the posterior is saved; "
+                   f"keeping it lets you retrain the flow without re-simulating.")
+    clock.advance(3780)
+    said(stand_in, _epoch(1, 0), _epoch(2, 1), _epoch(3, 2))
+    assert foot() == running_words("Fitting, epoch 3")
+    estimated = RunModel(_training_spec(), clock=clock, expected=(130, "about 130 epochs"))
+    for line in (_BUDGET, _ROTATING, _ROTATED, _writing(folder), _epoch(1, 0)):
+        estimated.feed([(line, "info")])
+    estimated.feed([(f"[checkpoint] complete: 10000 batches in {folder}. Safe to delete once the posterior is "
+                     f"saved; keeping it lets you retrain the flow without re-simulating.", "info"),
+                    (_epoch(2, 0), "info")])
+    assert estimated.doing() == "Fitting, epoch 2 of about 130", estimated.doing()
+    host.run_view.stop_button.click()
+    assert foot() == ("now", "Training is stopping", "Stopping: takes effect when this epoch ends, up to about 63 "
+                                                     "minutes.", True)
+    stand_in.say(_epoch(4, 3))
+    turn_until(app, lambda: not held.is_live())
+    stopped = ("Thu 8 Oct, 20:15. The 20,480,000 simulations are kept; the training is kept up to epoch 3, so you can "
+               "resume it.")
+    assert foot() == ("half", "Training stopped", stopped, True)
+    seen()
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=_training_spec())
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert foot() == ("done", "Training finished", "Thu 8 Oct, 20:15.", True)
+    seen()
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=_training_spec())
+    said(stand_in, _BUDGET, _ROTATING, _ROTATED, _writing(folder))
+    stand_in.fail(RuntimeError("the run broke"))
+    turn_until(app, lambda: not held.is_live())
+    assert foot() == ("err", "Training failed", "Thu 8 Oct, 20:15. No simulation was saved.", True)
+    seen()
+    loads = StandIn(word="Prior load")
+    start_run(host, loads, spec=RunSpec("Prior load", ("inference", "prior"), loads_only=True, keeps_files=False,
+                                        stop_asks=False))
+    assert foot() == ("now", "Loading…", "", True)
+    loads.release()
+    turn_until(app, lambda: not held.is_live())
+    assert foot() == ("none", "Nothing is running", "Only one run at a time.", False), "a load left an end to see"
+    _ended_history(tmp_path / "runs", "20261003T010000-training", default_store().root, outcome="not seen to end",
+                   stage="Simulation", ended=None, last_heard=_at(3, 3, 12), tries=[], fit=None,
+                   simulation_set={"folder": "eda5c2a1e468", "batches": 10_000, "at_end": 6_150})
+    held.recall(str(default_store().root))
+    assert foot() == ("err", "Training failed", "Sat 3 Oct, 03:12. What it had saved by then is kept.", True)
+    seen()
+    assert [words for words in written if "-" in words] == [], "a hyphen in the foot's own words"
+
+
+def test_an_end_is_acknowledged_once_its_page_has_been_seen_in_the_active_window(tmp_path):
+    """An end is seen, and said at the foot no more, once its run's page has been in sight while the window was the
+    one in front: looked at as the run ends, at every move and when the window comes to the front. Its history then
+    says it was seen. The run's page in sight in a window not in front, or another page in sight in the window in
+    front, sees nothing. A run started while an end waits to be seen sets that end aside: the window says the new
+    run, and the end is written seen, so that the next launch does not say it."""
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.run import history
+    qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    window = build_window()
+    panel, place = window.panel(CrossValPanel), ("temperature", "sweep")
+
+    def end_of_a_run():
+        """A run of the sweep study, ended; its id."""
+        with running(panel):
+            run = held.status.run
+        return run
+
+    def seen(run):
+        record = history.read(tmp_path / "runs" / f"{run}.json")
+        return record["acknowledged"], held.status.unacknowledged_end, window.shell.rail.foot._title
+
+    try:
+        _shown_off_screen(window)
+        window.go_to(*place)
+        run = end_of_a_run()
+        assert seen(run) == (False, True, "Training finished"), "seen in a window not in front"
+        with _in_front(window):
+            assert seen(run) == (True, False, "Nothing is running"), "not seen as the window came to the front"
+            window.go_to("home")
+            run = end_of_a_run()
+            assert seen(run) == (False, True, "Training finished"), "seen with another page in sight"
+            window.go_to(*place)
+            assert seen(run) == (True, False, "Nothing is running"), "not seen as its page came into sight"
+            run = end_of_a_run()
+            assert seen(run) == (True, False, "Nothing is running"), "not seen as it ended in sight"
+            window.go_to("home")
+            run = end_of_a_run()
+            assert seen(run) == (False, True, "Training finished")
+            later = end_of_a_run()
+            assert (seen(run)[0], seen(later)) == (True, (False, True, "Training finished")), (
+                "an end set aside by the next run was not written seen")
+    finally:
+        window.hide()
+
+
+def test_ctrl_r_opens_the_run_whenever_the_foot_is_a_button(tmp_path):
+    """Ctrl+R goes where the foot goes, whenever the foot is a button: to the live run's place; to the page of a run
+    whose end nobody has seen, which it then sees; and to the page of an end an earlier PRISM left unseen, drawn in
+    its past view from the run's files. While nothing runs and no end waits to be seen, it does nothing."""
+    from core.artifacts import default_store
+    from core.gui.panels.crossval_panel import CrossValPanel
+    qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    window = build_window()
+    foot = window.shell.rail.foot
+    try:
+        _shown_off_screen(window)
+        with _in_front(window):
+            _press(window, "Ctrl+R")
+            assert (window.current_place(), foot.is_button()) == (("home", None), False)
+            with running(window.panel(CrossValPanel)):
+                _press(window, "Ctrl+R")
+                assert window.current_place() == ("temperature", "sweep"), "Ctrl+R did not go to the live run"
+                window.go_to("home")
+            assert (held.status.unacknowledged_end, foot.is_button()) == (True, True)
+            _press(window, "Ctrl+R")
+            assert (window.current_place(), held.status.state) == (("temperature", "sweep"), "idle"), (
+                "Ctrl+R did not go to the ended run and see it")
+            window.go_to("home")
+            _press(window, "Ctrl+R")
+            assert window.current_place() == ("home", None), "Ctrl+R moved the window with no run to go to"
+            run = "20261003T010000-training"
+            _ended_history(tmp_path / "runs", run, default_store().root)
+            held.recall(str(default_store().root))
+            assert (held.status.run, foot.is_button()) == (run, True)
+            _press(window, "Ctrl+R")
+            view = window.part("inference").posterior_panel.run_view
+            assert (window.current_place(), view.mode, held.status.state) == (("inference", "training"), "past",
+                                                                              "idle")
+    finally:
+        window.hide()
+
+
+def test_during_a_run_every_setting_is_locked_but_appearance_and_every_page_reads(tmp_path, monkeypatch):
+    """From a run's start to its end every setting of every page that starts runs is locked; Records' note, its
+    delete and its clearing of leftovers, and Your own models' validate, save and delete, are refused after the
+    click, each with its own sentence, as they are today, and change nothing; while the rail, every part and every
+    step, Home, Help, Records' lists and the choice of appearance stay usable. At the run's end every setting is
+    free again."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from tests._fixtures import all_asked, build_browse_store, forget_asked
+    qt_app()
+    _on_the_runs_clock(tmp_path)
+    ids = build_browse_store(tmp_path / "Artifacts")
+    store = ArtifactStore(tmp_path / "Artifacts")
+    with use_store(store):
+        window = build_window()
+        for place in keys.PARTS:
+            window.part(place.key)
+        panels = window._all_panels()
+        records, models = window.part("records"), window.part("models")
+        records.note_edit.setText("written during a run")
+        note = store.get("prior", ids["prior"]).note
+        leftover = store.kind_dir("prior") / "_unnamed__20260917T090000"
+        leftover.mkdir(parents=True, exist_ok=True)
+        assert all(panel.controls.isEnabled() for panel in panels)
+        forget_asked()
+        with running(window.panel(CrossValPanel)):
+            assert [panel for panel in panels if panel.controls.isEnabled()] == [], "a setting is not locked"
+            refused = []
+            for action, doing in ((records._set_note, "setting a note"), (records._delete, "deleting an artifact"),
+                                  (lambda: records._sweep(all_kinds=False), "removing leftovers")):
+                records._set_status("")
+                action()
+                refused.append(records.status.text())
+            assert [f"A task is running -- wait for it to finish before {doing}." in said for said, doing in zip(
+                refused, ("setting a note", "deleting an artifact", "removing leftovers"))] == [True] * 3, refused
+            assert (store.get("prior", ids["prior"]).note, leftover.is_dir()) == (note, True), (
+                "a refused action changed the store")
+            builder = models.builder
+            builder._validate()
+            validating = builder.status.text()
+            builder._save()
+            assert (validating, builder.status.text()) == (
+                "⚠ A task is running -- wait for it to finish before validating.",
+                "⚠ A task is running -- wait for it to finish before saving.")
+            models._delete_user_model("BROKEN")
+            assert [(told.title, told.sentence) for told in all_asked()] == [
+                ("A task is running", "Wait for the running task to finish before deleting a model.")]
+            for place in keys.PARTS:
+                window.go_to(place.key)
+                assert window.current_place()[0] == place.key and window.shell.rail.row(place.key).isEnabled()
+                assert window.part(place.key).isEnabled(), place.key
+            for step in keys.STEPS:
+                window.go_to("inference", step.key)
+                assert window.current_place() == ("inference", step.key)
+            home = window.part("home")
+            assert all(table.isEnabled() for table in (home.steps_table, home.parts_table, home.records_table))
+            assert (records.table.isEnabled(), records.kind_combo.isEnabled()) == (True, True)
+            records.kind_combo.setCurrentIndex(records.kind_combo.findData("posterior"))
+            assert records.kind() == "posterior", "Records' list could not be changed"
+            radios = window.part("settings")._radios
+            assert radios and all(radio.isEnabled() for radio in radios.values()), "appearance was locked"
+        assert all(panel.controls.isEnabled() for panel in panels), "a setting stayed locked after the run"
+
+
+def test_the_chain_says_stopping_and_the_batch_a_stopped_training_kept(tmp_path, monkeypatch):
+    """The steps read the run's status. A run live on a step other than the step in hand reads "Now: running" on
+    that step, and the step in hand keeps its own "Now". A training stopping reads "Now: stopping" on its step; once
+    stopped with batches saved in its simulation set, the training's step says the batch it can be continued from,
+    in the rail and in Home's table, after its end has been seen too."""
+    import torch
+    from core.gui.session import SbiSession
+    from tests._fixtures import choose
+    app = qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    window = build_window()
+    inference, rail, home = window.part("inference"), window.shell.rail, window.part("home")
+    inference.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"),
+                                   inf_prior=SimpleNamespace(name="retrain_prior"))
+    inference.refresh_gates()
+    _shown_off_screen(window)                       # shown: Home reads as it is opened
+
+    def spoken(*steps):
+        return [rail.row(step).accessibleName() for step in steps]
+
+    assert spoken("training", "checks") == ["Step 3, Training. Now: setting up",
+                                                "Step 4, Checks. To come: needs a posterior"]
+    with running(inference.validate_panel):
+        assert spoken("training", "checks") == ["Step 3, Training. Now: setting up", "Step 4, Checks. Now: running"]
+    held.acknowledge(held.status.run)
+    folder = tmp_path / "simulations" / "_unnamed__20261003T030211"
+    folder.mkdir(parents=True)
+    torch.save({"batches_done": 6_150, "complete": False}, folder / "state.pt")
+    text, stand_in = RunText(held), StandIn(takes_stops=False)
+    start_run(inference.posterior_panel, stand_in, spec=_training_spec())
+    for line in (_BUDGET, _ROTATING, _ROTATED, _writing(folder)):
+        stand_in.say(line)
+    turn_until(app, lambda: _writing(folder) in text.texts())
+    assert spoken("training") == ["Step 3, Training. Now: running"]
+    choose(monkeypatch, words="Stop and keep the simulations")
+    inference.posterior_panel.run_view.stop_button.click()
+    assert spoken("training") == ["Step 3, Training. Now: stopping"]
+    stand_in.say("a line of the run")
+    turn_until(app, lambda: not held.is_live())
+    kept = ["Step 3, Training. Unfinished: simulations saved to batch 6,150"]
+    assert (held.status.continue_from, spoken("training")) == (6_150, kept)
+    held.acknowledge(held.status.run)
+    window.go_to("home")
+    assert spoken("training") == kept and _cells(home.steps_table)[2] == [
+        "3 Training", ("half", "Unfinished"), "Simulations saved to batch 6,150"]
+    held.forget_offers()                              # as the end of every test does
+    inference.recompute_states()
+    assert spoken("training") == ["Step 3, Training. Now: setting up"], "the batch outlived the offers"
+    window.hide()
+
+
+def test_the_keyboard_leaves_a_foot_that_stops_being_a_button(tmp_path):
+    """The foot holds the keyboard while it is a button, for a live run and for an end nobody has seen; when it stops
+    being one -- the end is seen, or a run that only loads a record ends into nothing -- the rail takes the
+    keyboard, on the row of the place in sight."""
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.run.model import RunSpec
+    qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    window = build_window()
+    foot, rail = window.shell.rail.foot, window.shell.rail
+    with running(window.panel(CrossValPanel)):
+        pass
+    foot.setFocus(Qt.TabFocusReason)
+    assert (foot.is_button(), window.focusWidget() is foot) == (True, True)
+    held.acknowledge(held.status.run)
+    assert (foot.is_button(), window.focusWidget() is rail.row("home")) == (False, True), (
+        "the end was seen and the foot kept the keyboard")
+    loads = StandIn(word="Prior load")
+    start_run(window.part("inference").prior_panel, loads, spec=RunSpec(
+        "Prior load", ("inference", "prior"), loads_only=True, keeps_files=False, stop_asks=False))
+    foot.setFocus(Qt.TabFocusReason)
+    loads.release()
+    turn_until(qt_app(), lambda: not held.is_live())
+    assert (foot.is_button(), window.focusWidget() is rail.row("home")) == (False, True), (
+        "a load ended and the foot kept the keyboard")
+
+
+def test_the_foots_tool_tip_follows_its_own_rule(tmp_path):
+    """With no clock, the foot's tool tip is the foot's own: none while its words stand whole, and its title and its
+    words when they are cut; its accessible name is always its title and its words."""
+    from core.artifacts import default_store
+    from core.gui.panels.crossval_panel import CrossValPanel
+    qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path, _at(12, 9, 0))
+    window = build_window()
+    foot = window.shell.rail.foot
+    whole = "Training is running. Running. Settings are locked."
+    with running(window.panel(CrossValPanel)):
+        assert (foot.accessibleName(), foot.toolTip()) == (whole, ""), (foot.accessibleName(), foot.toolTip())
+    held.acknowledge(held.status.run)
+    _ended_history(tmp_path / "runs", "20261003T010000-training", default_store().root)
+    held.recall(str(default_store().root))
+    said = ("Training stopped. Sun 11 Oct, 12:31. The 20,480,000 simulations are kept; the training is kept up to "
+            "epoch 62, so you can resume it.")
+    assert (foot.accessibleName(), foot.toolTip()) == (said, said), (foot.accessibleName(), foot.toolTip())
 
 
 def test_go_to_records_with_a_kind_opens_records_at_that_kind():
@@ -1242,7 +1847,7 @@ def test_the_current_row_stays_in_view_when_the_rail_has_less_room():
             assert window.current_place() == ("inference", "narrowing")
             assert not window.shell._small and _in_view(rail, rail.row("narrowing"))
             usual = rail.foot.height()
-            with running(panel):                               # a title of two lines: the foot grows
+            with running(panel, StandIn(word="Narrowing round")):     # a title of two lines: the foot grows
                 QApplication.processEvents()
                 assert rail.foot.height() > usual
                 assert _in_view(rail, rail.row("narrowing")), "the foot grew over the current row"
@@ -2127,7 +2732,7 @@ def test_a_part_that_fails_to_build_leaves_no_panel_for_a_run_to_lock_and_the_ne
         page = window.part(name)
         assert isinstance(page, PartError) and window.shell.stack.currentWidget() is page, attribute
         greyed = sorted(type(panel).__name__ for panel in BasePanel._instances if not panel.controls.isEnabled())
-        assert (raised, foot.accessibleName().startswith("Nothing is running"), greyed) == ([], True, []), (
+        assert (raised, foot.accessibleName().startswith("Training finished"), greyed) == ([], True, []), (
             "a run's end did not go through", attribute, raised)
         assert held(window, kinds, before) == ([], [], [], []), (
             f"what the failed build of {name} made is still held", attribute, held(window, kinds, before))
@@ -2501,8 +3106,8 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
     and Parameter inference first opened by a step's key, is built under the wait cursor with its row of the rail
     marked already. The ring shows also where the keyboard already stood, after a click in the help text or a move
     the mouse made, neither of which shows it. The key to the run goes to the running place only while the foot is
-    a button, and moves nothing once the run has ended; the key between the rail and the page takes the keyboard
-    from the page to the rail and back."""
+    a button, and moves nothing once the run's end has been seen; the key between the rail and the page takes the
+    keyboard from the page to the rail and back."""
     from PySide6.QtGui import QShortcut
     from core.gui import main_window, style
     from core.gui.panels.reduction_panel import ReductionPanel
@@ -2958,6 +3563,23 @@ def _answers(name):
     made = socket.waitForConnected(300)
     socket.abort()
     return made
+
+
+def test_no_key_is_made_outside_the_key_map():
+    """Every key of the window is made in one place: the window's loop over the key map, which Help prints and the
+    keys' test reads. No other line under core/gui makes a shortcut or sets one on an action, so that a key added
+    anywhere else cannot escape them."""
+    from pathlib import Path
+    gui = Path(__file__).resolve().parents[1] / "core" / "gui"
+    made = []
+    for path in sorted(gui.rglob("*.py")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for number, line in enumerate(lines):
+            if "QShortcut(" in line or "setShortcut(" in line:
+                above = next((earlier.strip() for earlier in reversed(lines[:number]) if earlier.strip()), "")
+                made.append((path.relative_to(gui).as_posix(), line.strip(), above))
+    assert made == [("main_window.py", "shortcut = QShortcut(QKeySequence(sequence), self)",
+                     "for sequence, does in keys.BINDINGS:")], made
 
 
 def test_which_case_a_start_of_prism_falls_in():

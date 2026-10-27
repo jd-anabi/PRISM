@@ -7095,25 +7095,26 @@ def _written_with_fonts(monkeypatch, widget):
     return written
 
 
-def test_the_foots_words_keep_their_lines_and_their_width_as_its_clock_ticks(monkeypatch):
-    """The foot's words are laid out and written in digits of equal width, so a clock among them, rewritten every
-    second while a run is live, keeps its lines and the first line its width: through a minute at four minutes, at
-    ten hours and at a hundred hours the words break at one place, and the first line, measured in the font it is
-    written in, is one width. In digits of unequal width the first line's end would move each second, and past a
-    hundred hours a word would jump between the two lines."""
+def test_the_foots_words_keep_their_lines_and_their_width_as_their_counts_move(monkeypatch):
+    """The foot's words are laid out and written in digits of equal width, so the counts among them, said again at
+    each change of the run's status, keep their lines and the first line its width: a simulation's batch counted
+    through a hundred in a set of thousands and in a set of hundreds, and a fit's epoch counted through ninety, each
+    break at one place, and the first line, measured in the font it is written in, is one width. In digits of
+    unequal width the first line's end would move with the count, and a word could jump between the two lines."""
     kit = _rail_kit()
     foot = kit.rail.RunFoot()
     with _standing(foot, 220, 160):
-        for hours, minutes in ((0, 4), (10, 0), (100, 0)):
+        for counts, said in ((range(6_100, 6_200), "Simulating, batch {:,} of 10,000. Settings are locked."),
+                             (range(100, 200), "Simulating, batch {} of 400. Settings are locked."),
+                             (range(10, 100), "Fitting, epoch {} of about 130. Settings are locked.")):
             seen = set()
-            for second in range(60):
-                clock = f"{hours}:{minutes:02}:{second:02}" if hours else f"{minutes}:{second:02}"
-                foot.set_state("now", "Running: Training", f"{clock} so far. Settings are locked.", button=True)
+            for count in counts:
+                foot.set_state("now", "Training is running", said.format(count), button=True)
                 words = [(text, font) for _box, text, font in _written_with_fonts(monkeypatch, foot)
                          if font.weight().value == 400]
                 (first, font), rest = words[0], tuple(text for text, _font in words[1:])
                 seen.add((rest, QFontMetricsF(font).horizontalAdvance(first)))
-            assert len(seen) == 1, (hours, minutes, sorted(seen))
+            assert len(seen) == 1, (said, sorted(seen))
 
 
 def test_the_step_names_stand_in_one_column(monkeypatch):

@@ -249,8 +249,8 @@ def test_a_stop_during_the_fit_lands_when_the_epoch_ends_and_says_so_meanwhile(t
     that epoch's end; once an epoch is measured, at that epoch's end, up to about the time an epoch takes -- on its
     page, where the stop button is greyed and "Don't stop after all" stands beside it, at the rail's foot, whose
     title is that the run is stopping, on Home, which says the run is stopping, and on the run's step in the rail.
-    "Don't stop after all" puts each back as the run says it while running, the foot's time counted from the run's
-    start."""
+    "Don't stop after all" puts each back as the run says it while running: the foot then says the stage the run is
+    in."""
     from core.gui.widgets.page import Sentence
     from tests._window_helpers import shown_off_screen
     app = qt_app()
@@ -270,7 +270,6 @@ def test_a_stop_during_the_fit_lands_when_the_epoch_ends_and_says_so_meanwhile(t
 
     stand_in = StandIn(takes_stops=False)
     start_run(host, stand_in, spec=_training())
-    window._run_started -= 3600                     # the run began an hour ago by the foot's own clock
     _to_the_fit(app, stand_in, text, clock, _THREE_EPOCHS)
     view, foot, home = host.run_view, window.shell.rail.foot, window.part("home")
     step = window.shell.rail.row("training")
@@ -290,12 +289,11 @@ def test_a_stop_during_the_fit_lands_when_the_epoch_ends_and_says_so_meanwhile(t
     assert ("Training retrain_3 is stopping, and no other run can start until it ends. You can still move around and "
             "read results. Keep PRISM open; you can minimise it.") in home_says(), home_says()
     view.withdraw_button.click()
-    assert (held.status.state, foot._title, foot._words[:5], step.accessibleName()) == (
-        "running", "Running: Training", "1:00:", "Step 3, Training. Now: running"), (
-        "after 'Don't stop after all' the foot or the rail still says the run is stopping, or the foot's time began "
-        "again", foot._title, foot._words)
-    assert ("A run is going in step 3, Training, and no other run can start until it ends. You can still move around "
-            "and read results. Keep PRISM open; you can minimise it.") in home_says(), home_says()
+    assert (held.status.state, foot._title, foot._words, step.accessibleName()) == (
+        "running", "Training is running", "Fitting, epoch 3. Settings are locked.", "Step 3, Training. Now: running"), (
+        "after 'Don't stop after all' the foot or the rail still says the run is stopping", foot._title, foot._words)
+    assert ("Training retrain_3 is running, and no other run can start until it ends. You can still move around and "
+            "read results. Keep PRISM open; you can minimise it.") in home_says(), home_says()
     view.stop_button.click()
     assert (held.status.state, foot._title) == ("stopping", "Training is stopping")
     last = _epoch(4, 3)

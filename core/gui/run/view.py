@@ -43,7 +43,7 @@ from ..widgets.ruled import Ruled, SectionHead
 from ..widgets.time_axis import AxisCaption, TimeAxis
 from . import ends, questions, retry
 from .loss import LossCurve
-from .model import LEADS, OUTCOMES, RunModel, RunSpec
+from .model import LEADS, OUTCOMES, RunModel, RunSpec, Stage
 
 SHOW_TEXT = "Show the full text"
 HIDE_TEXT = "Hide the full text"
@@ -594,15 +594,23 @@ class RunView(QWidget):
         self.sentence.setText(sentence)
         self._arrange()
 
-    def show_past(self, record: dict, text: Path | None) -> None:
+    def show_past(self, record: dict, text: Path | None, *, clock=None) -> None:
         """Draw a run that is over from its two files alone: ``record``, its history, and ``text``, its text
-        file (None when there is none). Its model reads the file's lines again, each at the moment written."""
+        file (None when there is none). Its model, of the stages its history names, reads the file's lines again,
+        each at the moment written, so that its stage line and its health are drawn as they stood at its end; its
+        sentence says how and when it ended and what it kept, as its history says it, dated against the moment
+        ``clock`` gives (the computer's own clock when none is handed)."""
         place = record.get("place")
+        stages = []
+        for stage in record.get("stages") or ():
+            if (isinstance(stage, list) and len(stage) == 3 and isinstance(stage[0], str)
+                    and isinstance(stage[1], list) and (stage[2] is None or isinstance(stage[2], str))):
+                stages.append(Stage(stage[0], tuple(str(begins) for begins in stage[1]), stage[2]))
         spec = RunSpec(str(record.get("word") or ""), tuple(place) if isinstance(place, list) and len(place) == 2
-                       else None, name=str(record.get("name") or ""))
+                       else None, name=str(record.get("name") or ""), stages=tuple(stages))
         entries = [] if text is None else _entries(text)
         written = [entries[0][0] if entries else _local_now()]           # the moment of the line read now
-        self.begin(spec, text=text, folder=None if text is None else Path(text).parent)
+        self.begin(spec, text=text, folder=None if text is None else Path(text).parent, clock=clock)
         model = RunModel(spec, clock=lambda: written[0])
         for moment, level, said in entries:
             written[0] = moment
@@ -610,6 +618,7 @@ class RunView(QWidget):
         outcome = record.get("outcome")
         model.ended(outcome if outcome in OUTCOMES else "not seen to end")
         self.full_text.append_lines([(said, level) for _moment, level, said in entries[-LINES_KEPT:]])
+        self._ended_words = ends.words({**record, "outcome": model.outcome}, self._clock())[0]
         self._model, self._mode, self._stopping = model, "past", False
         self._draw()
 

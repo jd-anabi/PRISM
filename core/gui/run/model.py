@@ -111,9 +111,10 @@ class RunStatus:
     """What the shell reads of the run: its state and the words for it, where it is, how it ended and what it
     kept. One of ``STATES``; an ended run's ``outcome`` is one of ``OUTCOMES``. While the run waits to be tried again
     ("retrying"), ``trying`` is which of the tries in a row comes next, from 1, and ``try_at`` when it begins;
-    ``reopen`` says that only closing PRISM and opening it again can help the failure it ended with. Once a run has
-    ended, ``sentence`` says how and when, and ``kept`` what it kept ("" for nothing to say), as
-    ``core/gui/run/ends.py`` words them."""
+    ``reopen`` says that only closing PRISM and opening it again can help the failure it ended with. While a run is
+    live, ``stage_words`` is the stage it is in, in a few words (the line that says when its stop is taken, while it
+    is stopping); once it has ended, ``sentence`` says how and when, and ``kept`` what it kept ("" for nothing to
+    say), as ``core/gui/run/ends.py`` words them."""
     state: str = "idle"
     word: str = ""
     name: str = ""
@@ -576,6 +577,28 @@ class RunModel:
     def expected_epochs(self) -> int | None:
         """The epochs the fit is expected to run, the estimate its axis is drawn from; None when there is none."""
         return None if self._expected is None else self._expected[0]
+
+    def doing(self) -> str:
+        """The stage the run is in, in a few words, as the foot of the rail says it: "Simulating, batch 6,150 of
+        10,000", "Fitting, epoch 62 of about 130", "Computing the rotation", "Saving the posterior", the name of
+        another run's stage, or "Running"."""
+        kind = self._kind_of(self._current)
+        if kind == "rotation":
+            return "Computing the rotation"
+        if kind == "simulation":
+            done, total = self._numbers(self._current)
+            return f"Simulating, batch {number_text(done)} of {number_text(total)}" if total else "Simulating"
+        if kind == "fit":
+            epoch = self._last_epoch()
+            if not epoch:
+                return "Fitting"
+            of = f" of about {number_text(self._expected[0])}" if self._expected is not None else ""
+            return f"Fitting, epoch {number_text(epoch)}{of}"
+        if kind == "saving":
+            return "Saving the posterior"
+        if self._current is not None:
+            return self._stages[self._current].name
+        return "Running"
 
     def batches_done(self) -> int | None:
         """The batches of the simulation set done so far, or None before the simulation."""

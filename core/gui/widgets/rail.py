@@ -274,8 +274,8 @@ class RunFoot(QWidget):
     """The run's state at the foot of the rail: a hairline, a marker, a semibold title of one or two lines and
     up to two lines of words, each cut at its end with an ellipsis after its second line. Room is always kept
     for two lines of words, so the foot changes its height only when its title takes a second line. The words
-    are laid out and written in digits of equal width, so that a clock among them keeps its lines and its width
-    as it ticks. While a run is shown it is one button, which the Tab key reaches and Enter, Space and a click
+    are laid out and written in digits of equal width, so that a count among them keeps its lines and its width
+    as it moves. While a run is shown it is one button, which the Tab key reaches and Enter, Space and a click
     press; otherwise it is no control at all."""
     clicked = Signal()
 

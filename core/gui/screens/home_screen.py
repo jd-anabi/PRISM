@@ -1,5 +1,6 @@
-"""Home: what to do next, where each step of parameter inference stands, what each part of PRISM is for and the
-newest records; on a computer where nothing has been made yet, four plain choices in place of the next step.
+"""Home: what to do next, where each step of parameter inference stands, what each part of PRISM is for, the
+newest records and the latest runs; on a computer where nothing has been made yet, four plain choices in place of
+the next step.
 
 Home states only what the function it is handed reads, at the moment it reads. It reads once when it is built,
 again when it is told to while it is shown, and once when it is shown after it was marked to read again; never
@@ -15,11 +16,13 @@ from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QSi
 
 from .. import chain, design, fonts, keys, style
 from ..reported import reported
+from ..run import ends
 from ..widgets.page import Columns, Page, PageHead, Sentence
 from ..widgets.rule_table import Column, RuleTable, StateCell, TextCell
 from ..widgets.ruled import SectionHead
 
 LATEST = 5                       # how many of the newest records Home lists
+LAST_RUNS = 3                    # how many of the latest runs Home lists
 
 _HEAD = ("Home", "What to do next, where your work stands, and what each part is for.")
 _FIRST_HEAD = ("What do you want to do?",
@@ -53,18 +56,27 @@ class RecordRow:
 
 
 @dataclass(frozen=True)
+class RunRow:
+    """One run as Home's "Last runs" lists it: its id, its word and name, when it started and when it ended (None
+    while it runs, or when not known), and how it ended (one of the run history's outcomes, or "running")."""
+    run: str
+    label: str
+    started: datetime | None
+    ended: datetime | None
+    outcome: str
+
+
+@dataclass(frozen=True)
 class HomeFacts:
-    """What Home states, read at one moment: the inference session, its six steps' states, the part and page a
-    live run is in (None while nothing runs), every record of the store in use, whether the records folder in
-    use has a run in its history, and the live run's word and name while it is stopping, and while it waits to be
-    tried again ("" otherwise)."""
+    """What Home states, read at one moment: the inference session, its six steps' states, the run's status (None
+    for none: nothing runs, and no end waits to be seen), every record of the store in use, whether the records
+    folder in use has a run in its history or a run is live, and the latest runs of that folder, newest first."""
     session: object
     states: tuple
-    live_place: tuple[str, str | None] | None
+    run: object
     records: tuple[RecordRow, ...]
     has_runs: bool = False
-    stopping: str = ""
-    waiting: str = ""
+    runs: tuple[RunRow, ...] = ()
 
 
 def _access_key(words: str) -> str:
@@ -143,9 +155,11 @@ class _Body(QWidget):
 class HomeScreen(QWidget):
     """Home. ``read`` gives what Home states, as a ``HomeFacts``; ``navigate(part, page)`` asks for a place to be
     opened: a part and one of its pages, a step of parameter inference as ("inference", step), or the records of
-    one kind as ("records", kind)."""
+    one kind as ("records", kind); ``open_run(run)`` asks for a run's page to be opened, by the run's id: a row of
+    "Last runs", or the next step of a run whose end has not been seen."""
 
     navigate = Signal(str, object)
+    open_run = Signal(str)
 
     def __init__(self, read: Callable[[], HomeFacts], parent=None) -> None:
         super().__init__(parent)
@@ -198,7 +212,9 @@ class HomeScreen(QWidget):
         self.steps_table = RuleTable([Column("Step", "fit"), Column("State", "fit"), Column("Holds or waits for")])
         self.parts_table = RuleTable([Column("Part", "fit"), Column("What it is for")])
         self.records_table = RuleTable([Column("Name"), Column("Kind", "fit"), Column("Made", "fit")])
-        for table in (self.steps_table, self.parts_table, self.records_table):
+        self.runs_table = RuleTable([Column("Run"), Column("Started", "fit"), Column("Ended", "fit"),
+                                     Column("How it ended", "fit")])
+        for table in (self.steps_table, self.parts_table, self.records_table, self.runs_table):
             view = table.view
             view.viewport().setCursor(Qt.PointingHandCursor)
             view.clicked.connect(self._row_clicked)
@@ -223,6 +239,8 @@ class HomeScreen(QWidget):
         blocks.setSpacing(design.scaled(design.GAP["block"]))
         blocks.addWidget(_block(_heading("The parts of PRISM"), self.parts_table))
         blocks.addWidget(_block(_heading("Latest records", self._all_records), self.records_table, self._no_records))
+        self._runs_block = _block(_heading("Last runs"), self.runs_table)
+        blocks.addWidget(self._runs_block)
         blocks.addStretch(1)
         self._columns = Columns(self._left, right, stretch=(2, 3))     # the parts' lines need the wider column
         self.page.add_scrolling(_Body(self._next_block, self._choices_block, self._columns))
@@ -261,7 +279,8 @@ class HomeScreen(QWidget):
             self._fill(self._read())
 
     def _fill(self, facts: HomeFacts) -> None:
-        """Show ``facts``: the first opening or the page of a project under way, the steps, the newest records."""
+        """Show ``facts``: the first opening or the page of a project under way, the steps, the newest records and
+        the latest runs, which are left out while there are none, and on the first opening."""
         self._stale = False
         self._first = chain.first_time(has_records=bool(facts.records), has_runs=facts.has_runs,
                                        session=facts.session)
@@ -271,8 +290,7 @@ class HomeScreen(QWidget):
         self._choices_block.setVisible(self._first)
         self._next_block.setVisible(not self._first)
         self._left.setVisible(not self._first)
-        self._next = chain.next_step(facts.session, facts.states, live_place=facts.live_place,
-                                     stopping=facts.stopping, waiting=facts.waiting)
+        self._next = chain.next_step(facts.session, facts.states, run=facts.run)
         self.next_heading.set_text(self._next.heading)
         self._next_sentence.set_text(self._next.sentence)
         self._next_sentence.setVisible(bool(self._next.sentence))
@@ -289,6 +307,13 @@ class HomeScreen(QWidget):
         self.records_table.setVisible(bool(newest))
         self._all_records.setVisible(bool(newest))
         self._no_records.setVisible(not newest)
+        runs = facts.runs[:LAST_RUNS]
+        self._set_rows(self.runs_table,
+                       [[TextCell(row.label, elide="middle"), TextCell(_made_words(row.started)),
+                         TextCell(_made_words(row.ended)), StateCell(*ends.HOW.get(row.outcome, ends.HOW["running"]))]
+                        for row in runs],
+                       [("run", row.run) for row in runs])
+        self._runs_block.setVisible(bool(runs) and not self._first)
 
     def _fill_parts(self) -> None:
         """The parts of PRISM, each with its line: they do not change while PRISM runs."""
@@ -307,7 +332,9 @@ class HomeScreen(QWidget):
 
     # what Home opens
     def _next_pressed(self) -> None:
-        if self._next is not None:
+        if self._next is not None and self._next.run is not None:
+            self.open_run.emit(self._next.run)
+        elif self._next is not None:
             self.navigate.emit(self._next.part, self._next.page)
 
     def _choice_pressed(self) -> None:
@@ -324,11 +351,15 @@ class HomeScreen(QWidget):
                 self._open(view, index.row())
 
     def _open(self, view, row: int) -> None:
-        """Open the place of a table's row; the row is not left selected behind it."""
+        """Open the place of a table's row, or the page of a run of "Last runs"; the row is not left selected behind
+        it."""
         opens = self._opens[view]
         if 0 <= row < len(opens):
             view.clearSelection()
-            self.navigate.emit(*opens[row])
+            if view is self.runs_table.view:
+                self.open_run.emit(opens[row][1])
+            else:
+                self.navigate.emit(*opens[row])
 
     @reported(False)
     def eventFilter(self, watched, event):

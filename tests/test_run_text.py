@@ -595,8 +595,8 @@ def test_another_threads_record_that_cannot_be_written_writes_nothing_on_the_run
 
 # ── the history file ─────────────────────────────────────────────────────────────────────────────
 FIELDS = ("id", "word", "name", "place", "records_root", "started", "ended", "last_heard", "outcome", "stop_reason",
-          "stage", "acknowledged", "tries", "plan", "settings", "memory_limit", "simulation_set", "health", "fit",
-          "check", "result", "failure", "text")
+          "stage", "stages", "acknowledged", "tries", "plan", "settings", "memory_limit", "simulation_set", "health",
+          "fit", "check", "result", "failure", "text")
 
 
 def _at(day, hour=12, minute=0, second=0):
@@ -621,7 +621,9 @@ def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
     record = {
         "id": "20261008T190211-training", "word": "Training", "name": "retrain_3", "place": ["inference", "posterior"],
         "records_root": str(tmp_path / "records"), "started": started, "ended": ended, "last_heard": None,
-        "outcome": "stopped", "stop_reason": None, "stage": "Fit", "acknowledged": False,
+        "outcome": "stopped", "stop_reason": None, "stage": "Fit",
+        "stages": [["Simulation", ["simulation_writing"], "Generating training data"], ["Fit", [], "fit_epoch"]],
+        "acknowledged": False,
         "tries": [{"started": started, "ended": ended, "outcome": "stopped", "failure": None, "batches_before": 0,
                    "batches_after": 10000, "epochs_before": 0, "epochs_after": 62}],
         "plan": "retrain", "settings": {"num_runs": 10000, "hidden_features": 128, "num_transforms": 5},
@@ -926,3 +928,157 @@ def test_a_run_still_marked_running_is_closed_as_not_seen_to_end(tmp_path):
     assert history.read(also)["last_heard"] == _at(4, 10).isoformat()
     assert (ended.read_bytes(), ended.stat().st_mtime_ns) == kept
     assert history.close_unseen(folder) == ()
+
+
+# ── at a launch ──────────────────────────────────────────────────────────────────────────────────
+def _training_history(folder, run, records_root, *, day=3, **changed) -> Path:
+    """A training's history file in ``folder``, of the records folder ``records_root``, begun on the ``day`` of
+    October 2026 at 01:00, as the window wrote it: still running, in its simulation, at batch 6,150 of 10,000, unless
+    ``changed`` says otherwise. The file's path."""
+    from core.gui.panels.inference.base import TRAINING_STAGES
+    from core.gui.run import history
+    record = {"id": run, "word": "Training", "name": "retrain_3", "place": ["inference", "training"],
+              "records_root": str(records_root), "started": _at(day, 1), "outcome": "running",
+              "stage": "Simulation", "stages": [[stage.name, list(stage.begins), stage.counts]
+                                                for stage in TRAINING_STAGES],
+              "simulation_set": {"folder": "eda5c2a1e468", "batches": 10_000, "at_start": 0, "at_end": 6_150,
+                                 "per_batch": 2_048}}
+    record.update(changed)
+    return history.write(folder, record)
+
+
+def _heard(path, moment) -> None:
+    """The file at ``path`` last written at ``moment``."""
+    os.utime(path, (moment.timestamp(), moment.timestamp()))
+
+
+def test_a_run_still_marked_running_at_launch_is_closed_as_not_seen_to_end(tmp_path, monkeypatch):
+    """A history file still marked running when PRISM starts is a run an earlier PRISM did not see end: the PRISM that
+    starts, holding the one-PRISM claim, closes it as not seen to end, heard last when its file was last written. It
+    is then the newest end nobody has seen: the foot says it as a failure, dated when the run was last heard, with
+    what it had saved by then; Home's next step is to see what happened to it; and its page, opened from the foot, says
+    in its past view where the run was when PRISM closed. Opened, its end is seen."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from tests._fixtures import whole_program
+    from tests._runs import Clock
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    folder = tmp_path / "runs"
+    held = controller()
+    held.use_folder(folder)
+    held.use_clock(Clock(_at(8, 19, 2)))
+    path = _training_history(folder, "20261003T010000-training", tmp_path / "Artifacts")
+    _heard(path, _at(3, 3, 12))
+    with whole_program() as (_app, window):
+        record = history.read(path)
+        assert (record["outcome"], record["last_heard"], bool(record["acknowledged"])) == (
+            "not seen to end", _at(3, 3, 12).isoformat(), False), record
+        foot = window.shell.rail.foot
+        assert (foot._marker, foot._title, foot._words, foot.is_button()) == (
+            "err", "Training failed", "Sat 3 Oct, 03:12. What it had saved by then is kept.", True)
+        home = window.part("home")
+        assert (home.next_heading.label.text(), home.next_button.text()) == (
+            "Next: see what happened to the training", "&See what happened")
+        QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
+        page = window.part("inference").posterior_panel.run_view
+        assert (window.current_place(), page.mode, page.sentence.text()) == (
+            ("inference", "training"), "past", "PRISM closed while this training was running; last heard Sat 3 Oct, "
+                                               "03:12, simulation, batch 6,150 of 10,000.")
+        assert (history.read(path)["acknowledged"], foot._title, foot.is_button()) == (
+            True, "Nothing is running", False)
+
+
+def test_only_the_prism_that_holds_the_claim_closes_a_run_not_seen_to_end(tmp_path, monkeypatch):
+    """A PRISM started without the one-PRISM claim (its settings folder could not hold the lock) may stand beside a
+    PRISM whose run is live, and that run's history still says it is running: such a start closes no history, and
+    says nothing of that run, which has not ended. Nor does a window built with no start at all."""
+    from core.gui import one_instance
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_window, whole_program
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    folder = tmp_path / "runs"
+    held = controller()
+    held.use_folder(folder)
+    path = _training_history(folder, "20261003T010000-training", tmp_path / "Artifacts")
+    before = path.read_bytes()
+    monkeypatch.setattr(one_instance, "claim", lambda settings_path, **kwargs: one_instance.Claim("start"))
+    with whole_program() as (_app, window):
+        foot = window.shell.rail.foot
+        assert (one_instance.current(), path.read_bytes(), held.status.state, foot._title, foot.is_button()) == (
+            None, before, "idle", "Nothing is running", False), "a start with no claim closed a live run's history"
+    held.use_folder(folder)
+    build_window()
+    assert (path.read_bytes(), held.status.state) == (before, "idle"), "a window built with no start closed it"
+
+
+def test_after_a_reopening_the_newest_unacknowledged_end_is_at_the_foot(tmp_path):
+    """When the window opens, the newest end of the records folder in use that nobody has seen fills the foot and
+    Home, as its history says it: an end seen since, or one of another records folder, however new, is passed over,
+    and so is a run still running. Its page opens from Home's next step, in its past view, and the end is then seen;
+    the next window opened finds the next such end, older still."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_window
+    from tests._runs import Clock
+    root, folder = tmp_path / "Artifacts", tmp_path / "runs"
+    held = controller()
+    held.use_folder(folder)
+    held.use_clock(Clock(_at(8, 19, 2)))
+    _training_history(folder, "20261002T010000-prior-build", root, day=2, word="Prior build", name="",
+                      place=["inference", "prior"], outcome="finished", ended=_at(2, 1, 30), stage=None)
+    stopped = _training_history(folder, "20261004T010000-training", root, day=4, outcome="stopped",
+                                ended=_at(4, 12, 31), tries=[{"ended": _at(4, 12, 31), "batches_after": 6_150}])
+    _training_history(folder, "20261005T010000-training", root, day=5, outcome="finished", acknowledged=True,
+                      ended=_at(5, 9, 0))
+    _training_history(folder, "20261006T010000-training", tmp_path / "elsewhere", day=6, outcome="failed",
+                      ended=_at(6, 9, 0))
+    _training_history(folder, "20261007T010000-training", root, day=7)
+    with use_store(ArtifactStore(root)):
+        window = build_window()
+        foot, home = window.shell.rail.foot, window.part("home")
+        kept = "The 6,150 batches simulated so far are kept; you can continue from batch 6,150."
+        assert (foot._marker, foot._title, foot._words, foot.is_button()) == (
+            "half", "Training stopped", f"Sun 4 Oct, 12:31. {kept}", True)
+        assert (home.next_heading.label.text(), home.next_button.text()) == (
+            "Next: see what happened to the training", "&Go to the run")
+        home.next_button.click()
+        page = window.part("inference").posterior_panel.run_view
+        assert (window.current_place(), page.mode, page.sentence.text()) == (
+            ("inference", "training"), "past", f"Training was stopped on Sun 4 Oct, 12:31, during simulation. {kept}")
+        assert (history.read(stopped)["acknowledged"], held.status.state) == (True, "idle")
+        window = build_window()
+        foot = window.shell.rail.foot
+        assert (foot._marker, foot._title, foot._words) == ("done", "Prior build finished", "Fri 2 Oct, 01:30."), (
+            "the next window did not find the next end nobody has seen")
+
+
+def test_home_counts_only_the_runs_of_the_records_folder_in_use(tmp_path):
+    """Home counts the runs of the records folder in use alone: with runs of another records folder only, no record
+    and nothing chosen, Home opens on its first-time page and lists no run; a run of the folder in use ends that page
+    and is the one run "Last runs" lists."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_window
+    from tests._window_helpers import shown_off_screen
+    root, folder = tmp_path / "Artifacts", tmp_path / "runs"
+    controller().use_folder(folder)
+    _training_history(folder, "20261004T010000-training", tmp_path / "elsewhere", day=4, outcome="finished",
+                      ended=_at(4, 9), acknowledged=True)
+    with use_store(ArtifactStore(root)):
+        window = build_window()
+        home = window.part("home")
+        try:
+            shown_off_screen(window)
+            facts = window._home_facts()
+            assert (home.is_first_time(), facts.runs, facts.has_runs) == (True, (), False)
+            _training_history(folder, "20261003T010000-training", root, outcome="stopped", ended=_at(3, 9),
+                              acknowledged=True)
+            window.go_to("home")
+            facts = window._home_facts()
+            assert (home.is_first_time(), [row.run for row in facts.runs], facts.has_runs) == (
+                False, ["20261003T010000-training"], True)
+        finally:
+            window.hide()
