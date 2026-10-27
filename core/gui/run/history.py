@@ -12,8 +12,10 @@ A file holds every name of ``FIELDS``, in that order, None where its run has not
   training can be continued from are read for the records folder in use.
 - ``started``, ``ended``, ``last_heard``: local times, written with their offset (a time with no zone is refused).
   ``last_heard`` is the last write of a run that was not seen to end.
-- ``outcome`` ("running" until the end, then "finished", "stopped", "failed" or "not seen to end"), ``stage``,
-  ``acknowledged``.
+- ``outcome`` ("running" until the end, then "finished", "stopped", "failed" or "not seen to end"; "stopped" from
+  the moment a stop with a reason of its own is asked, Windows ending the session, so that a process Windows ends
+  first leaves it said), ``stop_reason`` (that reason, "Windows shut down"; None for a stop the person asked for, for
+  none, and once the run has finished), ``stage``, ``acknowledged``.
 - ``tries``: one entry per try, each of ``TRY_FIELDS``: its start and end, how it ended, the kind of failure, and
   the batches and the epochs the run had kept before the try began and after it ended.
 - ``plan``, ``settings``, ``memory_limit``: what the run was started with; ``settings`` holds every argument, enough
@@ -42,9 +44,9 @@ from pathlib import Path
 
 from .. import settings
 
-FIELDS = ("id", "word", "name", "place", "records_root", "started", "ended", "last_heard", "outcome", "stage",
-          "acknowledged", "tries", "plan", "settings", "memory_limit", "simulation_set", "health", "fit", "check",
-          "result", "failure", "text")
+FIELDS = ("id", "word", "name", "place", "records_root", "started", "ended", "last_heard", "outcome", "stop_reason",
+          "stage", "acknowledged", "tries", "plan", "settings", "memory_limit", "simulation_set", "health", "fit",
+          "check", "result", "failure", "text")
 #: What ``simulation_set`` holds.
 SET_FIELDS = ("folder", "batches", "at_start", "at_end", "per_batch", "seconds_per_batch")
 #: What ``fit`` holds.

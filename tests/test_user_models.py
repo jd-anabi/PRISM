@@ -1329,7 +1329,7 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     assert {"sheet", "palette", "font", "figure settings", "error hook", "appearance",
             "appearance objects", "default store", "root log handler", "text factor",
             "class fonts", "theme flag", "small style", "focus follower", "follower objects", "layout room",
-            "top-level widgets", "one-PRISM lock", "local servers"} <= changed, \
+            "top-level widgets", "one-PRISM lock", "local servers", "session watch"} <= changed, \
         f"the whole program changed only {sorted(changed)}: the comparison below would prove nothing"
     # The window itself is deleted, but a name of it keeps alive what its parts hold in Python, the menus of its
     # plots among them: this test's own, and the one in the error hook the program set, which ``during`` holds.
@@ -1491,6 +1491,57 @@ def test_on_a_real_windows_display_the_taskbar_flash_returns_without_error():
     from core.gui import this_computer
     window, handle, user32, front = _never_shown()
     assert this_computer.flash(window) is True
+    assert not window.isVisible() and not user32.IsWindowVisible(handle) and user32.GetForegroundWindow() == front
+
+
+@pytest.mark.display
+def test_on_a_real_windows_display_windows_question_is_answered_block_only_while_a_run_is_live(tmp_path):
+    """Needs QT_QPA_PLATFORM=windows. With the watch on Windows' end of a session installed, Windows' question, sent
+    by this process to its own window that is never shown (``SendMessageW``, never to another program), is answered
+    "block" (0) while a run is live and "go ahead" (1) when none is; Windows' end message saying the session does not
+    end ("cancel") lets the window's close ask its questions again. The end message saying the session ends is never
+    sent: it ends the event loop. While the run is live it keeps the computer awake and registers its reason, for
+    real, and lets go of both at its end. Nothing a person sees changes."""
+    import ctypes
+    from ctypes import wintypes
+    from datetime import datetime
+    from PySide6.QtGui import QGuiApplication
+    from core.gui import this_computer
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_run_host
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    if QGuiApplication.platformName() != "windows":
+        pytest.skip(f"needs the windows platform, got {QGuiApplication.platformName()!r}")
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    user32.SendMessageW.restype = ctypes.c_ssize_t
+    query, end, logoff = 0x0011, 0x0016, 0x80000000
+    front = user32.GetForegroundWindow()
+    held = controller()
+    held.use_clock(Clock(datetime(2026, 10, 8, 19, 2, 11).astimezone()))
+    held.use_folder(tmp_path / "runs")
+    window = build_window()
+    handle = int(window.winId())
+    watch = this_computer.watch_session_end(app, asked=window.session_asked, ending=window.session_ending)
+    try:
+        stand_in = StandIn()
+        start_run(build_run_host(), stand_in)
+        stand_in.say("a line of the run")
+        turn_until(app, lambda: held.status.state == "running")
+        assert user32.SendMessageW(handle, query, 0, logoff) == 0, "Windows was not answered that PRISM blocks"
+        assert window._session_ending is True
+        assert user32.SendMessageW(handle, end, 0, logoff) == 0
+        assert window._session_ending is False, "a cancelled end of the session was not heard"
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())
+        assert this_computer.state() == (False, None), "the run's end did not let go of what it asked of Windows"
+        assert user32.SendMessageW(handle, query, 0, logoff) == 1, "with no run live PRISM still blocked"
+        assert user32.SendMessageW(handle, end, 0, logoff) == 0 and window._session_ending is False
+    finally:
+        watch.remove()
+    assert this_computer.watching() is None
     assert not window.isVisible() and not user32.IsWindowVisible(handle) and user32.GetForegroundWindow() == front
 
 

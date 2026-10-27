@@ -38,6 +38,9 @@ A stop asked for (``request_stop``) is taken at the run's next point where a sto
 until then (``withdraw_stop``); asked by the window's close, it carries the close, and the window closes once the
 run has ended. A training saving its posterior is not stopped, the save being a thing no stop interrupts: the
 window's close then waits for the save with no stop, and can be withdrawn until the run ends (``withdraw_close``). A
+stop asked with a reason of its own, Windows ending the session, is said in the run's text and its history from the
+moment it is asked, the history saying the run was stopped and why; a training saving its posterior is not stopped by
+it either, and its history says so only should it not finish. A
 training a stop kept stays kept until its page's Discard deletes it (``discard``), once the run has ended.
 
 While a run is live the computer is kept awake, from its start to its end, and Windows is given the reason it should
@@ -216,6 +219,8 @@ class _Run:
         self.failure_kind: str | None = None       # "out of memory", "device" or "other"
         self.repeats: str | None = None            # "continue" or "resume": the offer of a page this run repeats
         self.stop_requested = False
+        self.stop_reason = ""                      # why the stop was asked, when not by the person: Windows' end
+        self.reason_at: datetime | None = None     # when that reason was said in its text and its history
         self.closing = False                       # the window closes once the run has ended
         self.ended: datetime | None = None
         self.acknowledged = False
@@ -447,16 +452,21 @@ class RunController(QObject):
         self.status_changed.emit(IDLE)
 
     # ── a run's stop and its end ──
-    def request_stop(self, *, closing: bool = False) -> None:
+    def request_stop(self, *, closing: bool = False, reason: str = "") -> None:
         """Ask the live run to stop at its next point where a stop is taken: the run is Stopping from now on, and its
         history says so. With ``closing`` the window closes once the run has ended; a stop asked for already gains
-        that. A training saving its posterior is not stopped: with ``closing`` the window closes once the posterior is
-        saved and the run has ended, and a stop asked for without it comes too late and says so on the run's page. A
-        stop asked of a run that has ended does nothing and says so on its page; nothing at all before the process's
-        first run. Safe from any thread: the run's token is set at once, and the run's state, its history and its page
-        follow on the window's thread (at once when asked there). Asked while the run waits to be tried again, it ends
-        the tries, as "Stop trying" does."""
+        that. With ``reason`` (Windows ending the session, for one) the stop is the same, and from now on the run's
+        text says why it was asked and its history says the run was stopped and why: should the process be ended
+        before the run is, both say so. A training saving its posterior is not stopped: with ``closing`` the window
+        closes once the posterior is saved and the run has ended; with ``reason`` its text says the save goes on, and
+        its history keeps the reason only should the run not finish; a stop asked for with neither comes too late and
+        says so on the run's page. A stop asked of a run that has ended does nothing and says so on its page; nothing
+        at all before the process's first run. Safe from any thread: the run's token is set at once, and the run's
+        state, its history and its page follow on the window's thread (at once when asked there). Asked while the run
+        waits to be tried again, it ends the tries, as "Stop trying" does."""
         run = self._run
+        if reason and run is not None and self.is_live() and not run.stop_reason:
+            run.stop_reason = reason
         if run is not None and run.try_at is not None and self.is_live():
             run.closing = run.closing or closing
             run.stop_requested = True
@@ -471,7 +481,10 @@ class RunController(QObject):
         if closing:
             run.closing = True
         elif saving and not run.stop_requested:
-            self._unstoppable.emit()
+            if reason:
+                self._stopping.emit()            # the save goes on: the reason is said and written all the same
+            else:
+                self._unstoppable.emit()
             return
         if not run.stop_requested and not saving:
             run.stop_requested = True
@@ -479,12 +492,22 @@ class RunController(QObject):
         self._stopping.emit()
 
     def _stop_heard(self) -> None:
-        """A stop or a close asked for, on the window's thread: the model is told of a stop, and the run's state
-        worked out again. For a run that waits to be tried again, its tries end at the event loop's next turn, after
-        whoever asked has seen the stop asked for (the window's close waits for the end from there)."""
+        """A stop or a close asked for, on the window's thread: a stop's reason of its own, the first time it is heard,
+        said in the run's text and its full text and written into its history at once; the model told of a stop; and
+        the run's state worked out again. For a run that waits to be tried again, its tries end at the event loop's
+        next turn, after whoever asked has seen the stop asked for (the window's close waits for the end from
+        there)."""
         run = self._run
-        if run is None or not (run.stop_requested or run.closing) or not self.is_live():
+        if run is None or not (run.stop_requested or run.closing or run.stop_reason) or not self.is_live():
             return
+        if run.stop_reason and run.reason_at is None:
+            run.reason_at = (self._clock or _local_now)()
+            said = (questions.STOP_REASON_TEXT if run.stop_requested
+                    else questions.SAVE_GOES_ON_TEXT).format(run.stop_reason)
+            if run.text is not None:
+                run.text.line(said, "window")
+            self.lines.emit([(said, "window")])
+            self._write(run)
         if run.try_at is not None:
             QTimer.singleShot(0, self, self._tries_end)
         elif run.stop_requested:
@@ -1125,8 +1148,11 @@ class RunController(QObject):
             self.lines.emit([(said, "window")])
 
     def _record(self, run: _Run) -> dict:
-        """The run's history, as its model reads it now."""
+        """The run's history, as its model reads it now. A stop asked with a reason of its own makes the run's outcome
+        "stopped", with that reason, until the run has ended, and its end the moment the reason was said: a process
+        Windows ends before the run leaves them said. The reason stays unless the run finished."""
         spec, model = run.spec, self._model
+        reason = run.stop_reason if run.stop_reason and run.outcome != "finished" else None
         epochs, budget, failed = model.epochs(), model.budget() or {}, model.failed()
         folder, note = model.simulation_folder(), run.kept_fit
         network = spec.facts.get("network")
@@ -1168,8 +1194,10 @@ class RunController(QObject):
                           "epochs_after": (epochs[-1].epoch if epochs else None) if after is None else after[1]})
         return {"id": run.id, "word": spec.word, "name": spec.name,
                 "place": None if spec.place is None else list(spec.place),
-                "records_root": str(getattr(run.store, "root", "")), "started": model.started, "ended": run.ended,
-                "last_heard": None, "outcome": run.outcome or "running", "stage": model.stage,
+                "records_root": str(getattr(run.store, "root", "")), "started": model.started,
+                "ended": run.ended if run.ended is not None or reason is None else run.reason_at,
+                "last_heard": None, "outcome": run.outcome or ("stopped" if reason else "running"),
+                "stop_reason": reason, "stage": model.stage,
                 "acknowledged": run.acknowledged, "tries": tries,
                 "plan": None, "settings": None, "memory_limit": spec.facts.get("memory_limit"),
                 "simulation_set": None if folder is None else {

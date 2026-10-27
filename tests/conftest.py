@@ -349,6 +349,20 @@ def brought_forward(request):
         pytest.fail("the test ended holding the lock and the listener of a start of PRISM, now let go")
 
 
+class _StandInWatch:
+    """The watch on Windows' end of a session, as the guard of the requests made of Windows hands it back: nothing is
+    installed; its removal is kept, and the process holds it no more."""
+
+    def __init__(self, kept):
+        self._kept = kept
+
+    def remove(self):
+        from core.gui import this_computer
+        self._kept("remove the session watch")
+        if this_computer._watch is self:
+            this_computer._watch = None
+
+
 def windows_requests_left(calls: list) -> list[str]:
     """What a test's record of the requests made of Windows -- ``windows_asked``'s, each call as its name, what it
     was handed and the name of the thread it came from -- leaves standing at the test's end, in words: the computer
@@ -370,7 +384,8 @@ def windows_requests_left(calls: list) -> list[str]:
 def windows_asked(request):
     """Nothing a test does reaches Windows' power or session state, unless the test is marked for the real screen.
     The requests core/gui/this_computer.py makes of Windows -- keeping the computer awake, the reason against ending
-    the session, the taskbar's flash -- are stood in for, each answering that Windows took it, and each call is kept,
+    the session, the taskbar's flash, the watch on Windows' end of a session (handed back as one that installs
+    nothing) -- are stood in for, each answering that Windows took it, and each call is kept,
     as its name, what it was handed and the name of the thread it came from, in the list this fixture gives a test
     that asks for it by name. Each stand-in keeps the module's record of the last request as the request would. The
     one place that module reaches Windows is stood in for too: a test that reaches it all the same is noted, and it
@@ -378,8 +393,8 @@ def windows_asked(request):
 
     At the test's end, after the end of the test has stopped a run left live (a run's end lets go of what it asked),
     a test whose record leaves the computer kept awake, a reason registered or Windows reached fails here, as
-    ``windows_requests_left`` says it, and the module's record is put back to nothing asked. A monkeypatch of its
-    own, so that a test that undoes its own does not undo this one."""
+    ``windows_requests_left`` says it, and the module's record is put back to nothing asked and no watch. A
+    monkeypatch of its own, so that a test that undoes its own does not undo this one."""
     import threading
     from core.gui import this_computer
     calls = []
@@ -403,16 +418,23 @@ def windows_asked(request):
             kept("flash", window)
             return True
 
+        def watch_session_end(app, *, asked, ending):
+            kept("watch_session_end", app, asked, ending)
+            this_computer._watch = _StandInWatch(kept)
+            return this_computer._watch
+
         def reached(library, name):
             kept("windows", f"{library}.{name}")
             raise RuntimeError("a test not marked for the real screen reached Windows")
 
         for name, stand_in in (("keep_awake", keep_awake), ("block_shutdown", block_shutdown), ("flash", flash),
-                               ("_windows", reached)):
+                               ("watch_session_end", watch_session_end), ("_windows", reached)):
             mp.setattr(this_computer, name, stand_in)
     yield calls
     mp.undo()
     left = windows_requests_left(calls)
     this_computer._requested.update(awake=False, reason=None)
+    if isinstance(this_computer._watch, _StandInWatch):
+        this_computer._watch = None
     if left:
         raise AssertionError("the test ended with what it asked of Windows standing: " + "; ".join(left))

@@ -594,9 +594,9 @@ def test_another_threads_record_that_cannot_be_written_writes_nothing_on_the_run
 
 
 # ── the history file ─────────────────────────────────────────────────────────────────────────────
-FIELDS = ("id", "word", "name", "place", "records_root", "started", "ended", "last_heard", "outcome", "stage",
-          "acknowledged", "tries", "plan", "settings", "memory_limit", "simulation_set", "health", "fit", "check",
-          "result", "failure", "text")
+FIELDS = ("id", "word", "name", "place", "records_root", "started", "ended", "last_heard", "outcome", "stop_reason",
+          "stage", "acknowledged", "tries", "plan", "settings", "memory_limit", "simulation_set", "health", "fit",
+          "check", "result", "failure", "text")
 
 
 def _at(day, hour=12, minute=0, second=0):
@@ -621,7 +621,7 @@ def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
     record = {
         "id": "20261008T190211-training", "word": "Training", "name": "retrain_3", "place": ["inference", "posterior"],
         "records_root": str(tmp_path / "records"), "started": started, "ended": ended, "last_heard": None,
-        "outcome": "stopped", "stage": "Fit", "acknowledged": False,
+        "outcome": "stopped", "stop_reason": None, "stage": "Fit", "acknowledged": False,
         "tries": [{"started": started, "ended": ended, "outcome": "stopped", "failure": None, "batches_before": 0,
                    "batches_after": 10000, "epochs_before": 0, "epochs_after": 62}],
         "plan": "retrain", "settings": {"num_runs": 10000, "hidden_features": 128, "num_transforms": 5},

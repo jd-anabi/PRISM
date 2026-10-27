@@ -935,6 +935,8 @@ def process_state(app) -> dict:
         # the session registered. A run's end lets go of both, and the end of a test puts the record back.
         "keep awake": this_computer.state()[0],
         "shutdown reason": this_computer.state()[1],
+        # The watch on Windows' end of a session, which the whole program installs and ``whole_program`` removes.
+        "session watch": this_computer.watching(),
     }
 
 
@@ -961,7 +963,7 @@ def whole_program(*, held_by_another: bool = False):
     from core import config, logging_root
     from core.artifacts import default_store, set_default_store
     from core.gui import app as gui_app
-    from core.gui import design, one_instance, settings, theming
+    from core.gui import design, one_instance, settings, theming, this_computer
     from core.gui import style as small_style
     if not os.environ.get("PRISM_ARTIFACTS"):
         raise AssertionError("whole_program() needs PRISM_ARTIFACTS set to a temporary folder: "
@@ -997,6 +999,10 @@ def whole_program(*, held_by_another: bool = False):
             # The process's run controller as the next test must find it: a run that ended in the block
             # acknowledged, and what the block handed it let go.
             _built.put_back_the_run()
+            # The watch on Windows' end of a session, which calls the window, off the application before it goes.
+            watch = this_computer.watching()
+            if watch is not None:
+                watch.remove()
             # Then the lock and the server, before the window goes, so that no knock reaches it on its way out.
             one_instance.release()
             if held is not None:

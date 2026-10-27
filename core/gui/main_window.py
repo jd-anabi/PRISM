@@ -11,7 +11,7 @@ import time
 import traceback
 from datetime import datetime
 
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import QEventLoop, QTimer, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplication, QMainWindow,
                                QPlainTextEdit, QPushButton, QTabBar, QTextEdit, QToolButton, QWidget)
@@ -45,6 +45,9 @@ log = logging.getLogger(__name__)
 
 # How often a close that waited for a run, the run having ended, looks again for a box or a question still open.
 _ANSWERED_EVERY_MS = 200
+#: What the window's log says when Windows asks to end the session, and when that end is cancelled.
+SESSION_ASKED_TEXT = "Windows asked to end the session."
+SESSION_CANCELLED_TEXT = "Windows' end of the session was cancelled."
 
 
 # ── screen-geometry guards ────────────────────────────────────────────────────
@@ -247,6 +250,8 @@ class MainWindow(QMainWindow):
         self._run_waiting = ""
         self._close_at_end = False               # the close was asked for: the window closes once the run has ended
         self._ends_tries = False                 # ... asked while the run waited to be tried again: it ended the tries
+        # From Windows' question to end the session until it is cancelled the close asks nothing.
+        self._session_ending = False
         self._build("home")
 
         # Every way to move is go_to: a row of the rail, Home's buttons and rows, the run's foot. Each handler
@@ -779,6 +784,34 @@ class MainWindow(QMainWindow):
             return
         self.close()
 
+    # ── Windows' end of a session ─────────────────────────────────────────────
+    def session_asked(self, manager) -> None:
+        """Windows asks whether the session may end, for a sign-out or a shutdown (the toolkit's session manager,
+        inside Windows' message): from now on the window's close asks nothing, and while a run is live Windows is
+        answered that PRISM blocks the end, beside the reason the run registered. Said in the window's log."""
+        self._session_ending = True
+        log.info(SESSION_ASKED_TEXT)
+        if controller().is_live():
+            manager.cancel()
+
+    def session_ending(self, will_end: bool) -> None:
+        """Windows' answer, inside its end message. "Cancel" (``will_end`` False): the window's close asks its
+        questions again, which the window's log says. "Shut down anyway": the live run is asked to stop, as a stop
+        asked by the person, its history saying that Windows shut down (a training saving its posterior is not
+        stopped: the save goes on); then the window's thread waits for the run's end, the event loop turning, with
+        no limit of its own: Windows decides how long it lets PRISM live. Heard again, during the wait or after it,
+        it stops nothing more: a stop asked again of a stopping run asks nothing."""
+        if not will_end:
+            self._session_ending = False
+            log.info(SESSION_CANCELLED_TEXT)
+            return
+        self._session_ending = True
+        held = controller()
+        if held.is_live():
+            held.request_stop(reason=questions.SHUT_DOWN_REASON)
+        while held.is_live():
+            QApplication.processEvents(QEventLoop.AllEvents | QEventLoop.WaitForMoreEvents)
+
     def _tick_running(self) -> None:
         """Write the elapsed time again: a divmod and the foot's words, once a second."""
         words = f"{clock_words(int(time.monotonic() - self._run_started))} so far. Settings are locked."
@@ -832,6 +865,10 @@ class MainWindow(QMainWindow):
         answer given after the run ended is too late: nothing is stopped, and the window stays. A close while a close
         already waits asks nothing again: the window goes to the run's page, where the close can be withdrawn.
 
+        From Windows' question to end the session until it is cancelled the close asks nothing: the toolkit closes a
+        shown window inside Windows' end message, where a question would wait inside that message. With a run live
+        the close is refused, which keeps PRISM and its run going until Windows ends them; with none it is accepted.
+
         A close accepted, with no run live, writes the window's own settings, closes every other window of the
         program (the figure windows the pages opened among them), so that the program's event loop ends, and lets
         go of the one-PRISM claim last, in a ``finally``: after the run's last history write, and also when the
@@ -839,6 +876,8 @@ class MainWindow(QMainWindow):
         held = controller()
         if held.is_live():
             event.ignore()
+            if self._session_ending:
+                return
             if self._close_at_end:
                 self.go_to_run()
                 return

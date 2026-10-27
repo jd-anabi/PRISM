@@ -52,6 +52,11 @@ CLOSE_WHEN_STOPPED = "Close when it has stopped"
 CLOSE_WHEN_SAVED = "Close when it is saved"
 #: A training and a narrowing round, which simulate and fit: their stop keeps what each stage leaves.
 TRAINING_WORDS = ("Training", "Narrowing round")
+#: Why a run is stopped when Windows ends the session ("shut down anyway"), as its history keeps it; and what its text
+#: says then, filled with that reason: a stop asked for, or, for a training saving its posterior, the save going on.
+SHUT_DOWN_REASON = "Windows shut down"
+STOP_REASON_TEXT = "A stop was asked for: {}."
+SAVE_GOES_ON_TEXT = "{}: the posterior is still being saved, which no stop interrupts."
 
 # The question of each other kind of run, by its word: title, what its stop keeps, the safe answer, the other.
 _OTHERS = {

@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from core import config, logging_root, registry
 
-from . import app_icon, design, fonts, mpl_theme, one_instance, settings, style, theming
+from . import app_icon, design, fonts, mpl_theme, one_instance, settings, style, theming, this_computer
 from .main_window import MainWindow
 from .screens.shell import NO_MESSAGE, as_sentence
 from .widgets.ask import Ask, ask
@@ -221,6 +221,8 @@ def build_app(argv=None):
     # A second start's knock brings this window to the front. One that came while the window was being built is
     # heard when the event loop first runs, once the window is shown.
     claimed.knocked.connect(window.come_to_front)
+    # Windows' end of the session reaches the window: its question, "shut down anyway" and "cancel".
+    this_computer.watch_session_end(app, asked=window.session_asked, ending=window.session_ending)
     # The taskbar draws the window CLASS icon whenever its icon query goes unanswered, and Qt's class
     # carries python.exe's generic glyph; PRISM's first show is busy long enough for that to happen
     # every time (app_icon.set_windows_class_icon has the measurements). Before the first show --
