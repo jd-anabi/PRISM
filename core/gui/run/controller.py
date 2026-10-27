@@ -446,12 +446,14 @@ class RunController(QObject):
             run.view.say(questions.KEPT_OPEN_TEXT)
         return True
 
-    def discard(self, run: str | None) -> str | None:
+    def discard(self, run: str | None) -> tuple[bool, str] | None:
         """Delete the training the stop of the run ``run`` kept, once that run has ended (the training's lock is let
-        go by then): the one the controller holds, by the note its stop handed back, or an earlier one, by the id its
-        history kept. None when it is deleted, or is no longer kept; else the store's own sentence of why it was not,
-        the training kept. Nothing while the run is live."""
-        from core.artifacts import default_store
+        go by then): the one the controller holds, by the note its stop handed back, from the records it was kept
+        in, or an earlier one, by the id its history kept, from the records that history names. ``(gone, words)``:
+        whether the training is gone, and what the run's page says of it -- deleted, or no longer held by those
+        records (both gone); not found, its run's history unreadable; or the store's own sentence of why it was not
+        deleted (both kept). None while the run is live."""
+        from core.artifacts import ArtifactStore, StoreError, default_store
         held = self._run
         if held is not None and held.id == run:
             if self.is_live():
@@ -459,15 +461,21 @@ class RunController(QObject):
             store, kept = held.store, getattr(held.kept_fit, "id", None)
         else:
             folder = self._folder if self._folder is not None else history.runs_folder()
-            record = None if run is None else history.read(folder / f"{run}.json")
-            store, kept = default_store(), ((record or {}).get("fit") or {}).get("kept_id")
+            record = (None if run is None else history.read(folder / f"{run}.json")) or {}
+            root = record.get("records_root")
+            store = ArtifactStore(root) if root else default_store()
+            kept = (record.get("fit") or {}).get("kept_id")
         if not kept:
-            return None
+            return False, questions.UNFOUND_TEXT
+        try:
+            store.get("fit", kept)
+        except StoreError:
+            return True, questions.GONE_TEXT
         try:
             store.delete("fit", kept)
         except Refusal as refused:
-            return refused.message
-        return None
+            return False, refused.message
+        return True, questions.DISCARDED_TEXT
 
     def acknowledge(self, run: str) -> None:
         """Someone has seen how the run ``run`` ended: its history file says so, and when it is the run the

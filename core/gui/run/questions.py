@@ -15,6 +15,10 @@ from ..texts import date_text, duration_text, number_text
 WITHDRAW_TEXT = "Don't stop after all"
 #: The page's line while the window waits for its run to end before it closes.
 CLOSING_TEXT = "PRISM closes when the run has stopped."
+#: How the run ended, for each end at which a close that waited for it is carried out: at any other (a failure, or a
+#: refusal made before anything was spent) the window stays open, and the run's page says so.
+CLOSES_AT = ("stopped", "finished")
+STAYED_OPEN_TEXT = "PRISM stayed open: the run failed."
 #: The page's line while the window waits for a training to save its posterior, which no stop interrupts, before
 #: it closes; the page's button that withdraws that close, no stop having been asked; and what it leaves said.
 CLOSING_SAVED_TEXT = "PRISM closes when the posterior is saved."
@@ -35,6 +39,9 @@ KEEP_QUESTION = "Keep this training so you can resume it later?"
 KEEP_TEXT = "Keep"
 DISCARD_TEXT = "Discard"
 DISCARDED_TEXT = "The training was discarded."
+#: What Discard leaves said of a training the records no longer hold, and of one whose run's history cannot be read.
+GONE_TEXT = "The training was already gone."
+UNFOUND_TEXT = "Nothing was discarded: the run's history that names the training cannot be read."
 #: The words of the close question.
 CLOSE_TITLE = "Close PRISM?"
 KEEP_RUNNING = "Keep running"

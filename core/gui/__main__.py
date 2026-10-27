@@ -22,9 +22,9 @@ def main() -> int:
     try:
         return app.exec()
     finally:
-        # The window's close let go of the lock and the listener as it was accepted, though a figure window left
-        # open keeps the loop running and a run on the thread pool may go on to its end unseen; a loop that ended
-        # otherwise lets go of them here. Letting go twice does nothing.
+        # The window's close let go of the lock and the listener as it was accepted: it is accepted only once no run
+        # is live, and every figure window closes with it, so the loop then ends. A loop that ended otherwise lets
+        # go of them here. Letting go twice does nothing.
         one_instance.release()
 
 

@@ -15,14 +15,16 @@ Two window types, one per figure source (see FigureStack):
     missing or fails to load. A QGraphicsView gives wheel-zoom, drag-pan and fit-to-window over the
     static image.
 
-Both are top-level windows OWNED by the window they were opened from (a parent, with the flag that makes a
-widget a window of its own): they stand over it, go with it, and close with it. FigureStack holds them in a set,
-and drops each in its closeEvent.
+Both are parentless top-level windows, each with its own place on the task bar, over the main window or under
+it as a person puts it. FigureStack holds the ONLY reference (a set) and drops it in each window's
+closeEvent -- without that pin, Python/Qt would GC the window the moment show() returns (the same lifetime trap
+BasePanel.dispatch handles for its workers). The main window's accepted close closes every one of them.
 
 While a run is live the window's thread lays out no figure: the figure library keeps one parser of math-style text
 for the whole process, with no lock, and the run builds its own figures on its own thread. So an interactive window
-open when a run starts is told to HOLD: its figure's picture stands in its canvas's place, nothing of the figure is
-laid out or drawn until the run has ended, and then the canvas is back at the view it had.
+open when a run starts is told to HOLD: its figure's picture, scaled down to the room the window has, stands in its
+canvas's place, nothing of the figure is laid out or drawn until the run has ended -- a change of the screen's scale
+included -- and then the canvas is back at the view it had.
 """
 import pickle
 
@@ -32,6 +34,7 @@ from PySide6.QtWidgets import (QGraphicsPixmapItem, QGraphicsScene, QGraphicsVie
                                QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
 
 from ..file_chooser import choose_file
+from .figure_stack import _FitLabel            # the stack's own label that scales its picture down to its room
 
 _MIN_SCALE = 0.05
 _MAX_SCALE = 40.0
@@ -66,7 +69,7 @@ class InteractiveFigureWindow(QWidget):
     holds (``hold``)."""
 
     def __init__(self, fig, title="Figure", on_close=None, parent=None, picture=None):
-        super().__init__(parent, Qt.Window)
+        super().__init__(parent)
         # The Qt-agg backend is imported HERE -- lazily, and only when a figure is actually popped out --
         # so app start and the headless, non-pop-out tests never pull it in, and an import failure is
         # catchable at click time (FigureStack falls back to the image viewer) instead of breaking the
@@ -83,11 +86,12 @@ class InteractiveFigureWindow(QWidget):
 
         self.canvas = FigureCanvasQTAgg(fig)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
-        # the figure's picture, in the canvas's place while the window holds
-        self.picture = QLabel()
+        # the figure's picture, in the canvas's place while the window holds: scaled down to the room the window
+        # has, so that a picture larger than the window is no reason for it to grow
+        self.picture = _FitLabel()
         self.picture.setAlignment(Qt.AlignCenter)
         if picture is not None and not picture.isNull():
-            self.picture.setPixmap(picture)
+            self.picture.set_source(picture)
         else:
             self.picture.setText(WAIT_TEXT)
         self.picture.setVisible(False)
@@ -104,11 +108,16 @@ class InteractiveFigureWindow(QWidget):
         toolbar hidden, so that no resize, key or paint reaches the figure library; or let it go again, the canvas
         back at the view it had. A window closed meanwhile is passed over. The canvas goes first: a canvas still in
         sight while the toolbar goes and the picture comes would be resized, and would ask for a drawing of its
-        figure that comes after it has gone."""
+        figure that comes after it has gone. Before it, the figure library's watch on the window's own screen scale
+        is taken off (a change of scale lays the figure out and draws it, hidden or not); the canvas puts it back
+        itself when it is shown again, and reads the scale then."""
         if self.canvas is None or bool(on) == self._held:
             return
         self._held = bool(on)
         if on:
+            handle = self.windowHandle()
+            if handle is not None:
+                handle.removeEventFilter(self.canvas)
             self.canvas.setVisible(False)
             self.toolbar.setVisible(False)
             self.picture.setVisible(True)
@@ -153,7 +162,7 @@ class ImageZoomWindow(QWidget):
     when a figure could not be unpickled."""
 
     def __init__(self, pixmap, title="Figure", on_close=None, parent=None):
-        super().__init__(parent, Qt.Window)
+        super().__init__(parent)
         self._on_close = on_close
         self._pixmap = pixmap
         self._fitted = False

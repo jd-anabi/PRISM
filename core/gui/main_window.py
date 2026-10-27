@@ -43,6 +43,9 @@ from .widgets.page_names import PageNames
 
 log = logging.getLogger(__name__)
 
+# How often a close that waited for a run, the run having ended, looks again for a box or a question still open.
+_ANSWERED_EVERY_MS = 200
+
 
 # ── screen-geometry guards ────────────────────────────────────────────────────
 # All of them are safe to call unconditionally: when Qt cannot tell us about the screen, the room is
@@ -700,13 +703,16 @@ class MainWindow(QMainWindow):
         While the run is stopping, the steps' states are worked out again too, the foot says that the run is
         stopping and when the stop is taken, and Home that it is stopping. From the run's start to its end every
         figure window the window's pages opened shows its figure's picture. When the window's close waits for the
-        run, the run's end closes the window, once all of the end has been said; a close withdrawn with its stop
-        waits no more.
+        run, a run that ends stopped or finished closes the window, once all of the end has been said
+        (``_close_at_the_end``); one that ends otherwise (a failure, a refusal) leaves the window open, its close
+        withdrawn, and its page and its box say how it ended. A close withdrawn with its stop waits no more.
         """
         if self._close_at_end:
             if not status.live:
                 self._close_at_end = False
-                QTimer.singleShot(0, self, self.close)
+                model = controller().model
+                if model is not None and model.outcome in questions.CLOSES_AT:
+                    QTimer.singleShot(0, self, self._close_at_the_end)
             elif not status.closing:
                 self._close_at_end = False
         stopping = f"{status.word} {status.name}".strip() if status.live and status.state == "stopping" else ""
@@ -749,6 +755,15 @@ class MainWindow(QMainWindow):
             return
         self._tick_running()                       # shown at once, not a second from now
         self._run_timer.start()
+
+    def _close_at_the_end(self) -> None:
+        """The close that waited for the run, the run having ended: carried out now, or, while a box or a question
+        is open (one a person opened meanwhile), once it has been answered, looked at again every
+        ``_ANSWERED_EVERY_MS``: a close carried out under an open box would close the box unanswered."""
+        if QApplication.activeModalWidget() is not None:
+            QTimer.singleShot(_ANSWERED_EVERY_MS, self, self._close_at_the_end)
+            return
+        self.close()
 
     def _tick_running(self) -> None:
         """Write the elapsed time again: a divmod and the foot's words, once a second."""
@@ -795,11 +810,12 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """The window never closes under a live run (starting, running, stopping or waiting to try again): the close
         is refused, then asked about. "Stop the run and close" asks the run to stop, and "Close when it has stopped",
-        for a run already stopping, keeps the window waiting too: the window stays on the run's page, which says that
+        for a run already stopping, keeps the window waiting too: the window goes to the run's page, which says that
         PRISM closes when the run has stopped and offers to withdraw the stop and the close, and the run's end
         closes it. A training saving its posterior is not stopped: "Close when it is saved" asks no stop, and the window
-        waits for the save, its run's page offering to keep PRISM open. An answer given after the run ended is too
-        late: nothing is stopped, and the window stays.
+        goes to the run's page and waits for the save, the page offering to keep PRISM open. An answer given after the
+        run ended is too late: nothing is stopped, and the window stays. A close while a close already waits asks
+        nothing again: the window goes to the run's page, where the close can be withdrawn.
 
         A close accepted, with no run live, writes the window's own settings, closes every other window of the
         program (the figure windows the pages opened among them), so that the program's event loop ends, and lets
@@ -808,11 +824,16 @@ class MainWindow(QMainWindow):
         held = controller()
         if held.is_live():
             event.ignore()
+            if self._close_at_end:
+                self.go_to_run()
+                return
             question = questions.close_question(held.status, held.model)
             if ask(self, question.title, question.sentence, question.safe, question.other,
                    loses_work=question.loses_work, beneath=question.beneath or None):
                 held.request_stop(closing=True)
                 self._close_at_end = held.is_live() and held.status.closing
+                if self._close_at_end:
+                    self.go_to_run()
             return
         try:
             self._save_state()

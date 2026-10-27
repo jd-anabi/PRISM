@@ -5,13 +5,13 @@ lock. Static PNGs sidestep that entirely and unify with the FDT/Reduction/CrossV
 already save PNGs to disk.
 
 Each tab carries a "Pop out" button that re-opens the figure in its own window where it CAN be zoomed,
-panned and saved (core/gui/widgets/figure_window.py), a window owned by the one the stack stands in:
+panned and saved (core/gui/widgets/figure_window.py), a window of its own that no window owns:
   * SBI-panel figures also arrive as a pickled Figure -> a true interactive matplotlib window,
     reconstructed on the GUI thread (never painting the worker's original -- see above).
   * disk-PNG figures (and any figure whose pickle is missing / unloadable) -> a pan/zoom image viewer.
-While a run is live every figure pops out as its picture, in the image viewer, and an interactive window already
-open shows its picture until the run has ended (``hold``): the window's thread lays out no figure while a run
-builds its own.
+While a run is live every figure pops out as its picture, in the image viewer, and says so on its button, and an
+interactive window already open shows its picture until the run has ended (``hold``): the window's thread lays out
+no figure while a run builds its own.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
@@ -19,6 +19,12 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QScrollArea, QT
                                QWidget)
 
 from ..reported import reported
+
+#: The "Pop out" button's tool tip: for a figure that opens as an interactive copy, the same while a run is live, and
+#: for a figure that is a picture only.
+POP_INTERACTIVE = "Open an interactive, zoomable copy in a new window"
+POP_HELD = "Open a zoomable picture in a new window; an interactive copy opens once the run has ended"
+POP_PICTURE = "Open a zoomable copy in a new window"
 
 
 class _FitLabel(QLabel):
@@ -58,8 +64,9 @@ class FigureStack(QTabWidget):
         self.setTabsClosable(True)
         self.setMovable(True)
         self.tabCloseRequested.connect(self._close_tab)
-        # The pop-out windows, owned by the window the stack stands in: held here as well, so that each is reached
-        # while it is open (``hold``). Dropped on close.
+        # Pop-out windows are parentless top-levels; hold them or Python/Qt GCs them the instant show()
+        # returns (the lifetime trap BasePanel.dispatch handles for its workers), and so that each is reached while
+        # it is open (``hold``). Dropped on close.
         self._windows = set()
 
     def add_figure(self, title: str, png_bytes: bytes, fig_pickle=None):
@@ -90,9 +97,8 @@ class FigureStack(QTabWidget):
         scroll.setWidgetResizable(True)
         scroll.setWidget(label)
 
+        from ..run.controller import controller
         pop = QPushButton("Pop out")
-        pop.setToolTip("Open an interactive, zoomable copy in a new window" if fig_pickle is not None
-                       else "Open a zoomable copy in a new window")
 
         container = QWidget()
         # Stash everything the pop-out needs directly on the tab widget, so it travels with the tab
@@ -101,6 +107,8 @@ class FigureStack(QTabWidget):
         container._png_path = png_path
         container._pix = pix
         container._title = title
+        container._pop = pop
+        self._tip(container, controller().is_live())
         pop.clicked.connect(lambda: self._pop_out(container))
 
         layout = QVBoxLayout(container)
@@ -115,20 +123,28 @@ class FigureStack(QTabWidget):
         idx = self.addTab(container, title)
         self.setCurrentIndex(idx)
 
+    @staticmethod
+    def _tip(container, live: bool) -> None:
+        """Say on ``container``'s "Pop out" what it opens: an interactive copy, or, while a run is live (``live``),
+        its picture until the run has ended; a picture alone for a figure that has no interactive copy."""
+        if getattr(container, "_fig_pickle", None) is None:
+            container._pop.setToolTip(POP_PICTURE)
+        else:
+            container._pop.setToolTip(POP_HELD if live else POP_INTERACTIVE)
+
     def _pop_out(self, container):
-        """Open the figure of ``container`` in a window of its own, owned by the window this stack stands in: an
-        interactive copy when its pickle loads, else its picture in the image viewer. While a run is live it opens
-        as its picture: the window's thread lays out no figure while a run builds its own."""
+        """Open the figure of ``container`` in a window of its own, which no window owns: an interactive copy when
+        its pickle loads, else its picture in the image viewer. While a run is live it opens as its picture: the
+        window's thread lays out no figure while a run builds its own."""
         from ..run.controller import controller
         from .figure_window import ImageZoomWindow, build_interactive_window
 
         title = getattr(container, "_title", "Figure")
-        owner = self.window()
         window = None
         if getattr(container, "_fig_pickle", None) is not None and not controller().is_live():
             try:
                 window = build_interactive_window(container._fig_pickle, title, on_close=self._drop_window,
-                                                  parent=owner, picture=container._pix)
+                                                  picture=container._pix)
             except Exception:      # noqa: BLE001 -- a version-skewed / unloadable pickle: fall back
                 window = None
         if window is None:
@@ -137,14 +153,18 @@ class FigureStack(QTabWidget):
                 disk = QPixmap(container._png_path)
                 if not disk.isNull():
                     pix = disk
-            window = ImageZoomWindow(pix, title, on_close=self._drop_window, parent=owner)
+            window = ImageZoomWindow(pix, title, on_close=self._drop_window)
         self._windows.add(window)
         window.show()
         window.raise_()
 
     def hold(self, on: bool) -> None:
         """While a run is live (``on``), every interactive window this stack opened shows its figure's picture and
-        lays out nothing of its figure; off, each is interactive again, at the view it had."""
+        lays out nothing of its figure, and every "Pop out" says it opens a picture; off, each is interactive again,
+        at the view it had, and says so."""
+        for index in range(self.count()):
+            if hasattr(self.widget(index), "_pop"):
+                self._tip(self.widget(index), on)
         for window in list(self._windows):
             held = getattr(window, "hold", None)
             if callable(held):

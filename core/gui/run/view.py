@@ -435,8 +435,10 @@ class RunView(QWidget):
 
     def show_status(self, status, model: RunModel | None) -> None:
         """Draw the run as ``model`` reads it now, live or ended as ``status`` says. What the page said of an earlier
-        stop goes when a stop is asked for; at a stopped end of a training that kept nothing, the page says so."""
+        stop goes when a stop is asked for; at a stopped end of a training that kept nothing, the page says so; at an
+        end that the close which waited for it is not carried out at (a failure), the page says PRISM stayed open."""
         ending = self._mode == "live" and not status.live
+        closed = ending and self._closing
         if (status.stop_requested and not self._stopping) or ending:
             self.notice.setText("")
         self._model = model
@@ -446,6 +448,8 @@ class RunView(QWidget):
         self._run = status.run
         if ending and model is not None and self._kept_nothing(model):
             self.notice.setText(questions.NOT_KEPT_TEXT)
+        elif closed and model is not None and model.outcome not in questions.CLOSES_AT:
+            self.notice.setText(questions.STAYED_OPEN_TEXT)
         self._draw()
 
     def say(self, text: str) -> None:
@@ -666,13 +670,16 @@ class RunView(QWidget):
         self._arrange()
 
     def _discard(self) -> None:
-        """"Discard": the training the stop kept is deleted, and the page says so; or the store's own sentence says
-        why it was not, and the question stays."""
+        """"Discard": the training the stop kept is deleted, or found gone already, and the page says which, asking
+        no more; or the page says why it was not deleted, and the question stays."""
         from .controller import controller
-        refused = controller().discard(self._run)
-        if refused is None:
+        answer = controller().discard(self._run)
+        if answer is None:
+            return
+        gone, words = answer
+        if gone:
             self._answered = True
-        self.say(questions.DISCARDED_TEXT if refused is None else refused)
+        self.say(words)
 
     def _toggle_text(self) -> None:
         """Show the full text, or hide it again."""

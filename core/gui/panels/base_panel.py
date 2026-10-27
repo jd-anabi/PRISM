@@ -33,10 +33,15 @@ FIGURE_NOT_SHOWN_TEXT = "The figure '{}' could not be shown ({}). The record is 
 
 class FigureNotShown(UserWarning):
     """A figure a run handed over that the window could not show. Said every time, never dropped as a repeat of
-    one said before: the filter below is the process's for this kind alone."""
+    one said before: ``_said_every_time`` puts the process's filter for this kind alone in force."""
 
 
-warnings.filterwarnings("always", category=FigureNotShown)
+def _said_every_time() -> None:
+    """Put in force the filter that says every ``FigureNotShown``, when it is not in force already: at each sink made,
+    not once at import, because what puts the warnings filters back as they were (a test runner does, each time it
+    has collected or run a test) also takes away a filter added in between."""
+    if not any(entry[0] == "always" and entry[2] is FigureNotShown for entry in warnings.filters):
+        warnings.filterwarnings("always", category=FigureNotShown)
 
 
 def _png_fig_sink(figure_signal):
@@ -59,6 +64,8 @@ def _png_fig_sink(figure_signal):
     A stop (``WorkerCancelled``, which is no ``Exception``) still passes, as it passes every other point
     where a stop is taken. The figure is closed whatever happens.
     """
+    _said_every_time()
+
     def _sink(title, fig):
         try:
             import io

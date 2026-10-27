@@ -21,7 +21,7 @@ code under test opened.
 
 No name here is ever bound a second time: ``forget_asked()`` empties the two lists in place. A
 test reads a box or a question through ``asked()`` and ``all_asked()``, starts over with
-``forget_asked()`` and answers with ``choose()``.
+``forget_asked()``, answers with ``choose()`` and leaves one open a while with ``hold_open()``.
 """
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -245,6 +245,36 @@ def choose(monkeypatch, *, words: str | None = None, other: bool = False, defaul
     from core.gui.widgets.ask import Ask
     monkeypatch.setattr(QMessageBox, "exec", answer)
     monkeypatch.setattr(Ask, "exec", answer_question)
+
+
+def hold_open(monkeypatch, seen: list, *, during: Callable[[], None] | None = None) -> None:
+    """Leave every box or question open a while, from now until the test ends or until the next ``choose`` or
+    ``hold_open``, as a person reading it leaves it: it is recorded first, shown as ``exec`` shows it, modal to the
+    whole program, then ``during`` runs (when one is handed), the event loop turns until what was due by then has been
+    done, and whether the box and the window it stands over are still in sight is noted in ``seen`` as a pair. Then
+    it is hidden, answered with nothing, as the guard leaves it. Undone with the test's ``monkeypatch``."""
+    def held(box) -> int:
+        from PySide6.QtCore import Qt, QTimer
+        from PySide6.QtWidgets import QApplication
+        from tests._runs import turn_until
+        record(box)
+        box.setWindowModality(Qt.ApplicationModal)
+        box.show()
+        if during is not None:
+            during()
+        for _ in range(2):                        # two rounds of the loop's zero-time timers
+            done = []
+            QTimer.singleShot(0, lambda: done.append(True))
+            turn_until(QApplication.instance(), lambda: bool(done))
+        over = box.parentWidget()
+        seen.append((box.isVisible(), over is not None and over.window().isVisible()))
+        box.hide()
+        return 0
+
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui.widgets.ask import Ask
+    monkeypatch.setattr(QMessageBox, "exec", held)
+    monkeypatch.setattr(Ask, "exec", held)
 
 
 class ChooserCall(NamedTuple):

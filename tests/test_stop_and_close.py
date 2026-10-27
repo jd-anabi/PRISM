@@ -17,7 +17,7 @@ from core.gui.run import questions
 from core.gui.run.controller import controller
 from core.gui.run.model import SILENCE_NEEDS_YOU_S, SIMULATION_ROW, RunSpec
 from tests._fixtures import (all_asked, asked, build_fit_record, build_run_host, build_window, choose,
-                             forget_asked, qt_app)
+                             forget_asked, hold_open, qt_app)
 from tests._runs import Clock, RunText, StandIn, start_run, turn_until
 
 # local time with its zone, as the window's clock gives it
@@ -465,8 +465,11 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
     """Once a stop in the fit has landed with a note of the training it kept, the run's page itself -- never a box --
     asks whether to keep it, from the note's numbers: "Keep" first, then "Discard", drawn as losing work. Unanswered
     the training stays, and the question stays with the page. Discard deletes the kept training, says so, and asks
-    no more; Keep deletes nothing and asks no more; a training the store will not delete stays, the store's own
-    sentence saying why. A training kept by a run before the last is deleted by its id in that run's history."""
+    no more; Keep deletes nothing and asks no more; a training the records no longer hold is said to be gone already,
+    and asked about no more. A training kept by a run before the last is deleted by its id in that run's history,
+    from the records that history names, whatever records are in use now; when that history cannot be read, nothing
+    is deleted, the page says so, and the question stays."""
+    from core.artifacts import ArtifactStore, use_store
     from core.gui.run import history
     app = qt_app()
     clock = Clock(_at(8, 19, 2, 11))
@@ -512,19 +515,34 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
 
     stopped_in_the_fit(_note("20261011T121000"))           # a training the store does not hold
     view.discard_button.click()
-    assert (view.notice.text(), view.keep_block.isVisibleTo(view)) == (
-        "no complete fit artifact named or id'd '20261011T121000'", True), "the store's refusal was not said"
+    assert (view.notice.text(), view.keep_block.isVisibleTo(view), kept()) == (
+        "The training was already gone.", False, [second]), "a training already gone was not said to be"
+
+    def later_run():
+        """A run of another page, so that the controller holds the page's run no more."""
+        later = StandIn()
+        start_run(build_run_host(), later, spec=RunSpec("Check", ("inference", "checks"), keeps_files=False))
+        later.release()
+        _ended(app, held)
 
     third = build_fit_record(store, passes=62)
     run = stopped_in_the_fit(_note(third))
     assert history.read(tmp_path / "runs" / f"{run}.json")["fit"]["kept_id"] == third
-    later = StandIn()
-    start_run(build_run_host(), later, spec=RunSpec("Check", ("inference", "checks"), keeps_files=False))
-    later.release()
-    _ended(app, held)
+    later_run()
+    with use_store(ArtifactStore(tmp_path / "Elsewhere")):           # the records in use now are others
+        view.discard_button.click()
+    assert (sorted(kept()), view.notice.text(), view.keep_block.isVisibleTo(view)) == (
+        [second], "The training was discarded.", False), (
+        "the training an earlier run kept was not deleted by its history's id, from the records it names")
+
+    fourth = build_fit_record(store, passes=62)
+    run = stopped_in_the_fit(_note(fourth))
+    later_run()
+    (tmp_path / "runs" / f"{run}.json").unlink()                    # its history is gone
     view.discard_button.click()
-    assert (sorted(kept()), view.notice.text()) == ([second], "The training was discarded."), (
-        "the training an earlier run kept was not deleted by its history's id")
+    assert (sorted(kept()), view.notice.text(), view.keep_block.isVisibleTo(view)) == (
+        sorted([second, fourth]), "Nothing was discarded: the run's history that names the training cannot be read.",
+        True), "a training whose run's history cannot be read was said to be discarded"
 
 
 def test_discard_of_a_resumed_training_says_it_deletes_every_epoch_kept_since_it_began(tmp_path, monkeypatch, store):
@@ -962,6 +980,183 @@ def test_an_answer_given_once_the_save_has_begun_stops_nothing(tmp_path, monkeyp
             "finished", False, None), "the save was stopped, or the window did not close once it was saved"
 
 
+def test_a_close_that_waits_is_not_carried_out_when_the_run_fails(tmp_path, monkeypatch):
+    """A close that waits for its run is carried out only once the run has stopped or finished. A run that fails
+    instead, after "Stop the run and close", and a save that fails after "Close when it is saved", leave the window
+    open on the run's page, which says that PRISM stayed open, and the failure's box in sight, the event loop turning,
+    until it is answered: nothing closes it or the window meanwhile, and the one-PRISM claim is held. A question of
+    the person's own that is open when a stopped run ends is answered first; the window then closes."""
+    import time
+    from core.gui import one_instance
+    from core.gui.widgets.ask import ask
+    from tests._fixtures import whole_program
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    clock = Clock(_at(8, 19, 2, 11))
+
+    def turned_past_the_windows_look():
+        """The event loop turned for twice the time the window waits between two looks for an open box: a close that
+        waited for such a box has had its turn."""
+        from core.gui.main_window import _ANSWERED_EVERY_MS
+        began = time.monotonic()
+        turn_until(app, lambda: time.monotonic() - began >= 2 * _ANSWERED_EVERY_MS / 1000)
+
+    with whole_program() as (_app, window):
+        held = _controller_on(tmp_path, clock)
+        claim = one_instance.current()
+        shown_off_screen(window)
+        host = window.part("inference").posterior_panel
+        view = host.run_view
+        for answer, broke in (("Stop the run and close", "the run broke"),
+                              ("Close when it is saved", "the posterior could not be written")):
+            stand_in, text = StandIn(takes_stops=False), RunText(held)
+            start_run(host, stand_in, spec=_training())
+            if answer == "Close when it is saved":
+                _to_the_fit(app, stand_in, text, clock, [(1, 0), (2, 20)])      # the fit has ended: the save
+            else:
+                _say(app, stand_in, text, _BUDGET)
+            choose(monkeypatch, words=answer)
+            window.close()
+            assert (window._close_at_end, held.status.closing) == (True, True), answer
+            seen = []
+            hold_open(monkeypatch, seen)
+            forget_asked()
+            stand_in.fail(RuntimeError(broke))
+            _ended(app, held)
+            _settled(app)
+            assert ([(box.kind, box.sentence) for box in all_asked()], seen) == ([("error", broke)], [(True, True)]), (
+                f"{answer!r}: the failure's box was closed before it was answered, or the window with it")
+            turned_past_the_windows_look()
+            assert (window.isVisible(), one_instance.current() is claim, window._close_at_end, window.current_place(),
+                    view.mode, view.sentence.text(), view.notice.text(), view.notice.isVisible()) == (
+                True, True, False, ("inference", "training"), "ended", "Training retrain_3 failed.",
+                "PRISM stayed open: the run failed.", True), answer
+            assert [box.kind for box in all_asked()] == ["error"], f"{answer!r}: a close came after the box"
+            view.back_button.click()
+
+        stand_in, text = StandIn(takes_stops=False), RunText(held)
+        start_run(host, stand_in, spec=_training())
+        _say(app, stand_in, text, _BUDGET)
+        choose(monkeypatch, words="Stop the run and close")
+        window.close()
+        seen = []
+
+        def ends():
+            stand_in.say("the line at which the stop is taken")
+            _ended(app, held)
+
+        hold_open(monkeypatch, seen, during=ends)
+        released = _note_the_release(monkeypatch, tmp_path / "runs", held.status.run, text, view)
+        ask(window, "A question of its own", "Asked while the run stops.", "Cancel", "Go on")
+        assert (seen, released) == ([(True, True)], []), (
+            "the close the run's end made closed a question still open, or the window with it")
+        turn_until(app, lambda: not window.isVisible(), 10)
+        assert released == [("stopped", ["stopped"], "ended")], (
+            "the window did not close once the question was answered")
+
+
+def test_a_yes_to_the_close_shows_the_runs_page_wherever_the_close_was_asked(tmp_path, monkeypatch):
+    """Whatever place is in sight when the window is closed during a run, a yes to the close -- "Stop the run and
+    close", "Close when it has stopped", "Close when it is saved" -- brings the run's page into sight, where its line
+    says that PRISM closes when the run has stopped, or when the posterior is saved, and where the close can be
+    withdrawn."""
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, window = _controller_on(tmp_path, clock), build_window()
+    shown_off_screen(window)
+    host, text = window.part("inference").posterior_panel, RunText(held)
+    view = host.run_view
+
+    def closed_from(place, answer):
+        window.go_to(*place)
+        choose(monkeypatch, words=answer)
+        window.close()
+        return window.current_place(), view.closing_line.isVisible(), view.closing_line.text()
+
+    stand_in = StandIn(takes_stops=False)
+    start_run(host, stand_in, spec=_training())
+    _say(app, stand_in, text, _BUDGET)
+    assert closed_from(("home",), "Stop the run and close") == (
+        ("inference", "training"), True, "PRISM closes when the run has stopped."), "the run's page is not in sight"
+    assert view.withdraw_button.isVisible()
+    view.withdraw_button.click()
+    choose(monkeypatch, words="Stop training")
+    view.stop_button.click()
+    assert closed_from(("records",), "Close when it has stopped") == (
+        ("inference", "training"), True, "PRISM closes when the run has stopped."), "the run's page is not in sight"
+    assert view.withdraw_button.isVisible()
+    view.withdraw_button.click()
+    stand_in.release()
+    _ended(app, held)
+
+    saving = StandIn()
+    start_run(host, saving, spec=_training())
+    _to_the_fit(app, saving, text, clock, [(1, 0), (2, 20)])
+    assert closed_from(("temperature", "one_cell"), "Close when it is saved") == (
+        ("inference", "training"), True, "PRISM closes when the posterior is saved."), "the run's page is not in sight"
+    assert view.keep_open_button.isVisible()
+    view.keep_open_button.click()
+    saving.release()
+    _ended(app, held)
+    window.hide()
+
+
+def test_a_close_while_a_close_waits_asks_nothing_and_the_window_closes_at_the_end(tmp_path, monkeypatch):
+    """A close of the window while a close already waits for its run -- for the save, or for a stop -- asks nothing
+    again and brings the run's page into sight, so that no question stands open to take the close the run's end
+    makes: when the run ends, even where a question would have stayed open past its end, the window closes."""
+    from core.gui import one_instance
+    from tests._fixtures import whole_program
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    clock = Clock(_at(8, 19, 2, 11))
+    with whole_program() as (_app, window):
+        held = _controller_on(tmp_path, clock)
+        shown_off_screen(window)
+        host = window.part("inference").posterior_panel
+        view = host.run_view
+        saving, text = StandIn(), RunText(held)
+        start_run(host, saving, spec=_training())
+        _to_the_fit(app, saving, text, clock, [(1, 0), (2, 20)])
+        choose(monkeypatch, words="Close when it is saved")
+        window.close()
+        window.go_to("home")
+        forget_asked()
+        window.close()
+        assert (all_asked(), window.current_place(), window._close_at_end) == (
+            [], ("inference", "training"), True), "a close while the save's close waited asked again"
+        view.keep_open_button.click()
+        saving.release()
+        _ended(app, held)
+        app.processEvents()
+        assert window.isVisible()
+
+        stand_in = StandIn(takes_stops=False)
+        start_run(host, stand_in, spec=_training())
+        _say(app, stand_in, text, _BUDGET)
+        choose(monkeypatch, words="Stop the run and close")
+        window.close()
+        window.go_to("home")
+
+        def ends():
+            """The run ends while the question stands open, and the event loop turns on before it is answered."""
+            stand_in.say("the line at which the stop is taken")
+            _ended(app, held)
+            _settled(app)
+
+        choose(monkeypatch, words="Wait", during=ends)
+        forget_asked()
+        window.close()
+        assert (all_asked(), window.current_place()) == ([], ("inference", "training")), (
+            "a close while the stop's close waited asked again")
+        stand_in.say("the line at which the stop is taken")
+        turn_until(app, lambda: not window.isVisible(), 10)
+        assert (one_instance.current(), held.is_live()) == (None, False)
+
+
 def test_the_end_of_a_test_stops_a_training_it_left_live_in_its_save(tmp_path):
     """The end of a test stops a run it left live (tests/_built.py's end of a test) even while a training saves its
     posterior, which takes no stop asked through the controller: the run's own token is set, the stand-in takes the
@@ -982,11 +1177,11 @@ def test_the_end_of_a_test_stops_a_training_it_left_live_in_its_save(tmp_path):
 
 
 # ── the figure windows ──
-def _picture() -> bytes:
-    """A small picture of a figure, as the run's figure sink hands one over."""
+def _picture(width=40, height=30) -> bytes:
+    """A picture of a figure, small unless a size is handed, as the run's figure sink hands one over."""
     from PySide6.QtCore import QBuffer, QByteArray, QIODevice
     from PySide6.QtGui import QImage
-    image = QImage(40, 30, QImage.Format_RGB32)
+    image = QImage(width, height, QImage.Format_RGB32)
     image.fill(0xFFFFFF)
     data = QByteArray()
     buffer = QBuffer(data)
@@ -1005,11 +1200,16 @@ def _figure_pickle() -> bytes:
     return pickle.dumps(fig)
 
 
+def _pop_button(stack, index):
+    """The "Pop out" button of the figure at ``index`` of ``stack``."""
+    from PySide6.QtWidgets import QPushButton
+    return next(button for button in stack.widget(index).findChildren(QPushButton) if button.text() == "Pop out")
+
+
 def _pop(stack, index):
     """Press "Pop out" on the figure at ``index`` of ``stack``; the window it opened."""
-    from PySide6.QtWidgets import QPushButton
     before = set(stack._windows)
-    next(button for button in stack.widget(index).findChildren(QPushButton) if button.text() == "Pop out").click()
+    _pop_button(stack, index).click()
     (opened,) = set(stack._windows) - before
     return opened
 
@@ -1021,22 +1221,28 @@ def _open(widget) -> bool:
 
 
 def test_every_popped_out_figure_window_closes_with_the_main_one(tmp_path):
-    """A figure popped out of a page is a window of its own, owned by the main window, interactive or a picture;
-    when the main window closes, every such window closes with it, so that nothing keeps the program running unseen."""
+    """A figure popped out of a page is a window of its own that no window owns, interactive or a picture, so that it
+    stands where a person puts it, over the main window or under it, and is not minimised with it; when the main
+    window closes, every such window closes with it, a minimised one too, so that nothing keeps the program running
+    unseen."""
     from core.gui.panels.reduction_panel import ReductionPanel
     from core.gui.widgets.figure_window import ImageZoomWindow, InteractiveFigureWindow
     from tests._window_helpers import shown_off_screen
-    qt_app()
+    app = qt_app()
     window = build_window()
     shown_off_screen(window)
     stack = window.panel(ReductionPanel).figure_stack
     stack.add_figure("interactive", _picture(), _figure_pickle())
     stack.add_figure("a picture", _picture())
-    opened = [_pop(stack, 0), _pop(stack, 1)]
-    assert [type(figure) for figure in opened] == [InteractiveFigureWindow, ImageZoomWindow]
-    assert all(figure.isWindow() and figure.parentWidget() is window and figure.isVisible() for figure in opened)
+    opened = [_pop(stack, 0), _pop(stack, 1), _pop(stack, 1)]
+    opened[2].showMinimized()
+    app.processEvents()
+    assert [type(figure) for figure in opened] == [InteractiveFigureWindow, ImageZoomWindow, ImageZoomWindow]
+    assert [(figure.isWindow(), figure.parentWidget(), figure.isVisible()) for figure in opened] == [
+        (True, None, True)] * 3, "a figure window is owned, or not in sight"
+    assert opened[2].isMinimized()
     window.close()
-    assert (window.isVisible(), [_open(figure) for figure in opened]) == (False, [False, False]), (
+    assert (window.isVisible(), [_open(figure) for figure in opened]) == (False, [False, False, False]), (
         "a figure window outlived the main window's close")
 
 
@@ -1053,8 +1259,9 @@ def _settled(app) -> None:
 
 def test_a_figure_popped_out_during_a_run_opens_as_its_picture(tmp_path):
     """While a run is live, a figure popped out of a page opens as its picture, in the image viewer, even when an
-    interactive copy could be built: the window's thread lays out no figure while a run builds its own. Once the run
-    has ended, it opens interactive again."""
+    interactive copy could be built: the window's thread lays out no figure while a run builds its own; a window no
+    window owns, as at any time. Its button says so meanwhile, for a figure that arrived before the run and one that
+    arrived during it. Once the run has ended, it opens interactive again, and its button says that."""
     from core.gui.panels.reduction_panel import ReductionPanel
     from core.gui.widgets.figure_window import ImageZoomWindow, InteractiveFigureWindow
     app = qt_app()
@@ -1062,12 +1269,21 @@ def test_a_figure_popped_out_during_a_run_opens_as_its_picture(tmp_path):
     host = window.panel(ReductionPanel)
     stack = host.figure_stack
     stack.add_figure("interactive", _picture(), _figure_pickle())
+    interactive, held_tip, picture = ("Open an interactive, zoomable copy in a new window",
+                                      "Open a zoomable picture in a new window; an interactive copy opens once the run "
+                                      "has ended", "Open a zoomable copy in a new window")
+    assert _pop_button(stack, 0).toolTip() == interactive
     stand_in = StandIn()
     start_run(host, stand_in, spec=RunSpec("Reduction map", ("reduction", None), stop_button="Stop computing…"))
+    stack.add_figure("arrived during the run", _picture(), _figure_pickle())
+    stack.add_figure("a picture", _picture())
+    assert [_pop_button(stack, index).toolTip() for index in range(3)] == [held_tip, held_tip, picture], (
+        "the pop-out's button promises an interactive copy while a run is live")
     during = _pop(stack, 0)
-    assert (type(during), during.parentWidget() is window) == (ImageZoomWindow, True)
+    assert (type(during), during.parentWidget()) == (ImageZoomWindow, None)
     stand_in.release()
     _ended(app, held)
+    assert [_pop_button(stack, index).toolTip() for index in range(3)] == [interactive, interactive, picture]
     after = _pop(stack, 0)
     assert type(after) is InteractiveFigureWindow
     for figure in (during, after):
@@ -1075,12 +1291,15 @@ def test_a_figure_popped_out_during_a_run_opens_as_its_picture(tmp_path):
 
 
 def test_a_figure_window_open_when_a_run_starts_shows_its_picture_until_the_run_ends(tmp_path):
-    """An interactive figure window open when a run starts shows its figure's picture from the run's start, and
-    lays out nothing of its figure while the run is live: a resize or a key reaches no drawing of it. When the run
-    has ended it is interactive again, at the view it had. A window whose figure has no picture held says, in its
-    place, that the figure is drawn again when the run has ended."""
-    from PySide6.QtCore import Qt
+    """An interactive figure window open when a run starts shows its figure's picture from the run's start, scaled
+    down to the room the window has, and lays out nothing of its figure while the run is live: a resize, a key or a
+    change of the screen's scale reaches no drawing of it. It keeps its size, a picture larger than the window being
+    no reason to grow, and can be made smaller meanwhile. When the run has ended it is interactive again, at the view
+    it had and at the size it was given. A window whose figure has no picture held says, in its place, that the
+    figure is drawn again when the run has ended."""
+    from PySide6.QtCore import QEvent, Qt
     from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
     from core.gui.panels.reduction_panel import ReductionPanel
     from core.gui.widgets.figure_window import WAIT_TEXT
     from tests._window_helpers import shown_off_screen
@@ -1089,9 +1308,10 @@ def test_a_figure_window_open_when_a_run_starts_shows_its_picture_until_the_run_
     shown_off_screen(window)
     host = window.panel(ReductionPanel)
     stack = host.figure_stack
-    stack.add_figure("interactive", _picture(), _figure_pickle())
+    stack.add_figure("interactive", _picture(1_800, 1_200), _figure_pickle())
     stack.add_figure("no picture", b"", _figure_pickle())
     figure, bare = _pop(stack, 0), _pop(stack, 1)
+    figure.resize(900, 650)
     axes = figure._fig.axes[0]
     axes.set_xlim(0.5, 1.5)                          # zoomed in, as a person leaves it
     figure.canvas.setFocus(Qt.MouseFocusReason)      # the keyboard on the figure, as a click on it leaves it
@@ -1104,15 +1324,24 @@ def test_a_figure_window_open_when_a_run_starts_shows_its_picture_until_the_run_
     assert (figure.picture.isVisibleTo(figure), figure.canvas.isVisibleTo(figure), figure.toolbar.isVisibleTo(figure),
             figure.picture.pixmap().isNull()) == (True, False, False, False), "the run's start did not show the picture"
     assert (bare.picture.text(), bare.picture.isVisibleTo(bare)) == (WAIT_TEXT, True)
-    figure.resize(figure.width() + 120, figure.height() + 80)
+    _settled(app)
+    assert ((figure.width(), figure.height()), figure.picture.pixmap().width() <= figure.picture.width()) == (
+        (900, 650), True), "a held window grew to its picture's size, or its picture is not scaled to its room"
+    figure.resize(700, 480)
     QTest.keyClick(figure.focusWidget() or figure, Qt.Key_H)    # where a person's key goes: "home", a redraw
     _settled(app)
-    assert drawn == [], "the figure was drawn while the run was live"
+    assert ((figure.width(), figure.height()), drawn) == ((700, 480), []), (
+        "a held window could not be made smaller, or the figure was drawn while the run was live")
+    figure.canvas._set_device_pixel_ratio(2.0)       # the figure library's ratio as a screen of another scale leaves it
+    QApplication.sendEvent(figure.windowHandle(), QEvent(QEvent.DevicePixelRatioChange))
+    _settled(app)
+    assert drawn == [], "a change of the screen's scale drew the figure while the run was live"
     stand_in.release()
     _ended(app, held)
+    _settled(app)
     assert (figure.picture.isVisibleTo(figure), figure.canvas.isVisibleTo(figure), figure.toolbar.isVisibleTo(figure),
-            tuple(axes.get_xlim())) == (False, True, True, (0.5, 1.5)), (
-        "the window is not interactive again, at its view")
+            tuple(axes.get_xlim()), (figure.width(), figure.height())) == (False, True, True, (0.5, 1.5), (700, 480)), (
+        "the window is not interactive again, at its view and its size")
     turn_until(app, lambda: bool(drawn))
     for each in (figure, bare):
         each.close()
@@ -1122,8 +1351,9 @@ def test_a_figure_handed_over_after_the_window_is_gone_cannot_remove_a_finished_
     """The window's figure sink is called inside the writer of the record the figure is saved in, and that writer
     removes its record on any exception. A picture that cannot be made, a hand-over that fails, and a hand-over to a
     window that is gone each become one warning, the figure's title and the error's kind and message in it, and the
-    record is written whole with its figure; the figure is closed. A stop still passes, as at any point where one is
-    taken, and the figure is closed then too."""
+    record is written whole with its figure; the figure is closed. The same failure met again is said again, by the
+    filter of the window's own, never dropped as a repeat. A stop still passes, as at any point where one is taken,
+    and the figure is closed then too."""
     import io
     import matplotlib.pyplot as plt
     import shiboken6
@@ -1156,17 +1386,19 @@ def test_a_figure_handed_over_after_the_window_is_gone_cannot_remove_a_finished_
         visualizers.save_figure = save
         try:
             fig, _axes = plt.subplots()
+            again, _axes = plt.subplots()
             with warnings.catch_warnings(record=True) as said:
-                warnings.simplefilter("always")
                 with store.create("calibration", None) as writer:
                     writer.body = {"results": {}}
                     writer.fig_sink(_png_fig_sink(signal))("Training loss", fig)
+                _png_fig_sink(signal)("Training loss", again)       # the same failure once more: said again
         finally:
             visualizers.save_figure = real
         assert [(warning.category, str(warning.message)) for warning in said] == [
             (FigureNotShown,
-             f"The figure 'Training loss' could not be shown ({why}). The record is not affected.")], leg
-        assert plt.fignum_exists(fig.number) is False, f"{leg}: the figure was left open"
+             f"The figure 'Training loss' could not be shown ({why}). The record is not affected.")] * 2, leg
+        assert (plt.fignum_exists(fig.number), plt.fignum_exists(again.number)) == (False, False), (
+            f"{leg}: a figure was left open")
     records = store.list("calibration")
     assert len(records) == 3 and all(summary.complete for summary in records), "a record was removed"
 
