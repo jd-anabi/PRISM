@@ -18,8 +18,10 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel
 
+from core.gui.fields import fix_sentence
 from core.gui.run import retry
 from core.gui.run.controller import controller
 from core.gui.run.model import SIMULATION_ROW, RunSpec
@@ -192,15 +194,42 @@ def _tried(app, held, stand_in, calls) -> None:
     turn_until(app, lambda: len(stand_in.calls) == calls and held.status.state == "running")
 
 
-def _waits(pause, which, batch) -> str:
+def _waits(pause, which, batch, at=None) -> str:
     """What the page of a training that waits to be tried again says, the graphics card having run out of memory in
-    its simulation, ``batch`` batches saved."""
-    return (f"The graphics card ran out of memory at batch {batch + 1}. Trying again in {pause}: the {which} of three "
-            f"tries. The simulations up to batch {batch} are saved.")
+    its simulation at batch ``at`` (by default the one after the batches saved), ``batch`` batches saved."""
+    return (f"The graphics card ran out of memory at batch {at or batch + 1}. Trying again in {pause}: the {which} of "
+            f"three tries. The simulations up to batch {batch} are saved.")
 
 
-_REOPEN = ("Error. Trying again here did not help: this copy of PRISM still holds the graphics card's memory. Close "
-           "PRISM and open it again")
+# the opening of a page that only reopening PRISM can help: after tries that did not help, and after a failure of the
+# graphics card that is no lack of memory, filled with the error's message's first line
+_REOPEN = "Error. Trying again here did not help: this copy of PRISM still holds the graphics card's memory."
+_DEVICE = "Error. The graphics card failed in a way only reopening PRISM can clear: {}."
+# what a page says when its offer is pressed after its session came to hold another model or another prior
+_CHANGED = "The model or its prior has changed since this run began; start it again from the form."
+
+
+def _said_alone(view) -> str:
+    """The command line the page of a run names, read off the page's words as a person copies it: from the tool's name
+    to the end of the words it stands in; "" when the page names none."""
+    said = [_failure(view)] + [label.text() for label in view.failure.findChildren(QLabel)
+                               if label.isVisibleTo(view) and label.textFormat() == Qt.PlainText]
+    return next((words[words.index("python -m core "):] for words in said if "python -m core " in words), "")
+
+
+def _parsed(command):
+    """The command-line tool's own parser's reading of ``command``, the words before its subcommand left out; and
+    what the parser said when it refused it ("" when it took it)."""
+    import contextlib
+    import io
+    import shlex
+    from core.tool import build_parser
+    heard = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(heard):
+            return build_parser().parse_args(shlex.split(command)[3:]), ""
+    except SystemExit:
+        return None, heard.getvalue()
 
 
 # ── the failure page ──
@@ -311,10 +340,11 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
     own call in a new worker, its keywords as they were but the set's policy that must continue, its result handed
     where the run's was, in the same text and history files, each try opened by its line in the text; a try that
     keeps a batch more in the simulation set starts the count again, one whose run's text counted batches the set
-    does not hold does not. The history keeps each try: when it began and ended, how, and what the set and the kept
-    training held before and after it. "Stop trying" ends the run failed, said last in its text, and its page then
-    offers to continue from the batches the set holds. A run whose stop was asked for before it ran out of memory is
-    not tried again."""
+    does not hold does not. The page names the batch that was in progress, the one after the last its text counted,
+    and says what is saved from the set. The history keeps each try: when it began and ended, how, and what the set
+    and the kept training held before and after it. "Stop trying" ends the run failed, said last in its text, and its
+    page then offers to continue from the batches the set holds. A run whose stop was asked for before it ran out of
+    memory is not tried again."""
     from core.gui.run import history
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
@@ -333,8 +363,8 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
                 view.stop_trying_button.isVisibleTo(view), view.stop_button.isVisibleTo(view),
                 view.failure.isVisibleTo(view))
 
-    def waits(pause, which, batch):
-        return ("retrying", "trying again", True, _waits(pause, which, batch), True, False, False)
+    def waits(pause, which, batch, at=None):
+        return ("retrying", "trying again", True, _waits(pause, which, batch, at), True, False, False)
 
     assert (retry.TRIES, retry.PAUSES_S) == (3, (60.0, 180.0, 600.0)), (
         "the tries are not three, after 1, 3 and 10 minutes")
@@ -364,15 +394,15 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
     turn_until(app, lambda: held.model.batches_done() == 340)
     stand_in.fail(_simulated(_card("CUDA error: out of memory")))       # the card's own lack of memory
     _waiting(app, held)
-    assert page() == waits("3 minutes", "second", 300), (
-        "a try whose set holds no batch more started the count again, or the card's own lack of memory was not tried "
-        "again")
+    assert page() == waits("3 minutes", "second", 300, 341), (
+        "a try whose set holds no batch more started the count again, the card's own lack of memory was not tried "
+        "again, or the page does not name the batch in progress")
     clock.advance(61)
     held.tick()
-    assert page() == waits("2 minutes", "second", 300), "the page did not count down to the next try"
+    assert page() == waits("2 minutes", "second", 300, 341), "the page did not count down to the next try"
     clock.advance(118)                                  # 179 s into the pause of 3 minutes
     held.tick()
-    assert (len(stand_in.calls), page()) == (3, waits("1 minute", "second", 300)), "a try began before its pause"
+    assert (len(stand_in.calls), page()) == (3, waits("1 minute", "second", 300, 341)), "a try began before its pause"
     clock.advance(1)                                    # 03:17
     held.tick()
     _tried(app, held, stand_in, 4)
@@ -424,14 +454,43 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
 
     asked_to_stop, before = StandIn(takes_stops=False), len(text.statuses)
     start_run(host, asked_to_stop, spec=_training())
-    _to_the_simulation(app, asked_to_stop, text, held, folder, 300)
+    _set(tmp_path, 200)                                 # the set holds 200 batches; the run's text counts 236
+    _to_the_simulation(app, asked_to_stop, text, held, folder, 236)
     choose(monkeypatch, words="Stop and keep the simulations")
     view.stop_button.click()
-    asked_to_stop.fail(_out_of_memory("the simulation of batch 301"))      # before the stop is taken
+    asked_to_stop.fail(_out_of_memory())               # before the stop is taken
     _ended(app, held)
     assert ([status.state for status in text.statuses[before:] if status.state == "retrying"],
             len(asked_to_stop.calls), held.status.outcome, view.noted.isVisibleTo(view)) == ([], 1, "failed", True), (
         "a run whose stop was asked for was tried again after its failure")
+    assert (_failure(view), view.continue_button.text()) == (
+        "Error. Training failed on Sat 3 Oct, 03:18, during simulation: the graphics card ran out of memory at batch "
+        "237. Saved: the simulations up to batch 200. Lost: nothing else.", "Continue from batch 200"), (
+        "the cause does not name the batch in progress, or what is saved is not what the set holds")
+
+
+def test_stop_trying_pressed_as_the_pause_runs_out_begins_no_try(tmp_path):
+    """"Stop trying" pressed in the turn of the event loop in which the pause runs out, the window's look at its
+    clock coming before the tries have ended, begins no try: the run ends failed, as a press earlier in the pause
+    ends it."""
+    app = qt_app()
+    clock = Clock(_at(3, 3, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=_training())
+    _to_the_simulation(app, stand_in, text, held, _set(tmp_path, 236), 236)
+    stand_in.fail(_out_of_memory())
+    _waiting(app, held)
+    clock.advance(60)                                   # the pause has run out, and nothing has looked yet
+    view.stop_trying_button.click()
+    held.tick()                                         # the timer's look, in the turn of the press
+    turn_until(app, lambda: not held.is_live() or len(stand_in.calls) == 2)
+    if held.is_live():                                  # a try began after all: it is let end, as a later run needs
+        stand_in.release()
+        _ended(app, held)
+    assert (len(stand_in.calls), held.status.outcome) == (1, "failed"), (
+        "a try began though 'Stop trying' was pressed in the turn its pause ran out")
 
 
 _REPORTED_AT_ONCE = {
@@ -439,7 +498,7 @@ _REPORTED_AT_ONCE = {
     "a programming error": (lambda: TypeError("unsupported operand type(s) for +: 'int' and 'NoneType'"),
                             "unsupported operand type(s) for +: 'int' and 'NoneType'"),
     "a refusal after the spend": (lambda: Refusal("The read-back of the posterior was refused.", field="name"),
-                                  "The read-back of the posterior was refused."),
+                                  f"The read-back of the posterior was refused. {fix_sentence('name')}"),
     "the card's memory, in a check": (_out_of_memory, "the simulation of batch 237 failed"),
 }
 
@@ -448,7 +507,8 @@ _REPORTED_AT_ONCE = {
 def test_any_other_failure_is_reported_at_once(failure, tmp_path):
     """A failure that the graphics card's lack of memory did not cause fails the same way again, so the window says
     it at once: no pause and no try, the run ended failed, its page saying what failed and offering to continue
-    from the batches the simulation set holds. A run that is no training is not tried again, whatever its failure."""
+    from the batches the simulation set holds; a refusal made once something was spent is quoted with where to fix
+    it, as the window says a refusal. A run that is no training is not tried again, whatever its failure."""
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
@@ -482,23 +542,27 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     tries and nothing to press: after three tries in a row that kept nothing more, each out of memory again; and at
     once after a failure in which the graphics card failed in a way that is no lack of memory, a first failure as
     well as a try's, in the simulation, where the card's error comes under the simulator's own, as in the fit, which
-    is never tried again, and whose history says the card failed. The page says how the training goes on: started
+    is never tried again, and whose history says the card failed. The page names the cause: that trying again did
+    not help, or that the card failed, quoting the first line of its error. It says how the training goes on: started
     again once PRISM is open again, it continues the simulation set from the batches it holds; a training kept in its
-    fit is resumed from the command line. Neither "Continue from batch N" nor "Resume the training" is offered:
-    either would run in this copy of PRISM."""
+    fit is resumed from the command line, the command set off on its own beneath the sentence. Neither "Continue from
+    batch N" nor "Resume the training" is offered: either would run in this copy of PRISM."""
     from core.gui.run import history
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
     text, view = RunText(held), host.run_view
     folder = _set(tmp_path, 236)
-    reopen = (f"{_REOPEN}, then start the same training: it continues the saved simulations from batch 236.")
+    again = ("Close PRISM and open it again, then start the same training: it continues the saved simulations from "
+             "batch 236.")
+    simulated = f"{_SOLVER}: AcceleratorError: {_ILLEGAL}"
+    device_opening = _DEVICE.format(simulated.splitlines()[0])
 
-    def reopened(message):
+    def reopened(message, opening=_REOPEN):
         return (held.status.state, held.status.outcome, held.status.reopen, all_asked(), _failure(view),
                 view.failure_message.text(), view.continue_button.isVisibleTo(view),
                 view.resume_button.isVisibleTo(view), view.stop_trying_button.isVisibleTo(view)) == (
-            "ended", "failed", True, [], reopen, message, False, False, False)
+            "ended", "failed", True, [], f"{opening} {again}", message, False, False, False)
 
     stand_in = StandIn()
     start_run(host, stand_in, spec=_training())
@@ -525,17 +589,16 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     _tried(app, held, device, 2)
     device.fail(_device_failure())
     _ended(app, held)
-    simulated = f"{_SOLVER}: AcceleratorError: {_ILLEGAL}"
-    assert (len(device.calls), reopened(simulated)) == (2, True), _failure(view)
+    assert (len(device.calls), reopened(simulated, device_opening)) == (2, True), _failure(view)
 
     first = StandIn()
     start_run(host, first, spec=_training())
     _to_the_simulation(app, first, text, held, folder, 236)
     first.fail(_device_failure())
     _ended(app, held)
-    assert (len(first.calls), reopened(simulated)) == (1, True), (
-        "a first failure of the graphics card that is no lack of memory was tried again, or offered to continue",
-        _failure(view))
+    assert (len(first.calls), reopened(simulated, device_opening)) == (1, True), (
+        "a first failure of the graphics card that is no lack of memory was tried again, offered to continue, or its "
+        "page named another cause", _failure(view))
     assert history.read(tmp_path / "runs" / f"{held.status.run}.json")["failure"]["kind"] == "device", (
         "the history does not say the graphics card failed")
 
@@ -546,11 +609,12 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     _to_the_fit(app, in_the_fit, text, clock, _set(tmp_path, 10_000, complete=True), [(1, 0), (2, 1)])
     in_the_fit.fail(_device_failure(in_the_simulation=False))
     _ended(app, held)
-    assert (len(in_the_fit.calls), held.status.reopen, _failure(view), view.resume_button.isVisibleTo(view),
-            view.continue_button.isVisibleTo(view)) == (
-        1, True, f"{_REOPEN}. The training is kept up to epoch 2; until the Training page offers to resume it, it is "
-                 f"resumed from the command line: python -m core train --resume-fit {kept}, with the same --bounds, "
-                 f"--prior and --chi it was trained with.", False, False), _failure(view)
+    assert (len(in_the_fit.calls), held.status.reopen, _failure(view), _said_alone(view),
+            view.resume_button.isVisibleTo(view), view.continue_button.isVisibleTo(view)) == (
+        1, True, f"{_DEVICE.format(_ILLEGAL.splitlines()[0])} Close PRISM and open it again. The training is kept "
+                 f"up to epoch 2; until the Training page offers to resume it, it is resumed from the command line "
+                 f"with the command below, given the same --bounds, --prior and --chi it was trained with.",
+        f"python -m core train --resume-fit {kept}", False, False), _failure(view)
 
 
 # ── continuing and resuming from the run's page ──
@@ -558,7 +622,8 @@ def test_continue_from_batch_n_repeats_the_runs_own_call_with_the_must_continue_
     """"Continue from batch N" stands on the page of a training that failed, and of one that was stopped, while its
     simulation set is unfinished and holds a batch, N the batches the set holds as read from it once the run has
     ended, which may be fewer than the run's text counted, and the page says that the simulations up to N are
-    saved. Pressed, it starts the run's own call again as the page's next run, with files of its own: its keywords
+    saved; a load from the same page meanwhile, which is handed no page, leaves the offer and its call as they are.
+    Pressed, it starts the run's own call again as the page's next run, with files of its own: its keywords
     as they were, the policy that must continue (``resume="require"``) the one new argument and N in none of them,
     its result handed where the first run's was. A run stopped before its set held a batch offers nothing; neither
     does a page drawn from a run's files alone; and while another run is live, the press starts nothing and the page
@@ -581,6 +646,13 @@ def test_continue_from_batch_n_repeats_the_runs_own_call_with_the_must_continue_
             _failure(view).endswith("Saved: the simulations up to batch 200. Lost: nothing else.")) == (
         True, "Continue from batch 200", False, True), ("N is not the batches the set holds", _failure(view))
     record, path = history.read(tmp_path / "runs" / f"{first}.json"), tmp_path / "runs" / f"{first}.txt"
+    loads = StandIn(word="Posterior load")                # a load from the same page, which is handed no page
+    start_run(host, loads, spec=RunSpec("Posterior load", ("inference", "training"), stop_button="Stop loading",
+                                        loads_only=True, keeps_files=False, stop_asks=False))
+    loads.release()
+    _ended(app, held)
+    assert (view.continue_button.isVisibleTo(view), view.notice.text()) == (True, ""), (
+        "a load from the page took its offer away, or said something on it")
     view.continue_button.click()
     turn_until(app, lambda: len(failed.calls) == 2)
     assert (held.is_live(), held.status.run != first, held.status.name, view.mode,
@@ -708,12 +780,58 @@ def test_resume_the_training_repeats_the_runs_own_call_with_the_kept_training_na
         [], False, False), "a training Discard deleted was still offered to resume"
 
 
+def test_continue_and_resume_start_nothing_once_the_page_holds_another_model_or_prior(tmp_path, monkeypatch, store):
+    """"Continue from batch N" and "Resume the training" repeat the run's own call, made with the model and the prior
+    its page's session held then. While the session still holds them, the press starts the run; once it holds another
+    model (one applied in step 1) or another prior (one built or loaded), the press starts nothing: the page says why
+    and offers it no more, and the question it asks of the training a stop kept stays asked."""
+    from core.gui.session import ConfigDraft, SbiSession
+    from tests._fixtures import build_inference
+    app = qt_app()
+    clock = Clock(_at(3, 3, 2, 11))
+    cfg, prior = SimpleNamespace(model="NADROWSKI"), SimpleNamespace(kind="prior", id="20261001T150211",
+                                                                     name="retrain_prior")
+    screen = build_inference(session=SbiSession(cfg=cfg, inf_prior=prior))
+    held, host = _controller_on(tmp_path, clock), screen.posterior_panel
+    text, view = RunText(held), host.run_view
+    failed, folder = StandIn(), _set(tmp_path, 236)
+    _start_with(host, failed, _training(), cfg, prior, None, True)
+    _to_the_simulation(app, failed, text, held, folder, 236)
+    failed.fail(OSError(28, "No space left on device"))
+    _ended(app, held)
+    view.continue_button.click()                        # the session holds the model and the prior of the call
+    turn_until(app, lambda: len(failed.calls) == 2)
+    _to_the_simulation(app, failed, text, held, folder, 236)
+    failed.fail(OSError(28, "No space left on device"))
+    _ended(app, held)
+    assert view.continue_button.isVisibleTo(view), "the continued run's page does not offer to continue it"
+    screen.new_draft(ConfigDraft(model="NADROWSKI", labels=[], state_dep_drift=False))     # a model applied again
+    view.continue_button.click()
+    assert (held.is_live(), len(failed.calls), view.notice.text(), view.continue_button.isVisibleTo(view)) == (
+        False, 2, _CHANGED, False), "a continue ran in a session that holds another model"
+
+    choose(monkeypatch, words="Stop training")
+    stopped = StandIn()
+    stopped.kept_fit = _note(build_fit_record(store, passes=3), 3)
+    screen.session.cfg, screen.session.inf_prior = cfg, prior
+    _start_with(host, stopped, _training(), cfg, prior, None, True)
+    _to_the_fit(app, stopped, text, clock, _set(tmp_path, 10_000, complete=True), [(1, 0), (2, 1), (3, 2)])
+    view.stop_button.click()
+    _ended(app, held)
+    screen.session.inf_prior = SimpleNamespace(kind="prior", id="20261002T150211", name="another_prior")
+    view.resume_button.click()
+    assert (held.is_live(), len(stopped.calls), view.notice.text(), view.resume_button.isVisibleTo(view),
+            view.keep_block.isVisibleTo(view)) == (False, 1, _CHANGED, False, True), (
+        "a resume ran in a session that holds another prior, or the question of keeping the training went")
+
+
 def test_a_failure_during_the_fit_offers_resume_and_says_what_was_saved(tmp_path, store):
     """A training that fails during its fit says so, at the epoch the training it kept stands at (the note's, never
     the records the run said, one of which may be an epoch whose save did not hold), that the simulations and the
     training up to that epoch are saved and that at most the epoch in progress is lost, and offers to resume it; the
-    history's fit says the same epochs. One whose fit is not saved as it goes says the fit is lost; one whose fit had
-    kept no epoch yet says so; neither offers anything."""
+    history's fit says the same epochs, and its try, the one the run ended with, what the kept training and the set
+    held after it, as a try that was tried again says them. One whose fit is not saved as it goes says the fit is
+    lost; one whose fit had kept no epoch yet says so; neither offers anything."""
     from core.gui.run import history
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
@@ -740,8 +858,9 @@ def test_a_failure_during_the_fit_offers_resume_and_says_what_was_saved(tmp_path
         assert (all_asked(), _failure(view), view.resume_button.isVisibleTo(view),
                 view.continue_button.isVisibleTo(view)) == (
             [], f"Error. Training failed on Sat 3 Oct, {when}, {said}", resumes, False), _failure(view)
-    assert history.read(tmp_path / "runs" / f"20261003T030211-training.json")["fit"]["epochs"] == 41, (
-        "the history's fit holds the records seen, not the kept training's epochs")
+    record = history.read(tmp_path / "runs" / f"20261003T030211-training.json")
+    assert (record["fit"]["epochs"], record["tries"][-1]["epochs_after"], record["tries"][-1]["batches_after"]) == (
+        41, 41, 10_000), "the history's fit or its last try holds the records seen, not the kept training and the set"
 
 
 def test_a_failure_while_the_posterior_is_saved_says_the_finished_training_is_kept(tmp_path, store):
@@ -777,12 +896,12 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
     narrowing round's region; meanwhile the page and the history's fit say the epochs kept, the note's. The try
     resumes the kept training from its kept epoch: an epoch an earlier try recorded past it, whose save did not
     hold, leaves the curve, and the best epoch is counted again from the kept one. A try that keeps more epochs and
-    then runs out of memory again
-    starts a new count; a try that fails before it names the kept training keeps the one named before; when three
-    tries in a row keep none, the page says only reopening PRISM helps, and that the
+    then runs out of memory again starts a new count; a try that fails before it names the kept training keeps the
+    one named before; when three tries in a row keep none, the page says only reopening PRISM helps, and that the
     kept training is resumed from the command line until its page offers it: the tool's command for the run,
     ``train`` for a training, ``tsnpe`` for a narrowing round, with the flags of what the run's own call trained
-    from, or, where the call does not tell them, words that say to give them as they were."""
+    from, or, where the call does not tell them, words that say to give them as they were. The command stands on its
+    own beneath the sentence, so that copied off the page it is one the command-line tool takes."""
     from core.gui.run import history
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
@@ -832,10 +951,16 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
             _waiting(app, held)
             assert view.sentence.text() == waits(*after, 4)
     _ended(app, held)
-    assert (held.status.reopen, _failure(view), view.resume_button.isVisibleTo(view)) == (
-        True, f"{_REOPEN}. The training is kept up to epoch 4; until the Training page offers to resume it, it is "
-              f"resumed from the command line: python -m core train --resume-fit {kept} --bounds "
-              f"Resources/Bounds/nadrowski/master.txt --prior retrain_prior --chi.", False), _failure(view)
+    command = (f"python -m core train --resume-fit {kept} --bounds Resources/Bounds/nadrowski/master.txt --prior "
+               f"retrain_prior --chi")
+    assert (held.status.reopen, _failure(view), _said_alone(view), view.resume_button.isVisibleTo(view)) == (
+        True, f"{_REOPEN} Close PRISM and open it again. The training is kept up to epoch 4; until the Training page "
+              f"offers to resume it, it is resumed from the command line with the command below.", command, False), (
+        _failure(view))
+    args, said = _parsed(_said_alone(view))
+    assert (args is not None and (args.cmd, args.resume_fit, args.bounds, args.prior, args.chi_mode)) == (
+        "train", kept, "Resources/Bounds/nadrowski/master.txt", "retrain_prior", True), (
+        "the command copied off the page is not one the command-line tool takes", said)
     assert stand_in.calls[1:] == [(called, {**base, "resume_fit": kept})] * 4, stand_in.calls
 
     narrowing = StandIn(word="Narrowing round")
@@ -854,10 +979,11 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
                                   {**narrowed, "n_directions": None, "level": None, "resume_fit": kept})
     narrowing.fail(_device_failure(in_the_simulation=False))
     _ended(app, held)
-    assert _failure(view) == (f"{_REOPEN}. The training is kept up to epoch 2; until the Narrowing round page offers "
-                              f"to resume it, it is resumed from the command line: python -m core tsnpe --resume-fit "
-                              f"{kept}, with the same --bounds, --posterior, --observation and --chi it was trained "
-                              f"with."), _failure(view)
+    assert (_failure(view), _said_alone(view)) == (
+        f"{_DEVICE.format(_ILLEGAL.splitlines()[0])} Close PRISM and open it again. The training is kept up to "
+        f"epoch 2; until the Narrowing round page offers to resume it, it is resumed from the command line with the "
+        f"command below, given the same --bounds, --posterior, --observation and --chi it was trained with.",
+        f"python -m core tsnpe --resume-fit {kept}"), _failure(view)
     chosen = SimpleNamespace(sources={"bounds": r"C:\PRISM files\master.txt"}, chi_mode=False,
                              hw=SimpleNamespace(device=SimpleNamespace(type="cpu")))
     narrowed_parent = SimpleNamespace(name="", id="p2", posterior=SimpleNamespace(truncation=object()))
@@ -870,8 +996,9 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
 def test_a_runs_call_is_kept_only_while_its_page_offers_to_continue_or_resume_it(tmp_path):
     """A run's own call -- the configuration, the prior and the tensors its arguments hold -- is let go at its end,
     but for a training whose page offers to continue or resume it: that call is kept until the page starts its next
-    run. A finished training, a training whose failure only reopening can help, and a run of another kind let go of
-    it at their end."""
+    run, or goes. A finished training, a training whose failure only reopening can help, and a run of another kind let
+    go of it at their end."""
+    from PySide6.QtCore import QCoreApplication, QEvent
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
@@ -881,11 +1008,11 @@ def test_a_runs_call_is_kept_only_while_its_page_offers_to_continue_or_resume_it
     class Payload:
         """What a run's arguments hold, for the test to see when it is let go."""
 
-    def ended(spec, end):
+    def ended(spec, end, on=host):
         payload = Payload()
         kept = weakref.ref(payload)
         stand_in = StandIn(word=spec.word)
-        start_run(host, stand_in, spec=spec, payload=payload)
+        start_run(on, stand_in, spec=spec, payload=payload)
         del payload
         if spec.simulation_set:
             _to_the_simulation(app, stand_in, text, held, folder, 236)
@@ -906,6 +1033,14 @@ def test_a_runs_call_is_kept_only_while_its_page_offers_to_continue_or_resume_it
 
     offered = ended(_training(), lambda stand_in: stand_in.fail(OSError(28, "No space left on device")))
     assert offered() is not None, "the call of a run its page offers to continue was let go"
+    gone = build_run_host()
+    left = ended(_training(), lambda stand_in: stand_in.fail(OSError(28, "No space left on device")), gone)
+    assert left() is not None, "the call of a run its page offers to continue was let go"
+    gone.deleteLater()                                  # the page goes, its offer with it
+    QCoreApplication.sendPostedEvents(gone, QEvent.DeferredDelete)
+    del gone
+    gc.collect()
+    assert left() is None, "the call of a run whose page went was kept"
     let_go = [ended(_training(), lambda stand_in: stand_in.release()),
               ended(_training(), tries_to_the_end),
               ended(RunSpec("Check", ("inference", "checks")), lambda stand_in: stand_in.fail(OSError("x")))]
@@ -915,12 +1050,14 @@ def test_a_runs_call_is_kept_only_while_its_page_offers_to_continue_or_resume_it
 
 
 def test_closing_the_window_during_a_pause_ends_the_tries_and_then_closes_it(tmp_path, monkeypatch):
-    """Closing the window while a training waits to be tried again asks first, in the words of the pause, and a
-    question nobody answers keeps the window, the one-PRISM claim and the run's tries. "Stop the run and close" ends
-    the tries: the run ends failed, its history says so, and only then is the claim let go and the window closed."""
+    """While a training waits to be tried again, the rail's foot, its step in the rail and Home say that it waits to
+    try again, not that it runs. Closing the window meanwhile asks first, in the words of the pause, and a question
+    nobody answers keeps the window, the one-PRISM claim and the run's tries. "Stop the run and close" ends the tries:
+    the run ends failed, its history says so, and only then is the claim let go and the window closed."""
+    from core.artifacts import default_store
     from core.gui import one_instance
-    from core.gui.panels.reduction_panel import ReductionPanel
     from core.gui.run import history
+    from core.gui.widgets.page import Sentence
     from tests._fixtures import asked, whole_program
     from tests._window_helpers import shown_off_screen
     app = qt_app()
@@ -929,13 +1066,24 @@ def test_closing_the_window_during_a_pause_ends_the_tries_and_then_closes_it(tmp
     with whole_program() as (_app, window):
         held = _controller_on(tmp_path, clock)
         claim = one_instance.current()
+        build_fit_record(default_store())               # a record: Home states its next step, not its first page
         shown_off_screen(window)
-        host, text = window.panel(ReductionPanel), RunText(held)
+        host, text = window.part("inference").posterior_panel, RunText(held)
+        foot, home, step = window.shell.rail.foot, window.part("home"), window.shell.rail.row("training")
         stand_in = StandIn()
         start_run(host, stand_in, spec=_training())
         _to_the_simulation(app, stand_in, text, held, _set(tmp_path, 236), 236)
         stand_in.fail(_out_of_memory())
         _waiting(app, held)
+        window.go_to("home")
+        assert (foot._title, foot._words, step.accessibleName()) == (
+            "Training is waiting to try again", "Nothing runs until the next try. Settings are locked.",
+            "Step 3, Training. Now: waiting to try again"), (
+            "the foot or the rail does not say the run waits to try again", foot._title, foot._words)
+        assert ("Training retrain_3 is waiting to try again, and no other run can start until it ends. You can still "
+                "move around and read results. Keep PRISM open; you can minimise it.") in [
+            label.plain_text() for label in home.findChildren(Sentence) if label.isVisibleTo(home)], (
+            "Home does not say the run waits to try again")
         window.close()
         question = asked()
         assert (question.title, question.sentence, question.beneath, question.answers, question.default,
@@ -961,3 +1109,27 @@ def test_closing_the_window_during_a_pause_ends_the_tries_and_then_closes_it(tmp
             [("failed", "")], None, False, 1), (
             "the claim was let go before the run's history said how it ended, a try began, or the page said PRISM "
             "stayed open as it closed")
+
+
+class _Unsaid(RuntimeError):
+    """An error whose message cannot be had: asked for its words, it raises."""
+
+    def __str__(self):
+        raise ValueError("this error's message cannot be had")
+
+
+# The last test of the file: a run whose end is held up stays live, and no run after it in this process could start.
+def test_an_error_whose_message_cannot_be_had_still_ends_its_run(tmp_path):
+    """A training that fails with an error whose message cannot be had -- which the engine's rule of the graphics
+    card's memory cannot read either -- still ends, failed, and its page says that the error gave no message."""
+    app = qt_app()
+    clock = Clock(_at(3, 3, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=_training())
+    _to_the_simulation(app, stand_in, text, held, _set(tmp_path, 236), 236)
+    stand_in.fail(_Unsaid())
+    _ended(app, held)
+    assert (held.status.outcome, view.failure.isVisibleTo(view), view.failure_message.text()) == (
+        "failed", True, retry.NO_MESSAGE), "the run's end was held up, or its page does not say its failure"

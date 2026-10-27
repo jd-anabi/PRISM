@@ -13,7 +13,8 @@ _fixtures keeps nothing it built. What tests/_runs.py's ``RunText`` hears of the
 too, so that it hears no run after its test.
 
 The end of every test also puts the process's run controller back as the next test must find it: a run left live
-is stopped and waited for, and a run that ended is acknowledged (``end_of_test``, ``put_back_the_run``). While it
+is stopped and waited for, a run that ended is acknowledged, and every call kept for a page's offer is let go
+(``end_of_test``, ``put_back_the_run``). While it
 asks a run left live to stop, ``ENDING`` is set, which tests/_runs.py's stand-in run reads: a stand-in that holds a
 stop takes it at its own line only then.
 """
@@ -72,13 +73,15 @@ def a_run_is_live() -> bool:
 
 def put_back_the_run() -> None:
     """The process's run controller as the next test must find it: a run that ended acknowledged, so that the
-    controller is idle, and the clock and the folder of runs a test handed it let go. Nothing while a run is
-    live, nor when the controller's module was never loaded."""
+    controller is idle, every run's call kept for its page's offer let go, so that no test's run outlives it, and the
+    clock and the folder of runs a test handed it let go. Nothing while a run is live, nor when the controller's
+    module was never loaded."""
     held = _controller()
     if held is None or held.is_live():
         return
     if held.status.unacknowledged_end and held.status.run is not None:
         held.acknowledge(held.status.run)
+    held.forget_offers()
     held.use_clock(None)
     held.use_folder(None)
 

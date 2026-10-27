@@ -75,10 +75,11 @@ def _state(key: str, marker: str, detail: str, rail_words: str, can_start: bool)
 
 def step_states(session, *, live: str | None = None, stopping: bool = False, ended: int | None = None,
                 pending: frozenset = frozenset(), checks=None, observation_on_offer: bool = False,
-                label: Callable[[object], str] | None = None) -> tuple[StepState, ...]:
+                label: Callable[[object], str] | None = None, retrying: bool = False) -> tuple[StepState, ...]:
     """The six steps' states, in the steps' order, from what ``session`` holds.
 
-    ``live`` is the key of the step whose run is live, and ``stopping`` whether that run is stopping;
+    ``live`` is the key of the step whose run is live, ``stopping`` whether that run is stopping, and ``retrying``
+    whether it waits to be tried again;
     ``ended`` the batch the latest training of this launch kept when it was stopped or failed; ``pending``
     the keys of the steps whose choice was changed and not applied; ``observation_on_offer`` whether the
     narrowing round has an observation to choose. ``label`` names a record the session holds; with none, a
@@ -122,7 +123,7 @@ def step_states(session, *, live: str | None = None, stopping: bool = False, end
     for place in keys.STEPS:
         key, can_start = place.key, needs[place.key] is None
         if key == live:
-            words = "Stopping" if stopping else "Running"
+            words = "Stopping" if stopping else "Waiting to try again" if retrying else "Running"
             states.append(_state(key, "now", words, f"Now: {words.lower()}", can_start))
         elif key in pending:
             states.append(_state(key, "warn", "Changed, not applied", "Changed, not applied", can_start))
@@ -177,16 +178,19 @@ _NEXT = {
 }
 
 
-def next_step(session, states, *, live_place: tuple[str, str | None] | None = None, stopping: str = "") -> Next:
+def next_step(session, states, *, live_place: tuple[str, str | None] | None = None, stopping: str = "",
+              waiting: str = "") -> Next:
     """The one next step Home offers. The first that holds decides: a run is live (``live_place`` is the part
-    and page it runs in; ``stopping``, the run's word and name while it is stopping); then the step in hand among
+    and page it runs in; ``stopping``, the run's word and name while it is stopping, and ``waiting`` while it waits
+    to be tried again); then the step in hand among
     ``states``, which reads the steps in their order (no model, no prior, no posterior, no observation); otherwise
     nothing is waiting, and the narrowing round is offered, or Records once the posterior in use is a narrowed
     one."""
     if live_place is not None:
         part, page = live_place
         where = keys.place_words(f"{part}/{page}" if page else part)
-        going = f"{stopping} is stopping" if stopping else f"A run is going in {where}"
+        going = (f"{stopping} is stopping" if stopping else f"{waiting} is waiting to try again" if waiting
+                 else f"A run is going in {where}")
         return Next("Next: nothing until the run ends",
                     f"{going}, and no other run can start until it ends. You can still move around and read results. "
                     "Keep PRISM open; you can minimise it.", "Go to the run", part, page)

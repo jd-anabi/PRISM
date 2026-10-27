@@ -1508,8 +1508,10 @@ def test_a_refusal_before_anything_is_spent_is_no_run(tmp_path):
 def test_a_refusal_after_something_was_spent_ends_the_run_as_failed(spent, tmp_path):
     """A refusal that comes once something is spent -- the solver's count moved, a stage after the run's first
     began, or a record of a kind the run writes was made since the start -- ends the run as failed: its files are
-    kept, saying so, and the run's page says the refusal as the failure it now is, with no box."""
+    kept, saying so, and the run's page says the refusal as the failure it now is, with no box, and with where to
+    fix it, as the window says a refusal."""
     from core.artifacts import ArtifactStore, use_store
+    from core.gui.fields import fix_sentence
     from core.gui.run import history
     from core.refusals import Refusal
     from tests._fixtures import all_asked, build_fdt_record, build_run_host, qt_app
@@ -1535,7 +1537,8 @@ def test_a_refusal_after_something_was_spent_ends_the_run_as_failed(spent, tmp_p
     view = host.run_view
     assert all_asked() == [], "the refusal was told in a box"
     assert (view.failure.isVisibleTo(view), view.failure_message.text()) == (
-        True, "The read-back of the posterior was refused."), "the refusal is not said on the run's page"
+        True, f"The read-back of the posterior was refused. {fix_sentence('name')}"), (
+        "the refusal is not said on the run's page, or not with where to fix it")
 
 
 def test_a_run_that_only_loads_shows_loading_and_leaves_nothing_to_acknowledge(tmp_path):

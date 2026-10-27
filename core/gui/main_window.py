@@ -26,7 +26,7 @@ from .panels.fdt_panel import FdtPanel
 from .panels.inference_tabs import ConfigPanel, InferPanel, PosteriorPanel, PriorPanel, TSNPEPanel, ValidatePanel
 from .panels.reduction_panel import ReductionPanel
 from .panels.simulate_panel import SimulatePanel
-from .run import questions
+from .run import questions, retry
 from .run.controller import controller
 from .screens.artifact_screen import ArtifactScreen
 from .screens.help_screen import HelpScreen
@@ -243,6 +243,8 @@ class MainWindow(QMainWindow):
         # While the live run is stopping: its word and name, which Home says is stopping, and the line that says when
         # the stop is taken, which the foot says; "" otherwise.
         self._run_stopping = self._stopping_line = ""
+        # While the live run waits to be tried again: its word and name, which Home says is waiting; "" otherwise.
+        self._run_waiting = ""
         self._close_at_end = False               # the close was asked for: the window closes once the run has ended
         self._ends_tries = False                 # ... asked while the run waited to be tried again: it ended the tries
         self._build("home")
@@ -499,7 +501,7 @@ class MainWindow(QMainWindow):
         inference = self._built.get("inference")
         session = inference.session if inference is not None else SbiSession()
         return HomeFacts(session, self._step_states(), self._live_place, _home_records(default_store()),
-                         stopping=self._run_stopping)
+                         stopping=self._run_stopping, waiting=self._run_waiting)
 
     def _states_changed(self, states) -> None:
         """The six steps' states were worked out again: the rail shows them, and Home reads now while it is
@@ -702,8 +704,9 @@ class MainWindow(QMainWindow):
         not per tick.
 
         While the run is stopping, the steps' states are worked out again too, the foot says that the run is
-        stopping and when the stop is taken, and Home that it is stopping. From the run's start to its end every
-        figure window the window's pages opened shows its figure's picture. When the window's close waits for the
+        stopping and when the stop is taken, and Home that it is stopping; while it waits to be tried again, the same,
+        the foot saying that it waits and that nothing runs meanwhile, with no clock. From the run's start to its end
+        every figure window the window's pages opened shows its figure's picture. When the window's close waits for the
         run, a run that ends stopped or finished closes the window, once all of the end has been said
         (``_close_at_the_end``); one that ends otherwise (a failure, a refusal) leaves the window open, its close
         withdrawn, and its page and its box say how it ended, but for a close that ended the tries of a run that
@@ -720,10 +723,11 @@ class MainWindow(QMainWindow):
                 self._close_at_end = False
             self._ends_tries = self._ends_tries and self._close_at_end
         stopping = f"{status.word} {status.name}".strip() if status.live and status.state == "stopping" else ""
-        if status.live == self._run_live and stopping == self._run_stopping:
+        waiting = f"{status.word} {status.name}".strip() if status.live and status.state == "retrying" else ""
+        if status.live == self._run_live and stopping == self._run_stopping and waiting == self._run_waiting:
             return
         began = status.live and not self._run_live
-        self._run_live, self._run_stopping = status.live, stopping
+        self._run_live, self._run_stopping, self._run_waiting = status.live, stopping, waiting
         self._stopping_line = questions.stopping_line(status, controller().model) if stopping else ""
         if began or not status.live:
             for panel in self._all_panels():
@@ -755,6 +759,11 @@ class MainWindow(QMainWindow):
         if stopping:
             self._run_timer.stop()                 # the stopping row has no clock
             foot.set_state("now", f"{status.word} is stopping", self._stopping_line,
+                           button=self._live_place is not None)
+            return
+        if waiting:
+            self._run_timer.stop()                 # the waiting row has no clock: nothing runs
+            foot.set_state("now", retry.WAITING_TITLE.format(status.word), retry.WAITING_LINE,
                            button=self._live_place is not None)
             return
         self._tick_running()                       # shown at once, not a second from now

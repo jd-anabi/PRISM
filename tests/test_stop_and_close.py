@@ -1027,8 +1027,9 @@ def test_a_close_that_waits_is_not_carried_out_when_the_run_fails(tmp_path, monk
     """A close that waits for its run is carried out only once the run has stopped or finished. A run that fails
     instead, after "Stop the run and close", and a save that fails after "Close when it is saved", leave the window
     open on the run's page, which says the failure, with no box, and that PRISM stayed open, the event loop turning:
-    nothing closes the window, and the one-PRISM claim is held. A question of the person's own that is open when a
-    stopped run ends is answered first; the window then closes."""
+    nothing closes the window, and the one-PRISM claim is held. So does "Stop trying" after a save that ran out of
+    memory under "Close when it is saved", a close that did not end the tries. A question of the person's own that is
+    open when a stopped run ends is answered first; the window then closes."""
     import time
     from core.gui import one_instance
     from core.gui.widgets.ask import ask
@@ -1074,6 +1075,22 @@ def test_a_close_that_waits_is_not_carried_out_when_the_run_fails(tmp_path, monk
                 True, True, False, ("inference", "training"), "ended", "Training retrain_3 failed.",
                 "PRISM stayed open: the run failed.", True), answer
             view.back_button.click()
+
+        stand_in, text = StandIn(takes_stops=False), RunText(held)
+        start_run(host, stand_in, spec=_training())
+        _to_the_fit(app, stand_in, text, clock, [(1, 0), (2, 20)])          # the fit has ended: the save
+        choose(monkeypatch, words="Close when it is saved")
+        window.close()
+        stand_in.fail(RuntimeError("CUDA error: out of memory"))             # the save is tried again
+        turn_until(app, lambda: held.status.state == "retrying")
+        view.stop_trying_button.click()
+        _ended(app, held)
+        _settled(app)
+        turned_past_the_windows_look()
+        assert (window.isVisible(), one_instance.current() is claim, view.notice.text(), view.notice.isVisible()) == (
+            True, True, "PRISM stayed open: the run failed.", True), (
+            "'Stop trying' under a close that waited for the save closed the window, or the page did not say so")
+        view.back_button.click()
 
         stand_in, text = StandIn(takes_stops=False), RunText(held)
         start_run(host, stand_in, spec=_training())

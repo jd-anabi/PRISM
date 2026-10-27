@@ -38,12 +38,14 @@ from core.gui import chain, keys
 some = held(draft=held(model="NADROWSKI"), cfg=None, inf_prior=None, posterior=None, observation=None)
 every = held(draft=held(model="SHM"), cfg=None, inf_prior=held(name="p"), observation=held(name="o"),
              posterior=held(name="q", posterior=held(truncation=1)))
-for session, options in ((some, dict(live="prior", ended=3, pending=frozenset({"model"}))), (every, {}), (None, {})):
+for session, options in ((some, dict(live="prior", ended=3, pending=frozenset({"model"}))), (every, {}), (None, {}),
+                         (some, dict(live="training", retrying=True))):
     states = chain.step_states(session, observation_on_offer=True, **options)
     said = [state.spoken for state in states]
     chain.next_step(session, states)
     chain.next_step(session, states, live_place=("temperature", "sweep"))
     chain.next_step(session, states, live_place=("inference", "training"), stopping="Training retrain_3")
+    chain.next_step(session, states, live_place=("inference", "training"), waiting="Training retrain_3")
     chain.first_time(has_records=False, has_runs=False, session=session)
 said = [chain.model_label("HOPF"), keys.places_words(("training", "narrowing")), keys.place_words("inference/infer")]
 early = held(draft=held(model=""), cfg=None, inf_prior=held(name="p"), posterior=None, observation=None)
@@ -135,7 +137,9 @@ def look(run):
     waiting = model.RunStatus(state="retrying", word=run.spec.word, name=run.spec.name, continue_from=7,
                               kept_fit=run.kept_fit, trying=2, try_at=run.now() + timedelta(minutes=3))
     said += (retry.failure_words(waiting, run, None), questions.close_question(waiting, run),
-             retry.failure_words(replace(failed, reopen=True), run, RuntimeError("x")))
+             retry.failure_words(replace(failed, reopen=True), run, RuntimeError("x")),
+             retry.reopen_command(replace(failed, reopen=True), run), retry.untold(run.spec),
+             retry.made_in(run.spec, held(cfg=None, inf_prior=None)))
     moment[0] += timedelta(seconds=50)
     return said
 tag = "training batch 3/40 [t_scale=1, T=1, n_fine=8, N_points=8, rows=8]"
@@ -291,7 +295,8 @@ def test_the_run_model_and_its_readings_import_no_toolkit_and_no_engine():
     of this repository it imports; then a fresh interpreter imports every module those statements name, builds a
     training's model and models of runs of other kinds, feeds them their lines, rows, solver counts and clock, and
     reads every read-out at each step, the questions of a stop and a close among them, the words of the run's
-    failure and of its tries, and the question of keeping a training a stop kept; and the rules of the tries."""
+    failure and of its tries, the command line its page sets off, and the question of keeping a training a stop
+    kept; and the rules of the tries and of repeating a run's call into its page's session."""
     modules = ("core.gui.texts", "core.gui.run.readings", "core.gui.run.model", "core.gui.run.questions",
                "core.gui.run.retry")
     for module in modules:

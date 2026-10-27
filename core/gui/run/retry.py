@@ -15,7 +15,12 @@ in a row at most, after the pauses ``PAUSES_S``; a try that kept a batch or an e
 starts the count again. A try is the run's own call: the simulation set continued once it holds a batch, or, when
 the run kept a training, that training resumed. A failure of the graphics card that is no lack of memory is never
 tried again, its first time included: the card is then usually lost to this copy of PRISM, and only reopening PRISM
-can help. Any other failure is said at once.
+can help, which the page says, naming that cause, as it names the tries that did not help after the card ran out of
+memory; the command line that resumes a kept training outside the window stands on its own beneath the page's
+sentence (``reopen_command``), to be copied whole. Any other failure is said at once.
+
+"Continue from batch N" and "Resume the training" repeat the run's own call, made with the configuration and the
+prior its page's session held then: only into that session (``made_in``).
 """
 import math
 
@@ -30,9 +35,19 @@ PAUSES_S = (60.0, 180.0, 600.0)
 STOP_TRYING_TEXT = "Stop trying"
 #: Said in the run's text, last, when the tries are stopped.
 STOPPED_TRYING_TEXT = "No more tries: the tries were stopped, and the run ends failed."
-#: The opening of the page when trying again in this copy of PRISM did not help.
-REOPEN_TEXT = ("Trying again here did not help: this copy of PRISM still holds the graphics card's memory. Close "
-               "PRISM and open it again")
+#: The opening of the page when trying again in this copy of PRISM did not help; the opening when the graphics card
+#: failed in a way that is no lack of memory, filled with the first line of the error's message; and what follows
+#: either.
+REOPEN_TEXT = "Trying again here did not help: this copy of PRISM still holds the graphics card's memory."
+DEVICE_TEXT = "The graphics card failed in a way only reopening PRISM can clear: {}."
+AGAIN_TEXT = "Close PRISM and open it again"
+#: Said on a page whose "Continue from batch N" or "Resume the training" is pressed once its session holds another
+#: configuration or another prior than the run's own call was made with: nothing starts, and the offer goes.
+CHANGED_TEXT = "The model or its prior has changed since this run began; start it again from the form."
+#: What the rail's foot says while a run waits to be tried again: its title, filled with the run's word, and the line
+#: under it.
+WAITING_TITLE = "{} is waiting to try again"
+WAITING_LINE = "Nothing runs until the next try. Settings are locked."
 _ORDINALS = ("first", "second", "third", "fourth", "fifth", "sixth")
 _COUNTS = ("no", "one", "two", "three", "four", "five", "six")
 
@@ -127,10 +142,13 @@ def failure_words(status, model, exc, *, is_oom=None) -> tuple[str, str]:
     failed with; and the words of the button that continues or resumes it, or ends its tries, "" for none. While the
     run waits to be tried again (``status.state`` "retrying"): what failed, when the next try begins and which of
     the tries it is, and what is saved; once it has ended: what failed and when, what was saved and what was lost, or,
-    when only reopening PRISM can help (``status.reopen``), that, and how the run goes on after it. The numbers are
-    the simulation set's batches as the status holds them (``continue_from``, read from the set once the run's worker
-    has ended) and the epochs of the training it kept (its note's passes), never the records the run's text holds.
-    ``is_oom`` is the engine's rule of a failure that is the graphics card running out of memory; None: none is."""
+    when only reopening PRISM can help (``status.reopen``), that, why (the tries did not help, or the graphics card
+    failed, the first line of its error quoted), and how the run goes on after it. The numbers are the simulation
+    set's batches as the status holds them (``continue_from``, read from the set once the run's worker has ended) and
+    the epochs of the training it kept (its note's passes), never the records the run's text holds; but the batch that
+    was in progress when the graphics card ran out of memory is the one after the last the run's text counted, which
+    the set may not hold yet (``_failing``). ``is_oom`` is the engine's rule of a failure that is the graphics card
+    running out of memory; None: none is."""
     spec = model.spec
     word, kind, note = spec.word, model.stage_kind(), status.kept_fit
     if status.state == "retrying":
@@ -139,9 +157,11 @@ def failure_words(status, model, exc, *, is_oom=None) -> tuple[str, str]:
     said = _clause(message(exc).splitlines()[0])
     if word not in TRAINING_WORDS:
         return f"{word} failed on {when}: {said}.", ""
-    if status.reopen:
-        return _reopening(spec, kind, note, status.continue_from or 0), ""
     oom = is_oom is not None and exc is not None and bool(is_oom(exc))
+    if status.reopen:
+        device = exc is not None and is_device_failure(exc) and not oom
+        opening = DEVICE_TEXT.format(said) if device else REOPEN_TEXT
+        return _reopening(spec, kind, note, status.continue_from or 0, opening), ""
     cause = OUT_OF_MEMORY if oom else said
     if kind == "saving":
         return (SAVING_KEPT_TEXT, RESUME_TEXT) if note is not None else (SAVING_LOST_TEXT, "")
@@ -156,7 +176,7 @@ def failure_words(status, model, exc, *, is_oom=None) -> tuple[str, str]:
     batches = status.continue_from or 0
     where = "during simulation" if kind == "simulation" else "before its simulation"
     if oom and kind == "simulation":
-        cause = f"{OUT_OF_MEMORY} at batch {number_text(batches + 1)}"
+        cause = f"{OUT_OF_MEMORY} at batch {number_text(_failing(batches, model))}"
     if not batches:
         return f"{word} failed on {when}, {where}: {cause}. No simulation was saved.", ""
     return (f"{word} failed on {when}, {where}: {cause}. Saved: the simulations up to batch {number_text(batches)}. "
@@ -180,22 +200,57 @@ def _retrying(status, model, kind, note) -> str:
         return (f"The graphics card ran out of memory during the fit, at epoch {epochs}. {when} The epochs up to "
                 f"{epochs} are kept.")
     batches = status.continue_from or 0
-    at = f" at batch {number_text(batches + 1)}" if kind == "simulation" else ""
+    at = f" at batch {number_text(_failing(batches, model))}" if kind == "simulation" else ""
     saved = (f"The simulations up to batch {number_text(batches)} are saved." if batches
              else "No simulation is saved yet.")
     return f"{OUT_OF_MEMORY[0].upper()}{OUT_OF_MEMORY[1:]}{at}. {when} {saved}"
 
 
+def _failing(batches: int, model) -> int:
+    """The batch that was in progress when a run failed in its simulation: the one after the last the run's text
+    counted, which the simulation set, saved only every so many batches, may not hold yet (``batches``, the set's);
+    never one the set holds."""
+    return max(batches, model.batches_done() or 0) + 1
+
+
+def reopen_command(status, model) -> str:
+    """The command line that the page of a training only reopening PRISM can help sets off on its own beneath its
+    sentence, in the fixed-width face, so that it is copied whole with nothing of the sentence: the training it kept
+    resumed outside the window (``resume_command``). "" for every other page."""
+    spec = model.spec
+    if (not status.reopen or status.kept_fit is None or spec.word not in TRAINING_WORDS
+            or model.stage_kind() not in ("fit", "saving")):
+        return ""
+    return resume_command(spec, status.kept_fit.id)
+
+
 def resume_command(spec, kept: str) -> str:
     """The command line that resumes the kept training ``kept`` outside the window, built from the run's own call
     (``spec``'s): the tool's command for the run (``train`` for a training, ``tsnpe`` for a narrowing round), the kept
-    training named, then the flags the training was started with, read off the call: its bounds file, its prior (a
-    narrowing round's parent posterior and observation, and the acceptance of a parent that is itself narrowed), its
-    kind of observation, and the device when it was the processor, which the tool does not pick by itself where a
-    graphics card is. Where the call does not tell one of them (bounds typed in by hand, a call with no arguments),
-    the command is followed by the words that say to give them as they were."""
+    training named, then the flags the training was started with, read off the call (``_flags``). Where the call does
+    not tell one of them (bounds typed in by hand, a call with no arguments), the command names the kept training
+    alone, and ``untold`` names the flags to give as they were."""
     narrowing = spec.word == "Narrowing round"
     command = f"python -m core {'tsnpe' if narrowing else 'train'} --resume-fit {kept}"
+    flags = _flags(spec)
+    return command if flags is None else " ".join([command] + flags)
+
+
+def untold(spec) -> str:
+    """The flags of the run's command line that its own call does not tell, as the page names them for a person to
+    give as they were ("--bounds, --prior and --chi"); "" when the call tells them all."""
+    if _flags(spec) is not None:
+        return ""
+    return ("--bounds, --posterior, --observation and --chi" if spec.word == "Narrowing round"
+            else "--bounds, --prior and --chi")
+
+
+def _flags(spec) -> list[str] | None:
+    """The flags a training was started with, read off the run's own call: its bounds file, its prior (a narrowing
+    round's parent posterior and observation, and the acceptance of a parent that is itself narrowed), its kind of
+    observation, and the device when it was the processor, which the tool does not pick by itself where a graphics
+    card is. None when the call does not tell one of them."""
+    narrowing = spec.word == "Narrowing round"
     args = tuple(spec.args)
     cfg = args[0] if args else None
     bounds = (getattr(cfg, "sources", None) or {}).get("bounds")
@@ -204,8 +259,7 @@ def resume_command(spec, kept: str) -> str:
     named = ((("--posterior", 1), ("--observation", 3)) if narrowing else (("--prior", 1),))
     refs = [(flag, _ref(args[at] if len(args) > at else None)) for flag, at in named]
     if bounds is None or not isinstance(chi, bool) or any(ref is None for _flag, ref in refs):
-        what = "--bounds, --posterior, --observation" if narrowing else "--bounds, --prior"
-        return f"{command}, with the same {what} and --chi it was trained with"
+        return None
     flags = [f"--bounds {_quoted(str(bounds))}"] + [f"{flag} {_quoted(ref)}" for flag, ref in refs]
     flags.append("--chi" if chi else "--no-chi")
     parent = getattr(args[1], "posterior", None) if narrowing else None
@@ -213,7 +267,19 @@ def resume_command(spec, kept: str) -> str:
         flags.append("--accept-truncated")
     if device == "cpu":
         flags.append("--device cpu")
-    return " ".join([command] + flags)
+    return flags
+
+
+def made_in(spec, session) -> bool:
+    """Whether ``session``, the session of the page that offers to continue or resume a run, still holds what the
+    run's own call was made with: its configuration (the call's first argument) and its prior (a training's second
+    argument, a narrowing round's third), the very records, not records like them. A page with no session, and a call
+    that holds neither, have nothing to compare."""
+    args = tuple(spec.args)
+    at = 2 if spec.word == "Narrowing round" else 1
+    if session is None or len(args) <= at:
+        return True
+    return args[0] is getattr(session, "cfg", None) and args[at] is getattr(session, "inf_prior", None)
 
 
 def _ref(record) -> str | None:
@@ -228,19 +294,21 @@ def _quoted(word: str) -> str:
     return f'"{word}"' if " " in word else word
 
 
-def _reopening(spec, kind, note, batches: int) -> str:
-    """The page of a training that only reopening PRISM can help: that, and how it goes on after the reopening: the
-    kept training resumed, until its page offers it, from the command line (``resume_command``); or the same
-    training started again, which continues the simulation set from the batches it holds."""
+def _reopening(spec, kind, note, batches: int, opening: str) -> str:
+    """The page of a training that only reopening PRISM can help: ``opening``, which says why, then that PRISM is
+    closed and opened again, and how the training goes on after it: the kept training resumed, until its page offers
+    it, from the command line, with the command the page sets off beneath the sentence (``reopen_command``); or the
+    same training started again, which continues the simulation set from the batches it holds."""
     word = spec.word
     if note is not None and kind in ("fit", "saving"):
-        page = "Training" if word == "Training" else word
-        return (f"{REOPEN_TEXT}. The training is kept up to epoch {number_text(note.passes)}; until the {page} page "
-                f"offers to resume it, it is resumed from the command line: {resume_command(spec, note.id)}.")
+        given = untold(spec)
+        tail = f", given the same {given} it was trained with" if given else ""
+        return (f"{opening} {AGAIN_TEXT}. The training is kept up to epoch {number_text(note.passes)}; until the "
+                f"{word} page offers to resume it, it is resumed from the command line with the command below{tail}.")
     if batches:
-        return (f"{REOPEN_TEXT}, then start the same {word.lower()}: it continues the saved simulations from batch "
-                f"{number_text(batches)}.")
-    return f"{REOPEN_TEXT}, then start the same {word.lower()}."
+        return (f"{opening} {AGAIN_TEXT}, then start the same {word.lower()}: it continues the saved simulations from "
+                f"batch {number_text(batches)}.")
+    return f"{opening} {AGAIN_TEXT}, then start the same {word.lower()}."
 
 
 def _clause(text: str) -> str:

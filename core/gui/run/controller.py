@@ -18,10 +18,13 @@ record has no page of its own: its failure is told as a failure at a click is.
 After the graphics card ran out of memory, a training or a narrowing round is tried again (``core/gui/run/retry.py``
 says when): the run waits, Retrying, for a pause read on the run's clock, then its own call goes again in a new
 worker with a new token, in the same text and history files, the set continued or the kept training resumed;
-"Stop trying" (``stop_trying``) ends the tries, and the run ends failed. The page of a training that failed or was
-stopped offers "Continue from batch N" (``continue_run``) or "Resume the training" (``resume_training``): its own
-call again, as the page's next run. Its call is kept for that, until the page starts its next run or goes; every
-other run lets go of its call at its end.
+"Stop trying" (``stop_trying``) ends the tries, and the run ends failed, and so does a stop asked for in the turn
+the pause runs out. The page of a training that failed or was stopped offers "Continue from batch N"
+(``continue_run``) or "Resume the training" (``resume_training``): its own call again, as the page's next run, but
+only into the session the call was made with. Its call is kept for that, until the page starts its next run (a load,
+which is handed no page, leaves it kept) or goes, or the offer is pressed once the page's session holds another
+model or prior; wherever the call goes, the page's offer goes with it. Every other run lets go of its call at its
+end.
 
 A refusal the stage makes before anything is spent is no run: the solver has taken no step since the start, no
 stage after the run's first has begun, and the store holds no record of a kind the run writes made since the start.
@@ -49,6 +52,7 @@ import statistics
 import threading
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThreadPool, QTimer, Signal
@@ -99,9 +103,16 @@ def _memory_limit() -> tuple[float | None, str]:
 
 def _out_of_memory():
     """The engine's rule of a failure that is the graphics card running out of memory, loaded when a run has failed
-    and never at import: the rule's module loads the graphics library."""
+    and never at import: the rule's module loads the graphics library. The rule handed back answers False for an
+    error the engine's rule cannot read (one whose message cannot be had), so that no error holds up a run's end."""
     from core.SBI.pipeline import _is_oom
-    return _is_oom
+
+    def is_oom(exc) -> bool:
+        try:
+            return bool(_is_oom(exc))
+        except Exception:                        # noqa: BLE001 -- an error the rule cannot read is no lack of memory
+            return False
+    return is_oom
 
 
 def _made(created) -> datetime | None:
@@ -184,6 +195,8 @@ class _Run:
         self.failure = None                        # (exception, traceback, cancel noted) of a failed run
         self.kept_fit = None
         self.continue_from: int | None = None      # the batches its unfinished simulation set holds, read at its end
+        self.kept_now: tuple[int, int] | None = None    # (batches, epochs) its set and kept training held at its end
+        self.model = None                          # its model, which its page draws
         self.keywords: dict = {}                   # its start's own keywords, for each try and a repeat of its call
         self.tried = 0                             # the tries made since it last kept more
         self.last_kept: tuple[int, int] | None = None   # (batches, epochs) kept at its last failure
@@ -303,14 +316,14 @@ class RunController(QObject):
                         "provide_stream": provide_stream, "on_chunk": on_chunk}
         run.solver_at_start, run.real_start = SOLVER.steps, datetime.now(timezone.utc)
         # The page's next run: what its last run offered goes, with that run's call; so does the offer of a page that
-        # has gone.
+        # has gone. A run that only loads a record is handed no page, and leaves the page's offer as it is.
         self._offers = {key: offered for key, offered in self._offers.items()
-                        if offered.host is not host and _alive(offered.host)}
+                        if _alive(offered.host) and (offered.host is not host or spec.loads_only)}
         expected = _expected(store, spec.facts) if "model" in spec.facts else None
         word = spec.word
         model = RunModel(spec, clock=clock, expected=expected,
                          estimate=lambda per, size: history.estimate(folder, word=word, per=per, size=size))
-        self._model, self._run = model, run
+        self._model, self._run, run.model = model, run, model
         if spec.keeps_files:
             run.id = history.run_id(spec.word, model.started, folder)
             run.text = RunTextFile(folder / f"{run.id}.txt", clock=clock)
@@ -564,12 +577,44 @@ class RunController(QObject):
         offered = self._offers.get(run)
         if offered is not None and offered.continue_from is None:
             del self._offers[run]
+            self._let_go(offered)
+
+    def _let_go(self, run: _Run) -> None:
+        """The run's own call let go, the configuration, the prior and the tensors its arguments hold with it: from
+        the run, and from the model its page draws."""
+        run.spec = replace(run.spec, fn=None, args=(), kwargs={})
+        if run.model is not None:
+            run.model.spec = run.spec
+        run.keywords = {}
+
+    def _withdraw_offer(self, run: str | None) -> None:
+        """The offer of the page of the run ``run`` goes, in the controller and on the page, and the run's call with
+        it."""
+        offered = self._offers.pop(run, None)
+        if offered is None:
+            return
+        self._let_go(offered)
+        if _alive(offered.view):
+            offered.view.offer(None, False)
+
+    def _page_gone(self, run: str, *_signalled) -> None:
+        """The page of the run ``run`` has gone (its panel deleted): its offer goes, and the run's call with it."""
+        offered = self._offers.pop(run, None)
+        if offered is not None:
+            self._let_go(offered)
+
+    def forget_offers(self) -> None:
+        """Every call kept for a page's offer let go, and each offer withdrawn from its page, as though each such page
+        had started its next run: no page offers to continue or resume a run any more."""
+        for run in list(self._offers):
+            self._withdraw_offer(run)
 
     def continue_run(self, run: str) -> bool:
         """"Continue from batch N" on the page of the training ``run``, which failed or was stopped with batches in
         its unfinished simulation set: its own call again, as its page's next run, the policy that must continue
         (``resume="require"``) the one new argument; the batch it continues from is the set's own to say. False, and
-        nothing started, while a run is live, and for a run no page offers to continue."""
+        nothing started, while a run is live, for a run no page offers to continue, and once the page's session holds
+        another model or prior (``_repeat``)."""
         offered = self._offers.get(run)
         if offered is None or offered.continue_from is None:
             return False
@@ -578,8 +623,8 @@ class RunController(QObject):
     def resume_training(self, run: str) -> bool:
         """"Resume the training" on the page of the training ``run``, which was stopped and kept its training, or
         failed during its fit or while its posterior was saved: its own call again, as its page's next run, the kept
-        training named (``resume_fit``) the one new argument. False, and nothing started, while a run is live, and for
-        a run no page offers to resume."""
+        training named (``resume_fit``) the one new argument. False, and nothing started, while a run is live, for a
+        run no page offers to resume, and once the page's session holds another model or prior (``_repeat``)."""
         offered = self._offers.get(run)
         if offered is None or offered.kept_fit is None:
             return False
@@ -587,10 +632,17 @@ class RunController(QObject):
 
     def _repeat(self, offered: _Run, kwargs: dict, how: str) -> bool:
         """The call of the ended run ``offered`` started again from its page, with ``kwargs``, the keywords of its
-        start as they were: a new run, whose page says, should the stage refuse it before anything is spent, why."""
+        start as they were: a new run, whose page says, should the stage refuse it before anything is spent, why.
+        Only into the session the call was made with: once the page's session holds another configuration or another
+        prior (``retry.made_in``), nothing starts, the page says why, and its offer goes, with the call."""
         if self.is_live() or not _alive(offered.host):
             return False
         spec, keywords = offered.spec, offered.keywords
+        if not retry.made_in(spec, getattr(offered.host, "session", None)):
+            self._withdraw_offer(offered.id)
+            if _alive(offered.view):
+                offered.view.say(retry.CHANGED_TEXT)
+            return False
         started = self.dispatch(spec.fn, *spec.args, spec=replace(spec, fn=None, args=(), kwargs={}),
                                 host=offered.host, **keywords, **kwargs)
         if started:
@@ -723,22 +775,24 @@ class RunController(QObject):
             is_oom = _out_of_memory()
             run.failure_kind = ("out of memory" if is_oom(failure[0]) else "device"
                                 if retry.is_device_failure(failure[0]) else "other")
+        run.kept_now = None
         if run.spec.simulation_set and run.outcome in ("failed", "stopped") and not refused_early:
             batches, complete = self._set_holds(run)
             run.continue_from = batches if batches and not complete else None
-            if run.outcome == "failed" and self._tried_again(run, batches):
+            run.kept_now = (batches, int(getattr(run.kept_fit, "passes", 0) or 0))
+            if run.outcome == "failed" and self._tried_again(run):
                 return
         self._end(run, refused_early)
 
-    def _tried_again(self, run: _Run, batches: int) -> bool:
-        """After a training's failure, with ``batches`` in its simulation set: whether the window tries it again,
-        and if so the run's pause begun. What the run kept now (the set's batches, the kept training's epochs) is
-        held to what it kept at its last failure: a try that kept more starts the count of tries again. Only
-        reopening PRISM can help a failure as ``retry.only_reopening`` says, a first failure as well as a try's, and
-        the run then ends; a stop asked for before the failure, and any failure not tried again, end it too."""
+    def _tried_again(self, run: _Run) -> bool:
+        """After a training's failure: whether the window tries it again, and if so the run's pause begun. What the
+        run kept now (``kept_now``: the set's batches, the kept training's epochs) is held to what it kept at its last
+        failure: a try that kept more starts the count of tries again. Only reopening PRISM can help a failure as
+        ``retry.only_reopening`` says, a first failure as well as a try's, and the run then ends; a stop asked for
+        before the failure, and any failure not tried again, end it too."""
         exc = run.failure[0]
         is_oom = _out_of_memory()
-        kept = (batches, int(getattr(run.kept_fit, "passes", 0) or 0))
+        kept = run.kept_now
         before, run.last_kept = run.last_kept, kept
         if before is not None and retry.gained(before, kept):
             run.tried = 0
@@ -780,7 +834,11 @@ class RunController(QObject):
         """The pause over: the run's next try, its own call in a new worker with a new token, in the same text and
         history files, the text's line that opens it first: the simulation set continued once it holds a batch, or,
         when the run kept a training, that training resumed, as its page's Resume would, and no other argument
-        changed."""
+        changed. A stop asked for while the run waited whose end of the tries is not taken yet (asked in the turn of
+        the event loop in which the pause ran out) ends the tries instead: no try begins."""
+        if run.stop_requested:
+            self._tries_end()
+            return
         run.try_at, run.attempt_open = None, True
         run.tried += 1
         run.attempt_started, run.attempt_before = (self._clock or _local_now)(), run.last_kept
@@ -831,7 +889,8 @@ class RunController(QObject):
         if failure is not None and not refused_early and not spec.loads_only:
             page = self._failure_page(run, last, failure)
         offers = (not refused_early and not idle and spec.simulation_set and run.outcome in ("failed", "stopped")
-                  and not run.reopen and (run.continue_from is not None or run.kept_fit is not None))
+                  and not run.reopen and (run.continue_from is not None or run.kept_fit is not None)
+                  and _alive(run.host))
         self._status = IDLE if idle else last
         if spec.keeps_files:
             if refused_early:
@@ -844,13 +903,14 @@ class RunController(QObject):
         # The payload goes now: the worker's shell outlives the run (it is kept until the next run ends), and what it
         # points at -- the configuration, the prior, the posterior, tensors on the card -- must not. The run's own
         # call goes with it, but for a run whose page offers to continue or resume it: that call is kept until the
-        # page starts its next run, or goes.
+        # page starts its next run, or goes (its panel's deletion lets the call go at once).
         worker = run.worker
         if worker is not None:
             worker.fn, worker.args, worker.kwargs = None, (), {}
             self._spent_worker = worker
         if offers:
             self._offers[run.id] = run
+            run.host.destroyed.connect(partial(self._page_gone, run.id))
         else:
             spec = replace(spec, fn=None, args=(), kwargs={})
             run.spec = model.spec = spec
@@ -884,12 +944,15 @@ class RunController(QObject):
 
     def _failure_page(self, run: _Run, last: RunStatus, failure) -> tuple:
         """What the page of a run that failed shows: its sentence, then, as ``show_failure`` takes them, the error's
-        message, its kind and traceback, whether a stop had been asked for before it, and whether the run keeps a
-        file that holds them."""
+        message (a refusal's with where to fix it, as the window says a refusal), its kind and traceback, whether a
+        stop had been asked for before it, whether the run keeps a file that holds them, and the command line the
+        page sets off beneath its sentence ("" for none)."""
         exc, trace, noted = failure
         sentence, _button = retry.failure_words(last, self._model, exc, is_oom=_out_of_memory())
         said = retry.message(exc)
-        return sentence, said, trace or f"{type(exc).__name__}: {said}", bool(noted), run.text is not None
+        quoted = self._refusal_words(exc) if isinstance(exc, Refusal) else said
+        return (sentence, quoted, trace or f"{type(exc).__name__}: {said}", bool(noted), run.text is not None,
+                retry.reopen_command(last, self._model))
 
     def _set_holds(self, run: _Run) -> tuple[int, bool]:
         """The batches the run's simulation set holds, and whether it is complete, read from the set itself, in the
@@ -1044,11 +1107,15 @@ class RunController(QObject):
         tries = list(run.attempts)               # each try that failed and was tried again
         if run.attempt_open:                     # the try running, or the one the run ended with
             before = run.attempt_before
+            # Once the run has ended, what the try left is what the set and the kept training hold, as for a try that
+            # failed and was tried again; while it runs, what its text has counted.
+            after = run.kept_now if run.ended is not None else None
             tries.append({"started": run.attempt_started or model.started, "ended": run.ended,
                           "outcome": run.outcome, "failure": None if failure is None else failure["type"],
-                          "batches_before": run.at_start if before is None else before[0], "batches_after": done,
+                          "batches_before": run.at_start if before is None else before[0],
+                          "batches_after": done if after is None else after[0],
                           "epochs_before": None if before is None else before[1],
-                          "epochs_after": epochs[-1].epoch if epochs else None})
+                          "epochs_after": (epochs[-1].epoch if epochs else None) if after is None else after[1]})
         return {"id": run.id, "word": spec.word, "name": spec.name,
                 "place": None if spec.place is None else list(spec.place),
                 "records_root": str(getattr(run.store, "root", "")), "started": model.started, "ended": run.ended,
