@@ -16,6 +16,7 @@ from .. import fields as gui_fields
 from ..design import CONTROLS_MIN_W, DEFAULT_RESULTS_SPLIT, DEFAULT_SPLIT
 from ..reported import reported
 from ..run.controller import LIVE_TEXT, controller
+from ..run.retry import NOTED_TEXT
 from ..run.view import RunView
 from ..widgets.figure_stack import FigureStack
 from ..widgets.log_pane import LogPane
@@ -24,8 +25,9 @@ from ..widgets.refusal_box import show_refusal
 # "The stop noted": shown alongside an ordinary crash report when the run's stop had already been
 # ASKED FOR at the moment the failure was caught. It never claims the stop caused the failure (the two
 # are independent: the run crashed, and separately someone had asked it to stop) -- only that both are
-# true, which the person who asked for the stop is owed.
-CANCEL_NOTED_TEXT = "A stop was asked for before the run failed."
+# true, which the person who asked for the stop is owed. The run's page says the same words; this box
+# says them for the one run whose failure still reaches it, a load's.
+CANCEL_NOTED_TEXT = NOTED_TEXT
 # Said, as one warning of the run, when a figure the run handed over could not be shown, filled with the figure's
 # title and the error's kind and message.
 FIGURE_NOT_SHOWN_TEXT = "The figure '{}' could not be shown ({}). The record is not affected."
@@ -308,15 +310,16 @@ class BasePanel(QWidget):
     def _run_over(self, status) -> None:
         """This page's run has ended, as ``status`` says. A run that finished gives the column back to the
         figures, "How the run went" above them; one that ended into idle (a refusal before anything was spent, a
-        run that keeps no file) gives it back with no link; a stopped or a failed run keeps its page until "Back
-        to the form"; a run that only loads a record leaves the column as it is. When the keyboard was on the run's
-        page, a finish gives it to "How the run went", for no key of its own. Called by the run's controller, once
-        every panel is free again and the run's page has been drawn ended."""
+        run that keeps no file and did not fail) gives it back with no link; a stopped or a failed run keeps its
+        page until "Back to the form", a failed one whatever it keeps, since its page is where its failure is said;
+        a run that only loads a record leaves the column as it is. When the keyboard was on the run's page, a
+        finish gives it to "How the run went", for no key of its own. Called by the run's controller, once every
+        panel is free again and the run's page has been drawn ended."""
         if status.loading:
             return
         focus = QApplication.focusWidget()
         keys = focus is not None and self.run_view.isAncestorOf(focus)
-        if status.state == "idle":
+        if status.state == "idle" and status.outcome != "failed":
             self.show_figures()
         elif status.outcome == "finished":
             self.show_figures()
@@ -441,14 +444,16 @@ class BasePanel(QWidget):
         show_refusal(self, exc)
 
     def _on_error(self, exc_or_message, tb: str, cancel_noted: bool = False, kept_fit=None) -> None:
-        """Show a failure. A Refusal goes to the yellow box (_refusal); anything else is a bug and
+        """Show a failure at a click. A Refusal goes to the yellow box (_refusal); anything else is a bug and
         gets the red one, with the traceback in a collapsible Details panel rather than pasted whole
         into the body (which produced an unscrollable, un-copyable wall of text stretched to the
-        widest stack frame). Called by the run's controller once a run of this panel that failed has
-        ended, with the exception object WorkerSignals.error carried and what came with it;
-        a click handler that catches on the GUI thread passes what it caught the same way (omitting
-        ``cancel_noted``, which defaults to False -- a GUI-thread click has no worker cancel token to
-        ask). A plain string is still accepted and is still a bug.
+        widest stack frame). A click handler that catches on the GUI thread passes what it caught
+        (omitting ``cancel_noted``, which defaults to False -- a GUI-thread click has no worker cancel
+        token to ask). A run's failure no longer comes here: it is a state of the run's page. The one
+        exception is a run that only loads a record, which is never handed the run's page: the run's
+        controller hands its failure here once it has ended, with the exception object
+        WorkerSignals.error carried and what came with it. A plain string is still accepted and is
+        still a bug.
 
         ``cancel_noted``: true when the cancel token had already been REQUESTED at the moment
         ``Worker.run`` caught this failure -- a coincidence, never a cause (the crash is reported as

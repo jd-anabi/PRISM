@@ -1508,17 +1508,17 @@ def test_a_refusal_before_anything_is_spent_is_no_run(tmp_path):
 def test_a_refusal_after_something_was_spent_ends_the_run_as_failed(spent, tmp_path):
     """A refusal that comes once something is spent -- the solver's count moved, a stage after the run's first
     began, or a record of a kind the run writes was made since the start -- ends the run as failed: its files are
-    kept, saying so, and the page shows the refusal in its yellow box."""
+    kept, saying so, and the run's page says the refusal as the failure it now is, with no box."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.run import history
     from core.refusals import Refusal
-    from tests._fixtures import asked, build_fdt_record, build_run_host, qt_app
+    from tests._fixtures import all_asked, build_fdt_record, build_run_host, qt_app
     from tests._runs import Clock, StandIn, start_run, turn_until
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
-    stand_in, run = StandIn(), "20261008T190211-training"
+    stand_in, run, host = StandIn(), "20261008T190211-training", build_run_host()
     with use_store(ArtifactStore(tmp_path / "Artifacts")) as store:
-        start_run(build_run_host(), stand_in, spec=_training(kinds=("posterior", "simulation", "fit", "fdt")))
+        start_run(host, stand_in, spec=_training(kinds=("posterior", "simulation", "fit", "fdt")))
         if spent == "the solver stepped":
             stand_in.solver(5)
         elif spent == "a later stage began":
@@ -1532,7 +1532,10 @@ def test_a_refusal_after_something_was_spent_ends_the_run_as_failed(spent, tmp_p
     kept = history.read(tmp_path / "runs" / f"{run}.json")
     assert (kept["outcome"], kept["failure"]["type"]) == ("failed", "Refusal"), kept
     assert (tmp_path / "runs" / f"{run}.txt").is_file()
-    assert asked().kind == "refusal"
+    view = host.run_view
+    assert all_asked() == [], "the refusal was told in a box"
+    assert (view.failure.isVisibleTo(view), view.failure_message.text()) == (
+        True, "The read-back of the posterior was refused."), "the refusal is not said on the run's page"
 
 
 def test_a_run_that_only_loads_shows_loading_and_leaves_nothing_to_acknowledge(tmp_path):
@@ -2260,15 +2263,16 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
     figures, which it holds in sight under its messages; the form stays at the left, in sight and locked. A run
     that finishes gives the column back, the figures in their place at the heights they had and "How the run went"
     above them, which opens the run's page again, ended. A run that is stopped or fails keeps its page, ended, until
-    "Back to the form", and the layout saved meanwhile keeps the heights the figures had in their place. A run that
-    only loads a record never takes the column nor the page that shows there: after a finish "How the run went"
-    stays above the figures and opens the finished run's page, and a stopped run's page stays, its sentence and its
-    full text with it, while a load runs and after. A refusal made before anything was spent gives the column back
-    with no link. A run that is over is drawn again from its two files alone, past."""
+    "Back to the form", and the layout saved meanwhile keeps the heights the figures had in their place; a failure
+    is said on that page, never in a box. A run that only loads a record never takes the column nor the page that
+    shows there: after a finish "How the run went" stays above the figures and opens the finished run's page, and a
+    stopped run's page stays, its sentence and its full text with it, while a load runs and after. A refusal made
+    before anything was spent gives the column back with no link. A run that is over is drawn again from its two
+    files alone, past."""
     from core.refusals import Refusal
     from core.gui import settings
     from core.gui.run import history
-    from tests._fixtures import asked, build_run_host, choose, qt_app
+    from tests._fixtures import all_asked, build_run_host, choose, qt_app
     from tests._runs import Clock, RunText, StandIn, start_run, turn_until
     from tests._window_helpers import shown_off_screen
     app = qt_app()
@@ -2344,7 +2348,9 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
         assert column() == ("figures", False, True, True, True), said
         assert (split.indexOf(host.figure_stack), split.sizes()) == (0, heights), (
             f"the figures did not go back to their place at the heights they had: {said}")
-    assert asked().kind == "error", "the failure was not shown"
+    assert [box.title for box in all_asked()] == ["Stop training?"], "the failure was told in a box"
+    assert (view.failure.isVisibleTo(view), view.failure_message.text()) == (True, "the run broke"), (
+        "the failure is not said on its page")
     last = held.status.run
     record = history.read(tmp_path / "runs" / f"{last}.json")
     live_text = view.full_text.lines()

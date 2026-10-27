@@ -100,7 +100,8 @@ class WorkerSignals(QObject):
     chunk = Signal(object)          # one streamed numpy chunk (worker thread -> GUI) -- see base_panel.dispatch(provide_stream=)
     result = Signal(object)         # the callable's return value
     error = Signal(object, str, bool, object)  # (exception, traceback, cancel_noted, kept training) --
-                                        # base_panel._on_error routes by type; cancel_noted says whether the
+                                        # the run's page says it, a refusal before anything was spent the
+                                        # yellow box; cancel_noted says whether the
                                         # cancel token had been requested when this failure was caught -- a
                                         # coincidence to mention, never a cause to claim; the kept training is
                                         # the note the training stage puts on a failure in its fit, or None.
@@ -187,9 +188,10 @@ class Worker(QRunnable):
                         # _drop_tracebacks walks the chain, so `original` is covered by this one call.
                         _drop_tracebacks(cancel)
                     except Exception as e:               # noqa: BLE001 -- surface any failure to the UI
-                        # The EXCEPTION, not its text. The panel opens the yellow "Check your inputs"
-                        # box for a Refusal and the red one with the traceback for anything else, and
-                        # it can only tell the two apart if the object itself crosses the thread.
+                        # The EXCEPTION, not its text. The window shows a Refusal made before anything
+                        # was spent in the yellow "Check your inputs" box and any other failure on the
+                        # run's page, and it can only tell the two apart if the object itself crosses
+                        # the thread.
                         failure = (e, traceback.format_exc())
                         # "The cancel noted": the cancel checkpoint that would have raised here was
                         # deferred instead (see the WorkerCancelled branch above), so a

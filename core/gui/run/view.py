@@ -12,7 +12,9 @@ The stop button asks what the run's stage keeps before it stops the run (a run w
 with no question); while the stop is pending, "Don't stop after all" withdraws it, and, when the window waits for
 the run before it closes, the page says so. A training saving its posterior is not stopped, and the window's close
 waits for the save with no stop: "Keep PRISM open" withdraws that close. Once a stop of a training has landed, the
-page asks whether to keep the training it kept, never in a box of its own.
+page asks whether to keep the training it kept, never in a box of its own. A run that failed says so on its page,
+never in a box: what failed, what was saved and what was lost, the error's message, and its kind and traceback when
+asked for.
 
 It is live while the run is, ended once it has ended, and past when it is drawn from a run's files alone. A run
 with a view of its own shows the page in its compact form: the sentence and the stop button. The page lives
@@ -24,8 +26,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
+                               QSizePolicy, QVBoxLayout, QWidget)
 
 from .. import design, fonts, style
 from ..reported import reported
@@ -37,7 +39,7 @@ from ..widgets.page import Scroller
 from ..widgets.rule_table import Column, RuleTable, StateCell, TextCell, ValueCell
 from ..widgets.ruled import Ruled, SectionHead
 from ..widgets.time_axis import AxisCaption, TimeAxis
-from . import questions
+from . import questions, retry
 from .loss import LossCurve
 from .model import LEADS, OUTCOMES, RunModel, RunSpec
 
@@ -56,6 +58,8 @@ MESSAGES_TEXT = "Messages"
 STOP_TEXT = "Stop"
 #: The lines of the full text in sight at once, at the ordinary text size.
 FULL_TEXT_LINES = 16
+#: The lines of a failure's full error in sight at once, at the ordinary text size.
+FULL_ERROR_LINES = 12
 #: The least height of the figures the page holds, in pixels at the ordinary text size.
 FIGURES_LEAST_H = 320
 #: The marker beside each state word of the health table.
@@ -197,6 +201,8 @@ class RunView(QWidget):
         self._closing = False
         self._run: str | None = None             # the run's id, as its status names it
         self._answered = False                   # whether Keep or Discard was answered for the training it kept
+        self._failed = False                     # whether the page says its run's failure
+        self._noted = self._error_shown = False
         self._clock = _local_now
         self._text: Path | None = None
         self._folder: Path | None = None
@@ -290,11 +296,55 @@ class RunView(QWidget):
         keep.addWidget(self.keep_words)
         keep.addWidget(self.keep_beneath)
         keep.addLayout(answers)
+        # at a failure: what failed, what was saved and what was lost, beside the error's marker; the error's own
+        # message, quoted in the fixed-width face; where the full error is kept, and the full error itself (its kind
+        # and its traceback), shown only when asked for
+        self.failure = QWidget()
+        failure = QVBoxLayout(self.failure)
+        failure.setContentsMargins(0, 0, 0, 0)
+        failure.setSpacing(design.scaled(design.GAP["head_table"]))
+        self.failure_row = MessageRow("err", "", lead=LEADS["err"])
+        self.failure_message = QLabel()
+        self.failure_message.setTextFormat(Qt.PlainText)
+        self.failure_message.setWordWrap(True)
+        self.failure_message.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # Console text: the fixed-width face, given at build. Its width is the page's: a long word of a message
+        # (a path) is cut at the page's edge, never let widen it.
+        self.failure_message.setFont(fonts.fixed())
+        wide = self.failure_message.sizePolicy()
+        wide.setHorizontalPolicy(QSizePolicy.Ignored)
+        self.failure_message.setSizePolicy(wide)
+        self.noted = style.set_class(QLabel(retry.NOTED_TEXT), cls="quiet")
+        self.file_line = style.set_class(QLabel(retry.FILE_TEXT), cls="quiet")
+        for label in (self.noted, self.file_line):
+            label.setTextFormat(Qt.PlainText)
+            label.setWordWrap(True)
+        self.full_error_button = QPushButton(retry.SHOW_ERROR_TEXT)
+        self.full_error_button.clicked.connect(self._toggle_error)
+        where = QHBoxLayout()
+        where.setSpacing(design.scaled(design.GAP["action"]))
+        where.addWidget(self.file_line)
+        where.addWidget(self.full_error_button)
+        where.addStretch(1)
+        self.full_error = QPlainTextEdit()
+        self.full_error.setReadOnly(True)
+        self.full_error.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.full_error.setFont(fonts.fixed())
+        # In a plain holder of the fixed height, as the full text is.
+        self._error_holder = QWidget()
+        self._error_holder.setFixedHeight(FULL_ERROR_LINES * design.scaled(design.TYPE["body"][1]))
+        inside = QVBoxLayout(self._error_holder)
+        inside.setContentsMargins(0, 0, 0, 0)
+        inside.addWidget(self.full_error)
+        for part in (self.failure_row, self.failure_message, self.noted):
+            failure.addWidget(part)
+        failure.addLayout(where)
+        failure.addWidget(self._error_holder)
         self.said = QWidget()
         said = QVBoxLayout(self.said)
         said.setContentsMargins(0, design.scaled(design.GAP["now"][1]), 0, 0)
         said.setSpacing(design.scaled(design.GAP["head_table"]))
-        for part in (self.notice, self.closing_line, self.keep_block):
+        for part in (self.notice, self.closing_line, self.failure, self.keep_block):
             said.addWidget(part)
         box = self.status.box
         box.addWidget(self.stage_line)
@@ -406,6 +456,11 @@ class RunView(QWidget):
         page is live, in its compact form for a run with a view of its own."""
         self._mode, self._compact, self._model, self._stopping = "live", spec.own_view, None, False
         self._closing, self._run, self._answered = False, None, False
+        self._failed = self._noted = self._error_shown = False
+        self.failure_row.sentence.set_text("", lead=opening(LEADS["err"], None))
+        self.failure_message.setText("")
+        self.full_error.setPlainText("")
+        self.full_error_button.setText(retry.SHOW_ERROR_TEXT)
         self.notice.setText("")
         self._axis_shown = self._text_shown = False
         self.text_button.setText(SHOW_TEXT)
@@ -455,6 +510,20 @@ class RunView(QWidget):
     def say(self, text: str) -> None:
         """Say ``text`` on the page, under its sentence, in place of what it said before ("" says nothing)."""
         self.notice.setText(text)
+        self._arrange()
+
+    def show_failure(self, sentence: str, message: str, detail: str, noted: bool, kept: bool) -> None:
+        """The run failed: under the page's sentence, beside the error's marker, ``sentence`` (what failed and when,
+        what was saved and what was lost); the error's ``message``, quoted; that a stop had been asked for before
+        it, when ``noted``; that the full error is in the run's file, when the run ``kept`` one; and the full error,
+        ``detail`` (its kind and traceback), behind "Show the full error". Shown once the run has ended, until the
+        page's next run."""
+        self._failed, self._noted, self._error_shown = True, noted, False
+        self.failure_row.sentence.set_text(sentence, lead=opening(LEADS["err"], None))
+        self.failure_message.setText(message)
+        self.file_line.setText(retry.FILE_TEXT if kept else "")
+        self.full_error.setPlainText(detail)
+        self.full_error_button.setText(retry.SHOW_ERROR_TEXT)
         self._arrange()
 
     def show_past(self, record: dict, text: Path | None) -> None:
@@ -570,9 +639,13 @@ class RunView(QWidget):
         closing, notice = self._closing and live, bool(self.notice.text())
         keeps_open = closing and not self._stopping          # a close that waits for a save, no stop asked
         self.closing_line.setText(questions.CLOSING_SAVED_TEXT if keeps_open else questions.CLOSING_TEXT)
-        shown = ((self.said, closing or notice or keeps), (self.notice, notice), (self.closing_line, closing),
-                 (self.keep_block, keeps), (self.stop_button, live), (self.withdraw_button, withdraws),
-                 (self.keep_open_button, keeps_open), (self.back_button, not live and full))
+        failed = self._failed and self._mode == "ended"
+        shown = ((self.said, closing or notice or keeps or failed), (self.notice, notice),
+                 (self.closing_line, closing), (self.failure, failed), (self.noted, failed and self._noted),
+                 (self.file_line, failed and bool(self.file_line.text())),
+                 (self._error_holder, failed and self._error_shown), (self.keep_block, keeps),
+                 (self.stop_button, live), (self.withdraw_button, withdraws), (self.keep_open_button, keeps_open),
+                 (self.back_button, not live and full))
         for widget, on in shown:                 # what takes the keyboard is in sight before what holds it goes
             if on:
                 widget.setVisible(True)
@@ -685,6 +758,12 @@ class RunView(QWidget):
         """Show the full text, or hide it again."""
         self._text_shown = not self._text_shown
         self.text_button.setText(HIDE_TEXT if self._text_shown else SHOW_TEXT)
+        self._arrange()
+
+    def _toggle_error(self) -> None:
+        """Show a failure's full error, its kind and traceback, or hide it again."""
+        self._error_shown = not self._error_shown
+        self.full_error_button.setText(retry.HIDE_ERROR_TEXT if self._error_shown else retry.SHOW_ERROR_TEXT)
         self._arrange()
 
     def _open_find(self) -> None:

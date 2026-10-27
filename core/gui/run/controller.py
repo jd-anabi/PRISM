@@ -8,7 +8,12 @@ and queues the worker. All the worker says reaches the controller on the window'
 the run's state worked out again, the history written (at each change of state or stage, at each save of the
 simulation set the run passes, at each epoch and at the end) and every line handed on to the run's full text
 (``lines``). At the end the panels are unlocked and the payload let go, the run's status is published, then
-``run_ended``; only then is the run's page drawn ended, and the page shows how it ended when that takes a box.
+``run_ended``; only then is the run's page drawn ended.
+
+A run's failure is a state of its page, never a box: the page says what failed and when, what was saved and what
+was lost, and quotes the error's message, its kind and traceback shown when asked for. A training's simulation set
+is read for the batches it holds once the run's worker has ended, never while it runs. A run that only loads a
+record has no page of its own: its failure is told as a failure at a click is.
 
 A refusal the stage makes before anything is spent is no run: the solver has taken no step since the start, no
 stage after the run's first has begun, and the store holds no record of a kind the run writes made since the start.
@@ -44,7 +49,7 @@ from core.refusals import Refusal
 
 from ..streams import CancelToken
 from ..worker import Worker
-from . import history, questions
+from . import history, questions, retry
 from .model import FIT_PACE_RECORDS, IDLE, RunModel, RunSpec, RunStatus, moved
 from .textfile import FSYNC_EVERY_S, RunTextFile
 
@@ -82,6 +87,13 @@ def _memory_limit() -> tuple[float | None, str]:
         by_variable = False
     source = f"set by {pipeline.VRAM_CEILING_ENV}" if by_variable else "set in step 1, Model and options"
     return gib, LIMIT_TEXT.format(f"{gib:g}", source)
+
+
+def _out_of_memory():
+    """The engine's rule of a failure that is the graphics card running out of memory, loaded when a run has failed
+    and never at import: the rule's module loads the graphics library."""
+    from core.SBI.pipeline import _is_oom
+    return _is_oom
 
 
 def _made(created) -> datetime | None:
@@ -163,6 +175,7 @@ class _Run:
         self.outcome: str | None = None            # "finished", "stopped" or "failed"
         self.failure = None                        # (exception, traceback, cancel noted) of a failed run
         self.kept_fit = None
+        self.continue_from: int | None = None      # the batches its unfinished simulation set holds, read at its end
         self.stop_requested = False
         self.closing = False                       # the window closes once the run has ended
         self.ended: datetime | None = None
@@ -575,11 +588,13 @@ class RunController(QObject):
 
     def _on_finished(self) -> None:
         """The run's end, in this order: how it ended said on ``lines``, after every line its worker said before
-        it; its watchers' last look; its state (ended, or idle for a run that leaves nothing to acknowledge); the
-        history's end written and the text file closed, or both removed for a refusal made before anything was
+        it; its watchers' last look; its state (ended, or idle for a run that leaves nothing to acknowledge), with
+        the batches a training's unfinished simulation set holds, read from the set now that the worker has ended;
+        the history's end written and the text file closed, or both removed for a refusal made before anything was
         spent; every panel unlocked; the payload let go; the status published; then ``run_ended``; then the run's
-        page drawn ended and its host's column arranged, so that a page that cannot be drawn holds up nothing of the
-        run's own end; then the page's own word on a failure or a refusal."""
+        page drawn ended, a failure as its page's state, and its host's column arranged, so that a page that cannot
+        be drawn holds up nothing of the run's own end; then the page's own word on a refusal made before anything
+        was spent, or on the failure of a run that only loads a record, which has no page of its own."""
         from ..panels.base_panel import BasePanel
         run, model = self._run, self._model
         if run is None or run.worker is None:
@@ -597,12 +612,18 @@ class RunController(QObject):
         refused_early = failure is not None and isinstance(failure[0], Refusal) and not self._spent(run)
         model.ended(run.outcome, kept_fit=run.kept_fit)
         run.ended = (self._clock or _local_now)()
+        if spec.simulation_set and run.outcome == "failed" and not refused_early:
+            batches, complete = self._set_holds(run)
+            run.continue_from = batches if batches and not complete else None
         idle = refused_early or spec.loads_only or not spec.keeps_files
         last = RunStatus(state="idle" if idle else "ended", word=spec.word, name=spec.name,
                          run=None if refused_early else run.id, place=spec.place, loading=spec.loads_only,
                          stage=model.stage, outcome=None if refused_early else run.outcome, started=model.started,
-                         ended=run.ended, kept_fit=run.kept_fit, closing=run.closing, kinds=spec.kinds,
-                         records=spec.records)
+                         ended=run.ended, continue_from=run.continue_from, kept_fit=run.kept_fit,
+                         closing=run.closing, kinds=spec.kinds, records=spec.records)
+        page = None
+        if failure is not None and not refused_early and not spec.loads_only:
+            page = self._failure_page(run, last, failure)
         self._status = IDLE if idle else last
         if spec.keeps_files:
             if refused_early:
@@ -622,6 +643,8 @@ class RunController(QObject):
         self.status_changed.emit(self._status)
         self.run_ended.emit(last)
         if _alive(run.view):
+            if page is not None:
+                run.view.show_failure(*page)
             run.view.show_status(last, model)
         host = run.host
         if _alive(host) and hasattr(host, "_run_over"):
@@ -629,8 +652,33 @@ class RunController(QObject):
         if failure is not None and _alive(host):
             if refused_early:
                 host._refusal(failure[0])
-            else:
+            elif spec.loads_only:
                 host._on_error(failure[0], failure[1], failure[2], run.kept_fit)
+
+    def _failure_page(self, run: _Run, last: RunStatus, failure) -> tuple:
+        """What the page of a run that failed shows: its sentence, then, as ``show_failure`` takes them, the error's
+        message, its kind and traceback, whether a stop had been asked for before it, and whether the run keeps a
+        file that holds them."""
+        exc, trace, noted = failure
+        sentence, _button = retry.failure_words(last, self._model, exc, is_oom=_out_of_memory())
+        said = retry.message(exc)
+        return sentence, said, trace or f"{type(exc).__name__}: {said}", bool(noted), run.text is not None
+
+    def _set_holds(self, run: _Run) -> tuple[int, bool]:
+        """The batches the run's simulation set holds, and whether it is complete, read from the set itself, in the
+        folder its run named: once the run's worker has ended and never while it runs, since the engine replaces
+        what is read here at each save. No batch, and not complete, when the run named no set or none can be read
+        there."""
+        folder = self._model.simulation_folder()
+        if folder is None:
+            return 0, False
+        try:
+            from core.SBI.training_checkpoint import peek
+            state = peek(run.store.kind_dir("simulation") / folder) or {}
+            done, complete = int(state.get("batches_done") or 0), bool(state.get("complete"))
+        except Exception:                        # noqa: BLE001 -- a set that cannot be read holds nothing to offer
+            return 0, False
+        return max(done, 0), complete
 
     @staticmethod
     def _remove_files(run: _Run) -> None:

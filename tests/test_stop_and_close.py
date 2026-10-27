@@ -983,9 +983,9 @@ def test_an_answer_given_once_the_save_has_begun_stops_nothing(tmp_path, monkeyp
 def test_a_close_that_waits_is_not_carried_out_when_the_run_fails(tmp_path, monkeypatch):
     """A close that waits for its run is carried out only once the run has stopped or finished. A run that fails
     instead, after "Stop the run and close", and a save that fails after "Close when it is saved", leave the window
-    open on the run's page, which says that PRISM stayed open, and the failure's box in sight, the event loop turning,
-    until it is answered: nothing closes it or the window meanwhile, and the one-PRISM claim is held. A question of
-    the person's own that is open when a stopped run ends is answered first; the window then closes."""
+    open on the run's page, which says the failure, with no box, and that PRISM stayed open, the event loop turning:
+    nothing closes the window, and the one-PRISM claim is held. A question of the person's own that is open when a
+    stopped run ends is answered first; the window then closes."""
     import time
     from core.gui import one_instance
     from core.gui.widgets.ask import ask
@@ -1019,20 +1019,17 @@ def test_a_close_that_waits_is_not_carried_out_when_the_run_fails(tmp_path, monk
             choose(monkeypatch, words=answer)
             window.close()
             assert (window._close_at_end, held.status.closing) == (True, True), answer
-            seen = []
-            hold_open(monkeypatch, seen)
             forget_asked()
             stand_in.fail(RuntimeError(broke))
             _ended(app, held)
             _settled(app)
-            assert ([(box.kind, box.sentence) for box in all_asked()], seen) == ([("error", broke)], [(True, True)]), (
-                f"{answer!r}: the failure's box was closed before it was answered, or the window with it")
             turned_past_the_windows_look()
+            assert (all_asked(), view.failure.isVisible(), view.failure_message.text()) == ([], True, broke), (
+                f"{answer!r}: the failure was told in a box, or not on the run's page")
             assert (window.isVisible(), one_instance.current() is claim, window._close_at_end, window.current_place(),
                     view.mode, view.sentence.text(), view.notice.text(), view.notice.isVisible()) == (
                 True, True, False, ("inference", "training"), "ended", "Training retrain_3 failed.",
                 "PRISM stayed open: the run failed.", True), answer
-            assert [box.kind for box in all_asked()] == ["error"], f"{answer!r}: a close came after the box"
             view.back_button.click()
 
         stand_in, text = StandIn(takes_stops=False), RunText(held)

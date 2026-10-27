@@ -95,7 +95,7 @@ for name in sys.argv[2].split(","):
     except ImportError:
         pass
 from core.gui import texts
-from core.gui.run import model, questions, readings
+from core.gui.run import model, questions, readings, retry
 moment = [datetime(2026, 10, 8, 19, 2, 11, tzinfo=timezone(timedelta(hours=2)))]
 def clock():
     return moment[0]
@@ -126,6 +126,11 @@ def look(run):
     if run.state == "stopping":
         stopping = model.RunStatus(state="stopping", word=run.spec.word, stop_requested=True)
         said += (questions.stopping_line(stopping, run), questions.close_question(stopping, run))
+    failed = model.RunStatus(state="ended", word=run.spec.word, name=run.spec.name, outcome="failed",
+                             ended=run.now(), continue_from=7, kept_fit=run.kept_fit)
+    said += (retry.failure_words(failed, run, RuntimeError("CUDA out of memory"),
+                                 is_oom=lambda error: "out of memory" in str(error)),
+             retry.failure_words(failed, run, OSError("No space left on device.")), retry.message(ValueError()))
     moment[0] += timedelta(seconds=50)
     return said
 tag = "training batch 3/40 [t_scale=1, T=1, n_fine=8, N_points=8, rows=8]"
@@ -264,14 +269,16 @@ def test_the_rules_and_tables_import_no_toolkit_and_no_engine():
 
 
 def test_the_run_model_and_its_readings_import_no_toolkit_and_no_engine():
-    """The run's model, the table of the engine's lines it reads, the words a stop and a close ask, and the date and
-    number words load neither the toolkit, nor the engine, nor its settings: the window's thread reads a run's lines
-    through them while the run holds the engine, and they are tested with no window. Every import statement of each
-    module is read, wherever it stands, with every statement of each module of this repository it imports; then a
-    fresh interpreter imports every module those statements name, builds a training's model and models of runs of
-    other kinds, feeds them their lines, rows, solver counts and clock, and reads every read-out at each step, the
-    questions of a stop and a close among them, and the question of keeping a training a stop kept."""
-    modules = ("core.gui.texts", "core.gui.run.readings", "core.gui.run.model", "core.gui.run.questions")
+    """The run's model, the table of the engine's lines it reads, the words a stop and a close ask, the words of a
+    failure, and the date and number words load neither the toolkit, nor the engine, nor its settings: the window's
+    thread reads a run's lines through them while the run holds the engine, and they are tested with no window.
+    Every import statement of each module is read, wherever it stands, with every statement of each module of this
+    repository it imports; then a fresh interpreter imports every module those statements name, builds a training's
+    model and models of runs of other kinds, feeds them their lines, rows, solver counts and clock, and reads every
+    read-out at each step, the questions of a stop and a close among them, the words of the run's failure, and the
+    question of keeping a training a stop kept."""
+    modules = ("core.gui.texts", "core.gui.run.readings", "core.gui.run.model", "core.gui.run.questions",
+               "core.gui.run.retry")
     for module in modules:
         assert (REPO / (module.replace(".", "/") + ".py")).is_file(), f"{module} is not there to be read"
         found = _reaching(_imports(module), _RULES_FORBIDDEN)

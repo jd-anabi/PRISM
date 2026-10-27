@@ -3047,12 +3047,13 @@ def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch, w
     as the earlier record's. The viewer's tabs close when the run ends, whatever the outcome, a
     measurement's and a sweep study's alike, so what remains is the failed run's own partial figures,
     which its run page holds under its messages until "Back to the form" hands them back to their place;
-    the line still describes the selection, which is what the picker shows."""
+    the line still describes the selection, which is what the picker shows. The failure itself is a state
+    of that page, which says it with the error's message: no box tells it."""
     from core.artifacts import ArtifactStore, use_store
     from core.FDT import cross_validation
     from core.gui.panels import fdt_panel
     from core.gui.panels.crossval_panel import CrossValPanel
-    from tests._fixtures import all_asked, asked, forget_asked, qt_app
+    from tests._fixtures import all_asked, forget_asked, qt_app
 
     app = qt_app()
 
@@ -3085,7 +3086,11 @@ def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch, w
         _wait_for_run(app, panel, limit=60.0)
         _settle(app)
 
-        assert all_asked() and "failed after its first figure" in asked().sentence, "the failure reached no box"
+        view = panel.run_view
+        assert [box.title for box in all_asked() if "failed after its first figure" in box.text] == [], (
+            "the failure reached a box")
+        assert (view.failure.isVisibleTo(view), "failed after its first figure" in view.failure_message.text()) == (
+            True, True), "the failed run's page does not say its failure"
         stack = panel.figure_stack
         shown = [stack.png_path(i) for i in range(stack.count())]
         assert _tabs(panel) == own and str(earlier.dir) not in (shown[0] or ""), shown
@@ -4262,14 +4267,15 @@ def test_a_failed_inference_leaves_the_session_config_pristine(screen_run, monke
     records the cell and sets T_obs on the config it holds, then the run dies inside
     generate_observations. All three writes used to stay on the session, so the NEXT training
     anchored its Fisher rotation on that cell and the next manifest named it as an input. The error
-    reaches the red box (a bug, not a Refusal), and the session's config is untouched.
+    is said on the run's page (a bug, not a Refusal), with no box, and the session's config is
+    untouched.
 
     (a) makes the pin non-vacuous: with SimConfig.copy_for_run switched off (public_entry then hands the
     composition the caller's own object), the same click leaves the truth on a throwaway session
     config -- the leak this test exists to catch."""
     from core import orchestrator
     from core.sim_config import SimConfig
-    from tests._fixtures import all_asked, asked, assert_cfg_unchanged, forget_asked, qt_app, snapshot_cfg
+    from tests._fixtures import all_asked, assert_cfg_unchanged, forget_asked, qt_app, snapshot_cfg
 
     app = qt_app()
     inf = screen_run.screen
@@ -4302,8 +4308,10 @@ def test_a_failed_inference_leaves_the_session_config_pristine(screen_run, monke
     _wait_for_run(app, panel)
     assert_cfg_unchanged(pristine, snap)
     assert not pristine.has_ground_truth and "cell" not in pristine.sources
-    assert len(all_asked()) == 1 and asked().kind == "error", \
-        [(a.title, a.sentence) for a in all_asked()]
+    assert all_asked() == [], [(a.title, a.sentence) for a in all_asked()]
+    view = panel.run_view
+    assert (view.failure.isVisibleTo(view), view.failure_message.text()) == (
+        True, "stopped after the truth was injected"), "the failure is not said on the run's page"
 
 
 def test_a_dispatched_inference_leaves_the_session_config_pristine(screen_run):

@@ -67,17 +67,18 @@ def test_worker_payload_is_released_after_the_run():
 
 
 def test_a_failed_run_does_not_pin_its_frames():
-    """The worker carries the EXCEPTION across the thread (so the panel can route a Refusal to the
-    yellow box), and an exception's traceback owns every frame of the failed run -- the stage's host
-    buffers, the prior, the CUDA tensors. Held in a local of Worker.run, whose own frame heads that
-    traceback, it made a reference cycle only a full garbage collection frees, which in a process that
-    has loaded torch, sbi and Qt can be hours away. Worker.run drops the tracebacks once the text is
-    formatted, so reference counting frees the frames when the box is dismissed.
+    """The worker carries the EXCEPTION across the thread (so the window can tell a Refusal, for the
+    yellow box, from a failure, for the run's page), and an exception's traceback owns every frame of
+    the failed run -- the stage's host buffers, the prior, the CUDA tensors. Held in a local of
+    Worker.run, whose own frame heads that traceback, it made a reference cycle only a full garbage
+    collection frees, which in a process that has loaded torch, sbi and Qt can be hours away.
+    Worker.run drops the tracebacks once the text is formatted, so reference counting frees the frames
+    once the run has ended and its failure is said.
 
     NO gc.collect() here, and the collector is off for the whole run: a collection is exactly what
-    hides the cycle (test_worker_payload_is_released_after_the_run calls one). Two legs: a bug (the
-    red box) and a Refusal raised from a cause its frame keeps bound (the yellow box; the cause's own
-    traceback is dropped too, which the leg fails without)."""
+    hides the cycle (test_worker_payload_is_released_after_the_run calls one). Two legs: a bug (said
+    on its run's page, no box) and a Refusal raised from a cause its frame keeps bound (the yellow box;
+    the cause's own traceback is dropped too, which the leg fails without)."""
     import gc
     import weakref
     from core.refusals import Refusal
@@ -101,7 +102,7 @@ def test_a_failed_run_does_not_pin_its_frames():
             held = cause
         raise Refusal("The run was refused.", field="name") from held
 
-    for fn, title, marker in ((crash, "Error", "err"),
+    for fn, title, marker in ((crash, None, None),
                               (refuse, "Check your inputs", "warn")):
         panel = build_run_host()
         big = Big()
@@ -114,10 +115,15 @@ def test_a_failed_run_does_not_pin_its_frames():
             turn_until(app, lambda: not controller().is_live(), 10)
             pump(app, 0.2)
             shown = all_asked()
-            assert shown and (shown[-1].title, shown[-1].marker) == (title, marker), \
-                (fn.__name__, [(a.title, a.sentence) for a in shown])
+            if title is None:                   # a bug: its run's page says it, and no box
+                assert shown == [], (fn.__name__, [(a.title, a.sentence) for a in shown])
+                view = panel.run_view
+                assert (view.failure.isVisibleTo(view), view.failure_message.text()) == (True, "the batch failed")
+            else:
+                assert shown and (shown[-1].title, shown[-1].marker) == (title, marker), \
+                    (fn.__name__, [(a.title, a.sentence) for a in shown])
             del big
-            assert ref() is None, f"{fn.__name__}: a failed run still pins its frames after the box"
+            assert ref() is None, f"{fn.__name__}: a failed run still pins its frames once its failure is said"
         finally:
             if was_enabled:
                 gc.enable()
@@ -403,12 +409,13 @@ def test_inference_config_restore_with_a_stale_model_does_not_desync_the_bounds_
 
 # ── error dialogs ────────────────────────────────────────────────────────────────────────────────
 def test_on_error_puts_the_traceback_in_details_not_the_body():
-    """A run failure's traceback belongs in a collapsible Details panel, not pasted whole into the
-    dialog body. The worker hands over the EXCEPTION now, not its text: a bug is anything that is not
-    a Refusal, and it keeps this red box."""
-    from tests._fixtures import asked
+    """A failure's traceback is never pasted whole into the words that say it. A failure at a click,
+    which a click handler hands to its page as it caught it, keeps the red box, its traceback in a
+    collapsible Details panel. A run's failure is told by no box: the run's page quotes the error's
+    message, and its kind and traceback are behind "Show the full error"."""
+    from tests._fixtures import all_asked, asked, forget_asked
 
-    qt_app()
+    app = qt_app()
 
     panel = build_run_host()
     panel._on_error(RuntimeError("Something failed"),
@@ -417,6 +424,26 @@ def test_on_error_puts_the_traceback_in_details_not_the_body():
     assert told.sentence == "Something failed"
     assert "Traceback" in told.detail, "the traceback was not routed to Details"
     assert "Traceback" not in told.sentence, "the traceback leaked into the body"
+
+    def crash():
+        raise RuntimeError("Something failed")
+
+    forget_asked()
+    panel.dispatch(crash)
+    turn_until(app, lambda: not controller().is_live(), 10)
+    view = panel.run_view
+    assert all_asked() == [], "a run's failure opened a box"
+    said = (view.failure_row.sentence.plain_text(), view.failure_message.text())
+    assert (said[0].startswith("Error. Run failed on "), said[0].endswith(": Something failed."), said[1]) == (
+        True, True, "Something failed"), said
+    assert not any("Traceback" in words or "RuntimeError" in words for words in said), said
+    assert not view.full_error.isVisibleTo(view), "the full error was shown before it was asked for"
+    assert (panel.results.currentWidget() is view, view.file_line.isVisibleTo(view)) == (True, False), (
+        "a failed run that keeps no file gave its page back, or says the full error is in a file it has not")
+    view.full_error_button.click()
+    shown = view.full_error.toPlainText()
+    assert (view.full_error.isVisibleTo(view), "Traceback" in shown, "RuntimeError: Something failed" in shown) == (
+        True, True, True), shown
 
 
 # ── the session dialog guard and the pane recorder ───────────────────────────────────────────────
@@ -1182,14 +1209,16 @@ def test_on_error_routes_a_refusal_to_the_yellow_box():
     assert pane.lines[-1] == ("error", "plain text")
 
 
-def test_a_refusal_opens_the_yellow_box_without_a_traceback_and_a_bug_the_red_one():
+def test_a_refusal_opens_the_yellow_box_without_a_traceback_and_a_bug_is_said_on_its_runs_page():
     """End to end through dispatch(): the exception OBJECT crosses the worker thread on the error
-    signal, so the panel can route by type. Worker.run used to flatten every failure to
+    signal, so the window can tell a refusal from a bug. Worker.run used to flatten every failure to
     (str(e), traceback) and the panel had nothing left to route on -- a refusal raised inside a
     stage (the direction count, a near miss, a narrowed parent's round on a foreign observation, a
-    load mismatch) opened the same red Critical box, traceback and all, as a genuine crash. Read
-    through asked(), the record the class-level QMessageBox.exec guard leaves behind instead of a
-    modal that would stall offscreen."""
+    load mismatch) opened the same red Critical box, traceback and all, as a genuine crash. A refusal
+    made before anything was spent opens the yellow box, read through asked(), the record the
+    class-level QMessageBox.exec guard leaves behind instead of a modal that would stall offscreen; a
+    bug opens no box at all: the run's page says it, its traceback behind "Show the full error", and
+    nothing of it is said among the page's own lines."""
     from core.refusals import Refusal
     from tests._fixtures import PaneCapture, all_asked, asked, forget_asked, pump, qt_app
 
@@ -1198,34 +1227,38 @@ def test_a_refusal_opens_the_yellow_box_without_a_traceback_and_a_bug_the_red_on
     panel = build_run_host()
     pane = PaneCapture(panel)
 
-    def _run_to_dialog(fn):
+    def _run(fn):
         forget_asked()
         panel.dispatch(fn)
-        turn_until(app, lambda: not controller().is_live() and all_asked(), 10)
+        turn_until(app, lambda: not controller().is_live(), 10)
         pump(app, 0.2)
         assert not panel.is_running(), "the panel stayed busy after the failure"
-        assert all_asked(), "no dialog opened"
-        return asked()
 
     def refuse():
         raise Refusal("The observation length, in seconds, must be greater than 0; got 0 "
                       "(default none: it must be given).", field="t_obs")
 
-    box = _run_to_dialog(refuse)
+    _run(refuse)
+    assert all_asked(), "no dialog opened"
+    box = asked()
     assert (box.kind, box.marker) == ("refusal", "warn")
     assert box.sentence.startswith("The observation length, in seconds, must be greater than 0")
     assert box.beneath == "Set it in the 'T_obs (s)' box in step 5, Inference, or in Live simulation."
     assert box.detail == "", "a refusal must not carry a traceback"
     assert pane.lines[-1][0] == "warning" and "'T_obs (s)'" in pane.lines[-1][1], pane.lines
+    before = list(pane.lines)
 
     def bug():
         raise RuntimeError("Something failed")
 
-    box = _run_to_dialog(bug)
-    assert (box.kind, box.title) == ("error", "Error")
-    assert box.sentence == "Something failed"
-    assert "Traceback" in box.detail and "RuntimeError: Something failed" in box.detail
-    assert pane.lines[-1] == ("error", "Something failed")
+    _run(bug)
+    view = panel.run_view
+    assert all_asked() == [], "a run's bug opened a box"
+    assert (view.failure.isVisibleTo(view), view.failure_message.text()) == (True, "Something failed")
+    view.full_error_button.click()
+    assert "Traceback" in view.full_error.toPlainText()
+    assert "RuntimeError: Something failed" in view.full_error.toPlainText()
+    assert pane.lines == before, ("a run's bug was said among the page's own lines", pane.lines)
 
 
 def test_list_dir_returns_and_the_picker_no_longer_swaps_stdout(tmp_path, capsys):
@@ -2306,19 +2339,34 @@ _STOP = ("window", "The run stopped: a stop was asked for.")
 _NOTED = "A stop was asked for before the run failed"
 
 
-def _run_leg(app, panel, pane, text, fn, wait_for_dialog):
-    """Dispatch ``fn`` on ``panel`` and turn the event loop until the run has settled: no run is live and,
-    when a dialog is expected, the box has been shown. Each leg reads only its own pane lines, its own run's
-    text and its own dialogs."""
-    from tests._fixtures import all_asked, forget_asked
+def _run_leg(app, panel, pane, text, fn):
+    """Dispatch ``fn`` on ``panel`` and turn the event loop until the run has settled: no run is live, and how it
+    ended is drawn on its page. Each leg reads only its own pane lines, its own run's text and its own dialogs."""
+    from tests._fixtures import forget_asked
 
     forget_asked()
     del pane.lines[:]
     del text.lines[:]
     panel.dispatch(fn)
-    turn_until(app, lambda: not controller().is_live() and (not wait_for_dialog or all_asked()), 10)
+    turn_until(app, lambda: not controller().is_live(), 10)
     pump(app, 0.2)
     assert not panel.is_running(), "the panel stayed busy"
+
+
+def _reported_as_a_crash(panel, pane, text, message):
+    """The run CRASHED, and is told so on its page, never as a stop and in no box: the error's message quoted, its
+    kind and traceback behind "Show the full error", the stop that was asked for before it noted, and nothing of it
+    among the page's own lines."""
+    from tests._fixtures import all_asked
+    assert _STOP not in text.lines, ("a run that CRASHED was reported as a cancellation", text.lines)
+    view = panel.run_view
+    assert all_asked() == [], ("a run's failure opened a box", [(a.title, a.sentence) for a in all_asked()])
+    assert (view.failure.isVisibleTo(view), view.failure_message.text()) == (True, message), (
+        view.failure_message.text())
+    assert (view.noted.isVisibleTo(view), view.noted.text()) == (True, f"{_NOTED}."), (
+        "the page does not note the cancel", view.noted.text())
+    assert f"RuntimeError: {message}" in view.full_error.toPlainText(), view.full_error.toPlainText()
+    assert pane.lines == [], ("a run's failure was said among the page's own lines", pane.lines)
 
 
 def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
@@ -2335,9 +2383,10 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
 
     (a) THE COLLISION -- Cancel pressed in the moment before a crash, in the rescue block's shape: a
     record and a print inside the section, then a bare ``raise``. The ORIGINAL exception reaches
-    Worker.run's generic handler: the red box, its traceback in Details, the message in the pane --
-    and, because the token had been requested, the cancel NOTED in the pane and in the box. The record
-    and the print are the run's text.
+    Worker.run's generic handler: the run's page says the failure, its message quoted and its traceback
+    behind "Show the full error", no box and nothing among the page's own lines -- and, because the
+    token had been requested, the cancel NOTED on the page. The record and the print are the run's
+    text.
 
     (a2) THE RACE THE FIRST DESIGN CALLED RESIDUAL, and it is not rare: ``sdeint.euler_compiled``'s
     ``try ... finally: bar.close()`` sits on the graphed CUDA solver, the likeliest GPU crash site,
@@ -2367,7 +2416,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
 
     from core import runs
     from core.gui.streams import WorkerCancelled
-    from tests._fixtures import PaneCapture, all_asked, asked
+    from tests._fixtures import PaneCapture, all_asked
 
     app = qt_app()
 
@@ -2415,32 +2464,21 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
         except RuntimeError:
             raise WorkerCancelled()
 
-    def reported_as_a_crash(message):
-        assert _STOP not in text.lines, ("a run that CRASHED was reported as a cancellation", text.lines)
-        box = asked()
-        assert (box.kind, box.title) == ("error", "Error")
-        assert box.sentence == message, box.sentence
-        assert f"RuntimeError: {message}" in box.detail, box.detail
-        assert _NOTED in box.text, ("the box does not note the cancel", box.text)
-        assert pane.lines[-2] == ("error", message), pane.lines
-        assert pane.lines[-1][0] == "warning" and _NOTED in pane.lines[-1][1], \
-            ("the pane does not note the cancel", pane.lines)
-
     # (a) the collision: a crash, reported as a crash, with the cancel noted
-    _run_leg(app, panel, pane, text, crash_behind_the_section, True)
-    reported_as_a_crash("the batch failed")
+    _run_leg(app, panel, pane, text, crash_behind_the_section)
+    _reported_as_a_crash(panel, pane, text, "the batch failed")
     assert ("info", "[checkpoint] stopping: saving 1 completed batches") in text.lines, text.lines
     assert ("info", "a print beside the rescue write") in text.lines, text.lines
 
     # (a2) the crash unwinding through a finally that speaks: a crash too
-    _run_leg(app, panel, pane, text, crash_through_a_finally_that_speaks, True)
-    reported_as_a_crash("the graphed solver failed")
+    _run_leg(app, panel, pane, text, crash_through_a_finally_that_speaks)
+    _reported_as_a_crash(panel, pane, text, "the graphed solver failed")
     assert ("info", "the bar's last frame") in text.lines, text.lines
     assert ("info", "closing the solver's bar") in text.lines, text.lines
 
     # (b) a recovered guard, then normal flow: a plain cancel, taken at the first check after it
     del reached[:]
-    _run_leg(app, panel, pane, text, recovered_guard_then_normal_flow, False)
+    _run_leg(app, panel, pane, text, recovered_guard_then_normal_flow)
     assert all_asked() == [], "a recovered exception behind a cancel opened a dialog"
     assert pane.lines == [], ("a stop was said among the page's own lines", pane.lines)
     assert text.lines == [("warning", "empty_cache() failed during recovery and was ignored"), _STOP], text.lines
@@ -2448,13 +2486,13 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
 
     # (c) normal flow: the very next check
     del reached[:]
-    _run_leg(app, panel, pane, text, cancel_in_normal_flow, False)
+    _run_leg(app, panel, pane, text, cancel_in_normal_flow)
     assert pane.lines == [] and all_asked() == [] and reached == [], \
         (pane.lines, all_asked(), reached)
     assert text.lines == [_STOP], text.lines
 
     # (f) the fallback: a cancel that still carries a context stays a cancel; the context is kept
-    _run_leg(app, panel, pane, text, cancel_raised_inside_a_handler, False)
+    _run_leg(app, panel, pane, text, cancel_raised_inside_a_handler)
     assert all_asked() == [], "an exception behind a cancel opened a dialog"
     assert pane.lines == [] and text.lines.count(_STOP) == 1 and text.lines[-1] == _STOP, (pane.lines, text.lines)
     assert any(lv == "warning" and "may be a failure that was still in flight" in t
@@ -2528,13 +2566,14 @@ def test_a_crash_under_a_live_bar_is_a_crash_and_leaves_no_ignored_exception(mon
     generator finalizer, where Python cannot propagate it: a ~20-line "Exception ignored in:
     <generator object tqdm.__iter__>" block landed in the run's text, and the latch was consumed by a
     raise nobody could see. Now the teardown runs while GeneratorExit is being handled, so the write is
-    carried: the crash is reported as a crash with the cancel noted, the latch is never consumed, and
-    nothing is ignored. The run's token is read off the run's own output stream, which holds it.
+    carried: the crash is reported as a crash, on its run's page, with the cancel noted, the latch is
+    never consumed, and nothing is ignored. The run's token is read off the run's own output stream,
+    which holds it.
 
     ``sys.unraisablehook`` is put back to Python's own for the run. pytest installs a collecting hook,
     which would keep the "Exception ignored" block out of the run's text and make the last assertion
     vacuous; Python's own writes it to ``sys.stderr``, which under the run is the window's stream."""
-    from tests._fixtures import PaneCapture, asked
+    from tests._fixtures import PaneCapture
 
     monkeypatch.setattr(sys, "unraisablehook", sys.__unraisablehook__)
     app = qt_app()
@@ -2550,11 +2589,8 @@ def test_a_crash_under_a_live_bar_is_a_crash_and_leaves_no_ignored_exception(mon
                 controller().request_stop()
                 raise RuntimeError("the batch failed under a live bar")
 
-    _run_leg(app, panel, pane, text, crash_under_a_live_bar, True)
-    assert _STOP not in text.lines, ("a run that CRASHED was reported as a cancellation", text.lines)
-    box = asked()
-    assert box.sentence == "the batch failed under a live bar", box.sentence
-    assert _NOTED in box.text, box.text
+    _run_leg(app, panel, pane, text, crash_under_a_live_bar)
+    _reported_as_a_crash(panel, pane, text, "the batch failed under a live bar")
     assert tokens and tokens[0].requested.is_set() and tokens[0].fired is False, \
         "the bar's teardown consumed the cancel latch"
     assert not any("Exception ignored" in line for _lv, line in pane.lines + text.lines), (pane.lines, text.lines)
