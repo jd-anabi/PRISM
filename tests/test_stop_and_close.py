@@ -774,16 +774,18 @@ def test_stop_the_run_and_close_waits_for_the_end_then_closes_every_window(tmp_p
 
 
 def test_the_window_does_not_close_under_a_retry_pause_or_a_pending_stop(tmp_path, monkeypatch):
-    """A run starting, running or stopping is live: a close asked for meanwhile is refused, whatever is answered
-    short of the close's second answer, and the window keeps the one-PRISM claim; a stopping run's close waits for
-    its end, the claim held until then."""
+    """A run starting, running, waiting to be tried again or stopping is live: a close asked for meanwhile is
+    refused, whatever is answered short of the close's second answer, and the window keeps the one-PRISM claim; a
+    pause that runs out while the close's question is open lets the next try begin, and the answer that keeps the
+    run changes nothing; a stopping run's close waits for its end, the claim held until then."""
     from core.gui import one_instance
     from tests._fixtures import whole_program
     from tests._window_helpers import shown_off_screen
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     with whole_program() as (_app, window):
-        held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+        clock = Clock(_at(8, 19, 2, 11))
+        held = _controller_on(tmp_path, clock)
         claim = one_instance.current()
         shown_off_screen(window)
         host, text = window.part("inference").posterior_panel, RunText(held)
@@ -792,6 +794,29 @@ def test_the_window_does_not_close_under_a_retry_pause_or_a_pending_stop(tmp_pat
         def closed_now():
             window.close()
             seen.append((held.status.state, window.isVisible(), one_instance.current() is claim))
+
+        tried = StandIn()
+        start_run(host, tried, spec=_training())
+        _say(app, tried, text, "the line the run says before it runs out of memory")
+        tried.fail(RuntimeError("CUDA error: out of memory"))          # a failure the window tries again
+        turn_until(app, lambda: held.status.state == "retrying")
+        closed_now()                                 # nobody answers
+        assert (asked().sentence, seen) == ("Training retrain_3 is waiting to try again.",
+                                            [("retrying", True, True)]), "the window closed under a retry's pause"
+
+        def the_pause_runs_out():
+            clock.advance(60)
+            held.tick()
+
+        choose(monkeypatch, words="Keep running", during=the_pause_runs_out)
+        closed_now()
+        turn_until(app, lambda: len(tried.calls) == 2)
+        assert (seen[-1], held.is_live(), held.status.stop_requested) == (("running", True, True), True, False), (
+            "a pause that ran out while the close's question was open stopped the run or closed the window")
+        tried.release()
+        _ended(app, held)
+        seen.clear()
+        choose(monkeypatch)                          # the guard again: nobody answers
 
         start_run(host, stand_in, spec=_training())
         closed_now()                                 # nobody answers

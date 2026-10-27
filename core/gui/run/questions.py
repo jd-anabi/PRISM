@@ -105,10 +105,15 @@ def stop_question(status, model) -> "Question | None":
 
 def close_question(status, model) -> Question:
     """The question the window asks when it is closed during a run: whether to stop the run and close once it has
-    stopped; with a stop asked for already, whether to close once it has stopped; and, for a training saving its
-    posterior, which no stop interrupts, whether to close once it is saved. The second answer is drawn as losing
-    work where the stop's own is."""
+    stopped; with a stop asked for already, whether to close once it has stopped; for a training saving its
+    posterior, which no stop interrupts, whether to close once it is saved; and, while the run waits to be tried
+    again, whether to end its tries and close: what it kept stays kept, so nothing is lost. The second answer is
+    drawn as losing work where the stop's own is."""
     who = f"{status.word} {status.name}".strip()
+    if status.state == "retrying":
+        from .retry import failure_words           # here, not at the top: that module reads this one's words
+        return Question(CLOSE_TITLE, f"{who} is waiting to try again.", failure_words(status, model, None)[0],
+                        KEEP_RUNNING, STOP_AND_CLOSE, False)
     if status.stop_requested:
         return Question(CLOSE_TITLE, f"{who} is stopping.", stopping_line(status, model), WAIT, CLOSE_WHEN_STOPPED,
                         False)

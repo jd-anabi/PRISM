@@ -87,6 +87,7 @@ sys.exit(repr(bad) if bad else 0)
 _FRESH_RUN = """
 import importlib
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace as held
 for name in sys.argv[2].split(","):
@@ -131,6 +132,10 @@ def look(run):
     said += (retry.failure_words(failed, run, RuntimeError("CUDA out of memory"),
                                  is_oom=lambda error: "out of memory" in str(error)),
              retry.failure_words(failed, run, OSError("No space left on device.")), retry.message(ValueError()))
+    waiting = model.RunStatus(state="retrying", word=run.spec.word, name=run.spec.name, continue_from=7,
+                              kept_fit=run.kept_fit, trying=2, try_at=run.now() + timedelta(minutes=3))
+    said += (retry.failure_words(waiting, run, None), questions.close_question(waiting, run),
+             retry.failure_words(replace(failed, reopen=True), run, RuntimeError("x")))
     moment[0] += timedelta(seconds=50)
     return said
 tag = "training batch 3/40 [t_scale=1, T=1, n_fine=8, N_points=8, rows=8]"
@@ -149,6 +154,9 @@ for run in runs:
     run.stopping(True)
     look(run)
     run.stopping(False)
+    run.trying(True)
+    look(run)
+    run.trying(False)
     run.set_earlier(((1, 80),))
     run.feed([("[patho] batch 2: 1 new pathological trajectorie(s) -- 1 non-finite, 0 exactly constant, 0 over 1e+06 "
                "in magnitude, of 24 simulated", "warning"),
@@ -203,6 +211,13 @@ said += [texts.duration_text(s) for s in (0, 61, 3700, 200000)] + [texts.number_
 said += [texts.date_text(clock()), texts.date_text(clock(), clock())]
 said += [model.driving_row([row("a", "1/3", 3)]), model.fit_counter([row("b")]), model.moved(1, 2)]
 said += [model.IDLE.live, model.RunStatus(state="ended").unacknowledged_end]
+oom = lambda error: "out of memory" in str(error)
+narrowing = model.RunSpec("Narrowing round", ("inference", "narrowing"), kwargs={"n_directions": 4, "level": 0.9})
+said += [retry.is_tried_again(RuntimeError("out of memory"), runs[0].spec, is_oom=oom),
+         retry.only_reopening(RuntimeError("out of memory"), kept_before=(1, 0), kept_after=(1, 0), is_oom=oom,
+                              tried=retry.TRIES),
+         retry.gained((1, 0), (1, 2)), retry.continued_call(runs[0].spec), retry.resumed_call(narrowing, "k"),
+         retry.is_device_failure(ValueError()), retry.PAUSES_S]
 roots = sys.argv[1].split(",")
 bad = sorted(name for name in sys.modules if any(name == root or name.startswith(root + ".") for root in roots))
 sys.exit(repr(bad) if bad else 0)
@@ -269,14 +284,14 @@ def test_the_rules_and_tables_import_no_toolkit_and_no_engine():
 
 
 def test_the_run_model_and_its_readings_import_no_toolkit_and_no_engine():
-    """The run's model, the table of the engine's lines it reads, the words a stop and a close ask, the words of a
-    failure, and the date and number words load neither the toolkit, nor the engine, nor its settings: the window's
-    thread reads a run's lines through them while the run holds the engine, and they are tested with no window.
-    Every import statement of each module is read, wherever it stands, with every statement of each module of this
-    repository it imports; then a fresh interpreter imports every module those statements name, builds a training's
-    model and models of runs of other kinds, feeds them their lines, rows, solver counts and clock, and reads every
-    read-out at each step, the questions of a stop and a close among them, the words of the run's failure, and the
-    question of keeping a training a stop kept."""
+    """The run's model, the table of the engine's lines it reads, the words a stop and a close ask, the words and the
+    rules of a failure, and the date and number words load neither the toolkit, nor the engine, nor its settings:
+    the window's thread reads a run's lines through them while the run holds the engine, and they are tested with no
+    window. Every import statement of each module is read, wherever it stands, with every statement of each module
+    of this repository it imports; then a fresh interpreter imports every module those statements name, builds a
+    training's model and models of runs of other kinds, feeds them their lines, rows, solver counts and clock, and
+    reads every read-out at each step, the questions of a stop and a close among them, the words of the run's
+    failure and of its tries, and the question of keeping a training a stop kept; and the rules of the tries."""
     modules = ("core.gui.texts", "core.gui.run.readings", "core.gui.run.model", "core.gui.run.questions",
                "core.gui.run.retry")
     for module in modules:

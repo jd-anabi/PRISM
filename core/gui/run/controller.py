@@ -15,6 +15,14 @@ was lost, and quotes the error's message, its kind and traceback shown when aske
 is read for the batches it holds once the run's worker has ended, never while it runs. A run that only loads a
 record has no page of its own: its failure is told as a failure at a click is.
 
+After the graphics card ran out of memory, a training or a narrowing round is tried again (``core/gui/run/retry.py``
+says when): the run waits, Retrying, for a pause read on the run's clock, then its own call goes again in a new
+worker with a new token, in the same text and history files, the set continued or the kept training resumed;
+"Stop trying" (``stop_trying``) ends the tries, and the run ends failed. The page of a training that failed or was
+stopped offers "Continue from batch N" (``continue_run``) or "Resume the training" (``resume_training``): its own
+call again, as the page's next run. Its call is kept for that, until the page starts its next run or goes; every
+other run lets go of its call at its end.
+
 A refusal the stage makes before anything is spent is no run: the solver has taken no step since the start, no
 stage after the run's first has begun, and the store holds no record of a kind the run writes made since the start.
 Its two files are removed, the controller is idle again with nothing to acknowledge, and the page shows the refusal
@@ -40,7 +48,7 @@ import os
 import statistics
 import threading
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThreadPool, QTimer, Signal
@@ -51,7 +59,7 @@ from ..streams import CancelToken
 from ..worker import Worker
 from . import history, questions, retry
 from .model import FIT_PACE_RECORDS, IDLE, RunModel, RunSpec, RunStatus, moved
-from .textfile import FSYNC_EVERY_S, RunTextFile
+from .textfile import FSYNC_EVERY_S, SEPARATOR_TEXT, RunTextFile
 
 #: How often, in milliseconds, the controller looks at a live run: the model's silence, the solver's count, the
 #: text file's request to the disk.
@@ -176,6 +184,17 @@ class _Run:
         self.failure = None                        # (exception, traceback, cancel noted) of a failed run
         self.kept_fit = None
         self.continue_from: int | None = None      # the batches its unfinished simulation set holds, read at its end
+        self.keywords: dict = {}                   # its start's own keywords, for each try and a repeat of its call
+        self.tried = 0                             # the tries made since it last kept more
+        self.last_kept: tuple[int, int] | None = None   # (batches, epochs) kept at its last failure
+        self.attempts: list[dict] = []             # each try that failed, as its history keeps it
+        self.attempt_started: datetime | None = None     # when the try running began; None: the run's first
+        self.attempt_before: tuple[int, int] | None = None   # (batches, epochs) kept when it began
+        self.attempt_open = True                   # a try is running, or ended with the run: not yet in ``attempts``
+        self.try_at: datetime | None = None        # when its next try begins, while it waits for it
+        self.reopen = False                        # only reopening PRISM can help the failure it ended with
+        self.failure_kind: str | None = None       # "out of memory", "device" or "other"
+        self.repeats: str | None = None            # "continue" or "resume": the offer of a page this run repeats
         self.stop_requested = False
         self.closing = False                       # the window closes once the run has ended
         self.ended: datetime | None = None
@@ -216,6 +235,9 @@ class RunController(QObject):
         self._folder: Path | None = None           # None: the folder of runs beside the settings file
         self._timer: QTimer | None = None          # made at the first run: nothing ticks before it
         self._spent_worker = None                  # the last run's worker, kept until the next run ends
+        # The ended runs whose page offers to continue or resume them, by id, each with its own call kept: until its
+        # page starts its next run, or goes.
+        self._offers: dict[str, _Run] = {}
 
     # ── what the shell and the pages read ──
     @property
@@ -268,7 +290,7 @@ class RunController(QObject):
             return False
         from core.artifacts import default_store
         from core.progress import SOLVER
-        from ..panels.base_panel import BasePanel, _png_fig_sink
+        from ..panels.base_panel import BasePanel
         from ..plot_watcher import NewPngWatcher
         clock = self._clock or _local_now
         gib, limit_text = _memory_limit()
@@ -277,7 +299,13 @@ class RunController(QObject):
         store = default_store()
         folder = self._folder if self._folder is not None else history.runs_folder()
         run = _Run(spec, host, store, folder)
+        run.keywords = {"on_result": on_result, "provide_fig_sink": provide_fig_sink,
+                        "provide_stream": provide_stream, "on_chunk": on_chunk}
         run.solver_at_start, run.real_start = SOLVER.steps, datetime.now(timezone.utc)
+        # The page's next run: what its last run offered goes, with that run's call; so does the offer of a page that
+        # has gone.
+        self._offers = {key: offered for key, offered in self._offers.items()
+                        if offered.host is not host and _alive(offered.host)}
         expected = _expected(store, spec.facts) if "model" in spec.facts else None
         word = spec.word
         model = RunModel(spec, clock=clock, expected=expected,
@@ -316,32 +344,8 @@ class RunController(QObject):
             self._timer.start()
             self.status_changed.emit(self._status)
 
-            token, run.sink = CancelToken(), _Text(run.text)
-            worker = Worker(fn, *args, cancel=token, run_text=run.sink, **kwargs)
-            # Kept until the run has ended and its signals have been heard, and never deleted by the pool: a worker
-            # the pool deleted as its run returned would take its still-queued signals with it.
-            worker.setAutoDelete(False)
-            signals = worker.signals
-            if provide_fig_sink:
-                worker.kwargs["fig_sink"] = _png_fig_sink(signals.figure)
-            if provide_stream:
-                # A long-lived streaming run hands each chunk to ``emit_chunk`` and polls ``should_stop`` to unwind.
-                worker.kwargs["emit_chunk"] = signals.chunk.emit
-                worker.kwargs["should_stop"] = token.requested.is_set
-                if on_chunk is not None:
-                    signals.chunk.connect(on_chunk)
+            worker, token = self._worker(run, kwargs)
             stack = getattr(host, "figure_stack", None)
-            if stack is not None:
-                signals.figure.connect(stack.add_figure)
-            signals.log.connect(self._on_line)
-            signals.log_batch.connect(self._on_lines)
-            signals.rows.connect(self._on_rows)
-            if on_result is not None:
-                signals.result.connect(on_result)
-            signals.result.connect(self._on_result)
-            signals.error.connect(self._on_error)
-            signals.cancelled.connect(self._on_cancelled)
-            signals.finished.connect(self._on_finished)
             # One watcher for each folder: a watcher reads one folder and not the folders under it, and a sweep
             # study writes two records. The controller holds them, so a page deleted during the run takes none
             # with it.
@@ -358,6 +362,40 @@ class RunController(QObject):
         run.worker, run.token = worker, token
         QThreadPool.globalInstance().start(worker)
         return True
+
+    def _worker(self, run: _Run, kwargs: dict):
+        """A worker for the run's own call, its keywords ``kwargs``, with a new token: the run's text file its line
+        sink; its figures, its stream and its result handed where the run's start said; every signal it says heard
+        here. Returns the worker and its token."""
+        from ..panels.base_panel import _png_fig_sink
+        keywords = run.keywords
+        token, run.sink = CancelToken(), _Text(run.text)
+        worker = Worker(run.spec.fn, *run.spec.args, cancel=token, run_text=run.sink, **kwargs)
+        # Kept until the run has ended and its signals have been heard, and never deleted by the pool: a worker
+        # the pool deleted as its run returned would take its still-queued signals with it.
+        worker.setAutoDelete(False)
+        signals = worker.signals
+        if keywords.get("provide_fig_sink"):
+            worker.kwargs["fig_sink"] = _png_fig_sink(signals.figure)
+        if keywords.get("provide_stream"):
+            # A long-lived streaming run hands each chunk to ``emit_chunk`` and polls ``should_stop`` to unwind.
+            worker.kwargs["emit_chunk"] = signals.chunk.emit
+            worker.kwargs["should_stop"] = token.requested.is_set
+            if keywords.get("on_chunk") is not None:
+                signals.chunk.connect(keywords["on_chunk"])
+        stack = getattr(run.host, "figure_stack", None) if _alive(run.host) else None
+        if stack is not None:
+            signals.figure.connect(stack.add_figure)
+        signals.log.connect(self._on_line)
+        signals.log_batch.connect(self._on_lines)
+        signals.rows.connect(self._on_rows)
+        if keywords.get("on_result") is not None:
+            signals.result.connect(keywords["on_result"])
+        signals.result.connect(self._on_result)
+        signals.error.connect(self._on_error)
+        signals.cancelled.connect(self._on_cancelled)
+        signals.finished.connect(self._on_finished)
+        return worker, token
 
     def _take_back(self, run: _Run) -> None:
         """A start that raised before its worker was queued, taken back: its watchers let go, the timer stopped
@@ -386,8 +424,14 @@ class RunController(QObject):
         saved and the run has ended, and a stop asked for without it comes too late and says so on the run's page. A
         stop asked of a run that has ended does nothing and says so on its page; nothing at all before the process's
         first run. Safe from any thread: the run's token is set at once, and the run's state, its history and its page
-        follow on the window's thread (at once when asked there)."""
+        follow on the window's thread (at once when asked there). Asked while the run waits to be tried again, it ends
+        the tries, as "Stop trying" does."""
         run = self._run
+        if run is not None and run.try_at is not None and self.is_live():
+            run.closing = run.closing or closing
+            run.stop_requested = True
+            self._stopping.emit()
+            return
         token = None if run is None else run.token
         if token is None or not self.is_live():
             if run is not None and run.ended is not None:
@@ -406,13 +450,35 @@ class RunController(QObject):
 
     def _stop_heard(self) -> None:
         """A stop or a close asked for, on the window's thread: the model is told of a stop, and the run's state
-        worked out again."""
+        worked out again. For a run that waits to be tried again, its tries end at the event loop's next turn, after
+        whoever asked has seen the stop asked for (the window's close waits for the end from there)."""
         run = self._run
-        if run is not None and (run.stop_requested or run.closing) and self.is_live():
-            if run.stop_requested:
-                self._model.stopping(True)
-            self._refresh()
-            self._draw()
+        if run is None or not (run.stop_requested or run.closing) or not self.is_live():
+            return
+        if run.try_at is not None:
+            QTimer.singleShot(0, self, self._tries_end)
+        elif run.stop_requested:
+            self._model.stopping(True)
+        self._refresh()
+        self._draw()
+
+    def stop_trying(self) -> None:
+        """"Stop trying": the tries of a run that waits to be tried again end, and the run ends failed, as its last
+        try failed. Nothing for any other run."""
+        run = self._run
+        if run is not None and run.try_at is not None and self.is_live():
+            self.request_stop()
+
+    def _tries_end(self) -> None:
+        """The tries asked to end, on the window's thread: the run ends failed, said last in its text."""
+        run = self._run
+        if run is None or run.try_at is None or not self.is_live():
+            return
+        run.try_at, run.outcome = None, "failed"
+        if run.text is not None:
+            run.text.line(retry.STOPPED_TRYING_TEXT, "window")
+        self.lines.emit([(retry.STOPPED_TRYING_TEXT, "window")])
+        self._end(run, False)
 
     def _too_late(self) -> None:
         """A stop asked of a run that has ended, on the window's thread: its page says so."""
@@ -483,12 +549,53 @@ class RunController(QObject):
         try:
             store.get("fit", kept)
         except StoreError:
+            self._gone(run)
             return True, questions.GONE_TEXT
         try:
             store.delete("fit", kept)
         except Refusal as refused:
             return False, refused.message
+        self._gone(run)
         return True, questions.DISCARDED_TEXT
+
+    def _gone(self, run: str | None) -> None:
+        """The training the run ``run`` kept is gone: its page offers to resume it no more, and the run's call goes
+        with the offer when its page offered nothing else."""
+        offered = self._offers.get(run)
+        if offered is not None and offered.continue_from is None:
+            del self._offers[run]
+
+    def continue_run(self, run: str) -> bool:
+        """"Continue from batch N" on the page of the training ``run``, which failed or was stopped with batches in
+        its unfinished simulation set: its own call again, as its page's next run, the policy that must continue
+        (``resume="require"``) the one new argument; the batch it continues from is the set's own to say. False, and
+        nothing started, while a run is live, and for a run no page offers to continue."""
+        offered = self._offers.get(run)
+        if offered is None or offered.continue_from is None:
+            return False
+        return self._repeat(offered, retry.continued_call(offered.spec), "continue")
+
+    def resume_training(self, run: str) -> bool:
+        """"Resume the training" on the page of the training ``run``, which was stopped and kept its training, or
+        failed during its fit or while its posterior was saved: its own call again, as its page's next run, the kept
+        training named (``resume_fit``) the one new argument. False, and nothing started, while a run is live, and for
+        a run no page offers to resume."""
+        offered = self._offers.get(run)
+        if offered is None or offered.kept_fit is None:
+            return False
+        return self._repeat(offered, retry.resumed_call(offered.spec, offered.kept_fit.id), "resume")
+
+    def _repeat(self, offered: _Run, kwargs: dict, how: str) -> bool:
+        """The call of the ended run ``offered`` started again from its page, with ``kwargs``, the keywords of its
+        start as they were: a new run, whose page says, should the stage refuse it before anything is spent, why."""
+        if self.is_live() or not _alive(offered.host):
+            return False
+        spec, keywords = offered.spec, offered.keywords
+        started = self.dispatch(spec.fn, *spec.args, spec=replace(spec, fn=None, args=(), kwargs={}),
+                                host=offered.host, **keywords, **kwargs)
+        if started:
+            self._run.repeats = how
+        return started
 
     def acknowledge(self, run: str) -> None:
         """Someone has seen how the run ``run`` ended: its history file says so, and when it is the run the
@@ -521,10 +628,18 @@ class RunController(QObject):
     def tick(self) -> None:
         """What the controller's timer does each second while a run is live: the solver's count and the time handed
         to the model, the run's status worked out again, and, at most every ``FSYNC_EVERY_S`` seconds, the run's
-        text file asked to reach the disk, on a thread of its own: the disk's time is not the window's."""
+        text file asked to reach the disk, on a thread of its own: the disk's time is not the window's. While the run
+        waits to be tried again, nothing computes: its page counts down to the next try, which begins at the first
+        look its pause has run out by, read on the run's clock."""
         from core.progress import SOLVER
         run = self._run
         if run is None or not self.is_live():
+            return
+        if run.try_at is not None:
+            if (self._clock or _local_now)() >= run.try_at:
+                self._begin_try(run)
+            else:
+                self._draw()
             return
         self._model.solver(SOLVER.steps)
         self._model.tick()
@@ -567,9 +682,12 @@ class RunController(QObject):
             view.take_lines(batch)
 
     def _draw(self) -> None:
-        """The run's page drawn again from the run's model, as the run's status now says."""
+        """The run's page drawn again from the run's model, as the run's status now says; while the run waits to be
+        tried again, with the sentence that says what failed and when the next try begins."""
         view = None if self._run is None else self._run.view
         if _alive(view):
+            if self._status.state == "retrying":
+                view.show_retrying(retry.failure_words(self._status, self._model, None)[0])
             view.show_status(self._status, self._model)
 
     def _on_result(self, _payload) -> None:
@@ -579,28 +697,121 @@ class RunController(QObject):
     def _on_error(self, exc, tb: str, cancel_noted: bool = False, kept_fit=None) -> None:
         run = self._run
         if run is not None:
-            run.outcome, run.failure, run.kept_fit = "failed", (exc, tb, cancel_noted), kept_fit
+            run.outcome, run.failure = "failed", (exc, tb, cancel_noted)
+            run.kept_fit = run.kept_fit if kept_fit is None else kept_fit      # a try that names none keeps the last
 
     def _on_cancelled(self, kept_fit=None) -> None:
         run = self._run
         if run is not None:
-            run.outcome, run.kept_fit = "stopped", kept_fit
+            run.outcome = "stopped"
+            run.kept_fit = run.kept_fit if kept_fit is None else kept_fit
 
     def _on_finished(self) -> None:
-        """The run's end, in this order: how it ended said on ``lines``, after every line its worker said before
-        it; its watchers' last look; its state (ended, or idle for a run that leaves nothing to acknowledge), with
-        the batches a training's unfinished simulation set holds, read from the set now that the worker has ended;
-        the history's end written and the text file closed, or both removed for a refusal made before anything was
-        spent; every panel unlocked; the payload let go; the status published; then ``run_ended``; then the run's
-        page drawn ended, a failure as its page's state, and its host's column arranged, so that a page that cannot
-        be drawn holds up nothing of the run's own end; then the page's own word on a refusal made before anything
-        was spent, or on the failure of a run that only loads a record, which has no page of its own."""
-        from ..panels.base_panel import BasePanel
-        run, model = self._run, self._model
+        """The worker's end: how it ended said on ``lines``, after every line it said before it; then, for a
+        training that failed or was stopped, the batches its simulation set holds, read from the set now that the
+        worker has ended; then, for a failure the window tries again, the run's pause (``_pause``), else the run's
+        end (``_end``)."""
+        run = self._run
         if run is None or run.worker is None:
             return
         if run.sink.ended is not None:
             self.lines.emit([run.sink.ended])
+        failure = run.failure
+        run.outcome = run.outcome or "failed"
+        refused_early = failure is not None and isinstance(failure[0], Refusal) and not self._spent(run)
+        if failure is not None:
+            is_oom = _out_of_memory()
+            run.failure_kind = ("out of memory" if is_oom(failure[0]) else "device"
+                                if retry.is_device_failure(failure[0]) else "other")
+        if run.spec.simulation_set and run.outcome in ("failed", "stopped") and not refused_early:
+            batches, complete = self._set_holds(run)
+            run.continue_from = batches if batches and not complete else None
+            if run.outcome == "failed" and self._tried_again(run, batches):
+                return
+        self._end(run, refused_early)
+
+    def _tried_again(self, run: _Run, batches: int) -> bool:
+        """After a training's failure, with ``batches`` in its simulation set: whether the window tries it again,
+        and if so the run's pause begun. What the run kept now (the set's batches, the kept training's epochs) is
+        held to what it kept at its last failure: a try that kept more starts the count of tries again. Only
+        reopening PRISM can help a failure as ``retry.only_reopening`` says, a first failure as well as a try's, and
+        the run then ends; a stop asked for before the failure, and any failure not tried again, end it too."""
+        exc = run.failure[0]
+        is_oom = _out_of_memory()
+        kept = (batches, int(getattr(run.kept_fit, "passes", 0) or 0))
+        before, run.last_kept = run.last_kept, kept
+        if before is not None and retry.gained(before, kept):
+            run.tried = 0
+        if retry.only_reopening(exc, kept_before=before or kept, kept_after=kept, is_oom=is_oom, tried=run.tried):
+            run.reopen = True
+            return False
+        if run.stop_requested or not retry.is_tried_again(exc, run.spec, is_oom=is_oom):
+            return False
+        self._pause(run, kept)
+        return True
+
+    def _pause(self, run: _Run, kept: tuple[int, int]) -> None:
+        """The run failed and is tried again: the try that failed kept in its history, its worker's payload let go
+        (the run's own call is kept, for its next try), and the run waits, live and Retrying, for the pause the tries
+        made since it last kept more give it, read on the run's clock; nothing computes meanwhile, its panels stay
+        locked, and its text says when it is tried again."""
+        now = (self._clock or _local_now)()
+        exc = run.failure[0]
+        run.attempts.append({"started": run.attempt_started or self._model.started, "ended": now,
+                             "outcome": "failed", "failure": type(exc).__name__,
+                             "batches_before": run.at_start if run.attempt_before is None else run.attempt_before[0],
+                             "batches_after": kept[0],
+                             "epochs_before": None if run.attempt_before is None else run.attempt_before[1],
+                             "epochs_after": kept[1]})
+        run.attempt_open = False
+        worker = run.worker
+        worker.fn, worker.args, worker.kwargs = None, (), {}
+        self._spent_worker, run.worker, run.token, run.outcome = worker, None, None, None
+        run.try_at = now + timedelta(seconds=retry.PAUSES_S[run.tried])
+        self._model.trying(True)
+        self._refresh()
+        said = retry.failure_words(self._status, self._model, exc)[0]
+        if run.text is not None:
+            run.text.line(said, "window")
+        self.lines.emit([(said, "window")])
+        self._draw()
+
+    def _begin_try(self, run: _Run) -> None:
+        """The pause over: the run's next try, its own call in a new worker with a new token, in the same text and
+        history files, the text's line that opens it first: the simulation set continued once it holds a batch, or,
+        when the run kept a training, that training resumed, as its page's Resume would, and no other argument
+        changed."""
+        run.try_at, run.attempt_open = None, True
+        run.tried += 1
+        run.attempt_started, run.attempt_before = (self._clock or _local_now)(), run.last_kept
+        run.outcome = run.failure = None
+        said = SEPARATOR_TEXT.format(len(run.attempts) + 1)
+        if run.text is not None:
+            run.text.separator(len(run.attempts) + 1)
+        self.lines.emit([(said, "window")])
+        if run.kept_fit is not None:
+            kwargs = retry.resumed_call(run.spec, run.kept_fit.id)
+        elif run.last_kept is not None and run.last_kept[0]:
+            kwargs = retry.continued_call(run.spec)
+        else:
+            kwargs = dict(run.spec.kwargs)
+        run.worker, run.token = self._worker(run, kwargs)
+        self._model.trying(False)
+        self._refresh()
+        self._draw()
+        QThreadPool.globalInstance().start(run.worker)
+
+    def _end(self, run: _Run, refused_early: bool) -> None:
+        """The run's end, in this order: its watchers' last look; its state (ended, or idle for a run that leaves
+        nothing to acknowledge); the history's end written and the text file closed, or both removed for a refusal
+        made before anything was spent; every panel unlocked; the payload let go, and the run's own call with it
+        unless its page offers to continue or resume it; the status published; then ``run_ended``; then the run's
+        page drawn ended, a failure as its page's state with what the page offers, and its host's column arranged,
+        so that a page that cannot be drawn holds up nothing of the run's own end; then the page's own word on a
+        refusal made before anything was spent (on the run's page when the run repeats an offer of it), or on the
+        failure of a run that only loads a record, which has no page of its own."""
+        from ..panels.base_panel import BasePanel
+        model = self._model
         for watcher in run.watchers:
             watcher.stop()                       # one last look: the last figure often lands right at the end
             watcher.deleteLater()
@@ -608,22 +819,19 @@ class RunController(QObject):
         if self._timer is not None:
             self._timer.stop()
         spec, failure = run.spec, run.failure
-        run.outcome = run.outcome or "failed"
-        refused_early = failure is not None and isinstance(failure[0], Refusal) and not self._spent(run)
         model.ended(run.outcome, kept_fit=run.kept_fit)
         run.ended = (self._clock or _local_now)()
-        if spec.simulation_set and run.outcome == "failed" and not refused_early:
-            batches, complete = self._set_holds(run)
-            run.continue_from = batches if batches and not complete else None
         idle = refused_early or spec.loads_only or not spec.keeps_files
         last = RunStatus(state="idle" if idle else "ended", word=spec.word, name=spec.name,
                          run=None if refused_early else run.id, place=spec.place, loading=spec.loads_only,
                          stage=model.stage, outcome=None if refused_early else run.outcome, started=model.started,
                          ended=run.ended, continue_from=run.continue_from, kept_fit=run.kept_fit,
-                         closing=run.closing, kinds=spec.kinds, records=spec.records)
+                         closing=run.closing, kinds=spec.kinds, records=spec.records, reopen=run.reopen)
         page = None
         if failure is not None and not refused_early and not spec.loads_only:
             page = self._failure_page(run, last, failure)
+        offers = (not refused_early and not idle and spec.simulation_set and run.outcome in ("failed", "stopped")
+                  and not run.reopen and (run.continue_from is not None or run.kept_fit is not None))
         self._status = IDLE if idle else last
         if spec.keeps_files:
             if refused_early:
@@ -634,26 +842,45 @@ class RunController(QObject):
         for panel in list(BasePanel._instances):
             panel.set_controls_enabled(True)
         # The payload goes now: the worker's shell outlives the run (it is kept until the next run ends), and what it
-        # points at -- the configuration, the prior, the posterior, tensors on the card -- must not.
+        # points at -- the configuration, the prior, the posterior, tensors on the card -- must not. The run's own
+        # call goes with it, but for a run whose page offers to continue or resume it: that call is kept until the
+        # page starts its next run, or goes.
         worker = run.worker
-        worker.fn, worker.args, worker.kwargs = None, (), {}
-        spec = replace(spec, fn=None, args=(), kwargs={})
-        run.spec = model.spec = spec
-        self._spent_worker, run.worker, run.token, run.failure = worker, None, None, None
+        if worker is not None:
+            worker.fn, worker.args, worker.kwargs = None, (), {}
+            self._spent_worker = worker
+        if offers:
+            self._offers[run.id] = run
+        else:
+            spec = replace(spec, fn=None, args=(), kwargs={})
+            run.spec = model.spec = spec
+            run.keywords = {}
+        run.worker, run.token, run.failure = None, None, None
         self.status_changed.emit(self._status)
         self.run_ended.emit(last)
         if _alive(run.view):
             if page is not None:
                 run.view.show_failure(*page)
+            run.view.offer(run.continue_from if offers else None, offers and run.kept_fit is not None)
             run.view.show_status(last, model)
         host = run.host
-        if _alive(host) and hasattr(host, "_run_over"):
+        said_on_the_page = refused_early and run.repeats is not None and _alive(run.view)
+        if said_on_the_page:
+            run.view.refused(self._refusal_words(failure[0]))
+        elif _alive(host) and hasattr(host, "_run_over"):
             host._run_over(last)
-        if failure is not None and _alive(host):
+        if failure is not None and _alive(host) and not said_on_the_page:
             if refused_early:
                 host._refusal(failure[0])
             elif spec.loads_only:
                 host._on_error(failure[0], failure[1], failure[2], run.kept_fit)
+
+    @staticmethod
+    def _refusal_words(exc) -> str:
+        """A refusal as a page says it: the stage's sentence, then where to fix it, when the window names a
+        place."""
+        from .. import fields as gui_fields
+        return f"{exc.message} {gui_fields.fix_sentence(exc.field)}".rstrip()
 
     def _failure_page(self, run: _Run, last: RunStatus, failure) -> tuple:
         """What the page of a run that failed shows: its sentence, then, as ``show_failure`` takes them, the error's
@@ -714,16 +941,20 @@ class RunController(QObject):
     # ── the run's state, and its history ──
     def _live_status(self) -> RunStatus:
         run, model, spec = self._run, self._model, self._run.spec
-        state = model.state if model.state in ("starting", "running", "stopping") else "running"
+        waits = run.try_at is not None
+        state = ("retrying" if waits else model.state if model.state in ("starting", "running", "stopping")
+                 else "running")
         stage = model.stage
         words = next((word.word for word in model.stage_line() if word.name == stage), "")
         return RunStatus(state=state, word=spec.word, name=spec.name, run=run.id, place=spec.place,
                          loading=spec.loads_only,
                          state_word=("loading" if spec.loads_only else "stopping" if state == "stopping"
-                                     else "running"),
+                                     else "trying again" if waits else "running"),
                          stage=stage, stage_words=words, needs_you=model.needs_you(), started=model.started,
-                         stop_requested=run.stop_requested, closing=run.closing, kinds=spec.kinds,
-                         records=spec.records)
+                         continue_from=run.continue_from if waits else None,
+                         kept_fit=run.kept_fit if waits else None, stop_requested=run.stop_requested,
+                         closing=run.closing, kinds=spec.kinds, records=spec.records,
+                         trying=run.tried + 1 if waits else 0, try_at=run.try_at)
 
     def _refresh(self) -> None:
         """The run's state worked out again after the model heard something: the history written at a change of
@@ -791,7 +1022,7 @@ class RunController(QObject):
             best = model.best_epoch()
             loss = next((record.validation_loss for record in epochs if record.epoch == best), None)
             paces = [record.seconds for record in epochs[-FIT_PACE_RECORDS:]]
-            stopped = note is not None and run.outcome in ("stopped", "failed")
+            stopped = note is not None and (run.outcome in ("stopped", "failed") or run.try_at is not None)
             fit = {"epochs": note.passes if stopped else (epochs[-1].epoch if epochs else None),
                    "best_epoch": best,
                    "best_validation_loss": loss if loss is not None and math.isfinite(loss) else None,
@@ -801,23 +1032,28 @@ class RunController(QObject):
                    "resumed": getattr(note, "resumed", None), "processes": getattr(note, "processes", None),
                    "wall_seconds": None, "save_error": None}
         failure = None
-        if run.failure is not None:
+        if run.failure is not None and run.outcome == "failed":
             exc = run.failure[0]
             try:
                 message = str(exc)
             except Exception:                    # noqa: BLE001 -- the failure is kept by its kind alone
                 message = ""
-            failure = {"type": type(exc).__name__, "message": message}
+            failure = {"type": type(exc).__name__, "message": message, "kind": run.failure_kind,
+                       "reopen": run.reopen}
         done = model.batches_done()
+        tries = list(run.attempts)               # each try that failed and was tried again
+        if run.attempt_open:                     # the try running, or the one the run ended with
+            before = run.attempt_before
+            tries.append({"started": run.attempt_started or model.started, "ended": run.ended,
+                          "outcome": run.outcome, "failure": None if failure is None else failure["type"],
+                          "batches_before": run.at_start if before is None else before[0], "batches_after": done,
+                          "epochs_before": None if before is None else before[1],
+                          "epochs_after": epochs[-1].epoch if epochs else None})
         return {"id": run.id, "word": spec.word, "name": spec.name,
                 "place": None if spec.place is None else list(spec.place),
                 "records_root": str(getattr(run.store, "root", "")), "started": model.started, "ended": run.ended,
                 "last_heard": None, "outcome": run.outcome or "running", "stage": model.stage,
-                "acknowledged": run.acknowledged,
-                "tries": [{"started": model.started, "ended": run.ended, "outcome": run.outcome,
-                           "failure": None if failure is None else failure["type"], "batches_before": run.at_start,
-                           "batches_after": done, "epochs_before": None,
-                           "epochs_after": epochs[-1].epoch if epochs else None}],
+                "acknowledged": run.acknowledged, "tries": tries,
                 "plan": None, "settings": None, "memory_limit": spec.facts.get("memory_limit"),
                 "simulation_set": None if folder is None else {
                     "folder": folder, "batches": budget.get("batches"), "at_start": run.at_start, "at_end": done,

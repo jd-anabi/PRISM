@@ -1707,8 +1707,9 @@ def test_a_continued_runs_failed_simulations_count_its_earlier_runs(tmp_path):
 
 def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
     """Every call that starts a run under the window is a page's own ``self.dispatch`` (the base panel's one
-    forward to the controller aside), each in a class whose ``run_spec`` answers its function (a call outside
-    every class answers to none), read off the files' syntax trees; and the spec of each kind of run, read off
+    forward to the controller, and the controller's own start of a run's call again from its page's offer, with the
+    spec that page made, aside), each in a class whose ``run_spec`` answers its function (a call outside every
+    class answers to none), read off the files' syntax trees; and the spec of each kind of run, read off
     its own page's ``run_spec`` with arguments of the call's shape, holds the run's word, its place, its stop
     button, the kinds of record it writes, whether it only loads, whether it keeps files, whether it is tried
     again and whether its stop asks, with a training's stages, patience, epoch limit and facts. The stand-in
@@ -1743,7 +1744,8 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         forwards += [(path.relative_to(REPO).as_posix(), None, ast.unparse(call.args[0]))
                      for key, call in calls.items() if key not in in_a_class]     # outside every class: no run_spec
     assert found == _DISPATCHES, sorted(found ^ _DISPATCHES)
-    assert forwards == [("core/gui/panels/base_panel.py", "BasePanel", "fn")], forwards
+    assert forwards == [("core/gui/panels/base_panel.py", "BasePanel", "fn"),
+                        ("core/gui/run/controller.py", "RunController", "spec.fn")], forwards
 
     window = build_window()
     inference, temperature = window.part("inference"), window.part("temperature")

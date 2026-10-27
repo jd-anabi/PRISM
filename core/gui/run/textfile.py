@@ -37,6 +37,8 @@ STAMP_WIDTH = 20
 
 #: The window's line, at warning, when the file cannot be written; filled with the error's kind and message.
 BROKEN_TEXT = "The run's text file could not be written ({}); the full text is still on the page."
+#: The window's line that opens a try of the run after its first, filled with the try's number.
+SEPARATOR_TEXT = "Try {} begins here."
 
 
 class RunTextFile:
@@ -72,7 +74,7 @@ class RunTextFile:
     def separator(self, attempt: int) -> None:
         """The line that opens a try of the run after its first."""
         with self._lock:
-            self._write(f"Try {attempt} begins here.", "window")
+            self._write(SEPARATOR_TEXT.format(attempt), "window")
 
     def outcome(self, text: str, level: str, detail: str = "") -> None:
         """How the run ended, which the worker writes before it says anything to the window: ``text`` at

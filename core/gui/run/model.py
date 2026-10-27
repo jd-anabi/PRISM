@@ -109,7 +109,9 @@ class RunSpec:
 @dataclass(frozen=True)
 class RunStatus:
     """What the shell reads of the run: its state and the words for it, where it is, how it ended and what it
-    kept. One of ``STATES``; an ended run's ``outcome`` is one of ``OUTCOMES``."""
+    kept. One of ``STATES``; an ended run's ``outcome`` is one of ``OUTCOMES``. While the run waits to be tried again
+    ("retrying"), ``trying`` is which of the tries in a row comes next, from 1, and ``try_at`` when it begins;
+    ``reopen`` says that only closing PRISM and opening it again can help the failure it ended with."""
     state: str = "idle"
     word: str = ""
     name: str = ""
@@ -132,6 +134,9 @@ class RunStatus:
     closing: bool = False
     kinds: tuple[str, ...] = ()
     records: tuple[str, ...] = ()
+    trying: int = 0
+    try_at: datetime | None = None
+    reopen: bool = False
 
     @property
     def live(self) -> bool:
@@ -364,6 +369,16 @@ class RunModel:
         if self._state in ("starting", "running", "stopping"):
             self._state = "stopping" if on else "running"
 
+    def trying(self, on: bool) -> None:
+        """The run failed and waits to be tried again (True), or its next try has begun (False). While it waits
+        nothing computes, so no silence is said; its next try is heard from the moment it begins."""
+        if on and self._state in ("starting", "running", "stopping"):
+            self._state = "retrying"
+            self._silence, self._silence_needs_you = None, False
+        elif not on and self._state == "retrying":
+            self._state = "running"
+            self._heard = self._clock()
+
     def ended(self, outcome: str, *, kept_fit=None) -> None:
         """The run has ended: one of ``OUTCOMES``, with the kept training's note when the run kept one. A finished
         run's stages are all done but those passed over; after any end nothing begins or moves a stage."""
@@ -378,8 +393,8 @@ class RunModel:
     # ── read-outs ──
     @property
     def state(self) -> str:
-        """"starting" until the run's first line or row, then "running", "stopping" while a stop is asked for, and
-        "ended"."""
+        """"starting" until the run's first line or row, then "running", "stopping" while a stop is asked for,
+        "retrying" while it waits to be tried again, and "ended"."""
         return self._state
 
     @property
@@ -652,6 +667,11 @@ class RunModel:
             if name == "fit_resuming":
                 since = _SINCE.search(values["progress"])
                 self._resumed_fit = (values["passes"], None if since is None else int(since.group(1)))
+                # The kept training goes on from its kept epoch: an epoch an earlier try of this run recorded past
+                # it, whose save did not hold, is no epoch of the training, and its record goes from the curve and
+                # from the count of the best.
+                self._records = {epoch: record for epoch, record in self._records.items()
+                                 if epoch <= values["passes"]}
         elif name in ("fit_stopped_kept", "fit_stopped_not_saved_here"):
             self._saved, self._saving_shown = values["passes"], True
         elif name == "fit_save_failed":

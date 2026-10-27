@@ -64,12 +64,15 @@ class StandIn:
     says no line of its own when a stop is asked for: the stop is taken at the next line its test has it say, or,
     once the end of the test has asked and none is said within ``HELD_STOP_S``, at its own line. A stop is asked for
     when the controller's status says so, and also when the run's own token is set with none asked through the
-    controller, as the end of a test sets it for a training saving its posterior."""
+    controller, as the end of a test sets it for a training saving its posterior. It may be called again, as a try of
+    a run or the repeat of its call is: ``calls`` holds the arguments of each call, in order, and each call ends at
+    the end its test gives it after the call began."""
 
     def __init__(self, *, word: str = "Training", lines=(), takes_stops: bool = True):
         self.word = word
         self.takes_stops = takes_stops
         self.kept_fit = None
+        self.calls: list[tuple[tuple, dict]] = []
         self.started = threading.Event()
         self.stopped = threading.Event()
         self.stopped_at: str | None = None
@@ -121,6 +124,9 @@ class StandIn:
         from core.gui.run.controller import controller
         from core.gui.streams import WorkerCancelled
         from tests import _built
+        with self._lock:
+            self.calls.append((args, dict(kwargs)))
+        self._said_stop = False
         self.started.set()
         token = getattr(getattr(controller(), "_run", None), "token", None)       # this run's own
         log, saying, framed, ending_at = logging.getLogger("core"), None, False, None
@@ -130,6 +136,8 @@ class StandIn:
                 with self._lock:
                     items, end = list(self._queue), self._end
                     self._queue.clear()
+                    if end is not None:
+                        self._end = None                 # this call's end: a call after it waits for its own
                 for item in items:
                     saying = item[1] if item[0] == "say" else None
                     framed = self._do(item, log, fig_sink) or framed

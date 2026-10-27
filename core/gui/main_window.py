@@ -244,6 +244,7 @@ class MainWindow(QMainWindow):
         # the stop is taken, which the foot says; "" otherwise.
         self._run_stopping = self._stopping_line = ""
         self._close_at_end = False               # the close was asked for: the window closes once the run has ended
+        self._ends_tries = False                 # ... asked while the run waited to be tried again: it ended the tries
         self._build("home")
 
         # Every way to move is go_to: a row of the rail, Home's buttons and rows, the run's foot. Each handler
@@ -705,16 +706,19 @@ class MainWindow(QMainWindow):
         figure window the window's pages opened shows its figure's picture. When the window's close waits for the
         run, a run that ends stopped or finished closes the window, once all of the end has been said
         (``_close_at_the_end``); one that ends otherwise (a failure, a refusal) leaves the window open, its close
-        withdrawn, and its page and its box say how it ended. A close withdrawn with its stop waits no more.
+        withdrawn, and its page and its box say how it ended, but for a close that ended the tries of a run that
+        waited to be tried again, which closes the window at the failed end it leaves, the failure being the one the
+        page said before the close was asked. A close withdrawn with its stop waits no more.
         """
         if self._close_at_end:
             if not status.live:
                 self._close_at_end = False
                 model = controller().model
-                if model is not None and model.outcome in questions.CLOSES_AT:
+                if model is not None and (model.outcome in questions.CLOSES_AT or self._ends_tries):
                     QTimer.singleShot(0, self, self._close_at_the_end)
             elif not status.closing:
                 self._close_at_end = False
+            self._ends_tries = self._ends_tries and self._close_at_end
         stopping = f"{status.word} {status.name}".strip() if status.live and status.state == "stopping" else ""
         if status.live == self._run_live and stopping == self._run_stopping:
             return
@@ -813,9 +817,10 @@ class MainWindow(QMainWindow):
         for a run already stopping, keeps the window waiting too: the window goes to the run's page, which says that
         PRISM closes when the run has stopped and offers to withdraw the stop and the close, and the run's end
         closes it. A training saving its posterior is not stopped: "Close when it is saved" asks no stop, and the window
-        goes to the run's page and waits for the save, the page offering to keep PRISM open. An answer given after the
-        run ended is too late: nothing is stopped, and the window stays. A close while a close already waits asks
-        nothing again: the window goes to the run's page, where the close can be withdrawn.
+        goes to the run's page and waits for the save, the page offering to keep PRISM open. "Stop the run and close"
+        while the run waits to be tried again ends its tries, and the window closes at the failed end they leave. An
+        answer given after the run ended is too late: nothing is stopped, and the window stays. A close while a close
+        already waits asks nothing again: the window goes to the run's page, where the close can be withdrawn.
 
         A close accepted, with no run live, writes the window's own settings, closes every other window of the
         program (the figure windows the pages opened among them), so that the program's event loop ends, and lets
@@ -830,8 +835,10 @@ class MainWindow(QMainWindow):
             question = questions.close_question(held.status, held.model)
             if ask(self, question.title, question.sentence, question.safe, question.other,
                    loses_work=question.loses_work, beneath=question.beneath or None):
+                tries = held.status.state == "retrying"              # read at the answer: a try may have begun
                 held.request_stop(closing=True)
                 self._close_at_end = held.is_live() and held.status.closing
+                self._ends_tries = self._close_at_end and tries
                 if self._close_at_end:
                     self.go_to_run()
             return
