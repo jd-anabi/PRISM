@@ -459,18 +459,20 @@ def test_a_stop_during_the_simulation_keeps_no_training_and_says_so(tmp_path, mo
     _ended(app, held)
     assert (view.mode, view.sentence.text(), view.notice.text(), view.notice.isVisibleTo(view),
             view.keep_block.isVisibleTo(view)) == (
-        "ended", "Training retrain_3 was stopped.", "No training was kept: the fit had not begun.", True, False)
+        "ended", "Training was stopped on Thu 8 Oct, 19:02, during simulation. No simulation was saved.",
+        "No training was kept: the fit had not begun.", True, False)
     assert held.status.kept_fit is None
 
 
 def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_path, monkeypatch, store):
     """Once a stop in the fit has landed with a note of the training it kept, the run's page itself -- never a box --
-    asks whether to keep it, from the note's numbers: "Keep" first, then "Discard", drawn as losing work. Unanswered
-    the training stays, and the question stays with the page. Discard deletes the kept training, says so, and asks
-    no more; Keep deletes nothing and asks no more; a training the records no longer hold is said to be gone already,
-    and asked about no more. A training kept by a run before the last is deleted by its id in that run's history,
-    from the records that history names, whatever records are in use now; when that history cannot be read, nothing
-    is deleted, the page says so, and the question stays."""
+    asks whether to keep it, from the note's numbers: "Keep" first, then "Discard", drawn as losing work. Unanswered the
+    training stays, and the question stays with the page. Discard deletes the kept training, says so, and asks no more;
+    the run's end then says, on its page and in its history, that the training was discarded; Keep deletes nothing and
+    asks no more; a training the records no longer hold is said to be gone already, and asked about no more. A training
+    kept by a run before the last is deleted by its id in that run's history, from the records that history names,
+    whatever records are in use now; when that history cannot be read, nothing is deleted, the page says so, and the
+    question stays."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.run import history
     app = qt_app()
@@ -503,9 +505,17 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
     view.back_button.click()
     view.how_link.click()
     assert view.keep_block.isVisibleTo(view) and kept() == [first], "an unanswered question lost the training"
+    said = "Training was stopped on Thu 8 Oct, 20:05, during the fit. The 20,480,000 simulations are kept; "
+    assert (view.sentence.text(), held.status.kept) == (
+        said + "the training is kept up to epoch 62, so you can resume it.",
+        "The 20,480,000 simulations are kept; the training is kept up to epoch 62, so you can resume it.")
     view.discard_button.click()
     assert (kept(), view.notice.text(), view.keep_block.isVisibleTo(view)) == (
         [], "The training was discarded.", False)
+    assert (view.sentence.text(), held.status.sentence, history.read(tmp_path / "runs" / f"{run}.json")["fit"][
+        "discarded"]) == (said + "the training was discarded, as you asked.",
+                          said + "the training was discarded, as you asked.", True), (
+        "the end's words or its history still say the discarded training is kept")
     view.back_button.click()
     view.how_link.click()
     assert not view.keep_block.isVisibleTo(view), "the question was asked again"
@@ -536,6 +546,8 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
     assert (sorted(kept()), view.notice.text(), view.keep_block.isVisibleTo(view)) == (
         [second], "The training was discarded.", False), (
         "the training an earlier run kept was not deleted by its history's id, from the records it names")
+    assert history.read(tmp_path / "runs" / f"{run}.json")["fit"]["discarded"] is True, (
+        "an earlier run's history does not say its training was discarded")
 
     fourth = build_fit_record(store, passes=62)
     run = stopped_in_the_fit(_note(fourth))
@@ -1305,14 +1317,14 @@ def test_from_the_moment_windows_asks_no_question_is_shown(tmp_path, caplog):
 
 
 def test_shut_down_anyway_stops_the_run_once_and_cancel_never(tmp_path, monkeypatch, caplog):
-    """"Cancel" stops nothing: the window's log says the end of the session was cancelled, and a close asks its
-    question again. "Shut down anyway" stops the live run as a stop asked by the person does, once however often it
-    is heard, during the wait for the run's end too. From that moment the run's history says the run, and the try it
-    is in, was stopped, when, and that Windows shut down, and its text says the stop was asked for that reason, so
-    both hold it should Windows end PRISM before the run has ended; then the window's thread waits for the run's end,
-    the event loop turning, and returns once the run has ended, stopped, its history and its try then holding the
-    moment it ended. Such a run counts as stopped by the person: Home offers to continue it no more than it offers a
-    stop's."""
+    """"Cancel" stops nothing: the window's log says the end of the session was cancelled, and a close asks its question
+    again. "Shut down anyway" stops the live run as a stop asked by the person does, once however often it is heard,
+    during the wait for the run's end too. From that moment the run's history says the run, and the try it is in, was
+    stopped, when, and that Windows shut down, with the moment the run was last heard, and its text says the stop was
+    asked for that reason, so both hold it should Windows end PRISM before the run has ended; then the window's thread
+    waits for the run's end, the event loop turning, and returns once the run has ended, stopped, its history and its
+    try then holding the moment it ended. Such a run counts as stopped by the person: Home offers to continue it no more
+    than it offers a stop's."""
     from PySide6.QtCore import QTimer
     from core.artifacts import ArtifactStore
     from core.gui.panels.reduction_panel import ReductionPanel
@@ -1343,6 +1355,9 @@ def test_shut_down_anyway_stops_the_run_once_and_cancel_never(tmp_path, monkeypa
     _ended(app, held)
 
     written = _histories_written(monkeypatch, held)
+    heard, noted = [], history.write
+    monkeypatch.setattr(history, "write", lambda folder, record: (
+        heard.append((record["outcome"], record["last_heard"] is not None, held.is_live())), noted(folder, record))[1])
     text, stand_in = RunText(held), StandIn()
     start_run(host, stand_in, spec=_training())
     _to_the_simulation(app, stand_in, text, held)
@@ -1363,6 +1378,9 @@ def test_shut_down_anyway_stops_the_run_once_and_cancel_never(tmp_path, monkeypa
     assert ("stopped", "Windows shut down", heard_at, "stopped", heard_at, True) in written, (
         "the history did not say the run and its try were stopped, when, and why, while the run was still live")
     assert text.texts("window").count("A stop was asked for: Windows shut down.") == 1
+    assert ("stopped", True, True) in heard and (record["last_heard"], heard[-1]) == (
+        None, ("stopped", False, False)), (
+        "while the stop waited the history did not hold when the run was last heard, or the end kept it")
     assert history.continuable(record, store=ArtifactStore(tmp_path / "records"), folder=folder) is None
 
 

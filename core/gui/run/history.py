@@ -23,15 +23,17 @@ A file holds every name of ``FIELDS``, in that order, None where its run has not
 - ``simulation_set``, of ``SET_FIELDS``: the set's folder, its batches in all, at the start and at the end, the
   simulations per batch and the median seconds per batch.
 - ``health``, ``fit``, ``check``, ``result``, ``failure``, ``text``: what the run's page measured, the fit, a
-  check's own result, the records the run wrote, how it failed, and its text file's name.
+  check's own result, the record the run wrote (its kind, its id, its name and the name it was asked to have, which
+  differ when another record took the name while the run was going), how it failed, and its text file's name.
 
 ``fit``, of ``FIT_FIELDS``: the epochs, the best epoch and its validation loss, the median seconds per epoch, what
-ended the fit, the network (hidden features, transforms) and the number of simulations it was fitted on (an epoch's
-pace is matched by these two), and the kept training: its id, the passes it holds, whether it was resumed, the
-processes that trained it, its wall time in seconds and the last save that failed. After a stop or a failure in the
-fit, ``epochs`` is the kept training's passes, never the count of epoch records this run's text holds: the kept
-training counts every pass saved, a resumed training's earlier processes included, while the run's records are this
-run's own.
+ended the fit by itself ("patience" or "limit"), the network (hidden features, transforms) and the number of
+simulations it was fitted on (an epoch's pace is matched by these two), and the kept training: its id, the passes it
+holds, whether it was resumed, the processes that trained it, its wall time in seconds and the last save that
+failed; then the epochs the fit was expected to run (the estimate, None when there was none) and whether the kept
+training was discarded since. After a stop or a failure in the fit, ``epochs`` is the kept training's passes, never
+the count of epoch records this run's text holds: the kept training counts every pass saved, a resumed training's
+earlier processes included, while the run's records are this run's own.
 
 No torch at import: the one reading that needs it (``continuable``'s, of a simulation set's state) imports it when
 it is asked.
@@ -51,7 +53,8 @@ FIELDS = ("id", "word", "name", "place", "records_root", "started", "ended", "la
 SET_FIELDS = ("folder", "batches", "at_start", "at_end", "per_batch", "seconds_per_batch")
 #: What ``fit`` holds.
 FIT_FIELDS = ("epochs", "best_epoch", "best_validation_loss", "seconds_per_epoch", "ended_by", "network",
-              "simulations", "kept_id", "passes", "resumed", "processes", "wall_seconds", "save_error")
+              "simulations", "kept_id", "passes", "resumed", "processes", "wall_seconds", "save_error", "expected",
+              "discarded")
 #: What each entry of ``tries`` holds.
 TRY_FIELDS = ("started", "ended", "outcome", "failure", "batches_before", "batches_after", "epochs_before",
               "epochs_after")

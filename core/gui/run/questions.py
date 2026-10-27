@@ -153,6 +153,12 @@ def keep_question(note) -> tuple[str, str]:
     return KEEP_QUESTION, beneath
 
 
+def what_a_stop_keeps(word: str, name: str) -> str:
+    """What the stop of a run that is no training keeps, as its stop's question says it, its record named where the
+    words name one: the run's end says it after the stop's date."""
+    return _OTHERS.get(word, _ANY)[1].replace("{name}", f"{name} " if name else "")
+
+
 def stopping_line(status, model) -> str:
     """When a stop asked for is taken, as the page, the foot and Home say it while the run stops: the run's own
     sentence while it is stopping."""

@@ -2178,7 +2178,8 @@ def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_an
     with pytest.raises(TypeError):
         start_run(host, StandIn(word="Prior load"), spec=_load(), watch_dir=5)
     assert (host.results.currentWidget() is host.run_view, host.run_view.mode, host.run_view.sentence.text()) == (
-        True, "ended", "Training retrain_3 was stopped."), "a load taken back lost the stopped run's page"
+        True, "ended", "Training was stopped on Thu 8 Oct, 19:02, as it started. Nothing was simulated."), (
+        "a load taken back lost the stopped run's page")
 
 
 @pytest.mark.parametrize("where", ["at its end", "as it is handed the run", "at its first drawing"])
@@ -2480,6 +2481,295 @@ def test_the_reason_against_shutting_down_follows_the_runs_stage(tmp_path, windo
         assert reasons() == given(reason, None), spec.word
 
 
+# ── a run's end, in words ──
+def _ended_record(**changed) -> dict:
+    """A training's history as the window writes it at the training's end: stopped on Sun 11 Oct at 12:31, in its
+    fit, its 20,480,000 simulations kept and its training kept up to epoch 62; ``changed`` sets any field, and a
+    field of ``fit`` or ``simulation_set`` it does not name reads None."""
+    record = {"id": "20261008T190211-training", "word": "Training", "name": "retrain_3",
+              "place": ["inference", "training"], "records_root": "records", "started": _at(8, 19, 2, 11),
+              "ended": _at(11, 12, 31), "last_heard": None, "outcome": "stopped", "stop_reason": None,
+              "stage": "Fitting", "acknowledged": False,
+              "tries": [{"started": _at(8, 19, 2, 11), "ended": _at(11, 12, 31), "outcome": "stopped",
+                         "failure": None, "batches_before": 0, "batches_after": 10_000, "epochs_before": None,
+                         "epochs_after": 62}],
+              "simulation_set": {"folder": _FOLDER, "batches": 10_000, "at_start": 0, "at_end": 10_000,
+                                 "per_batch": 2_048, "seconds_per_batch": 9.7},
+              "fit": {"epochs": 62, "best_epoch": 60, "ended_by": None, "simulations": 20_480_000, "kept_id": "k1",
+                      "passes": 62, "expected": None, "discarded": False},
+              "result": None, "failure": None}
+    for field in ("fit", "simulation_set"):
+        if isinstance(changed.get(field), dict):
+            changed = {**changed, field: {**{name: None for name in record[field]}, **changed[field]}}
+    record.update(changed)
+    return record
+
+
+def _ended_try(ended, outcome, batches) -> list:
+    """A run's one try, begun on Thu 8 Oct at 19:02, as its history keeps it at the run's end."""
+    return [{"started": _at(8, 19, 2, 11), "ended": ended, "outcome": outcome, "failure": None, "batches_before": 0,
+             "batches_after": batches, "epochs_before": None, "epochs_after": None}]
+
+
+_FINISHED = dict(outcome="finished", stage="Saving", started=_at(8, 19, 10), ended=_at(14, 14, 10),
+                 tries=_ended_try(_at(14, 14, 10), "finished", 10_000),
+                 result={"kind": "posterior", "id": "q1", "name": "retrain_3", "asked": "retrain_3"})
+_SAVED = "Training finished on Wed 14 Oct, 14:10, after 5 days 19 hours. The posterior retrain_3 is saved."
+_FIT_KEPT = "The 20,480,000 simulations are kept; the training is kept up to epoch 62, so you can resume it."
+_MEASURED = ("The record cell_a_3oct is kept, marked unfinished, with what it has measured so far. A measurement "
+             "cannot be continued; to finish it, it is measured again from the start.")
+# How each kind of end is said: what its history holds beyond ``_ended_record``'s, the moment it is said at, whether
+# a stop came too late, then its sentence and what the foot says was kept.
+_ENDS = {
+    "finished": (_FINISHED, _at(14, 14, 10), False, _SAVED, ""),
+    "finished a week and more ago": (
+        _FINISHED, _at(22, 9, 0), False,
+        "Training finished on 14 Oct 2026, 14:10, after 5 days 19 hours. The posterior retrain_3 is saved.", ""),
+    "finished, saved without its name": (
+        {**_FINISHED, "result": {"kind": "posterior", "id": "q1", "name": "", "asked": "retrain_3"}}, _at(14, 14, 10),
+        False, "Training finished on Wed 14 Oct, 14:10, after 5 days 19 hours. The posterior is saved. It was saved "
+               "without its name: 'retrain_3' was taken while the run was going.", ""),
+    "finished, the fit ended earlier than its estimate": (
+        {**_FINISHED, "fit": {"epochs": 84, "best_epoch": 64, "ended_by": "patience", "expected": 130}},
+        _at(14, 14, 10), False, f"{_SAVED} The fit ended at epoch 84, earlier than the estimate of about 130: "
+                                f"validation had not improved for 20 epochs (best at epoch 64).", ""),
+    "finished, the fit ended later than its estimate": (
+        {**_FINISHED, "fit": {"epochs": 140, "best_epoch": 120, "ended_by": "patience", "expected": 130}},
+        _at(14, 14, 10), False, f"{_SAVED} The fit ended at epoch 140: validation had not improved for 20 epochs "
+                                f"(best at epoch 120).", ""),
+    "finished, the fit ended with no estimate": (
+        {**_FINISHED, "fit": {"epochs": 84, "best_epoch": 64, "ended_by": "patience"}}, _at(14, 14, 10), False,
+        f"{_SAVED} The fit ended at epoch 84: validation had not improved for 20 epochs (best at epoch 64).", ""),
+    "finished, the fit stopped at its limit": (
+        {**_FINISHED, "fit": {"epochs": 51, "best_epoch": 49, "ended_by": "limit", "expected": 130}},
+        _at(14, 14, 10), False, f"{_SAVED} The fit stopped at its epoch limit after 51 epochs, before it had stopped "
+                                f"improving. The saved network is the last epoch's, not the best (epoch 49).", ""),
+    "finished, a stop asked too late": (
+        _FINISHED, _at(14, 14, 10), True, f"{_SAVED} A stop was asked for, but the run had already finished.", ""),
+    "stopped during the fit": (
+        {}, _at(11, 12, 31), False, f"Training was stopped on Sun 11 Oct, 12:31, during the fit. {_FIT_KEPT}",
+        _FIT_KEPT),
+    "stopped during the fit, its training discarded": (
+        {"fit": {"epochs": 62, "best_epoch": 60, "simulations": 20_480_000, "kept_id": "k1", "passes": 62,
+                 "discarded": True}}, _at(11, 12, 31), False,
+        "Training was stopped on Sun 11 Oct, 12:31, during the fit. The 20,480,000 simulations are kept; the training "
+        "was discarded, as you asked.",
+        "The 20,480,000 simulations are kept; the training was discarded, as you asked."),
+    "stopped during the simulation": (
+        {"stage": "Simulation", "fit": None, "tries": _ended_try(_at(11, 12, 31), "stopped", 6_150)}, _at(11, 12, 31),
+        False, "Training was stopped on Sun 11 Oct, 12:31, during simulation. The 6,150 batches simulated so far are "
+               "kept; you can continue from batch 6,150.",
+        "The 6,150 batches simulated so far are kept; you can continue from batch 6,150."),
+    "stopped during the rotation": (
+        {"stage": "Rotation", "fit": None, "simulation_set": None, "tries": _ended_try(_at(11, 12, 31), "stopped", 0)},
+        _at(11, 12, 31), False, "Training was stopped on Sun 11 Oct, 12:31, during the rotation. Nothing was "
+                                "simulated.", "Nothing was simulated."),
+    "stopped when Windows shut down": (
+        {"stop_reason": "Windows shut down"}, _at(11, 12, 31), False,
+        f"Training was stopped on Sun 11 Oct, 12:31, when Windows shut down. {_FIT_KEPT}", _FIT_KEPT),
+    "stopped when Windows shut down, PRISM ended before the run": (
+        {"stop_reason": "Windows shut down", "last_heard": _at(11, 12, 33), "fit": {"simulations": 20_480_000},
+         "tries": _ended_try(_at(11, 12, 31), "stopped", 9_950)}, _at(11, 12, 40), False,
+        "Training was stopped on Sun 11 Oct, 12:31, when Windows shut down. What it had saved by then is kept.",
+        "What it had saved by then is kept."),
+    "stopped, in a history written before the stop's reason was kept": (
+        {"stop_reason": "left out"}, _at(11, 12, 31), False,
+        f"Training was stopped on Sun 11 Oct, 12:31, during the fit. {_FIT_KEPT}", _FIT_KEPT),
+    "failed": (
+        {"outcome": "failed", "stage": "Simulation", "fit": None, "tries": _ended_try(_at(11, 12, 31), "failed", 6_150),
+         "failure": {"type": "OutOfMemoryError", "message": "CUDA out of memory.", "kind": "out of memory",
+                     "reopen": False}}, _at(11, 12, 31), False,
+        "Training failed on Sun 11 Oct, 12:31, during simulation: the graphics card ran out of memory. The "
+        "simulations up to batch 6,150 are kept.", "The simulations up to batch 6,150 are kept."),
+    "failed, its tries ended when Windows shut down": (
+        {"outcome": "failed", "stop_reason": "Windows shut down", "stage": "Simulation", "fit": None,
+         "tries": _ended_try(_at(11, 12, 31), "failed", 6_150),
+         "failure": {"type": "OutOfMemoryError", "message": "CUDA out of memory.", "kind": "out of memory",
+                     "reopen": False}}, _at(11, 12, 31), False,
+        "Training failed on Sun 11 Oct, 12:31, during simulation: the graphics card ran out of memory. The "
+        "simulations up to batch 6,150 are kept.", "The simulations up to batch 6,150 are kept."),
+    "not seen to end": (
+        {"outcome": "not seen to end", "stage": "Simulation", "ended": None, "last_heard": _at(3, 3, 12), "fit": None,
+         "simulation_set": {"folder": _FOLDER, "batches": 10_000, "at_start": 0, "at_end": 6_150},
+         "tries": _ended_try(None, None, 6_150)}, _at(8, 19, 2), False,
+        "PRISM closed while this training was running; last heard Sat 3 Oct, 03:12, simulation, batch 6,150 of "
+        "10,000.", "What it had saved by then is kept."),
+    "a measurement finished": (
+        {"word": "Measurement", "name": "cell_a_3oct", "place": ["temperature", "one_cell"], "outcome": "finished",
+         "stage": "Driven", "started": _at(11, 11, 19), "fit": None, "simulation_set": None,
+         "result": {"kind": "fdt", "id": "f1", "name": "cell_a_3oct", "asked": "cell_a_3oct"}}, _at(11, 12, 31),
+        False, "Measurement finished on Sun 11 Oct, 12:31, after 1 hour 12 minutes. The record cell_a_3oct is saved.",
+        ""),
+    "a measurement stopped": (
+        {"word": "Measurement", "name": "cell_a_3oct", "place": ["temperature", "one_cell"], "stage": "Driven",
+         "fit": None, "simulation_set": None}, _at(11, 12, 31), False,
+        f"Measurement was stopped on Sun 11 Oct, 12:31. {_MEASURED}", _MEASURED),
+    "a prior build stopped": (
+        {"word": "Prior build", "name": "", "place": ["inference", "prior"], "stage": None, "fit": None,
+         "simulation_set": None}, _at(11, 12, 31), False,
+        "Prior build was stopped on Sun 11 Oct, 12:31. Nothing of the prior is kept; it is built again from the start "
+        "next time.", "Nothing of the prior is kept; it is built again from the start next time."),
+}
+
+
+@pytest.mark.parametrize("case", list(_ENDS))
+def test_each_end_says_how_and_when_and_never_finished_after_a_stop_or_a_failure(case):
+    """How a run ended is said from its history alone, in the words its page, the foot and Home say: when it
+    finished and after how long, the record it saved and that it was saved without its name, how its fit ended, a
+    stop that came too late; when it was stopped and where it was, or that Windows shut down, and what the stop kept,
+    a training's by its stage and any other run's as its stop's question said it; when it failed, where and why, and
+    what was kept; and a run PRISM did not see end, by when it was last heard and where it was. A date within seven
+    days carries its weekday. A history written before the stop's reason was kept is read as one with none. Nothing
+    says "finished" after a stop or a failure, and no line of the window says a measurement finished whatever its
+    end."""
+    from core.gui.run import ends
+    from core.gui.worker import CANCEL_TOO_LATE_TEXT
+    changed, now, too_late, sentence, kept = _ENDS[case]
+    record = _ended_record(**changed)
+    if record["stop_reason"] == "left out":
+        del record["stop_reason"]
+    assert ends.words(record, now, too_late=too_late) == (sentence, kept)
+    assert CANCEL_TOO_LATE_TEXT is ends.TOO_LATE_TEXT, "the run's text and its page say a late stop in two words"
+    if record["outcome"] != "finished":
+        assert not re.search(r"\bfinished\b", sentence), sentence
+    said = [path.relative_to(REPO).as_posix() for path in (REPO / "core").rglob("*.py")
+            if "FDT run finished" in path.read_text(encoding="utf-8")]
+    assert said == [], f"a line of the window says a measurement finished, whatever its end: {said}"
+
+
+def test_at_the_end_the_run_lets_go_of_everything_and_is_published_last(tmp_path, windows_asked, monkeypatch):
+    """At a run's end, in this order: its history says how it ended, every panel's controls are free again, the
+    computer may sleep again and the reason against ending the session is withdrawn, as the guard of the requests
+    made of Windows records them; only then is the run's status published, saying how and when the run ended, then
+    its end; then the taskbar flashes on the newest window built. Every step is taken on the window's thread."""
+    import threading
+    from PySide6.QtCore import QObject
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.run import history
+    from tests import _built
+    from tests._fixtures import build_window, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    window = build_window()
+    host = window.part("inference").posterior_panel
+    order = windows_asked                             # the guard's record, with the end's other steps put in it
+    write, free = history.write, BasePanel.set_controls_enabled
+
+    def written(folder, record):
+        order.append(("history", (record["outcome"],), threading.current_thread().name))
+        return write(folder, record)
+
+    def controls(panel, enabled):
+        order.append(("controls", (enabled,), threading.current_thread().name))
+        return free(panel, enabled)
+
+    monkeypatch.setattr(history, "write", written)
+    monkeypatch.setattr(BasePanel, "set_controls_enabled", controls)
+
+    class Heard(QObject):
+        """Each status and each end the run's controller publishes, put in the record as it is heard."""
+
+        def __init__(self):
+            super().__init__()
+            held.status_changed.connect(self.status)
+            held.run_ended.connect(self.ended)
+            _built.keep(self)
+
+        def status(self, status):
+            order.append(("status", (status.state,), threading.current_thread().name))
+
+        def ended(self, status):
+            order.append(("run_ended", (status.outcome,), threading.current_thread().name))
+
+    heard = Heard()
+    text, stand_in = RunText(held), StandIn()
+    start_run(host, stand_in, spec=_training())
+    stand_in.say(_LINES["budget"])
+    turn_until(app, lambda: _LINES["budget"] in text.texts())
+    del order[:]
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    steps = []
+    for name, args, thread in order:
+        assert thread == "MainThread", (name, thread)
+        step = (name, args[0] is window if name == "flash" else args[-1])
+        if not steps or steps[-1] != step:
+            steps.append(step)
+    assert steps == [("history", "finished"), ("controls", True), ("keep_awake", False), ("block_shutdown", None),
+                     ("status", "ended"), ("run_ended", "finished"), ("flash", True)], steps
+    assert held.status.sentence == "Training finished on Thu 8 Oct, 19:02, after less than a minute.", (
+        held.status.sentence)
+
+
+def test_the_taskbar_flashes_for_an_end_and_for_needs_you(tmp_path, windows_asked):
+    """The taskbar flashes on the newest window built, from the window's thread, once a run has come to need someone,
+    after the status that says so is published, and not again while it still does, a stop asked meanwhile
+    included; and once at an end that is to be seen, after its status. Never at the end of a run that ends straight into idle (one that keeps no file, or only
+    loads a record), nor at a refusal made before anything was spent."""
+    import threading
+    from PySide6.QtCore import QObject
+    from core.gui.run.model import SILENCE_NEEDS_YOU_S
+    from core.refusals import Refusal
+    from tests import _built
+    from tests._fixtures import build_run_host, build_window, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held = _controller_on(tmp_path, clock)
+    window, host = build_window(), build_run_host()
+
+    class Heard(QObject):
+        """Whether each status the run's controller publishes says the run needs someone, put in the guard's record
+        as it is heard."""
+
+        def __init__(self):
+            super().__init__()
+            held.status_changed.connect(self.status)
+            _built.keep(self)
+
+        def status(self, status):
+            windows_asked.append(("status", (bool(status.needs_you),), threading.current_thread().name))
+
+    def said():
+        return [(name, args[0] is window if name == "flash" else args[0], thread)
+                for name, args, thread in windows_asked if name in ("flash", "status")]
+
+    def flashes():
+        return [step for step in said() if step[0] == "flash"]
+
+    heard = Heard()
+    text, stand_in = RunText(held), StandIn()
+    start_run(host, stand_in, spec=_training())
+    for line in (_LINES["budget"], _LINES["rotation_begins"], _LINES["rotation_done"], _LINES["simulation_writing"]):
+        stand_in.say(line)
+    turn_until(app, lambda: _LINES["simulation_writing"] in text.texts())
+    windows_asked.clear()
+    clock.advance(SILENCE_NEEDS_YOU_S + 1)
+    held.tick()
+    held.tick()
+    assert held.status.needs_you, "the run does not need someone after its silence"
+    assert flashes() == [("flash", True, "MainThread")], said()
+    assert said().index(("status", True, "MainThread")) < said().index(("flash", True, "MainThread")), said()
+    windows_asked.clear()
+    held.request_stop()                               # its status changes while it still needs someone
+    assert (held.status.state, bool(held.status.needs_you), flashes()) == ("stopping", True, []), said()
+    turn_until(app, lambda: not held.is_live())
+    assert said()[-2:] == [("status", False, "MainThread"), ("flash", True, "MainThread")], said()
+    assert len(flashes()) == 1, said()
+    for spec, refused in ((RunSpec("Live simulation", ("live", None), keeps_files=False), False), (_load(), False),
+                          (_training(), True)):
+        windows_asked.clear()
+        stand_in = StandIn(word=spec.word)
+        start_run(host, stand_in, spec=spec)
+        if refused:
+            stand_in.fail(Refusal("The posterior name 'retrain_3' is taken.", field="name"))
+        else:
+            stand_in.release()
+        turn_until(app, lambda: not held.is_live())
+        assert (held.status.state, flashes()) == ("idle", []), (spec.word, refused, said())
+
+
 # ── the run's page: in the place of a page's results, drawn from the run's model ──
 def _page_says(view) -> dict:
     """What the run's page shows, read off its parts, each only while it is in sight: its sentence, its stages as
@@ -2571,7 +2861,7 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
     assert column() == ("figures", False, True, True, True), "a load's end hid 'How the run went'"
     view.how_link.click()
     assert column() == ("run", True, False, True, True)
-    assert page() == ("ended", False, True, "Training retrain_3 finished.")
+    assert page() == ("ended", False, True, "Training finished on Thu 8 Oct, 19:02, after less than a minute.")
     view.back_button.click()
     assert column() == ("figures", False, True, True, True)
 
@@ -2580,7 +2870,8 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
     host.save_layout(store)
     saved = store.value(key)
     choose(monkeypatch, words="Stop training")                # the stop's question, answered
-    for how, said, load in ((lambda stand_in: view.stop_button.click(), "Training retrain_3 was stopped.", True),
+    for how, said, load in ((lambda stand_in: view.stop_button.click(),
+                             "Training was stopped on Thu 8 Oct, 19:02, as it started. Nothing was simulated.", True),
                             (lambda stand_in: stand_in.fail(RuntimeError("the run broke")),
                              "Training retrain_3 failed.", False)):
         stand_in = StandIn()

@@ -98,7 +98,7 @@ for name in sys.argv[2].split(","):
     except ImportError:
         pass
 from core.gui import texts
-from core.gui.run import model, questions, readings, retry
+from core.gui.run import ends, model, questions, readings, retry
 moment = [datetime(2026, 10, 8, 19, 2, 11, tzinfo=timezone(timedelta(hours=2)))]
 def clock():
     return moment[0]
@@ -123,7 +123,8 @@ def look(run):
     said = (run.state, run.stage, run.outcome, run.sentence(), run.stage_line(), run.axis(), run.health(),
             run.messages(), run.needs_you(), run.epochs(), run.best_epoch(), run.batches_done(),
             run.simulation_folder(), run.began_after_first(), run.fit_not_saved(), run.saves_passed(),
-            run.stage_kind(), run.now(), run.stop_bound(), run.last_epoch_ends())
+            run.stage_kind(), run.now(), run.stop_bound(), run.last_epoch_ends(), run.fit_ended_by(),
+            run.expected_epochs())
     status = model.RunStatus(state="running", word=run.spec.word, name=run.spec.name)
     said += (questions.stop_question(status, run), questions.close_question(status, run),
              questions.shutdown_reason(status, run))
@@ -223,6 +224,22 @@ said += [retry.is_tried_again(RuntimeError("out of memory"), runs[0].spec, is_oo
                               tried=retry.TRIES),
          retry.gained((1, 0), (1, 2)), retry.continued_call(runs[0].spec), retry.resumed_call(narrowing, "k"),
          retry.is_device_failure(ValueError()), retry.PAUSES_S]
+at = moment[0]
+fit = {"epochs": 9, "best_epoch": 7, "ended_by": "limit", "expected": 12, "simulations": 320, "kept_id": "k",
+       "passes": 8, "discarded": False}
+for outcome, stage, word in (("finished", "Saving", "Training"), ("stopped", "Simulation", "Training"),
+                             ("stopped", "Fitting", "Training"), ("stopped", "Saving", "Narrowing round"),
+                             ("stopped", None, "Measurement"), ("failed", "Fitting", "Training"),
+                             ("failed", "Rotation", "Check"), ("not seen to end", "Simulation", "Training"),
+                             ("not seen to end", "Spontaneous", "Measurement")):
+    record = {"id": "r", "word": word, "name": "n", "place": ["inference", "training"], "outcome": outcome,
+              "stage": stage, "started": at, "ended": at.isoformat(), "last_heard": at, "stop_reason": None,
+              "tries": [{"ended": at, "batches_after": 4}], "simulation_set": {"batches": 40, "at_end": 4,
+                                                                                 "per_batch": 8},
+              "fit": fit, "result": {"kind": "posterior", "id": "q", "name": "", "asked": "n"},
+              "failure": {"kind": "other", "message": "x."}}
+    said += [ends.words(record, at, too_late=True),
+             ends.words({**record, "stop_reason": "Windows shut down", "tries": [], "fit": None}, at)]
 roots = sys.argv[1].split(",")
 bad = sorted(name for name in sys.modules if any(name == root or name.startswith(root + ".") for root in roots))
 sys.exit(repr(bad) if bad else 0)
@@ -316,10 +333,10 @@ def test_the_run_model_and_its_readings_import_no_toolkit_and_no_engine():
     training's model and models of runs of other kinds, feeds them their lines, rows, solver counts and clock, and
     reads every read-out at each step, the questions of a stop and a close among them with the reason Windows is
     given against ending the session, the words of the run's failure and of its tries, the command line its page
-    sets off, and the question of keeping a training a stop kept; and the rules of the tries and of repeating a
-    run's call into its page's session."""
+    sets off, and the question of keeping a training a stop kept; the rules of the tries and of repeating a run's
+    call into its page's session; and how each kind of run's end is said, from its history."""
     modules = ("core.gui.texts", "core.gui.run.readings", "core.gui.run.model", "core.gui.run.questions",
-               "core.gui.run.retry")
+               "core.gui.run.retry", "core.gui.run.ends")
     for module in modules:
         assert (REPO / (module.replace(".", "/") + ".py")).is_file(), f"{module} is not there to be read"
         found = _reaching(_imports(module), _RULES_FORBIDDEN)

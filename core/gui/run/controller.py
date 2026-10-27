@@ -71,7 +71,7 @@ from core.refusals import Refusal
 from .. import this_computer
 from ..streams import CancelToken
 from ..worker import Worker
-from . import history, questions, retry
+from . import ends, history, questions, retry
 from .model import FIT_PACE_RECORDS, IDLE, RunModel, RunSpec, RunStatus, moved
 from .textfile import FSYNC_EVERY_S, SEPARATOR_TEXT, RunTextFile
 
@@ -224,6 +224,9 @@ class _Run:
         self.closing = False                       # the window closes once the run has ended
         self.ended: datetime | None = None
         self.acknowledged = False
+        self.result: tuple | None = None           # (kind, id, name) of the record a finished run wrote
+        self.discarded = False                     # the training its stop kept was discarded since
+        self.last: RunStatus | None = None         # its status at its end, which its page is drawn with after it
         self.set_named = False
         self.view = None                           # its host's run page, which it draws on
         self.at_start: int | None = None
@@ -286,6 +289,14 @@ class RunController(QObject):
     def is_live(self) -> bool:
         """Whether a run is live: starting, running, stopping or waiting to try again."""
         return self._status.live
+
+    def now(self) -> datetime:
+        """The moment now, on the clock the runs are read from."""
+        return (self._clock or _local_now)()
+
+    def folder(self) -> Path:
+        """The folder of runs in use: the one a test handed in, else the one beside the settings file in use."""
+        return self._folder if self._folder is not None else history.runs_folder()
 
     def use_clock(self, clock) -> None:
         """The clock every moment of the next runs is read from, local time with its zone; None for the
@@ -613,11 +624,35 @@ class RunController(QObject):
 
     def _gone(self, run: str | None) -> None:
         """The training the run ``run`` kept is gone: its page offers to resume it no more, and the run's call goes
-        with the offer when its page offered nothing else."""
+        with the offer when its page offered nothing else; its history says it was discarded, and its end's words,
+        on its page and in the status while its end waits to be seen, say so too."""
         offered = self._offers.get(run)
         if offered is not None and offered.continue_from is None:
             del self._offers[run]
             self._let_go(offered)
+        held = self._run
+        if held is not None and held.id == run:
+            held.discarded = True
+            self._write(held)
+            if held.last is not None:
+                try:
+                    sentence, kept = ends.words(self._record(held), held.ended or self.now())
+                except Exception:                # noqa: BLE001 -- the words stay as the end said them
+                    sentence, kept = held.last.sentence, held.last.kept
+                held.last = replace(held.last, kept=kept,
+                                    sentence=held.last.sentence if held.outcome == "failed" else sentence)
+                if self._status.run == run and self._status.unacknowledged_end:
+                    self._status = held.last
+                    self.status_changed.emit(self._status)
+                self._draw()
+            return
+        folder = self.folder()
+        record = None if run is None else history.read(folder / f"{run}.json")
+        if record is not None and isinstance(record.get("fit"), dict):
+            try:
+                history.write(folder, {**record, "fit": {**record["fit"], "discarded": True}})
+            except Exception:                    # noqa: BLE001 -- an older run's file that cannot be written stays
+                pass
 
     def _let_go(self, run: _Run) -> None:
         """The run's own call let go, the configuration, the prior and the tensors its arguments hold with it: from
@@ -774,17 +809,24 @@ class RunController(QObject):
             view.take_lines(batch)
 
     def _draw(self) -> None:
-        """The run's page drawn again from the run's model, as the run's status now says; while the run waits to be
-        tried again, with the sentence that says what failed and when the next try begins."""
-        view = None if self._run is None else self._run.view
+        """The run's page drawn again from the run's model, as the run's status now says, or, once the run has
+        ended, as its status at its end said it, whether or not that end has been seen since; while the run waits to
+        be tried again, with the sentence that says what failed and when the next try begins."""
+        run = self._run
+        view = None if run is None else run.view
         if _alive(view):
-            if self._status.state == "retrying":
-                view.show_retrying(retry.failure_words(self._status, self._model, None)[0])
-            view.show_status(self._status, self._model)
+            status = self._status if self.is_live() or run.last is None else run.last
+            if status.state == "retrying":
+                view.show_retrying(retry.failure_words(status, self._model, None)[0])
+            view.show_status(status, self._model)
 
-    def _on_result(self, _payload) -> None:
+    def _on_result(self, payload) -> None:
+        """The run returned: it finished, and the record it wrote, when it hands one back, is noted by its kind, its
+        id and its name (never the record itself, which holds what the run computed)."""
         if self._run is not None and self._run.outcome is None:
             self._run.outcome = "finished"
+            found = tuple(getattr(payload, part, None) for part in ("kind", "id", "name"))
+            self._run.result = found if all(isinstance(part, str) for part in found) and found[0] else None
 
     def _on_error(self, exc, tb: str, cancel_noted: bool = False, kept_fit=None) -> None:
         run = self._run
@@ -901,14 +943,16 @@ class RunController(QObject):
 
     def _end(self, run: _Run, refused_early: bool) -> None:
         """The run's end, in this order: its watchers' last look; its state (ended, or idle for a run that leaves
-        nothing to acknowledge); the history's end written and the text file closed, or both removed for a refusal
-        made before anything was spent; every panel unlocked; the computer let sleep again and the reason against
-        ending the session withdrawn; the payload let go, and the run's own call with it
-        unless its page offers to continue or resume it; the status published; then ``run_ended``; then the run's
-        page drawn ended, a failure as its page's state with what the page offers, and its host's column arranged,
-        so that a page that cannot be drawn holds up nothing of the run's own end; then the page's own word on a
-        refusal made before anything was spent (on the run's page when the run repeats an offer of it), or on the
-        failure of a run that only loads a record, which has no page of its own."""
+        nothing to acknowledge), with how and when it ended and what it kept in words, read from the history it
+        leaves (``ends.words``; a failure's sentence is its page's own); the history's end written and the text file
+        closed, or both removed for a refusal made before anything was spent; every panel unlocked; the computer let
+        sleep again and the reason against ending the session withdrawn; the payload let go, and the run's own call
+        with it unless its page offers to continue or resume it; the status published; then ``run_ended``; then, for
+        an end to be seen, the taskbar's flash on the newest window built; then the run's page drawn ended, a failure
+        as its page's state with what the page offers, and its host's column arranged, so that a page that cannot be
+        drawn holds up nothing of the run's own end; then the page's own word on a refusal made before anything was
+        spent (on the run's page when the run repeats an offer of it), or on the failure of a run that only loads a
+        record, which has no page of its own."""
         from ..panels.base_panel import BasePanel
         model = self._model
         for watcher in run.watchers:
@@ -929,6 +973,14 @@ class RunController(QObject):
         page = None
         if failure is not None and not refused_early and not spec.loads_only:
             page = self._failure_page(run, last, failure)
+        if not idle:
+            try:
+                sentence, kept = ends.words(self._record(run), run.ended,
+                                            too_late=run.stop_requested and run.outcome == "finished")
+            except Exception:                    # noqa: BLE001 -- the end's words never hold up the run's end
+                sentence, kept = model.sentence(), ""
+            last = replace(last, sentence=sentence if page is None else page[0], kept=kept)
+        run.last = last
         offers = (not refused_early and not idle and spec.simulation_set and run.outcome in ("failed", "stopped")
                   and not run.reopen and (run.continue_from is not None or run.kept_fit is not None)
                   and _alive(run.host))
@@ -961,6 +1013,8 @@ class RunController(QObject):
         run.worker, run.token, run.failure = None, None, None
         self.status_changed.emit(self._status)
         self.run_ended.emit(last)
+        if not idle:
+            this_computer.flash(self._the_window())
         if _alive(run.view):
             if page is not None:
                 run.view.show_failure(*page)
@@ -1065,7 +1119,8 @@ class RunController(QObject):
     def _refresh(self) -> None:
         """The run's state worked out again after the model heard something: the history written at a change of
         state or stage, at a save of the simulation set passed and at an epoch; the status published at a change of
-        it and at a save passed."""
+        it and at a save passed, and once it is published the taskbar flashed when the run has come to need
+        someone."""
         run, model = self._run, self._model
         named = not run.set_named and model.simulation_folder() is not None
         if named:
@@ -1078,8 +1133,11 @@ class RunController(QObject):
             run.saves, run.epochs = saves, epochs
             self._write(run)
         if saved or status != self._status:
+            needed = self._status.needs_you
             self._status = status
             self.status_changed.emit(status)
+            if status.needs_you and not needed:
+                this_computer.flash(self._the_window())
         self._give_reason()
 
     # ── this computer, while a run is live ──
@@ -1150,8 +1208,9 @@ class RunController(QObject):
     def _record(self, run: _Run) -> dict:
         """The run's history, as its model reads it now. A stop asked with a reason of its own makes the run's outcome
         "stopped", with that reason, until the run has ended, and its end the moment the reason was said, and the same
-        of the try it is in: a process Windows ends before the run leaves them said. The reason stays unless the run
-        finished."""
+        of the try it is in, with the moment the run was last heard, at each write: a process Windows ends before the
+        run leaves them said, and leaves said that the run's own end was never written. The reason stays unless the
+        run finished."""
         spec, model = run.spec, self._model
         reason = run.stop_reason if run.stop_reason and run.outcome != "finished" else None
         ended = run.ended if run.ended is not None or reason is None else run.reason_at
@@ -1167,11 +1226,13 @@ class RunController(QObject):
             fit = {"epochs": note.passes if stopped else (epochs[-1].epoch if epochs else None),
                    "best_epoch": best,
                    "best_validation_loss": loss if loss is not None and math.isfinite(loss) else None,
-                   "seconds_per_epoch": float(statistics.median(paces)) if paces else None, "ended_by": None,
+                   "seconds_per_epoch": float(statistics.median(paces)) if paces else None,
+                   "ended_by": model.fit_ended_by() if run.outcome == "finished" else None,
                    "network": list(network) if network else None, "simulations": budget.get("simulations"),
                    "kept_id": getattr(note, "id", None), "passes": getattr(note, "passes", None),
                    "resumed": getattr(note, "resumed", None), "processes": getattr(note, "processes", None),
-                   "wall_seconds": None, "save_error": None}
+                   "wall_seconds": None, "save_error": None, "expected": model.expected_epochs(),
+                   "discarded": run.discarded}
         failure = None
         if run.failure is not None and run.outcome == "failed":
             exc = run.failure[0]
@@ -1198,15 +1259,19 @@ class RunController(QObject):
         return {"id": run.id, "word": spec.word, "name": spec.name,
                 "place": None if spec.place is None else list(spec.place),
                 "records_root": str(getattr(run.store, "root", "")), "started": model.started,
-                "ended": ended, "last_heard": None, "outcome": run.outcome or ("stopped" if reason else "running"),
-                "stop_reason": reason, "stage": model.stage,
+                "ended": ended, "last_heard": (self._clock or _local_now)() if reason and run.ended is None else None,
+                "outcome": run.outcome or ("stopped" if reason else "running"), "stop_reason": reason,
+                "stage": model.stage,
                 "acknowledged": run.acknowledged, "tries": tries,
                 "plan": None, "settings": None, "memory_limit": spec.facts.get("memory_limit"),
                 "simulation_set": None if folder is None else {
                     "folder": folder, "batches": budget.get("batches"), "at_start": run.at_start, "at_end": done,
                     "per_batch": budget.get("rows"), "seconds_per_batch": model.seconds_per_batch()},
                 "health": None if failed is None else {"failed": failed[0], "simulated": failed[1]},
-                "fit": fit, "check": None, "result": None, "failure": failure, "text": f"{run.id}.txt"}
+                "fit": fit, "check": None,
+                "result": None if run.result is None else dict(zip(("kind", "id", "name"), run.result),
+                                                               asked=spec.name),
+                "failure": failure, "text": f"{run.id}.txt"}
 
 
 def _alive(widget) -> bool:

@@ -280,8 +280,8 @@ class FdtPanel(BasePanel):
     def _on_run_finished(self) -> None:
         """A run has ended, whatever its outcome. The viewer closes the tabs it opened for an earlier
         record, so the stack holds this run's own figures alone -- every run of this analysis draws
-        the same titles, and a mix of two runs' tabs cannot be read."""
-        self.log_pane.append_line("FDT run finished.")
+        the same titles, and a mix of two runs' tabs cannot be read. How the run ended is its page's to
+        say: no line here says it finished, which a stopped or a failed run did not."""
         self._viewer.close_figures()
 
     def _on_model_changed(self, model: str):

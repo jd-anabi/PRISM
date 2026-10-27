@@ -111,7 +111,9 @@ class RunStatus:
     """What the shell reads of the run: its state and the words for it, where it is, how it ended and what it
     kept. One of ``STATES``; an ended run's ``outcome`` is one of ``OUTCOMES``. While the run waits to be tried again
     ("retrying"), ``trying`` is which of the tries in a row comes next, from 1, and ``try_at`` when it begins;
-    ``reopen`` says that only closing PRISM and opening it again can help the failure it ended with."""
+    ``reopen`` says that only closing PRISM and opening it again can help the failure it ended with. Once a run has
+    ended, ``sentence`` says how and when, and ``kept`` what it kept ("" for nothing to say), as
+    ``core/gui/run/ends.py`` words them."""
     state: str = "idle"
     word: str = ""
     name: str = ""
@@ -137,6 +139,7 @@ class RunStatus:
     trying: int = 0
     try_at: datetime | None = None
     reopen: bool = False
+    sentence: str = ""
 
     @property
     def live(self) -> bool:
@@ -263,6 +266,7 @@ class RunModel:
         self._counter: list[tuple[datetime, int]] = []
         self._resumed_fit: tuple[int, int | None] | None = None     # the pass resumed after, its count since the best
         self._fit_ended_after: int | None = None
+        self._fit_ended_by: str | None = None
         self._failed: tuple[int, int] | None = None
         self._earlier: tuple[tuple[int, int], ...] | None = None
         self._unusable: tuple[int, int] | None = None
@@ -563,6 +567,16 @@ class RunModel:
         newest = self._records[max(self._records)]
         return newest.epoch - newest.since_best
 
+    def fit_ended_by(self) -> str | None:
+        """What ended the fit by itself: "patience" when validation had not improved for the patience (or the
+        training library said so), "limit" when its epoch limit was reached first; None while it has not ended by
+        itself."""
+        return self._fit_ended_by
+
+    def expected_epochs(self) -> int | None:
+        """The epochs the fit is expected to run, the estimate its axis is drawn from; None when there is none."""
+        return None if self._expected is None else self._expected[0]
+
     def batches_done(self) -> int | None:
         """The batches of the simulation set done so far, or None before the simulation."""
         simulation = self._kind_index("simulation")
@@ -643,7 +657,7 @@ class RunModel:
         elif name == "fit_epoch":
             self._record(values)
         elif name == "sbi_converged":
-            self._fit_ended_after = values["n"]
+            self._fit_ended_after, self._fit_ended_by = values["n"], "patience"
             self._end_fit()
         elif name == "patho_batch":
             self._failed = (values["nonfinite"] + values["constant"] + values["overflow"], values["rows"])
@@ -690,6 +704,7 @@ class RunModel:
         if ((patience is not None and record.since_best >= patience)
                 or (limit is not None and record.epoch >= limit + 1)):
             self._fit_ended_after = record.epoch
+            self._fit_ended_by = "patience" if patience is not None and record.since_best >= patience else "limit"
             self._end_fit()
 
     def _end_fit(self) -> None:

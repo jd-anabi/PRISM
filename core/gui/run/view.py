@@ -41,7 +41,7 @@ from ..widgets.page import Scroller
 from ..widgets.rule_table import Column, RuleTable, StateCell, TextCell, ValueCell
 from ..widgets.ruled import Ruled, SectionHead
 from ..widgets.time_axis import AxisCaption, TimeAxis
-from . import questions, retry
+from . import ends, questions, retry
 from .loss import LossCurve
 from .model import LEADS, OUTCOMES, RunModel, RunSpec
 
@@ -208,6 +208,7 @@ class RunView(QWidget):
         self._noted = self._error_shown = False
         self._retrying = ""                      # while the run waits to be tried again: what the page says
         self._refused = ""                       # the refusal of a run that repeated an offer of the page
+        self._ended_words = ""                   # once its run has ended: how and when, and what it kept
         self._continue_from: int | None = None   # the batch the page offers to continue its run from
         self._resumable = False                  # whether the page offers to resume the training its run kept
         self._clock = _local_now
@@ -488,7 +489,7 @@ class RunView(QWidget):
         self._mode, self._compact, self._model, self._stopping = "live", spec.own_view, None, False
         self._closing, self._run, self._answered = False, None, False
         self._failed = self._noted = self._error_shown = self._resumable = self._close_saves = False
-        self._retrying = self._refused = ""
+        self._retrying = self._refused = self._ended_words = ""
         self._continue_from = None
         self.failure_row.sentence.set_text("", lead=opening(LEADS["err"], None))
         self.failure_message.setText("")
@@ -523,17 +524,20 @@ class RunView(QWidget):
         self.full_text.append_lines(batch)
 
     def show_status(self, status, model: RunModel | None) -> None:
-        """Draw the run as ``model`` reads it now, live or ended as ``status`` says. What the page said of an earlier
-        stop goes when a stop is asked for; at a stopped end of a training that kept nothing, the page says so; at an
-        end that the close which waited for it is not carried out at (a failure), the page says PRISM stayed open: but
-        for the end of the tries the close itself ended, at which it is carried out. A close that waited for the
-        posterior's save (one that began with no stop asked) did not end the tries that followed, whoever ended them:
-        at the failed end they leave, the page says PRISM stayed open."""
+        """Draw the run as ``model`` reads it now, live or ended as ``status`` says. Once it has ended, its sentence
+        is how and when it ended and what it kept (``status.sentence``), but for a failure, whose sentence stands
+        beside its error in the failure's block. What the page said of an earlier stop goes when a stop is asked for;
+        at a stopped end of a training that kept nothing, the page says so; at an end that the close which waited for
+        it is not carried out at (a failure), the page says PRISM stayed open: but for the end of the tries the close
+        itself ended, at which it is carried out. A close that waited for the posterior's save (one that began with no
+        stop asked) did not end the tries that followed, whoever ended them: at the failed end they leave, the page
+        says PRISM stayed open."""
         ending = self._mode == "live" and not status.live
         closed = ending and self._closing and (not self._retrying or self._close_saves)
         if (status.stop_requested and not self._stopping) or ending:
             self.notice.setText("")
         self._model = model
+        self._ended_words = "" if status.live or status.outcome == "failed" else status.sentence
         self._mode = "live" if status.live else "ended"
         self._stopping = status.stop_requested
         self._closing = status.closing and status.live
@@ -645,7 +649,7 @@ class RunView(QWidget):
             self._arrange()
             return
         now = self._clock()
-        said = self._refused or self._retrying or model.sentence()
+        said = self._refused or self._retrying or self._ended_words or model.sentence()
         if self.sentence.text() != said:
             self.sentence.setText(said)
         self.stage_line.show_words(model.stage_line())

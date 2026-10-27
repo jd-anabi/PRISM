@@ -6,14 +6,14 @@ import traceback
 
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
+from .run.ends import TOO_LATE_TEXT
 from .streams import WorkerCancelled, redirect_streams
 
 # Said, at warning, when a run RETURNS with the cancel token requested but never fired. The
 # counterpart of ``base_panel.CANCEL_NOTED_TEXT``, which the failure path carries: there the run
-# crashed, here it finished. Kept here rather than in base_panel because this module must not import
-# a panel, and it is the worker that knows the token's final state.
-CANCEL_TOO_LATE_TEXT = ("The run finished before the cancel could take effect; nothing was stopped, "
-                        "and its result is complete.")
+# crashed, here it finished. The words are the run's end's own, which its page says after its sentence:
+# one sentence, kept in one place.
+CANCEL_TOO_LATE_TEXT = TOO_LATE_TEXT
 
 # Said, at warning, before the traceback of a failure a stop may have replaced (the WorkerCancelled
 # branch of Worker.run says why it is hedged).
