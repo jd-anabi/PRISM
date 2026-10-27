@@ -2,9 +2,10 @@
 
 `qapp` is the one QApplication a process may hold; ``tests/_fixtures.qt_app()`` is the same
 expression as a plain call, which is what the GUI suites use. The settings, dialog and drawing-code
-fixtures at the end, the one that lets go what the builders made and the one that stands in for
-bringing a window to the front, are autouse at session and function scope; a test requests the last
-by name, ``brought_forward``, to read what it kept, and no other by name.
+fixtures at the end, the one that lets go what the builders made, the one that stands in for
+bringing a window to the front and the one that stands in for the requests made of Windows, are
+autouse at session and function scope; a test requests the last two by name, ``brought_forward`` and
+``windows_asked``, to read what each kept, and no other by name.
 """
 from pathlib import Path
 
@@ -301,14 +302,15 @@ def _layout_room_put_back():
 
 
 @pytest.fixture(autouse=True)
-def _built_widgets_let_go(_isolated_settings, _drawing_code_raises_nothing, _layout_room_put_back):
+def _built_widgets_let_go(_isolated_settings, _drawing_code_raises_nothing, _layout_room_put_back, windows_asked):
     """Every window, part, inference screen and bare run host the builders of tests/_fixtures.py made during
     a test is deleted when the test ends (tests/_built.py), so that none outlives it. Left alive, each would
     be dressed again by every later change of sheet, style or font on the one application, and an error of
     one of its guarded methods would be charged to whichever later test made that change. Each goes by its
     own deferred delete, the newest first, and is never closed, because closing a window writes settings.
-    The three fixtures it names are set up before it and torn down after it, so the widgets go while this
-    test's own settings file and its room are in force and before the drawing record is read. What a
+    The four fixtures it names are set up before it and torn down after it, so the widgets go while this
+    test's own settings file and its room are in force and before the drawing record is read, and a run this
+    ends lets go of what it asked of Windows before the guard of those requests reads its record. What a
     fixture of wider scope built was made before this test was set up, so it is left alone. A test that ends
     with a run still live fails here, and its run is asked to stop and waited for before anything goes, so
     that no panel is deleted under its run (tests/_built.py's end_of_test says how long, and why). The
@@ -345,3 +347,72 @@ def brought_forward(request):
     if held is not None:
         held.release()
         pytest.fail("the test ended holding the lock and the listener of a start of PRISM, now let go")
+
+
+def windows_requests_left(calls: list) -> list[str]:
+    """What a test's record of the requests made of Windows -- ``windows_asked``'s, each call as its name, what it
+    was handed and the name of the thread it came from -- leaves standing at the test's end, in words: the computer
+    still asked to stay awake, a reason against ending the session still registered, and each time Windows itself
+    was reached by a test not marked for the real screen. Nothing for a record that leaves nothing."""
+    left = []
+    awake = [args[0] for name, args, _thread in calls if name == "keep_awake"]
+    if awake and awake[-1]:
+        left.append("the computer is still kept awake")
+    reasons = [args[1] for name, args, _thread in calls if name == "block_shutdown"]
+    if reasons and reasons[-1] is not None:
+        left.append(f"a reason against shutting down is still registered: {reasons[-1]!r}")
+    left += [f"Windows was reached by a test not marked for the real screen: {args[0]}"
+             for name, args, _thread in calls if name == "windows"]
+    return left
+
+
+@pytest.fixture(autouse=True)
+def windows_asked(request):
+    """Nothing a test does reaches Windows' power or session state, unless the test is marked for the real screen.
+    The requests core/gui/this_computer.py makes of Windows -- keeping the computer awake, the reason against ending
+    the session, the taskbar's flash -- are stood in for, each answering that Windows took it, and each call is kept,
+    as its name, what it was handed and the name of the thread it came from, in the list this fixture gives a test
+    that asks for it by name. Each stand-in keeps the module's record of the last request as the request would. The
+    one place that module reaches Windows is stood in for too: a test that reaches it all the same is noted, and it
+    is answered with an error. A test marked for the real screen makes every call for real, and releases each.
+
+    At the test's end, after the end of the test has stopped a run left live (a run's end lets go of what it asked),
+    a test whose record leaves the computer kept awake, a reason registered or Windows reached fails here, as
+    ``windows_requests_left`` says it, and the module's record is put back to nothing asked. A monkeypatch of its
+    own, so that a test that undoes its own does not undo this one."""
+    import threading
+    from core.gui import this_computer
+    calls = []
+    mp = pytest.MonkeyPatch()
+
+    def kept(name, *args):
+        calls.append((name, args, threading.current_thread().name))
+
+    if request.node.get_closest_marker("display") is None:
+        def keep_awake(on):
+            kept("keep_awake", on)
+            this_computer._requested["awake"] = bool(on)
+            return True
+
+        def block_shutdown(window, reason):
+            kept("block_shutdown", window, reason)
+            this_computer._requested["reason"] = None if reason is None else this_computer.fitted(reason)
+            return True
+
+        def flash(window):
+            kept("flash", window)
+            return True
+
+        def reached(library, name):
+            kept("windows", f"{library}.{name}")
+            raise RuntimeError("a test not marked for the real screen reached Windows")
+
+        for name, stand_in in (("keep_awake", keep_awake), ("block_shutdown", block_shutdown), ("flash", flash),
+                               ("_windows", reached)):
+            mp.setattr(this_computer, name, stand_in)
+    yield calls
+    mp.undo()
+    left = windows_requests_left(calls)
+    this_computer._requested.update(awake=False, reason=None)
+    if left:
+        raise AssertionError("the test ended with what it asked of Windows standing: " + "; ".join(left))

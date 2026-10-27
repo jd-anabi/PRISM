@@ -1,7 +1,8 @@
 """What a stop and a close ask, and what a page says while its run stops: the question the stop button asks for each
 kind of run and each stage, the question the window asks when it is closed during a run, the question of keeping a
-training a stop kept, and the line that says when a stop asked for is taken. Words only: no toolkit, no engine and
-none of the engine's settings are imported here, so the words are read and tested with no window.
+training a stop kept, the line that says when a stop asked for is taken, and the reason Windows is given not to end
+the session while a run is live. Words only: no toolkit, no engine and none of the engine's settings are imported
+here, so the words are read and tested with no window.
 
 Each question's first answer is the safe one: it changes nothing, it is the default, and Enter and Escape mean it.
 The other answer is drawn as losing work where taking it loses what cannot be had again. A run whose stop loses
@@ -151,6 +152,32 @@ def stopping_line(status, model) -> str:
     """When a stop asked for is taken, as the page, the foot and Home say it while the run stops: the run's own
     sentence while it is stopping."""
     return model.sentence()
+
+
+def shutdown_reason(status, model) -> str:
+    """The reason Windows is given not to end the session while the run is live, the words Windows lists beside
+    PRISM when a sign-out or a shutdown is asked for: what the run is doing, and what shutting down loses and keeps.
+    A training's simulation, its fit and its saving of the posterior have words of their own (a fit not saved as it
+    goes is lost whole); before its simulation, and in any other run, shutting down stops it, followed by what its
+    stop keeps, as its stop's question says it (nothing for a run whose stop keeps nothing it would ask about)."""
+    spec = model.spec
+    who = f"{spec.word} {spec.name}".strip()
+    if spec.word in TRAINING_WORDS:
+        kind = model.stage_kind()
+        doing = {"simulation": "simulating", "fit": "fitting", "saving": "saving its posterior"}.get(kind)
+        if doing is not None and kind != "simulation" and model.fit_not_saved():
+            return (f"{who} is {doing}. Shutting down loses the fit: nothing of it can be saved. The simulations are "
+                    f"kept.")
+        if kind == "simulation":
+            return f"{who} is simulating. Shutting down stops it; the simulations done so far are saved first."
+        if kind == "fit":
+            return f"{who} is fitting. Shutting down loses the epoch in progress; the epochs finished so far are kept."
+        if kind == "saving":
+            return (f"{who} is saving its posterior. Shutting down stops it; the finished training is kept, and "
+                    f"resuming it writes the posterior.")
+        return f"{who} is running. Shutting down stops it. {_training_question(spec, model).sentence}"
+    kept = _kept(spec, _OTHERS.get(spec.word, _ANY)[1]) if spec.stop_asks else ""
+    return f"{who} is running. Shutting down stops it." + (f" {kept}" if kept else "")
 
 
 # ── the parts ──

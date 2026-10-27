@@ -876,7 +876,7 @@ def process_state(app) -> dict:
     from PySide6.QtWidgets import QApplication
     from core import config, logging_root
     from core.artifacts import default_store
-    from core.gui import design, one_instance, theming
+    from core.gui import design, one_instance, theming, this_computer
     from core.gui import style as small_style
     from core.gui.run.controller import controller
     gc.collect()
@@ -931,6 +931,10 @@ def process_state(app) -> dict:
                                       if server.isListening())),
         # The process's one run: none live, no end left to acknowledge, and no close waiting for one.
         "run": (controller().is_live(), controller().status.state, controller().status.closing),
+        # What the process last asked of Windows for a run: the computer kept awake, and the reason against ending
+        # the session registered. A run's end lets go of both, and the end of a test puts the record back.
+        "keep awake": this_computer.state()[0],
+        "shutdown reason": this_computer.state()[1],
     }
 
 

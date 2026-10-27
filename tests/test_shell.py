@@ -3455,11 +3455,12 @@ def test_a_close_whose_settings_cannot_be_written_still_lets_go_of_the_claim(tmp
 def test_bringing_the_window_forward_brings_the_question_open_over_it_first(monkeypatch):
     """The window brought to the front, as a second start's knock asks: out of the minimised state, a maximised one
     staying maximised; raised and activated; and its taskbar button flashed only when the system keeps the front for
-    another window. While a question is open over the window, it is the question that is raised and activated and
-    whose hold of the front is read, so that the keyboard stays on what must be answered first. Every call that
-    reaches the system is stood in for and noted: nothing is brought to the front here."""
+    another window, through the one place that asks Windows for it. While a question is open over the window, it is
+    the question that is raised and activated and whose hold of the front is read, so that the keyboard stays on what
+    must be answered first. Every call that reaches the system is stood in for and noted: nothing is brought to the
+    front here."""
     from PySide6.QtWidgets import QWidget
-    from core.gui import main_window
+    from core.gui import main_window, this_computer
     from core.gui.widgets.ask import Ask
     qt_app()
     window = build_window()
@@ -3471,7 +3472,7 @@ def test_bringing_the_window_forward_brings_the_question_open_over_it_first(monk
 
     monkeypatch.setattr(QWidget, "raise_", note("raise"))
     monkeypatch.setattr(QWidget, "activateWindow", note("activate"))
-    monkeypatch.setattr(QApplication, "alert", note("alert"))
+    monkeypatch.setattr(this_computer, "flash", note("flash"))
     try:
         for asking in (False, True):
             if asking:
@@ -3486,7 +3487,7 @@ def test_bringing_the_window_forward_brings_the_question_open_over_it_first(monk
                 del did[:]
                 COME_TO_FRONT(window)
                 wanted = [("raise", front), ("activate", front), ("front", front)] + (
-                    [] if holds else [("alert", "window")])
+                    [] if holds else [("flash", "window")])
                 assert (did, window.windowState()) == (wanted, Qt.WindowMaximized), (
                     f"with {'a' if asking else 'no'} question open, the front {'held' if holds else 'refused'}: "
                     f"{did}, {window.windowState()}")

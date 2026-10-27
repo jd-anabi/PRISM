@@ -40,6 +40,11 @@ run has ended. A training saving its posterior is not stopped, the save being a 
 window's close then waits for the save with no stop, and can be withdrawn until the run ends (``withdraw_close``). A
 training a stop kept stays kept until its page's Discard deletes it (``discard``), once the run has ended.
 
+While a run is live the computer is kept awake, from its start to its end, and Windows is given the reason it should
+not end the session, registered on the newest window built (``use_window``) from the run's first line to its end and
+set again at each change of the run's stage (``core/gui/this_computer.py``); both are asked from the window's thread,
+from the controller's slots and its own timer, and both stand through a stop and a wait to be tried again.
+
 The run's page is its host's: the controller hands it the run at the start and draws it again from the run's model
 at every change the model hears and at each look; the run's full text reaches it through ``lines``. A run that only
 loads a record is handed no page: it never takes the page's place, nor the page of a run that shows there. Nothing
@@ -50,6 +55,7 @@ import math
 import os
 import statistics
 import threading
+import weakref
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -59,6 +65,7 @@ from PySide6.QtCore import QObject, QThreadPool, QTimer, Signal
 
 from core.refusals import Refusal
 
+from .. import this_computer
 from ..streams import CancelToken
 from ..worker import Worker
 from . import history, questions, retry
@@ -251,6 +258,9 @@ class RunController(QObject):
         # The ended runs whose page offers to continue or resume them, by id, each with its own call kept: until its
         # page starts its next run, or goes.
         self._offers: dict[str, _Run] = {}
+        self._window = None                        # the newest window built, held weakly: the reason goes on it
+        self._awake = False                        # Windows is asked to keep the computer awake
+        self._reason: tuple | None = None          # the live run's stage and the reason registered for it
 
     # ── what the shell and the pages read ──
     @property
@@ -281,6 +291,11 @@ class RunController(QObject):
         """The folder of runs the next runs keep their files in, and their paces and earlier runs are read from;
         None for the one beside the settings file in use when each starts."""
         self._folder = None if folder is None else Path(folder)
+
+    def use_window(self, window) -> None:
+        """The window the reason against ending the session is registered on: the newest window built, which calls
+        this as it is built. Held weakly: a window deleted is held by nothing here."""
+        self._window = None if window is None else weakref.ref(window)
 
     # ── a run's start ──
     def dispatch(self, fn, *args, spec: RunSpec, host=None, on_result=None, provide_fig_sink: bool = False,
@@ -355,6 +370,7 @@ class RunController(QObject):
                 self._timer.setInterval(TICK_MS)
                 self._timer.timeout.connect(self.tick)
             self._timer.start()
+            self._stay_awake(True)
             self.status_changed.emit(self._status)
 
             worker, token = self._worker(run, kwargs)
@@ -424,6 +440,7 @@ class RunController(QObject):
             self._remove_files(run)
         for panel in list(BasePanel._instances):
             panel.set_controls_enabled(True)
+        self._stay_awake(False)
         if not run.spec.loads_only and _alive(run.host) and hasattr(run.host, "_run_over"):
             run.host._run_over(IDLE)
         self._status = IDLE
@@ -862,7 +879,8 @@ class RunController(QObject):
     def _end(self, run: _Run, refused_early: bool) -> None:
         """The run's end, in this order: its watchers' last look; its state (ended, or idle for a run that leaves
         nothing to acknowledge); the history's end written and the text file closed, or both removed for a refusal
-        made before anything was spent; every panel unlocked; the payload let go, and the run's own call with it
+        made before anything was spent; every panel unlocked; the computer let sleep again and the reason against
+        ending the session withdrawn; the payload let go, and the run's own call with it
         unless its page offers to continue or resume it; the status published; then ``run_ended``; then the run's
         page drawn ended, a failure as its page's state with what the page offers, and its host's column arranged,
         so that a page that cannot be drawn holds up nothing of the run's own end; then the page's own word on a
@@ -900,6 +918,8 @@ class RunController(QObject):
                 run.text.close()
         for panel in list(BasePanel._instances):
             panel.set_controls_enabled(True)
+        self._stay_awake(False)
+        self._withdraw_reason()
         # The payload goes now: the worker's shell outlives the run (it is kept until the next run ends), and what it
         # points at -- the configuration, the prior, the posterior, tensors on the card -- must not. The run's own
         # call goes with it, but for a run whose page offers to continue or resume it: that call is kept until the
@@ -1037,6 +1057,36 @@ class RunController(QObject):
         if saved or status != self._status:
             self._status = status
             self.status_changed.emit(status)
+        self._give_reason()
+
+    # ── this computer, while a run is live ──
+    def _stay_awake(self, on: bool) -> None:
+        """Ask Windows to keep the computer awake, or let it sleep again: once each way."""
+        if on != self._awake:
+            self._awake = on
+            this_computer.keep_awake(on)
+
+    def _the_window(self):
+        """The newest window built, while it is there; None otherwise."""
+        window = None if self._window is None else self._window()
+        return window if _alive(window) else None
+
+    def _give_reason(self) -> None:
+        """The reason against ending the session, registered once the live run is past its start, and again at each
+        change of its stage or of the words for it."""
+        status = self._status
+        if not status.live or status.state == "starting":
+            return
+        reason = (status.stage, questions.shutdown_reason(status, self._model))
+        if reason != self._reason:
+            self._reason = reason
+            this_computer.block_shutdown(self._the_window(), reason[1])
+
+    def _withdraw_reason(self) -> None:
+        """The reason against ending the session withdrawn, when one is registered."""
+        if self._reason is not None:
+            self._reason = None
+            this_computer.block_shutdown(self._the_window(), None)
 
     def _name_the_set(self, run: _Run) -> None:
         """The simulation set's folder is named: the batches it held at the start are noted, and the model is

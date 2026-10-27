@@ -125,7 +125,8 @@ def look(run):
             run.simulation_folder(), run.began_after_first(), run.fit_not_saved(), run.saves_passed(),
             run.stage_kind(), run.now(), run.stop_bound(), run.last_epoch_ends())
     status = model.RunStatus(state="running", word=run.spec.word, name=run.spec.name)
-    said += (questions.stop_question(status, run), questions.close_question(status, run))
+    said += (questions.stop_question(status, run), questions.close_question(status, run),
+             questions.shutdown_reason(status, run))
     if run.state == "stopping":
         stopping = model.RunStatus(state="stopping", word=run.spec.word, stop_requested=True)
         said += (questions.stopping_line(stopping, run), questions.close_question(stopping, run))
@@ -227,6 +228,25 @@ bad = sorted(name for name in sys.modules if any(name == root or name.startswith
 sys.exit(repr(bad) if bad else 0)
 """
 
+_FRESH_THIS_COMPUTER = """
+import importlib
+import sys
+for name in sys.argv[2].split(","):
+    try:
+        importlib.import_module(name)
+    except ImportError:
+        pass
+from core.gui import this_computer
+words = "a reason " * 40
+said = (this_computer.keep_awake(True), this_computer.block_shutdown(None, words), this_computer.flash(None),
+        this_computer.state(), this_computer.keep_awake(False), this_computer.block_shutdown(None, None),
+        this_computer.state())
+assert said == (False, False, False, (True, this_computer.fitted(words)), False, False, (False, None)), said
+roots = sys.argv[1].split(",")
+bad = sorted(name for name in sys.modules if any(name == root or name.startswith(root + ".") for root in roots))
+sys.exit(repr(bad) if bad else 0)
+"""
+
 
 def _imports(module: str) -> set:
     """Every module an import statement names, in ``module`` and in every module of this repository it reaches
@@ -294,9 +314,10 @@ def test_the_run_model_and_its_readings_import_no_toolkit_and_no_engine():
     window. Every import statement of each module is read, wherever it stands, with every statement of each module
     of this repository it imports; then a fresh interpreter imports every module those statements name, builds a
     training's model and models of runs of other kinds, feeds them their lines, rows, solver counts and clock, and
-    reads every read-out at each step, the questions of a stop and a close among them, the words of the run's
-    failure and of its tries, the command line its page sets off, and the question of keeping a training a stop
-    kept; and the rules of the tries and of repeating a run's call into its page's session."""
+    reads every read-out at each step, the questions of a stop and a close among them with the reason Windows is
+    given against ending the session, the words of the run's failure and of its tries, the command line its page
+    sets off, and the question of keeping a training a stop kept; and the rules of the tries and of repeating a
+    run's call into its page's session."""
     modules = ("core.gui.texts", "core.gui.run.readings", "core.gui.run.model", "core.gui.run.questions",
                "core.gui.run.retry")
     for module in modules:
@@ -305,6 +326,20 @@ def test_the_run_model_and_its_readings_import_no_toolkit_and_no_engine():
         assert not found, f"{module} imports {found}, itself or through a module of this repository it imports"
     named = set().union(*(_imports(module) for module in modules))
     r = subprocess.run([sys.executable, "-c", _FRESH_RUN, ",".join(_RULES_FORBIDDEN), ",".join(sorted(named))],
+                       cwd=str(REPO), capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_requests_made_of_windows_load_no_torch():
+    """The one module that makes PRISM's requests of Windows for a run loads no torch: the window's thread makes them
+    while the run holds the engine. Every import statement it holds is read, with every statement of each module of
+    this repository it imports; then a fresh interpreter imports every module those statements name and makes each
+    request, with no window, which off the toolkit's real platform reaches nothing of Windows and answers False."""
+    assert (REPO / "core" / "gui" / "this_computer.py").is_file(), "core.gui.this_computer is not there to be read"
+    found = _reaching(_imports("core.gui.this_computer"), ("torch",))
+    assert not found, f"core.gui.this_computer imports {found}, itself or through a module of this repository"
+    r = subprocess.run([sys.executable, "-c", _FRESH_THIS_COMPUTER, "torch",
+                        ",".join(sorted(_imports("core.gui.this_computer")))],
                        cwd=str(REPO), capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
 

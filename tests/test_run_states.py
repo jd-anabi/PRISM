@@ -2227,6 +2227,245 @@ def test_a_run_page_that_cannot_be_drawn_holds_up_neither_the_runs_start_nor_its
     assert all(panel.controls.isEnabled() for panel in BasePanel._instances) and other.controls.isEnabled()
 
 
+# ── this computer: kept awake while a run is live, and the reason Windows is given not to end the session ──
+# What the calls to Windows are named, which no file under core/ but the one that makes them names.
+_WINDOWS_CALLS = ("SetThreadExecutionState", "ShutdownBlockReason", ".alert(")
+# The reason a training gives at each stage, and one whose fit is not saved as it goes.
+_RUNNING = ("Training retrain_3 is running. Shutting down stops it. Nothing has been simulated yet. The rotation will "
+            "be computed again next time.")
+_SIMULATING = "Training retrain_3 is simulating. Shutting down stops it; the simulations done so far are saved first."
+_FITTING = ("Training retrain_3 is fitting. Shutting down loses the epoch in progress; the epochs finished so far are "
+            "kept.")
+_SAVING = ("Training retrain_3 is saving its posterior. Shutting down stops it; the finished training is kept, and "
+           "resuming it writes the posterior.")
+_LOSES_THE_FIT = "Shutting down loses the fit: nothing of it can be saved. The simulations are kept."
+# Every other kind of run: its spec, as its page hands it, and the reason it gives.
+_OTHER_REASONS = (
+    (RunSpec("Prior build", ("inference", "prior"), stop_button="Stop the prior build…", kinds=("prior",)),
+     "Prior build is running. Shutting down stops it. Nothing of the prior is kept; it is built again from the start "
+     "next time."),
+    (RunSpec("Check", ("inference", "checks"), name="Calibration", stop_button="Stop the calibration…"),
+     "Check Calibration is running. Shutting down stops it. A check writes its record only when it finishes, so "
+     "nothing of this one is kept."),
+    (RunSpec("Inference", ("inference", "infer"), stop_button="Stop the inference…"),
+     "Inference is running. Shutting down stops it. The inference is not kept. An observation it has already written "
+     "stays in Records."),
+    (RunSpec("Measurement", ("temperature", "one_cell"), name="cell_a_3oct", stop_button="Stop measurement…"),
+     "Measurement cell_a_3oct is running. Shutting down stops it. The record cell_a_3oct is kept, marked unfinished, "
+     "with what it has measured so far. A measurement cannot be continued; to finish it, it is measured again from "
+     "the start."),
+    (RunSpec("Sweep study", ("temperature", "sweep"), name="study", stop_button="Stop sweep study…"),
+     "Sweep study study is running. Shutting down stops it. What the study has measured is kept, marked unfinished; a "
+     "study cannot be continued."),
+    (RunSpec("Comparison", ("temperature", "one_cell"), stop_button="Stop the comparison…"),
+     "Comparison is running. Shutting down stops it. A comparison writes its record only when it finishes, so nothing "
+     "of this one is kept."),
+    (RunSpec("Reduction map", ("reduction", None), stop_button="Stop computing…"),
+     "Reduction map is running. Shutting down stops it. The map will not be shown. If its table is already written, "
+     "that file stays in the reduction folder."),
+    (RunSpec("Video", ("live", None), stop_button="Stop saving…", keeps_files=False),
+     "Video is running. Shutting down stops it. The unfinished file is removed. The trace stays and can be saved "
+     "again."),
+    (RunSpec("Live simulation", ("live", None), stop_button="Stop simulation", keeps_files=False, stop_asks=False),
+     "Live simulation is running. Shutting down stops it."),
+    (_load(), "Prior load is running. Shutting down stops it."),
+)
+
+
+def _guards(request):
+    """tests/conftest.py as pytest holds it: tests/ is no package, so pytest holds its conftest under a name of its
+    own, and imported by name the file would be loaded a second time, beside the one whose fixtures are in force."""
+    here = REPO / "tests" / "conftest.py"
+    return next(plugin for plugin in request.config.pluginmanager.get_plugins()
+                if getattr(plugin, "__file__", None) and Path(plugin.__file__).resolve() == here)
+
+
+def test_a_test_that_ends_with_a_windows_request_standing_fails(request):
+    """No test leaves the computer kept awake or a reason against ending the session registered, and no test that is
+    not marked for the real screen reaches Windows. In every such test the session's guard stands in for the calls of
+    core/gui/this_computer.py and keeps each, with what it was handed and the thread it came from; what a test's
+    record leaves standing -- the computer still kept awake, a reason still registered, Windows reached -- is
+    ``windows_requests_left``'s to say, and it says nothing of a record that leaves nothing. The guard's own function
+    is driven here as the test runner drives it, around a test that leaves each standing and around one that leaves
+    nothing: the first fail at their end, the module's record of the last request put back. The end of a test, which
+    stops a run the test left live and so lets go of what the run asked, is torn down before the guard reads its
+    record: it names the guard among the fixtures it needs. Under core/ no file but that module names Windows'
+    calls."""
+    import inspect
+    from core.gui import this_computer
+    guards = _guards(request)
+    assert "windows_asked" in inspect.signature(guards._built_widgets_let_go.__wrapped__).parameters, (
+        "the end of a test is not torn down before the guard of the requests made of Windows reads its record")
+    left, window = guards.windows_requests_left, object()
+    balanced = [("keep_awake", (True,), "MainThread"),
+                ("block_shutdown", (window, "Training is running."), "MainThread"),
+                ("block_shutdown", (window, "Training is fitting."), "MainThread"), ("flash", (window,), "MainThread"),
+                ("keep_awake", (False,), "MainThread"), ("block_shutdown", (window, None), "MainThread")]
+    assert (left([]), left(balanced)) == ([], [])
+    assert left(balanced[:4]) == ["the computer is still kept awake",
+                                  "a reason against shutting down is still registered: 'Training is fitting.'"]
+    assert left(balanced + [("windows", ("kernel32.SetThreadExecutionState",), "MainThread")]) == [
+        "Windows was reached by a test not marked for the real screen: kernel32.SetThreadExecutionState"]
+
+    around_a_test = guards.windows_asked.__wrapped__       # the function the fixture was made from
+    reached = "Windows was reached by a test not marked for the real screen: kernel32.SetThreadExecutionState"
+    for leaves, wanted in (("nothing", None), ("awake", "the computer is still kept awake"),
+                           ("reason", "a reason against shutting down is still registered: 'Training is fitting.'"),
+                           ("Windows", reached)):
+        run = around_a_test(request)
+        calls = next(run)                                  # before the test
+        assert this_computer.keep_awake(True) is True     # the test: the stand-ins, each kept
+        assert this_computer.block_shutdown(window, "Training is fitting.") is True
+        if leaves != "awake":
+            this_computer.keep_awake(False)
+        if leaves != "reason":
+            this_computer.block_shutdown(window, None)
+        if leaves == "Windows":
+            with pytest.raises(RuntimeError):
+                this_computer._windows("kernel32", "SetThreadExecutionState")
+        assert all(thread == "MainThread" for _name, _args, thread in calls) and len(calls) >= 2, calls
+        if wanted is None:
+            with pytest.raises(StopIteration):
+                next(run)                                  # after the test: nothing standing
+        else:
+            with pytest.raises(AssertionError, match=re.escape(wanted)):
+                next(run)
+        assert this_computer.state() == (False, None), "the guard did not put back the module's record"
+
+    named = {path.relative_to(REPO).as_posix(): [call for call in _WINDOWS_CALLS
+                                                 if call in path.read_text(encoding="utf-8")]
+             for path in sorted((REPO / "core").rglob("*.py"))}
+    assert {path: calls for path, calls in named.items() if calls} == {
+        "core/gui/this_computer.py": list(_WINDOWS_CALLS)}, "a file under core/ but this_computer.py calls Windows"
+
+
+def test_the_computer_is_kept_awake_from_the_start_of_a_run_to_its_end(tmp_path, windows_asked):
+    """Windows is asked to keep the computer awake as a run starts, and to let it sleep again as the run ends: once
+    each, both from the window's thread, however the run ends -- finished, stopped or failed. The request stands
+    through the run's stop, and the run's end lets the computer sleep before its end is published."""
+    from PySide6.QtCore import QObject
+    from tests import _built
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    held, host = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_run_host()
+
+    def awake():
+        return [(args[0], thread) for name, args, thread in windows_asked if name == "keep_awake"]
+
+    class Ends(QObject):
+        """What Windows had been asked of keeping the computer awake when each run's end was published."""
+
+        def __init__(self):
+            super().__init__()
+            self.asked = []
+            held.run_ended.connect(self.ended)
+            _built.keep(self)
+
+        def ended(self, _status):
+            self.asked.append(awake())
+
+    ends = Ends()
+    for ending in ("finished", "stopped", "failed"):
+        windows_asked.clear()
+        del ends.asked[:]
+        text, stand_in = RunText(held), StandIn()
+        start_run(host, stand_in, spec=_training())
+        assert (held.status.state, awake()) == ("starting", [(True, "MainThread")]), (ending, awake())
+        stand_in.say(_LINES["budget"])
+        turn_until(app, lambda: _LINES["budget"] in text.texts())
+        if ending == "stopped":
+            held.request_stop()
+            assert held.status.state == "stopping"
+        assert awake() == [(True, "MainThread")], f"the request did not stand while the run was live: {awake()}"
+        if ending == "finished":
+            stand_in.release()
+        elif ending == "failed":
+            stand_in.fail(RuntimeError("the cell file could not be read"))
+        turn_until(app, lambda: not held.is_live())
+        assert [status.outcome for status in text.ended] == [ending]
+        assert ends.asked == [awake()] == [[(True, "MainThread"), (False, "MainThread")]], (
+            f"{ending}: not asked once each way from the window's thread, or let sleep after the end was published: "
+            f"{ends.asked}, {awake()}")
+
+
+def test_the_reason_against_shutting_down_follows_the_runs_stage(tmp_path, windows_asked):
+    """From a run's first line to its end Windows is given the reason PRISM should not be shut down, the words Windows
+    lists beside PRISM: registered on the newest window built as the run is running, set again at each change of its
+    stage, standing through its stop, and withdrawn as it ends, each from the window's thread; none while it starts.
+    A training says it is simulating, fitting, or saving its posterior, and what shutting down then loses and keeps
+    (a fit not saved as it goes is lost whole); before its simulation, and every other kind of run, a live
+    simulation's and a load's too, it says that shutting down stops it, then what its stop keeps, as its stop's
+    question says it."""
+    from tests._fixtures import build_run_host, build_window, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held = _controller_on(tmp_path, clock)
+    build_window()                                     # an earlier window: the reason goes on the newest
+    window, host = build_window(), build_run_host()
+
+    def reasons():
+        return [(args[1], args[0] is window, thread) for name, args, thread in windows_asked
+                if name == "block_shutdown"]
+
+    def said(text, stand_in, *lines):
+        for line in lines:
+            stand_in.say(line)
+        turn_until(app, lambda: lines[-1] in text.texts())
+
+    def given(*words):
+        return [(word, True, "MainThread") for word in words]
+
+    # a training through its stages, stopped in its simulation
+    text, stand_in = RunText(held), StandIn(takes_stops=False)
+    start_run(host, stand_in, spec=_training())
+    held.tick()                                        # the controller's look, while the run starts
+    assert (held.status.state, reasons()) == ("starting", []), "a reason was registered before the run's first line"
+    said(text, stand_in, _LINES["budget"])
+    assert reasons() == given(_RUNNING)
+    said(text, stand_in, _LINES["rotation_begins"])
+    assert reasons() == given(_RUNNING, _RUNNING), "the reason was not set again at the rotation"
+    said(text, stand_in, _LINES["rotation_done"], _LINES["simulation_writing"])
+    assert reasons() == given(_RUNNING, _RUNNING, _SIMULATING)
+    held.request_stop()
+    clock.advance(30)
+    held.tick()
+    assert (held.status.state, reasons()) == ("stopping", given(_RUNNING, _RUNNING, _SIMULATING)), (
+        "the reason did not stand through the stop")
+    stand_in.say("the line at which the stop is taken")
+    turn_until(app, lambda: not held.is_live())
+    assert reasons() == given(_RUNNING, _RUNNING, _SIMULATING, None), "the reason was not withdrawn at the end"
+
+    # a training to its fit and the saving of its posterior; then one whose fit is not saved as it goes
+    for saved, fitting, saving in ((True, _FITTING, _SAVING),
+                                   (False, f"Training retrain_3 is fitting. {_LOSES_THE_FIT}",
+                                    f"Training retrain_3 is saving its posterior. {_LOSES_THE_FIT}")):
+        windows_asked.clear()
+        text, stand_in = RunText(held), StandIn()
+        start_run(host, stand_in, spec=_training())
+        for line in (_LINES["budget"], _LINES["rotation_begins"], _LINES["rotation_done"],
+                     _LINES["simulation_writing"], *(() if saved else (_LINES["fit_saving_off"],)),
+                     _LINES["simulation_complete"], _epoch(1), _epoch(2, since=20)):   # 20 since the best: it ends
+            said(text, stand_in, line)
+        assert held.model.stage == "Saving"
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())
+        assert reasons() == given(_RUNNING, _RUNNING, _SIMULATING, fitting, saving, None), (saved, reasons())
+
+    # every other kind of run
+    for spec, reason in _OTHER_REASONS:
+        windows_asked.clear()
+        text, stand_in = RunText(held), StandIn(word=spec.word)
+        start_run(host, stand_in, spec=spec)
+        assert reasons() == [], spec.word
+        said(text, stand_in, "a line of the run")
+        assert reasons() == given(reason), spec.word
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())
+        assert reasons() == given(reason, None), spec.word
+
+
 # ── the run's page: in the place of a page's results, drawn from the run's model ──
 def _page_says(view) -> dict:
     """What the run's page shows, read off its parts, each only while it is in sight: its sentence, its stages as

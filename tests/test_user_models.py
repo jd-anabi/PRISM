@@ -1408,6 +1408,92 @@ def test_on_a_real_windows_display_bringing_the_window_forward_returns_without_e
     assert user32.GetForegroundWindow() == front, "the front was taken from the window the person works in"
 
 
+def _never_shown():
+    """A window of the real platform that is never shown, its native handle made, and Windows' front window now:
+    nothing a person sees changes while it stands."""
+    import ctypes
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QMainWindow
+    qt_app()
+    if QGuiApplication.platformName() != "windows":
+        pytest.skip(f"needs the windows platform, got {QGuiApplication.platformName()!r}")
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    window = QMainWindow()
+    return window, int(window.winId()), user32, user32.GetForegroundWindow()
+
+
+@pytest.mark.display
+def test_on_a_real_windows_display_the_computer_is_kept_awake_and_let_sleep_again():
+    """Needs QT_QPA_PLATFORM=windows. Asked to keep the computer awake, Windows holds the system's execution state
+    with the flag that keeps the system running, and drops the flag when the request is ended, both on this thread.
+    The state is read with ``CallNtPowerInformation(SystemExecutionState)``; ``powercfg /requests`` cannot be: it
+    needs an elevated prompt. Nothing a person sees changes."""
+    import ctypes
+    from core.gui import this_computer
+    window, _handle, user32, front = _never_shown()
+
+    def kept_running() -> bool:
+        flags = ctypes.c_ulong(0)
+        status = ctypes.WinDLL("powrprof").CallNtPowerInformation(16, None, 0, ctypes.byref(flags),
+                                                                  ctypes.sizeof(flags))
+        assert status == 0, f"the execution state could not be read: status {status}"
+        return bool(flags.value & this_computer.ES_SYSTEM_REQUIRED)
+
+    assert not kept_running(), "another program keeps the system running, so this request cannot be told apart"
+    try:
+        assert this_computer.keep_awake(True) is True
+        assert (kept_running(), this_computer.state()[0]) == (True, True)
+    finally:
+        assert this_computer.keep_awake(False) is True
+    assert (kept_running(), this_computer.state()[0]) == (False, False)
+    assert not window.isVisible() and user32.GetForegroundWindow() == front
+
+
+@pytest.mark.display
+def test_on_a_real_windows_display_a_reason_against_shutting_down_is_registered_and_withdrawn():
+    """Needs QT_QPA_PLATFORM=windows. A reason registered on a window that is never shown is read back from Windows
+    as it was given, and words longer than Windows takes are given cut to what it takes, the last an ellipsis (a
+    longer reason is refused whole); once withdrawn, Windows holds none for the window: its read fails with the
+    error that says so (87). Nothing a person sees changes."""
+    import ctypes
+    from ctypes import wintypes
+    from core.gui import this_computer
+    window, handle, user32, front = _never_shown()
+    user32.ShutdownBlockReasonQuery.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+    user32.ShutdownBlockReasonQuery.restype = wintypes.BOOL
+
+    def registered():
+        size = wintypes.DWORD(0)
+        if not user32.ShutdownBlockReasonQuery(handle, None, ctypes.byref(size)):
+            return False, ctypes.get_last_error()
+        words = ctypes.create_unicode_buffer(size.value)
+        assert user32.ShutdownBlockReasonQuery(handle, words, ctypes.byref(size)), ctypes.get_last_error()
+        return True, words.value
+
+    reason = ("Training retrain_3 is fitting. Shutting down loses the epoch in progress; the epochs finished so far "
+              "are kept.")
+    try:
+        assert this_computer.block_shutdown(window, reason) is True
+        assert registered() == (True, reason)
+        assert this_computer.block_shutdown(window, "x" * 300) is True
+        assert registered() == (True, "x" * 255 + "…") == (True, this_computer.state()[1])
+    finally:
+        assert this_computer.block_shutdown(window, None) is True
+    assert (registered(), this_computer.state()[1]) == ((False, 87), None)
+    assert not window.isVisible() and not user32.IsWindowVisible(handle) and user32.GetForegroundWindow() == front
+
+
+@pytest.mark.display
+def test_on_a_real_windows_display_the_taskbar_flash_returns_without_error():
+    """Needs QT_QPA_PLATFORM=windows. The taskbar's flash, asked for a window that is never shown, returns without
+    error and takes nothing from the window the person works in."""
+    from core.gui import this_computer
+    window, handle, user32, front = _never_shown()
+    assert this_computer.flash(window) is True
+    assert not window.isVisible() and not user32.IsWindowVisible(handle) and user32.GetForegroundWindow() == front
+
+
 def test_the_builders_empty_variables_box_shows_a_hint_that_cannot_be_an_entry():
     """The hint in an empty box is dark enough to be read, so a hint that is itself a valid entry looks as if
     it had been typed: "x, y" in the variables box read as two variables already declared. With "e.g." before

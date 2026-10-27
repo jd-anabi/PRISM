@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplicat
 from core.artifacts import KIND_DIRS, StoreError, default_store
 from core.config import VALID_MODELS
 
-from . import chain, design, keys, one_instance, record_words, settings, style
+from . import chain, design, keys, one_instance, record_words, settings, style, this_computer
 from .panels.base_panel import BasePanel
 from .panels.crossval_panel import CrossValPanel
 from .panels.fdt_panel import FdtPanel
@@ -272,8 +272,9 @@ class MainWindow(QMainWindow):
         self._run_timer.setInterval(1000)
         self._run_timer.timeout.connect(self._tick_running)
         # The process's one run is heard through a method of this window's own, so that a deleted window leaves no
-        # connection behind.
+        # connection behind; and its reason against ending the session goes on this window, the newest built.
         controller().status_changed.connect(self._on_status)
+        controller().use_window(self)
 
         # ALWAYS open on Home, its row marked and the steps' states in the rail. Home has read what it states
         # as it was built, and reads nothing more at its first show.
@@ -551,7 +552,7 @@ class MainWindow(QMainWindow):
         front.raise_()
         front.activateWindow()
         if not _holds_the_front(front):
-            QApplication.alert(self)
+            this_computer.flash(self)
 
     def go_to_run(self) -> None:
         """Go to the place of the live run. Nothing when no run is live, or it has no place."""
