@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from core.gui import this_computer
 from core.gui.run import questions
 from core.gui.run.controller import controller
 from core.gui.run.model import SILENCE_NEEDS_YOU_S, SIMULATION_ROW, RunSpec
@@ -1235,6 +1236,11 @@ def test_the_end_of_a_test_stops_a_training_it_left_live_in_its_save(tmp_path):
 
 
 # ── Windows' end of a session: its question, "shut down anyway" and "cancel" ──
+# The watch on Windows' end of a session as its module defines it, read as this file is loaded: in a test not marked
+# for the real screen the session's guard stands in for it.
+WATCH_SESSION_END = this_computer.watch_session_end
+
+
 class _Manager:
     """The toolkit's session manager, as Windows' question hands it to the window: how often it was cancelled."""
 
@@ -1252,13 +1258,16 @@ def _windows_log(caplog) -> list:
 
 
 def _histories_written(monkeypatch, held) -> list:
-    """Each write of a run's history from now on, as the outcome, the stop's reason and the end it wrote, and whether
-    the run was live as it was written; the list they are put in."""
+    """Each write of a run's history from now on, as the outcome, the stop's reason and the end it wrote, the outcome
+    and the end it wrote of the run's last try, and whether the run was live as it was written; the list they are put
+    in."""
     from core.gui.run import history
     written, write = [], history.write
 
     def noted(folder, record):
-        written.append((record["outcome"], record["stop_reason"], record["ended"], held.is_live()))
+        last = record["tries"][-1] if record["tries"] else {}
+        written.append((record["outcome"], record["stop_reason"], record["ended"], last.get("outcome"),
+                        last.get("ended"), held.is_live()))
         return write(folder, record)
 
     monkeypatch.setattr(history, "write", noted)
@@ -1298,11 +1307,12 @@ def test_from_the_moment_windows_asks_no_question_is_shown(tmp_path, caplog):
 def test_shut_down_anyway_stops_the_run_once_and_cancel_never(tmp_path, monkeypatch, caplog):
     """"Cancel" stops nothing: the window's log says the end of the session was cancelled, and a close asks its
     question again. "Shut down anyway" stops the live run as a stop asked by the person does, once however often it
-    is heard, during the wait for the run's end too. From that moment the run's history says the run was stopped,
-    when, and that Windows shut down, and its text says the stop was asked for that reason, so both hold it should
-    Windows end PRISM before the run has ended; then the window's thread waits for the run's end, the event loop
-    turning, and returns once the run has ended, stopped. Such a run counts as stopped by the person: Home offers to
-    continue it no more than it offers a stop's."""
+    is heard, during the wait for the run's end too. From that moment the run's history says the run, and the try it
+    is in, was stopped, when, and that Windows shut down, and its text says the stop was asked for that reason, so
+    both hold it should Windows end PRISM before the run has ended; then the window's thread waits for the run's end,
+    the event loop turning, and returns once the run has ended, stopped, its history and its try then holding the
+    moment it ended. Such a run counts as stopped by the person: Home offers to continue it no more than it offers a
+    stop's."""
     from PySide6.QtCore import QTimer
     from core.artifacts import ArtifactStore
     from core.gui.panels.reduction_panel import ReductionPanel
@@ -1339,15 +1349,19 @@ def test_shut_down_anyway_stops_the_run_once_and_cancel_never(tmp_path, monkeypa
     run = held.status.run
     clock.advance(600)
     window.session_asked(_Manager())
-    QTimer.singleShot(0, lambda: window.session_ending(True))      # heard again while the window waits
+    heard_at = clock()
+    QTimer.singleShot(0, lambda: (clock.advance(5), window.session_ending(True)))   # heard again while it waits
     window.session_ending(True)
     assert (held.is_live(), stand_in.stopped_at) == (False, STOP_LINE), "the window did not wait for the run's end"
     window.session_ending(True)
     record = history.read(folder / f"{run}.json")
     assert (len(stand_in.calls), [status.outcome for status in text.ended], record["outcome"],
-            record["stop_reason"]) == (1, ["stopped"], "stopped", "Windows shut down")
-    assert ("stopped", "Windows shut down", clock(), True) in written, (
-        "the history did not say the run was stopped, when, and why, while the run was still live")
+            record["stop_reason"], datetime.fromisoformat(record["ended"]), record["tries"][-1]["outcome"],
+            datetime.fromisoformat(record["tries"][-1]["ended"])) == (
+        1, ["stopped"], "stopped", "Windows shut down", clock(), "stopped", clock()), (
+        "the run's end did not write how and when the run and its try ended")
+    assert ("stopped", "Windows shut down", heard_at, "stopped", heard_at, True) in written, (
+        "the history did not say the run and its try were stopped, when, and why, while the run was still live")
     assert text.texts("window").count("A stop was asked for: Windows shut down.") == 1
     assert history.continuable(record, store=ArtifactStore(tmp_path / "records"), folder=folder) is None
 
@@ -1355,9 +1369,10 @@ def test_shut_down_anyway_stops_the_run_once_and_cancel_never(tmp_path, monkeypa
 def test_shut_down_anyway_while_the_posterior_is_saved_stops_nothing_and_waits_for_the_save(tmp_path, monkeypatch):
     """A training saving its posterior is not stopped, whoever asks, Windows too: "shut down anyway" sets no stop and
     its text says the save goes on, and the window's thread waits for the save as long as Windows lets PRISM live.
-    Until the run has ended its history says it was stopped because Windows shut down, which is what stays should
-    Windows end PRISM first (the finished training is kept, and resuming it writes the posterior); once the posterior
-    is saved the run has finished, and its history says so, with no reason for a stop."""
+    Until the run has ended its history says it, and the try it is in, was stopped because Windows shut down, which is
+    what stays should Windows end PRISM first (the finished training is kept, and resuming it writes the posterior);
+    once the posterior is saved the run has finished, and its history says so, with no reason for a stop and the
+    moment the save ended."""
     from PySide6.QtCore import QTimer
     from core.gui.run import history
     from tests._window_helpers import shown_off_screen
@@ -1373,14 +1388,18 @@ def test_shut_down_anyway_while_the_posterior_is_saved_stops_nothing_and_waits_f
     token, run = held._run.token, held.status.run
     clock.advance(30)
     window.session_asked(_Manager())
-    QTimer.singleShot(0, stand_in.release)            # the save ends while the window waits
+    heard_at = clock()
+    QTimer.singleShot(0, lambda: (clock.advance(5), stand_in.release()))   # the save ends while the window waits
     window.session_ending(True)
     record = history.read(tmp_path / "runs" / f"{run}.json")
     assert (held.is_live(), token.requested.is_set(), stand_in.stopped_at, [status.outcome for status in text.ended],
-            record["outcome"], record["stop_reason"]) == (False, False, None, ["finished"], "finished", None), (
-        "the save was stopped, or the window did not wait for it, or a finished run's history kept the reason")
-    assert ("stopped", "Windows shut down", clock(), True) in written, (
-        "until the save ended the history did not say the run was stopped because Windows shut down")
+            record["outcome"], record["stop_reason"], datetime.fromisoformat(record["ended"]),
+            record["tries"][-1]["outcome"], datetime.fromisoformat(record["tries"][-1]["ended"])) == (
+        False, False, None, ["finished"], "finished", None, clock(), "finished", clock()), (
+        "the save was stopped, or the window did not wait for it, or a finished run's history kept the reason, or did "
+        "not say when the run and its try ended")
+    assert ("stopped", "Windows shut down", heard_at, "stopped", heard_at, True) in written, (
+        "until the save ended the history did not say the run and its try were stopped because Windows shut down")
     assert text.texts("window").count(
         "Windows shut down: the posterior is still being saved, which no stop interrupts.") == 1
 
@@ -1391,16 +1410,41 @@ def test_the_session_watch_hears_shut_down_anyway_apart_from_an_ordinary_quit_an
     down anyway". Windows' end message saying the session does not end is "cancel", heard once for its question
     however many of the process's windows Windows sends it to; a quit after it is ordinary again. The filter consumes
     no message, and hands on no other: the end message saying the session ends, Windows' question, any other message,
-    another kind of event. Removed, the watch is off the application."""
+    another kind of event. The filter is on the application only from Windows' question to its cancel, since a filter
+    written in Python is handed every message of the window's thread: once however many questions come, off at the
+    cancel, and kept once the session ends. Removed, the watch is off the application. Its signals are raised on a
+    stand-in of the application: the one application of the suites is heard by others too (the live view's plotting
+    library cleans up as it quits), so on it the watch's connections are only counted, from a reading taken first."""
     import ctypes
     from ctypes import wintypes
-    from PySide6.QtCore import QByteArray
-    from core.gui import this_computer
-    app = qt_app()
+    from PySide6.QtCore import QByteArray, QObject, Signal
+
+    class Application(QObject):
+        """The application as the watch uses it: its question and its quit, and the native filters it holds."""
+        aboutToQuit = Signal()
+        commitDataRequest = Signal(object)
+
+        def __init__(self):
+            super().__init__()
+            self.filters = []
+
+        def installNativeEventFilter(self, one):
+            self.filters.append(one)
+
+        def removeNativeEventFilter(self, one):
+            self.filters.remove(one)
+
+    app, stand_in = qt_app(), Application()
     asked_with, ending, manager = [], [], _Manager()
     signals = ("2aboutToQuit()", "2commitDataRequest(QSessionManager&)")
-    assert [app.receivers(signal) for signal in signals] == [0, 0], "something else hears the toolkit's quit"
-    watch = this_computer.SessionWatch(app, asked=asked_with.append, ending=ending.append)
+    before = [app.receivers(signal) for signal in signals]
+    real = this_computer.SessionWatch(app, asked=asked_with.append, ending=ending.append)
+    try:
+        assert [app.receivers(signal) for signal in signals] == [count + 1 for count in before]
+    finally:
+        real.remove()
+    assert [app.receivers(signal) for signal in signals] == before, "the watch was left on the application"
+    watch = this_computer.SessionWatch(stand_in, asked=asked_with.append, ending=ending.append)
 
     def message(number, wparam=0, kind=b"windows_generic_MSG"):
         msg = wintypes.MSG()
@@ -1408,23 +1452,49 @@ def test_the_session_watch_hears_shut_down_anyway_apart_from_an_ordinary_quit_an
         return watch.filter.nativeEventFilter(QByteArray(kind), ctypes.addressof(msg))
 
     try:
-        assert [app.receivers(signal) for signal in signals] == [1, 1]
-        app.aboutToQuit.emit()
-        assert (asked_with, ending) == ([], []), "an ordinary quit was heard as Windows ending the session"
-        watch._question(manager)                       # Windows' question, as the toolkit hands it on
-        app.aboutToQuit.emit()
-        assert (asked_with, ending) == ([manager], [True])
-        watch._question(manager)
-        assert [message(0x0016), message(0x0016)] == [(False, 0)] * 2
-        assert ending == [True, False], "a cancel was not heard, or was heard twice"
-        app.aboutToQuit.emit()
-        watch._question(manager)
+        assert stand_in.filters == [], "the filter was handed the application's messages before Windows' question"
+        stand_in.aboutToQuit.emit()
+        assert (asked_with, ending, stand_in.filters) == ([], [], []), (
+            "an ordinary quit was heard as Windows ending the session")
+        stand_in.commitDataRequest.emit(manager)       # Windows' question, the toolkit's session manager handed on
+        assert stand_in.filters == [watch.filter], "Windows' question did not put the filter on the application"
+        stand_in.aboutToQuit.emit()
+        assert (asked_with, ending, stand_in.filters) == ([manager], [True], [watch.filter])
+        stand_in.commitDataRequest.emit(manager)
+        assert stand_in.filters == [watch.filter], "a second question put the filter on the application again"
+        assert (message(0x0016), ending, stand_in.filters) == ((False, 0), [True, False], []), (
+            "a cancel was not heard, or left the filter on the application")
+        assert (message(0x0016), ending, stand_in.filters) == ((False, 0), [True, False], []), (
+            "a cancel was heard twice")
+        stand_in.aboutToQuit.emit()
+        stand_in.commitDataRequest.emit(manager)
         assert [message(0x0016, 1), message(0x0011), message(0x000F),
                 message(0x0016, kind=b"windows_dispatcher_MSG")] == [(False, 0)] * 4
-        assert ending == [True, False], f"a quit after a cancel, or another message, was heard: {ending}"
+        assert (ending, stand_in.filters) == ([True, False], [watch.filter]), (
+            f"a quit after a cancel, or another message, was heard: {ending}")
     finally:
         watch.remove()
-    assert [app.receivers(signal) for signal in signals] == [0, 0], "the watch was left on the application"
+    stand_in.commitDataRequest.emit(manager)
+    stand_in.aboutToQuit.emit()
+    assert (len(asked_with), ending, stand_in.filters) == (3, [True, False], []), (
+        "the watch was left on the application")
+
+
+def test_off_the_real_windows_platform_no_watch_on_the_sessions_end_is_installed():
+    """Off Windows, and off the toolkit's real ``windows`` platform as here, the watch on Windows' end of a session is
+    installed nowhere, as every other request made of Windows answers False there: none is handed back, the process
+    holds none, and nothing more hears the application's question or its quit. The watch is asked for as its module
+    defines it."""
+    app = qt_app()
+    signals = ("2aboutToQuit()", "2commitDataRequest(QSessionManager&)")
+    before, asked_with, ending = [app.receivers(signal) for signal in signals], [], []
+    watch = WATCH_SESSION_END(app, asked=asked_with.append, ending=ending.append)
+    try:
+        assert (watch, this_computer.watching(), [app.receivers(signal) for signal in signals]) == (
+            None, None, before), "off the real windows platform the watch on Windows' end of a session was installed"
+    finally:
+        if watch is not None:
+            watch.remove()
 
 
 # ── the figure windows ──

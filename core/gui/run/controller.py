@@ -1149,10 +1149,12 @@ class RunController(QObject):
 
     def _record(self, run: _Run) -> dict:
         """The run's history, as its model reads it now. A stop asked with a reason of its own makes the run's outcome
-        "stopped", with that reason, until the run has ended, and its end the moment the reason was said: a process
-        Windows ends before the run leaves them said. The reason stays unless the run finished."""
+        "stopped", with that reason, until the run has ended, and its end the moment the reason was said, and the same
+        of the try it is in: a process Windows ends before the run leaves them said. The reason stays unless the run
+        finished."""
         spec, model = run.spec, self._model
         reason = run.stop_reason if run.stop_reason and run.outcome != "finished" else None
+        ended = run.ended if run.ended is not None or reason is None else run.reason_at
         epochs, budget, failed = model.epochs(), model.budget() or {}, model.failed()
         folder, note = model.simulation_folder(), run.kept_fit
         network = spec.facts.get("network")
@@ -1186,8 +1188,9 @@ class RunController(QObject):
             # Once the run has ended, what the try left is what the set and the kept training hold, as for a try that
             # failed and was tried again; while it runs, what its text has counted.
             after = run.kept_now if run.ended is not None else None
-            tries.append({"started": run.attempt_started or model.started, "ended": run.ended,
-                          "outcome": run.outcome, "failure": None if failure is None else failure["type"],
+            tries.append({"started": run.attempt_started or model.started, "ended": ended,
+                          "outcome": run.outcome or ("stopped" if reason else None),
+                          "failure": None if failure is None else failure["type"],
                           "batches_before": run.at_start if before is None else before[0],
                           "batches_after": done if after is None else after[0],
                           "epochs_before": None if before is None else before[1],
@@ -1195,8 +1198,7 @@ class RunController(QObject):
         return {"id": run.id, "word": spec.word, "name": spec.name,
                 "place": None if spec.place is None else list(spec.place),
                 "records_root": str(getattr(run.store, "root", "")), "started": model.started,
-                "ended": run.ended if run.ended is not None or reason is None else run.reason_at,
-                "last_heard": None, "outcome": run.outcome or ("stopped" if reason else "running"),
+                "ended": ended, "last_heard": None, "outcome": run.outcome or ("stopped" if reason else "running"),
                 "stop_reason": reason, "stage": model.stage,
                 "acknowledged": run.acknowledged, "tries": tries,
                 "plan": None, "settings": None, "memory_limit": spec.facts.get("memory_limit"),

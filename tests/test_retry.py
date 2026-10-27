@@ -469,6 +469,71 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
         "the cause does not name the batch in progress, or what is saved is not what the set holds")
 
 
+def test_a_run_waiting_to_be_tried_again_keeps_the_computer_awake_and_shutting_down_anyway_ends_its_tries(
+        tmp_path, windows_asked):
+    """A run that waits to be tried again is live: the computer is kept awake, asked once as the run starts and let
+    sleep only at its end, and the reason against ending the session stays registered, through each pause and the
+    try after it, each asked from the window's thread. Windows' question meanwhile is answered that PRISM blocks the
+    end. "Shut down anyway" ends the tries, as any stop asked while the run waits does: the window's wait returns, the
+    run ends failed, its history says that Windows shut down and when the run ended, its text says the stop's reason
+    and then that the tries stopped, and the computer is let sleep, the reason withdrawn."""
+    from PySide6.QtCore import QTimer
+    from core.gui.run import history
+    from tests._fixtures import build_window
+    app = qt_app()
+    clock = Clock(_at(3, 3, 2, 11))
+    held = _controller_on(tmp_path, clock)
+    window, host = build_window(), build_run_host()
+    text, stand_in, folder = RunText(held), StandIn(), _set(tmp_path, 236)
+    simulating = ("Training retrain_3 is simulating. Shutting down stops it; the simulations done so far are saved "
+                  "first.")
+
+    def asked_of_windows():
+        """Each request to keep the computer awake, and each reason registered (None: withdrawn), so far."""
+        assert all(thread == "MainThread" for _name, _args, thread in windows_asked), windows_asked
+        return ([args[0] for name, args, _thread in windows_asked if name == "keep_awake"],
+                [args[1] for name, args, _thread in windows_asked if name == "block_shutdown"])
+
+    def standing(when):
+        awake, reasons = asked_of_windows()
+        assert (awake, reasons[-1:], None in reasons) == ([True], [simulating], False), (
+            f"{when}: the computer was let sleep, or the reason withdrawn: {awake}, {reasons}")
+
+    start_run(host, stand_in, spec=_training())
+    _to_the_simulation(app, stand_in, text, held, folder, 236)
+    stand_in.fail(_out_of_memory())
+    _waiting(app, held)
+    standing("the first pause")
+    clock.advance(60)
+    held.tick()
+    _tried(app, held, stand_in, 2)
+    standing("the second try")
+    stand_in.fail(_out_of_memory("the simulation of batch 237"))
+    _waiting(app, held)
+    standing("the second pause")
+
+    cancelled = []
+    window.session_asked(SimpleNamespace(cancel=lambda: cancelled.append(True)))
+    assert cancelled == [True], "while the run waits to be tried again Windows was not answered that PRISM blocks"
+    QTimer.singleShot(0, lambda: clock.advance(5))      # the tries end a moment after "shut down anyway"
+    late = QTimer()                                      # were the tries not ended, the next try begins and ends it
+    late.setSingleShot(True)
+    late.timeout.connect(lambda: (clock.advance(600), held.tick()))
+    late.start(10_000)
+    try:
+        window.session_ending(True)
+    finally:
+        late.stop()
+    record = history.read(tmp_path / "runs" / f"{held.status.run}.json")
+    assert (held.is_live(), held.status.outcome, len(stand_in.calls), record["outcome"], record["stop_reason"],
+            datetime.fromisoformat(record["ended"])) == (False, "failed", 2, "failed", "Windows shut down", clock()), (
+        "shutting down anyway during a pause did not end the tries, or the history did not say why and when")
+    assert text.texts("window")[-2:] == ["A stop was asked for: Windows shut down.", retry.STOPPED_TRYING_TEXT]
+    awake, reasons = asked_of_windows()
+    assert (awake, reasons[-2:], reasons.count(None)) == ([True, False], [simulating, None], 1), (
+        "the run's end did not let the computer sleep, or did not withdraw the reason")
+
+
 def test_stop_trying_pressed_as_the_pause_runs_out_begins_no_try(tmp_path):
     """"Stop trying" pressed in the turn of the event loop in which the pause runs out, the window's look at its
     clock coming before the tries have ended, begins no try: the run ends failed, as a press earlier in the pause

@@ -2393,8 +2393,9 @@ def test_the_reason_against_shutting_down_follows_the_runs_stage(tmp_path, windo
     """From a run's first line to its end Windows is given the reason PRISM should not be shut down, the words Windows
     lists beside PRISM: registered on the newest window built as the run is running, set again at each change of its
     stage, standing through its stop, and withdrawn as it ends, each from the window's thread; none while it starts.
-    A training says it is simulating, fitting, or saving its posterior, and what shutting down then loses and keeps
-    (a fit not saved as it goes is lost whole); before its simulation, and every other kind of run, a live
+    A training, and a narrowing round in its own name, says it is simulating, fitting, or saving its posterior, and
+    what shutting down then loses and keeps (a fit not saved as it goes is lost whole); before its simulation, and
+    every other kind of run, a live
     simulation's and a load's too, it says that shutting down stops it, then what its stop keeps, as its stop's
     question says it."""
     from tests._fixtures import build_run_host, build_window, qt_app
@@ -2452,6 +2453,19 @@ def test_the_reason_against_shutting_down_follows_the_runs_stage(tmp_path, windo
         stand_in.release()
         turn_until(app, lambda: not held.is_live())
         assert reasons() == given(_RUNNING, _RUNNING, _SIMULATING, fitting, saving, None), (saved, reasons())
+
+    # a narrowing round, carried to its fit: a training's words, in the round's own name
+    windows_asked.clear()
+    text, stand_in = RunText(held), StandIn(word="Narrowing round")
+    start_run(host, stand_in, spec=_training(word="Narrowing round", name="round_2",
+                                             facts={**_training().facts, "narrowed": True}))
+    for line in (_LINES["budget"], _LINES["rotation_begins"], _LINES["rotation_done"], _LINES["simulation_writing"],
+                 _LINES["simulation_complete"], _epoch(1)):
+        said(text, stand_in, line)
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert reasons() == given(*(words.replace("Training retrain_3", "Narrowing round round_2")
+                                for words in (_RUNNING, _RUNNING, _SIMULATING, _FITTING)), None), reasons()
 
     # every other kind of run
     for spec, reason in _OTHER_REASONS:

@@ -1428,7 +1428,8 @@ def test_on_a_real_windows_display_the_computer_is_kept_awake_and_let_sleep_agai
     """Needs QT_QPA_PLATFORM=windows. Asked to keep the computer awake, Windows holds the system's execution state
     with the flag that keeps the system running, and drops the flag when the request is ended, both on this thread.
     The state is read with ``CallNtPowerInformation(SystemExecutionState)``; ``powercfg /requests`` cannot be: it
-    needs an elevated prompt. Nothing a person sees changes."""
+    needs an elevated prompt. While another program keeps the system running, the request cannot be told apart from
+    it, and the test is skipped. Nothing a person sees changes."""
     import ctypes
     from core.gui import this_computer
     window, _handle, user32, front = _never_shown()
@@ -1440,7 +1441,8 @@ def test_on_a_real_windows_display_the_computer_is_kept_awake_and_let_sleep_agai
         assert status == 0, f"the execution state could not be read: status {status}"
         return bool(flags.value & this_computer.ES_SYSTEM_REQUIRED)
 
-    assert not kept_running(), "another program keeps the system running, so this request cannot be told apart"
+    if kept_running():
+        pytest.skip("another program keeps the system running, so this request cannot be told apart")
     try:
         assert this_computer.keep_awake(True) is True
         assert (kept_running(), this_computer.state()[0]) == (True, True)
@@ -1499,9 +1501,12 @@ def test_on_a_real_windows_display_windows_question_is_answered_block_only_while
     """Needs QT_QPA_PLATFORM=windows. With the watch on Windows' end of a session installed, Windows' question, sent
     by this process to its own window that is never shown (``SendMessageW``, never to another program), is answered
     "block" (0) while a run is live and "go ahead" (1) when none is; Windows' end message saying the session does not
-    end ("cancel") lets the window's close ask its questions again. The end message saying the session ends is never
-    sent: it ends the event loop. While the run is live it keeps the computer awake and registers its reason, for
-    real, and lets go of both at its end. Nothing a person sees changes."""
+    end ("cancel") lets the window's close ask its questions again. The filter that hears the cancel is handed
+    Windows' messages only from the question to its cancel: put on the application inside the handling of the
+    question itself, it is handed the end message that follows, and neither one sent before the question nor one sent
+    after the cancel. The end message saying the session ends is never sent: it ends the event loop. While the run is
+    live it keeps the computer awake and registers its reason, for real, and lets go of both at its end. Nothing a
+    person sees changes."""
     import ctypes
     from ctypes import wintypes
     from datetime import datetime
@@ -1525,20 +1530,27 @@ def test_on_a_real_windows_display_windows_question_is_answered_block_only_while
     window = build_window()
     handle = int(window.winId())
     watch = this_computer.watch_session_end(app, asked=window.session_asked, ending=window.session_ending)
+    handed, cancelled = [], watch.filter._cancelled
+    watch.filter._cancelled = lambda: (handed.append(end), cancelled())     # each end message the filter is handed
     try:
         stand_in = StandIn()
         start_run(build_run_host(), stand_in)
         stand_in.say("a line of the run")
         turn_until(app, lambda: held.status.state == "running")
+        assert (user32.SendMessageW(handle, end, 0, logoff), handed) == (0, []), (
+            "the filter was handed Windows' messages before Windows' question")
         assert user32.SendMessageW(handle, query, 0, logoff) == 0, "Windows was not answered that PRISM blocks"
         assert window._session_ending is True
         assert user32.SendMessageW(handle, end, 0, logoff) == 0
-        assert window._session_ending is False, "a cancelled end of the session was not heard"
+        assert (window._session_ending, handed) == (False, [end]), "a cancelled end of the session was not heard"
+        assert (user32.SendMessageW(handle, end, 0, logoff), handed) == (0, [end]), (
+            "the filter was handed Windows' messages after the cancel")
         stand_in.release()
         turn_until(app, lambda: not held.is_live())
         assert this_computer.state() == (False, None), "the run's end did not let go of what it asked of Windows"
         assert user32.SendMessageW(handle, query, 0, logoff) == 1, "with no run live PRISM still blocked"
         assert user32.SendMessageW(handle, end, 0, logoff) == 0 and window._session_ending is False
+        assert handed == [end, end], "a cancelled end of the session with no run live was not heard"
     finally:
         watch.remove()
     assert this_computer.watching() is None

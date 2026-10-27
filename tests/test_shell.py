@@ -16,7 +16,7 @@ from PySide6.QtGui import QKeySequence, QTextLayout
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
-from core.gui import chain, design, keys, record_words
+from core.gui import chain, design, keys, record_words, this_computer
 from core.gui.main_window import MainWindow
 from core.gui.run.controller import controller
 from core.gui.screens.home_screen import HomeFacts, HomeScreen, RecordRow
@@ -42,6 +42,9 @@ PARTS = [(place.name, place.line) for place in keys.PARTS[1:]]
 # The window's own way to the front, read as this file is loaded: in a test not marked for the real screen a guard
 # stands in for it.
 COME_TO_FRONT = MainWindow.come_to_front
+# The taskbar's flash as its module defines it, read the same way: the guard of the requests made of Windows stands in
+# for it.
+FLASH = this_computer.flash
 
 
 def _under_way():
@@ -3495,6 +3498,26 @@ def test_bringing_the_window_forward_brings_the_question_open_over_it_first(monk
         if question is not None:
             question.reject()
             question.deleteLater()
+
+
+def test_off_windows_the_flash_is_the_toolkits_alert_on_a_real_screen_and_nothing_off_it(monkeypatch):
+    """The taskbar's flash, as its module makes it. On Windows it is asked of Windows on the real platform alone, so
+    here, off the screen, nothing is asked. Off Windows, on a real screen, it is the toolkit's alert, as it was before
+    the flash went through that module: each system draws the eye to the window its own way (a dock's icon, a window
+    marked urgent); off the screen there, and with no window, nothing. The other systems and their platforms are
+    stood in for, and the alert is noted: nothing flashes here."""
+    from PySide6.QtGui import QGuiApplication
+    qt_app()
+    window, alerted = object(), []                 # the window, as the alert is handed it
+    monkeypatch.setattr(QApplication, "alert", lambda widget, *_rest: alerted.append(widget))
+    assert (FLASH(window), alerted) == (False, []), "on Windows off the screen the flash asked something"
+    for system, platform, flashes in (("linux", "xcb", True), ("linux", "wayland", True), ("darwin", "cocoa", True),
+                                      ("linux", "offscreen", False), ("darwin", "minimal", False)):
+        monkeypatch.setattr(this_computer, "sys", SimpleNamespace(platform=system))
+        monkeypatch.setattr(QGuiApplication, "platformName", staticmethod(lambda named=platform: named))
+        del alerted[:]
+        assert (FLASH(window), FLASH(None), alerted) == (flashes, False, [window] if flashes else []), (
+            system, platform)
 
 
 def test_no_key_fires_while_a_question_with_no_window_is_open():

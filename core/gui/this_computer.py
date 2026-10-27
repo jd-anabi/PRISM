@@ -11,11 +11,14 @@ last request this process made of each.
 Windows' own messages. Windows' question comes first, as the toolkit's ``commitDataRequest``. "Shut down anyway"
 comes as the toolkit's ``aboutToQuit``, inside Windows' end message, after a question; an ordinary quit raises the
 same signal with no question before it. "Cancel" gives the toolkit no signal at all: only a filter of the native
-messages sees it, as Windows' end message saying the session does not end. The process holds one watch at a time
-(``watching``).
+messages sees it, as Windows' end message saying the session does not end. A filter written in Python is handed
+every message of the window's thread, so the watch's filter is on the application only from Windows' question to
+its cancel. The process holds one watch at a time (``watching``).
 
 Every call answers False, never an error: off Windows, off the toolkit's real ``windows`` platform (the suites run
-off the screen) and when Windows refuses. Windows is reached in one place, ``_windows``. No torch is loaded here.
+off the screen) and when Windows refuses. Off Windows, and off that platform, the watch is not installed either, and
+None is handed back; off Windows the flash alone is still asked on a real screen, as the toolkit's alert. Windows is
+reached in one place, ``_windows``. No torch is loaded here.
 """
 import sys
 
@@ -30,6 +33,8 @@ REASON_CHARS = 256
 #: Windows' end message, and the kind of event the toolkit hands a native filter one of Windows' messages as.
 WM_ENDSESSION = 0x0016
 NATIVE_MESSAGE = b"windows_generic_MSG"
+#: The toolkit's platforms that show no window on a screen.
+OFF_SCREEN = ("offscreen", "minimal")
 
 # The last request this process made: the computer kept awake, and the reason registered (None for none).
 _requested = {"awake": False, "reason": None}
@@ -89,8 +94,9 @@ def fitted(reason: str) -> str:
 
 def flash(window) -> bool:
     """Flash ``window``'s button on the taskbar until the window is brought to the front. True when Windows was
-    asked."""
-    if window is None or not _on_windows():
+    asked; off Windows, on a real screen, the toolkit's alert is asked instead, which each system shows its own way
+    (a dock's icon, a window marked urgent), and True when it was."""
+    if window is None or not (_on_windows() or _on_a_screen_elsewhere()):
         return False
     try:
         from PySide6.QtWidgets import QApplication
@@ -105,11 +111,14 @@ def watching():
     return _watch
 
 
-def watch_session_end(app, *, asked, ending) -> "SessionWatch":
+def watch_session_end(app, *, asked, ending) -> "SessionWatch | None":
     """Hear Windows end the session from now on (``SessionWatch``): ``asked(manager)`` at Windows' question,
     ``ending(True)`` at "shut down anyway", ``ending(False)`` at "cancel". The process's watch, in place of any it
-    held."""
+    held. Off Windows, and off the toolkit's real ``windows`` platform, nothing is installed and None is handed
+    back."""
     global _watch
+    if not _on_windows():
+        return None
     if _watch is not None:
         _watch.remove()
     _watch = SessionWatch(app, asked=asked, ending=ending)
@@ -122,20 +131,24 @@ class SessionWatch(QObject):
     only when a question was heard since the last cancel: "shut down anyway", never an ordinary quit. One native
     filter (``filter``) sees Windows' end message; one saying the session does not end, after a question, reaches
     ``ending(False)`` once (Windows may send it to each of the process's windows), and the filter consumes no message.
-    ``remove`` takes all of it off the application."""
+    The filter is handed every message of the window's thread while it is on the application, each an entry into
+    Python, so it is put there only at Windows' question, once however many questions come, and taken off at the
+    cancel; after "shut down anyway" it stays, as the process is ending. ``remove`` takes all of it off the
+    application."""
 
     def __init__(self, app, *, asked, ending):
         super().__init__()
         self._app, self._asked, self._ending = app, asked, ending
         self.heard = False                       # a question was heard since the last cancel
         self._removed = False
+        self._filtering = False                  # the filter is on the application
         self.filter = _EndFilter(self._cancelled)
         app.commitDataRequest.connect(self._question)
         app.aboutToQuit.connect(self._quitting)
-        app.installNativeEventFilter(self.filter)
 
     def _question(self, manager) -> None:
         self.heard = True
+        self._filter(True)
         self._asked(manager)
 
     def _quitting(self) -> None:
@@ -146,6 +159,16 @@ class SessionWatch(QObject):
         if self.heard:
             self.heard = False
             self._ending(False)
+            self._filter(False)
+
+    def _filter(self, on: bool) -> None:
+        """Put the filter on the application, or take it off: once each way."""
+        if on != self._filtering:
+            self._filtering = on
+            if on:
+                self._app.installNativeEventFilter(self.filter)
+            else:
+                self._app.removeNativeEventFilter(self.filter)
 
     def remove(self) -> None:
         """The watch off the application, once: its two signals and its filter. The process holds it no more."""
@@ -155,7 +178,7 @@ class SessionWatch(QObject):
         self._removed = True
         self._app.commitDataRequest.disconnect(self._question)
         self._app.aboutToQuit.disconnect(self._quitting)
-        self._app.removeNativeEventFilter(self.filter)
+        self._filter(False)
         if _watch is self:
             _watch = None
 
@@ -188,6 +211,15 @@ def _on_windows() -> bool:
         return False
     from PySide6.QtGui import QGuiApplication
     return QGuiApplication.instance() is not None and QGuiApplication.platformName() == "windows"
+
+
+def _on_a_screen_elsewhere() -> bool:
+    """Whether this process shows its windows on a real screen of another system than Windows: the toolkit's
+    application made there, on a platform that shows windows."""
+    if sys.platform == "win32":
+        return False
+    from PySide6.QtGui import QGuiApplication
+    return QGuiApplication.instance() is not None and QGuiApplication.platformName() not in OFF_SCREEN
 
 
 def _windows(library: str, name: str):
