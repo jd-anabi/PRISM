@@ -1,29 +1,40 @@
 # PRISM — state
 
-**Last updated:** 2026-10-27, late evening.
+**Last updated:** 2026-10-28, afternoon.
 
-THE BUILD OF STAGE 3 OF THE WINDOW REDESIGN, THE RUN, STANDS WITH TASKS 12 AND 13 COMPLETE AND TASK 14 BUILT THROUGH
-TWO FIX ROUNDS, WITH A THIRD FIX ROUND OWED. It is handed to a new chat by the rule of about three tasks, with this
-chat at about 61 % of its room. The weekly bar read 46 % at 23:19, resetting on 1 November at 04:00 UTC.
+THE BUILD OF STAGE 3 OF THE WINDOW REDESIGN, THE RUN, IS BUILT AND REVIEWED: TASKS 0 TO 14 ARE COMPLETE, AND THE
+STAGE'S LAST REVIEW AND ITS ONE FIX WAVE ARE DONE. What is left is TASK 15, THE EXIT, which needs the owner. It is
+handed to a new chat after the last review, as the owner's prompt says, with this chat at about 45 % of its room. The
+weekly bar read 51 % at 13:03, resetting on 1 November at 04:00 UTC.
 
 The session was started from the owner's pasted prompt
-`docs/superpowers/prompts/2026-10-26-window-redesign-stage-3-from-task-12.md`.
+`docs/superpowers/prompts/2026-10-27-window-redesign-stage-3-last-review-and-exit.md`.
 
-- **Task 12** is complete: `93ca7f7`, `4ca7d70`, fix `53f9995`.
-- **Task 13** is complete: `ff5e563`, `6307cd4`, fix `9be258e`, fix 2 `988137c`.
-- **Task 14** is built: `62b37e5`, `81a4282`, `c57b24f`, fix `bc4f43e` and `f5f9cc9`, fix 2 `c8caede`. Its last
-  gate, on `c8caede`: 1986 passed, 9 skipped, 5 deselected (24 min 16 s). The real screen's set: 9 passed.
-- **Departure 120** (shutting down while a posterior is saved stops nothing) and **departure 121** (THE OWNER'S YES:
-  the 'no window' flag on `core/artifacts/provenance.py`'s two calls) were added. The plan is corrected as built
-  (`b3a639a`, `6bf8411`, and this session's last docs commit).
+- **Task 14** is complete: its third fix round `bb560ba` (the launcher tests run a copy of `run.bat` only when its
+  bytes have the digest written in the test; every home the copy can name is the test's own). Its gate: 1987 passed,
+  9 skipped, 5 deselected; its re-read clean; the real screen's set 9.
+- **The stage's last review** (three readers over `6dd4f12..bb560ba`): no Critical, one Important (a Discard pressed
+  after another run had started left the page, the foot and Home saying the training was kept). Its ONE fix wave:
+  `2fb637c`, `ba4b281`, `4abfd8e`. Its gate, on `4abfd8e`: 1989 passed, 9 skipped, 5 deselected (27 min 26 s); its
+  re-read clean; the real screen's set 9.
+- The plan is corrected as built through Task 14 (`35e2a3a`).
 
-NEXT, IN A NEW CHAT THE OWNER STARTS: Task 14's fix round 3 (`stage-3/briefs/task-14-fix3-rulings.md`: pin `run.bat`
-whole by its digest in the launcher tests, and point every home folder into the test's folder), Task 14's
-carried-over list, the stage's last review and Task 15, the exit, from
-`docs/superpowers/prompts/2026-10-27-window-redesign-stage-3-last-review-and-exit.md`. The paragraph "THE BUILD OF
-STAGE 3, TASKS 12 TO 14" below is this session's record.
+NEXT, IN A NEW CHAT THE OWNER STARTS: Task 15, the exit, from
+`docs/superpowers/prompts/2026-10-28-window-redesign-stage-3-exit.md`. The paragraph "THE LAST REVIEW OF STAGE 3 AND
+TASK 14's THIRD FIX ROUND" below is this session's record.
 
-What follows in this parenthesis is the head as the late evening of 26 October left it: 2026-10-26, late evening (THE
+What follows in this parenthesis is the head as the late evening of 27 October left it: 2026-10-27, late evening (THE
+BUILD OF STAGE 3 OF THE WINDOW REDESIGN, THE RUN, STOOD WITH TASKS 12 AND 13 COMPLETE AND TASK 14 BUILT THROUGH TWO FIX
+ROUNDS, WITH A THIRD FIX ROUND OWED, handed to a new chat by the rule of about three tasks (that chat at about 61 % of
+its room; the weekly bar at 46 % at 23:19); it ran in a session started from the owner's pasted prompt
+`docs/superpowers/prompts/2026-10-26-window-redesign-stage-3-from-task-12.md`: Task 12 complete (`93ca7f7`, `4ca7d70`,
+fix `53f9995`); Task 13 complete (`ff5e563`, `6307cd4`, fix `9be258e`, fix 2 `988137c`); Task 14 built (`62b37e5`,
+`81a4282`, `c57b24f`, fix `bc4f43e` and `f5f9cc9`, fix 2 `c8caede`; gate on `c8caede` 1986 passed, 9 skipped, 5
+deselected, 24 min 16 s; the real screen's set 9); departures 120 and 121 (121 THE OWNER'S YES) added; the plan
+corrected as built (`b3a639a`, `6bf8411`, `0a1d64a`). NEXT then: Task 14's fix round 3, its carried-over list, the
+stage's last review and Task 15, from `docs/superpowers/prompts/2026-10-27-window-redesign-stage-3-last-review-and-exit.md`;
+the paragraph "THE BUILD OF STAGE 3, TASKS 12 TO 14" below is that session's record. What follows in this parenthesis
+is the head as the late evening of 26 October left it: 2026-10-26, late evening (THE
 BUILD OF STAGE 3 OF THE WINDOW REDESIGN, THE RUN, STANDS AFTER TASK 11 AND IS HANDED TO A NEW CHAT BY THE RULE OF ABOUT THREE TASKS (the weekly bar at 31 % at 22:11, resetting on 1 November at 04:00 UTC); it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-25-window-redesign-stage-3-from-task-9.md`: TASKS 9, 10 AND 11 ARE COMPLETE (`8a3ab93`..`f66cac7`, each after one fix round, each review clean and each gate green on its head; the last gate, on `f66cac7`: 1895 passed, 5 skipped, 5 deselected); the loss curve (`core/gui/run/loss.py`), stopping and closing (`core/gui/run/questions.py`: a stop asks what it keeps, Keep or Discard on the run's page, the window waits for a run to end before it closes) and failure with the window's tries (`core/gui/run/retry.py`: no box, three tries, the reopen page, Continue and Resume from the run's page) are built; departures 118 (the owner's "Three tries") and 119 (a load's failure keeps the red box) added (`abdb07c`); the plan corrected as built (`0b0fe7b`, `9f7966c`, `13cea07`); the owner chose to keep the same care rather than go faster. NEXT, IN A NEW CHAT THE OWNER STARTS: Task 12 (this computer: keep-awake, the reason against shutting down, the flash; Windows' end of a session), not yet prepared, then Tasks 13 and 14, the stage's last review and Task 15, the exit, from `docs/superpowers/prompts/2026-10-26-window-redesign-stage-3-from-task-12.md`; the paragraph "THE BUILD OF STAGE 3, TASKS 9 TO 11" below is this session's record. What follows in this parenthesis is the head as the late evening of 25 October left it: 2026-10-25, late evening (THE BUILD OF STAGE 3 OF THE WINDOW REDESIGN, THE RUN, STANDS AFTER TASK 8, WITH TASK 9 PREPARED AND NOT RULED, AND IS HANDED TO A NEW CHAT BY THE RULE OF ABOUT THREE TASKS (this chat at about two thirds of its room; the weekly bar at 14 % at 23:44, resetting on 1 November at 04:00 UTC); it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-23-window-redesign-stage-3-from-task-6.md`: TASKS 6, 7 AND 8 ARE COMPLETE (`7217019`..`456871c`, each after one fix round, each review clean and each gate green on its head; the last gate, on `456871c`: 1828 passed, 5 skipped, 5 deselected); the run's model (`core/gui/run/readings.py`, `model.py`, `core/gui/texts.py`), the one run controller per process (`core/gui/run/controller.py`, the suites on a stand-in run) and the run page (`core/gui/run/view.py`, the progress pane gone) are built; departure 117 added (a short counted stage timed from a quarter of its count); the plan corrected as built (`56e33da`, `c618fb6`, `0c3ed32`); TASK 9 (the loss curve) prepared by its skeptic (`stage-3/briefs/task-09-brief.md`, twenty findings PROPOSED, its "Rulings" empty, +9, the gate expected at 1837). NEXT, IN A NEW CHAT THE OWNER STARTS: rule Task 9's brief and build it, then Tasks 10 onward, from `docs/superpowers/prompts/2026-10-25-window-redesign-stage-3-from-task-9.md`; the paragraph "THE BUILD OF STAGE 3, TASKS 6 TO 8, AND TASK 9 PREPARED" below is this session's record. What follows in this parenthesis is the head as the late evening of 23 October left it: 2026-10-23, late evening (THE BUILD OF STAGE 3 OF THE WINDOW REDESIGN, THE RUN, STANDS AFTER TASK 5, WITH TASK 6 PREPARED AND NOT RULED, AND IS HANDED TO A NEW CHAT BY THE OWNER'S USAGE RULE (the weekly bar at 87 %, resetting on 25 October at 04:00 UTC); it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-23-window-redesign-stage-3-from-task-4.md`: TASKS 4 AND 5 ARE COMPLETE (`b9bd783`..`b33ebd5`, each after one fix round, each review clean and each gate green on its head; the last gate, on `b33ebd5`: 1719 passed, 5 skipped, 5 deselected); the stage's engine tasks are done (the named training code's digests unchanged since Task 3, now held by a standing test); departure 116 added (the training stage says the epoch it kept at a stop); the plan corrected as built (`8d94e39`); TASK 6's skeptic built it as a stand-in and wrote its brief (`stage-3/briefs/task-06-brief.md`, nineteen findings PROPOSED, its "Rulings" empty). NEXT, IN A NEW CHAT THE OWNER STARTS: rule Task 6's brief and build it, then Tasks 7 onward, from `docs/superpowers/prompts/2026-10-23-window-redesign-stage-3-from-task-6.md`; the paragraph "THE BUILD OF STAGE 3, TASKS 4 AND 5, AND TASK 6 PREPARED" below is this session's record. What follows in this parenthesis is the head as the afternoon of 23 October left it: 2026-10-23, afternoon (THE BUILD OF STAGE 3 OF THE WINDOW REDESIGN, THE RUN, STANDS AFTER TASK 3 AND IS HANDED TO A NEW CHAT BY THE RULE OF ABOUT THREE TASKS; it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-23-window-redesign-stage-3-build.md`: TASK 0 (no commit) AND TASKS 1, 2 AND 3 ARE COMPLETE (`ad4b7e2`..`34021d7`, each after one fix round, each review clean and each gate green on its head; the last gate, on `34021d7`: 1682 passed, 5 skipped, 5 deselected); Task 3 made the stage's ONE edit inside the named training code (`c08acbf`; `Artifacts/fits/` absent; only `run_fit` and `train_nn` moved); the plan corrected as built and departure 115 added (`e353023`); the weekly bar at 80 %. NEXT, IN A NEW CHAT THE OWNER STARTS: Task 4 (the engine's other three: the two training refusals, a simulation set's name, the card test as a step, and the named code's digests held), then Tasks 5 onward, from `docs/superpowers/prompts/2026-10-23-window-redesign-stage-3-from-task-4.md`; the paragraph "THE BUILD OF STAGE 3, TASKS 0 TO 3" below is this session's record. What follows in this parenthesis is the head as the morning of 23 October left it: 2026-10-23, morning (THE PLAN OF STAGE 3 OF THE WINDOW REDESIGN, THE RUN, IS WRITTEN, COMMITTED (`f5faaaa`) AND APPROVED BY THE OWNER on 23 October ("I approve it"); nothing built: `docs/superpowers/plans/2026-10-22-window-redesign-stage-3.md`, fourteen building tasks and two controller tasks, departures 83 to 114 in the plan's table and the design's section 8; it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-22-window-redesign-stage-3-plan.md`; the owner answered four questions (Resume on the run's page; Keep or Discard asked on the page once the stop has landed; the launcher finds PRISM's Python itself and makes a desktop shortcut once; a fifteen-minute real-screen row at the exit, a sign-out started and cancelled, none completed); the weekly bar at 73 %. NEXT, IN A NEW CHAT THE OWNER STARTS: the build from Task 0, from `docs/superpowers/prompts/2026-10-23-window-redesign-stage-3-build.md`. The paragraph "THE PLAN OF STAGE 3" below is this session's record. What follows in this parenthesis is the head as the afternoon of 22 October left it: 2026-10-22, afternoon (THE FIT-SAVING STAGE IS BUILT AND ITS EXIT IS PASSED: its last review (three readers, no Critical or Important) and its one fix wave (`0158d16`, `6721f33`, `bb2857c`, re-read clean, gate green: 1660 passed) are complete; the gate of record 1660 passed, 5 skipped, 5 deselected (30 min 4 s, not a quiet time); the slow set 5 passed (1 h 33 min 22 s); the card gates pass, run 5 included, except `identifiability laplace`, AN OLDER FAULT (the pre-stage code fails the same way), which the owner had FIXED IN THE SAME CHAT (`05c0123`: a stored posterior's training prior is built on an inverse that survives pickling; two tests, red first; gate green, 1662 passed; the laplace passes on the card again); the owner said yes to CLAUDE.md's new sentence about the fit (`de6f288`) and to run 5 in the card block (`abe5579`); it ran in a session started from the session of the owner's pasted prompt `docs/superpowers/prompts/2026-10-21-fit-saving-stage-last-review-and-exit.md`; the weekly bar 58 % to about 69 %. NEXT, IN A NEW CHAT THE OWNER STARTS: the window redesign returns, stage 3 (the run page, with the Keep or Discard question and the cancel words) is planned next, from the owner's
 prompt `docs/superpowers/prompts/2026-10-22-window-redesign-stage-3-plan.md` (written at the owner's word). The paragraph "THE FIT-SAVING STAGE'S LAST REVIEW AND EXIT" below is this session's record. What follows in this parenthesis is the head as the late evening of 21 October left it: 2026-10-21, late evening (THE FIT-SAVING STAGE'S CODE IS BUILT: TASKS 4, 5 AND 6 ARE COMPLETE, HANDED TO A NEW CHAT BY THE RULE OF ABOUT THREE TASKS; it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-21-fit-saving-stage-from-task-4.md`: Task 4 (`bd0b30a`, fix `40d1707`), Task 5 (`b7f8394`, `f879095`, fix `1f23446`) and Task 6 (`cfe80d7`, no fix round), each review clean and each gate green on its head; the last gate, on `cfe80d7`: 1657 passed, 5 skipped, 5 deselected; the drill of the card gate's proposed resume run passed every criterion once on the card; the weekly bar at 57 %. NEXT, IN A NEW CHAT THE OWNER STARTS: the stage's last review (three readers over `82424f5..cfe80d7`, one fix wave; its inputs indexed in `.superpowers/sdd/2026-10-06-window-redesign/fit-saving/last-review-inputs.md`), then Task 7, the exit, with the owner, from `docs/superpowers/prompts/2026-10-21-fit-saving-stage-last-review-and-exit.md`; the paragraph "THE FIT-SAVING STAGE, TASKS 4 TO 6" below is this session's record. What follows in this parenthesis is the head as the evening of 21 October left it: 2026-10-21, evening (THE FIT-SAVING STAGE IS BEING BUILT AND STANDS AFTER TASK 3, HANDED TO A NEW CHAT BY THE RULE OF ABOUT THREE TASKS; it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-21-fit-saving-stage-build.md`: TASK 0 (no commit) AND TASKS 1, 2 AND 3 ARE COMPLETE (`3448486`..`1aecbf8`; Tasks 1 and 3 after one fix round each, Task 2 with none; each review clean and each gate green on its head; the last gate, on `1aecbf8`: 1619 passed, 5 skipped, 5 deselected); departure F-10 added (`207b4db`); TASK 4 IS PREPARED (its skeptic's stand-in and one brief, its findings PROPOSED, for the next controller to rule); the weekly bar at 51 %. NEXT, IN A NEW CHAT THE OWNER STARTS: rule on Task 4's brief and build Tasks 4, 5 and 6, then the stage's last review, then Task 7, the exit, from `docs/superpowers/prompts/2026-10-21-fit-saving-stage-from-task-4.md`; the paragraph "THE FIT-SAVING STAGE, TASKS 0 TO 3" below is this session's record. What follows in this parenthesis is the head as the afternoon of 21 October left it: 2026-10-21, afternoon (THE DESIGN FOR SAVING THE FIT IS MADE AND APPROVED (`3221fcc`), AND THE PLAN OF ITS SHORT STAGE, THE TRAINING SIDE, IS WRITTEN AND APPROVED (`e89da79`), both in the same chat at the owner's word; nothing of it built. NEXT, IN A NEW CHAT THE OWNER STARTS: the fit-saving stage from Task 0, from `docs/superpowers/prompts/2026-10-21-fit-saving-stage-build.md`; then stage 3 of the redesign (the run), planned with this design in hand. The paragraph "THE DESIGN AND THE PLAN FOR SAVING THE FIT" below is this session's later record; the weekly bar at 44 %. What follows in this parenthesis is the head as the morning of 21 October left it: 2026-10-21 (STAGE 2 OF THE WINDOW REDESIGN, THE SHELL, IS BUILT AND ITS EXIT IS PASSED; THE BUILD NOW PAUSES, as the owner decided on 6 October, FOR THE SEPARATE DESIGN FOR SAVING THE FIT, to be made in a new chat the owner starts; NO PROMPT FOR STAGE 3 IS WRITTEN until that design is made; the paragraph "STAGE 2 OF THE WINDOW REDESIGN IS BUILT" below is the stage's record and this session's; the weekly bar at 42 % after the pictures. What follows in this parenthesis is the head as the evening of 20 October left it: 2026-10-20, evening (THE BUILD OF STAGE 2, THE SHELL, IS COMPLETE AND REVIEWED, AND ITS EXIT STANDS AFTER STEP 3: Task 10 is complete (`d5a7a0b`..`ffc0a93`, after one fix round), the stage's last review is complete with its one fix wave (`9ababa1`..`c7106c3`), the fence holds and the gate of record is green on a quiet machine (1583 passed, 5 skipped, 5 deselected, 19 min 21 s); the owner answered fourteen questions; the weekly bar at 39 %. NEXT, IN A NEW CHAT THE OWNER STARTS: the exit from its Step 4 (the pictures, the owner's remaining questions, the documents, the list of rulings), then the pause for the design for saving the fit, from `docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-exit.md`; the paragraph "THE BUILD OF STAGE 2, TASK 10, ITS LAST REVIEW AND THE EXIT'S FIRST STEPS" below is this session's record. What follows in this parenthesis is the head as the early morning of 20 October left it: 2026-10-20, early morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 9 AND IS HANDED TO A NEW CHAT BY THE RULE OF ABOUT THREE TASKS; it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md`: TASKS 7, 8 AND 9 ARE COMPLETE (`07a3fff`..`c914688`, each after one fix round, its review clean and its gate green; the last gate, on `c914688`: 1558 passed, 4 skipped, 5 deselected; the real-screen set 4 passed); departure 59 amended and three registry lines; the weekly bar at 24 % (it had reset to 0 %; next reset 25 October, 04:00 UTC). NEXT, IN A NEW CHAT THE OWNER STARTS WHEN THEY CHOOSE: Task 10 (one PRISM at a time, the last-resort error, the fonts once), then the stage's last review, then Task 11, the exit, from `docs/superpowers/prompts/2026-10-20-window-redesign-stage-2-from-task-10.md`; the paragraph "THE BUILD OF STAGE 2, TASKS 7, 8 AND 9" below is this session's record. What follows in this parenthesis is the head as the morning of 16 October left it: 2026-10-16, morning (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 6 AND STOPS AT A CLEAN STATE AT THE OWNER'S WORD ("Try to also finish things up at a clean state when usage limits are near their max, I won't buy anymore credits"); it ran in a session started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-15-window-redesign-stage-2-from-task-6.md`: TASK 6 IS COMPLETE (`22b8827`..`c1628d0`, after one fix round, its review clean and its gate green; the last gate, on `c1628d0`: 1532 passed, 4 skipped, 5 deselected); departure 70 amended; Task 7's preparation was begun and STOPPED (nothing of it in the repository); the weekly bar at 100 % (resets on the evening of 17 October). NEXT, IN A NEW CHAT THE OWNER STARTS WHEN THEY CHOOSE: Task 7 (each part built when first opened), its preparation afresh, from `docs/superpowers/prompts/2026-10-16-window-redesign-stage-2-from-task-7.md`; the paragraph "THE BUILD OF STAGE 2, TASK 6" below is this session's record. What follows in this parenthesis is the head as the evening of 15 October left it: 2026-10-15, evening (THE BUILD OF STAGE 2, THE SHELL, STANDS AFTER TASK 5 AND IS HANDED TO A NEW
 CHAT AT THE OWNER'S WORD; it ran in a session started from the owner's pasted prompt
@@ -109,6 +120,88 @@ the build's state stands in four paragraphs, each as it was written on its date 
 "THE PICTURES"; "AFTER THE PICTURES"; "TASK 10f"): where one of them says a probe is running, a thing is not yet asked,
 or what comes next, the later paragraph and "THE HAND-OFF" are right; "THE WINDOW REDESIGN, PLAN AND BUILD" is the
 plan's story, and the design's own story is the paragraph that begins "THE REDESIGN CHAT HAS STARTED").
+
+**THE LAST REVIEW OF STAGE 3 AND TASK 14's THIRD FIX ROUND (2026-10-28, 09:37 to about 13:30 by `date`; a session
+started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-27-window-redesign-stage-3-last-review-and-exit.md`;
+the ledger's lines from "NEW CHAT 2026-10-28" have every figure, ruling and cost).**
+
+At the start: the tree clean at `0a1d64a`, no python alive, no `PRISM.lock`, the card at 1,921 MiB, the real
+`PRISM.ini` 3,296 bytes sha256 79BF94DF…C83E (unchanged at every gate since), the desktop's ten names and no
+`PRISM.lnk`; the weekly bar at 46 %.
+
+**Task 14's third fix round: COMPLETE at `bb560ba`.**
+- One skeptic (opus) built the cure on a copy of `c8caede` and found the ruled LF normalisation let two one-byte
+  line-end changes through, so the digest reads a copy as LF only when every line ends CRLF (or it is git's LF form).
+- The pin is checked first, right after the copy is written; a standing test,
+  `test_the_launcher_runs_only_as_pinned_and_the_pin_is_todays_file`, holds it to the checked-out `run.bat` and reads
+  `_launcher`'s source for the check's place.
+- `HOME`, `HOMEDRIVE` and `HOMEPATH` are made from the test's own user folder; eight names must be folders of
+  `tmp_path`.
+- Measured: `[Environment]::GetFolderPath` reads Windows' own record, so no variable can point the desktop elsewhere;
+  only the pin keeps a changed launcher off the owner's desktop (on the owner's exit list).
+- One Sonnet implementer, the commit `cmp`-identical to the saved diff. Gate 1987 (25 min 12 s); re-read clean (three
+  Minors carried into the wave); the real screen's set 9; the carried-over list through Task 14 (`all rows 929; twice
+  []; missing 0: []; gone 40`).
+
+**The stage's last review: COMPLETE at `4abfd8e`.**
+- Three readers over `6dd4f12..bb560ba`, beside fix 3's gate: seat one (opus, the product) "may exit once Important 1
+  is cured"; seat two (opus, the tests, sixteen fault runs after the gate) "Tests: approved"; seat three (sonnet) sorted
+  all 133 deferred ledger lines and the sixteen carried items.
+- The Important: a Discard pressed after another run had started (a check elsewhere, a load on the same page) deleted
+  the kept training but left the page, and after a load the foot and Home, saying it was kept and could be resumed.
+- The one fix wave, ruled at `stage-3/briefs/stage-3-final-fix-rulings.md` and built by one skeptic (opus) and one
+  Sonnet implementer, each commit `cmp`-identical to its saved diff:
+  - `2fb637c`: the Discard's words everywhere, a live run's noted end included; the health table's gaps go with it;
+    a typed number of expected epochs before the store's; two docstrings of the history made true;
+  - `ba4b281`: a module check that no panel outlives its module (`_no_panel_outlives_its_module`); a start taken back
+    lets go of its watchers; the records' refusal on Discard; the narrowing round's reopen command parsed by the tool's
+    parser; the loss tick's gap from "Loss" (a case added: the ruled lines were never red on their fault); the early
+    return of `_to_the_figures`; the Training page's call tied to what Continue and Resume compare;
+  - `4abfd8e`: the launcher pin's standing test reads the function's shape, and its messages name their cause.
+- Gate 1989 passed, 9 skipped, 5 deselected (27 min 26 s); re-read clean (four Minors: one to the owner with the
+  pictures, two to the audit, one settled); the real screen's set 9; the carried-over list through the wave (`all rows
+  931; twice []; missing 0: []; gone 40`).
+
+**What the exit carries** (the prompt `docs/superpowers/prompts/2026-10-28-window-redesign-stage-3-exit.md` lists each):
+- The documents: departures 122 (figure windows stay parentless) and 123 (the history's `plan`, `settings`, `check`
+  empty and `health` short until stage 4); `core/diagnostics/rng.py` (a docstring of Task 4's fix, `36ee51a`) in Task
+  4's "As built" and the ledger's "Engine changes landed"; departures 106's and 87's words; the registry's
+  `discard -> tuple[bool, str, str] | None`; the module check in `testing.md`; the `CLAUDE.md` draft's counts
+  RECOUNTED from `tests/conftest.py` before the owner is asked (the draft's "six and six" misses the per-test check
+  `windows_asked`; the module check is a third kind; the suites are thirty, not twenty-six, and the four new ones need
+  their lines).
+- The owner's list (`stage-3/exit/rulings-for-the-owner.md`), which gained the last review's items and two that the
+  sorting found missing.
+- Carried to stage 4: the history's empty fields, the reopen command by mouse only, the inert opt-in for a taken name,
+  the helpers defined two to five times, `history.continuable` with no caller. To stage 7: Live simulation's sentence
+  and its failed compact page. To stage 9: the reason during a retry's pause, the refusal leg of the waiting close,
+  ` (--resume)` at the end of the last listed line.
+
+**The code audit's list gains:** `build_posterior` rebinding its parameter `note` (`core/orchestrator.py:1754`,
+`:1772`); two constants of one name with different words (`FINISHED_TEXT`, `NO_MESSAGE`); `request_stop`'s "safe from
+any thread" (true of the window's thread only); the native message's guard reading one module; a history file that
+cannot be written leaving another run's page with its old words under "The training was discarded."; a test's unpack
+that names no reason; the history writes that wait for the disk on the window's thread (up to 0.8 s when a scanner
+holds the file); the sorting's sixteen (`stage-3/reviews/stage-3-final-review-sorting.md`, section 5). And from
+Tasks 12 to 14, written in no paragraph of this file until now (the ledger and the sorting's A12 to A16 hold them): a
+modal box opened during Windows' end-message wait; a process ended between the posterior's write and the kept
+training's removal; `_end` letting go of keep-awake and the reason partway; the history's readings unbounded on a
+folder of many runs (about 60 ms per 1,000 warm, 3 s cold); the past view's replay (about 12 µs a line, half a second
+near 40,000 lines); the claim's two warnings printed bare; `platform.release()`'s fallback to `ver` through a shell.
+Taken off: `core/gui/streams.py:58` and `core/gui/worker.py:197-199` (settled by Task 10). The whole list is this
+file's "The code audit's list gains" sentences (search "audit's list"), the ledger's "Engine changes landed", and the
+sorting's section 5; Task 15's Step 9 gathers it.
+
+**Slips.**
+- A `cd` inside a Bash call moved the session's folder twice (put back at once).
+- A reader typed `python3 -c 1` during a gate; `python3` is not on the path, so nothing ran.
+- The controller wrote the next prompt's draft into `docs/superpowers/prompts/` while an implementer worked; it showed
+  once as untracked and was moved out within a minute, before the first commit was staged.
+
+**Cost:** the weekly bar 46 % to about 51 % (about 4.6 M tokens in background agents: fix 3 about 0.65, the last
+review's three seats about 1.6, the wave about 1.0, the re-reads and the carried-over lists about 1.0).
+
+**Unpushed:** everything after `20eb415` (the owner pushed up to it on 23 October).
 
 **THE BUILD OF STAGE 3, TASKS 12 TO 14 (2026-10-27, 09:32 to about 23:30 by `date`; a session started from the
 owner's pasted prompt `docs/superpowers/prompts/2026-10-26-window-redesign-stage-3-from-task-12.md`).**
