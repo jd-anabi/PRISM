@@ -8,24 +8,41 @@ PRISM keeps what it reads and what it writes.
 ## Launching PRISM
 
 PRISM runs in the conda environment the root README's [installation steps](../../README.md#installation)
-create (`biophys-env`). Activate it before you launch anything: every command below runs the
-`python` it finds, and only this environment's has PRISM's dependencies installed.
+create (`biophys-env`). On Windows the launcher, `run.bat`, finds that environment itself. Every other
+command below runs the `python` it finds, so activate the environment first: only its `python` has
+PRISM's dependencies installed.
 
 | to start | on Windows (PowerShell) | on macOS and Linux (bash) |
 |---|---|---|
-| the window | `run.bat` | `bash run.sh` |
-| the window, directly | `$env:KMP_DUPLICATE_LIB_OK="TRUE"; python -m core.gui` | `KMP_DUPLICATE_LIB_OK=TRUE python -m core.gui` |
+| the window | `run.bat`, or the desktop shortcut it makes | `bash run.sh` |
+| the window, directly | `python -m core.gui` | `python -m core.gui` |
 | the command-line tool | `python -m core <subcommand>` | `python -m core <subcommand>` |
 
+- **The launchers start the window with no console.** `run.bat` starts it with the environment's
+  `pythonw.exe` and returns at once, and `run.sh` starts it detached from the terminal, which may then
+  be closed. A second start brings the open window to the front. What the window prints outside a
+  run, a record another thread logs during one, the toolkit's own messages, an error nothing else
+  caught and a crash of the interpreter go to `window-log.txt` beside the settings file, after a dated
+  line for each launch; a run's full text is on the run's page and in the dated file it opens, in the
+  `runs` folder there. A start that fails before its window is shown says so in a plain Windows
+  message that names `window-log.txt`. A direct launch keeps its console and writes there instead.
+- **Which Python `run.bat` uses.** The active environment's `pythonw.exe`, when it is started from a
+  prompt whose active environment holds PySide6 and torch (a prompt left in conda's `base`
+  environment holds neither); else `envs\biophys-env\pythonw.exe` under `anaconda3` or `miniconda3`
+  in your user folder, `anaconda3` in your local application data folder, or `anaconda3` or
+  `miniconda3` in the folder shared by every user. When it finds none, a Windows message says what to
+  do. `run.bat --where` prints the Python it would use, and starts nothing.
+- **The desktop shortcut.** The first time `run.bat` runs it puts `PRISM.lnk` on the desktop (the
+  environment's `pythonw.exe -m core.gui`, started in the repository, with PRISM's icon) and leaves a
+  mark, `shortcut-made`, beside the settings file; it never makes the shortcut again, even when it was
+  deleted. `run.bat --make-shortcut` makes it without starting PRISM. The shortcut starts PRISM with
+  the environment Windows gives it, so a variable set in a shell (`PRISM_ARTIFACTS`,
+  `PRISM_VRAM_CEILING_GIB`) reaches the window only through `run.bat` started from that shell.
 - **`KMP_DUPLICATE_LIB_OK=TRUE`.** torch and MKL each ship an OpenMP runtime; without this variable
-  the first simulation aborts with "OMP Error #15" and no traceback. `run.bat` and `run.sh` set it
-  before they start the window. A direct launch of the window must set it by hand, as in the table:
-  the window's entry module, `core.gui.__main__`, sets only matplotlib's backend.
-- **The launchers' interpreter.** `run.bat` runs the first `python` on the PATH and `run.sh` runs
-  `python3`, so start either from a terminal in which the environment is active.
-- **The tool needs nothing set around it.** Its entry module, `core.__main__`, sets
-  `KMP_DUPLICATE_LIB_OK` itself (unless it is already set) and switches matplotlib to its
-  non-interactive Agg backend, both before anything imports torch.
+  the first simulation aborts with "OMP Error #15" and no traceback. Both entry modules, the window's
+  `core.gui.__main__` and the tool's `core.__main__`, set it themselves (unless it is already set) and
+  switch matplotlib to its non-interactive Agg backend, both before anything imports torch; the
+  launchers set it too. Neither front end needs anything set around it.
 - **The working directory does not matter** to PRISM's own folders: `core.config` finds them from its
   own location in the repository. It does matter to a path you type. A flag such as
   `--bounds Resources/Bounds/nadrowski/master.txt` is read relative to where you are, so the examples

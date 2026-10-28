@@ -133,10 +133,7 @@ The `requirements.txt` torch/torchvision lines pin `+cu130` for Linux, so for a 
    ```
    This installs `torch==2.9.0+cu130` (CUDA build) for **NVIDIA GPUs**; it also runs CPU-only if you have no NVIDIA GPU (large download).
 3. _(Optional)_ **ffmpeg** for MP4 export: `conda install -c conda-forge ffmpeg`
-4. **Run:** double-click **`run.bat`**, or from a terminal:
-   ```bat
-   run.bat
-   ```
+4. **Run:** double-click **`run.bat`**, or type `run.bat` in a terminal. PRISM opens in its own window, with no console window beside it. Starting it again while it is open brings that window to the front. The launcher finds the environment's Python itself: the active environment's, when it holds PRISM's libraries, else `biophys-env` in the usual Anaconda and Miniconda folders; when it finds none, a Windows message says what to do. The first time, it also puts a PRISM shortcut on the desktop. `run.bat --where` says which Python it would use, and starts nothing.
 
 **CPU-only / smaller install:** same as Linux — install `torch` / `torchvision` from `https://download.pytorch.org/whl/cpu` first and skip those two lines in `requirements.txt`.
 
@@ -150,9 +147,11 @@ Use the launchers below (they `cd` to the repository root for you). The working 
 | --------------- | ---------------------------------------------- |
 | macOS / Linux   | `bash run.sh`                                  |
 | Windows         | `run.bat`                                      |
-| Any OS (direct) | `KMP_DUPLICATE_LIB_OK=TRUE python -m core.gui` |
+| Any OS (direct) | `python -m core.gui`                           |
 
-The launchers set `KMP_DUPLICATE_LIB_OK=TRUE` for you (on Windows, `set KMP_DUPLICATE_LIB_OK=TRUE` first, or `$env:KMP_DUPLICATE_LIB_OK="TRUE"` in PowerShell); torch and MKL ship two OpenMP runtimes under conda and without it the first simulation aborts with OMP Error #15 and no traceback.
+The launchers set `KMP_DUPLICATE_LIB_OK=TRUE` for you, and so does the window's entry module itself before anything imports torch, so a direct launch needs it no longer; torch and MKL ship two OpenMP runtimes under conda and without it the first simulation aborts with OMP Error #15 and no traceback.
+
+On Windows the launcher starts PRISM without a console, so nothing the program prints is on screen: a run's full text is behind "Show the full text" on the run's page and in the dated file that page opens, and what PRISM prints outside a run goes to `window-log.txt` beside its settings file. The direct launch in the table keeps a console.
 
 On macOS/Linux, remember to activate the environment (`conda activate biophys-env`, or the `source .../activate biophys-env` line if you set up Miniforge by full path) before launching.
 
