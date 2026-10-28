@@ -5217,6 +5217,15 @@ def test_the_last_resort_error_says_where_the_full_error_is(tmp_path, monkeypatc
 # the shortcut goes in.
 _LAUNCHER_FOLDERS = ("USERPROFILE", "LOCALAPPDATA", "PROGRAMDATA", "APPDATA", "PRISM_DESKTOP")
 
+# The user's home under its other names, each made the user's folder of the test: as a whole, and as the drive and the
+# rest that Windows splits it into.
+_LAUNCHER_HOMES = ("HOME", "HOMEDRIVE", "HOMEPATH")
+
+# The SHA-256 of run.bat, its line ends read as LF, as git keeps them. The launcher's tests run a copy of run.bat only
+# when it has this digest: an edit to the launcher must be read by a person before a test runs it, so this test file
+# changes with it, in the same commit.
+_LAUNCHER_DIGEST = "9d882d053fd7e7f5c061596b93b98fa0dfe975547f6b692b8465ce3446f79e43"
+
 # The two lines of run.bat that read its options, each whole and at the start of its line: with either gone, moved or
 # setting another mode, a run with that option is a start with none, which starts PRISM.
 _LAUNCHER_OPTIONS = ('if /i "%~1"=="--where" set "LAUNCH_MODE=where"',
@@ -5255,16 +5264,27 @@ def _desktop_entries(desktop) -> set:
     return found
 
 
+def _launcher_digest(data: bytes) -> str:
+    """The SHA-256 of a copy of ``run.bat`` whose bytes are ``data``. When every line ends with CRLF, as git writes
+    the file on Windows, each line end is read as LF, as git keeps the file, so that the two give one digest; any
+    other copy is read byte for byte, so that a line end of the other kind among the rest is a change too."""
+    import hashlib
+    lf = data.replace(b"\r\n", b"\n")
+    return hashlib.sha256(lf if data == lf.replace(b"\n", b"\r\n") else data).hexdigest()
+
+
 def _launcher_refused(text: str) -> str:
-    """Why a copy of ``run.bat`` whose text is ``text`` must not be run by a test with ``--where`` or
-    ``--make-shortcut``, or "" when it may: run so, it must start nothing, and write nothing on the person's desktop.
-    Unless both options' lines stand whole at the start of their lines (``_LAUNCHER_OPTIONS``), and they and the
-    start's own setting before them are the only lines that set the mode, all above the line that starts PRISM
+    """The second reading of a copy of ``run.bat``, after the pin of the whole file (``_launcher``): why its lines
+    show that a test must not run it with ``--where`` or ``--make-shortcut``, or "" when they do not. Unless both
+    options' lines stand whole at the start of their lines (``_LAUNCHER_OPTIONS``), and they and the start's own
+    setting before them are the only lines that set the mode, all above the line that starts PRISM
     (``_LAUNCHER_MODES``), a run with an option is a start with none, and starts PRISM; unless its one line that
     starts PRISM, and its one line that shows the Windows message, are each held to a start with no option, a run
     with an option reaches them; unless the file names Windows' own desktop once, in any case of its letters as
-    PowerShell reads them, and there makes the shortcut in the folder ``PRISM_DESKTOP`` names whenever that is set
-    (``_LAUNCHER_DESKTOP``), a run writes on the person's own desktop."""
+    PowerShell reads them, and holds the text of its shortcut step (``_LAUNCHER_DESKTOP``), a run may write on the
+    person's own desktop. Only the lines named are read, and the start and the message in the letters written here:
+    a line that empties ``PRISM_DESKTOP`` ahead of the shortcut step, a start or a message in other letters, which
+    cmd and PowerShell read alike, and any other edit are refused by the pin, not here."""
     lines = text.splitlines()
     unread = [option for option in _LAUNCHER_OPTIONS if option not in lines]
     if unread:
@@ -5288,13 +5308,15 @@ def _launcher_refused(text: str) -> str:
 
 def _launcher(tmp_path, option, *, conda_prefix=None, **folders):
     """``run.bat``, copied byte for byte into ``tmp_path``, run there with ``option``: ``--where`` or
-    ``--make-shortcut``, and nothing else, since without one it starts PRISM; nor is a copy run whose lines do not
-    keep such a run from starting anything (``_launcher_refused``), read line by line before it runs. Every folder it
-    reads or writes (``_LAUNCHER_FOLDERS``, given here by their names in small letters) must be a folder of
-    ``tmp_path``, and the run is refused before it starts when one is not, so that nothing can reach the person's own
-    desktop or settings; the active environment is ``conda_prefix``, or none. Windows' own desktop is listed before
-    and after, each entry by its name, size and time of writing, and must be as it was. Handed back: the status the
-    launcher ended with, the lines it printed, and the folder of the copy."""
+    ``--make-shortcut``, and nothing else, since without one it starts PRISM. Before it runs, and refused when any
+    fails: the copy is the launcher pinned here, whole (``_LAUNCHER_DIGEST``), so that whatever it does was read by a
+    person; then its lines hold what keeps such a run from starting anything (``_launcher_refused``); then the
+    folders it is handed are each a folder of ``tmp_path``: the five it reads and writes (``_LAUNCHER_FOLDERS``,
+    given here by their names in small letters), and the user's home under its other names (``_LAUNCHER_HOMES``),
+    made the user's folder given, its drive and the rest together naming that folder. The active environment is
+    ``conda_prefix``, or none. Last, Windows' own desktop is listed before and after, each entry by its name, size and
+    time of writing, and must be as it was. Handed back: the status the launcher ended with, the lines it printed,
+    and the folder of the copy."""
     import os
     import shutil
     import subprocess
@@ -5303,17 +5325,27 @@ def _launcher(tmp_path, option, *, conda_prefix=None, **folders):
     copy = tmp_path / "launcher" / "run.bat"
     copy.parent.mkdir(exist_ok=True)
     shutil.copyfile(Path(__file__).resolve().parents[1] / "run.bat", copy)
+    assert _launcher_digest(copy.read_bytes()) == _LAUNCHER_DIGEST, (
+        "run.bat has changed, and no test runs it: read what it now does, then write its new digest into "
+        "_LAUNCHER_DIGEST in the same commit as the change")
     refused = _launcher_refused(copy.read_text(encoding="utf-8"))
     assert not refused, f"{refused}: it is not run"
     env = {name.upper(): value for name, value in os.environ.items()
-           if name.upper() not in _LAUNCHER_FOLDERS + ("CONDA_PREFIX",)}
+           if name.upper() not in _LAUNCHER_FOLDERS + _LAUNCHER_HOMES + ("CONDA_PREFIX",)}
     env.update({name.upper(): str(value) for name, value in folders.items()})
+    if env.get("USERPROFILE"):
+        drive, rest = os.path.splitdrive(env["USERPROFILE"])
+        env.update(HOME=env["USERPROFILE"], HOMEDRIVE=drive, HOMEPATH=rest)
     if conda_prefix is not None:
         env["CONDA_PREFIX"] = str(conda_prefix)
     own = tmp_path.resolve()
-    for name in _LAUNCHER_FOLDERS:
+    for name in _LAUNCHER_FOLDERS + ("HOME",):
         assert env.get(name) and Path(env[name]).resolve().is_relative_to(own), (
             f"{name} is not a folder of the test's own, so the launcher would reach the person's own")
+    home = Path(env.get("HOMEDRIVE", "") + env.get("HOMEPATH", ""))
+    assert env.get("HOMEDRIVE") and home.is_absolute() and home.resolve().is_relative_to(own), (
+        "HOMEDRIVE and HOMEPATH do not together name a folder of the test's own, so the launcher would reach the "
+        "person's own")
     assert " " not in str(copy), f"the copy's path holds a space, which the command line would split: {copy}"
     desktop = _windows_desktop()
     before = _desktop_entries(desktop)
@@ -5450,15 +5482,16 @@ def test_the_launcher_makes_the_desktop_shortcut_once(tmp_path):
 
 
 def test_the_launchers_guard_refuses_every_copy_that_could_start_something():
-    """The launcher's tests run a copy of ``run.bat`` with ``--where`` or ``--make-shortcut`` alone, and refuse to run
-    one whose lines would not keep such a run from starting anything, or from writing on the person's desktop
-    (``_launcher_refused``): an option's line gone, written in a remark, setting the mode of a start with no option,
-    or read below the line that starts PRISM; the mode set to a start again above that line, or the start's own
-    setting moved there; the line that starts PRISM held to no mode, or a second one beside it; the Windows message
-    shown in another mode, or a second one; the shortcut put on Windows' own desktop whatever ``PRISM_DESKTOP`` says,
-    or made elsewhere than in the folder that variable names, or that desktop named again, on a line of its own or on
-    the shortcut's line. Each is made to today's file in memory, every one of its changes on a text found there once,
-    and refused; today's file is not. Nothing is run."""
+    """The launcher's tests run a copy of ``run.bat`` with ``--where`` or ``--make-shortcut`` alone, only when it is
+    the file pinned whole, and read its lines as well (``_launcher_refused``). That reading refuses a copy whose lines
+    would not keep such a run from starting anything, or from writing on the person's desktop: an option's line gone,
+    written in a remark, setting the mode of a start with no option, or read below the line that starts PRISM; the
+    mode set to a start again above that line, or the start's own setting moved there; the line that starts PRISM
+    held to no mode, or a second one beside it; the Windows message shown in another mode, or a second one; the
+    shortcut put on Windows' own desktop whatever ``PRISM_DESKTOP`` says, or made elsewhere than in the folder that
+    variable names, or that desktop named again, on a line of its own or on the shortcut's line. Each is made to
+    today's file in memory, every one of its changes on a text found there once, and refused; today's file is not.
+    Nothing is run."""
     from pathlib import Path
     text = (Path(__file__).resolve().parents[1] / "run.bat").read_text(encoding="utf-8")
     start = 'if "%LAUNCH_MODE%"=="start" start "PRISM" "%LAUNCH_PYTHONW%" -m core.gui\n'
@@ -5498,6 +5531,36 @@ def test_the_launchers_guard_refuses_every_copy_that_could_start_something():
     copies = {what: made(changes) for what, changes in edits.items()}
     passed = [what for what, copy in copies.items() if copy is None or not _launcher_refused(copy)]
     assert passed == [], f"the launcher's guard would run a copy with {passed}"
+
+
+def test_the_launcher_runs_only_as_pinned_and_the_pin_is_todays_file():
+    """The launcher's tests run a copy of ``run.bat`` only when it has the digest pinned here (``_LAUNCHER_DIGEST``),
+    so that an edit to the launcher is read by a person before any test runs it, and this test changes with it. The
+    pin is today's file's: as checked out here, and alike with every line end CRLF, as git writes it on Windows, or
+    LF, as git keeps it. A copy one byte away is refused: the start in other letters, or one line end of the other
+    kind among the rest, either way. The pin is checked in the function that runs the copy, before its lines are read
+    and before the statement that runs it. Read in memory and off that function's text; nothing is run."""
+    import ast
+    import inspect
+    import textwrap
+    from pathlib import Path
+    data = (Path(__file__).resolve().parents[1] / "run.bat").read_bytes()
+    lf = data.replace(b"\r\n", b"\n")
+    crlf = lf.replace(b"\n", b"\r\n")
+    assert [_launcher_digest(form) for form in (data, lf, crlf)] == [_LAUNCHER_DIGEST] * 3, (
+        "run.bat is not the launcher its tests were pinned to: read what it now does, then write its new digest, "
+        f"{_launcher_digest(lf)}, into _LAUNCHER_DIGEST in the same commit as the change")
+    end = lf.index(b"\n")
+    away = {"the start in other letters": lf.replace(b'=="start" start "PRISM"', b'=="start" Start "PRISM"'),
+            "one line end LF among CRLF": crlf[:end] + crlf[end + 1:],
+            "one line end CRLF among LF": lf[:end] + b"\r" + lf[end:]}
+    passed = [what for what, copy in away.items() if _launcher_digest(copy) == _LAUNCHER_DIGEST]
+    assert passed == [], f"the launcher's pin would let a copy through with {passed}"
+    held = [ast.unparse(node) for node in ast.parse(textwrap.dedent(inspect.getsource(_launcher))).body[0].body[1:]]
+    at = [[n for n, line in enumerate(held) if text in line] for text in (
+        "assert _launcher_digest(copy.read_bytes()) == _LAUNCHER_DIGEST", "_launcher_refused(", "subprocess.run(")]
+    assert ([len(found) for found in at], sorted(at) == at) == ([1, 1, 1], True), (
+        "the pin is not checked once, before the copy's lines are read and before it runs", at)
 
 
 def test_the_launcher_for_macos_and_linux_starts_prism_detached():
