@@ -198,7 +198,8 @@ class BasePanel(QWidget):
 
         # The right-hand column is a stack of two: the figures, with "How the run went" above them once a run
         # of the page has ended, and the run's page, which takes their place while it shows and holds the
-        # figures under its messages. The form stays at the left, locked while a run is live.
+        # figures under its messages; a third, the past view, joins them the first time a run that is over is
+        # drawn here (``past_view``). The form stays at the left, locked while a run is live.
         self.run_view = RunView()
         self.run_view.setObjectName("run")
         self.run_view.back.connect(self._back_to_the_form)
@@ -215,6 +216,8 @@ class BasePanel(QWidget):
         self.results.addWidget(self.figures)
         self.results.addWidget(self.run_view)
         self._split_sizes = None             # the figures' and the lines' heights, kept while the run's page holds them
+        self._past_view: RunView | None = None       # built the first time a run that is over is drawn here
+        self._before_past = None             # what the column showed before the past view took it
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.controls_scroll)
@@ -290,6 +293,32 @@ class BasePanel(QWidget):
         self.run_view.hold_figures(self.figure_stack)
         self.run_view.how_link.setVisible(False)
         self.results.setCurrentWidget(self.run_view)
+
+    @property
+    def past_view(self) -> RunView:
+        """The page a run that is over is drawn on from its two files, by the run's controller: built the first time
+        it is asked for, beside the run's page and never in its place, so that the run's page keeps its own run, its
+        offer, its question and its failure; and holding no figures, since this page's are no past run's."""
+        if self._past_view is None:
+            self._past_view = RunView()
+            self._past_view.setObjectName("past")
+            self._past_view.back.connect(self._back_from_the_past)
+            self.results.addWidget(self._past_view)
+        return self._past_view
+
+    def show_past_view(self) -> None:
+        """The past view in the right-hand column, in the place of what the column showed."""
+        shown = self.results.currentWidget()
+        if shown is not self._past_view:
+            self._before_past = shown
+        self.results.setCurrentWidget(self.past_view)
+
+    def _back_from_the_past(self) -> None:
+        """"Back to the form" on the past view: the figures again, with "How the run went" above them when this page
+        has a run of its own to show, as before the past view was shown."""
+        own = self._before_past is self.run_view or self.run_view.how_link.isVisibleTo(self.figures)
+        self.show_figures()
+        self.run_view.how_link.setVisible(own)
 
     def show_figures(self) -> None:
         """The right-hand column back to this page's figures over its own lines, the figures the run's page held

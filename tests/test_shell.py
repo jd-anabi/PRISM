@@ -189,6 +189,40 @@ def _foot(window):
     return foot._marker, foot._title, foot._words, foot.is_button()
 
 
+def _clocks_started(monkeypatch) -> list:
+    """Every timer started from the window's own files -- the window, the shell and the rail -- from now to the
+    test's end, each a timer of the toolkit (whatever its parent) or an object whose own timer was started: the start
+    is noted where it is made, as the launch test notes the starts it watches."""
+    import sys
+    from pathlib import Path
+    from PySide6.QtCore import QObject, QTimer
+    own = ("core/gui/main_window.py", "core/gui/screens/shell.py", "core/gui/widgets/rail.py")
+    started, start, start_timer = [], QTimer.start, QObject.startTimer
+
+    def by_the_window() -> bool:
+        return Path(sys._getframe(2).f_code.co_filename).as_posix().endswith(own)
+
+    def started_timer(timer, *args):
+        if by_the_window():
+            started.append(timer)
+        return start(timer, *args)
+
+    def started_by(timed, *args, **kwargs):
+        if by_the_window():
+            started.append(timed)
+        return start_timer(timed, *args, **kwargs)
+
+    monkeypatch.setattr(QTimer, "start", started_timer)
+    monkeypatch.setattr(QObject, "startTimer", started_by)
+    return started
+
+
+def _repeating(started) -> list:
+    """Of the timers ``_clocks_started`` noted, those that repeat: every one but a timer of a single shot."""
+    from PySide6.QtCore import QTimer
+    return [timer for timer in started if not isinstance(timer, QTimer) or not timer.isSingleShot()]
+
+
 def _ended_history(folder, run, records_root, **changed):
     """A training's history file in ``folder``, as the window wrote it at the training's end: stopped on Sun 11 Oct
     at 12:31 during its fit, its 20,480,000 simulations kept and its training kept up to epoch 62, its end not yet
@@ -751,7 +785,7 @@ def test_home_lists_the_last_runs_and_opens_one_in_its_past_view(tmp_path):
         QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier,
                          view.visualRect(view.model().index(0, 0)).center())
         host = window.part("inference").posterior_panel
-        page = host.run_view
+        page = host.past_view
         assert (window.current_place(), host.results.currentWidget() is page, page.mode) == (
             ("inference", "training"), True, "past")
         assert page.sentence.text() == ("Training was stopped on Sun 11 Oct, 12:31, during simulation. The 6,150 "
@@ -1223,23 +1257,26 @@ def test_a_step_names_a_held_record_by_the_name_its_save_box_gave_it(monkeypatch
     assert rail.row("training").accessibleName() == "Step 3, Training. Done: retrain"
 
 
-def test_the_foot_reads_nothing_is_running_at_start_and_follows_each_run_to_its_end(tmp_path):
+def test_the_foot_reads_nothing_is_running_at_start_and_follows_each_run_to_its_end(tmp_path, monkeypatch):
     """At the window's start the foot says nothing is running and is no control, and the window keeps no clock.
     While a panel's run is live the foot says the run's word, the stage it is in, in a few words, and that settings
     are locked; it is a button then. When the run ends the foot says how and when, and stays a button, until the end
     is seen; then it says nothing is running again, and a foot that held the keyboard hands it to the rail. At no
-    moment does the window keep a clock: what the foot says is the run's status alone."""
+    moment does the window keep a clock: what the foot says is the run's status alone, and no timer that repeats is
+    started by the window, the shell or the rail, whatever its parent."""
     from PySide6.QtCore import QTimer
     from core.gui.panels.crossval_panel import CrossValPanel
     qt_app()
     held, _clock = _on_the_runs_clock(tmp_path)
     window = build_window()
     idle = ("none", "Nothing is running", "Only one run at a time.", False)
+    started = _clocks_started(monkeypatch)
 
     def foot():
         clocks = [timer for timer in window.findChildren(QTimer, options=Qt.FindDirectChildrenOnly)
                   if timer.isActive()]
         assert clocks == [], f"the window keeps a clock: {clocks}"
+        assert _repeating(started) == [], f"the window keeps a clock: {started}"
         return _foot(window)
 
     assert foot() == idle and not hasattr(window, "_run_timer")
@@ -1385,7 +1422,8 @@ def test_the_foot_says_each_state_of_a_run_in_its_words(tmp_path, monkeypatch):
     and an end nobody has seen: finished with its date, stopped and failed with the date and what was kept, and a
     run PRISM did not see end, as a failure dated when it was last heard. A date within seven days carries its
     weekday. Every state but the first is a button. No word the window writes there holds a hyphen, which the
-    words' digits of equal width would widen."""
+    words' digits of equal width would widen. No timer that repeats is started by the window, the shell or the
+    rail at any moment, whatever its parent."""
     from PySide6.QtCore import QTimer
     from core.artifacts import default_store
     from core.gui.run.model import SILENCE_NEEDS_YOU_S, SIMULATION_ROW, RunModel, RunSpec
@@ -1396,12 +1434,13 @@ def test_the_foot_says_each_state_of_a_run_in_its_words(tmp_path, monkeypatch):
     window = build_window()
     host, text = window.part("inference").posterior_panel, RunText(held)
     folder = tmp_path / "simulations" / "_unnamed__20261008T190211"
-    written = []
+    written, started = [], _clocks_started(monkeypatch)
 
     def foot():
         clocks = [timer for timer in window.findChildren(QTimer, options=Qt.FindDirectChildrenOnly)
                   if timer.isActive()]
         assert clocks == [], f"the window keeps a clock: {clocks}"
+        assert _repeating(started) == [], f"the window keeps a clock: {started}"
         written.append(_foot(window)[2])
         return _foot(window)
 
@@ -1532,8 +1571,9 @@ def test_an_end_is_acknowledged_once_its_page_has_been_seen_in_the_active_window
 
 def test_ctrl_r_opens_the_run_whenever_the_foot_is_a_button(tmp_path):
     """Ctrl+R goes where the foot goes, whenever the foot is a button: to the live run's place; to the page of a run
-    whose end nobody has seen, which it then sees; and to the page of an end an earlier PRISM left unseen, drawn in
-    its past view from the run's files. While nothing runs and no end waits to be seen, it does nothing."""
+    whose end nobody has seen, which it then sees, a finished run's figures in sight, its result; and to the page
+    of an end an earlier PRISM left unseen, drawn in its past view from the run's files. While nothing runs and no
+    end waits to be seen, it does nothing."""
     from core.artifacts import default_store
     from core.gui.panels.crossval_panel import CrossValPanel
     qt_app()
@@ -1551,8 +1591,9 @@ def test_ctrl_r_opens_the_run_whenever_the_foot_is_a_button(tmp_path):
                 window.go_to("home")
             assert (held.status.unacknowledged_end, foot.is_button()) == (True, True)
             _press(window, "Ctrl+R")
-            assert (window.current_place(), held.status.state) == (("temperature", "sweep"), "idle"), (
-                "Ctrl+R did not go to the ended run and see it")
+            sweep = window.panel(CrossValPanel)
+            assert (window.current_place(), held.status.state, sweep.results.currentWidget() is sweep.figures) == (
+                ("temperature", "sweep"), "idle", True), "Ctrl+R did not go to the finished run's result and see it"
             window.go_to("home")
             _press(window, "Ctrl+R")
             assert window.current_place() == ("home", None), "Ctrl+R moved the window with no run to go to"
@@ -1561,7 +1602,7 @@ def test_ctrl_r_opens_the_run_whenever_the_foot_is_a_button(tmp_path):
             held.recall(str(default_store().root))
             assert (held.status.run, foot.is_button()) == (run, True)
             _press(window, "Ctrl+R")
-            view = window.part("inference").posterior_panel.run_view
+            view = window.part("inference").posterior_panel.past_view
             assert (window.current_place(), view.mode, held.status.state) == (("inference", "training"), "past",
                                                                               "idle")
     finally:
@@ -1728,6 +1769,224 @@ def test_the_foots_tool_tip_follows_its_own_rule(tmp_path):
     said = ("Training stopped. Sun 11 Oct, 12:31. The 20,480,000 simulations are kept; the training is kept up to "
             "epoch 62, so you can resume it.")
     assert (foot.accessibleName(), foot.toolTip()) == (said, said), (foot.accessibleName(), foot.toolTip())
+
+
+def _open_last_run(window, run):
+    """Home opened, and its "Last runs" row of the run ``run`` clicked."""
+    window.go_to("home")
+    rows = [row.run for row in window._home_facts().runs]
+    view = window.part("home").runs_table.view
+    QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier,
+                     view.visualRect(view.model().index(rows.index(run), 0)).center())
+
+
+def test_a_row_of_last_runs_for_the_live_run_opens_its_page_and_leaves_its_end_to_come(tmp_path):
+    """During a run, Home's "Last runs" lists it, running, and its row opens its page; the run is not seen by it,
+    since its end is still to come: its history still says that nobody has seen its end, so that a PRISM that closed
+    then would say it at the next launch. At its end, its page in sight in the window in front sees it."""
+    import shutil
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.run import history
+    app = qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    folder, root = tmp_path / "runs", tmp_path / "Artifacts"
+    with use_store(ArtifactStore(root)):
+        window = build_window()
+        try:
+            _shown_off_screen(window)
+            with _in_front(window):
+                stand_in = StandIn()
+                start_run(window.panel(CrossValPanel), stand_in)
+                run = held.status.run
+                _open_last_run(window, run)
+                during = history.read(folder / f"{run}.json")
+                assert (window.current_place(), held.is_live(), during["outcome"], during["acknowledged"]) == (
+                    ("temperature", "sweep"), True, "running", False), "a row of Last runs wrote the live run seen"
+                crashed = tmp_path / "crashed"            # the file as a PRISM that closed now would leave it
+                crashed.mkdir()
+                shutil.copy(folder / f"{run}.json", crashed / f"{run}.json")
+                assert (history.close_unseen(crashed),
+                        history.newest_unseen(crashed, records_root=str(root))["id"]) == ((run,), run), (
+                    "a PRISM that closed during the run would not say it at the next launch")
+                stand_in.release()
+                turn_until(app, lambda: not held.is_live())
+                assert (history.read(folder / f"{run}.json")["acknowledged"], held.status.state) == (True, "idle"), (
+                    "the run's end, its page in sight in the window in front, was not seen")
+        finally:
+            window.hide()
+
+
+def test_a_past_view_stands_beside_the_pages_own_run_and_holds_none_of_its_figures(tmp_path):
+    """A run that is over, opened from Home's "Last runs", is drawn in its page's past view, beside the run page and
+    never in its place, and holds no figures. A training that finished with a figure leaves the figure on its page;
+    an older training's past view opened then shows none, the figure staying the page's own, and the finished run's
+    page is as it was: "Back to the form" gives the figures back, "How the run went" above them opening the finished
+    run's page. A training that then stops with batches kept keeps its page: an older run's past opened over it,
+    "Back to the form" and "How the run went" bring the stopped run's page back as it was at its end, with its
+    "Continue from batch N", and so does the stopped run's row, also once a run of another page has ended since,
+    while the stopped run's page still offers to continue it."""
+    import torch
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.run.model import SIMULATION_ROW
+    app = qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    folder, root = tmp_path / "runs", tmp_path / "Artifacts"
+    older = "20261001T120000-training"
+    with use_store(ArtifactStore(root)):
+        _ended_history(folder, older, root, outcome="finished", acknowledged=True, started=_at(1, 12, 0),
+                       ended=_at(2, 12, 0), stage="Saving", fit=None)
+        window = build_window()
+        host = window.part("inference").posterior_panel
+        try:
+            _shown_off_screen(window)
+            text, finished = RunText(held), StandIn()
+            start_run(host, finished, spec=_training_spec(), provide_fig_sink=True)
+            finished.figure("the loss by epoch")
+            turn_until(app, lambda: host.figure_stack.count() == 1)
+            finished.release()
+            turn_until(app, lambda: not held.is_live())
+            own = host.run_view.sentence.text()
+            _open_last_run(window, older)
+            assert (host.run_view.mode, host.run_view.sentence.text()) == ("ended", own), (
+                "an older run's past was drawn on the finished run's page")
+            past = host.past_view
+            assert (window.current_place(), host.results.currentWidget() is past, past.mode, past.sentence.text()) == (
+                ("inference", "training"), True, "past", "Training finished on Fri 2 Oct, 12:00, after 1 day."), (
+                past.sentence.text())
+            assert (past.isAncestorOf(host.figure_stack), past.figures.isVisibleTo(past),
+                    host.figure_stack.count()) == (False, False, 1), "the past view shows the page's own figures"
+            past.back_button.click()
+            assert (host.results.currentWidget() is host.figures, host.run_view.how_link.isVisibleTo(host)) == (
+                True, True), "Back to the form left the page's own run out of reach"
+            host.run_view.how_link.click()
+            assert (host.results.currentWidget() is host.run_view, host.run_view.sentence.text()) == (
+                True, own), "How the run went did not open the page's own run"
+
+            sets = tmp_path / "simulations" / "_unnamed__20261008T190211"
+            sets.mkdir(parents=True)
+            torch.save({"batches_done": 6_150, "complete": False}, sets / "state.pt")
+            stopped = StandIn()
+            start_run(host, stopped, spec=_training_spec())
+            for line in (_BUDGET, _ROTATING, _ROTATED, _writing(sets)):
+                stopped.say(line)
+            stopped.row(SIMULATION_ROW, 6_150, 10_000)
+            turn_until(app, lambda: held.model.batches_done() == 6_150)
+            held.request_stop()
+            turn_until(app, lambda: not held.is_live())
+            run, page = held.status.run, host.run_view
+
+            def offered():
+                return (host.results.currentWidget() is page, page.mode, page.continue_button.isVisibleTo(page),
+                        page.continue_button.text())
+
+            assert offered() == (True, "ended", True, "Continue from batch 6,150"), offered()
+            _open_last_run(window, older)
+            assert host.results.currentWidget() is host.past_view
+            host.past_view.back_button.click()
+            assert (host.results.currentWidget() is host.figures, host.run_view.how_link.isVisibleTo(host)) == (
+                True, True), "Back to the form left the stopped run's page out of reach"
+            host.run_view.how_link.click()
+            assert offered() == (True, "ended", True, "Continue from batch 6,150"), (
+                "How the run went did not bring back the stopped run's page and its offer", offered())
+            _open_last_run(window, older)
+            _open_last_run(window, run)
+            assert offered() == (True, "ended", True, "Continue from batch 6,150"), (
+                "the stopped run's row did not bring back its page and its offer", offered())
+            with running(window.panel(CrossValPanel)):
+                pass
+            _open_last_run(window, run)
+            assert offered() == (True, "ended", True, "Continue from batch 6,150"), (
+                "once another page's run had ended, the stopped run's row lost its page and its offer", offered())
+        finally:
+            window.hide()
+
+
+def test_during_a_training_a_row_of_an_earlier_training_leaves_the_live_page_in_sight(tmp_path):
+    """While a training is live, the row of an earlier training in Home's "Last runs" opens the training's page,
+    which shows the live run as it was: nothing of the past is drawn over it, and the earlier run is not seen by
+    it."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.run import history
+    qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    folder, root = tmp_path / "runs", tmp_path / "Artifacts"
+    earlier = "20261001T120000-training"
+    with use_store(ArtifactStore(root)):
+        window = build_window()
+        host = window.part("inference").posterior_panel
+        _ended_history(folder, earlier, root, started=_at(1, 12, 0))
+        try:
+            _shown_off_screen(window)
+            with running(host, spec=_training_spec()):
+                run = held.status.run
+                _open_last_run(window, earlier)
+                assert (window.current_place(), host.results.currentWidget() is host.run_view, host.run_view.mode,
+                        held.is_live(), held.status.run) == (("inference", "training"), True, "live", True, run), (
+                    "the live training's page did not stay in sight")
+                assert history.read(folder / f"{earlier}.json")["acknowledged"] is False, (
+                    "the earlier run was seen though nothing of it was shown")
+        finally:
+            window.hide()
+
+
+def test_an_end_during_windows_end_of_the_session_is_not_seen_until_it_is_cancelled(tmp_path):
+    """From Windows' question to end the session until it is cancelled, nothing is seen: a run that "shut down
+    anyway" stopped in that time, its page in sight in the window in front, is said at the foot and in its history
+    as an end nobody has seen, so that the next launch says it. Once Windows' end is cancelled, a look sees it."""
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.run import history
+    qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    window = build_window()
+    try:
+        _shown_off_screen(window)
+        window.go_to("temperature", "sweep")
+        with _in_front(window):
+            start_run(window.panel(CrossValPanel), StandIn())
+            run = held.status.run
+            window.session_asked(SimpleNamespace(cancel=lambda: None))
+            window.session_ending(True)           # "shut down anyway": the run is stopped, and the window waits
+            record = history.read(tmp_path / "runs" / f"{run}.json")
+            assert (held.is_live(), record["outcome"], record["stop_reason"], record["acknowledged"],
+                    held.status.unacknowledged_end, window.current_place()) == (
+                False, "stopped", "Windows shut down", False, True, ("temperature", "sweep")), (
+                "an end during Windows' end of the session was seen")
+            window.session_ending(False)          # cancelled after all
+            window.go_to("home")
+            window.go_to("temperature", "sweep")
+            assert (history.read(tmp_path / "runs" / f"{run}.json")["acknowledged"], held.status.state) == (
+                True, "idle"), "the end was not seen once Windows' end of the session was cancelled"
+    finally:
+        window.hide()
+
+
+def test_an_end_whose_page_this_prism_does_not_have_is_seen_when_its_page_is_asked_for(tmp_path, caplog):
+    """An end an earlier PRISM left unseen whose place this window does not have -- a part, or a step of one, that a
+    later PRISM names otherwise -- cannot have its page opened: asked for from the foot, it is seen all the same, so
+    that the foot moves on, and the window's log says its page no longer exists."""
+    import logging
+    from core.artifacts import default_store
+    from core.gui.run import history
+    qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    window = build_window()
+    foot, folder, root = window.shell.rail.foot, tmp_path / "runs", default_store().root
+    for run, place in (("20261003T010000-training", ["fitting room", None]),
+                       ("20261004T010000-training", ["inference", "posterior"])):
+        _ended_history(folder, run, root, place=place, started=_at(int(run[6:8]), 1, 0))
+        held.recall(str(root))
+        assert (held.status.run, foot.is_button()) == (run, True), held.status
+        with caplog.at_level(logging.WARNING, logger="core.gui.main_window"):
+            QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
+        assert (history.read(folder / f"{run}.json")["acknowledged"], held.status.state, foot._title,
+                foot.is_button(), window.current_place()) == (True, "idle", "Nothing is running", False,
+                                                              ("home", None)), place
+        said = [record.getMessage() for record in caplog.records if record.name == "core.gui.main_window"]
+        where = "/".join(part for part in place if part)
+        assert said[-1:] == [f"The page of the run {run} no longer exists in this PRISM ({where}); its end is taken "
+                             f"as seen."], said
 
 
 def test_go_to_records_with_a_kind_opens_records_at_that_kind():

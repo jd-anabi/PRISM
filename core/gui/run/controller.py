@@ -54,6 +54,7 @@ loads a record is handed no page: it never takes the page's place, nor the page 
 here draws: a figure a run hands over goes to its page's stack of pictures as the picture it already is.
 """
 import json
+import logging
 import math
 import os
 import statistics
@@ -75,6 +76,8 @@ from . import ends, history, questions, retry
 from .model import FIT_PACE_RECORDS, IDLE, RunModel, RunSpec, RunStatus, moved
 from .textfile import FSYNC_EVERY_S, SEPARATOR_TEXT, RunTextFile
 
+log = logging.getLogger(__name__)
+
 #: How often, in milliseconds, the controller looks at a live run: the model's silence, the solver's count, the
 #: text file's request to the disk.
 TICK_MS = 1000
@@ -88,6 +91,12 @@ NO_LIMIT_TEXT = "No memory limit is set on this computer."
 #: Said in the run's full text when its history file cannot be written; filled with the error's kind and message.
 HISTORY_BROKEN_TEXT = ("The run's history file could not be written ({}); the run goes on, and the file is tried "
                        "again at the run's next change.")
+#: Said in the run's full text when, once the run has ended, its history file cannot be written again to say that
+#: its end was seen or that the training it kept was discarded; filled with the error's kind and message.
+HISTORY_LEFT_TEXT = ("The run's history file could not be written again after the run's end ({}); it says what it "
+                     "said before.")
+#: The window's log, when a run's page cannot be drawn in its past view: the history file's path and why.
+PAST_UNDRAWN_TEXT = "The page of a run could not be drawn from its history file %s (%s)."
 
 
 def _local_now() -> datetime:
@@ -132,6 +141,17 @@ def _made(created) -> datetime | None:
     except (TypeError, ValueError):
         return None
     return moment if moment.tzinfo is not None else None
+
+
+def _asked(kwargs: dict) -> str:
+    """The name the person typed for the record a run writes, as its call was handed it: the call's ``name``, or
+    the name of the record its page made at the click (a measurement's ``writer``). "" when the call was handed
+    none: a check, and a training, a narrowing round, a prior's build and an inference started from the window, are
+    named after they are saved, never by their call; a run's own word for itself ("Calibration") is no name."""
+    for given in (kwargs.get("name"), getattr(kwargs.get("writer"), "name", None)):
+        if isinstance(given, str) and given:
+            return given
+    return ""
 
 
 def _expected(store, facts: dict) -> tuple[int, str] | None:
@@ -223,9 +243,10 @@ class _Run:
         self.reason_at: datetime | None = None     # when that reason was said in its text and its history
         self.closing = False                       # the window closes once the run has ended
         self.ended: datetime | None = None
-        self.acknowledged = False
         self.result: tuple | None = None           # (kind, id, name) of the record a finished run wrote
-        self.discarded = False                     # the training its stop kept was discarded since
+        self.asked = ""                            # the name its call was handed for that record ("" for none)
+        self.record: dict | None = None            # the history its end wrote, which every later write starts from
+        self.waiting: RunStatus | None = None      # the end that waited to be seen as it started, until it is set aside
         self.last: RunStatus | None = None         # its status at its end, which its page is drawn with after it
         self.set_named = False
         self.view = None                           # its host's run page, which it draws on
@@ -335,11 +356,11 @@ class RunController(QObject):
         ``provide_fig_sink`` hands the call a sink for its figures, which go to the host's stack of pictures;
         ``provide_stream`` hands it ``emit_chunk`` and ``should_stop``, and ``on_chunk`` hears each chunk;
         ``watch_dir`` is one folder, or several, whose new pictures go to the host's stack. None of these is handed
-        on to ``fn``. An end that waits to be seen as the run starts is written seen in its history: from now on the
-        window says the new run, and it never says two (``_set_aside``)."""
+        on to ``fn``. An end that waits to be seen as the run starts is noted: the run sets it aside when it ends with
+        an end of its own, and gives it back when it ends into idle or is taken back (``_set_aside``)."""
         if self.is_live():
             return False
-        self._set_aside()
+        waiting = self._status if self._status.unacknowledged_end and self._status.run is not None else None
         from core.artifacts import default_store
         from core.progress import SOLVER
         from ..panels.base_panel import BasePanel
@@ -351,6 +372,7 @@ class RunController(QObject):
         store = default_store()
         folder = self._folder if self._folder is not None else history.runs_folder()
         run = _Run(spec, host, store, folder)
+        run.asked, run.waiting = _asked(kwargs), waiting
         run.keywords = {"on_result": on_result, "provide_fig_sink": provide_fig_sink,
                         "provide_stream": provide_stream, "on_chunk": on_chunk}
         run.solver_at_start, run.real_start = SOLVER.steps, datetime.now(timezone.utc)
@@ -453,7 +475,8 @@ class RunController(QObject):
     def _take_back(self, run: _Run) -> None:
         """A start that raised before its worker was queued, taken back: its watchers let go, the timer stopped
         (once there is one), the run's two files removed, every panel free, the host's results given back (a load
-        never took them), and the status published idle again."""
+        never took them), and the status published idle again, or, when an end waited to be seen as it started, that
+        end's again: a start taken back sets nothing aside."""
         from ..panels.base_panel import BasePanel
         for watcher in run.watchers:
             watcher.deleteLater()
@@ -467,8 +490,8 @@ class RunController(QObject):
         self._stay_awake(False)
         if not run.spec.loads_only and _alive(run.host) and hasattr(run.host, "_run_over"):
             run.host._run_over(IDLE)
-        self._status = IDLE
-        self.status_changed.emit(IDLE)
+        self._status = run.waiting or IDLE
+        self.status_changed.emit(self._status)
 
     # ── a run's stop and its end ──
     def request_stop(self, *, closing: bool = False, reason: str = "") -> None:
@@ -580,7 +603,7 @@ class RunController(QObject):
         self._draw()
         if _alive(run.view):
             run.view.say(questions.WITHDRAWN_TEXT.format(run.spec.word.lower()) if withdrawn
-                         else questions.TOO_LATE_TEXT)
+                         else questions.BEGUN_TO_STOP_TEXT)
         return withdrawn
 
     def withdraw_close(self) -> bool:
@@ -632,19 +655,22 @@ class RunController(QObject):
 
     def _gone(self, run: str | None) -> None:
         """The training the run ``run`` kept is gone: its page offers to resume it no more, and the run's call goes
-        with the offer when its page offered nothing else; its history says it was discarded, and its end's words,
-        on its page and in the status while its end waits to be seen, say so too."""
+        with the offer when its page offered nothing else; its history says it was discarded, nothing else changed
+        (the history its end wrote, ``_write_ended``, for the run the controller holds; else its file, ``_rewrite``),
+        and its end's words, read from that history, on its page and in the status while its end waits to be seen,
+        say so too."""
         offered = self._offers.get(run)
         if offered is not None and offered.continue_from is None:
             del self._offers[run]
             self._let_go(offered)
+        if run is None:
+            return
         held = self._run
         if held is not None and held.id == run:
-            held.discarded = True
-            self._write(held)
-            if held.last is not None:
+            record = self._write_ended(held, _discarded)
+            if held.last is not None and record is not None:
                 try:
-                    sentence, kept = ends.words(self._record(held), held.ended or self.now())
+                    sentence, kept = ends.words(record, held.ended or self.now())
                 except Exception:                # noqa: BLE001 -- the words stay as the end said them
                     sentence, kept = held.last.sentence, held.last.kept
                 held.last = replace(held.last, kept=kept,
@@ -654,13 +680,7 @@ class RunController(QObject):
                     self.status_changed.emit(self._status)
                 self._draw()
             return
-        folder = self.folder()
-        record = None if run is None else history.read(folder / f"{run}.json")
-        if record is not None and isinstance(record.get("fit"), dict):
-            try:
-                history.write(folder, {**record, "fit": {**record["fit"], "discarded": True}})
-            except Exception:                    # noqa: BLE001 -- an older run's file that cannot be written stays
-                pass
+        self._rewrite(self.folder(), run, _discarded)
 
     def _let_go(self, run: _Run) -> None:
         """The run's own call let go, the configuration, the prior and the tensors its arguments hold with it: from
@@ -737,41 +757,83 @@ class RunController(QObject):
     def acknowledge(self, run: str) -> None:
         """Someone has seen how the run ``run`` ended: its history file says so, and when its end is the one the
         status says (the run the controller holds, or one of an earlier launch whose end the status was filled
-        with), the controller is idle again."""
+        with), the controller is idle again. A run still live is not seen: its end is to come. An end seen while a
+        later run is live is no longer that run's to set aside or give back."""
         self._write_seen(run)
+        live = self._run
+        if live is not None and live.waiting is not None and live.waiting.run == run:
+            live.waiting = None
         if self._status.unacknowledged_end and self._status.run == run:
             self._status = IDLE
             self.status_changed.emit(IDLE)
 
-    def _set_aside(self) -> None:
-        """A run starts while an end waits to be seen: the window says the new run from now on, and never says two,
-        so that end is written seen in its history, as though it had been looked at, and is not said again at the
-        next launch. Nothing is published: the new run's status follows at once."""
-        status = self._status
-        if status.unacknowledged_end and status.run is not None:
-            self._write_seen(status.run)
+    def _set_aside(self, run: _Run) -> None:
+        """The run ``run`` has ended with an end of its own to say while the end that waited to be seen as it started
+        still waits: the window says this run's end from now on, and never says two, so that end is written seen in
+        its history, as though it had been looked at, and is not said again at the next launch. Only a run that keeps
+        a history file and leaves an end of its own sets an end aside: one that ends into idle (a refusal before
+        anything was spent, a load, a run that keeps no file) or is taken back gives that end back instead, as the
+        status (``_end``, ``_take_back``)."""
+        waiting, run.waiting = run.waiting, None
+        if waiting is not None:
+            self._write_seen(waiting.run)
 
     def _write_seen(self, run: str) -> None:
-        """The run ``run`` written seen into its history: the run the controller holds, or else its history file in
-        the folder of runs, when it says otherwise. A file that cannot be written stays as it is."""
+        """The run ``run`` written seen into its history, once it has ended: the run the controller holds, from the
+        history its end wrote (``_write_ended``), or else an earlier run, from its history file in the folder of runs
+        (``_rewrite``). Nothing for a run still live, which is seen only once it has ended: it has written no end
+        yet."""
         held = self._run
         if held is not None and held.id == run:
-            if not held.acknowledged:
-                held.acknowledged = True
-                self._write(held)
+            self._write_ended(held, {"acknowledged": True})
             return
-        folder = self.folder()
-        record = history.read(folder / f"{run}.json")
-        if record is not None and record.get("id") == run and not record.get("acknowledged"):
+        self._rewrite(self.folder(), run, {"acknowledged": True})
+
+    def _write_ended(self, run: _Run, change) -> dict | None:
+        """The history of the ended run ``run``, the run the controller holds, written again with ``change`` made
+        (the names a dict sets, or what a function makes of the record) to the history its end wrote, and kept as its
+        history: once a run has ended, its history is never worked out from the run again, so that a write after its
+        end (its end seen, the training it kept discarded) keeps all its end wrote, its failure among it, and an end
+        whose own write failed is written whole at last. The history now held is handed back; None for a run whose
+        end wrote none. A write that changes nothing is not made; one that fails is said in the run's full text,
+        once, as a history that cannot be written is said."""
+        if run.record is None:
+            return None
+        changed = change(run.record) if callable(change) else {**run.record, **change}
+        if changed == run.record:
+            return run.record
+        run.record = changed
+        if run.writes:
             try:
-                history.write(folder, {**record, "acknowledged": True})
-            except Exception:                    # noqa: BLE001 -- an older run's file that cannot be written stays
-                pass
+                history.write(run.folder, run.record)
+            except Exception as error:           # noqa: BLE001 -- the file says what it said before
+                self._say_history(run, HISTORY_LEFT_TEXT.format(f"{type(error).__name__}: {error}"))
+        return run.record
+
+    @staticmethod
+    def _rewrite(folder: Path, run: str, change) -> dict | None:
+        """The history of an ended run that the controller no longer holds -- one set aside, or of an earlier launch
+        -- read back from its file in ``folder`` and written again with ``change`` made to it alone, as
+        ``_write_ended`` makes it. The record now in the file is handed back; None when the file cannot be read
+        back as the run's, and then nothing is written. A file that cannot be written is left as it is."""
+        record = history.read(folder / f"{run}.json")
+        if record is None or record.get("id") != run:
+            return None
+        changed = change(record) if callable(change) else {**record, **change}
+        if changed == record:
+            return record
+        try:
+            history.write(folder, changed)
+        except Exception:                        # noqa: BLE001 -- an older run's file that cannot be written stays
+            return record
+        return changed
 
     def recall(self, records_root: str) -> None:
         """As a window is opened with no run live and no end waiting to be seen: the newest run of the records folder
         ``records_root`` whose end nobody has seen, as its history file in the folder of runs says it, becomes the
-        status, so that the foot and Home say how it ended until it is seen. Nothing when there is none."""
+        status, so that the foot and Home say how it ended until it is seen. Nothing when there is none. A history
+        file that cannot be read is passed over as though it were not there (``history.read``), and so is one whose
+        end cannot be said, which the window's log names."""
         if self._status != IDLE:
             return
         try:
@@ -780,31 +842,49 @@ class RunController(QObject):
             record = None
         if record is None or not isinstance(record.get("id"), str):
             return
-        self._status = ends.status_of(record, self.now())
+        try:
+            status = ends.status_of(record, self.now())
+        except Exception as error:               # noqa: BLE001 -- a history no reading foresaw opens no window's end
+            log.warning(history.PASSED_OVER_TEXT, self.folder() / f"{record['id']}.json",
+                        f"{type(error).__name__}: {error}")
+            return
+        self._status = status
         self.status_changed.emit(self._status)
 
-    def show_past(self, run: str, host) -> None:
-        """The run ``run`` on the run page of ``host``, the page of its place, which then shows it: as it stands when
-        it is the run the controller holds and ``host`` the page it ran on (a finished run's page leaves the figures
-        in sight, its result); else drawn in the past view from its two files alone, its history and its text.
-        Nothing is drawn while ``host`` holds a live run, nor when the run's history cannot be read."""
+    def show_past(self, run: str, host) -> bool:
+        """The run ``run`` on the page of its place, ``host``, which then shows it; whether it was shown. The run the
+        controller holds, or one whose page still offers to continue or resume it, on the page it ran on, is shown as
+        it stood at its end: a finished run's figures, its result, under "How the run went"; any other its run page,
+        with its offer, its question and its failure as they were. Any other run is drawn in the page's past view
+        (``past_view``), from its two files alone, its history and its text, beside the run page and never in its
+        place, and holding no figures, since the page's own are no past run's: a history that cannot be read, or
+        drawn, is said there, and the window's log names its file. Nothing is shown while ``host`` holds a live run
+        of its own, whose page stays in sight."""
         held = self._run
-        view = getattr(host, "run_view", None)
-        if view is None or not _alive(view):
-            return
-        if held is not None and held.id == run and held.host is host:
-            if held.outcome != "finished":
+        own = held if held is not None and held.id == run else self._offers.get(run)
+        if own is not None and own.host is host and _alive(own.view):
+            if own.outcome == "finished":
+                host._run_over(own.last)
+            else:
                 host.show_run()
-            return
+            return True
         if getattr(host, "is_running", lambda: False)():
-            return
+            return False
+        past = getattr(host, "past_view", None)
+        if past is None:
+            return False
         folder = self.folder()
-        record = history.read(folder / f"{run}.json")
-        if record is None:
-            return
-        text = folder / f"{run}.txt"
-        view.show_past(record, text if text.is_file() else None, clock=self._clock or _local_now)
-        host.show_run()
+        path, text = folder / f"{run}.json", folder / f"{run}.txt"
+        record = history.read(path)
+        try:
+            if record is None:
+                raise ValueError("it cannot be read")
+            past.show_past(record, text if text.is_file() else None, clock=self._clock or _local_now)
+        except Exception as error:               # noqa: BLE001 -- a past that cannot be drawn is said on its page
+            log.warning(PAST_UNDRAWN_TEXT, path, f"{type(error).__name__}: {error}")
+            past.show_unreadable()
+        host.show_past_view()
+        return True
 
     def where(self, run: str) -> tuple[str, str | None] | None:
         """The place of the run ``run``: the part and the page that show it, or None when it is not known."""
@@ -1008,10 +1088,12 @@ class RunController(QObject):
     def _end(self, run: _Run, refused_early: bool) -> None:
         """The run's end, in this order: its watchers' last look; its state (ended, or idle for a run that leaves
         nothing to acknowledge), with how and when it ended and what it kept in words, read from the history it
-        leaves (``ends.words``; a failure's sentence is its page's own); the history's end written and the text file
-        closed, or both removed for a refusal made before anything was spent; every panel unlocked; the computer let
-        sleep again and the reason against ending the session withdrawn; the payload let go, and the run's own call
-        with it unless its page offers to continue or resume it; the status published; then ``run_ended``; then, for
+        leaves (``ends.words``; a failure's sentence is its page's own); the end that waited to be seen as the run
+        started set aside when the run leaves an end of its own, or else the status again (``_set_aside``); the
+        history's end written, and kept for every later write, and the text file closed, or both removed for a
+        refusal made before anything was spent; every panel unlocked; the computer let sleep again and the reason
+        against ending the session withdrawn; the payload let go, and the run's own call with it unless its page
+        offers to continue or resume it; the status published; then ``run_ended``; then, for
         an end to be seen, the taskbar's flash on the newest window built; then the run's page drawn ended, a failure
         as its page's state with what the page offers, and its host's column arranged, so that a page that cannot be
         drawn holds up nothing of the run's own end; then the page's own word on a refusal made before anything was
@@ -1050,7 +1132,9 @@ class RunController(QObject):
         offers = (not refused_early and not idle and spec.simulation_set and run.outcome in ("failed", "stopped")
                   and not run.reopen and (run.continue_from is not None or run.kept_fit is not None)
                   and _alive(run.host))
-        self._status = IDLE if idle else last
+        self._status = (run.waiting or IDLE) if idle else last
+        if not idle:
+            self._set_aside(run)
         if spec.keeps_files:
             if refused_early:
                 self._remove_files(run)
@@ -1171,7 +1255,7 @@ class RunController(QObject):
         state = ("retrying" if waits else model.state if model.state in ("starting", "running", "stopping")
                  else "running")
         stage = model.stage
-        words = model.sentence() if state == "stopping" else model.doing()
+        words = questions.stopping_line(self._status, model) if state == "stopping" else model.doing()
         return RunStatus(state=state, word=spec.word, name=spec.name, run=run.id, place=spec.place,
                          loading=spec.loads_only,
                          state_word=("loading" if spec.loads_only else "stopping" if state == "stopping"
@@ -1255,28 +1339,38 @@ class RunController(QObject):
             self._model.set_earlier(tuple(counts))
 
     def _write(self, run: _Run) -> None:
-        """Write the run's history file whole, while it is still written. A write that fails is tried again at the
-        run's next moment that writes it, and the run goes on; the first failure is said, once, in the run's full
-        text and its text file."""
+        """Write the run's history file whole, while it is still written; at the run's end, the history written is
+        kept, and every later write starts from it. A write that fails is tried again at the run's next moment that
+        writes it, and the run goes on; the first failure is said, once, in the run's full text and its text file."""
         if not run.writes:
             return
         try:
-            history.write(run.folder, self._record(run))
+            record = self._record(run)
+            if run.ended is not None:
+                run.record = record              # the end's: every later write starts from it (``_write_ended``)
+            history.write(run.folder, record)
         except Exception as error:               # noqa: BLE001 -- the history never stops a run
-            if run.history_said:
-                return
-            run.history_said = True
-            said = HISTORY_BROKEN_TEXT.format(f"{type(error).__name__}: {error}")
-            if run.text is not None:
-                run.text.line(said, "window")
-            self.lines.emit([(said, "window")])
+            self._say_history(run, HISTORY_BROKEN_TEXT.format(f"{type(error).__name__}: {error}"))
+
+    def _say_history(self, run: _Run, said: str) -> None:
+        """A history file that could not be written, ``said`` in the run's full text and its text file, once for the
+        run: its text file, closed at the run's end, takes nothing more after it."""
+        if run.history_said:
+            return
+        run.history_said = True
+        if run.text is not None:
+            run.text.line(said, "window")
+        self.lines.emit([(said, "window")])
 
     def _record(self, run: _Run) -> dict:
-        """The run's history, as its model reads it now. A stop asked with a reason of its own makes the run's outcome
+        """The run's history, as its model reads it now, worked out until the run's end and never after it: that its
+        end was seen, and that the training it kept was discarded, are written once it has ended, into the history its
+        end wrote (``_write_ended``). A stop asked with a reason of its own makes the run's outcome
         "stopped", with that reason, until the run has ended, and its end the moment the reason was said, and the same
         of the try it is in, with the moment the run was last heard, at each write: a process Windows ends before the
         run leaves them said, and leaves said that the run's own end was never written. The reason stays unless the
-        run finished."""
+        run finished. The record's name asked is the name the run's call was handed, never the run's own word for
+        itself."""
         spec, model = run.spec, self._model
         reason = run.stop_reason if run.stop_reason and run.outcome != "finished" else None
         ended = run.ended if run.ended is not None or reason is None else run.reason_at
@@ -1298,7 +1392,7 @@ class RunController(QObject):
                    "kept_id": getattr(note, "id", None), "passes": getattr(note, "passes", None),
                    "resumed": getattr(note, "resumed", None), "processes": getattr(note, "processes", None),
                    "wall_seconds": None, "save_error": None, "expected": model.expected_epochs(),
-                   "discarded": run.discarded}
+                   "discarded": False}
         failure = None
         if run.failure is not None and run.outcome == "failed":
             exc = run.failure[0]
@@ -1329,7 +1423,7 @@ class RunController(QObject):
                 "outcome": run.outcome or ("stopped" if reason else "running"), "stop_reason": reason,
                 "stage": model.stage,
                 "stages": [[stage.name, list(stage.begins), stage.counts] for stage in spec.stages],
-                "acknowledged": run.acknowledged, "tries": tries,
+                "acknowledged": False, "tries": tries,
                 "plan": None, "settings": None, "memory_limit": spec.facts.get("memory_limit"),
                 "simulation_set": None if folder is None else {
                     "folder": folder, "batches": budget.get("batches"), "at_start": run.at_start, "at_end": done,
@@ -1337,8 +1431,14 @@ class RunController(QObject):
                 "health": None if failed is None else {"failed": failed[0], "simulated": failed[1]},
                 "fit": fit, "check": None,
                 "result": None if run.result is None else dict(zip(("kind", "id", "name"), run.result),
-                                                               asked=spec.name),
+                                                               asked=run.asked),
                 "failure": failure, "text": f"{run.id}.txt"}
+
+
+def _discarded(record: dict) -> dict:
+    """A run's history, its kept training said to be discarded; as it was when it holds no fit."""
+    fit = record.get("fit")
+    return {**record, "fit": {**fit, "discarded": True}} if isinstance(fit, dict) else record
 
 
 def _alive(widget) -> bool:

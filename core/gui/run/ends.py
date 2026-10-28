@@ -38,9 +38,11 @@ HOW = {"finished": ("done", "Finished"), "stopped": ("half", "Stopped"), "failed
 # The word for the record a run wrote, by the store's kind, as the end's sentence names it.
 _RECORDS = {"prior": "prior", "posterior": "posterior", "observation": "observation", "calibration": "calibration",
             "inference": "inference", "diagnostic": "check", "fdt": "record", "simulation": "simulation set"}
-# Where a training was when it was stopped, failed or was last heard, by the name of its stage.
+# Where a training was when it was stopped, failed or was last heard, by the name of its stage. No stop is taken while
+# the posterior is saved: a training stopped in that stage was stopped as its fit ended by itself, at the save of the
+# fit's last pass, before the posterior's save began.
 _DURING = {"Rotation": "during the rotation", "Simulation": "during simulation", "Fitting": "during the fit",
-           "Saving": "while its posterior was being saved"}
+           "Saving": "as its fit ended"}
 _FAILED_AT = {"Rotation": "before its simulation", "Simulation": "during simulation", "Fitting": "during the fit",
               "Saving": "while its posterior was being saved"}
 
@@ -188,7 +190,7 @@ def _stop_kept(record: dict) -> str:
         return f"{held}."
     if stage == "Saving":
         if fit.get("kept_id") and not fit.get("discarded"):
-            return "The finished training is kept; resuming it writes the posterior."
+            return "The training is kept with its fit complete; resuming it writes the posterior."
         return "The simulations are kept."
     return "Nothing was simulated."
 

@@ -2604,6 +2604,72 @@ _ENDS = {
         {"word": "Measurement", "name": "cell_a_3oct", "place": ["temperature", "one_cell"], "stage": "Driven",
          "fit": None, "simulation_set": None}, _at(11, 12, 31), False,
         f"Measurement was stopped on Sun 11 Oct, 12:31. {_MEASURED}", _MEASURED),
+    "a check finished, under the name asked for": (
+        {"word": "Check", "name": "Calibration", "place": ["inference", "checks"], "outcome": "finished",
+         "stage": None, "started": _at(11, 12, 19), "fit": None, "simulation_set": None,
+         "result": {"kind": "calibration", "id": "c1", "name": "cal_oct", "asked": "cal_oct"}}, _at(11, 12, 31),
+        False, "Check finished on Sun 11 Oct, 12:31, after 12 minutes. The calibration cal_oct is saved.", ""),
+    "a check finished, asked for no name": (
+        {"word": "Check", "name": "Calibration", "place": ["inference", "checks"], "outcome": "finished",
+         "stage": None, "started": _at(11, 12, 19), "fit": None, "simulation_set": None,
+         "result": {"kind": "calibration", "id": "c1", "name": "", "asked": ""}}, _at(11, 12, 31), False,
+        "Check finished on Sun 11 Oct, 12:31, after 12 minutes. The calibration is saved.", ""),
+    "a sweep study finished, which names no record": (
+        {"word": "Sweep study", "name": "sweep_a", "place": ["temperature", "sweep"], "outcome": "finished",
+         "stage": None, "started": _at(11, 9, 1), "fit": None, "simulation_set": None, "result": None},
+        _at(11, 12, 31), False, "Sweep study finished on Sun 11 Oct, 12:31, after 3 hours 30 minutes.", ""),
+    "stopped during the fit, no training kept": (
+        {"fit": {"epochs": 3, "best_epoch": 2, "simulations": 20_480_000}}, _at(11, 12, 31), False,
+        "Training was stopped on Sun 11 Oct, 12:31, during the fit. The 20,480,000 simulations are kept.",
+        "The 20,480,000 simulations are kept."),
+    "stopped as its fit ended, before its posterior was written": (
+        {"stage": "Saving"}, _at(11, 12, 31), False,
+        "Training was stopped on Sun 11 Oct, 12:31, as its fit ended. The training is kept with its fit complete; "
+        "resuming it writes the posterior.", "The training is kept with its fit complete; resuming it writes the "
+                                             "posterior."),
+    "failed during the fit, its training kept": (
+        {"outcome": "failed", "tries": _ended_try(_at(11, 12, 31), "failed", 10_000),
+         "failure": {"type": "RuntimeError", "message": "the fit's epoch 63 failed", "kind": "out of memory",
+                     "reopen": True}}, _at(11, 12, 31), False,
+        "Training failed on Sun 11 Oct, 12:31, during the fit: the graphics card ran out of memory. The simulations "
+        "and the training up to epoch 62 are kept.", "The simulations and the training up to epoch 62 are kept."),
+    "failed, its message ending in a full stop": (
+        {"outcome": "failed", "stage": "Simulation", "fit": None, "tries": _ended_try(_at(11, 12, 31), "failed", 6_150),
+         "failure": {"type": "RuntimeError", "message": "The simulation of batch 6151 failed.\nIts second line.",
+                     "kind": "other", "reopen": False}}, _at(11, 12, 31), False,
+        "Training failed on Sun 11 Oct, 12:31, during simulation: The simulation of batch 6151 failed. The "
+        "simulations up to batch 6,150 are kept.", "The simulations up to batch 6,150 are kept."),
+    "failed, the error with no message": (
+        {"outcome": "failed", "stage": "Simulation", "fit": None, "tries": _ended_try(_at(11, 12, 31), "failed", 6_150),
+         "failure": {"type": "RuntimeError", "message": "", "kind": "other", "reopen": False}}, _at(11, 12, 31),
+        False, "Training failed on Sun 11 Oct, 12:31, during simulation: the error gave no message. The simulations "
+               "up to batch 6,150 are kept.", "The simulations up to batch 6,150 are kept."),
+    "not seen to end in its fit": (
+        {"outcome": "not seen to end", "ended": None, "last_heard": _at(3, 3, 12),
+         "tries": _ended_try(None, None, 10_000)}, _at(8, 19, 2), False,
+        "PRISM closed while this training was running; last heard Sat 3 Oct, 03:12, the fit, epoch 62.",
+        "What it had saved by then is kept."),
+    "not seen to end in its rotation": (
+        {"outcome": "not seen to end", "stage": "Rotation", "ended": None, "last_heard": _at(3, 3, 12), "fit": None,
+         "simulation_set": None, "tries": _ended_try(None, None, 0)}, _at(8, 19, 2), False,
+        "PRISM closed while this training was running; last heard Sat 3 Oct, 03:12, the rotation.",
+        "What it had saved by then is kept."),
+    "not seen to end as its posterior was saved": (
+        {"outcome": "not seen to end", "stage": "Saving", "ended": None, "last_heard": _at(3, 3, 12),
+         "tries": _ended_try(None, None, 10_000)}, _at(8, 19, 2), False,
+        "PRISM closed while this training was running; last heard Sat 3 Oct, 03:12, saving its posterior.",
+        "What it had saved by then is kept."),
+    "a measurement not seen to end": (
+        {"word": "Measurement", "name": "cell_a_3oct", "place": ["temperature", "one_cell"],
+         "outcome": "not seen to end", "stage": "Driven", "ended": None, "last_heard": _at(3, 3, 12), "fit": None,
+         "simulation_set": None}, _at(8, 19, 2), False,
+        "PRISM closed while this measurement was running; last heard Sat 3 Oct, 03:12, driven.", ""),
+    "not seen to end, at a moment not known": (
+        {"outcome": "not seen to end", "stage": "Simulation", "ended": None, "last_heard": None, "fit": None,
+         "simulation_set": {"folder": _FOLDER, "batches": 10_000, "at_start": 0, "at_end": 6_150},
+         "tries": _ended_try(None, None, 6_150)}, _at(8, 19, 2), False,
+        "PRISM closed while this training was running; last heard at a moment not known, simulation, batch 6,150 of "
+        "10,000.", "What it had saved by then is kept."),
     "a prior build stopped": (
         {"word": "Prior build", "name": "", "place": ["inference", "prior"], "stage": None, "fit": None,
          "simulation_set": None}, _at(11, 12, 31), False,
@@ -2635,6 +2701,118 @@ def test_each_end_says_how_and_when_and_never_finished_after_a_stop_or_a_failure
     said = [path.relative_to(REPO).as_posix() for path in (REPO / "core").rglob("*.py")
             if "FDT run finished" in path.read_text(encoding="utf-8")]
     assert said == [], f"a line of the window says a measurement finished, whatever its end: {said}"
+
+
+def test_the_end_is_said_from_what_the_controller_heard_of_the_run(tmp_path, monkeypatch):
+    """The end's words are said from the history the controller writes of what it heard. A training whose call was
+    handed the name to save its posterior under returns the posterior it saved, after a fit that ended by its
+    patience earlier than its estimate, a stop asked of it too late to stop anything: it is said finished, after how
+    long, with its posterior, how its fit ended and the late stop; and its history holds the record it wrote with
+    the name asked, how its fit ended, the epochs it was expected to run and its stages. A check whose call was
+    handed a name returns its calibration under that name and is said with it; one handed none, as the window
+    starts a check, is said saved, and never saved without its name: a run's own word for itself is no name. A
+    measurement's name is the name of the record its page made at the click, which its call is handed."""
+    import logging
+    import threading
+    from core.gui.run import controller as controller_module
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, start_run, turn_until
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held = _controller_on(tmp_path, clock)
+    monkeypatch.setattr(controller_module, "_expected", lambda store, facts: _EXPECTED)
+    asked, log = threading.Event(), logging.getLogger("core.SBI.train")
+
+    def training(*, name, **_kwargs):
+        for line in (_LINES["budget"], _LINES["rotation_begins"], _LINES["rotation_done"],
+                     _LINES["simulation_writing"], _LINES["simulation_complete"], _epoch(1), _epoch(2), _epoch(3, 1)):
+            log.info(line)
+        asked.wait(10)
+        try:
+            raise RuntimeError("a last pass the fit recovered from")
+        except RuntimeError:
+            log.info(_epoch(4, 2))          # said inside a handler, the stop is carried: the fit ends by its patience
+        return SimpleNamespace(kind="posterior", id="q1", name=name)
+
+    start_run(build_run_host(), training, spec=_training(patience=2), name="retrain_3")
+    turn_until(app, lambda: len(held.model.epochs()) == 3)
+    held.request_stop()
+    clock.advance(4 * 3600 + 12 * 60)
+    asked.set()
+    turn_until(app, lambda: not held.is_live())
+    record = history.read(tmp_path / "runs" / f"{held.status.run}.json")
+    assert held.status.sentence == (
+        "Training finished on Thu 8 Oct, 23:14, after 4 hours 12 minutes. The posterior retrain_3 is saved. The fit "
+        "ended at epoch 4, earlier than the estimate of about 130: validation had not improved for 2 epochs (best at "
+        "epoch 2). A stop was asked for, but the run had already finished."), held.status.sentence
+    assert (record["result"], record["fit"]["ended_by"], record["fit"]["expected"], record["stages"]) == (
+        {"kind": "posterior", "id": "q1", "name": "retrain_3", "asked": "retrain_3"}, "patience", 130,
+        [[stage.name, list(stage.begins), stage.counts] for stage in _TRAINING]), record
+
+    check = RunSpec("Check", ("inference", "checks"), name="Calibration", stop_button="Stop the calibration…",
+                    kinds=("calibration",))                 # as the check's page names it: its word, no record's name
+    measurement = RunSpec("Measurement", ("temperature", "one_cell"), name="cell_a_3oct",
+                          stop_button="Stop measurement…", kinds=("fdt",))
+    for spec, given, kind, returned, saved in (
+            (check, {"name": "cal_oct"}, "calibration", "cal_oct", "The calibration cal_oct is saved."),
+            (check, {}, "calibration", "", "The calibration is saved."),
+            (measurement, {"writer": SimpleNamespace(name="cell_a_3oct", id="f1")}, "fdt", "cell_a_3oct",
+             "The record cell_a_3oct is saved.")):
+        start_run(build_run_host(), lambda **_kwargs: SimpleNamespace(kind=kind, id="c1", name=returned), spec=spec,
+                  **given)
+        turn_until(app, lambda: not held.is_live())
+        record = history.read(tmp_path / "runs" / f"{held.status.run}.json")
+        assert (held.status.sentence, record["result"]) == (
+            f"{spec.word} finished on Thu 8 Oct, 23:14, after less than a minute. {saved}",
+            {"kind": kind, "id": "c1", "name": returned, "asked": returned}), held.status.sentence
+
+
+def test_an_end_waiting_to_be_seen_is_set_aside_only_by_a_run_that_leaves_an_end_of_its_own(tmp_path, monkeypatch):
+    """A run started while an end waits to be seen sets that end aside, written seen in its history, only once it has
+    ended with an end of its own to say: a run that keeps a history file (a training, a narrowing round, a prior's
+    build, a check, an inference, a measurement, a sweep study, a comparison, a reduction map). A load and a video,
+    which keep no file and end into idle, set nothing aside, nor does a start taken back before its worker was
+    queued, nor a run the stage refused before anything was spent: after each, the end that waited is the status
+    again, its history still unseen."""
+    from core.gui.run import history
+    from core.refusals import Refusal
+    from tests._fixtures import asked as box_asked, build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    held, host = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_run_host()
+    first = StandIn()
+    start_run(host, first, spec=_training())
+    first.release()
+    turn_until(app, lambda: not held.is_live())
+    waiting = held.status
+    path = tmp_path / "runs" / f"{waiting.run}.json"
+
+    def kept_waiting(what):
+        assert (held.status == waiting, history.read(path)["acknowledged"]) == (True, False), (
+            f"{what} set aside the end that waited to be seen", held.status)
+
+    for spec in (_load(), RunSpec("Video", ("live", None), stop_button="Stop saving…", keeps_files=False)):
+        stand_in = StandIn(word=spec.word)
+        start_run(host, stand_in, spec=spec)
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())
+        kept_waiting(spec.word)
+    with pytest.raises(TypeError):
+        start_run(host, StandIn(), spec=_training(), watch_dir=5)
+    kept_waiting("a start taken back")
+    refused = StandIn()
+    start_run(host, refused, spec=_training())
+    refused.fail(Refusal("The posterior name 'retrain_3' is taken.", field="name"))
+    turn_until(app, lambda: not held.is_live())
+    assert box_asked().sentence == "The posterior name 'retrain_3' is taken."
+    kept_waiting("a run refused before anything was spent")
+    later = StandIn()
+    start_run(host, later, spec=_training())
+    later.release()
+    turn_until(app, lambda: not held.is_live())
+    assert (held.status.run != waiting.run, held.status.unacknowledged_end, history.read(path)["acknowledged"]) == (
+        True, True, True), "a run that left an end of its own did not set aside the end that waited"
 
 
 def test_at_the_end_the_run_lets_go_of_everything_and_is_published_last(tmp_path, windows_asked, monkeypatch):
@@ -2757,6 +2935,7 @@ def test_the_taskbar_flashes_for_an_end_and_for_needs_you(tmp_path, windows_aske
     turn_until(app, lambda: not held.is_live())
     assert said()[-2:] == [("status", False, "MainThread"), ("flash", True, "MainThread")], said()
     assert len(flashes()) == 1, said()
+    held.acknowledge(held.status.run)                 # seen: each run below starts with no end waiting
     for spec, refused in ((RunSpec("Live simulation", ("live", None), keeps_files=False), False), (_load(), False),
                           (_training(), True)):
         windows_asked.clear()

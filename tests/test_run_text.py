@@ -982,7 +982,7 @@ def test_a_run_still_marked_running_at_launch_is_closed_as_not_seen_to_end(tmp_p
         assert (home.next_heading.label.text(), home.next_button.text()) == (
             "Next: see what happened to the training", "&See what happened")
         QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
-        page = window.part("inference").posterior_panel.run_view
+        page = window.part("inference").posterior_panel.past_view
         assert (window.current_place(), page.mode, page.sentence.text()) == (
             ("inference", "training"), "past", "PRISM closed while this training was running; last heard Sat 3 Oct, "
                                                "03:12, simulation, batch 6,150 of 10,000.")
@@ -1045,7 +1045,7 @@ def test_after_a_reopening_the_newest_unacknowledged_end_is_at_the_foot(tmp_path
         assert (home.next_heading.label.text(), home.next_button.text()) == (
             "Next: see what happened to the training", "&Go to the run")
         home.next_button.click()
-        page = window.part("inference").posterior_panel.run_view
+        page = window.part("inference").posterior_panel.past_view
         assert (window.current_place(), page.mode, page.sentence.text()) == (
             ("inference", "training"), "past", f"Training was stopped on Sun 4 Oct, 12:31, during simulation. {kept}")
         assert (history.read(stopped)["acknowledged"], held.status.state) == (True, "idle")
@@ -1053,6 +1053,106 @@ def test_after_a_reopening_the_newest_unacknowledged_end_is_at_the_foot(tmp_path
         foot = window.shell.rail.foot
         assert (foot._marker, foot._title, foot._words) == ("done", "Prior build finished", "Fri 2 Oct, 01:30."), (
             "the next window did not find the next end nobody has seen")
+
+
+def test_a_history_file_the_window_cannot_read_is_passed_over_and_the_window_says_which(tmp_path, monkeypatch,
+                                                                                        caplog):
+    """A file in the folder of runs that is no run's history the window can read -- one whose records folder is a
+    number, one whose stage is a list, one still running whose tries are a number -- is passed over as though it were
+    not there: PRISM opens, closing and recalling the runs it can read; Home's "Last runs" lists none of the files it
+    cannot; and the window's log names each such file, once however often it is read. A run's page asked of such a
+    file says on its page that it cannot be drawn, and the log names the file. A history written before the run's
+    stages were kept is drawn in its past view with no stage line. A file still running that cannot be written
+    again -- one a later PRISM wrote, holding a name this one does not keep -- is left as it is, and the next file is
+    closed all the same."""
+    from core.gui.run import history, view
+    from core.gui.run.controller import controller
+    from tests._fixtures import whole_program
+    from tests._runs import Clock
+    root, folder = tmp_path / "Artifacts", tmp_path / "runs"
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(root))
+    held = controller()
+    held.use_folder(folder)
+    held.use_clock(Clock(_at(8, 19, 2)))
+    kept = "The 6,150 batches simulated so far are kept; you can continue from batch 6,150."
+    older = "20261002T010000-training"
+    path = _training_history(folder, older, root, day=2, outcome="finished", ended=_at(2, 9), acknowledged=True)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    del record["stages"]                                  # a history written before the stages were kept
+    path.write_text(json.dumps(record), encoding="utf-8")
+    stopped = "20261003T010000-training"
+    _training_history(folder, stopped, root, day=3, outcome="stopped", ended=_at(3, 12, 31),
+                      tries=[{"ended": _at(3, 12, 31), "batches_after": 6_150}])
+    unread = {"20261004T010000-training": ("tries", 7), "20261005T010000-training": ("records_root", 5),
+              "20261006T010000-training": ("stage", ["Fitting"])}
+    for run, (name, value) in unread.items():
+        written = json.loads(_training_history(folder, run, root, day=int(run[6:8]),
+                                               **({} if name == "tries" else {"outcome": "stopped"})).read_text(
+            encoding="utf-8"))
+        (folder / f"{run}.json").write_text(json.dumps({**written, name: value}), encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="core.gui"):
+        with whole_program() as (_app, window):
+            foot = window.shell.rail.foot
+            assert (window is not None, foot._title, foot._words) == (True, "Training stopped",
+                                                                      f"Sat 3 Oct, 12:31. {kept}"), foot._words
+            window.go_to("home")
+            window.go_to("home")
+            assert [row.run for row in window._home_facts().runs] == [stopped, older]
+            said = [entry.getMessage() for entry in caplog.records if entry.name == "core.gui.run.history"]
+            for run, (name, value) in unread.items():
+                named = [line for line in said if f"{run}.json" in line]
+                assert len(named) == 1 and f"its {name} should hold" in named[0], (run, said)
+            host = window.part("inference").posterior_panel
+            for run in unread:
+                held.show_past(run, host)
+                past = host.past_view
+                assert (host.results.currentWidget() is past, past.mode, past.sentence.text()) == (
+                    True, "past", view.UNREADABLE_TEXT), run
+            undrawn = [entry.getMessage() for entry in caplog.records if entry.name == "core.gui.run.controller"]
+            assert [run for run in unread if any(f"{run}.json" in line for line in undrawn)] == list(unread), undrawn
+            held.show_past(older, host)
+            assert (host.past_view.sentence.text(), host.past_view.stage_line.words()) == (
+                "Training finished on Fri 2 Oct, 09:00, after 8 hours.", ()), host.past_view.sentence.text()
+    closing = tmp_path / "closing"
+    later = _training_history(closing, "20261001T010000-training", root, day=1)
+    later.write_text(json.dumps({**json.loads(later.read_text(encoding="utf-8")), "colour": "red"}),
+                     encoding="utf-8")                   # a later PRISM's file, holding a name this one does not keep
+    _training_history(closing, "20261002T010000-training", root, day=2)
+    with caplog.at_level(logging.WARNING, logger="core.gui"):
+        assert history.close_unseen(closing) == ("20261002T010000-training",)
+    assert [entry.getMessage() for entry in caplog.records if "20261001T010000-training.json" in entry.getMessage()
+            and "does not keep: ['colour']" in entry.getMessage()] != [], caplog.records
+
+
+def test_a_window_built_during_a_run_closes_no_history_and_recalls_no_end(tmp_path, monkeypatch):
+    """A window built while a run is live, by the PRISM that holds the one-PRISM claim, closes no history -- the live
+    run's still says it is running -- and recalls no end an earlier run left unseen: the status stays the live run's.
+    Nor is an end recalled while another waits to be seen: the status stays the end that waits."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import one_instance
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from core.gui.run.model import RunSpec
+    from tests._fixtures import build_run_host, build_window
+    from tests._runs import Clock, running
+    root, folder = tmp_path / "Artifacts", tmp_path / "runs"
+    held = controller()
+    held.use_folder(folder)
+    held.use_clock(Clock(_at(8, 19, 2)))
+    _training_history(folder, "20261003T010000-training", root, outcome="stopped", ended=_at(3, 9))
+    monkeypatch.setattr(one_instance, "current", lambda: one_instance.Claim("start"))
+    with use_store(ArtifactStore(root)):
+        with running(build_run_host(), spec=RunSpec("Training", ("inference", "training"))):
+            run = held.status.run
+            build_window()
+            assert (history.read(folder / f"{run}.json")["outcome"], held.status.run, held.is_live()) == (
+                "running", run, True), "a window built during a run closed its history or recalled an end"
+            held.recall(str(root))
+            assert (held.status.run, held.is_live()) == (run, True), "an end was recalled during a run"
+        waiting = held.status
+        assert (waiting.run, waiting.unacknowledged_end) == (run, True)
+        held.recall(str(root))
+        assert held.status == waiting, "an end was recalled in the place of the end that waits to be seen"
 
 
 def test_home_counts_only_the_runs_of_the_records_folder_in_use(tmp_path):

@@ -37,16 +37,23 @@ training was discarded since. After a stop or a failure in the fit, ``epochs`` i
 the count of epoch records this run's text holds: the kept training counts every pass saved, a resumed training's
 earlier processes included, while the run's records are this run's own.
 
+A file that cannot be read whole, or that holds a name in a shape no run's history holds it (``SHAPES``), is no
+run's history the window can read: every reader passes it over, as though it were not there, and the window's log
+says which file, once.
+
 No torch at import: the one reading that needs it (``continuable``'s, of a simulation set's state) imports it when
 it is asked.
 """
 import json
+import logging
 import os
 import time
 from datetime import datetime
 from pathlib import Path
 
 from .. import settings
+
+log = logging.getLogger(__name__)
 
 FIELDS = ("id", "word", "name", "place", "records_root", "started", "ended", "last_heard", "outcome", "stop_reason",
           "stage", "stages", "acknowledged", "tries", "plan", "settings", "memory_limit", "simulation_set", "health",
@@ -64,9 +71,19 @@ TRY_FIELDS = ("started", "ended", "outcome", "failure", "batches_before", "batch
 #: tried before the refusal is raised.
 REPLACE_TRIES = 5
 REPLACE_PAUSE_S = 0.2
+#: What a name of a history holds when it holds anything but None, as the window writes it, for each name a reader
+#: takes as such; a place's two parts and each try are of their own shape too.
+SHAPES = {"id": str, "place": list, "records_root": str, "outcome": str, "stage": str, "stages": list,
+          "acknowledged": bool, "tries": list, "simulation_set": dict, "health": dict, "fit": dict}
+#: The window's log, the first time a file in the folder of runs is passed over as no run's history it can read:
+#: the file's path and why.
+PASSED_OVER_TEXT = "The file %s is no run's history the window can read (%s); it is passed over."
 
 #: The pause between two tries of a refused rename.
 _pause = time.sleep
+#: The files already said to be passed over, each by its path, its size and when it was last written: a file written
+#: again is said again.
+_said: set = set()
 
 
 def runs_folder() -> Path:
@@ -114,12 +131,50 @@ def write(folder: Path, record: dict) -> Path:
 
 
 def read(path: Path) -> dict | None:
-    """The record a history file holds; None for a file that cannot be read whole as one."""
+    """The record a history file holds; None for a file that is not there, for one that cannot be read whole as one,
+    and for one that holds a name in a shape no run's history holds it (``SHAPES``), so that every reader passes such
+    a file over as though it were not there; the window's log names such a file, once for each time it was
+    written."""
+    path = Path(path)
     try:
-        record = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return None
-    return record if isinstance(record, dict) else None
+    except (OSError, ValueError) as error:
+        _passed_over(path, f"{type(error).__name__}: {error}")
+        return None
+    wrong = _misshapen(record)
+    if wrong:
+        _passed_over(path, wrong)
+        return None
+    return record
+
+
+def _misshapen(record) -> str:
+    """What makes ``record`` no run's history the window can read, in words; "" when nothing does."""
+    if not isinstance(record, dict):
+        return "it holds no record"
+    for name, shape in SHAPES.items():
+        value = record.get(name)
+        if value is not None and not isinstance(value, shape):
+            return f"its {name} should hold {shape.__name__}, not {type(value).__name__}"
+    if any(part is not None and not isinstance(part, str) for part in record.get("place") or ()):
+        return "its place holds what is no name"
+    if any(not isinstance(one, dict) for one in record.get("tries") or ()):
+        return "a try is not a record"
+    return ""
+
+
+def _passed_over(path: Path, why: str) -> None:
+    """The window's log says that the file at ``path`` is passed over, and why: once for each time it was written."""
+    try:
+        written = path.stat()
+        key = (str(path), written.st_size, written.st_mtime_ns)
+    except OSError:
+        key = (str(path), None, None)
+    if key not in _said:
+        _said.add(key)
+        log.warning(PASSED_OVER_TEXT, path, why)
 
 
 def latest(folder: Path, *, records_root: str, n: int) -> list[dict]:
@@ -206,14 +261,19 @@ def runs_for(folder: Path, simulation_set: str) -> list[dict]:
 def close_unseen(folder: Path) -> tuple[str, ...]:
     """Rewrite each history file in ``folder`` that still says "running" as a run not seen to end, heard last when
     its file was last written, and return their ids. Only one PRISM runs at a time, so such a file is a run that
-    ended unseen; who may call this, and when, is the window's to decide. A run that ended is left as it is."""
+    ended unseen; who may call this, and when, is the window's to decide. A run that ended is left as it is, and so is
+    a file that cannot be read or written again, which the window's log names."""
     closed = []
     for path in sorted(Path(folder).glob("*.json")):
         record = read(path)
         if record is None or record.get("outcome") != "running" or record.get("id") != path.stem:
             continue
-        heard = datetime.fromtimestamp(path.stat().st_mtime).astimezone()
-        write(folder, {**record, "outcome": "not seen to end", "last_heard": heard})
+        try:
+            heard = datetime.fromtimestamp(path.stat().st_mtime).astimezone()
+            write(folder, {**record, "outcome": "not seen to end", "last_heard": heard})
+        except (OSError, ValueError) as error:
+            _passed_over(path, f"{type(error).__name__}: {error}")
+            continue
         closed.append(record["id"])
     return tuple(closed)
 

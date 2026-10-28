@@ -928,6 +928,85 @@ def test_a_failure_during_the_fit_offers_resume_and_says_what_was_saved(tmp_path
         41, 41, 10_000), "the history's fit or its last try holds the records seen, not the kept training and the set"
 
 
+def test_a_failed_runs_history_keeps_its_failure_once_its_end_is_seen_or_set_aside(tmp_path, store):
+    """Once a run has ended, every later write of its history reads the file back and changes only what that write
+    is for. A failed training's history keeps its failure -- its kind, its message, whether only reopening PRISM
+    helps -- and each try's failure, once its end is seen, its page keeping its failure and the command it names;
+    and the past view drawn from that history names the cause: so for a training out of memory in its fit after the
+    tries that did not help, and for one that failed with an error of its own. The same once a run that started
+    while the failure waited to be seen sets it aside. A history spoiled after the run's end is written whole
+    again, from what its end wrote, once its end is seen."""
+    from core.gui.run import history
+    app = qt_app()
+    clock = Clock(_at(3, 3, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    folder = _set(tmp_path, 10_000, complete=True)
+    kept = build_fit_record(store, passes=2)
+    own = "unsupported operand type(s) for +: 'int' and 'NoneType'"
+
+    def out_of_memory_in_the_fit():
+        stand_in = StandIn()
+        stand_in.kept_fit = _note(kept, 2)
+        start_run(host, stand_in, spec=_training())
+        _to_the_fit(app, stand_in, text, clock, folder, [(1, 0), (2, 1)])
+        stand_in.fail(_out_of_memory("the fit's epoch 3"))
+        stand_in.kept_fit = None                        # three tries in a row that keep nothing more
+        for pause, calls in ((60, 2), (180, 3), (600, 4)):
+            _waiting(app, held)
+            clock.advance(pause)
+            held.tick()
+            _tried(app, held, stand_in, calls)
+            stand_in.fail(_out_of_memory("the fit's epoch 3"))
+        _ended(app, held)
+
+    def an_error_of_its_own():
+        stand_in = StandIn()
+        start_run(host, stand_in, spec=_training())
+        _to_the_fit(app, stand_in, text, clock, folder, [(1, 0)])
+        stand_in.fail(TypeError(own))
+        _ended(app, held)
+
+    def ended():
+        """The run that ended: its id, its history file, what that file says, and what its page says."""
+        run = held.status.run
+        path = tmp_path / "runs" / f"{run}.json"
+        return run, path, history.read(path), (_failure(view), _said_alone(view), view.failure.isVisibleTo(view))
+
+    for fail, cause, failure in ((out_of_memory_in_the_fit, "the graphics card ran out of memory",
+                                  {"type": "RuntimeError", "message": "the fit's epoch 3 failed",
+                                   "kind": "out of memory", "reopen": True}),
+                                 (an_error_of_its_own, own,
+                                  {"type": "TypeError", "message": own, "kind": "other", "reopen": False})):
+        fail()
+        run, path, at_the_end, page = ended()
+        assert (at_the_end["failure"], at_the_end["tries"][-1]["failure"], page[2]) == (
+            failure, failure["type"], True), at_the_end
+        held.acknowledge(run)
+        assert history.read(path) == {**at_the_end, "acknowledged": True}, (
+            "seeing the end changed its history", history.read(path))
+        assert ended()[3] == page, "seeing the end changed the failure its page says"
+        past = build_run_host().past_view
+        past.show_past(history.read(path), tmp_path / "runs" / f"{run}.txt", clock=held.now)
+        assert f"during the fit: {cause}." in past.sentence.text(), past.sentence.text()
+
+    an_error_of_its_own()                               # its end waits to be seen as the next run starts
+    run, path, at_the_end, _page = ended()
+    later = StandIn()
+    start_run(host, later, spec=_training())
+    later.release()
+    _ended(app, held)
+    assert (held.status.run != run, history.read(path)) == (True, {**at_the_end, "acknowledged": True}), (
+        "setting the end aside changed its history", history.read(path))
+
+    an_error_of_its_own()
+    run, path, at_the_end, _page = ended()
+    path.write_text("not a run's history", encoding="utf-8")       # spoiled after the run's end
+    held.acknowledge(run)
+    assert history.read(path) == {**at_the_end, "acknowledged": True}, (
+        "a history spoiled after the run's end was not written again from what its end wrote")
+
+
 def test_a_failure_while_the_posterior_is_saved_says_the_finished_training_is_kept(tmp_path, store):
     """A training whose fit finished but whose posterior could not be written says so, and that the finished
     training is kept, so that resuming it writes the posterior without training again, and offers to resume it; one

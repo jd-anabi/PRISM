@@ -54,6 +54,8 @@ OPEN_FOLDER = "Open its folder"
 BACK_TEXT = "Back to the form"
 HOW_TEXT = "How the run went"
 EARLIER_TEXT = "Earlier lines are in the file."
+#: The past view's sentence for a run whose history file cannot be read, or drawn.
+UNREADABLE_TEXT = "This run's history file cannot be read, so its page cannot be drawn."
 HEALTH_TEXT = "Training health"
 MESSAGES_TEXT = "Messages"
 #: The stop button's words for a run whose page names none.
@@ -621,6 +623,14 @@ class RunView(QWidget):
         self._ended_words = ends.words({**record, "outcome": model.outcome}, self._clock())[0]
         self._model, self._mode, self._stopping = model, "past", False
         self._draw()
+
+    def show_unreadable(self) -> None:
+        """A run that is over whose history cannot be read, or drawn: the page says so, in the past view, and draws
+        nothing else of it."""
+        self.begin(RunSpec("", None))
+        self._mode = "past"
+        self.sentence.setText(UNREADABLE_TEXT)
+        self._arrange()
 
     def set_count(self, done: int, total: int, unit: str) -> None:
         """A run that prints no counted row says how far it is: ``done`` of ``total`` ``unit``."""

@@ -28,7 +28,7 @@ KEPT_OPEN_TEXT = "PRISM stays open."
 #: Said on the page when a stop is withdrawn in time, filled with the run's word.
 WITHDRAWN_TEXT = "The stop was withdrawn. The {} goes on."
 #: Said on the page when a stop is withdrawn too late, the run having begun to stop.
-TOO_LATE_TEXT = "Too late: the run had already begun to stop."
+BEGUN_TO_STOP_TEXT = "Too late: the run had already begun to stop."
 #: Said on the page when a stop is asked for after the run has ended.
 FINISHED_TEXT = "Too late: the run had already finished."
 #: Said on the page when a stop is asked for once the training has begun to save its posterior.

@@ -48,6 +48,9 @@ _ANSWERED_EVERY_MS = 200
 #: What the window's log says when Windows asks to end the session, and when that end is cancelled.
 SESSION_ASKED_TEXT = "Windows asked to end the session."
 SESSION_CANCELLED_TEXT = "Windows' end of the session was cancelled."
+#: What the window's log says when a run's page cannot be opened, its place being one this window does not have: the
+#: run and its place. Its end is seen all the same.
+PAGE_GONE_TEXT = "The page of the run %s no longer exists in this PRISM (%s); its end is taken as seen."
 
 
 # ── screen-geometry guards ────────────────────────────────────────────────────
@@ -609,21 +612,29 @@ class MainWindow(QMainWindow):
 
     def _open_run(self, run: str, keyboard=Qt.OtherFocusReason) -> None:
         """Open the page of the run ``run`` at its place, as the foot, Home's next step and a row of Home's "Last runs"
-        do, and see its end: a run this window holds shows as its page stands; one of an earlier launch, or any run
-        this window no longer holds, is drawn in its page's past view from its two files. Nothing for a run whose
-        place is not known, or not one of the window's."""
+        do, and see its end once it has ended: a run this window holds shows as its page stands; one of an earlier
+        launch, or any run this window no longer holds, is drawn in its page's past view from its two files. A live
+        run is not seen: its end is to come. A page whose own run is live shows that run, and sees no other. Nothing
+        for a run whose place is not known; a run whose place this window does not have, whose page cannot be opened,
+        is seen all the same, so that it is not said again, and the window's log says its page no longer exists."""
         held = controller()
         place = held.where(run)
-        if place is None or place[0] not in _PARTS:
+        if place is None:
             return
+        ended = not (held.is_live() and held.status.run == run)
         try:
+            if place[0] not in _PARTS:
+                raise KeyError(place[0])
             self._move(*place, keyboard=keyboard)
-        except KeyError:
-            return                               # a place of an earlier PRISM this window no longer has
+        except KeyError:                         # a place of an earlier PRISM this window no longer has
+            log.warning(PAGE_GONE_TEXT, run, "/".join(str(part) for part in place if part))
+            if ended:
+                held.acknowledge(run)
+            return
         panel = next((panel for panel, at in self._places.items() if at == tuple(place)), None)
-        if panel is not None:
-            held.show_past(run, panel)
-        held.acknowledge(run)
+        shown = panel is None or held.show_past(run, panel)
+        if shown and ended:
+            held.acknowledge(run)
 
     def _move(self, part: str, page, *, keyboard) -> None:
         """The move ``go_to`` makes. ``keyboard`` is the reason the page takes the keyboard for, or None for a move
@@ -725,9 +736,9 @@ class MainWindow(QMainWindow):
 
     def _key_pressed(self) -> None:
         """A key of the map was pressed: what its row says. The key of a part or of a step opens that place as a
-        move does, the page taking the keyboard as after a key; the key to the run goes to the place of the live
-        run, which the foot is a button for, and does nothing while it is none; the key between the rail and the
-        page moves the keyboard from the one to the other."""
+        move does, the page taking the keyboard as after a key; the key to the run goes where the foot goes, and does
+        nothing while the foot is no button; the key between the rail and the page moves the keyboard from the one to
+        the other."""
         does = self.sender().property("does")
         if does == "rail or page":
             self._rail_or_page()
@@ -816,9 +827,11 @@ class MainWindow(QMainWindow):
     def _seen(self, *_place) -> None:
         """An end nobody has seen is seen once its run's page is in sight while the window is the one in front: looked
         at as the run ends, at every move and when the window comes to the front; the run's controller then writes
-        it into the run's history and is idle again."""
+        it into the run's history and is idle again. Nothing is seen from Windows' question to end the session until
+        it is cancelled: nobody is looking then, and the next launch says the end."""
         status = controller().status
         if (status.unacknowledged_end and status.run is not None and status.place is not None
+                and not self._session_ending
                 and self.isActiveWindow() and self.current_place() == tuple(status.place)):
             controller().acknowledge(status.run)
 
