@@ -191,8 +191,9 @@ def main() -> int:
     figure library draws with Agg; the Windows shell is told PRISM is an application of its own, and the application
     is made, with PRISM's names; the one PRISM is claimed. A start handed over to an open PRISM says so in one line
     and ends with 0, one that gives up ends with 1, both having built nothing and imported nothing of the window.
-    With the streams bound that line reaches the log alone, which nobody reads as PRISM starts, so a start that gives
-    up says so in a plain Windows message too; one handed over has the open window come to the front for its sign.
+    With the streams bound that line reaches the log alone, which nobody reads as PRISM starts, and with no error
+    stream and no log it reaches nowhere, so a start that gives up says so in a plain Windows message too; one
+    handed over has the open window come to the front for its sign.
     Only then is the window's module imported and the program built, handed the application and the claim; the
     window is shown and the event loop runs. A failure before the window is shown is written to the log and said in
     a plain Windows message, and ends with 1. Whatever the end, the claim is let go and the streams are put back,
@@ -219,7 +220,7 @@ def main() -> int:
                 one_instance.say(claimed.case)
                 if claimed.case == "hand_over":
                     return 0
-                if _bound is not None:                # the line reached the log alone, which nobody reads now
+                if _bound is not None or sys.stderr is None:  # the line reached the log alone, or nowhere
                     _native_box(one_instance.SAID["give_up"])
                 return 1
             from core.gui.app import build_app

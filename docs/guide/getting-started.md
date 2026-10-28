@@ -25,9 +25,10 @@ PRISM's dependencies installed.
   caught and a crash of the interpreter go to `window-log.txt` beside the settings file, after a dated
   line for each launch; a run's full text is on the run's page and in the dated file it opens, in the
   `runs` folder there. A start that fails before its window is shown writes why to that file and, on
-  Windows only, says so in a plain Windows message that names it, and a second start that the open
-  PRISM does not answer says so in one too. On macOS and Linux no message is shown: `run.sh` prints
-  where to look as it starts. A direct launch keeps its console and writes there instead.
+  Windows only, says so in a plain Windows message that names it, and a second start from `run.bat`
+  or its shortcut that the open PRISM does not answer says so in one too. On macOS and Linux no
+  message is shown: `run.sh` prints where to look as it starts. A direct launch keeps its console and
+  writes there instead.
 - **Which Python `run.bat` uses.** The active environment's `pythonw.exe`, when it is started from a
   prompt whose active environment holds PySide6 and torch (a prompt left in conda's `base`
   environment holds neither); else `envs\biophys-env\pythonw.exe` under `anaconda3` or `miniconda3`

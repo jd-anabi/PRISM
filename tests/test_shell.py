@@ -4788,7 +4788,8 @@ def test_streams_are_bound_only_with_no_console_or_when_prism_runs_detached(tmp_
     ``run.sh`` starts it; started from a console, it leaves them as they are. Bound or not, the start goes on: here it
     is handed over to an open PRISM and ends with the status 0. A log that cannot be opened -- a folder stands where
     it would be -- holds no start back either: the start goes on with the streams as they are, and says nothing of
-    a failure."""
+    a failure; one that then gives up, its line reaching no stream and no log, says so in a plain Windows message
+    and ends with the status 1."""
     from core.gui import __main__ as entry
     from core.gui import one_instance
     from tests._dialogs import native_boxes
@@ -4819,6 +4820,11 @@ def test_streams_are_bound_only_with_no_console_or_when_prism_runs_detached(tmp_
         status = _main(entry)
     assert (status, native_boxes(), sys.stdout, sys.stderr) == (0, [], None, None), (
         "a window's log that cannot be opened held the start back")
+    monkeypatch.setattr(one_instance, "claim", lambda settings_path, **told: one_instance.Claim("give_up"))
+    with _names_kept(app):
+        status = _main(entry)
+    assert (status, native_boxes(), sys.stdout, sys.stderr) == (1, [one_instance.SAID["give_up"]], None, None), (
+        "a start that gave up with no log and no stream to say so in said nothing")
 
 
 def test_qts_own_messages_and_a_crash_of_the_interpreter_go_to_the_window_log(tmp_path):
@@ -5216,6 +5222,17 @@ _LAUNCHER_FOLDERS = ("USERPROFILE", "LOCALAPPDATA", "PROGRAMDATA", "APPDATA", "P
 _LAUNCHER_OPTIONS = ('if /i "%~1"=="--where" set "LAUNCH_MODE=where"',
                      'if /i "%~1"=="--make-shortcut" set "LAUNCH_MODE=shortcut"')
 
+# Every line of run.bat that sets its mode, in their order and each whole: a start, then the two options' lines, all
+# above the line that starts PRISM. With the mode set again after them, or the start's own setting moved below them, a
+# run with an option is a start.
+_LAUNCHER_MODES = ('set "LAUNCH_MODE=start"', *_LAUNCHER_OPTIONS)
+
+# Where run.bat's one shortcut step makes the shortcut: in the folder PRISM_DESKTOP names, on Windows' own desktop
+# only when that variable is not set. The one place the file may name that desktop.
+_LAUNCHER_DESKTOP = ("$folder = $env:PRISM_DESKTOP; if (-not $folder) "
+                     "{ $folder = [Environment]::GetFolderPath('Desktop') }; $path = Join-Path $folder 'PRISM.lnk'; "
+                     "$link = (New-Object -ComObject WScript.Shell).CreateShortcut($path)")
+
 
 def _windows_desktop():
     """Windows' own desktop folder, as the shell names it: listed, never written."""
@@ -5240,10 +5257,14 @@ def _desktop_entries(desktop) -> set:
 
 def _launcher_refused(text: str) -> str:
     """Why a copy of ``run.bat`` whose text is ``text`` must not be run by a test with ``--where`` or
-    ``--make-shortcut``, or "" when it may: run so, it must start nothing. Unless both options' lines stand whole at
-    the start of their lines (``_LAUNCHER_OPTIONS``), a run with an option the copy does not read is a start with
-    none, and starts PRISM; unless its one line that starts PRISM, and its one line that shows the Windows message,
-    are each held to a start with no option, a run with an option reaches them."""
+    ``--make-shortcut``, or "" when it may: run so, it must start nothing, and write nothing on the person's desktop.
+    Unless both options' lines stand whole at the start of their lines (``_LAUNCHER_OPTIONS``), and they and the
+    start's own setting before them are the only lines that set the mode, all above the line that starts PRISM
+    (``_LAUNCHER_MODES``), a run with an option is a start with none, and starts PRISM; unless its one line that
+    starts PRISM, and its one line that shows the Windows message, are each held to a start with no option, a run
+    with an option reaches them; unless the file names Windows' own desktop once, in any case of its letters as
+    PowerShell reads them, and there makes the shortcut in the folder ``PRISM_DESKTOP`` names whenever that is set
+    (``_LAUNCHER_DESKTOP``), a run writes on the person's own desktop."""
     lines = text.splitlines()
     unread = [option for option in _LAUNCHER_OPTIONS if option not in lines]
     if unread:
@@ -5251,10 +5272,17 @@ def _launcher_refused(text: str) -> str:
     starts = [line.strip() for line in lines if 'start "PRISM"' in line]
     if len(starts) != 1 or not starts[0].startswith('if "%LAUNCH_MODE%"=="start" start "PRISM" '):
         return f"run.bat starts PRISM otherwise than in a start with no option: {starts}"
+    modes = [at for at, line in enumerate(lines) if "launch_mode=" in line.lower()]
+    start = next(at for at, line in enumerate(lines) if 'start "PRISM"' in line)
+    if [lines[at] for at in modes] != list(_LAUNCHER_MODES) or modes[-1] > start:
+        return ("run.bat sets its mode otherwise than as a start and then by its two options, above the line that "
+                f"starts PRISM: {[lines[at] for at in modes]}")
     popups = [at for at, line in enumerate(lines) if ".Popup(" in line]
     if len(popups) != 1 or [line.strip() for line in lines[max(popups[0] - 2, 0):popups[0]]] != [
             "if not defined LAUNCH_PYTHONW (", 'if "%LAUNCH_MODE%"=="start" (']:
         return "run.bat shows its Windows message otherwise than in a start with no option"
+    if text.lower().count("getfolderpath") != 1 or _LAUNCHER_DESKTOP not in text:
+        return "run.bat makes its shortcut otherwise than in the folder PRISM_DESKTOP names, when that is set"
     return ""
 
 
@@ -5423,23 +5451,52 @@ def test_the_launcher_makes_the_desktop_shortcut_once(tmp_path):
 
 def test_the_launchers_guard_refuses_every_copy_that_could_start_something():
     """The launcher's tests run a copy of ``run.bat`` with ``--where`` or ``--make-shortcut`` alone, and refuse to run
-    one whose lines would not keep such a run from starting anything (``_launcher_refused``): an option's line gone,
-    written in a remark, or setting the mode of a start with no option; the line that starts PRISM held to no mode,
-    or a second one beside it; the Windows message shown in another mode. Each is made to today's file in memory, and
-    refused; today's file is not. Nothing is run."""
+    one whose lines would not keep such a run from starting anything, or from writing on the person's desktop
+    (``_launcher_refused``): an option's line gone, written in a remark, setting the mode of a start with no option,
+    or read below the line that starts PRISM; the mode set to a start again above that line, or the start's own
+    setting moved there; the line that starts PRISM held to no mode, or a second one beside it; the Windows message
+    shown in another mode, or a second one; the shortcut put on Windows' own desktop whatever ``PRISM_DESKTOP`` says,
+    or made elsewhere than in the folder that variable names, or that desktop named again, on a line of its own or on
+    the shortcut's line. Each is made to today's file in memory, every one of its changes on a text found there once,
+    and refused; today's file is not. Nothing is run."""
     from pathlib import Path
     text = (Path(__file__).resolve().parents[1] / "run.bat").read_text(encoding="utf-8")
     start = 'if "%LAUNCH_MODE%"=="start" start "PRISM" "%LAUNCH_PYTHONW%" -m core.gui\n'
-    edits = {"an option's line gone": ('if /i "%~1"=="--where" set "LAUNCH_MODE=where"\n', ""),
-             "an option's line in a remark": ('if /i "%~1"=="--where"', 'REM if /i "%~1"=="--where"'),
-             "an option setting a start": ('set "LAUNCH_MODE=shortcut"', 'set "LAUNCH_MODE=start"'),
-             "the start in every mode": ('if "%LAUNCH_MODE%"=="start" start "PRISM"', 'start "PRISM"'),
-             "a second start": (start, start + 'start "PRISM" "%LAUNCH_PYTHONW%" -m core.gui\n'),
-             "the message in every mode but one": ('\n    if "%LAUNCH_MODE%"=="start" (\n',
-                                                    '\n    if not "%LAUNCH_MODE%"=="where" (\n')}
+    where, shortcut = (option + "\n" for option in _LAUNCHER_OPTIONS)
+    popup = next(line + "\n" for line in text.splitlines() if ".Popup(" in line)
+    desktop = "[Environment]::GetFolderPath('Desktop')"
+    edits = {"an option's line gone": [(where, "")],
+             "an option's line in a remark": [('if /i "%~1"=="--where"', 'REM if /i "%~1"=="--where"')],
+             "an option setting a start": [('set "LAUNCH_MODE=shortcut"', 'set "LAUNCH_MODE=start"')],
+             "an option read below the start": [(shortcut, ""), (start, start + shortcut)],
+             "the mode set to a start again": [(start, 'set "LAUNCH_MODE=start"\n' + start)],
+             "the start's own setting moved down": [('set "LAUNCH_MODE=start"\n', ""),
+                                                    (start, 'set "LAUNCH_MODE=start"\n' + start)],
+             "the start in every mode": [('if "%LAUNCH_MODE%"=="start" start "PRISM"', 'start "PRISM"')],
+             "a second start": [(start, start + 'start "PRISM" "%LAUNCH_PYTHONW%" -m core.gui\n')],
+             "the message in every mode but one": [('\n    if "%LAUNCH_MODE%"=="start" (\n',
+                                                     '\n    if not "%LAUNCH_MODE%"=="where" (\n')],
+             "a second message": [("        echo %LAUNCH_MISSING%\n", "        echo %LAUNCH_MISSING%\n" + popup)],
+             "the desktop whatever the variable says": [(f"if (-not $folder) {{ $folder = {desktop} }}",
+                                                         f"$folder = {desktop}")],
+             "the shortcut made elsewhere": [("Join-Path $folder 'PRISM.lnk'", "Join-Path $HOME 'Desktop\\PRISM.lnk'")],
+             "the desktop on a line of its own": [(start, f'powershell -NoProfile -Command "{desktop}"\n' + start)],
+             "the desktop again on the shortcut's line": [
+                 ("$link.Save();", "$link.Save(); Copy-Item $path ([environment]::getfolderpath('desktop'));")]}
+
+    def made(changes):
+        """Today's file with each change made in turn, or None when the text a change replaces is not found there
+        exactly once: an edit that no longer applies is never taken for one refused."""
+        edited = text
+        for old, new in changes:
+            if edited.count(old) != 1:
+                return None
+            edited = edited.replace(old, new)
+        return edited
+
     assert _launcher_refused(text) == "", _launcher_refused(text)
-    passed = [what for what, (old, new) in edits.items()
-              if text.count(old) != 1 or not _launcher_refused(text.replace(old, new))]
+    copies = {what: made(changes) for what, changes in edits.items()}
+    passed = [what for what, copy in copies.items() if copy is None or not _launcher_refused(copy)]
     assert passed == [], f"the launcher's guard would run a copy with {passed}"
 
 

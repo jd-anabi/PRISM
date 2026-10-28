@@ -109,8 +109,9 @@ def test_provenance_starts_git_and_nvidia_smi_with_no_console_window(monkeypatch
     read. So the two programs the provenance starts -- ``git``, three times for every record written, and
     ``nvidia-smi``, for the card's free memory beside the memory ceiling's field -- are started with no window
     (``CREATE_NO_WINDOW`` on Windows; elsewhere the flag is 0, which asks for nothing): each call is read as it is
-    made, and every call to ``subprocess.run`` in the module carries the flag, read off its syntax tree, so that a
-    call added without it is seen too."""
+    made, and every call the module makes to ``subprocess`` -- through its own name for that module or through a name
+    imported from it, to ``run``, ``Popen``, ``check_output`` or any other -- carries the flag, read off its syntax
+    tree, so that a call added without it is seen too."""
     import ast
     import subprocess
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -124,8 +125,14 @@ def test_provenance_starts_git_and_nvidia_smi_with_no_console_window(monkeypatch
     assert (prov.git_info(Path(__file__).resolve().parents[1])["git_rev"], prov._nvidia_smi_free_gib()) == ("abc", 1.0)
     assert started == [("git", no_window)] * 3 + [("nvidia-smi", no_window)], started
     tree = ast.parse(Path(prov.__file__).read_text(encoding="utf-8"))
-    calls = [node for node in ast.walk(tree)
-             if isinstance(node, ast.Call) and ast.unparse(node.func) == "subprocess.run"]
+    module = {alias.asname or alias.name for node in ast.walk(tree) if isinstance(node, ast.Import)
+              for alias in node.names if alias.name == "subprocess"}
+    taken = {alias.asname or alias.name for node in ast.walk(tree)
+             if isinstance(node, ast.ImportFrom) and node.module == "subprocess" for alias in node.names}
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and (
+        isinstance(node.func, ast.Name) and node.func.id in taken
+        or isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in module)]
     flags = [next((ast.unparse(word.value) for word in call.keywords if word.arg == "creationflags"), None)
              for call in calls]
     assert flags == ["getattr(subprocess, 'CREATE_NO_WINDOW', 0)"] * 2, flags
