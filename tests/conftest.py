@@ -265,12 +265,14 @@ def _no_native_boxes():
     its window is shown: one reached in a test would hold the run past the tool call's limit, on the real screen as
     much as off it. For the whole session ``core.gui.__main__._native_box`` is tests/_dialogs.native_box, which keeps
     the words in NATIVE_BOXES and shows nothing, whatever the test is marked for; a test's own stand-in layered with
-    monkeypatch wins while installed, and its undo puts this one back. The entry point's module loads nothing but
-    ``os`` and ``sys`` as it is imported, so importing it here changes nothing about what a suite loads first."""
+    monkeypatch wins while installed, and its undo puts this one back. The function must be there to be stood in
+    for: renamed, every test stops here, at its setup, where a stand-in set under the old name would be passed by
+    and the message shown. The entry point's module loads nothing but ``os`` and ``sys`` as it is imported, so
+    importing it here changes nothing about what a suite loads first."""
     from core.gui import __main__ as entry
     from tests._dialogs import native_box
     mp = pytest.MonkeyPatch()
-    mp.setattr(entry, "_native_box", native_box, raising=False)
+    mp.setattr(entry, "_native_box", native_box)
     yield
     mp.undo()
 

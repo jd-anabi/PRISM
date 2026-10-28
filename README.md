@@ -153,7 +153,7 @@ The launchers set `KMP_DUPLICATE_LIB_OK=TRUE` for you, and so does the window's 
 
 On Windows the launcher starts PRISM without a console, so nothing the program prints is on screen: a run's full text is behind "Show the full text" on the run's page and in the dated file that page opens, and what PRISM prints outside a run goes to `window-log.txt` beside its settings file. The direct launch in the table keeps a console.
 
-On macOS/Linux, remember to activate the environment (`conda activate biophys-env`, or the `source .../activate biophys-env` line if you set up Miniforge by full path) before launching.
+On macOS/Linux, remember to activate the environment (`conda activate biophys-env`, or the `source .../activate biophys-env` line if you set up Miniforge by full path) before launching. `bash run.sh` starts PRISM in the background and gives the prompt back at once, after one line that says where to look if no window opens: what PRISM prints goes to `window-log.txt` beside its settings file, as on Windows.
 
 ## The command-line tool
 

@@ -24,8 +24,10 @@ PRISM's dependencies installed.
   run, a record another thread logs during one, the toolkit's own messages, an error nothing else
   caught and a crash of the interpreter go to `window-log.txt` beside the settings file, after a dated
   line for each launch; a run's full text is on the run's page and in the dated file it opens, in the
-  `runs` folder there. A start that fails before its window is shown says so in a plain Windows
-  message that names `window-log.txt`. A direct launch keeps its console and writes there instead.
+  `runs` folder there. A start that fails before its window is shown writes why to that file and, on
+  Windows only, says so in a plain Windows message that names it, and a second start that the open
+  PRISM does not answer says so in one too. On macOS and Linux no message is shown: `run.sh` prints
+  where to look as it starts. A direct launch keeps its console and writes there instead.
 - **Which Python `run.bat` uses.** The active environment's `pythonw.exe`, when it is started from a
   prompt whose active environment holds PySide6 and torch (a prompt left in conda's `base`
   environment holds neither); else `envs\biophys-env\pythonw.exe` under `anaconda3` or `miniconda3`
@@ -35,7 +37,8 @@ PRISM's dependencies installed.
 - **The desktop shortcut.** The first time `run.bat` runs it puts `PRISM.lnk` on the desktop (the
   environment's `pythonw.exe -m core.gui`, started in the repository, with PRISM's icon) and leaves a
   mark, `shortcut-made`, beside the settings file; it never makes the shortcut again, even when it was
-  deleted. `run.bat --make-shortcut` makes it without starting PRISM. The shortcut starts PRISM with
+  deleted. `run.bat --make-shortcut` makes it, without starting PRISM, when it was never made; to make
+  it again, delete the mark first (`run.bat --where` names it). The shortcut starts PRISM with
   the environment Windows gives it, so a variable set in a shell (`PRISM_ARTIFACTS`,
   `PRISM_VRAM_CEILING_GIB`) reaches the window only through `run.bat` started from that shell.
 - **`KMP_DUPLICATE_LIB_OK=TRUE`.** torch and MKL each ship an OpenMP runtime; without this variable

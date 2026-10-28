@@ -5,7 +5,8 @@ REM environment itself, starts the window with no console window beside it, and 
 REM it also puts a PRISM shortcut on the desktop, and never again, even when that shortcut was deleted.
 REM   run.bat --where          says which Python it would use and whether it would make the desktop shortcut,
 REM                            and starts and makes nothing.
-REM   run.bat --make-shortcut  makes the desktop shortcut, when it was never made, and starts nothing.
+REM   run.bat --make-shortcut  makes the desktop shortcut, when it was never made, and starts nothing; to have it
+REM                            made again, delete its mark first (--where names it).
 REM The working directory does not matter to PRISM; the window is started from the repository's folder.
 pushd "%~dp0"
 set "LAUNCH_REPO=%CD%"
@@ -60,10 +61,13 @@ if not exist "%LAUNCH_MARK%" (
     powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference = 'Stop'; $folder = $env:PRISM_DESKTOP; if (-not $folder) { $folder = [Environment]::GetFolderPath('Desktop') }; $path = Join-Path $folder 'PRISM.lnk'; $link = (New-Object -ComObject WScript.Shell).CreateShortcut($path); $link.TargetPath = $env:LAUNCH_PYTHONW; $link.Arguments = '-m core.gui'; $link.WorkingDirectory = $env:LAUNCH_REPO; $link.IconLocation = $env:LAUNCH_ICON; $link.Description = 'PRISM'; $link.Save(); New-Item -ItemType Directory -Force -Path (Split-Path $env:LAUNCH_MARK) | Out-Null; Set-Content -Path $env:LAUNCH_MARK -Value 'run.bat made the desktop shortcut PRISM.lnk once, and does not make it again.'; Write-Output ('The desktop shortcut was made: ' + $path)"
     if errorlevel 1 set "LAUNCH_FAILED=1"
 ) else (
-    if "%LAUNCH_MODE%"=="shortcut" echo The desktop shortcut was made once already, and is not made again.
+    if "%LAUNCH_MODE%"=="shortcut" echo The desktop shortcut was made once already, and is not made again: delete its mark "%LAUNCH_MARK%" to make it again.
 )
 if defined LAUNCH_FAILED echo The desktop shortcut could not be made.
 
+REM PRISM writes what it prints to its window's log whatever streams it is handed: a file or a pipe, when the output
+REM of run.bat itself is sent to one, as much as none at all.
+set "PRISM_DETACHED=1"
 if "%LAUNCH_MODE%"=="start" start "PRISM" "%LAUNCH_PYTHONW%" -m core.gui
 popd
 if defined LAUNCH_FAILED if "%LAUNCH_MODE%"=="shortcut" exit /b 1

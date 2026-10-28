@@ -136,8 +136,9 @@ def unbind_streams() -> None:
 def _native_box(text: str) -> None:
     """Show ``text`` in a plain Windows message with PRISM's name as its title and an error's mark, and wait for its
     OK. The one place PRISM shows such a message: a start that failed before its window was shown, when the
-    toolkit's own boxes cannot be trusted. No test calls it, since it waits for a person. Off Windows nothing is
-    shown: the log holds the words."""
+    toolkit's own boxes cannot be trusted, and a start with no console that gives up beside an open PRISM that does
+    not answer. No test calls it, since it waits for a person. Off Windows nothing is shown: the log holds the
+    words."""
     if sys.platform != "win32":
         return
     try:
@@ -186,17 +187,23 @@ def main() -> int:
     """Start PRISM, and return the status the process ends with.
 
     In this order: with no output or no error stream, or started detached (``PRISM_DETACHED``), the streams are
-    bound to the window's log; the figure library draws with Agg; the Windows shell is told PRISM is an application
-    of its own, and the application is made, with PRISM's names; the one PRISM is claimed. A start handed over to an
-    open PRISM says so in one line and ends with 0, one that gives up ends with 1, both having built nothing and
-    imported nothing of the window. Only then is the window's module imported and the program built, handed the
-    application and the claim; the window is shown and the event loop runs. A failure before the window is shown is
-    written to the log and said in a plain Windows message, and ends with 1. Whatever the end, the claim is let go
-    and the streams are put back, last."""
+    bound to the window's log, unless that log cannot be opened, when PRISM starts with the streams as they are; the
+    figure library draws with Agg; the Windows shell is told PRISM is an application of its own, and the application
+    is made, with PRISM's names; the one PRISM is claimed. A start handed over to an open PRISM says so in one line
+    and ends with 0, one that gives up ends with 1, both having built nothing and imported nothing of the window.
+    With the streams bound that line reaches the log alone, which nobody reads as PRISM starts, so a start that gives
+    up says so in a plain Windows message too; one handed over has the open window come to the front for its sign.
+    Only then is the window's module imported and the program built, handed the application and the claim; the
+    window is shown and the event loop runs. A failure before the window is shown is written to the log and said in
+    a plain Windows message, and ends with 1. Whatever the end, the claim is let go and the streams are put back,
+    last."""
     try:
         try:
             if sys.stdout is None or sys.stderr is None or os.environ.get("PRISM_DETACHED"):
-                bind_streams(window_log_path())
+                try:
+                    bind_streams(window_log_path())
+                except OSError:                       # a log that cannot be opened holds no start back
+                    pass
             import matplotlib
             matplotlib.use("Agg")
             from PySide6.QtWidgets import QApplication
@@ -210,7 +217,11 @@ def main() -> int:
             claimed = one_instance.claim(settings.settings().fileName())
             if claimed.case in one_instance.SAID:
                 one_instance.say(claimed.case)
-                return 1 if claimed.case == "give_up" else 0
+                if claimed.case == "hand_over":
+                    return 0
+                if _bound is not None:                # the line reached the log alone, which nobody reads now
+                    _native_box(one_instance.SAID["give_up"])
+                return 1
             from core.gui.app import build_app
             app, window = build_app(app=app, claimed=claimed)
             window.show()

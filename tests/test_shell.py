@@ -4067,7 +4067,8 @@ def test_a_start_handed_over_builds_no_window_and_exits_zero(tmp_path, monkeypat
     appearance, the figure settings -- and hands back the application with no window, having let the open one's
     process take the front; the open one hears the knock when its loop runs. With no error stream, as a start with
     no console has none, it hands over all the same. The entry point, beside the same open PRISM, ends with the
-    status 0, showing nothing and running no event loop: it hands over before it builds anything."""
+    status 0, showing nothing, building nothing and running no event loop: it hands over before it builds anything.
+    Its build is stood in for, so that a start that went on past its hand-over would build nothing here for real."""
     import os
     import sys
     from core.gui import one_instance, settings
@@ -4089,12 +4090,15 @@ def test_a_start_handed_over_builds_no_window_and_exits_zero(tmp_path, monkeypat
         pump(app, 0.2)
         assert heard == [True], "the open PRISM did not hear the knock"
     from core.gui import __main__ as entry
-    ran = []
+    from core.gui import app as gui_app
+    ran, built = [], []
     monkeypatch.setattr(QApplication, "exec", lambda application: ran.append("a loop") or 3)
+    monkeypatch.setattr(gui_app, "build_app", lambda **handed: built.append(handed))
     held = one_instance.claim(settings.settings().fileName())          # the open PRISM
     try:
         with _names_kept(app), as_another_process():
-            assert (_main(entry), ran) == (0, []), "the start that was handed over ran an event loop"
+            assert (_main(entry), ran, built) == (0, [], []), (
+                "the start that was handed over built the program or ran an event loop")
     finally:
         held.release()
 
@@ -4139,12 +4143,15 @@ def test_a_second_start_says_in_one_line_what_it_did(tmp_path, monkeypatch):
     """A start that builds no window says what it did in one line on the error stream, the only sign a start from a
     console gives -- that PRISM was open and was asked to come to the front, or that it did not answer and this start
     ends -- and ends with the status 0 or 1. With no error stream, as a start with no console has none, the line is
-    written to the window's log, after the launch's dated line. Said where there is no stream at all, nothing is
+    written to the window's log, after the launch's dated line; nobody reads that log as PRISM starts, so a start
+    that gives up says so in a plain Windows message too, while one handed over shows none, the open window coming to
+    the front for its sign. From a console no message is shown. Said where there is no stream at all, nothing is
     written and nothing is raised."""
     import io
     import sys
     from core.gui import __main__ as entry
     from core.gui import one_instance
+    from tests._dialogs import native_boxes
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     for case, line, status in (("hand_over", "PRISM is already open: it was asked to come to the front.\n", 0),
@@ -4154,13 +4161,14 @@ def test_a_second_start_says_in_one_line_what_it_did(tmp_path, monkeypatch):
         monkeypatch.setattr(sys, "stderr", stream)
         with _names_kept(app):
             assert _main(entry) == status, case
-        assert stream.getvalue() == line, stream.getvalue()
+        assert (stream.getvalue(), native_boxes()) == (line, []), (case, stream.getvalue())
         monkeypatch.setattr(sys, "stderr", None)
         with _names_kept(app):
             assert _main(entry) == status, case
         written = (tmp_path / "window-log.txt").read_text(encoding="utf-8").splitlines(keepends=True)
         launch = max(at for at, text in enumerate(written) if text.endswith(f" PRISM started ({sys.executable}).\n"))
-        assert written[launch + 1:] == [line], written
+        assert (written[launch + 1:], native_boxes()) == ([line], [line.rstrip("\n")] if status else []), (
+            case, written)
         one_instance.say(case)
 
 
@@ -4670,11 +4678,19 @@ def _names_kept(app):
 
 def _main(entry):
     """The entry point's ``main()``, run once its plain Windows message is seen to be the suites' stand-in -- a real one
-    would wait for a person's OK -- and once the entry module is seen to hold nothing of the window's module, which
-    ``main`` imports inside itself after its claim: a ``build_app`` of the module's own would build the whole program
-    for real here, the test's stand-in passed by."""
+    would wait for a person's OK -- and to be shown by that one function alone, read off the module's syntax tree, so
+    that a message shown by a function of another name is never reached; and once the entry module is seen to hold
+    nothing of the window's module, which ``main`` imports inside itself after its claim: a ``build_app`` of the
+    module's own would build the whole program for real here, the test's stand-in passed by."""
+    import ast
+    from pathlib import Path
     from tests._dialogs import native_box
     assert entry._native_box is native_box, "the entry point's Windows message is not stood in for: it would wait"
+    tree = ast.parse(Path(entry.__file__).read_text(encoding="utf-8"))
+    shown = [function.name for function in ast.walk(tree) if isinstance(function, ast.FunctionDef)
+             for node in ast.walk(function) if isinstance(node, ast.Attribute) and node.attr == "MessageBoxW"]
+    every = [node for node in ast.walk(tree) if isinstance(node, ast.Attribute) and node.attr == "MessageBoxW"]
+    assert (shown, len(every)) == (["_native_box"], 1), "a Windows message is shown somewhere else than _native_box"
     assert "build_app" not in vars(entry), "the entry module imports the window's module before it claims"
     return entry.main()
 
@@ -4770,12 +4786,15 @@ def test_streams_are_bound_only_with_no_console_or_when_prism_runs_detached(tmp_
     """The entry point binds the standard streams to the window's log when the process has no output stream or no
     error stream, as under ``pythonw``, and when ``PRISM_DETACHED`` says it was started detached from its terminal, as
     ``run.sh`` starts it; started from a console, it leaves them as they are. Bound or not, the start goes on: here it
-    is handed over to an open PRISM and ends with the status 0."""
+    is handed over to an open PRISM and ends with the status 0. A log that cannot be opened -- a folder stands where
+    it would be -- holds no start back either: the start goes on with the streams as they are, and says nothing of
+    a failure."""
     from core.gui import __main__ as entry
     from core.gui import one_instance
+    from tests._dialogs import native_boxes
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
-    bound = []
+    bound, binds = [], entry.bind_streams
     monkeypatch.setattr(entry, "bind_streams", bound.append)
     monkeypatch.setattr(one_instance, "claim", lambda settings_path, **told: one_instance.Claim("hand_over"))
     out, err = sys.stdout, sys.stderr
@@ -4789,6 +4808,17 @@ def test_streams_are_bound_only_with_no_console_or_when_prism_runs_detached(tmp_
             got.append((_main(entry), list(bound)))
     log = tmp_path / "window-log.txt"
     assert got == [(0, [log]), (0, [log]), (0, [log]), (0, [])], got
+    taken = tmp_path / "taken"
+    taken.mkdir()
+    monkeypatch.setattr(entry, "bind_streams", binds)
+    monkeypatch.setattr(entry, "window_log_path", lambda: taken)
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    monkeypatch.setenv("PRISM_DETACHED", "")
+    with _names_kept(app):
+        status = _main(entry)
+    assert (status, native_boxes(), sys.stdout, sys.stderr) == (0, [], None, None), (
+        "a window's log that cannot be opened held the start back")
 
 
 def test_qts_own_messages_and_a_crash_of_the_interpreter_go_to_the_window_log(tmp_path):
@@ -4853,24 +4883,50 @@ def test_qts_own_messages_and_a_crash_of_the_interpreter_go_to_the_window_log(tm
         True, True, True, True), dumped
 
 
+def test_putting_the_streams_back_leaves_the_log_open_while_a_run_stands_in_front_of_it(tmp_path):
+    """A run started while the streams are bound to the window's log stands streams of its own in front of them, and
+    hands back what it found, the log, when it ends. Put back while such a stream still stands in front -- Windows'
+    end of a session can end the event loop under a live run -- the stream it holds is left as it is, the other is put
+    back, and the log is kept open, so that what the run writes as it ends is still written there."""
+    import io
+    from core.gui import __main__ as entry
+    log = tmp_path / "window-log.txt"
+    out, err = sys.stdout, sys.stderr
+    entry.bind_streams(log)
+    bound, in_front = entry.bound_log(), io.StringIO()
+    try:
+        sys.stdout = in_front
+        entry.unbind_streams()
+        kept = (sys.stdout is in_front, sys.stderr is err, bound.closed)
+        if not bound.closed:
+            bound.write("the run's end, written once the streams were put back\n")
+    finally:
+        sys.stdout, sys.stderr = out, err
+        bound.close()
+    assert kept == (True, True, False), "the streams were put back over the run's, or the log was closed under it"
+    assert "the run's end, written once the streams were put back\n" in log.read_text(encoding="utf-8")
+
+
 def test_a_failure_before_the_window_is_shown_is_a_plain_windows_message_naming_the_log(tmp_path, monkeypatch, capsys):
     """A start of PRISM that fails before its window is shown -- as its window is built, or before its application
-    exists -- writes the failure with its trace to the window's log and says so in a plain Windows message naming
-    that file, not in a window of the toolkit's, which may be what failed; it lets go of the claim it made and ends
-    with the status 1. Started with no console the trace is in the log the streams are bound to; from a console, in
-    the log beside the settings file, and on the console too. The message is shown by one function alone, which no
-    test calls: the suites stand in for it."""
-    import ast
+    exists -- writes the failure with its trace to the window's log, once, and says so in a plain Windows message
+    naming that file, not in a window of the toolkit's, which may be what failed; it lets go of the claim it made and
+    ends with the status 1. Started with no console the trace is in the log the streams are bound to; from a console,
+    in the log beside the settings file, and on the console too. The program's own start raises a window it cannot
+    build as it came, for the entry point to say: here the real start, its window's parts failing, with what it set
+    on the process put back as every test of the whole program puts it back. The message is shown by one function
+    alone, which no test calls: the suites stand in for it."""
     import matplotlib
-    from pathlib import Path
     from core.gui import __main__ as entry
     from core.gui import app as gui_app
     from core.gui import one_instance, settings
     from tests._dialogs import native_boxes
+    from tests._fixtures import whole_program
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     log = tmp_path / "window-log.txt"
     said = f"PRISM could not start. The details are in {log}."
+    begins, real, started = "Traceback (most recent call last):", gui_app.build_app, []
 
     def broken(**handed):
         raise RuntimeError("the window could not be built")
@@ -4889,13 +4945,38 @@ def test_a_failure_before_the_window_is_shown_is_a_plain_windows_message_naming_
     written = log.read_text(encoding="utf-8")
     assert (status, native_boxes(), one_instance.current(), (tmp_path / "PRISM.lock").exists()) == (
         1, [said], None, False), "the start that failed said it otherwise, or kept its claim"
-    assert ("PRISM could not start.\nTraceback (most recent call last):" in written,
-            "RuntimeError: the window could not be built\n" in written) == (True, True), written
+    assert ("PRISM could not start.\n" + begins in written, written.count(begins),
+            "RuntimeError: the window could not be built\n" in written) == (True, 1, True), written
     again = one_instance.claim(settings.settings().fileName(), tries=1, pause_ms=0)
     try:
         assert again.case == "start", f"the next start was {again.case}"
     finally:
         again.release()
+
+    def no_window(**told):
+        raise RuntimeError("the window's parts could not be built")
+
+    def through_main(argv=None, **handed):
+        """The whole program's start as the entry point makes it: the build the entry point asks for is the real
+        program's."""
+        if handed:
+            return real(argv, **handed)
+        started.append(_main(entry))
+        return app, None
+
+    monkeypatch.setattr(gui_app, "build_app", through_main)
+    monkeypatch.setattr(gui_app, "MainWindow", no_window)
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    with whole_program() as built:
+        pass
+    monkeypatch.setattr(sys, "stdout", out)
+    monkeypatch.setattr(sys, "stderr", err)
+    more = log.read_text(encoding="utf-8")[len(written):]
+    assert (started, built, native_boxes(), one_instance.current()) == ([1], (app, None), [said], None), (
+        "the real start whose window could not be built said it otherwise, or kept its claim")
+    assert (more.count(begins), "RuntimeError: the window's parts could not be built\n" in more) == (1, True), more
+    written = log.read_text(encoding="utf-8")
     capsys.readouterr()
     monkeypatch.setattr(matplotlib, "use", refused)
     with _names_kept(app):
@@ -4904,11 +4985,6 @@ def test_a_failure_before_the_window_is_shown_is_a_plain_windows_message_naming_
     assert (status, native_boxes(), one_instance.current()) == (1, [said], None), "the failure before the application"
     assert ("ImportError: the figure library has no backend here" in log.read_text(encoding="utf-8")[len(written):],
             "ImportError: the figure library has no backend here" in console) == (True, True), console
-    tree = ast.parse(Path(entry.__file__).read_text(encoding="utf-8"))
-    shown = [function.name for function in ast.walk(tree) if isinstance(function, ast.FunctionDef)
-             for node in ast.walk(function) if isinstance(node, ast.Attribute) and node.attr == "MessageBoxW"]
-    every = [node for node in ast.walk(tree) if isinstance(node, ast.Attribute) and node.attr == "MessageBoxW"]
-    assert (shown, len(every)) == (["_native_box"], 1), "a Windows message is shown somewhere else than _native_box"
 
 
 def test_the_claim_is_made_before_the_heavy_imports_and_once_per_process(tmp_path, monkeypatch, brought_forward):
@@ -4916,17 +4992,22 @@ def test_the_claim_is_made_before_the_heavy_imports_and_once_per_process(tmp_pat
     load torch and the engine for seconds. The entry module sets the variable torch and MKL need as its first
     statement and imports nothing but ``os`` and ``sys`` (read off its syntax tree, and in a fresh interpreter, where
     importing it loads neither torch, the figure library, the toolkit nor the window); its ``main`` claims before it
-    imports the window's module, and imports nothing heavy before the claim; run as a module it hands over to itself
+    imports the window's module, and imports nothing heavy before the claim (read off the syntax tree, and run in that
+    fresh interpreter, its plain Windows message stood in for before anything else and its claim a hand-over: up to
+    the claim it loads neither torch, the configuration nor the window); run as a module it hands over to itself
     imported under its own name. A process claims once: a second claim is handed back the claim it holds, trying
     nothing, where it would otherwise knock on its own server and hand over to itself; let go, the next claim is a
-    new one. The program handed a claim claims no more, and its window answers that claim's knock."""
+    new one; one made as another process's start that takes the lock, when the process holds none, is the process's
+    own once that start is over. The program handed a claim claims no more, and its window answers that claim's
+    knock."""
     import ast
+    import os
     import subprocess
     from pathlib import Path
     from core.gui import __main__ as entry
     from core.gui import app as gui_app
     from core.gui import one_instance, settings
-    from tests._fixtures import as_another_process, pump, whole_program
+    from tests._fixtures import as_another_process, whole_program
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     light = {"faulthandler", "time", "tempfile", "traceback", "pathlib", "ctypes", "matplotlib", "PySide6.QtCore",
@@ -4964,11 +5045,21 @@ def test_the_claim_is_made_before_the_heavy_imports_and_once_per_process(tmp_pat
     returns = [node.lineno for node in ast.walk(main) if isinstance(node, ast.Return) and node.lineno < window_line]
     assert (claim_line < window_line, bool(returns) and all(claim_line < line for line in returns)) == (True, True), (
         "the entry point imports the window before it claims, or a start handed over returns before its claim")
-    code = ("import sys\nsys.path.insert(0, sys.argv[1])\nimport core.gui.__main__\n"
-            "print(sorted(name for name in ('torch', 'matplotlib', 'PySide6', 'core.gui.app') if name in sys.modules))")
+    code = ("import sys\nsys.path.insert(0, sys.argv[1])\nimport core.gui.__main__ as entry\n"
+            "entry._native_box = lambda text: print('a plain Windows message:', text)\n"
+            "print(sorted(name for name in ('torch', 'matplotlib', 'PySide6', 'core.gui.app')"
+            " if name in sys.modules))\n"
+            "from core.gui import one_instance, settings\n"
+            "settings.use_ini_file(sys.argv[2])\n"
+            "one_instance.claim = lambda settings_path, **told: one_instance.Claim('hand_over')\n"
+            "print(entry.main())\n"
+            "print(sorted(name for name in ('torch', 'core.config', 'core.gui.app') if name in sys.modules))\n")
     repo = str(Path(__file__).resolve().parents[1])
-    fresh = subprocess.run([sys.executable, "-c", code, repo], cwd=repo, capture_output=True, text=True, timeout=120)
-    assert (fresh.returncode, fresh.stdout.strip()) == (0, "[]"), (fresh.stdout, fresh.stderr)
+    env = {name: value for name, value in os.environ.items() if name.upper() != "PRISM_DETACHED"}
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    fresh = subprocess.run([sys.executable, "-c", code, repo, str(tmp_path / "fresh" / "prism.ini")], cwd=repo,
+                           env=env, capture_output=True, text=True, timeout=120)
+    assert (fresh.returncode, fresh.stdout.splitlines()) == (0, ["[]", "0", "[]"]), (fresh.stdout, fresh.stderr)
 
     path = settings.settings().fileName()
     first = one_instance.claim(path)
@@ -4983,6 +5074,13 @@ def test_the_claim_is_made_before_the_heavy_imports_and_once_per_process(tmp_pat
         assert (third.case, third is not first, one_instance.current() is third) == ("start", True, True)
     finally:
         third.release()
+    with as_another_process():
+        inside = one_instance.claim(path, tries=1, pause_ms=0)
+    try:
+        assert (inside.case, one_instance.current() is inside) == ("start", True), (
+            "a claim that took the lock as another process's start is not the process's own once that start is over")
+    finally:
+        inside.release()
 
     held, claims, claim, real = one_instance.claim(path), [], one_instance.claim, gui_app.build_app
     monkeypatch.setattr(gui_app, "build_app", lambda argv=None: real(argv, app=qt_app(), claimed=held))
@@ -4992,7 +5090,7 @@ def test_the_claim_is_made_before_the_heavy_imports_and_once_per_process(tmp_pat
             "the program handed a claim built no window, claimed again, or holds another claim")
         with as_another_process():
             second = claim(path, tries=1, pause_ms=0)
-        pump(app, 0.2)
+        turn_until(app, lambda: brought_forward[-1:] == [("come_to_front", window)])
         assert (second.case, brought_forward[-1:]) == ("hand_over", [("come_to_front", window)]), (
             "the window does not answer the knock on the claim it was handed")
 
@@ -5006,7 +5104,7 @@ def test_main_hands_over_to_an_open_prism_and_builds_nothing(tmp_path, monkeypat
     from core.gui import __main__ as entry
     from core.gui import app as gui_app
     from core.gui import one_instance, settings
-    from tests._fixtures import as_another_process, process_state, pump
+    from tests._fixtures import as_another_process, process_state
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     built, ran, heard = [], [], []
@@ -5022,7 +5120,7 @@ def test_main_hands_over_to_an_open_prism_and_builds_nothing(tmp_path, monkeypat
         assert (status, built, ran, len(QApplication.topLevelWidgets()), left) == (0, [], [], widgets, []), (
             "the start that was handed over built something, ran a loop or left the process changed")
         assert brought_forward == [("allow_foreground", os.getpid())], "the open PRISM was not let take the front"
-        pump(app, 0.2)
+        turn_until(app, lambda: heard == [True])
         assert heard == [True], "the open PRISM did not hear the knock"
     finally:
         held.release()
@@ -5113,6 +5211,11 @@ def test_the_last_resort_error_says_where_the_full_error_is(tmp_path, monkeypatc
 # the shortcut goes in.
 _LAUNCHER_FOLDERS = ("USERPROFILE", "LOCALAPPDATA", "PROGRAMDATA", "APPDATA", "PRISM_DESKTOP")
 
+# The two lines of run.bat that read its options, each whole and at the start of its line: with either gone, moved or
+# setting another mode, a run with that option is a start with none, which starts PRISM.
+_LAUNCHER_OPTIONS = ('if /i "%~1"=="--where" set "LAUNCH_MODE=where"',
+                     'if /i "%~1"=="--make-shortcut" set "LAUNCH_MODE=shortcut"')
+
 
 def _windows_desktop():
     """Windows' own desktop folder, as the shell names it: listed, never written."""
@@ -5123,15 +5226,47 @@ def _windows_desktop():
     return Path(named.value)
 
 
+def _desktop_entries(desktop) -> set:
+    """Each entry of the folder ``desktop`` by its name, its size and the time it was last written: read, never
+    written, so that a file rewritten under its own name is seen as much as one added."""
+    import os
+    found = set()
+    with os.scandir(desktop) as entries:
+        for entry in entries:
+            kept = entry.stat(follow_symlinks=False)
+            found.add((entry.name, kept.st_size, kept.st_mtime_ns))
+    return found
+
+
+def _launcher_refused(text: str) -> str:
+    """Why a copy of ``run.bat`` whose text is ``text`` must not be run by a test with ``--where`` or
+    ``--make-shortcut``, or "" when it may: run so, it must start nothing. Unless both options' lines stand whole at
+    the start of their lines (``_LAUNCHER_OPTIONS``), a run with an option the copy does not read is a start with
+    none, and starts PRISM; unless its one line that starts PRISM, and its one line that shows the Windows message,
+    are each held to a start with no option, a run with an option reaches them."""
+    lines = text.splitlines()
+    unread = [option for option in _LAUNCHER_OPTIONS if option not in lines]
+    if unread:
+        return f"run.bat does not read {unread} whole at the start of its line, so it would start PRISM"
+    starts = [line.strip() for line in lines if 'start "PRISM"' in line]
+    if len(starts) != 1 or not starts[0].startswith('if "%LAUNCH_MODE%"=="start" start "PRISM" '):
+        return f"run.bat starts PRISM otherwise than in a start with no option: {starts}"
+    popups = [at for at, line in enumerate(lines) if ".Popup(" in line]
+    if len(popups) != 1 or [line.strip() for line in lines[max(popups[0] - 2, 0):popups[0]]] != [
+            "if not defined LAUNCH_PYTHONW (", 'if "%LAUNCH_MODE%"=="start" (']:
+        return "run.bat shows its Windows message otherwise than in a start with no option"
+    return ""
+
+
 def _launcher(tmp_path, option, *, conda_prefix=None, **folders):
     """``run.bat``, copied byte for byte into ``tmp_path``, run there with ``option``: ``--where`` or
-    ``--make-shortcut``, and nothing else, since without one it starts PRISM; nor is a launcher run that does not
-    know the option, for the same reason. Every folder it reads or writes
-    (``_LAUNCHER_FOLDERS``, given here by their names in small letters) must be a folder of ``tmp_path``, and the
-    run is refused before it starts when one is not, so that nothing can reach the person's own desktop or settings;
-    the active environment is ``conda_prefix``, or none. Windows' own desktop is listed before and after, and must
-    hold the same names. Handed back: the status the launcher ended with, the lines it printed, and the folder of
-    the copy."""
+    ``--make-shortcut``, and nothing else, since without one it starts PRISM; nor is a copy run whose lines do not
+    keep such a run from starting anything (``_launcher_refused``), read line by line before it runs. Every folder it
+    reads or writes (``_LAUNCHER_FOLDERS``, given here by their names in small letters) must be a folder of
+    ``tmp_path``, and the run is refused before it starts when one is not, so that nothing can reach the person's own
+    desktop or settings; the active environment is ``conda_prefix``, or none. Windows' own desktop is listed before
+    and after, each entry by its name, size and time of writing, and must be as it was. Handed back: the status the
+    launcher ended with, the lines it printed, and the folder of the copy."""
     import os
     import shutil
     import subprocess
@@ -5140,8 +5275,8 @@ def _launcher(tmp_path, option, *, conda_prefix=None, **folders):
     copy = tmp_path / "launcher" / "run.bat"
     copy.parent.mkdir(exist_ok=True)
     shutil.copyfile(Path(__file__).resolve().parents[1] / "run.bat", copy)
-    assert f'if /i "%~1"=="{option}"' in copy.read_text(encoding="utf-8"), (
-        f"run.bat does not know {option}, so it would start PRISM: it is not run")
+    refused = _launcher_refused(copy.read_text(encoding="utf-8"))
+    assert not refused, f"{refused}: it is not run"
     env = {name.upper(): value for name, value in os.environ.items()
            if name.upper() not in _LAUNCHER_FOLDERS + ("CONDA_PREFIX",)}
     env.update({name.upper(): str(value) for name, value in folders.items()})
@@ -5153,13 +5288,13 @@ def _launcher(tmp_path, option, *, conda_prefix=None, **folders):
             f"{name} is not a folder of the test's own, so the launcher would reach the person's own")
     assert " " not in str(copy), f"the copy's path holds a space, which the command line would split: {copy}"
     desktop = _windows_desktop()
-    before = set(os.listdir(desktop))
+    before = _desktop_entries(desktop)
     try:
         ran = subprocess.run(["cmd.exe", "/d", "/c", str(copy), option], cwd=str(tmp_path), env=env,
                              capture_output=True, text=True, timeout=120)
     finally:
-        added = set(os.listdir(desktop)) - before
-        assert not added, f"the launcher wrote on Windows' own desktop: {sorted(added)}"
+        changed = sorted({entry[0] for entry in before ^ _desktop_entries(desktop)})
+        assert not changed, f"the launcher wrote on Windows' own desktop: {changed}"
     return ran.returncode, ran.stdout.splitlines(), copy.parent
 
 
@@ -5182,8 +5317,22 @@ def test_the_launcher_finds_the_environment_or_says_what_to_do(tmp_path):
     only one, passed over for ``biophys-env`` under the user's ``anaconda3``; then the other usual places in their
     order; with none found, the words that say what to do and the status 1. Whether the desktop shortcut would be made
     is said from its mark, with where the shortcut and its mark would go. Nothing is started -- the one line that
-    starts PRISM, and the Windows message, belong to a start with no option -- and nothing is written."""
+    starts PRISM, and the Windows message, belong to a start with no option, as every run's guard reads -- and nothing
+    is written. Read off the file first, since no test runs either: an argument but the two options starts nothing
+    and ends with the status 2, and a start is told PRISM runs detached, so that the window binds its streams to its
+    log whatever streams it is handed, the variable kept out of the calling shell (``setlocal``)."""
     from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "run.bat").read_text(encoding="utf-8")
+    assert not _launcher_refused(text), _launcher_refused(text)
+    lines = text.splitlines()
+    options = lines.index(_LAUNCHER_OPTIONS[-1]) + 1
+    start = next(at for at, line in enumerate(lines) if 'start "PRISM"' in line)
+    assert (lines[options:options + 5], lines[1], lines[start - 1]) == (
+        ['if not "%~1"=="" if "%LAUNCH_MODE%"=="start" (',
+         "    echo run.bat takes no argument but --where or --make-shortcut, and started nothing.", "    popd",
+         "    exit /b 2", ")"], "setlocal", 'set "PRISM_DETACHED=1"'), (
+        "an argument but the two options is not refused with the status 2 before anything is found, or a start is not "
+        "told that PRISM runs detached", lines[options:options + 5], lines[1], lines[start - 1])
     root = tmp_path / "computer"
     user, local, shared, roaming, desktop = (root / name for name in ("user", "local", "shared", "roaming", "desktop"))
     for folder in (local, shared, roaming, desktop):
@@ -5226,23 +5375,17 @@ def test_the_launcher_finds_the_environment_or_says_what_to_do(tmp_path):
     mark.write_text("", encoding="utf-8")
     assert where() == found(places[1], f"The desktop shortcut was made once already, and is not made again: its mark "
                                        f"is \"{mark}\".")
-    lines = [line.strip() for line in (Path(__file__).resolve().parents[1] / "run.bat").read_text(
-        encoding="utf-8").splitlines()]
-    starts = [line for line in lines if 'start "PRISM"' in line or ".Popup(" in line]
-    popup = lines.index(starts[0])
-    assert (starts[1:], lines[popup - 1], lines[popup - 2]) == (
-        ['if "%LAUNCH_MODE%"=="start" start "PRISM" "%LAUNCH_PYTHONW%" -m core.gui'],
-        'if "%LAUNCH_MODE%"=="start" (', "if not defined LAUNCH_PYTHONW ("), (
-        "the launcher starts PRISM, or shows its Windows message, otherwise than in a start with no option", starts)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="run.bat is the launcher for Windows")
 def test_the_launcher_makes_the_desktop_shortcut_once(tmp_path):
     """The launcher puts a PRISM shortcut on the desktop once: the environment's ``pythonw.exe`` with ``-m core.gui``,
     started in the repository's folder, with PRISM's icon -- each read back through Windows' own shell -- and a mark
-    beside PRISM's settings file that says it was made. Run again after the shortcut was deleted, it makes none: made
-    once is made. Every folder is the test's own, ``PRISM_DESKTOP`` naming the desktop; Windows' own desktop is
-    listed before and after each run, and holds the same names."""
+    beside PRISM's settings file that says it was made. Run again after the shortcut was deleted, it makes none, and
+    names the mark to delete for it to be made again: made once is made. With the mark deleted it tries again: where
+    the shortcut cannot be saved -- its desktop folder is not there -- it says so with the status 1 and leaves no mark,
+    so that the next run tries again; and that run makes it. Every folder is the test's own, ``PRISM_DESKTOP`` naming
+    the desktop; Windows' own desktop is listed before and after each run, and is as it was."""
     import os
     import subprocess
     root = tmp_path / "computer"
@@ -5266,20 +5409,54 @@ def test_the_launcher_makes_the_desktop_shortcut_once(tmp_path):
     link.unlink()
     status, lines, _ = _launcher(tmp_path, "--make-shortcut", **folders)
     assert (status, lines, link.exists(), mark.is_file()) == (
-        0, ["The desktop shortcut was made once already, and is not made again."], False, True), (status, lines)
+        0, [f"The desktop shortcut was made once already, and is not made again: delete its mark \"{mark}\" to make it "
+            "again."], False, True), (status, lines)
+    mark.unlink()
+    gone = root / "gone"
+    status, lines, _ = _launcher(tmp_path, "--make-shortcut", **{**folders, "prism_desktop": gone})
+    assert (status, lines, gone.exists(), mark.exists()) == (
+        1, ["The desktop shortcut could not be made."], False, False), (status, lines)
+    status, lines, _ = _launcher(tmp_path, "--make-shortcut", **folders)
+    assert (status, lines, link.is_file(), mark.is_file()) == (
+        0, [f"The desktop shortcut was made: {link}"], True, True), (status, lines)
+
+
+def test_the_launchers_guard_refuses_every_copy_that_could_start_something():
+    """The launcher's tests run a copy of ``run.bat`` with ``--where`` or ``--make-shortcut`` alone, and refuse to run
+    one whose lines would not keep such a run from starting anything (``_launcher_refused``): an option's line gone,
+    written in a remark, or setting the mode of a start with no option; the line that starts PRISM held to no mode,
+    or a second one beside it; the Windows message shown in another mode. Each is made to today's file in memory, and
+    refused; today's file is not. Nothing is run."""
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "run.bat").read_text(encoding="utf-8")
+    start = 'if "%LAUNCH_MODE%"=="start" start "PRISM" "%LAUNCH_PYTHONW%" -m core.gui\n'
+    edits = {"an option's line gone": ('if /i "%~1"=="--where" set "LAUNCH_MODE=where"\n', ""),
+             "an option's line in a remark": ('if /i "%~1"=="--where"', 'REM if /i "%~1"=="--where"'),
+             "an option setting a start": ('set "LAUNCH_MODE=shortcut"', 'set "LAUNCH_MODE=start"'),
+             "the start in every mode": ('if "%LAUNCH_MODE%"=="start" start "PRISM"', 'start "PRISM"'),
+             "a second start": (start, start + 'start "PRISM" "%LAUNCH_PYTHONW%" -m core.gui\n'),
+             "the message in every mode but one": ('\n    if "%LAUNCH_MODE%"=="start" (\n',
+                                                    '\n    if not "%LAUNCH_MODE%"=="where" (\n')}
+    assert _launcher_refused(text) == "", _launcher_refused(text)
+    passed = [what for what, (old, new) in edits.items()
+              if text.count(old) != 1 or not _launcher_refused(text.replace(old, new))]
+    assert passed == [], f"the launcher's guard would run a copy with {passed}"
 
 
 def test_the_launcher_for_macos_and_linux_starts_prism_detached():
     """On macOS and Linux ``run.sh`` starts PRISM detached from the terminal that ran it, which may then be closed: it
-    sets the variable torch and MKL need, says that PRISM runs detached (so that the window binds its streams to its
-    log, since what it writes reaches no terminal), and starts the window under ``nohup``, its output thrown away, in
-    the background, as the script's last line; it no longer replaces itself with the window. Read off the file,
-    which no test runs."""
+    says in the one line it prints that PRISM starts in the background and where to look when no window opens, since
+    the window says nothing in that terminal, even when it cannot start; it sets the variable torch and MKL need,
+    says that PRISM runs detached (so that the window binds its streams to its log, since what it writes reaches no
+    terminal), and starts the window under ``nohup``, its output thrown away, in the background, as the script's last
+    line; it no longer replaces itself with the window. Read off the file, which no test runs."""
     from pathlib import Path
     lines = [line.strip() for line in (Path(__file__).resolve().parents[1] / "run.sh").read_text(
         encoding="utf-8").splitlines()]
     commands = [line for line in lines if line and not line.startswith("#")]
-    wanted = ["export KMP_DUPLICATE_LIB_OK=TRUE", "export PRISM_DETACHED=1",
+    wanted = ['echo "PRISM starts in the background; if no window opens, see window-log.txt beside its settings file '
+              'or in the temporary folder."', "export KMP_DUPLICATE_LIB_OK=TRUE", "export PRISM_DETACHED=1",
               "nohup python3 -m core.gui >/dev/null 2>&1 &"]
-    assert commands[-3:] == wanted, commands
-    assert [line for line in commands if "core.gui" in line or line.startswith("exec ")] == [wanted[-1]], commands
+    assert commands[-4:] == wanted, commands
+    assert [line for line in commands if "core.gui" in line or line.startswith(("exec ", "echo "))] == [
+        wanted[0], wanted[-1]], commands
