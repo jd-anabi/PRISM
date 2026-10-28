@@ -103,6 +103,34 @@ def test_provenance_records_git_rev_and_dirty_and_unknown_outside_a_repo():
     assert out == {"git_rev": "unknown", "git_dirty": None, "branch": "unknown"}
 
 
+def test_provenance_starts_git_and_nvidia_smi_with_no_console_window(monkeypatch):
+    """PRISM's window runs with no console, as its launcher starts it, and a console program started by a process
+    with no console opens a console window of its own, on the screen while it runs, whether or not its output is
+    read. So the two programs the provenance starts -- ``git``, three times for every record written, and
+    ``nvidia-smi``, for the card's free memory beside the memory ceiling's field -- are started with no window
+    (``CREATE_NO_WINDOW`` on Windows; elsewhere the flag is 0, which asks for nothing): each call is read as it is
+    made, and every call to ``subprocess.run`` in the module carries the flag, read off its syntax tree, so that a
+    call added without it is seen too."""
+    import ast
+    import subprocess
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    started = []
+
+    def stand_in(command, *args, **kwargs):
+        started.append((command[0], kwargs.get("creationflags")))
+        return subprocess.CompletedProcess(command, 0, "1024\n" if command[0] == "nvidia-smi" else "abc\n", "")
+
+    monkeypatch.setattr(subprocess, "run", stand_in)
+    assert (prov.git_info(Path(__file__).resolve().parents[1])["git_rev"], prov._nvidia_smi_free_gib()) == ("abc", 1.0)
+    assert started == [("git", no_window)] * 3 + [("nvidia-smi", no_window)], started
+    tree = ast.parse(Path(prov.__file__).read_text(encoding="utf-8"))
+    calls = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and ast.unparse(node.func) == "subprocess.run"]
+    flags = [next((ast.unparse(word.value) for word in call.keywords if word.arg == "creationflags"), None)
+             for call in calls]
+    assert flags == ["getattr(subprocess, 'CREATE_NO_WINDOW', 0)"] * 2, flags
+
+
 def test_env_records_versions_and_device():
     env = prov.env_info(config.cpu_device())
     for key in ("python", "torch", "sbi", "PySide6", "numpy", "os", "hostname", "device_type", "device_name", "dtype"):

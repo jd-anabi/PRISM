@@ -13,7 +13,8 @@ UNKNOWN_GIT = {"git_rev": "unknown", "git_dirty": None, "branch": "unknown"}
 
 def _git(args, root) -> str | None:
     try:
-        out = subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True, timeout=5)
+        out = subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True, timeout=5,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception:                        # noqa: BLE001 -- no git binary, a hung index, a timeout
         return None
     return out.stdout.strip() if out.returncode == 0 else None
@@ -120,7 +121,8 @@ def _nvidia_smi_free_gib() -> "float | None":
     """
     try:
         out = subprocess.run(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
-                             capture_output=True, text=True, timeout=2.0)
+                             capture_output=True, text=True, timeout=2.0,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if out.returncode != 0:
             return None
         return float(out.stdout.strip().splitlines()[0]) / 1024.0
