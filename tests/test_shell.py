@@ -5106,3 +5106,180 @@ def test_the_last_resort_error_says_where_the_full_error_is(tmp_path, monkeypatc
         True, True), text
     assert (shown.endswith("\u2026"), height <= room) == (True, True), (
         f"the question with its line beneath is {height} px in a room of {room} px")
+
+
+# The folders the launcher reads and writes, each pointed into a test's own folder: the user's, the local and the
+# shared application data, the roaming one that holds PRISM's settings folder and its shortcut's mark, and the folder
+# the shortcut goes in.
+_LAUNCHER_FOLDERS = ("USERPROFILE", "LOCALAPPDATA", "PROGRAMDATA", "APPDATA", "PRISM_DESKTOP")
+
+
+def _windows_desktop():
+    """Windows' own desktop folder, as the shell names it: listed, never written."""
+    import ctypes
+    from pathlib import Path
+    named = ctypes.create_unicode_buffer(1024)
+    assert ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, named) == 0, "the desktop folder has no name"
+    return Path(named.value)
+
+
+def _launcher(tmp_path, option, *, conda_prefix=None, **folders):
+    """``run.bat``, copied byte for byte into ``tmp_path``, run there with ``option``: ``--where`` or
+    ``--make-shortcut``, and nothing else, since without one it starts PRISM; nor is a launcher run that does not
+    know the option, for the same reason. Every folder it reads or writes
+    (``_LAUNCHER_FOLDERS``, given here by their names in small letters) must be a folder of ``tmp_path``, and the
+    run is refused before it starts when one is not, so that nothing can reach the person's own desktop or settings;
+    the active environment is ``conda_prefix``, or none. Windows' own desktop is listed before and after, and must
+    hold the same names. Handed back: the status the launcher ended with, the lines it printed, and the folder of
+    the copy."""
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+    assert option in ("--where", "--make-shortcut"), f"run.bat is never run here with {option!r}: it would start PRISM"
+    copy = tmp_path / "launcher" / "run.bat"
+    copy.parent.mkdir(exist_ok=True)
+    shutil.copyfile(Path(__file__).resolve().parents[1] / "run.bat", copy)
+    assert f'if /i "%~1"=="{option}"' in copy.read_text(encoding="utf-8"), (
+        f"run.bat does not know {option}, so it would start PRISM: it is not run")
+    env = {name.upper(): value for name, value in os.environ.items()
+           if name.upper() not in _LAUNCHER_FOLDERS + ("CONDA_PREFIX",)}
+    env.update({name.upper(): str(value) for name, value in folders.items()})
+    if conda_prefix is not None:
+        env["CONDA_PREFIX"] = str(conda_prefix)
+    own = tmp_path.resolve()
+    for name in _LAUNCHER_FOLDERS:
+        assert env.get(name) and Path(env[name]).resolve().is_relative_to(own), (
+            f"{name} is not a folder of the test's own, so the launcher would reach the person's own")
+    assert " " not in str(copy), f"the copy's path holds a space, which the command line would split: {copy}"
+    desktop = _windows_desktop()
+    before = set(os.listdir(desktop))
+    try:
+        ran = subprocess.run(["cmd.exe", "/d", "/c", str(copy), option], cwd=str(tmp_path), env=env,
+                             capture_output=True, text=True, timeout=120)
+    finally:
+        added = set(os.listdir(desktop)) - before
+        assert not added, f"the launcher wrote on Windows' own desktop: {sorted(added)}"
+    return ran.returncode, ran.stdout.splitlines(), copy.parent
+
+
+def _environment(folder, *libraries):
+    """A conda environment's folder as the launcher reads it: its ``pythonw.exe``, an empty file nothing runs, and a
+    folder for each library named. Handed back: the interpreter's path."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "pythonw.exe").write_bytes(b"")
+    for library in libraries:
+        (folder / "Lib" / "site-packages" / library).mkdir(parents=True)
+    return folder / "pythonw.exe"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="run.bat is the launcher for Windows")
+def test_the_launcher_finds_the_environment_or_says_what_to_do(tmp_path):
+    """Double-clicked, the launcher must start PRISM with PRISM's own Python, which on this computer is not the first
+    on the path, and with no console it must never fail in silence. Read through its ``--where``, on a copy of it whose
+    every folder is the test's own: the active environment's interpreter first, when that environment's folder holds
+    PySide6 and torch; an active environment that holds neither -- a prompt left in conda's base environment -- or
+    only one, passed over for ``biophys-env`` under the user's ``anaconda3``; then the other usual places in their
+    order; with none found, the words that say what to do and the status 1. Whether the desktop shortcut would be made
+    is said from its mark, with where the shortcut and its mark would go. Nothing is started -- the one line that
+    starts PRISM, and the Windows message, belong to a start with no option -- and nothing is written."""
+    from pathlib import Path
+    root = tmp_path / "computer"
+    user, local, shared, roaming, desktop = (root / name for name in ("user", "local", "shared", "roaming", "desktop"))
+    for folder in (local, shared, roaming, desktop):
+        folder.mkdir(parents=True)
+    folders = {"userprofile": user, "localappdata": local, "programdata": shared, "appdata": roaming,
+               "prism_desktop": desktop}
+    active = _environment(root / "active", "PySide6", "torch")
+    base = user / "anaconda3"
+    _environment(base, "numpy")
+    half = _environment(root / "half", "PySide6")
+    places = [_environment(folder / "envs" / "biophys-env") for folder in (
+        user / "anaconda3", user / "miniconda3", local / "anaconda3", shared / "anaconda3", shared / "miniconda3")]
+
+    def listing():
+        return sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob("*") if "launcher" not in path.parts)
+
+    def where(conda_prefix=None):
+        status, lines, _ = _launcher(tmp_path, "--where", conda_prefix=conda_prefix, **folders)
+        return status, lines
+
+    mark = roaming / "PRISM" / "shortcut-made"
+
+    def found(python, made=f"The desktop shortcut would be made now: \"{desktop / 'PRISM.lnk'}\", its mark \"{mark}\"."):
+        return 0, [f"PRISM's Python: \"{python}\"", made]
+
+    before = listing()
+    got = [where(conda_prefix=active.parent), where(conda_prefix=base), where(conda_prefix=half.parent), where()]
+    assert got == [found(active), found(places[0]), found(places[0]), found(places[0])], got
+    assert listing() == before, "the launcher's --where wrote something"
+    walked = []
+    for python in places:
+        walked.append(where())
+        python.unlink()
+    walked.append(where())
+    assert walked == [found(python) for python in places] + [(1, [
+        "PRISM's Python was not found. Open the Anaconda Prompt, type: conda activate biophys-env, then run run.bat "
+        "from there."])], walked
+    _environment(user / "miniconda3" / "envs" / "biophys-env")
+    mark.parent.mkdir()
+    mark.write_text("", encoding="utf-8")
+    assert where() == found(places[1], f"The desktop shortcut was made once already, and is not made again: its mark "
+                                       f"is \"{mark}\".")
+    lines = [line.strip() for line in (Path(__file__).resolve().parents[1] / "run.bat").read_text(
+        encoding="utf-8").splitlines()]
+    starts = [line for line in lines if 'start "PRISM"' in line or ".Popup(" in line]
+    popup = lines.index(starts[0])
+    assert (starts[1:], lines[popup - 1], lines[popup - 2]) == (
+        ['if "%LAUNCH_MODE%"=="start" start "PRISM" "%LAUNCH_PYTHONW%" -m core.gui'],
+        'if "%LAUNCH_MODE%"=="start" (', "if not defined LAUNCH_PYTHONW ("), (
+        "the launcher starts PRISM, or shows its Windows message, otherwise than in a start with no option", starts)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="run.bat is the launcher for Windows")
+def test_the_launcher_makes_the_desktop_shortcut_once(tmp_path):
+    """The launcher puts a PRISM shortcut on the desktop once: the environment's ``pythonw.exe`` with ``-m core.gui``,
+    started in the repository's folder, with PRISM's icon -- each read back through Windows' own shell -- and a mark
+    beside PRISM's settings file that says it was made. Run again after the shortcut was deleted, it makes none: made
+    once is made. Every folder is the test's own, ``PRISM_DESKTOP`` naming the desktop; Windows' own desktop is
+    listed before and after each run, and holds the same names."""
+    import os
+    import subprocess
+    root = tmp_path / "computer"
+    user, local, shared, roaming, desktop = (root / name for name in ("user", "local", "shared", "roaming", "desktop"))
+    for folder in (local, shared, roaming, desktop):
+        folder.mkdir(parents=True)
+    folders = {"userprofile": user, "localappdata": local, "programdata": shared, "appdata": roaming,
+               "prism_desktop": desktop}
+    python = _environment(user / "anaconda3" / "envs" / "biophys-env")
+    link, mark = desktop / "PRISM.lnk", roaming / "PRISM" / "shortcut-made"
+    status, lines, repo = _launcher(tmp_path, "--make-shortcut", **folders)
+    assert (status, lines, link.is_file(), mark.is_file()) == (
+        0, [f"The desktop shortcut was made: {link}"], True, True), (status, lines)
+    read = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                           "$link = (New-Object -ComObject WScript.Shell).CreateShortcut($env:LAUNCH_LINK); "
+                           "$link.TargetPath; $link.Arguments; $link.WorkingDirectory; $link.IconLocation"],
+                          env={**os.environ, "LAUNCH_LINK": str(link)}, capture_output=True, text=True, timeout=120)
+    assert read.stdout.splitlines() == [str(python), "-m core.gui", str(repo),
+                                        f"{repo}\\core\\gui\\assets\\app\\prism.ico,0"], (read.stdout, read.stderr)
+    assert sorted(path.name for path in desktop.iterdir()) == ["PRISM.lnk"], "the shortcut is not alone on the desktop"
+    link.unlink()
+    status, lines, _ = _launcher(tmp_path, "--make-shortcut", **folders)
+    assert (status, lines, link.exists(), mark.is_file()) == (
+        0, ["The desktop shortcut was made once already, and is not made again."], False, True), (status, lines)
+
+
+def test_the_launcher_for_macos_and_linux_starts_prism_detached():
+    """On macOS and Linux ``run.sh`` starts PRISM detached from the terminal that ran it, which may then be closed: it
+    sets the variable torch and MKL need, says that PRISM runs detached (so that the window binds its streams to its
+    log, since what it writes reaches no terminal), and starts the window under ``nohup``, its output thrown away, in
+    the background, as the script's last line; it no longer replaces itself with the window. Read off the file,
+    which no test runs."""
+    from pathlib import Path
+    lines = [line.strip() for line in (Path(__file__).resolve().parents[1] / "run.sh").read_text(
+        encoding="utf-8").splitlines()]
+    commands = [line for line in lines if line and not line.startswith("#")]
+    wanted = ["export KMP_DUPLICATE_LIB_OK=TRUE", "export PRISM_DETACHED=1",
+              "nohup python3 -m core.gui >/dev/null 2>&1 &"]
+    assert commands[-3:] == wanted, commands
+    assert [line for line in commands if "core.gui" in line or line.startswith("exec ")] == [wanted[-1]], commands
