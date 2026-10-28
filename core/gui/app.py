@@ -4,7 +4,7 @@ import logging
 import sys
 import traceback
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 
 from core import config, logging_root, registry
 
@@ -13,10 +13,14 @@ from .main_window import MainWindow
 from .screens.shell import NO_MESSAGE, as_sentence
 from .widgets.ask import Ask, ask
 
-# What a start of PRISM that builds no window says as it ends, on the error stream when the process has one:
-# started from a console, it is the only sign the person gets.
-SAID = {"hand_over": "PRISM is already open: it was asked to come to the front.",
-        "give_up": "PRISM is already running but did not answer; this start ends."}
+# What a start of PRISM that builds no window says as it ends, and how it says it: the start's own module keeps both,
+# so that the entry point says the line before it imports this module.
+SAID = one_instance.SAID
+_say = one_instance.say
+
+# Said beneath the last-resort question while the standard streams are bound to the window's log, which then holds
+# the error's trace.
+FULL_ERROR_IN_LOG = "The full error is in the window's log file."
 
 # The most a window's frame -- its title bar and its borders -- takes of a screen's height, which a question's own
 # height leaves out.
@@ -30,12 +34,13 @@ def _room(parent) -> int:
     return screen.availableGeometry().height() - FRAME
 
 
-def _fitted(sentence: str, room: int) -> str:
+def _fitted(sentence: str, room: int, beneath: str | None = None) -> str:
     """``sentence`` as the last-resort question can show it in ``room``, the height it may take: whole when the
     question then stands whole; else cut after its last word that leaves the question whole -- inside its first
     word, after its last letter that does, when not one whole word does -- an ellipsis put in place of the rest,
-    which the full error holds. Measured on the question itself, built and never shown."""
-    question = Ask(None, "Error", sentence, "OK", marker="err", detail=sentence)
+    which the full error holds. Measured on the question itself, with what it says ``beneath``, built and never
+    shown."""
+    question = Ask(None, "Error", sentence, "OK", marker="err", beneath=beneath, detail=sentence)
     try:
         over = question.sizeHint().height() - room
         if over <= 0:
@@ -71,7 +76,9 @@ def _install_excepthook(parent_getter):
     and its trace are behind "Show the full error", and nowhere else. A message too long for the question to stand
     whole on its screen is cut, with an ellipsis (``_fitted``); the full error holds it whole. Over the window once
     there is one (``parent_getter``), and with no window under it before. Each error is still written to the console
-    as before.
+    as before. While the standard streams are bound to the window's log (PRISM started with no console), the error
+    and its trace are written to that log, never to a run's text, whose streams a live run holds then; and the
+    question says beneath its sentence that the full error is in the window's log file.
 
     Installed BEFORE MainWindow() is built, so that it stands for everything after. A part that cannot
     be built (e.g. a bad cell file breaking a panel's prefill) does not reach it: the window builds each
@@ -83,19 +90,34 @@ def _install_excepthook(parent_getter):
     asking = []                              # holds a mark while a question of this hook is open
 
     def _excepthook(exc_type, exc, tb):
+        log = _bound_log()
         try:
             if not asking:
                 asking.append(True)
                 try:
                     parent = parent_getter()
-                    ask(parent, "Error", _fitted(as_sentence(str(exc)) or NO_MESSAGE, _room(parent)), "OK",
-                        marker="err", detail="".join(traceback.format_exception(exc_type, exc, tb)))
+                    beneath = FULL_ERROR_IN_LOG if log is not None else None
+                    ask(parent, "Error", _fitted(as_sentence(str(exc)) or NO_MESSAGE, _room(parent), beneath), "OK",
+                        marker="err", beneath=beneath, detail="".join(traceback.format_exception(exc_type, exc, tb)))
                 finally:
                     asking.clear()
         finally:
-            sys.__excepthook__(exc_type, exc, tb)
+            if log is None:
+                sys.__excepthook__(exc_type, exc, tb)
+            else:
+                try:
+                    traceback.print_exception(exc_type, exc, tb, file=log)
+                except Exception:                # noqa: BLE001 -- a trace that cannot be written is lost
+                    pass
 
     sys.excepthook = _excepthook
+
+
+def _bound_log():
+    """The window's log while the standard streams are bound to it, read from the entry point's own module, which a
+    start of PRISM always runs under that name; None when they are not bound, and when the entry point never ran."""
+    entry = sys.modules.get("core.gui.__main__")
+    return None if entry is None else entry.bound_log()
 
 
 def _library_record_sink(record) -> None:
@@ -131,20 +153,12 @@ def _library_record_sink(record) -> None:
     stream.flush()
 
 
-def _say(case: str) -> None:
-    """Say what a start that builds no window did, in one line on the error stream; nothing when the process has
-    no such stream, as one started with no console, or when the stream cannot be written."""
-    stream = sys.stderr
-    if stream is None:
-        return
-    try:
-        stream.write(SAID[case] + "\n")
-        stream.flush()
-    except (OSError, ValueError):            # a stream that was closed, or whose reader is gone
-        pass
-
-
-def build_app(argv=None):
+def build_app(argv=None, *, app=None, claimed=None):
+    """The whole program: the application and its window, or the application and None when this start was handed
+    over to an open PRISM. The entry point makes the application and claims the one PRISM before it imports this
+    module, and hands in both (``app``, ``claimed``); handed neither, as the suites build the program, the
+    application in the process is used, or one is made, and the claim is made here. A failure to build the window
+    is raised as it came, for the entry point to say."""
     # THE root-logger handler, before anything else in this process can log. A handler on the root
     # FROM START-UP is what stops a library's logging.warning from calling basicConfig and
     # installing a second one -- after which every ``core`` record would be emitted twice, the
@@ -170,20 +184,22 @@ def build_app(argv=None):
 
     # Before the QApplication, and so before any window: this is the Windows shell's grouping key, and
     # setting it late leaves the taskbar button showing the interpreter's icon instead of ours.
-    app_icon.set_windows_app_user_model_id()
-
-    app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
+    # The entry point told the shell so before it made the application it hands in.
+    if app is None:
+        app_icon.set_windows_app_user_model_id()
+        app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
     app.setOrganizationName(settings.ORG)   # both are needed for a stable QSettings store on Windows
     app.setApplicationName(settings.APP)
     # One PRISM at a time, settled as soon as the settings file is known and before the style, the fonts or any
     # window: a start that finds PRISM open hands over to it, or gives up when it does not answer, and ends here
-    # having built nothing (one_instance.py).
-    claimed = one_instance.claim(settings.settings().fileName())
-    if claimed.case in SAID:
-        _say(claimed.case)
-        if claimed.case == "give_up":
-            raise SystemExit(1)
-        return app, None
+    # having built nothing (one_instance.py). The entry point settled it before it imported this module.
+    if claimed is None:
+        claimed = one_instance.claim(settings.settings().fileName())
+        if claimed.case in SAID:
+            _say(claimed.case)
+            if claimed.case == "give_up":
+                raise SystemExit(1)
+            return app, None
     # On the APPLICATION, not on the window: every dialog, message box and popped-out figure window
     # inherits it, so there is no per-window wiring to forget. PRISM had no icon at all before this.
     app.setWindowIcon(app_icon.app_icon())
@@ -204,19 +220,10 @@ def build_app(argv=None):
 
     window_ref = {}
     _install_excepthook(lambda: window_ref.get("w"))
-    try:
-        window = MainWindow(appearance=appearance)
-    except Exception as e:                   # noqa: BLE001 -- a construction failure must still show
-        box = QMessageBox(None)
-        box.setIcon(QMessageBox.Critical)
-        box.setWindowTitle("PRISM could not start")
-        box.setText(f"The application failed to start:\n{e}")
-        box.setDetailedText(traceback.format_exc())
-        box.exec()
-        # We already showed the dialog and logged the traceback. Exit via SystemExit so the installed
-        # sys.excepthook does NOT fire and pop a SECOND "Unhandled error" dialog for the same failure.
-        traceback.print_exc()
-        raise SystemExit(1) from e
+    # A window that cannot be built is raised as it came, out of the program's start and so past the hook above:
+    # the entry point writes it to the window's log once, with its trace, and says so in a plain Windows message,
+    # since the toolkit may be what failed.
+    window = MainWindow(appearance=appearance)
     window_ref["w"] = window
     # A second start's knock brings this window to the front. One that came while the window was being built is
     # heard when the event loop first runs, once the window is shown.

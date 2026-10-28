@@ -6,6 +6,7 @@ steps' states are the rules' own. The window's reading of its session, its run a
 what each of Home's places opens in the window, are tested on a whole window.
 """
 import contextlib
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -2655,10 +2656,11 @@ def test_opening_prism_touches_no_card_and_starts_no_program(tmp_path, monkeypat
     callers swallow what is raised, so a stand-in that raised would prove nothing), and none is recorded. Nothing
     ticks then either: no timer of the window or of the application runs, and of every start of a timer from Python,
     a timer with no parent among them, none still runs after the first idle turn, nor is a single shot of a later
-    moment waiting. The same holds after the entry point's own lines, which show the window, run the event loop and
-    let go of the claim once the program is built: run here with a loop that turns once and ends."""
+    moment waiting. The same holds after the entry point's own lines, which claim, show the window, run the event loop
+    and let go of the claim once the program is built: run here with a loop that turns once and ends."""
     from PySide6.QtCore import QObject, QTimer
     from core.gui import __main__ as entry
+    from core.gui import app as gui_app
     from tests._fixtures import whole_program
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
@@ -2701,8 +2703,8 @@ def test_opening_prism_touches_no_card_and_starts_no_program(tmp_path, monkeypat
         try:
             _shown_off_screen(window)                             # Home shown, then one idle turn
             nothing_asked_and_nothing_ticking(window)
-            monkeypatch.setattr(entry, "build_app", lambda: (Loop(), window))
-            assert entry.main() == 0                              # the entry point's own lines, after the build
+            monkeypatch.setattr(gui_app, "build_app", lambda **handed: (Loop(), window))
+            assert _main(entry) == 0                              # the entry point's own lines, the build stood in
             nothing_asked_and_nothing_ticking(window)
         finally:
             window.hide()
@@ -3885,10 +3887,11 @@ def test_a_second_start_is_handed_over_even_while_the_first_is_busy(tmp_path, mo
     """A second start on the settings file of a PRISM that is open -- one that holds the lock and listens -- connects
     at once and is handed over, though the open one's event loop has not run since: before it knocks, it lets the
     open one's process take the front. The open one hears the knock when its loop next runs, and not before: not
-    while its main thread is held for a second, as while a figure is drawn."""
+    while its main thread is held for a second, as while a figure is drawn. The second start claims as a start in
+    another process does: in this one it would be handed back the claim the process holds."""
     import os
     from core.gui import one_instance
-    from tests._fixtures import pump
+    from tests._fixtures import as_another_process, pump
     app = qt_app()
     path = str(tmp_path / "prism.ini")
     first = one_instance.claim(path)
@@ -3897,7 +3900,8 @@ def test_a_second_start_is_handed_over_even_while_the_first_is_busy(tmp_path, mo
     monkeypatch.setattr(one_instance, "_knock", lambda *told: brought_forward.append(("knock",)) or knock(*told))
     try:
         began = time.monotonic()
-        second = one_instance.claim(path)
+        with as_another_process():
+            second = one_instance.claim(path)
         took = time.monotonic() - began
         assert (first.case, second.case, one_instance.current() is first) == ("start", "hand_over", True), (
             first.case, second.case)
@@ -4062,12 +4066,12 @@ def test_a_start_handed_over_builds_no_window_and_exits_zero(tmp_path, monkeypat
     no other widget, sets nothing of the look on the process -- the icon, the text size, the style, the fonts, the
     appearance, the figure settings -- and hands back the application with no window, having let the open one's
     process take the front; the open one hears the knock when its loop runs. With no error stream, as a start with
-    no console has none, it hands over all the same. Handed no window, the entry point ends with the status 0,
-    showing nothing and running no event loop."""
+    no console has none, it hands over all the same. The entry point, beside the same open PRISM, ends with the
+    status 0, showing nothing and running no event loop: it hands over before it builds anything."""
     import os
     import sys
-    from core.gui import one_instance
-    from tests._fixtures import process_state, pump, whole_program
+    from core.gui import one_instance, settings
+    from tests._fixtures import as_another_process, process_state, pump, whole_program
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     monkeypatch.setattr(sys, "stderr", None)
@@ -4086,14 +4090,13 @@ def test_a_start_handed_over_builds_no_window_and_exits_zero(tmp_path, monkeypat
         assert heard == [True], "the open PRISM did not hear the knock"
     from core.gui import __main__ as entry
     ran = []
-
-    class Application:
-        def exec(self):
-            ran.append("a loop")
-            return 3
-
-    monkeypatch.setattr(entry, "build_app", lambda: (Application(), None))
-    assert (entry.main(), ran) == (0, []), "the start that was handed over ran an event loop"
+    monkeypatch.setattr(QApplication, "exec", lambda application: ran.append("a loop") or 3)
+    held = one_instance.claim(settings.settings().fileName())          # the open PRISM
+    try:
+        with _names_kept(app), as_another_process():
+            assert (_main(entry), ran) == (0, []), "the start that was handed over ran an event loop"
+    finally:
+        held.release()
 
 
 def test_a_start_beside_a_prism_that_never_answers_ends_with_the_status_one(tmp_path, monkeypatch, capsys):
@@ -4132,29 +4135,43 @@ def test_a_start_beside_a_prism_that_never_answers_ends_with_the_status_one(tmp_
     assert capsys.readouterr().err.endswith("PRISM is already running but did not answer; this start ends.\n")
 
 
-def test_a_second_start_says_in_one_line_what_it_did(monkeypatch):
+def test_a_second_start_says_in_one_line_what_it_did(tmp_path, monkeypatch):
     """A start that builds no window says what it did in one line on the error stream, the only sign a start from a
-    console gives: that PRISM was open and was asked to come to the front, or that it did not answer and this start
-    ends. With no error stream, as a start with no console has none, nothing is written and nothing is raised."""
+    console gives -- that PRISM was open and was asked to come to the front, or that it did not answer and this start
+    ends -- and ends with the status 0 or 1. With no error stream, as a start with no console has none, the line is
+    written to the window's log, after the launch's dated line. Said where there is no stream at all, nothing is
+    written and nothing is raised."""
     import io
     import sys
-    from core.gui import app as gui_app
-    for case, line in (("hand_over", "PRISM is already open: it was asked to come to the front.\n"),
-                       ("give_up", "PRISM is already running but did not answer; this start ends.\n")):
+    from core.gui import __main__ as entry
+    from core.gui import one_instance
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    for case, line, status in (("hand_over", "PRISM is already open: it was asked to come to the front.\n", 0),
+                               ("give_up", "PRISM is already running but did not answer; this start ends.\n", 1)):
+        monkeypatch.setattr(one_instance, "claim", lambda settings_path, case=case, **told: one_instance.Claim(case))
         stream = io.StringIO()
         monkeypatch.setattr(sys, "stderr", stream)
-        gui_app._say(case)
+        with _names_kept(app):
+            assert _main(entry) == status, case
         assert stream.getvalue() == line, stream.getvalue()
         monkeypatch.setattr(sys, "stderr", None)
-        gui_app._say(case)
+        with _names_kept(app):
+            assert _main(entry) == status, case
+        written = (tmp_path / "window-log.txt").read_text(encoding="utf-8").splitlines(keepends=True)
+        launch = max(at for at, text in enumerate(written) if text.endswith(f" PRISM started ({sys.executable}).\n"))
+        assert written[launch + 1:] == [line], written
+        one_instance.say(case)
 
 
 def test_a_prism_that_cannot_listen_turns_a_second_start_away_and_says_so(tmp_path, monkeypatch, caplog):
     """A PRISM that holds the lock but whose local server does not listen cannot hear a second start of itself, and
-    a second start on its settings file is turned away while it is open, as its warning says, naming the server."""
+    a second start on its settings file is turned away while it is open, as its warning says, naming the server. The
+    second start claims as a start in another process does."""
     import logging
     from PySide6.QtNetwork import QLocalServer
     from core.gui import one_instance
+    from tests._fixtures import as_another_process
     qt_app()
     path = str(tmp_path / "prism.ini")
     monkeypatch.setattr(QLocalServer, "listen", lambda server, name: False)
@@ -4162,7 +4179,8 @@ def test_a_prism_that_cannot_listen_turns_a_second_start_away_and_says_so(tmp_pa
         first = one_instance.claim(path)
     try:
         said = [record.getMessage() for record in caplog.records if record.name == "core.gui.one_instance"]
-        refused = one_instance.claim(path, tries=1, pause_ms=0)
+        with as_another_process():
+            refused = one_instance.claim(path, tries=1, pause_ms=0)
         assert (first.case, one_instance.current() is first, refused.case) == ("start", True, "give_up"), (
             f"the first start: {first.case}, the second: {refused.case}")
         assert len(said) == 1 and one_instance.server_name(path) in said[0] and (
@@ -4174,14 +4192,16 @@ def test_a_prism_that_cannot_listen_turns_a_second_start_away_and_says_so(tmp_pa
 def test_the_open_prism_brings_its_window_to_the_front_when_a_second_start_knocks(tmp_path, monkeypatch,
                                                                                     brought_forward):
     """The whole program holds the lock beside its settings file and listens; a second start's knock on it brings
-    the program's window to the front once its event loop runs, and not before."""
+    the program's window to the front once its event loop runs, and not before. The second start claims as a start in
+    another process does."""
     import os
     from core.gui import one_instance, settings
-    from tests._fixtures import pump, whole_program
+    from tests._fixtures import as_another_process, pump, whole_program
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     with whole_program() as (_app, window):
-        second = one_instance.claim(settings.settings().fileName(), tries=1, pause_ms=0)
+        with as_another_process():
+            second = one_instance.claim(settings.settings().fileName(), tries=1, pause_ms=0)
         assert (second.case, brought_forward) == ("hand_over", [("allow_foreground", os.getpid())]), (
             "the second start was not handed over, the open PRISM let take the front first")
         pump(app, 0.2)
@@ -4196,6 +4216,7 @@ def test_a_prism_whose_window_closed_while_a_run_goes_on_lets_the_next_start_ope
     import threading
     from PySide6.QtCore import QRunnable, QThreadPool
     from core.gui import __main__ as entry
+    from core.gui import app as gui_app
     from core.gui import one_instance, settings
     from tests._fixtures import whole_program
     qt_app()
@@ -4218,10 +4239,10 @@ def test_a_prism_whose_window_closed_while_a_run_goes_on_lets_the_next_start_ope
                 return 0
 
         window.setAttribute(Qt.WA_DontShowOnScreen)
-        monkeypatch.setattr(entry, "build_app", lambda: (Loop(), window))
+        monkeypatch.setattr(gui_app, "build_app", lambda **handed: (Loop(), window))
         QThreadPool.globalInstance().start(Run())
         try:
-            assert entry.main() == 0
+            assert _main(entry) == 0
             assert (during == [held], one_instance.current(), ended.is_set()) == (True, None, False), (
                 "the claim was not held while the loop ran and let go as it ended, the run going on")
             again = one_instance.claim(settings.settings().fileName(), tries=1, pause_ms=0)
@@ -4237,14 +4258,17 @@ def test_a_prism_whose_window_closed_while_a_run_goes_on_lets_the_next_start_ope
 def test_main_lets_go_of_the_claim_when_its_loop_ends_without_a_close(tmp_path, monkeypatch):
     """The program's event loop can end with the window never closed -- the application told to quit -- and the
     claim is then the entry point's to let go: it holds the lock and the listener while the loop runs and has let go
-    of both as the loop returns, so that the next start of PRISM on its settings file opens a window of its own."""
+    of both as the loop returns, so that the next start of PRISM on its settings file opens a window of its own. The
+    entry point claims before it builds the program, and hands the program its application and that claim: in a
+    process that holds one, the claim it holds."""
     from core.gui import __main__ as entry
+    from core.gui import app as gui_app
     from core.gui import one_instance, settings
     from tests._fixtures import whole_program
-    qt_app()
+    app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     with whole_program() as (_app, window):
-        held, during = one_instance.current(), []
+        held, during, handed = one_instance.current(), [], []
         assert held is not None, "the whole program holds no claim"
 
         class Loop:
@@ -4254,9 +4278,10 @@ def test_main_lets_go_of_the_claim_when_its_loop_ends_without_a_close(tmp_path, 
                 return 0
 
         window.setAttribute(Qt.WA_DontShowOnScreen)
-        monkeypatch.setattr(entry, "build_app", lambda: (Loop(), window))
+        monkeypatch.setattr(gui_app, "build_app", lambda **told: handed.append(told) or (Loop(), window))
         try:
-            assert entry.main() == 0
+            assert _main(entry) == 0
+            assert handed == [{"app": app, "claimed": held}], f"the entry point handed the program {handed}"
             assert (during == [held], window.isVisible(), one_instance.current()) == (True, True, None), (
                 "the claim was not held while the loop ran, the window was closed, or the claim was not let go as "
                 "the loop ended")
@@ -4628,3 +4653,456 @@ def test_the_class_fonts_are_set_once_at_start(tmp_path, monkeypatch):
         found = {name: (QApplication.font(name).family(), QApplication.font(name).pixelSize(),
                         QApplication.font(name).isFeatureSet(tabular)) for name in ("QAbstractItemView", "QMenu")}
         assert found == {"QAbstractItemView": ("Inter", 14, True), "QMenu": ("Inter", 14, False)}, found
+
+
+# ── the launcher and the start with no console ─────────────────────────────────────────────────────────────────────
+@contextlib.contextmanager
+def _names_kept(app):
+    """The application's names as the block found them, put back as it ends: the entry point gives the application it
+    starts PRISM's names."""
+    names = (app.organizationName(), app.applicationName())
+    try:
+        yield
+    finally:
+        app.setOrganizationName(names[0])
+        app.setApplicationName(names[1])
+
+
+def _main(entry):
+    """The entry point's ``main()``, run once its plain Windows message is seen to be the suites' stand-in -- a real one
+    would wait for a person's OK -- and once the entry module is seen to hold nothing of the window's module, which
+    ``main`` imports inside itself after its claim: a ``build_app`` of the module's own would build the whole program
+    for real here, the test's stand-in passed by."""
+    from tests._dialogs import native_box
+    assert entry._native_box is native_box, "the entry point's Windows message is not stood in for: it would wait"
+    assert "build_app" not in vars(entry), "the entry module imports the window's module before it claims"
+    return entry.main()
+
+
+def _launch_line(text: str) -> bool:
+    """Whether ``text`` is the dated line a launch opens the window's log with, naming this interpreter."""
+    import re
+    match = re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d PRISM started \((.*)\)\.\n?", text)
+    return match is not None and match.group(1) == sys.executable
+
+
+def test_the_window_starts_and_logs_with_no_console_streams(tmp_path, monkeypatch):
+    """Started with no console, as the launcher starts it, PRISM has no standard streams, and the window writes to
+    them all the same: a library's warning between runs, a record another thread logs during a run, an error nothing
+    else caught. Bound to the window's log, each of those is written there, after the launch's dated line naming the
+    interpreter, and nothing is raised; a run's own lines, what it prints among them, go to the run's dated file and
+    never to the log, and the other thread's record goes to the log and never to the run's file. Put back, the
+    streams, the fault handler and the toolkit's message handler are as they were found."""
+    import logging
+    import threading
+    from core.gui import __main__ as entry
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._fixtures import all_asked, process_state, whole_program
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    log = tmp_path / "window-log.txt"
+    found = process_state(app)
+    entry.bind_streams(log)
+    try:
+        bound = process_state(app)
+        with whole_program() as (_app, window):
+            logging.getLogger("sbi.inference").warning("Only 0.5% proposal samples are accepted.")
+            text, stand_in = RunText(controller()), StandIn()
+            with running(window.panel(ReductionPanel), stand_in):
+                stand_in.say("the run prints this line", "print")
+                turn_until(app, lambda: "the run prints this line" in text.texts())
+                other = threading.Thread(target=lambda: logging.getLogger("core.gui.main_window").warning(
+                    "A part of the window could not be opened."))
+                other.start()
+                other.join()
+            run = controller().status.run
+            try:
+                raise ValueError("the cell file could not be read")
+            except ValueError as raised:
+                sys.excepthook(type(raised), raised, raised.__traceback__)
+            told = all_asked()[-1]
+    finally:
+        entry.unbind_streams()
+    after = process_state(app)
+    keys = ("standard streams", "fault handler", "Qt message handler")
+    assert {"standard streams", "Qt message handler"} <= {key for key in keys if bound[key] != found[key]}, (
+        "the streams or the toolkit's messages were not bound")
+    assert [key for key in keys if after[key] != found[key]] == [], "the streams were not put back as found"
+    written = log.read_text(encoding="utf-8")
+    ran = (tmp_path / "runs" / f"{run}.txt").read_text(encoding="utf-8")
+    assert _launch_line(written.splitlines(keepends=True)[0]), written[:200]
+    assert ("library: sbi.inference: Only 0.5% proposal samples are accepted.\n" in written,
+            "warning: A part of the window could not be opened.\n" in written,
+            "Traceback (most recent call last):" in written,
+            "ValueError: the cell file could not be read\n" in written,
+            "the run prints this line" in written) == (True, True, True, True, False), written
+    assert ("the run prints this line" in ran, "A part of the window could not be opened." in ran) == (True, False), ran
+    assert told.beneath == "The full error is in the window's log file.", told
+
+
+def test_the_window_log_sits_beside_the_settings_file_or_in_the_temporary_folder(tmp_path, monkeypatch):
+    """The window's log is ``window-log.txt`` in the folder of the settings file, here the test's own, made with that
+    folder when neither is there yet, as on a computer where PRISM never ran. Where that folder cannot be made -- a
+    file stands where it would be -- or the log cannot be opened there -- a folder stands in its place -- the log is
+    in the system's temporary folder, which is not written until the log is opened."""
+    import tempfile
+    from core.gui import __main__ as entry
+    from core.gui import settings
+    beside = tmp_path / "window-log.txt"
+    assert (entry.window_log_path(), beside.is_file()) == (beside, True)
+    fresh = tmp_path / "never" / "ran"
+    monkeypatch.setattr(settings, "_override_path", str(fresh / "prism.ini"))
+    assert (entry.window_log_path(), (fresh / "window-log.txt").is_file()) == (fresh / "window-log.txt", True)
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temporary))
+    (tmp_path / "a-file").write_text("", encoding="utf-8")
+    (tmp_path / "taken" / "window-log.txt").mkdir(parents=True)
+    for settings_file in (tmp_path / "a-file" / "prism.ini", tmp_path / "taken" / "prism.ini"):
+        monkeypatch.setattr(settings, "_override_path", str(settings_file))
+        assert entry.window_log_path() == temporary / "window-log.txt", settings_file
+    assert list(temporary.iterdir()) == [], "the temporary folder was written before the log was opened"
+
+
+def test_streams_are_bound_only_with_no_console_or_when_prism_runs_detached(tmp_path, monkeypatch):
+    """The entry point binds the standard streams to the window's log when the process has no output stream or no
+    error stream, as under ``pythonw``, and when ``PRISM_DETACHED`` says it was started detached from its terminal, as
+    ``run.sh`` starts it; started from a console, it leaves them as they are. Bound or not, the start goes on: here it
+    is handed over to an open PRISM and ends with the status 0."""
+    from core.gui import __main__ as entry
+    from core.gui import one_instance
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    bound = []
+    monkeypatch.setattr(entry, "bind_streams", bound.append)
+    monkeypatch.setattr(one_instance, "claim", lambda settings_path, **told: one_instance.Claim("hand_over"))
+    out, err = sys.stdout, sys.stderr
+    got = []
+    for streams, detached in (((None, err), ""), ((out, None), ""), ((out, err), "1"), ((out, err), "")):
+        monkeypatch.setattr(sys, "stdout", streams[0])
+        monkeypatch.setattr(sys, "stderr", streams[1])
+        monkeypatch.setenv("PRISM_DETACHED", detached)
+        del bound[:]
+        with _names_kept(app):
+            got.append((_main(entry), list(bound)))
+    log = tmp_path / "window-log.txt"
+    assert got == [(0, [log]), (0, [log]), (0, [log]), (0, [])], got
+
+
+def test_qts_own_messages_and_a_crash_of_the_interpreter_go_to_the_window_log(tmp_path):
+    """With no console the toolkit's own messages and a crash of the interpreter itself would leave no trace, so the
+    binding writes both to the window's log. The toolkit's messages, with their kind, through a message handler that
+    is put back as the streams are, after which they go where they went before. A crash, as the fault handler dumps
+    it: here in a process of its own, which binds, puts back, binds again and crashes, the fault handler taken by the
+    binding only while nothing held it and let go with it. In this process the suites' runner holds the fault handler,
+    and keeps it."""
+    import os
+    import subprocess
+    from pathlib import Path
+    from PySide6.QtCore import qInstallMessageHandler, qWarning
+    from core.gui import __main__ as entry
+    from tests._fixtures import process_state
+    app = qt_app()
+    log, heard = tmp_path / "window-log.txt", []
+    previous = qInstallMessageHandler(lambda kind, context, text: heard.append(text))     # where they went before
+    try:
+        found = process_state(app)
+        entry.bind_streams(log)
+        try:
+            during = process_state(app)
+            qWarning("the toolkit could not load a font")
+        finally:
+            entry.unbind_streams()
+        qWarning("the toolkit says this after the streams were put back")
+        after = process_state(app)
+    finally:
+        qInstallMessageHandler(previous)
+    written = log.read_text(encoding="utf-8")
+    assert ("Qt warning: the toolkit could not load a font\n" in written, "put back" in written,
+            "the toolkit could not load a font" in heard,
+            "the toolkit says this after the streams were put back" in heard) == (True, False, False, True), (
+        written, heard)
+    keys = ("standard streams", "fault handler", "Qt message handler")
+    assert (during["Qt message handler"] is not None, during["fault handler"],
+            [key for key in keys if after[key] != found[key]]) == (True, True, []), (
+        "the toolkit's handler was not installed and put back, or the fault handler was lost")
+    crash = tmp_path / "crash" / "window-log.txt"
+    crash.parent.mkdir()
+    code = ("import faulthandler, sys\n"
+            "sys.path.insert(0, sys.argv[2])\n"
+            "from core.gui import __main__ as entry\n"
+            "assert not faulthandler.is_enabled(), 'the fault handler was held before the binding'\n"
+            "entry.bind_streams(sys.argv[1])\n"
+            "assert faulthandler.is_enabled(), 'the binding did not take the fault handler'\n"
+            "entry.unbind_streams()\n"
+            "assert not faulthandler.is_enabled(), 'the fault handler was kept after the streams were put back'\n"
+            "entry.bind_streams(sys.argv[1])\n"
+            "print('bound, and about to crash')\n"
+            "faulthandler._sigsegv()\n")
+    repo = str(Path(__file__).resolve().parents[1])
+    env = {name: value for name, value in os.environ.items() if name.upper() != "PYTHONFAULTHANDLER"}
+    child = subprocess.run([sys.executable, "-c", code, str(crash), repo], cwd=repo, env=env, capture_output=True,
+                           text=True, timeout=120)
+    dumped = crash.read_text(encoding="utf-8")
+    assert (child.returncode not in (0, 1), child.stdout, child.stderr) == (True, "", ""), (child.returncode,
+                                                                                            child.stdout, child.stderr)
+    assert (_launch_line(dumped.splitlines(keepends=True)[0]), "bound, and about to crash\n" in dumped,
+            "Fatal Python error: Segmentation fault" in dumped, 'File "<string>", line 11' in dumped) == (
+        True, True, True, True), dumped
+
+
+def test_a_failure_before_the_window_is_shown_is_a_plain_windows_message_naming_the_log(tmp_path, monkeypatch, capsys):
+    """A start of PRISM that fails before its window is shown -- as its window is built, or before its application
+    exists -- writes the failure with its trace to the window's log and says so in a plain Windows message naming
+    that file, not in a window of the toolkit's, which may be what failed; it lets go of the claim it made and ends
+    with the status 1. Started with no console the trace is in the log the streams are bound to; from a console, in
+    the log beside the settings file, and on the console too. The message is shown by one function alone, which no
+    test calls: the suites stand in for it."""
+    import ast
+    import matplotlib
+    from pathlib import Path
+    from core.gui import __main__ as entry
+    from core.gui import app as gui_app
+    from core.gui import one_instance, settings
+    from tests._dialogs import native_boxes
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    log = tmp_path / "window-log.txt"
+    said = f"PRISM could not start. The details are in {log}."
+
+    def broken(**handed):
+        raise RuntimeError("the window could not be built")
+
+    def refused(backend):
+        raise ImportError("the figure library has no backend here")
+
+    monkeypatch.setattr(gui_app, "build_app", broken)
+    out, err = sys.stdout, sys.stderr
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    with _names_kept(app):
+        status = _main(entry)
+    monkeypatch.setattr(sys, "stdout", out)
+    monkeypatch.setattr(sys, "stderr", err)
+    written = log.read_text(encoding="utf-8")
+    assert (status, native_boxes(), one_instance.current(), (tmp_path / "PRISM.lock").exists()) == (
+        1, [said], None, False), "the start that failed said it otherwise, or kept its claim"
+    assert ("PRISM could not start.\nTraceback (most recent call last):" in written,
+            "RuntimeError: the window could not be built\n" in written) == (True, True), written
+    again = one_instance.claim(settings.settings().fileName(), tries=1, pause_ms=0)
+    try:
+        assert again.case == "start", f"the next start was {again.case}"
+    finally:
+        again.release()
+    capsys.readouterr()
+    monkeypatch.setattr(matplotlib, "use", refused)
+    with _names_kept(app):
+        status = _main(entry)
+    console = capsys.readouterr().err
+    assert (status, native_boxes(), one_instance.current()) == (1, [said], None), "the failure before the application"
+    assert ("ImportError: the figure library has no backend here" in log.read_text(encoding="utf-8")[len(written):],
+            "ImportError: the figure library has no backend here" in console) == (True, True), console
+    tree = ast.parse(Path(entry.__file__).read_text(encoding="utf-8"))
+    shown = [function.name for function in ast.walk(tree) if isinstance(function, ast.FunctionDef)
+             for node in ast.walk(function) if isinstance(node, ast.Attribute) and node.attr == "MessageBoxW"]
+    every = [node for node in ast.walk(tree) if isinstance(node, ast.Attribute) and node.attr == "MessageBoxW"]
+    assert (shown, len(every)) == (["_native_box"], 1), "a Windows message is shown somewhere else than _native_box"
+
+
+def test_the_claim_is_made_before_the_heavy_imports_and_once_per_process(tmp_path, monkeypatch, brought_forward):
+    """A second start of PRISM only knocks on the open one, so it must not first pay for the window's imports, which
+    load torch and the engine for seconds. The entry module sets the variable torch and MKL need as its first
+    statement and imports nothing but ``os`` and ``sys`` (read off its syntax tree, and in a fresh interpreter, where
+    importing it loads neither torch, the figure library, the toolkit nor the window); its ``main`` claims before it
+    imports the window's module, and imports nothing heavy before the claim; run as a module it hands over to itself
+    imported under its own name. A process claims once: a second claim is handed back the claim it holds, trying
+    nothing, where it would otherwise knock on its own server and hand over to itself; let go, the next claim is a
+    new one. The program handed a claim claims no more, and its window answers that claim's knock."""
+    import ast
+    import subprocess
+    from pathlib import Path
+    from core.gui import __main__ as entry
+    from core.gui import app as gui_app
+    from core.gui import one_instance, settings
+    from tests._fixtures import as_another_process, pump, whole_program
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    light = {"faulthandler", "time", "tempfile", "traceback", "pathlib", "ctypes", "matplotlib", "PySide6.QtCore",
+             "PySide6.QtWidgets", "core.gui.app_icon", "core.gui.one_instance", "core.gui.settings"}
+
+    def imported(node):
+        """The modules an import names, a module of ``core.gui`` named for each name it imports from there."""
+        if isinstance(node, ast.Import):
+            return [alias.name for alias in node.names]
+        if node.module == "core.gui":
+            return [f"core.gui.{alias.name}" for alias in node.names]
+        return [node.module]
+
+    tree = ast.parse(Path(entry.__file__).read_text(encoding="utf-8"))
+    body = tree.body[1:] if ast.get_docstring(tree) is not None else tree.body
+    leading = [node for node in body[:2] if isinstance(node, (ast.Import, ast.ImportFrom))]
+    guard = body[-1]
+    opening = "os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')"
+    assert (sorted(name for node in leading for name in imported(node)), ast.unparse(body[len(leading)])) == (
+        ["os", "sys"], opening), "the entry module does not import os and sys alone and then set the variable first"
+    assert ast.unparse(guard) == ("if __name__ == '__main__':\n    from core.gui.__main__ import main as _main\n"
+                                  "    raise SystemExit(_main())"), ast.unparse(guard)
+    at_module = [node for node in body[:-1] if isinstance(node, (ast.Import, ast.ImportFrom))]
+    assert at_module == leading, "the entry module imports more than os and sys at its module level"
+    functions = {node.name: node for node in body if isinstance(node, ast.FunctionDef)}
+    heavy = sorted({(name, module) for name, function in functions.items() for node in ast.walk(function)
+                    if isinstance(node, (ast.Import, ast.ImportFrom)) for module in imported(node)
+                    if module not in light and (name, module) != ("main", "core.gui.app")})
+    assert heavy == [], f"the entry module imports what a start before its claim must not pay for: {heavy}"
+    main = functions["main"]
+    claim_line = min(node.lineno for node in ast.walk(main)
+                     if isinstance(node, ast.Call) and ast.unparse(node.func) == "one_instance.claim")
+    window_line = min(node.lineno for node in ast.walk(main) if isinstance(node, (ast.Import, ast.ImportFrom))
+                      and "core.gui.app" in imported(node))
+    returns = [node.lineno for node in ast.walk(main) if isinstance(node, ast.Return) and node.lineno < window_line]
+    assert (claim_line < window_line, bool(returns) and all(claim_line < line for line in returns)) == (True, True), (
+        "the entry point imports the window before it claims, or a start handed over returns before its claim")
+    code = ("import sys\nsys.path.insert(0, sys.argv[1])\nimport core.gui.__main__\n"
+            "print(sorted(name for name in ('torch', 'matplotlib', 'PySide6', 'core.gui.app') if name in sys.modules))")
+    repo = str(Path(__file__).resolve().parents[1])
+    fresh = subprocess.run([sys.executable, "-c", code, repo], cwd=repo, capture_output=True, text=True, timeout=120)
+    assert (fresh.returncode, fresh.stdout.strip()) == (0, "[]"), (fresh.stdout, fresh.stderr)
+
+    path = settings.settings().fileName()
+    first = one_instance.claim(path)
+    try:
+        second = one_instance.claim(path, tries=1, pause_ms=0)
+        assert (first.case, second is first, one_instance.current() is first, brought_forward) == (
+            "start", True, True, []), "a second claim in the process was not handed the claim it holds"
+    finally:
+        first.release()
+    third = one_instance.claim(path, tries=1, pause_ms=0)
+    try:
+        assert (third.case, third is not first, one_instance.current() is third) == ("start", True, True)
+    finally:
+        third.release()
+
+    held, claims, claim, real = one_instance.claim(path), [], one_instance.claim, gui_app.build_app
+    monkeypatch.setattr(gui_app, "build_app", lambda argv=None: real(argv, app=qt_app(), claimed=held))
+    monkeypatch.setattr(one_instance, "claim", lambda *args, **kwargs: claims.append(args) or claim(*args, **kwargs))
+    with whole_program() as (_app, window):
+        assert (window is not None, claims, one_instance.current() is held) == (True, [], True), (
+            "the program handed a claim built no window, claimed again, or holds another claim")
+        with as_another_process():
+            second = claim(path, tries=1, pause_ms=0)
+        pump(app, 0.2)
+        assert (second.case, brought_forward[-1:]) == ("hand_over", [("come_to_front", window)]), (
+            "the window does not answer the knock on the claim it was handed")
+
+
+def test_main_hands_over_to_an_open_prism_and_builds_nothing(tmp_path, monkeypatch, brought_forward):
+    """The entry point started beside an open PRISM -- one that holds the lock beside the same settings file and
+    listens -- is handed over and ends with the status 0, having built nothing: no widget is made, the program is
+    not built, no event loop runs, and nothing of the process is as it set it once it has ended; the open PRISM's
+    process is let take the front first, and hears the knock when its loop runs."""
+    import os
+    from core.gui import __main__ as entry
+    from core.gui import app as gui_app
+    from core.gui import one_instance, settings
+    from tests._fixtures import as_another_process, process_state, pump
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    built, ran, heard = [], [], []
+    monkeypatch.setattr(gui_app, "build_app", lambda **handed: built.append(handed))
+    monkeypatch.setattr(QApplication, "exec", lambda application: ran.append("a loop") or 0)
+    held = one_instance.claim(settings.settings().fileName())            # the open PRISM
+    held.knocked.connect(lambda: heard.append(True))
+    try:
+        widgets, found = len(QApplication.topLevelWidgets()), process_state(app)
+        with _names_kept(app), as_another_process():
+            status = _main(entry)
+        left = sorted(key for key, value in process_state(app).items() if value != found[key])
+        assert (status, built, ran, len(QApplication.topLevelWidgets()), left) == (0, [], [], widgets, []), (
+            "the start that was handed over built something, ran a loop or left the process changed")
+        assert brought_forward == [("allow_foreground", os.getpid())], "the open PRISM was not let take the front"
+        pump(app, 0.2)
+        assert heard == [True], "the open PRISM did not hear the knock"
+    finally:
+        held.release()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a junction is Windows' link to a folder")
+def test_a_settings_path_written_through_a_junction_names_the_same_server(tmp_path, brought_forward):
+    """A settings folder reached through a junction -- a link to a folder, which Windows makes for anyone, with no
+    administrator -- is the same folder: its settings file names one server whichever way its path is written, as it
+    names one lock file, so a second start through the other spelling is handed over to the open PRISM, never turned
+    away after knocking where nobody listens."""
+    import os
+    import subprocess
+    from core.gui import one_instance
+    from tests._fixtures import as_another_process
+    qt_app()
+    real, joined = tmp_path / "real", tmp_path / "joined"
+    real.mkdir()
+    made = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(joined), str(real)], capture_output=True,
+                          text=True, timeout=60)
+    assert made.returncode == 0, made.stdout + made.stderr
+    try:
+        names = {one_instance.server_name(str(folder / "prism.ini")) for folder in (real, joined)}
+        assert len(names) == 1, "one settings file, written through a junction, names two servers"
+        first = one_instance.claim(str(real / "prism.ini"))
+        try:
+            with as_another_process():
+                second = one_instance.claim(str(joined / "prism.ini"), tries=1, pause_ms=0)
+            assert (first.case, second.case) == ("start", "hand_over"), (first.case, second.case)
+        finally:
+            first.release()
+    finally:
+        os.rmdir(joined)                      # the junction alone: the folder it names stays
+
+
+def test_the_last_resort_error_says_where_the_full_error_is(tmp_path, monkeypatch):
+    """While the standard streams are bound to the window's log, the question of last resort says beneath its
+    sentence that the full error is in the window's log file, and the error's trace is written there -- not where the
+    console's hook writes it, which during a run is the run's own text -- and a message too long to stand whole is cut
+    to the room its question has with that line beneath it. Not bound, nothing stands beneath the sentence, and the
+    error is written where it was before."""
+    from core.gui import __main__ as entry
+    from core.gui import app as gui_app
+    from core.gui.widgets.ask import Ask
+    from tests._fixtures import all_asked
+    qt_app()
+    written = []
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)       # the hook installed here is put back at the end
+    monkeypatch.setattr(sys, "__excepthook__", lambda kind, error, trace: written.append(f"{kind.__name__}: {error}"))
+    gui_app._install_excepthook(lambda: None)
+
+    def unhandled(error):
+        try:
+            raise error
+        except Exception as raised:                                 # noqa: BLE001 -- handed to the hook, as uncaught
+            sys.excepthook(type(raised), raised, raised.__traceback__)
+
+    unhandled(ValueError("the cell file could not be read"))
+    unbound = all_asked()[-1]
+    log = tmp_path / "window-log.txt"
+    room = 600 - gui_app.FRAME
+    whole = " ".join(["the cell file could not be read"] * 400)
+    entry.bind_streams(log)
+    try:
+        unhandled(ValueError("the model file could not be read"))
+        bound = all_asked()[-1]
+        shown = gui_app._fitted(whole, room, gui_app.FULL_ERROR_IN_LOG)
+        question = Ask(None, "Error", shown, "OK", marker="err", beneath=gui_app.FULL_ERROR_IN_LOG, detail=whole)
+        try:
+            height = question.sizeHint().height()
+        finally:
+            question.deleteLater()
+    finally:
+        entry.unbind_streams()
+    assert ((unbound.sentence, unbound.beneath), (bound.sentence, bound.beneath)) == (
+        ("The cell file could not be read.", ""),
+        ("The model file could not be read.", "The full error is in the window's log file.")), (unbound, bound)
+    assert written == ["ValueError: the cell file could not be read"], f"written by the console's hook: {written}"
+    text = log.read_text(encoding="utf-8")
+    assert ("Traceback (most recent call last):" in text, "ValueError: the model file could not be read\n" in text) == (
+        True, True), text
+    assert (shown.endswith("\u2026"), height <= room) == (True, True), (
+        f"the question with its line beneath is {height} px in a room of {room} px")

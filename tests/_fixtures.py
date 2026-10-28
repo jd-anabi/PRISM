@@ -36,9 +36,9 @@ from core.artifacts import manifest as mf
 # The dialog record, the chooser record and their helpers live in tests/_dialogs.py, whose import
 # loads neither torch nor the program. Re-exported so a suite keeps one import line; the lists are
 # the SAME objects.
-from tests._dialogs import (CHOOSER_CALLS, SHOWN, Asked, ChooserCall, all_asked,  # noqa: F401
-                            answer_chooser, asked, check_choosers_answered, choose, chooser_guard,
-                            forget_asked, hold_open, record)
+from tests._dialogs import (CHOOSER_CALLS, NATIVE_BOXES, SHOWN, Asked, ChooserCall, all_asked,  # noqa: F401
+                            answer_chooser, asked, check_choosers_answered, check_native_boxes_read, choose,
+                            chooser_guard, forget_asked, hold_open, native_box, native_boxes, record)
 # The record of what the builders below made, which tests/conftest.py lets go at each test's end. Reached
 # through its module, never re-exported: a container of widgets here is what the builders' own test refuses.
 from tests import _built
@@ -867,6 +867,7 @@ def process_state(app) -> dict:
     test reads it before, during and after; whatever ``whole_program`` learns to put back gets a
     key here in the same change, so that test fails on the key until it does. It runs the collector
     first, so that a widget an earlier test dropped is not counted at one reading and gone at the next."""
+    import faulthandler
     import gc
     import sys
     import matplotlib
@@ -876,6 +877,7 @@ def process_state(app) -> dict:
     from PySide6.QtWidgets import QApplication
     from core import config, logging_root
     from core.artifacts import default_store
+    from core.gui import __main__ as entry
     from core.gui import design, one_instance, theming, this_computer
     from core.gui import style as small_style
     from core.gui.run.controller import controller
@@ -937,7 +939,29 @@ def process_state(app) -> dict:
         "shutdown reason": this_computer.state()[1],
         # The watch on Windows' end of a session, which the whole program installs and ``whole_program`` removes.
         "session watch": this_computer.watching(),
+        # What the entry point binds to the window's log when PRISM starts with no console, and puts back as it ends:
+        # the standard streams, the fault handler and the toolkit's message handler. The handler is read from the
+        # entry point's own record of the one it installed: asking the toolkit which is installed would install one.
+        "standard streams": (sys.stdout, sys.stderr),
+        "fault handler": faulthandler.is_enabled(),
+        "Qt message handler": getattr(entry._bound, "qt", None),
     }
+
+
+@contextmanager
+def as_another_process():
+    """Inside the block a start of PRISM claims as a start in another process would: the claim this process holds,
+    when it holds one, is set aside while the block runs and is its own again as the block ends, so that a claim made
+    inside finds the lock held and knocks, where in this process it would be handed back the claim it holds. A claim
+    made inside that takes the lock, when this process held none, stays the process's own."""
+    from core.gui import one_instance
+    held = one_instance._current
+    one_instance._current = None
+    try:
+        yield
+    finally:
+        if one_instance._current is None:
+            one_instance._current = held
 
 
 @contextmanager
@@ -952,9 +976,14 @@ def whole_program(*, held_by_another: bool = False):
     installs it as the process's store.
 
     With ``held_by_another`` a PRISM is open already: the test's own settings file is claimed first,
-    as an open PRISM claims it, so that build_app hands over to that claim and the block receives
-    ``(app, None)``. That claim is the one the process holds (``one_instance.current()``) until the
-    block ends, and it is let go then too."""
+    as an open PRISM claims it, so that build_app, claiming as a start in another process would
+    (``as_another_process``), hands over to that claim and the block receives ``(app, None)``. That
+    claim is the one the process holds (``one_instance.current()``) until the block ends, and it is
+    let go then too.
+
+    The standard streams, the fault handler and the toolkit's message handler are put back too when
+    the block bound them to a window's log (``core.gui.__main__.bind_streams``); bound before the
+    block, they are left bound, for the caller to put back."""
     import sys
     import matplotlib
     import shiboken6
@@ -962,6 +991,7 @@ def whole_program(*, held_by_another: bool = False):
     from PySide6.QtGui import QFont, QPalette
     from core import config, logging_root
     from core.artifacts import default_store, set_default_store
+    from core.gui import __main__ as entry
     from core.gui import app as gui_app
     from core.gui import design, one_instance, settings, theming, this_computer
     from core.gui import style as small_style
@@ -977,16 +1007,21 @@ def whole_program(*, held_by_another: bool = False):
              "appearance": theming.active_appearance(), "hook": sys.excepthook,
              "quiet": config.QUIET_SEGMENT_BAR, "handler": logging_root.installed(),
              "store": default_store(), "factor": design.text_scale(), "dark": design.is_dark(),
-             "room": design._room}
+             "room": design._room, "bound": entry._bound is not None}
     with matplotlib.rc_context():                     # the figure settings, exactly as found
         built = held = None
         try:
             if held_by_another:
                 held = one_instance.claim(settings.settings().fileName())
-            built = gui_app.build_app([])
+                with as_another_process():
+                    built = gui_app.build_app([])
+            else:
+                built = gui_app.build_app([])
             yield built
         finally:
             sys.excepthook = found["hook"]            # first: a slip below must not open a box
+            if not found["bound"]:
+                entry.unbind_streams()                # then the streams, so that what follows writes where it did
             # Then the five that cannot fail, so that a slip in the toolkit's lines below cannot
             # leave a temporary folder as the process's store, a handler on the root logger, or a
             # text factor or a room that sizes every later test's widgets.

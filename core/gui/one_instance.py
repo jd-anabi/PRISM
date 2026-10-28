@@ -14,9 +14,15 @@ connection, it is removed and taken; when it cannot be removed, its holder lives
 gives up. A lock that cannot be made at all holds no start back: PRISM then starts without it, and says so in a
 warning.
 
+The entry point claims before it imports the window, so that a second start, which only knocks, pays for nothing
+more, and it hands its claim to the program it builds. A process claims once: a second claim in it is handed back
+the claim it holds, where it would otherwise find its own lock held, knock on its own server and hand over to itself.
+A start that builds no window says what it did in one line on the error stream (``say``).
+
 The claim is let go as the window's close is accepted, though a figure window left open keeps the event loop
-running, or a run on the thread pool keeps the process: the next start then opens a window of its own. As the
-loop ends it is let go again, which does nothing.
+running, or a run on the thread pool keeps the process: the next start then opens a window of its own. The entry
+point lets go of it again as the loop ends, which then does nothing, and lets go of it when its start fails before
+the window is shown.
 
 The command-line tool takes no lock and does not see this one.
 """
@@ -37,13 +43,32 @@ CONNECT_MS = 1000                 # how long one knock waits for its connection,
 
 _current = None                   # the claim this process holds, while it holds one
 
+# What a start of PRISM that builds no window says as it ends, on the error stream: started from a console, it is the
+# only sign the person gets; started with no console, the entry point has bound that stream to the window's log.
+SAID = {"hand_over": "PRISM is already open: it was asked to come to the front.",
+        "give_up": "PRISM is already running but did not answer; this start ends."}
+
+
+def say(case: str) -> None:
+    """Say what a start that builds no window did, in one line on the error stream; nothing when the process has
+    no such stream, or when the stream cannot be written."""
+    stream = sys.stderr
+    if stream is None:
+        return
+    try:
+        stream.write(SAID[case] + "\n")
+        stream.flush()
+    except (OSError, ValueError):            # a stream that was closed, or whose reader is gone
+        pass
+
 
 def server_name(settings_path: str) -> str:
     """The name of the local server that listens for a second start of the PRISM whose settings file is at
     ``settings_path``: one name for each file, the same for the same path written another way (with its letters in
-    another case, with the other separator, with a "." or ".." among its folders), and one every system takes for a
-    local server."""
-    key = os.path.normcase(os.path.abspath(settings_path))
+    another case, with the other separator, with a "." or ".." among its folders, through a junction or a link to one
+    of its folders), and one every system takes for a local server. Two spellings of one file share its lock file, so
+    they must share the server too, or a second start would knock where nobody listens and give up."""
+    key = os.path.normcase(os.path.realpath(settings_path))
     return "PRISM-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
 
 
@@ -153,8 +178,13 @@ def claim(settings_path: str, *, tries: int = 3, pause_ms: int = 1000) -> Claim:
     times, ``pause_ms`` milliseconds apart. When nothing takes the connection, the lock is removed and taken, and the
     server listens; a lock that cannot be removed has a living holder that does not answer, and this start gives up.
     A lock that cannot be made at all -- its folder cannot be made or written, or it names no holder and cannot be
-    removed -- holds no start back: the start goes on without it, and a warning says so."""
+    removed -- holds no start back: the start goes on without it, and a warning says so.
+
+    A process that holds a claim is handed that claim back, whatever it asks, and nothing is tried: its own lock is
+    held, and a second claim would knock on its own server and hand over to itself."""
     global _current
+    if _current is not None:
+        return _current
     path = os.path.abspath(settings_path)
     lock_path = os.path.join(os.path.dirname(path), LOCK_FILE)
     try:
@@ -191,7 +221,7 @@ def current() -> Claim | None:
 
 def release() -> None:
     """Let go of the claim this process holds, when it holds one; nothing when it holds none, so that letting go
-    twice does nothing. Made as the window's close is accepted, as the program's event loop ends, and as a test
-    that builds the whole program ends."""
+    twice does nothing. Made as the window's close is accepted; by the entry point as the program's event loop ends
+    and when its start fails before the window is shown; and as a test that builds the whole program ends."""
     if _current is not None:
         _current.release()

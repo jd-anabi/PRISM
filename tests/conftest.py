@@ -2,7 +2,8 @@
 
 `qapp` is the one QApplication a process may hold; ``tests/_fixtures.qt_app()`` is the same
 expression as a plain call, which is what the GUI suites use. The settings, dialog and drawing-code
-fixtures at the end, the one that lets go what the builders made, the one that stands in for
+fixtures at the end, the two that stand in for the entry point's plain Windows message and put back
+the streams it binds, the one that lets go what the builders made, the one that stands in for
 bringing a window to the front and the one that stands in for the requests made of Windows, are
 autouse at session and function scope; a test requests the last two by name, ``brought_forward`` and
 ``windows_asked``, to read what each kept, and no other by name.
@@ -256,6 +257,51 @@ def _every_file_chooser_is_answered():
         check_choosers_answered()
     finally:
         CHOOSER_CALLS.clear()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_native_boxes():
+    """A plain Windows message waits for a person's OK, and the entry point shows one when PRISM cannot start before
+    its window is shown: one reached in a test would hold the run past the tool call's limit, on the real screen as
+    much as off it. For the whole session ``core.gui.__main__._native_box`` is tests/_dialogs.native_box, which keeps
+    the words in NATIVE_BOXES and shows nothing, whatever the test is marked for; a test's own stand-in layered with
+    monkeypatch wins while installed, and its undo puts this one back. The entry point's module loads nothing but
+    ``os`` and ``sys`` as it is imported, so importing it here changes nothing about what a suite loads first."""
+    from core.gui import __main__ as entry
+    from tests._dialogs import native_box
+    mp = pytest.MonkeyPatch()
+    mp.setattr(entry, "_native_box", native_box, raising=False)
+    yield
+    mp.undo()
+
+
+@pytest.fixture(autouse=True)
+def _every_native_box_is_read():
+    """NATIVE_BOXES holds this test's plain Windows messages only, and one the test did not read -- with
+    tests/_dialogs.native_boxes() -- FAILS it here, at teardown: a start that failed where none was expected."""
+    from tests._dialogs import NATIVE_BOXES, check_native_boxes_read
+    NATIVE_BOXES.clear()
+    yield
+    try:
+        check_native_boxes_read()
+    finally:
+        NATIVE_BOXES.clear()
+
+
+@pytest.fixture(autouse=True)
+def _streams_put_back():
+    """A test that binds the standard streams to a window's log, as the entry point does when PRISM starts with no
+    console, and leaves them bound FAILS here, once they are put back and the streams the test began with are in
+    force again: left bound, every later test's output, the toolkit's messages among it, would go to that test's
+    file."""
+    import sys
+    from core.gui import __main__ as entry
+    began = (sys.stdout, sys.stderr)
+    yield
+    if getattr(entry, "_bound", None) is not None:
+        entry.unbind_streams()
+        sys.stdout, sys.stderr = began
+        pytest.fail("the test ended with the standard streams bound to a window's log, now put back")
 
 
 def check_drawing_code_raised_nothing(errors, counts) -> None:

@@ -17,15 +17,41 @@ afterwards. A widget whose parent a test has since dropped can no longer be read
 wants are the ones the operator would have seen at that moment. A record is words only -- strings,
 tuples of strings and a bool; never the box, a button, an exception or a traceback -- so keeping one
 keeps nothing of a failed run alive. ``CHOOSER_CALLS`` holds one ``ChooserCall`` per file chooser the
-code under test opened.
+code under test opened. ``NATIVE_BOXES`` holds the words of each plain Windows message the entry point
+asked for, which ``native_box`` keeps in its place.
 
 No name here is ever bound a second time: ``forget_asked()`` empties the two lists in place. A
 test reads a box or a question through ``asked()`` and ``all_asked()``, starts over with
-``forget_asked()``, answers with ``choose()`` and leaves one open a while with ``hold_open()``.
+``forget_asked()``, answers with ``choose()`` and leaves one open a while with ``hold_open()``; it
+reads the plain Windows messages it caused with ``native_boxes()``.
 """
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import NamedTuple
+
+# The words of every plain Windows message the entry point asked for, in order, shown to nobody:
+# tests/conftest.py::_no_native_boxes puts native_box in the entry point's own for the session, and
+# _every_native_box_is_read empties the list before each test and fails a test that left one unread.
+NATIVE_BOXES: list[str] = []
+
+
+def native_box(text: str) -> None:
+    """The entry point's plain Windows message, as the suites have it: its words kept, nothing shown."""
+    NATIVE_BOXES.append(text)
+
+
+def native_boxes() -> list[str]:
+    """The words of every plain Windows message asked for since the last reading, in order; read, they are
+    forgotten."""
+    said = list(NATIVE_BOXES)
+    NATIVE_BOXES.clear()
+    return said
+
+
+def check_native_boxes_read() -> None:
+    """Fail when a plain Windows message was asked for and its test never read it."""
+    if NATIVE_BOXES:
+        raise AssertionError(f"the test asked for a plain Windows message it never read: {NATIVE_BOXES}")
 
 # Every QMessageBox or shared question the code under test opened, in order: the dialogs themselves,
 # shown to nobody. tests/conftest.py::_no_modal_dialogs replaces the exec of each of the two classes
