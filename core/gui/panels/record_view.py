@@ -154,7 +154,8 @@ class RecordViewer(QObject):
     what the run's watcher is landing.
 
     ``to_figures``, when the panel hands one, is called before figures open: the panel then shows its
-    stack where a person sees it, which a stopped or failed run's page holds out of its place.
+    stack where a person sees it, which a stopped or failed run's page holds out of its place and the
+    page's past view, a run that is over drawn from its files, stands in front of.
     """
 
     def __init__(self, picker, label, stack, *, busy, to_figures=None):

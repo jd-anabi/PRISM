@@ -3135,6 +3135,75 @@ def test_a_record_picked_while_a_failed_runs_page_shows_opens_its_figures_in_the
         assert sorted(_tabs(panel)) == ["x one", "x one", "x two"], _tabs(panel)
 
 
+@pytest.mark.parametrize("which", ["fdt", "crossval"])
+def test_a_record_picked_while_a_past_view_shows_opens_its_figures_in_their_place(tmp_path, monkeypatch, which):
+    """A run that is over, drawn in its page's past view, stands where the page's figures stand. A saved record
+    picked meanwhile leaves the past view by its own way back, so that the record's figures open where a person sees
+    them, with "How the run went" above them only when the page has a run of its own to show: none on a page that
+    has not run; after a failed run of the page, whose page the past view stood in front of, that run's, its figure
+    given back to its place beside the record's."""
+    from datetime import datetime, timezone
+    from core.artifacts import ArtifactStore, use_store
+    from core.FDT import cross_validation
+    from core.gui.panels import fdt_panel
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from tests._fixtures import qt_app
+
+    app = qt_app()
+
+    def run_fdt(cfg, *, skip_sanity, confirm_production, writer, seed=None):
+        with writer:
+            writer.figure_path("x one").write_bytes(b"png")
+            raise RuntimeError("the measurement failed after its first figure")
+
+    def sweep(cfg, sweep_param, sweep_grid, fixed_overrides=None, *, writer):
+        writer.body.update(settings={}, points={"param": sweep_param, "planned": len(sweep_grid),
+                                                "done": 0, "failed": 0})
+        with writer:
+            writer.figure_path(f"FDT ratio vs {sweep_param}").write_bytes(b"png")
+            raise RuntimeError("the sweep failed after its first figure")
+
+    monkeypatch.setattr(fdt_panel, "run_fdt", run_fdt)
+    monkeypatch.setattr(cross_validation, "run_fdt_param_sweep", sweep)
+    cls, study, titles, own, word, page = {
+        "fdt": (fdt_panel.FdtPanel, "single", ["x one", "x two"], ["x one"], "Measurement", "one_cell"),
+        "crossval": (CrossValPanel, "sweep", ["FDT ratio vs s", "FDT ratio vs temp"], ["fdt ratio vs s"],
+                     "Sweep study", "sweep")}[which]
+    held, past = controller(), f"20261001T090000-{word.lower().replace(' ', '-')}"
+    held.use_folder(tmp_path / "runs")
+    at = lambda hour: datetime(2026, 10, 1, hour, 0, tzinfo=timezone.utc)
+    history.write(tmp_path / "runs", {"id": past, "word": word, "place": ["temperature", page], "started": at(9),
+                                      "ended": at(10), "outcome": "finished", "acknowledged": True})
+    store = ArtifactStore(tmp_path / "records")
+    with use_store(store):
+        earlier = _saved_fdt_record(store, "earlier", study, 1, titles)
+        panel = build_part(cls)
+        combo, stack = panel.record_picker.combo, panel.figure_stack
+
+        def column():
+            """Which page the column shows, where the figures stand in it, and "How the run went" above them."""
+            return (panel.results.currentWidget().objectName(), panel.results_split.indexOf(stack),
+                    panel.run_view.how_link.isVisibleTo(panel))
+
+        assert held.show_past(past, panel) and column() == ("past", 0, False), column()
+        _choose(combo, combo.findData(earlier.id))
+        assert (column(), sorted(_tabs(panel))) == (("figures", 0, False), sorted(t.lower() for t in titles)), (
+            "a record picked while a past view showed opened its figures out of sight", column(), _tabs(panel))
+
+        panel._run()
+        _wait_for_run(app, panel, limit=60.0)
+        _settle(app)
+        assert (column(), _tabs(panel)) == (("run", -1, False), own), (column(), _tabs(panel))
+        assert held.show_past(past, panel) and column() == ("past", -1, False), column()
+        _choose(combo, combo.findData(earlier.id))
+        assert (column(), sorted(_tabs(panel))) == (
+            ("figures", 0, True), sorted([*own, *(t.lower() for t in titles)])), (
+            "a record picked while a past view stood in front of the failed run's page opened its figures out of "
+            "sight", column(), _tabs(panel))
+
+
 def test_record_summary_never_prints_none():
     """A null in a record means "not recorded" or "does not apply", and the line must say nothing
     rather than print Python's ``None``. A real SWEEP's settings carry two nulls on every record --

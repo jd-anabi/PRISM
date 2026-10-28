@@ -362,9 +362,15 @@ class BasePanel(QWidget):
         self.run_view.how_link.setVisible(True)
 
     def _to_the_figures(self) -> None:
-        """The figures in sight before a saved record's are opened among them: a run's page that shows them gives
-        the column back, as "Back to the form" does."""
-        if self.results.currentWidget() is self.run_view:
+        """The figures in sight before a saved record's are opened among them: whatever shows in their place gives
+        the column back by its own "Back to the form" -- the past view as it leaves, so that "How the run went" stands
+        above the figures only when this page has a run of its own to show, and a run's page as it does."""
+        shown = self.results.currentWidget()
+        if shown is self.figures:
+            return
+        if shown is self._past_view:
+            self._back_from_the_past()
+        else:
             self._back_to_the_form()
 
     def set_controls_enabled(self, enabled: bool):

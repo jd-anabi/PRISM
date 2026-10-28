@@ -1781,9 +1781,10 @@ def _open_last_run(window, run):
 
 
 def test_a_row_of_last_runs_for_the_live_run_opens_its_page_and_leaves_its_end_to_come(tmp_path):
-    """During a run, Home's "Last runs" lists it, running, and its row opens its page; the run is not seen by it,
-    since its end is still to come: its history still says that nobody has seen its end, so that a PRISM that closed
-    then would say it at the next launch. At its end, its page in sight in the window in front sees it."""
+    """During a run, Home's "Last runs" lists it, running, and its row opens its page; the run is not seen by it, nor
+    by the run's controller asked to see it, since its end is still to come: its history still says that nobody has
+    seen its end, so that a PRISM that closed then would say it at the next launch. At its end, its page in sight in
+    the window in front sees it."""
     import shutil
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels.crossval_panel import CrossValPanel
@@ -1803,6 +1804,9 @@ def test_a_row_of_last_runs_for_the_live_run_opens_its_page_and_leaves_its_end_t
                 during = history.read(folder / f"{run}.json")
                 assert (window.current_place(), held.is_live(), during["outcome"], during["acknowledged"]) == (
                     ("temperature", "sweep"), True, "running", False), "a row of Last runs wrote the live run seen"
+                held.acknowledge(run)                     # asked of the run's controller itself, the window aside
+                assert (held.is_live(), history.read(folder / f"{run}.json")["acknowledged"]) == (True, False), (
+                    "the run's controller wrote the live run seen")
                 crashed = tmp_path / "crashed"            # the file as a PRISM that closed now would leave it
                 crashed.mkdir()
                 shutil.copy(folder / f"{run}.json", crashed / f"{run}.json")

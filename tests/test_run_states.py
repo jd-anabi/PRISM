@@ -2113,6 +2113,41 @@ def test_a_history_file_that_cannot_be_written_is_said_once_and_tried_again(fail
         (None, None) if fails == "every time" else ("finished", True)), kept
 
 
+def test_a_history_that_cannot_be_written_once_its_end_is_seen_is_said_once_and_keeps_what_its_end_wrote(
+        tmp_path, monkeypatch):
+    """The run's end is written whole; the write that says its end has been seen fails. That failure is said once,
+    in the window's words, in the run's full text and on its page, though no earlier write of the run failed;
+    nothing more goes into its text file, which its end closed; and the history file keeps what its end wrote, its
+    end not seen, so that the next launch says it."""
+    from core.gui.run import history
+    from core.gui.run.controller import HISTORY_LEFT_TEXT
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    real, error = history.write, OSError(13, "Permission denied")
+
+    def write(folder, record):
+        if record.get("acknowledged"):
+            raise error
+        return real(folder, record)
+
+    monkeypatch.setattr(history, "write", write)
+    folder, run = tmp_path / "runs", "20261008T190211-training"
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text, stand_in, host = RunText(held), StandIn(), build_run_host()
+    start_run(host, stand_in, spec=_training())
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    ended, written = (folder / f"{run}.json").read_bytes(), _entries(folder / f"{run}.txt")
+    held.acknowledge(run)
+    said = HISTORY_LEFT_TEXT.format(f"{type(error).__name__}: {error}")
+    assert (text.lines.count(("window", said)), host.run_view.full_text.lines().count(said)) == (1, 1), text.lines
+    assert _entries(folder / f"{run}.txt") == written, "a line went into the text file the run's end closed"
+    assert (folder / f"{run}.json").read_bytes() == ended, "the history file lost what the run's end wrote"
+    kept = history.read(folder / f"{run}.json")
+    assert (kept["outcome"], kept["acknowledged"]) == ("finished", False), kept
+
+
 def test_a_stop_over_a_failure_and_a_stop_too_late_leave_the_full_text_in_the_files_order(tmp_path):
     """What the worker says itself once the run's function has ended -- the failure a stop may have replaced,
     with its traceback, and a stop that came too late to stop anything -- reaches the run's full text where the
@@ -3374,6 +3409,40 @@ def test_live_simulation_keeps_its_own_view_under_the_runs_sentence(tmp_path, mo
     assert view.sentence.text() == "Live simulation is starting.", view.sentence.text()
     again.release()
     turn_until(app, lambda: not held.is_live())
+
+
+def test_a_past_view_on_the_live_simulations_page_gives_the_live_view_back(tmp_path):
+    """A live simulation keeps no history file, but a history file that names its page (another PRISM's) is drawn
+    in the page's past view all the same, in the live view's place. "Back to the form" gives the live view back, and
+    so does a live simulation started while the past view shows, its page above the live view."""
+    from core.gui.panels import simulate_panel as live
+    from core.gui.run import history
+    from tests._fixtures import build_part, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    run = "20261001T090000-live-simulation"
+    history.write(tmp_path / "runs", {"id": run, "word": "Live simulation", "started": _at(1, 9, 0),
+                                      "ended": _at(1, 9, 30), "outcome": "finished", "place": ["live", None]})
+    panel = build_part(live.SimulatePanel)
+    shown_off_screen(panel, 1300, 900)
+
+    def column():
+        """Which page the column shows, and whether the live view and the run's page above it are in sight."""
+        return (panel.results.currentWidget().objectName(), panel.live_view.isVisibleTo(panel),
+                panel.run_view.isVisibleTo(panel))
+
+    assert held.show_past(run, panel) and column() == ("past", False, False), column()
+    panel.past_view.back_button.click()
+    assert column() == ("figures", True, False), ("Back to the form left the live view out of sight", column())
+    assert held.show_past(run, panel) and column() == ("past", False, False), column()
+    stand_in = StandIn(word="Live simulation")
+    start_run(panel, stand_in, spec=panel.run_spec(live.run_simulation_stream))
+    assert column() == ("figures", True, True), ("a live simulation started behind the past view", column())
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert column() == ("figures", True, False), column()
 
 
 def test_when_a_run_starts_from_the_keyboard_the_keyboard_goes_to_its_stop_button(tmp_path, monkeypatch):

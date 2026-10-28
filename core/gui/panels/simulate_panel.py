@@ -156,13 +156,16 @@ class SimulatePanel(BasePanel):
             self.run_view.set_count(self._samples[0], total, "samples")
 
     def show_run(self):
-        """The run's page above the live view, which stays where it is."""
+        """The run's page above the live view, which stays where it is, both in sight: a past view drawn in their
+        place (from a history file that names this page, which no run of it keeps) gives the column back."""
         self.run_view.how_link.setVisible(False)
         self.run_view.setVisible(True)
+        self.results.setCurrentWidget(self.figures)
 
     def show_figures(self):
-        """The live view alone again: the run's page above it goes."""
+        """The live view alone again, in sight: the run's page above it goes, and so does a past view in its place."""
         self.run_view.setVisible(False)
+        self.results.setCurrentWidget(self.figures)
 
     def _save_video(self):
         if not self._record:
