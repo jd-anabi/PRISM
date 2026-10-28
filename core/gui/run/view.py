@@ -397,6 +397,10 @@ class RunView(QWidget):
         self.health_head = SectionHead(HEALTH_TEXT)
         self.health = RuleTable([Column("Measure"), Column("Now", "fit", right=True), Column("State", "fit")],
                                 selectable=False)
+        # the gaps after the health's head and after its table, which come and go with them, as the curve's does
+        self._health_head_gap, self._health_gap = QWidget(), QWidget()
+        self._health_head_gap.setFixedHeight(design.scaled(design.GAP["head_table"]))
+        self._health_gap.setFixedHeight(design.scaled(design.GAP["block"]))
         self.loss = LossCurve()
         self._loss_gap = QWidget()                  # the gap after the curve, which comes and goes with it
         self._loss_gap.setFixedHeight(design.scaled(design.GAP["block"]))
@@ -409,9 +413,9 @@ class RunView(QWidget):
         self._figures = QVBoxLayout(self.figures)
         self._figures.setContentsMargins(0, design.scaled(design.GAP["block"]), 0, 0)
         self.figures.setMinimumHeight(design.scaled(FIGURES_LEAST_H))
-        for part, after in ((self.health_head, "head_table"), (self.health, "block"), (self.loss, None),
-                            (self._loss_gap, None), (self.messages_head, "head_table"), (self.messages, None),
-                            (self.figures, None)):
+        for part, after in ((self.health_head, None), (self._health_head_gap, None), (self.health, None),
+                            (self._health_gap, None), (self.loss, None), (self._loss_gap, None),
+                            (self.messages_head, "head_table"), (self.messages, None), (self.figures, None)):
             column.addWidget(part)
             if after:
                 column.addSpacing(design.scaled(design.GAP[after]))
@@ -767,8 +771,8 @@ class RunView(QWidget):
         self.axis_caption.setVisible(axis)
         self.follows.setVisible(axis and bool(self.follows.text()))
         health = bool(self._shown_health) and full
-        self.health_head.setVisible(health)
-        self.health.setVisible(health)
+        for part in (self.health_head, self._health_head_gap, self.health, self._health_gap):
+            part.setVisible(health)
         self.loss.setVisible(full and self._fit_shown)
         self._loss_gap.setVisible(full and self._fit_shown)
         messages = bool(self._message_rows) and full
@@ -877,14 +881,18 @@ class RunView(QWidget):
 
     def _discard(self) -> None:
         """"Discard": the training the stop kept is deleted, or found gone already, and the page says which, asking
-        no more; or the page says why it was not deleted, and the question stays."""
+        no more, and its sentence says how its run ended again, the training gone, in the words the run's controller
+        hands back; or the page says why it was not deleted, and the question stays."""
         from .controller import controller
         answer = controller().discard(self._run)
         if answer is None:
             return
-        gone, words = answer
+        gone, words, ended = answer
         if gone:
             self._answered, self._resumable = True, False      # nothing kept is left to resume
+            if ended:
+                self._ended_words = ended
+                self._draw()
         self.say(words)
 
     def _toggle_text(self) -> None:

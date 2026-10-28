@@ -469,10 +469,14 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
     the run's end then says, on its page and in its history, that the training was discarded; Keep deletes nothing and
     asks no more; a training the records no longer hold is said to be gone already, and asked about no more. A training
     kept by a run before the last is deleted by its id in that run's history, from the records that history names,
-    whatever records are in use now; when that history cannot be read, nothing is deleted, the page says so, and the
+    whatever records are in use now, and its end's words then say so on its page; and in the status, the foot and
+    Home's next step whenever that end is the status again, given back by a run that ended into idle since (a load of
+    the page's own, which leaves the page and its offer as they were, or a run that keeps no file, ended before the
+    Discard or still live at it). When that history cannot be read, nothing is deleted, the page says so, and the
     question stays."""
     from core.artifacts import ArtifactStore, use_store
-    from core.gui.run import history
+    from core.gui import chain
+    from core.gui.run import ends, history
     app = qt_app()
     clock = Clock(_at(8, 19, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
@@ -484,6 +488,7 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
         stand_in.kept_fit = note
         start_run(host, stand_in, spec=_training())
         _to_the_fit(app, stand_in, text, clock, _THREE_EPOCHS)
+        turn_until(app, lambda: len(held.model.epochs()) == 3)       # this run's own records, not an earlier run's
         forget_asked()
         view.stop_button.click()
         _ended(app, held)
@@ -491,6 +496,11 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
 
     def kept():
         return [summary.id for summary in store.list("fit")]
+
+    def discarded(at):
+        """The end's words once the training a stop in the fit at ``at`` kept is discarded."""
+        return (f"Training was stopped on {at}, during the fit. The 20,480,000 simulations are kept; the training was "
+                f"discarded, as you asked.")
 
     first = build_fit_record(store, passes=62)
     run = stopped_in_the_fit(_note(first))
@@ -546,6 +556,8 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
         "the training an earlier run kept was not deleted by its history's id, from the records it names")
     assert history.read(tmp_path / "runs" / f"{run}.json")["fit"]["discarded"] is True, (
         "an earlier run's history does not say its training was discarded")
+    assert (view.sentence.text(), held.status.sentence) == (discarded("Thu 8 Oct, 23:14"),) * 2, (
+        "the page or the status still says the training an earlier run kept can be resumed")
 
     fourth = build_fit_record(store, passes=62)
     run = stopped_in_the_fit(_note(fourth))
@@ -555,6 +567,34 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
     assert (sorted(kept()), view.notice.text(), view.keep_block.isVisibleTo(view)) == (
         sorted([second, fourth]), "Nothing was discarded: the run's history that names the training cannot be read.",
         True), "a training whose run's history cannot be read was said to be discarded"
+
+    loaded = build_fit_record(store, passes=62)
+    run = stopped_in_the_fit(_note(loaded))
+    loads = StandIn(word="Posterior load")
+    start_run(host, loads, spec=RunSpec("Posterior load", ("inference", "training"), stop_button="Stop loading",
+                                        loads_only=True, keeps_files=False, stop_asks=False))
+    loads.release()
+    _ended(app, held)
+    assert (held.status.run, view.mode, view.resume_button.isVisibleTo(view), view.keep_block.isVisibleTo(view)) == (
+        run, "ended", True, True), "a load of the page's own took the stopped run's end, its page or its offer"
+    view.discard_button.click()
+    gone = discarded("Fri 9 Oct, 01:20")
+    assert (sorted(kept()), view.sentence.text(), held.status.sentence, ends.foot(held.status, clock()),
+            chain.next_step(None, {}, run=held.status).sentence) == (
+        sorted([second, fourth]), gone, gone, ("half", "Training stopped", "Fri 9 Oct, 01:20. The 20,480,000 "
+                                               "simulations are kept; the training was discarded, as you asked."),
+        gone), "after a load, the page, the status, the foot or Home still say the training can be resumed"
+
+    meanwhile = build_fit_record(store, passes=62)
+    stopped_in_the_fit(_note(meanwhile))
+    later = StandIn()
+    start_run(build_run_host(), later, spec=RunSpec("Check", ("inference", "checks"), keeps_files=False))
+    view.discard_button.click()                                      # while a run of another page is live
+    later.release()
+    _ended(app, held)
+    assert (sorted(kept()), view.sentence.text(), held.status.sentence) == (
+        sorted([second, fourth]), discarded("Fri 9 Oct, 02:23"), discarded("Fri 9 Oct, 02:23")), (
+        "a run live at the Discard gave back, as it ended, the end's words that say the training is kept")
 
 
 def test_discard_of_a_resumed_training_says_it_deletes_every_epoch_kept_since_it_began(tmp_path, monkeypatch, store):

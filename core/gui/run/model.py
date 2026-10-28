@@ -239,7 +239,7 @@ class RunModel:
         self._clock = clock
         self._estimate = estimate
         self._estimates: dict = {}
-        if expected is None and spec.expected_epochs:
+        if spec.expected_epochs:                    # a number typed on the page wins over the last training's
             expected = (spec.expected_epochs,
                         f"about {spec.expected_epochs} epochs: the number given on the Training page")
         self._expected = expected

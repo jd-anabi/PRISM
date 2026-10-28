@@ -980,6 +980,21 @@ def test_the_fits_end_is_a_range_one_patience_either_side_of_the_expected_epochs
     assert axis.end_from == axis.end_by == clock() - 2 * hour < axis.now, "due when epoch 150 should have ended"
 
 
+def test_the_expected_epochs_typed_on_the_training_page_come_before_the_last_training_of_its_kind():
+    """The expected epochs a person types on the Training page, which its run's spec hands on, are the ones the fit's
+    end is drawn from, in the page's own words, even where a finished training of the same kind gives a number; with
+    none typed, that training's number is the one."""
+    def estimate(per, size):
+        return (3780.0, "the last training of this size took about 63 minutes per epoch") if per == "epoch" else None
+
+    for spec, said in ((_training(expected_epochs=90), "About 90 epochs: the number given on the Training page."),
+                       (_training(), "About 130 epochs: the last training of this kind, retrain_aug, ran 130.")):
+        clock = _Clock(_at(8, 19, 2, 11))
+        run = RunModel(spec, clock=clock, estimate=estimate, expected=_EXPECTED)
+        _fitting(run, clock)
+        assert (run.expected_epochs(), run.axis().follows) == (int(said.split()[1]), said), run.axis()
+
+
 def test_a_resumed_fit_counts_from_the_pass_it_resumed_after():
     """A kept training resumed says the pass it resumes after and its epochs since the best. Before the first record
     of this process its sentence and its end count from there, as its records then do: resumed after pass 40, two
@@ -3691,6 +3706,33 @@ def test_the_run_page_shows_the_loss_curve_during_the_fit_and_after_it(tmp_path)
     start_run(host, second, spec=_training())
     assert (view.mode, curve()) == ("live", (False, [], "")), "the page's next run kept the last run's curve"
     second.release()
+    turn_until(app, lambda: not held.is_live())
+
+
+def test_a_run_page_with_no_health_keeps_no_room_for_it(tmp_path):
+    """The health stands on a training's page alone, its head, its table and the look's gaps after each together: on
+    the page of any other run all four are gone, and its messages stand at the top of the page's scrolling column,
+    where a page with no health table would put them."""
+    from PySide6.QtCore import QPoint
+    from core.gui import design
+    from tests._fixtures import build_run_host, qt_app
+    from tests._look_helpers import _settle
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    held, host, stand_in = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_run_host(), StandIn()
+    view, text = host.run_view, RunText(held)
+    start_run(host, stand_in, spec=RunSpec("Check", ("inference", "checks"), name="Calibration",
+                                           stop_button="Stop the calibration…"))
+    shown_off_screen(host, 1300, 1000)
+    stand_in.say("the coverage of 12 rows could not be computed", "warning")
+    turn_until(app, lambda: "the coverage of 12 rows could not be computed" in text.texts())
+    _settle()
+    assert (view.health_head.isVisibleTo(view), view.messages_head.isVisibleTo(view),
+            view.messages_head.mapTo(view.body.widget(), QPoint(0, 0)).y()) == (
+        False, True, design.scaled(design.GAP["status_to_body"])), (
+        "the messages stand under the room of a health table the page does not show")
+    stand_in.release()
     turn_until(app, lambda: not held.is_live())
 
 

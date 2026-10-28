@@ -620,13 +620,14 @@ class RunController(QObject):
             run.view.say(questions.KEPT_OPEN_TEXT)
         return True
 
-    def discard(self, run: str | None) -> tuple[bool, str] | None:
+    def discard(self, run: str | None) -> tuple[bool, str, str] | None:
         """Delete the training the stop of the run ``run`` kept, once that run has ended (the training's lock is let
         go by then): the one the controller holds, by the note its stop handed back, from the records it was kept
-        in, or an earlier one, by the id its history kept, from the records that history names. ``(gone, words)``:
-        whether the training is gone, and what the run's page says of it -- deleted, or no longer held by those
+        in, or an earlier one, by the id its history kept, from the records that history names. ``(gone, words,
+        ended)``: whether the training is gone, what the run's page says of it -- deleted, or no longer held by those
         records (both gone); not found, its run's history unreadable; or the store's own sentence of why it was not
-        deleted (both kept). None while the run is live."""
+        deleted (both kept) -- and, once it is gone, how the run ended and what it kept, as its page says it from
+        then on ("" when the page's words stay as they are, ``_gone``). None while the run is live."""
         from core.artifacts import ArtifactStore, StoreError, default_store
         held = self._run
         if held is not None and held.id == run:
@@ -640,47 +641,58 @@ class RunController(QObject):
             store = ArtifactStore(root) if root else default_store()
             kept = (record.get("fit") or {}).get("kept_id")
         if not kept:
-            return False, questions.UNFOUND_TEXT
+            return False, questions.UNFOUND_TEXT, ""
         try:
             store.get("fit", kept)
         except StoreError:
-            self._gone(run)
-            return True, questions.GONE_TEXT
+            return True, questions.GONE_TEXT, self._gone(run)
         try:
             store.delete("fit", kept)
         except Refusal as refused:
-            return False, refused.message
-        self._gone(run)
-        return True, questions.DISCARDED_TEXT
+            return False, refused.message, ""
+        return True, questions.DISCARDED_TEXT, self._gone(run)
 
-    def _gone(self, run: str | None) -> None:
+    def _gone(self, run: str | None) -> str:
         """The training the run ``run`` kept is gone: its page offers to resume it no more, and the run's call goes
         with the offer when its page offered nothing else; its history says it was discarded, nothing else changed
         (the history its end wrote, ``_write_ended``, for the run the controller holds; else its file, ``_rewrite``),
-        and its end's words, read from that history, on its page and in the status while its end waits to be seen,
-        say so too."""
+        and its end's words, read from that history, say so too: in the status while its end waits to be seen; in the
+        end a live run noted as it started, which that run gives back as the status should it end into idle; and on
+        its page, which is drawn here for the run the controller holds, and draws the words handed back for any
+        other. They are dated against the moment the run ended for the run the controller holds, as its end dated
+        them, and against the moment now for any other, as a run read back from its history is. A failed run's
+        sentence stays, beside its error: "" is handed back for it, as when the history cannot be read again or put
+        into words."""
         offered = self._offers.get(run)
         if offered is not None and offered.continue_from is None:
             del self._offers[run]
             self._let_go(offered)
         if run is None:
-            return
-        held = self._run
+            return ""
+        held, now = self._run, self.now()
         if held is not None and held.id == run:
             record = self._write_ended(held, _discarded)
-            if held.last is not None and record is not None:
-                try:
-                    sentence, kept = ends.words(record, held.ended or self.now())
-                except Exception:                # noqa: BLE001 -- the words stay as the end said them
-                    sentence, kept = held.last.sentence, held.last.kept
-                held.last = replace(held.last, kept=kept,
-                                    sentence=held.last.sentence if held.outcome == "failed" else sentence)
-                if self._status.run == run and self._status.unacknowledged_end:
-                    self._status = held.last
-                    self.status_changed.emit(self._status)
-                self._draw()
-            return
-        self._rewrite(self.folder(), run, _discarded)
+            if held.last is None or record is None:
+                return ""
+            held.last = _said_again(held.last, record, held.ended or now)
+            if self._status.run == run and self._status.unacknowledged_end:
+                self._status = held.last
+                self.status_changed.emit(self._status)
+            self._draw()
+            return "" if held.last.outcome == "failed" else held.last.sentence
+        record = self._rewrite(self.folder(), run, _discarded)
+        if record is None:
+            return ""
+        if self._status.run == run and self._status.unacknowledged_end:
+            self._status = _said_again(self._status, record, now)
+            self.status_changed.emit(self._status)
+        if held is not None and held.waiting is not None and held.waiting.run == run:
+            held.waiting = _said_again(held.waiting, record, now)
+        try:
+            sentence = ends.words(record, now)[0]
+        except Exception:                        # noqa: BLE001 -- the page's words stay as its end said them
+            return ""
+        return "" if record.get("outcome") == "failed" else sentence
 
     def _let_go(self, run: _Run) -> None:
         """The run's own call let go, the configuration, the prior and the tensors its arguments hold with it: from
@@ -1439,6 +1451,17 @@ def _discarded(record: dict) -> dict:
     """A run's history, its kept training said to be discarded; as it was when it holds no fit."""
     fit = record.get("fit")
     return {**record, "fit": {**fit, "discarded": True}} if isinstance(fit, dict) else record
+
+
+def _said_again(status: RunStatus, record: dict, when: datetime) -> RunStatus:
+    """``status``, an end of the run whose history is ``record``, with what it kept said again from that history, and
+    how it ended too but for a failure, whose sentence is its page's own beside its error; dated against ``when``. As
+    it was when that history's words cannot be read."""
+    try:
+        sentence, kept = ends.words(record, when)
+    except Exception:                            # noqa: BLE001 -- the words stay as the end said them
+        return status
+    return replace(status, kept=kept, sentence=status.sentence if status.outcome == "failed" else sentence)
 
 
 def _alive(widget) -> bool:

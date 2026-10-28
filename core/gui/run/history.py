@@ -19,9 +19,11 @@ A file holds every name of ``FIELDS``, in that order, None where its run has not
   stages, each its name, the readings that begin it and what counts it, so that its page in the past view draws them
   from its text), ``acknowledged``.
 - ``tries``: one entry per try, each of ``TRY_FIELDS``: its start and end, how it ended, the kind of failure, and
-  the batches and the epochs the run had kept before the try began and after it ended.
-- ``plan``, ``settings``, ``memory_limit``: what the run was started with; ``settings`` holds every argument, enough
-  to start the same run again.
+  the batches and the epochs the run had kept before the try began and after it ended. The try a run is in as
+  Windows ends the session is written "stopped" with the run, from the moment that stop is asked.
+- ``plan``, ``settings``, ``memory_limit``: what the run was started with; ``settings`` is for every argument,
+  enough to start the same run again. Until the window's forms hand them over, ``plan`` and ``settings`` are
+  written None, and so is ``check``, and ``health`` holds the failed and the simulated counts alone.
 - ``simulation_set``, of ``SET_FIELDS``: the set's folder, its batches in all, at the start and at the end, the
   simulations per batch and the median seconds per batch.
 - ``health``, ``fit``, ``check``, ``result``, ``failure``, ``text``: what the run's page measured, the fit, a
