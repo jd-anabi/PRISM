@@ -526,7 +526,7 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
 
     cap = {}
     for panel in (inf.prior_panel, inf.posterior_panel, inf.validate_panel):
-        panel.dispatch = lambda fn, *a, **k: cap.update(kwargs=k)
+        panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
 
     inf.validate_panel.cal_n.setText("77")
     inf.validate_panel.cal_scales.setText("11")
@@ -546,6 +546,12 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     pp._build_posterior()
     assert refused == [], [str(e) for e in refused]
     k = cap["kwargs"]
+    from core.gui.run import retry
+    from core.gui.run.model import RunSpec
+    called = RunSpec("Training", ("inference", "training")).with_call(cap["fn"], cap["args"], k)
+    assert len(cap["args"]) > 1 and retry.made_in(called, inf.session), (
+        "the training is not called with the session's own model and prior as its first two arguments, which is "
+        "what its page's Continue and Resume compare with the session before they repeat the call")
     assert (k["hidden_features"], k["num_transforms"], k["stop_after_epochs"]) == (64, 3, 7), k
     # The two float knobs arrive as typed, through the rule -- not through `value() or default`.
     assert (k["learning_rate"], k["fisher_dz"]) == (0.0007, 0.03), k
@@ -3191,6 +3197,9 @@ def test_a_record_picked_while_a_past_view_shows_opens_its_figures_in_their_plac
         _choose(combo, combo.findData(earlier.id))
         assert (column(), sorted(_tabs(panel))) == (("figures", 0, False), sorted(t.lower() for t in titles)), (
             "a record picked while a past view showed opened its figures out of sight", column(), _tabs(panel))
+        _choose(combo, combo.findData(earlier.id))   # the same record again, its figures already in sight
+        assert column() == ("figures", 0, False), (
+            "a record picked while the figures were in sight showed the way to a run the page never had", column())
 
         panel._run()
         _wait_for_run(app, panel, limit=60.0)

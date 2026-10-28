@@ -7852,11 +7852,13 @@ def test_the_loss_curve_has_two_axes_with_round_ticks_outward_and_its_words_from
     lines' names and the best epoch's words in the ink and semibold. No two labels of an axis stand closer than the
     look's gap, at the least width and a larger text, and every round tick is a multiple of one round step. Two lines
     that end within a line's height of each other have their names a line apart about the middle of their ends, and
-    an epoch of four digits is written with its comma. No two words meet, none meets the two choices and none
-    begins left of the plot, at every moment of the fit, at the run page's width and at the least, in both choices,
-    and for one record, for losses all equal (a loss tick that would crowd the loss axis's name is left out), for a
-    span so narrow that its ticks need four decimals (fewer are taken until the labels fit) and for a loss that
-    spikes at the newest epoch, whose line keeps a label's gap from the choices (the axes stand under them)."""
+    an epoch of four digits is written with its comma. No two words meet, none meets the two choices, none begins
+    left of the plot and no loss tick's label stands within the look's gap of the loss axis's name, at every moment
+    of the fit, at the run page's width and at the least, in both choices, and for one record, for losses all equal
+    and for a fit whose highest round loss stands just under that name (a loss tick that would crowd the name is
+    left out), for a span so narrow that its ticks need four decimals (fewer are taken until the labels fit) and for
+    a loss that spikes at the newest epoch, whose line keeps a label's gap from the choices (the axes stand under
+    them)."""
     loss = _lc()
     records, best = _fit(_LOSS_VALIDATION, _LOSS_TRAINING)
     painted = []
@@ -7983,7 +7985,8 @@ def test_the_loss_curve_has_two_axes_with_round_ticks_outward_and_its_words_from
     assert [words for _x, words, _newest in lay["x_ticks"]] == ["1,000"], lay["x_ticks"]
     assert "best so far: epoch 1,000" in [entry[0] for entry in lay["words"]], lay["words"]
 
-    # no two words meet, none meets the choices and none begins left of the plot, read off the words as laid out
+    # no two words meet, none meets the choices, none begins left of the plot and no loss tick's label is within the
+    # look's gap of the loss axis's name, read off the words as laid out
     def apart(curve, why):
         lay = curve.drawn()
         boxes = [(entry[0], entry[1:5]) for entry in lay["words"]]
@@ -7991,6 +7994,11 @@ def test_the_loss_curve_has_two_axes_with_round_ticks_outward_and_its_words_from
                                                                                        curve.all_button)]
         met = [(a, b) for at, (a, one) in enumerate(boxes) for b, other in boxes[at + 1:] if _meet(one, other)]
         assert not met and min(box[0] for _words, box in boxes) >= 0, (why, met, boxes)
+        gap, ticks = design.scaled(design.FIGURE["line_label_gap"]), {words for _y, words in lay["y_ticks"]}
+        (x, y, w, h), = [box for words, box in boxes if words == loss.LOSS_NAME]
+        crowding = [(words, box) for words, box in boxes
+                    if words in ticks and _meet(box, (x - gap, y - gap, w + 2 * gap, h + 2 * gap))]
+        assert not crowding, (why, crowding)
         return lay
 
     least = design.scaled(design.FIGURE["loss"]["min_w"]) + design.scaled(design.GAP["figure_inset"])
@@ -8007,6 +8015,8 @@ def test_the_loss_curve_has_two_axes_with_round_ticks_outward_and_its_words_from
                     curve.set_recent(False)
                 for why, validation, training, recent in (
                         ("one record", [-3.0], [-3.2], False), ("equal losses", [-3.0] * 5, [-3.0] * 5, False),
+                        ("the highest round loss just under the axis's name", [-2.37, -2.77, -2.6, -2.8, -3.0],
+                         [-2.57, -2.97, -2.8, -3.0, -3.2], False),
                         ("a narrow span", narrow, [value - 0.0003 for value in narrow], False),
                         ("a spike at the newest epoch", _LOSS_VALIDATION[:30], _LOSS_TRAINING[:29] + [3.0], False),
                         ("a fall at the eleventh epoch, \"Recent\" chosen: its words kept off the note",

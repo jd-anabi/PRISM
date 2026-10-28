@@ -2204,8 +2204,8 @@ def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_an
     """A start that raises once every panel is locked and before its worker is queued -- here a page hands its
     run a folder to watch of a shape no folder has -- raises to the page as it came, and is taken back: no run is
     live, the status is published idle again, every panel is free, the page's results are given back from the
-    run's page, and the run's two files are removed. A load taken back so, which never took the column, leaves a
-    stopped run's page where it was."""
+    run's page, the run's two files are removed, and a folder it had begun to watch is watched no more. A load
+    taken back so, which never took the column, leaves a stopped run's page where it was."""
     from core.gui.panels.base_panel import BasePanel
     from core.gui.run.model import IDLE
     from tests._fixtures import build_run_host, choose, qt_app
@@ -2221,6 +2221,27 @@ def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_an
     assert (host.results.currentWidget() is host.figures, host.run_view.isAncestorOf(host.figure_stack)) == (
         True, False), "the run's page kept the page's results for a run that never started"
     assert list((tmp_path / "runs").iterdir()) == [], "a start taken back left a file"
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from core.gui.plot_watcher import NewPngWatcher
+    real_start, began = NewPngWatcher.start, []
+
+    def start(watcher):
+        """The first folder is watched; the second cannot be."""
+        began.append(watcher)
+        if len(began) > 1:
+            raise OSError("the second folder cannot be watched")
+        real_start(watcher)
+
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    watching = set(map(id, held.findChildren(NewPngWatcher)))
+    monkeypatch.setattr(NewPngWatcher, "start", start)
+    with pytest.raises(OSError):
+        start_run(host, StandIn(), spec=_training(), watch_dir=[tmp_path / "one", tmp_path / "two"])
+    monkeypatch.setattr(NewPngWatcher, "start", real_start)
+    began.clear()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert [one for one in held.findChildren(NewPngWatcher) if id(one) not in watching] == [], (
+        "a start taken back went on watching a folder it had begun to watch")
     start_run(host, StandIn(), spec=_training())
     choose(monkeypatch, words="Stop training")
     host.run_view.stop_button.click()
@@ -2446,9 +2467,8 @@ def test_the_reason_against_shutting_down_follows_the_runs_stage(tmp_path, windo
     stage, standing through its stop, and withdrawn as it ends, each from the window's thread; none while it starts.
     A training, and a narrowing round in its own name, says it is simulating, fitting, or saving its posterior, and
     what shutting down then loses and keeps (a fit not saved as it goes is lost whole); before its simulation, and
-    every other kind of run, a live
-    simulation's and a load's too, it says that shutting down stops it, then what its stop keeps, as its stop's
-    question says it."""
+    every other kind of run, a live simulation's and a load's too, it says that shutting down stops it, then what its
+    stop keeps, as its stop's question says it."""
     from tests._fixtures import build_run_host, build_window, qt_app
     from tests._runs import Clock, RunText, StandIn, start_run, turn_until
     app = qt_app()

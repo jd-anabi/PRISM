@@ -472,9 +472,9 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
     whatever records are in use now, and its end's words then say so on its page; and in the status, the foot and
     Home's next step whenever that end is the status again, given back by a run that ended into idle since (a load of
     the page's own, which leaves the page and its offer as they were, or a run that keeps no file, ended before the
-    Discard or still live at it). When that history cannot be read, nothing is deleted, the page says so, and the
-    question stays."""
-    from core.artifacts import ArtifactStore, use_store
+    Discard or still live at it). When that history cannot be read, or the records refuse to delete the training,
+    nothing is deleted, the page says why, and the question stays."""
+    from core.artifacts import ArtifactStore, StoreError, use_store
     from core.gui import chain
     from core.gui.run import ends, history
     app = qt_app()
@@ -595,6 +595,18 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
     assert (sorted(kept()), view.sentence.text(), held.status.sentence) == (
         sorted([second, fourth]), discarded("Fri 9 Oct, 02:23"), discarded("Fri 9 Oct, 02:23")), (
         "a run live at the Discard gave back, as it ended, the end's words that say the training is kept")
+
+    fifth = build_fit_record(store, passes=62)
+    stopped_in_the_fit(_note(fifth))
+    refused = f"refusing to delete fit {fifth}: a running process is training it"
+
+    def held_elsewhere(kind, ref, **_):
+        raise StoreError(refused, field="artifact")
+
+    monkeypatch.setattr(store, "delete", held_elsewhere)
+    view.discard_button.click()
+    assert (view.notice.text(), view.keep_block.isVisibleTo(view), fifth in kept()) == (refused, True, True), (
+        "a training the records would not delete was said to be discarded, or its question went")
 
 
 def test_discard_of_a_resumed_training_says_it_deletes_every_epoch_kept_since_it_began(tmp_path, monkeypatch, store):

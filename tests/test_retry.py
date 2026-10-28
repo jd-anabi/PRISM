@@ -1135,6 +1135,11 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
     assert retry.resume_command(spec, "k1") == (
         'python -m core tsnpe --resume-fit k1 --bounds "C:\\PRISM files\\master.txt" --posterior p2 --observation o1 '
         '--no-chi --accept-truncated --device cpu'), "the command names a flag that is not the call's"
+    args, said = _parsed(retry.resume_command(spec, "k1"))
+    assert args is not None and (args.cmd, args.resume_fit, args.bounds, args.posterior, args.observation,
+                                 args.chi_mode, args.accept_truncated, args.device) == (
+        "tsnpe", "k1", r"C:\PRISM files\master.txt", "p2", "o1", False, True, "cpu"), (
+        "the narrowing round's command is not one the command-line tool takes", said)
 
 
 def test_a_runs_call_is_kept_only_while_its_page_offers_to_continue_or_resume_it(tmp_path):

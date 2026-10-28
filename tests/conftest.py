@@ -5,8 +5,9 @@ expression as a plain call, which is what the GUI suites use. The settings, dial
 fixtures at the end, the two that stand in for the entry point's plain Windows message and put back
 the streams it binds, the one that lets go what the builders made, the one that stands in for
 bringing a window to the front and the one that stands in for the requests made of Windows, are
-autouse at session and function scope; a test requests the last two by name, ``brought_forward`` and
-``windows_asked``, to read what each kept, and no other by name.
+autouse at session and function scope, and the check that no panel outlives its module at module
+scope; a test requests the last two by name, ``brought_forward`` and ``windows_asked``, to read what
+each kept, and no other by name.
 """
 from pathlib import Path
 
@@ -368,6 +369,30 @@ def _built_widgets_let_go(_isolated_settings, _drawing_code_raises_nothing, _lay
     at_start = _built.noted()
     yield
     _built.end_of_test(at_start)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _no_panel_outlives_its_module():
+    """Every panel enrols in the set that the run's controller locks at each run's start and frees at its end, and
+    what a fixture of a module's scope built is let go by that fixture, not by the end of a test. So once a module's
+    tests and fixtures have all ended, the set holds no panel it did not hold when the module began: a panel left there
+    would be locked and freed by every later module's runs, and refreshed at their end through whatever records that
+    module has in use. Deferred deletions are carried out and the collector run before the set is read; nothing is
+    read when no panel's module was ever loaded."""
+    import gc
+    import sys
+    import weakref
+    base = sys.modules.get("core.gui.panels.base_panel")
+    held = weakref.WeakSet() if base is None else weakref.WeakSet(base.BasePanel._instances)
+    yield
+    base = sys.modules.get("core.gui.panels.base_panel")
+    if base is None:
+        return
+    from PySide6.QtCore import QCoreApplication, QEvent
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    gc.collect()
+    left = sorted(type(panel).__name__ for panel in list(base.BasePanel._instances) if panel not in held)
+    assert not left, f"panels built in this module outlived it, still among the panels every run locks: {left}"
 
 
 @pytest.fixture(autouse=True)
