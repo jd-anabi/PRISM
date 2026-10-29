@@ -2092,8 +2092,9 @@ def test_a_maximised_window_at_a_large_text_size_keeps_the_usual_layout(monkeypa
 
 
 def test_the_current_row_stays_in_view_when_the_rail_has_less_room():
-    """At 150 % text the rail's list scrolls, and the current row stays in view when the list has less room: after
-    the foot's title takes a second line, and after the window is made lower and takes the small layout."""
+    """At 150 % text the rail's list scrolls, and the current row stays in view: the foot's title taking a second line
+    takes none of the list's room, the foot keeping its height, and when the list has less room, after the window is
+    made lower and takes the small layout, the current row is brought into view."""
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.session import SbiSession
     from tests._look_helpers import text_size
@@ -2111,9 +2112,9 @@ def test_the_current_row_stays_in_view_when_the_rail_has_less_room():
             assert window.current_place() == ("inference", "narrowing")
             assert not window.shell._small and _in_view(rail, rail.row("narrowing"))
             usual = rail.foot.height()
-            with running(panel, StandIn(word="Narrowing round")):     # a title of two lines: the foot grows
+            with running(panel, StandIn(word="Narrowing round")):     # a title of two lines: the foot keeps its height
                 QApplication.processEvents()
-                assert rail.foot.height() > usual
+                assert len(rail.foot._laid_out()[0]) == 2 and rail.foot.height() == usual
                 assert _in_view(rail, rail.row("narrowing")), "the foot grew over the current row"
             window.go_to("help")
             window.resize(760, 600)                            # a lower window, in the small layout

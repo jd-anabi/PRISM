@@ -273,7 +273,8 @@ def _lines(text: str, font: QFont, width: float, most: int) -> list[str]:
 class RunFoot(QWidget):
     """The run's state at the foot of the rail: a hairline, a marker, a semibold title of one or two lines and
     up to two lines of words, each cut at its end with an ellipsis after its second line. Room is always kept
-    for two lines of words, so the foot changes its height only when its title takes a second line. The words
+    for two lines of title and two of words, so the foot keeps one height in every state and the rows above it
+    never move; the words follow the title's last line. The words
     are laid out and written in digits of equal width, so that a count among them keeps its lines and its width
     as it moves. While a run is shown it is one button, which the Tab key reaches and Enter, Space and a click
     press; otherwise it is no control at all."""
@@ -309,7 +310,7 @@ class RunFoot(QWidget):
         title_lines, word_lines = self._laid_out()
         _left, top, _right, bottom = (design.scaled(n) for n in design.SIZE["run_line"])
         title_h, words_h = design.scaled(design.TYPE["strong"][1]), design.scaled(design.TYPE["small"][1])
-        self.setFixedHeight(design.SIZE["hair"] + top + max(1, len(title_lines)) * title_h + 2 * words_h + bottom)
+        self.setFixedHeight(design.SIZE["hair"] + top + 2 * title_h + 2 * words_h + bottom)
         whole = f"{title}. {words}" if words else title
         self.setAccessibleName(whole)
         self.setToolTip(whole if any(line.endswith(_ELLIPSIS) for line in title_lines + word_lines) else "")
@@ -390,8 +391,8 @@ class _List(QWidget):
 
 
 class _Scroll(QScrollArea):
-    """The list's scrolling area. Each time its height changes -- a lower window, the small layout, a foot whose
-    title takes a second line -- the current row is brought into view again."""
+    """The list's scrolling area. Each time its height changes -- a lower window, the small layout -- the current
+    row is brought into view again."""
 
     @reported(QScrollArea.resizeEvent)
     def resizeEvent(self, event):

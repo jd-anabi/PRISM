@@ -6765,8 +6765,8 @@ def test_the_rails_rows_stay_put_when_another_part_is_opened():
 def test_the_small_rail_shortens_its_rows_and_keeps_two_steps_whole(monkeypatch):
     """In a low window the name and the rows are shorter, and a step keeps its second line only when it is the
     step in hand, the first that cannot start or the open one; back in a high window everything is as before.
-    With every part's row and the six steps showing and the step in hand open, the rail needs 754 pixels in the
-    usual layout and 652 in the low one at the ordinary text size; a step of one line writes no words."""
+    With every part's row and the six steps showing and the step in hand open, the rail needs 774 pixels in the
+    usual layout and 672 in the low one at the ordinary text size; a step of one line writes no words."""
     with _railed() as held:
         rail, kit = held.rail, held.kit
 
@@ -6780,7 +6780,7 @@ def test_the_small_rail_shortens_its_rows_and_keeps_two_steps_whole(monkeypatch)
         rail.set_place("inference", "prior")
         _settle()
         usual = heights()
-        assert usual == (58, [36] * 9, [46] * 6) and needed() == 754
+        assert usual == (58, [36] * 9, [46] * 6) and needed() == 774
         rail.set_small(True)
         _settle()
         assert heights() == (48, [32] * 9, [32, 46, 32, 32, 32, 32])    # no state shown: the open step alone
@@ -6788,14 +6788,14 @@ def test_the_small_rail_shortens_its_rows_and_keeps_two_steps_whole(monkeypatch)
         assert (kit.chain.step_in_hand(states), [s.key for s in states if not s.can_start][0]) == ("prior", "training")
         rail.set_step_states(states)
         _settle()
-        assert heights() == (48, [32] * 9, [32, 46, 46, 32, 32, 32]) and needed() == 652
+        assert heights() == (48, [32] * 9, [32, 46, 46, 32, 32, 32]) and needed() == 672
         assert [len(_painted_words(monkeypatch, rail.row(p.key))) for p in kit.keys.STEPS] == [2, 3, 3, 2, 2, 2]
         rail.set_place("inference", "infer")                           # a step opened that can wait keeps its words
         _settle()
-        assert heights()[2] == [32, 46, 46, 32, 46, 32] and needed() == 652 + 46 - 32
+        assert heights()[2] == [32, 46, 46, 32, 46, 32] and needed() == 672 + 46 - 32
         rail.set_small(False)
         _settle()
-        assert heights() == usual and needed() == 754
+        assert heights() == usual and needed() == 774
     with text_size(1.5), _railed() as held:
         rail, kit = held.rail, held.kit
         rail.set_step_states(kit.chain.step_states(session()))
@@ -6824,7 +6824,7 @@ def test_the_rail_scrolls_its_list_under_a_fixed_name_and_above_a_fixed_foot():
             assert scroll.geometry().top() == fixed[0].bottom() + 1 and scroll.geometry().bottom() + 1 == fixed[1].top()
             assert bar.maximum() > 0 and bar.isVisibleTo(rail), factor
             if factor == 1.0:
-                assert bar.maximum() == 652 - 600
+                assert bar.maximum() == 672 - 600
             for value in (bar.maximum(), 0, bar.maximum() // 2):
                 bar.setValue(value)
                 _settle()
@@ -6927,14 +6927,14 @@ def test_the_rail_is_one_tab_stop_and_its_arrows_move_in_the_order_seen(monkeypa
 def test_the_foot_reads_nothing_is_running_and_is_no_control_then(monkeypatch):
     """At rest the foot is the dash, "Nothing is running" semibold and "Only one run at a time." small in the
     second ink, under a hairline of the quiet rule; it is no stop of the Tab key and neither a click nor a key
-    presses it. It keeps room for two lines of words, so it is as tall as when a run is shown. A marker the look
-    does not have is refused."""
+    presses it. It keeps room for a title of two lines and two lines of words, so it is as tall as when a run is
+    shown. A marker the look does not have is refused."""
     kit = _rail_kit()
     foot = kit.rail.RunFoot()
     with _standing(foot, 220, 120) as window:
         pressed = []
         foot.clicked.connect(lambda: pressed.append(True))
-        assert (foot.is_button(), foot.focusPolicy(), foot.height()) == (False, Qt.NoFocus, 79)
+        assert (foot.is_button(), foot.focusPolicy(), foot.height()) == (False, Qt.NoFocus, 99)
         assert foot.accessibleName() == "Nothing is running. Only one run at a time." and foot.toolTip() == ""
         assert [line[:2] + line[3:] for line in _painted_words(monkeypatch, foot)] == [
             ("Nothing is running", 600, design.hex_colour("ink")),
@@ -6956,23 +6956,23 @@ def test_the_foot_reads_nothing_is_running_and_is_no_control_then(monkeypatch):
     with text_size(1.25):
         tall = kit.rail.RunFoot()
         try:
-            assert tall.height() == 1 + 15 + 25 + 2 * 20 + 18
+            assert tall.height() == 1 + 15 + 2 * 25 + 2 * 20 + 18
         finally:
             _gone(tall)
 
 
 def test_the_foot_is_one_button_while_a_run_is_shown_and_its_title_may_wrap(monkeypatch):
     """While a run is shown the foot is one button: the Tab key reaches it (a click does not give it the keyboard),
-    and a click, Enter and Space each press it once. Its title takes a second line when it needs one, and the
-    foot grows by that line; title and words are each cut with an ellipsis after their second line, and its tool
-    tip then gives them whole. Back at rest it is no control again."""
+    and a click, Enter and Space each press it once. Its title takes a second line when it needs one, in the room
+    the foot always keeps for it, so the foot keeps its height; title and words are each cut with an ellipsis after
+    their second line, and its tool tip then gives them whole. Back at rest it is no control again."""
     kit = _rail_kit()
     foot = kit.rail.RunFoot()
     with _standing(foot, 220, 160) as window:
         pressed = []
         foot.clicked.connect(lambda: pressed.append(True))
         foot.set_state("now", "Running: Training", "4:07 so far. Settings are locked.", button=True)
-        assert (foot.is_button(), foot.focusPolicy(), foot.height(), foot.toolTip()) == (True, Qt.TabFocus, 79, "")
+        assert (foot.is_button(), foot.focusPolicy(), foot.height(), foot.toolTip()) == (True, Qt.TabFocus, 99, "")
         assert foot.property("ring") == "inset"
         written = _painted_words(monkeypatch, foot)
         title, words = [line[0] for line in written if line[1] == 600], [line[0] for line in written if line[1] == 400]
@@ -6991,7 +6991,7 @@ def test_the_foot_is_one_button_while_a_run_is_shown_and_its_title_may_wrap(monk
         title, words = [line[0] for line in written if line[1] == 600], [line[0] for line in written if line[1] == 400]
         assert (len(title), " ".join(title), " ".join(words)) == (
             2, "Running: Effective temperature, One cell", "1:02:03 so far. Settings are locked.")
-        assert foot.height() == 79 + 20
+        assert foot.height() == 99
         long, many = "Running: " + " ".join(["a long place name"] * 6), " ".join(["words"] * 30)
         foot.set_state("now", long, many, button=True)
         written = [line[0] for line in _painted_words(monkeypatch, foot)]
@@ -7002,7 +7002,44 @@ def test_the_foot_is_one_button_while_a_run_is_shown_and_its_title_may_wrap(monk
         QTest.mouseClick(foot, Qt.LeftButton)
         QTest.keyClick(foot, Qt.Key_Space)
         assert (pressed, foot.is_button(), foot.focusPolicy(), foot.height(), foot.toolTip()) == (
-            [True] * 4, False, Qt.NoFocus, 79, "")
+            [True] * 4, False, Qt.NoFocus, 99, "")
+
+
+def test_the_foot_keeps_one_height_in_every_state_and_the_rows_above_it_stay_where_they_are():
+    """The foot keeps one height in every state the run's ends give it, its title on one line or on two ("Narrowing
+    round is running", "Training is waiting to try again", "Measurement is running"), with words or with none, at the
+    ordinary text size and at one and a half times it; in a rail of the window's opening height, with the chain open,
+    every row above it stays where it was as the foot's state changes."""
+    QApplication.instance() or QApplication([])
+    from core.gui.run import ends
+    from core.gui.run.model import OUTCOMES, RunStatus
+    now = dt.datetime(2026, 10, 9, 18, 0, tzinfo=dt.timezone.utc)
+    statuses = [RunStatus()]
+    for word in ("Training", "Narrowing round", "Measurement", "Sweep study", "Live simulation", "Prior build"):
+        statuses += [RunStatus(state="running", word=word, stage_words="Simulating, batch 6,150 of 10,000"),
+                     RunStatus(state="running", word=word, loading=True),
+                     RunStatus(state="retrying", word=word),
+                     RunStatus(state="running", word=word, needs_you="No output for 11 minutes."),
+                     RunStatus(state="stopping", word=word,
+                               stage_words="Stopping: takes effect when this epoch ends, up to about 63 minutes.")]
+        statuses += [RunStatus(state="ended", word=word, outcome=outcome, ended=now, last_heard=now,
+                               kept="The 20,480,000 simulations are kept.") for outcome in OUTCOMES]
+    for factor in (1.0, 1.5):
+        with text_size(factor), _railed(design.scaled(820)) as held:
+            rail, kit = held.rail, held.kit
+            rail.set_step_states(kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI"))))
+            rail.set_place("inference", "training")
+            _settle()
+            rows = [rail.row(place.key) for place in kit.keys.PARTS + kit.keys.STEPS]
+            heights, places, lines = set(), set(), set()
+            for status in statuses:
+                marker, title, words = ends.foot(status, now)
+                rail.foot.set_state(marker, title, words, button=status.live or status.unacknowledged_end)
+                _settle()
+                heights.add(rail.foot.height())
+                places.add(tuple(row.mapTo(rail, QPoint(0, 0)).y() for row in rows) + (rail.foot.y(),))
+                lines.add(len(rail.foot._laid_out()[0]))
+            assert (len(heights), len(places), lines) == (1, 1, {1, 2}), (factor, heights, len(places), lines)
 
 
 def test_the_page_names_mark_the_current_page_and_move_with_the_arrows(monkeypatch):
