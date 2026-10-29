@@ -1544,6 +1544,81 @@ def test_the_foot_says_each_state_of_a_run_in_its_words(tmp_path, monkeypatch):
     assert [words for words in written if "-" in words] == [], "a hyphen in the foot's own words"
 
 
+def test_a_live_simulation_that_fails_is_said_at_the_foot_until_it_is_seen_and_writes_nothing(tmp_path, monkeypatch):
+    """A live simulation keeps no history file, and its failure is said at the foot all the same, with its time, as
+    every other end is, and in Home's next step: until it is seen, as an end is seen (here by the foot pressed, which
+    shows its page), or the next run starts. Nothing is written for it: the folder of runs holds what it held, and
+    Home's "Last runs", which reads the runs' histories, lists what it listed. The end that waited to be seen before it
+    is neither set aside nor lost: once the failure is seen it is said again, and a run started while the failure
+    waits takes it as the end that waited, which a live simulation that ends without failing gives back, as before."""
+    import numpy as np
+    from core.gui.panels import simulate_panel as live_module
+    from core.gui.panels.fdt_panel import FdtPanel
+    from core.gui.run.model import RunSpec
+    app = qt_app()
+    held, clock = _on_the_runs_clock(tmp_path)
+    window = build_window()
+    home, folder = window.part("home"), tmp_path / "runs"
+    cell = tmp_path / "cell.txt"
+    cell.write_text("# values\n", encoding="utf-8")
+    monkeypatch.setattr(live_module, "build_stream_config", lambda model, path: SimpleNamespace(length_unit="nm"))
+    monkeypatch.setattr(live_module, "plan_stream", lambda cfg, t_obs: SimpleNamespace(total_steps=7_999,
+                                                                                        subsample_factor=2))
+    live = window.part("live")
+    live.cell_picker.selected_path = lambda: str(cell)
+    _shown_off_screen(window)
+    try:
+        window.go_to("home")                            # Home in sight: it reads what it states at each change
+        with running(window.panel(FdtPanel), StandIn(word="Comparison"),
+                     spec=RunSpec("Comparison", ("temperature", "one_cell"), stop_button="Stop the comparison…",
+                                  kinds=("fdt",))):
+            pass
+        waiting = held.status
+        compared = ("done", "Comparison finished", "Thu 8 Oct, 19:02.", True)
+        assert _foot(window) == compared and waiting.unacknowledged_end, _foot(window)
+        listed, rows = sorted(path.name for path in folder.iterdir()), _cells(home.runs_table)
+
+        def simulated(how):
+            """A live simulation started from its page, which shows 1,200 of its samples, then ends ``how``."""
+            stand_in = StandIn(word="Live simulation")
+            monkeypatch.setattr(live_module, "run_simulation_stream", stand_in)
+            live._start()
+            live._on_chunk(np.zeros((1_200, 2)))
+            clock.advance(20)
+            how(stand_in)
+            turn_until(app, lambda: not held.is_live())
+
+        def failed(stand_in):
+            stand_in.fail(RuntimeError("NadrowskiSDE euler_compiled failed after 4500 steps (batch=1, segs=1, "
+                                       "device=cuda:0, dtype=torch.float32)"))
+
+        simulated(failed)
+        run = held.status.run
+        assert (_foot(window), held.status.unacknowledged_end, live.run_view.sentence.text()) == (
+            ("err", "Live simulation failed", "Thu 8 Oct, 19:02.", True), True, "Live simulation failed."), (
+            "the foot does not say the live simulation's failure", _foot(window))
+        assert (sorted(path.name for path in folder.iterdir()), _cells(home.runs_table), run is not None) == (
+            listed, rows, True), "a file was written for the live simulation's failure, or Home's last runs changed"
+        assert (home.next_heading.label.text(), home.next_button.text()) == (
+            "Next: see what happened to the live simulation", "&See what happened"), home.next_heading.label.text()
+        window.go_to_run()                              # the foot pressed: the failure's page, and it is seen
+        assert (window.current_place(), live.run_view.isVisibleTo(live), held.status, _foot(window)) == (
+            ("live", None), True, waiting, compared), (
+            "once seen, the failure did not give back the end that waited before it", held.status)
+        assert sorted(path.name for path in folder.iterdir()) == listed, "seeing the failure wrote a file"
+        window.go_to("home")
+
+        simulated(failed)
+        assert _foot(window)[:2] == ("err", "Live simulation failed")
+        simulated(lambda stand_in: stand_in.release())  # the next start takes the end that waited before it
+        assert (held.status, _foot(window)) == (waiting, compared), (
+            "a run started while the failure waited did not take the end before it, or one that ended without failing "
+            "did not give it back", held.status)
+        assert (sorted(path.name for path in folder.iterdir()), _cells(home.runs_table)) == (listed, rows)
+    finally:
+        window.hide()
+
+
 def test_an_end_is_acknowledged_once_its_page_has_been_seen_in_the_active_window(tmp_path):
     """An end is seen, and said at the foot no more, once its run's page has been in sight while the window was the
     one in front: looked at as the run ends, at every move and when the window comes to the front. Its history then

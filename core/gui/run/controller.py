@@ -32,7 +32,9 @@ Its two files are removed, the controller is idle again with nothing to acknowle
 as it shows one made at the click.
 
 A run that only loads a record, a live simulation and a video export keep no file and end straight into idle, with
-nothing to acknowledge.
+nothing to acknowledge; but a live simulation or a video export that fails leaves an end of its own, its failure, which
+the foot says until it is seen or the next run starts, with nothing written for it: its id names no file, and the end
+that waited to be seen as it started is given back once its own is seen, as a run that ends into idle gives it back.
 
 A stop asked for (``request_stop``) is taken at the run's next point where a stop is taken and can be withdrawn
 until then (``withdraw_stop``); asked by the window's close, it carries the close, and the window closes once the
@@ -360,7 +362,10 @@ class RunController(QObject):
         an end of its own, and gives it back when it ends into idle or is taken back (``_set_aside``)."""
         if self.is_live():
             return False
-        waiting = self._status if self._status.unacknowledged_end and self._status.run is not None else None
+        if self._unfiled_end():
+            waiting = self._run.waiting          # the failure of a run that keeps no file goes; the end before it waits
+        else:
+            waiting = self._status if self._status.unacknowledged_end and self._status.run is not None else None
         from core.artifacts import default_store
         from core.progress import SOLVER
         from ..panels.base_panel import BasePanel
@@ -769,15 +774,27 @@ class RunController(QObject):
     def acknowledge(self, run: str) -> None:
         """Someone has seen how the run ``run`` ended: its history file says so, and when its end is the one the
         status says (the run the controller holds, or one of an earlier launch whose end the status was filled
-        with), the controller is idle again. A run still live is not seen: its end is to come. An end seen while a
-        later run is live is no longer that run's to set aside or give back."""
+        with), the controller is idle again; or, for the failure of a run that keeps no file, which writes nothing,
+        the end that waited to be seen as that run started is the status again. A run still live is not seen: its end
+        is to come. An end seen while a later run is live is no longer that run's to set aside or give back."""
+        unfiled = self._unfiled_end() and self._status.run == run
         self._write_seen(run)
         live = self._run
         if live is not None and live.waiting is not None and live.waiting.run == run:
             live.waiting = None
         if self._status.unacknowledged_end and self._status.run == run:
-            self._status = IDLE
-            self.status_changed.emit(IDLE)
+            given = None
+            if unfiled:
+                given, live.waiting = live.waiting, None
+            self._status = given or IDLE
+            self.status_changed.emit(self._status)
+
+    def _unfiled_end(self) -> bool:
+        """Whether the status is the end of the run the controller holds that keeps no file: a live simulation or a
+        video export that failed, said with nothing written for it, until it is seen or the next run starts."""
+        held = self._run
+        return (held is not None and not held.spec.keeps_files and held.id is not None
+                and self._status.unacknowledged_end and self._status.run == held.id)
 
     def _set_aside(self, run: _Run) -> None:
         """The run ``run`` has ended with an end of its own to say while the end that waited to be seen as it started
@@ -1122,7 +1139,13 @@ class RunController(QObject):
         spec, failure = run.spec, run.failure
         model.ended(run.outcome, kept_fit=run.kept_fit)
         run.ended = (self._clock or _local_now)()
-        idle = refused_early or spec.loads_only or not spec.keeps_files
+        # A run that keeps no file and has a place (a live simulation, a video export) that failed once something was
+        # spent leaves an end of its own all the same: an id names it, which names no file, and nothing is written.
+        unfiled = (not spec.keeps_files and not spec.loads_only and not refused_early and run.outcome == "failed"
+                   and spec.place is not None)
+        if unfiled:
+            run.id = history.run_id(spec.word, model.started, run.folder)
+        idle = refused_early or spec.loads_only or (not spec.keeps_files and not unfiled)
         last = RunStatus(state="idle" if idle else "ended", word=spec.word, name=spec.name,
                          run=None if refused_early else run.id, place=spec.place, loading=spec.loads_only,
                          stage=model.stage, outcome=None if refused_early else run.outcome, started=model.started,
@@ -1145,7 +1168,7 @@ class RunController(QObject):
                   and not run.reopen and (run.continue_from is not None or run.kept_fit is not None)
                   and _alive(run.host))
         self._status = (run.waiting or IDLE) if idle else last
-        if not idle:
+        if not idle and not unfiled:
             self._set_aside(run)
         if spec.keeps_files:
             if refused_early:
