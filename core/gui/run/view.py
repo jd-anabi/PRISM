@@ -19,8 +19,9 @@ when, and "Stop trying" stands in the stop button's place. The page of a trainin
 "Continue from batch N" or "Resume the training" while its run's call is kept for it, and no longer.
 
 It is laid out to fit the column it stands in at any width: its buttons go to rows of their own under the run's name
-where the two do not fit one row, and what a run's end leaves to say (its failure, the question of keeping a training,
-what the page offers) stands at the head of what scrolls, so that the page's height never cuts it short.
+where the two do not fit one row, as the full text's tools do under its field, and what a run's end leaves to say (its
+failure, the question of keeping a training, what the page offers) stands at the head of what scrolls, so that the
+page's height never cuts it short, and is brought into sight when it comes.
 
 It is live while the run is, ended once it has ended, and past when it is drawn from a run's files alone. A run
 with a view of its own shows the page in its compact form: the sentence and the stop button. The page lives
@@ -31,7 +32,7 @@ import math
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QSize, Qt, QUrl, Signal
+from PySide6.QtCore import QPointF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QDesktopServices, QFontMetrics, QKeySequence, QPainter, QTextCharFormat, QTextLayout,
                            QTextOption)
 from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit,
@@ -206,11 +207,26 @@ class _StageLine(QWidget):
 
 
 class _Name(QLabel):
-    """The run's name in the page's head, cut at its end with "…" where the room it has is narrower than it."""
+    """The run's name in the page's head, cut at its end with "…" where the room it has is narrower than it; while it
+    is cut, its tooltip is the whole name, and while it is whole it has none."""
 
     def shown(self) -> str:
         """The name as it is drawn in the room it has now: whole, or cut at its end with "…"."""
         return QFontMetrics(self.font()).elidedText(self.text(), Qt.ElideRight, self.contentsRect().width())
+
+    def setText(self, text: str) -> None:
+        """Show the name ``text``."""
+        super().setText(text)
+        self._tell_whole()
+
+    @reported(QLabel.resizeEvent)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._tell_whole()
+
+    def _tell_whole(self) -> None:
+        """The whole name as the tooltip while it is cut; none while it is whole."""
+        self.setToolTip(self.text() if self.shown() != self.text() else "")
 
     @reported()
     def paintEvent(self, _event):
@@ -291,10 +307,81 @@ class _Head(QWidget):
         self._plan = plan
 
 
+class _Tools(QWidget):
+    """The full text's tools: the field that finds words in it, while it is open, then its buttons. They stand on one
+    row while every one in sight fits it at the width it asks, the field taking the room the buttons leave and the
+    first button standing beside it, the others at the right; else the field stands alone on a row of its own, as wide
+    as the row, and the buttons on rows under it, as many to a row as fit, each at its own width, from the left."""
+
+    def __init__(self, field: QLineEdit, buttons) -> None:
+        super().__init__()
+        self._field, self._buttons = field, tuple(buttons)
+        self._plan = ()                      # None: one row; else the buttons of each row under the field's
+        self._gap = design.scaled(design.GAP["action"])
+        self._box = QVBoxLayout(self)
+        self._box.setContentsMargins(0, 0, 0, 0)
+        self._box.setSpacing(design.scaled(design.GAP["head_table"]))
+        # The field's row: the field takes the room the buttons leave; while it is shut, the stretch after the first
+        # button takes it, so that the others stand at the right.
+        self._first = QHBoxLayout()
+        self._first.setSpacing(self._gap)
+        self._first.addWidget(field, 1)
+        self._first.addStretch(0)
+        self._box.addLayout(self._first)
+        self._rows = []                      # the rows of buttons under the field's, as many as there are buttons
+        for _button in self._buttons:
+            row = QHBoxLayout()
+            row.setSpacing(self._gap)
+            row.addStretch(1)
+            self._box.addLayout(row)
+            self._rows.append(row)
+        self.fit()
+
+    @reported(QWidget.resizeEvent)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.fit()
+
+    def fit(self) -> None:
+        """Lay the field, while it is open, and the buttons in sight out for the tools' width now."""
+        width = self.width()
+        shown = [button for button in self._buttons if not button.isHidden()]
+        wide = [part.sizeHint().width() for part in ([] if self._field.isHidden() else [self._field]) + shown]
+        if sum(wide) + self._gap * (len(wide) - 1) <= width:
+            plan = None                      # one row
+        else:
+            plan, row, used = [], [], 0
+            for button in shown:
+                one = button.sizeHint().width()
+                if row and used + self._gap + one > width:
+                    plan.append(tuple(row))
+                    row, used = [], 0
+                used += (self._gap if row else 0) + one
+                row.append(button)
+            plan = tuple(plan + [tuple(row)])
+        if plan == self._plan:
+            return
+        for button in self._buttons:
+            for row in (self._first, *self._rows):
+                row.removeWidget(button)
+        if plan is None:
+            first, *others = self._buttons
+            self._first.insertWidget(1, first)
+            for button in others:
+                self._first.addWidget(button)
+        else:
+            for row, buttons in zip(self._rows, plan):
+                for button in buttons:
+                    row.insertWidget(row.count() - 1, button)
+        self._plan = plan
+
+
 class _Wrapped(QLabel):
     """Words wrapped within the page's width: between words where they can be, and inside a word wider than the line,
     a long name or path most often, where they must, with nothing added to the words; a line break of the words' own
-    stays. Shown as written, in the font the label is given; never wider than the page."""
+    stays. Shown as written, in the font the label is given; never wider than the page. The words are laid out once
+    for one text, font and width, and that layout is kept: a repaint while the page scrolls, or a move of a drag, lays
+    nothing out again."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -302,9 +389,14 @@ class _Wrapped(QLabel):
         policy = QSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         policy.setHeightForWidth(True)
         self.setSizePolicy(policy)
+        self._kept = None                    # the last layout, with the text, the font and the width it was laid for
 
     def _laid(self, width: float) -> QTextLayout:
-        """The words laid out in lines no wider than ``width``, from the top left."""
+        """The words laid out in lines no wider than ``width``, from the top left: the layout kept, when it was laid
+        for the same text, font and width."""
+        asked = (self.text(), self.font(), width)
+        if self._kept is not None and self._kept[0] == asked:
+            return self._kept[1]
         layout = QTextLayout(self.text().replace("\n", chr(0x2028)), self.font())      # one character for one
         option = QTextOption()
         option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
@@ -319,6 +411,7 @@ class _Wrapped(QLabel):
             line.setPosition(QPointF(0, top))
             top += line.height()
         layout.endLayout()
+        self._kept = (asked, layout)
         return layout
 
     def hasHeightForWidth(self) -> bool:
@@ -360,8 +453,11 @@ class _Wrapped(QLabel):
 
 class _Lines(_Wrapped):
     """Wrapped words in the fixed-width face that a person selects with the mouse, a double click selecting them
-    whole, and copies as written: the keyboard's copy and select-all and the menu of the right button do that. A
-    command so copied is one line, as it was written."""
+    whole, and copies as written: the keyboard's copy and select-all and the menu of the right button do that, the
+    menu the toolkit's own for a selectable label. A selection is counted as the text layout counts the words, in
+    UTF-16 units (two for a character outside the Basic Multilingual Plane), and ends when the keyboard goes to
+    another control, but not when the window or a popup takes it. A command so copied is one line, as it was
+    written."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -375,18 +471,22 @@ class _Lines(_Wrapped):
         self._anchor = self._cursor = 0
         self.update()
 
+    def _units(self) -> int:
+        """How long the words are, in the units the text layout counts."""
+        return len(self.text().encode("utf-16-le")) // 2
+
     def selectedText(self) -> str:
         """The words selected, as written."""
         start, end = sorted((self._anchor, self._cursor))
-        return self.text()[start:end]
+        return self.text().encode("utf-16-le")[2 * start:2 * end].decode("utf-16-le")
 
     def hasSelectedText(self) -> bool:
         return self._anchor != self._cursor
 
     def setSelection(self, start: int, length: int) -> None:
-        """Select ``length`` characters of the words from ``start``."""
-        self._anchor = max(0, min(start, len(self.text())))
-        self._cursor = max(0, min(start + length, len(self.text())))
+        """Select ``length`` units of the words from ``start``, counted as the text layout counts them."""
+        self._anchor = max(0, min(start, self._units()))
+        self._cursor = max(0, min(start + length, self._units()))
         self.update()
 
     def _marked(self) -> list:
@@ -412,6 +512,7 @@ class _Lines(_Wrapped):
                 return line.xToCursor(point.x() - room.left())
         return 0
 
+    @reported(QLabel.mousePressEvent)
     def mousePressEvent(self, event):
         if event.button() != Qt.LeftButton:
             super().mousePressEvent(event)
@@ -419,6 +520,7 @@ class _Lines(_Wrapped):
         self._anchor = self._cursor = self._place(event.position())
         self.update()
 
+    @reported(QLabel.mouseMoveEvent)
     def mouseMoveEvent(self, event):
         if not event.buttons() & Qt.LeftButton:
             super().mouseMoveEvent(event)
@@ -426,12 +528,14 @@ class _Lines(_Wrapped):
         self._cursor = self._place(event.position())
         self.update()
 
+    @reported(QLabel.mouseDoubleClickEvent)
     def mouseDoubleClickEvent(self, event):
         if event.button() != Qt.LeftButton:
             super().mouseDoubleClickEvent(event)
             return
         self._select_all()
 
+    @reported(QLabel.keyPressEvent)
     def keyPressEvent(self, event):
         if event.matches(QKeySequence.Copy):
             self._copy()
@@ -440,18 +544,29 @@ class _Lines(_Wrapped):
         else:
             super().keyPressEvent(event)
 
+    @reported(QLabel.focusOutEvent)
+    def focusOutEvent(self, event):
+        if event.reason() not in (Qt.ActiveWindowFocusReason, Qt.PopupFocusReason):
+            self.setSelection(0, 0)          # the selection ends with the keyboard, as a selectable label's does
+        super().focusOutEvent(event)
+
+    @reported(QLabel.contextMenuEvent)
     def contextMenuEvent(self, event):
+        """The toolkit's menu for a selectable label: "Copy", greyed with nothing selected, a line, then "Select All",
+        greyed for no words; a popup that is deleted once it closes."""
         menu = QMenu(self)
+        menu.setAttribute(Qt.WA_DeleteOnClose)
         copy = menu.addAction("&Copy\t" + QKeySequence(QKeySequence.Copy).toString(QKeySequence.NativeText))
         copy.setEnabled(self.hasSelectedText())
         copy.triggered.connect(self._copy)
+        menu.addSeparator()
         every = menu.addAction("Select All\t" + QKeySequence(QKeySequence.SelectAll).toString(QKeySequence.NativeText))
+        every.setEnabled(bool(self.text()))
         every.triggered.connect(self._select_all)
-        menu.exec(event.globalPos())
-        menu.deleteLater()
+        menu.popup(event.globalPos())
 
     def _select_all(self) -> None:
-        self.setSelection(0, len(self.text()))
+        self.setSelection(0, self._units())
 
     def _copy(self) -> None:
         """The selection to the clipboard, as written."""
@@ -685,9 +800,6 @@ class RunView(QWidget):
         lines = QVBoxLayout(self.text_block)
         lines.setContentsMargins(0, design.scaled(design.GAP["block"]), 0, 0)
         lines.setSpacing(design.scaled(design.GAP["head_table"]))
-        tools = QHBoxLayout()
-        tools.setContentsMargins(0, 0, 0, 0)
-        tools.setSpacing(design.scaled(design.GAP["action"]))
         self.find_field = QLineEdit()
         self.find_field.setPlaceholderText(FIND_HINT)
         self.find_field.returnPressed.connect(self._find)
@@ -698,12 +810,8 @@ class RunView(QWidget):
         self.file_button.clicked.connect(self._open_file)
         self.folder_button = QPushButton(OPEN_FOLDER)
         self.folder_button.clicked.connect(self._open_folder)
-        tools.addWidget(self.find_field, 1)
-        tools.addWidget(self.find_button)
-        tools.addStretch(0)
-        tools.addWidget(self.file_button)
-        tools.addWidget(self.folder_button)
-        lines.addLayout(tools)
+        self.tools = _Tools(self.find_field, (self.find_button, self.file_button, self.folder_button))
+        lines.addWidget(self.tools)
         self.full_text = LogPane(head=EARLIER_TEXT)
         # Console text: the fixed-width face, given at build.
         self.full_text.setFont(fonts.fixed())
@@ -983,7 +1091,8 @@ class RunView(QWidget):
         button to "Stop trying" while the run waits to be tried again, and back; an offer pressed to the stop button of
         the run it starts; at a stopped end to "Keep" while the training the stop kept is asked about, else to the
         sentence; at any other end to "Back to the form". A keyboard on a control that stays (the full text's, "Show
-        the full text") stays where it is."""
+        the full text") stays where it is. When what a run's end leaves to say comes into sight on the full page, at
+        the head of what scrolls, the middle is scrolled to its top, so that it is in sight when it comes."""
         live, full = self._mode == "live", not self._compact
         retrying = live and bool(self._retrying)
         axis = self._axis_shown and live and full and not retrying
@@ -1011,9 +1120,12 @@ class RunView(QWidget):
                  (self.resume_button, resumes), (self.stop_button, live and not retrying),
                  (self.withdraw_button, withdraws), (self.keep_open_button, keeps_open),
                  (self.stop_trying_button, retrying), (self.back_button, not live and full))
+        comes = ended and full and self.end.isHidden()       # what the run's end leaves to say comes into sight
         for widget, on in shown:                 # what takes the keyboard is in sight before what holds it goes
             if on:
                 widget.setVisible(True)
+        if comes:
+            self.body.verticalScrollBar().setValue(0)
         if stops:
             self.stop_button.setEnabled(True)
         focus = QApplication.focusWidget()
@@ -1045,6 +1157,7 @@ class RunView(QWidget):
         self.body.setVisible(full)
         self.text_block.setVisible(full and self._text_shown)
         self.head.fit()
+        self.tools.fit()
         self._hold_width()
 
     @reported(QWidget.showEvent)
@@ -1071,14 +1184,15 @@ class RunView(QWidget):
 
     def _hold_width(self) -> None:
         """The page asks for its least width while it shows in full, and for nothing more of its own while it is out
-        of sight or compact: the page of the column's other place never narrows the form beside it."""
+        of sight or compact: its least width is then what its parts ask, and no more."""
         least = design.scaled(LEAST_W) if self.isVisible() and not self._compact else 0
         if self.minimumWidth() != least:
             self.setMinimumWidth(least)
 
     def _hand_on(self, stops: bool, withdraws: bool, keeps: bool, retrying: bool) -> None:
         """The keyboard, held by a control of the page that goes or is greyed, to where the page's state now puts
-        it (``_arrange`` says where)."""
+        it (``_arrange`` says where). A control inside what scrolls is then made visible there, once the page is laid
+        out."""
         if self._mode == "live":
             target = (self.withdraw_button if withdraws else self.stop_trying_button if retrying
                       else self.stop_button if stops else self.sentence)
@@ -1089,6 +1203,13 @@ class RunView(QWidget):
         else:
             target = self.back_button
         target.setFocus(Qt.OtherFocusReason)
+        if self.body.isAncestorOf(target):
+            QTimer.singleShot(0, self, lambda: self._into_sight(target))
+
+    def _into_sight(self, target: QWidget) -> None:
+        """``target``, inside what scrolls, made visible there while it is in sight on the page."""
+        if target.isVisibleTo(self) and self.body.isVisibleTo(self):
+            self.body.ensureWidgetVisible(target)
 
     def _saving(self) -> bool:
         """Whether the run is saving its posterior, its fit ended: the stop button is greyed then."""
@@ -1203,6 +1324,7 @@ class RunView(QWidget):
     def _open_find(self) -> None:
         """Open the field that finds words in the full text, with the keyboard in it."""
         self.find_field.setVisible(True)
+        self.tools.fit()
         self.find_field.setFocus(Qt.OtherFocusReason)
 
     def _find(self) -> None:

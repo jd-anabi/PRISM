@@ -3446,6 +3446,57 @@ def test_live_simulation_keeps_its_own_view_under_the_runs_sentence(tmp_path, mo
     turn_until(app, lambda: not held.is_live())
 
 
+def test_a_live_simulation_that_fails_says_so_under_its_sentence_on_its_compact_page(tmp_path, monkeypatch):
+    """A live simulation that fails keeps its compact page above its own view, and says the failure there: under the
+    sentence that it failed, beside the error's marker, what failed and when, the error's own message quoted beneath
+    and "Show the full error"; nothing of what scrolls on a full page is in sight, and there is no way back to a form.
+    While compact, running or failed, the page asks for no width of its own."""
+    import numpy as np
+    from PySide6.QtCore import QPoint
+    from core.gui.panels import simulate_panel as live
+    from tests._fixtures import build_part, qt_app
+    from tests._runs import Clock, StandIn, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    clock = Clock(_at(20, 18, 17, 40))
+    held = _controller_on(tmp_path, clock)
+    cell = tmp_path / "cell.txt"
+    cell.write_text("# values\n", encoding="utf-8")
+    stand_in = StandIn(word="Live simulation")
+    monkeypatch.setattr(live, "build_stream_config", lambda model, path: SimpleNamespace(length_unit="nm"))
+    monkeypatch.setattr(live, "plan_stream", lambda cfg, t_obs: SimpleNamespace(total_steps=7_999,
+                                                                                 subsample_factor=2))
+    monkeypatch.setattr(live, "run_simulation_stream", stand_in)
+    panel = build_part(live.SimulatePanel)
+    panel.cell_picker.selected_path = lambda: str(cell)
+    shown_off_screen(panel, 1300, 900)
+    view = panel.run_view
+    panel._start()
+    panel._on_chunk(np.zeros((1_200, 2)))
+    app.processEvents()
+    assert (view.compact, view.isVisibleTo(panel), view.minimumWidth()) == (True, True, 0), (
+        "the live simulation's compact page asks for a width of its own", view.minimumWidth())
+    clock.advance(20)
+    message = ("NadrowskiSDE euler_compiled failed after 4500 steps (batch=1, segs=1, device=cuda:0, "
+               "dtype=torch.float32)")
+    stand_in.fail(RuntimeError(message))
+    turn_until(app, lambda: not held.is_live())
+    app.processEvents()
+    shown = [name for name in ("title", "text_button", "stop_button", "back_button", "stage_line", "sentence", "said",
+                               "failure", "full_error_button", "body", "text_block")
+             if getattr(view, name).isVisibleTo(view)]
+    assert (view.compact, view.isVisibleTo(panel), panel.live_view.isVisibleTo(panel), shown) == (
+        True, True, True, ["sentence", "said", "failure", "full_error_button"]), (
+        "the failed compact page does not show its sentence and its failure alone", shown)
+    under = view.sentence.mapTo(view, QPoint(0, view.sentence.height())).y()
+    assert view.failure.mapTo(view, QPoint(0, 0)).y() >= under, "the failure does not stand under the sentence"
+    assert (view.sentence.text(), view.failure_row.sentence.plain_text(), view.failure_message.text(),
+            view.full_error_button.text()) == (
+        "Live simulation failed.", f"Error. Live simulation failed on Tue 20 Oct, 18:18: {message}.", message,
+        "Show the full error"), (view.sentence.text(), view.failure_row.sentence.plain_text())
+    assert view.minimumWidth() == 0, ("the failed compact page asks for a width of its own", view.minimumWidth())
+
+
 def test_a_past_view_on_the_live_simulations_page_gives_the_live_view_back(tmp_path):
     """A live simulation keeps no history file, but a history file that names its page (another PRISM's) is drawn
     in the page's past view all the same, in the live view's place. "Back to the form" gives the live view back, and
@@ -3812,18 +3863,20 @@ _LONG_BOUNDS = (r"C:\Users\J\OneDrive - Hair Bundle Lab\PRISM inputs\Bounds\nadr
                 r"\master_tier1_spontaneous_and_driven_wide_box_october_retrain.txt")
 
 
-def _in_its_column(view, column, why) -> None:
+def _in_its_column(view, column, why, *, whole=True) -> None:
     """The run's page as its column holds it: it asks for no more width than the column; every part of it in sight
     begins at or right of the column's left edge and ends at or left of its right edge, and every label in sight that
-    keeps its words on one line, its name but, is as wide as its words; every button of its head is at least its own
-    size hint wide and its name is not cut to nothing; the line under the time axis stands under the axis; the
-    failure's row is as tall as its wrapped words need; and the health table's first column holds each word of it
-    whole, a word broken only after a hyphen. What the page let go of when its run began, deleted at the event loop's
-    next turn, is deleted first."""
+    keeps its words on one line, its name but, is as wide as its words; every button and every field of it in sight is
+    at least its own size hint wide; its name is not cut to nothing, is whole when ``whole``, and has the whole name as
+    its tooltip while it is cut and none while it is whole; the line under the time axis stands under the axis; the
+    failure's row, and every other label in sight that wraps its words, is as tall as its lines need; the health
+    table's first column holds each word of it whole, a word broken only after a hyphen, and its "Now" column holds as
+    ``_health_holds`` says. What the page let go of when its run began, deleted at the event loop's next turn, is
+    deleted first."""
     import re
     from PySide6.QtCore import QEvent, QPoint
     from PySide6.QtGui import QFontMetricsF
-    from PySide6.QtWidgets import QApplication, QLabel, QWidget
+    from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel, QLineEdit, QWidget
     from core.gui.widgets import rule_table
     from tests._look_helpers import _settle
     QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
@@ -3839,11 +3892,14 @@ def _in_its_column(view, column, why) -> None:
            if label.isVisibleTo(view) and label is not view.title and not label.hasHeightForWidth()
            and label.width() < label.sizeHint().width()]
     assert cut == [], (why, "labels of the page cut short", cut)
-    for button in (view.text_button, view.stop_button, view.withdraw_button, view.keep_open_button,
-                   view.stop_trying_button, view.back_button):
-        if button.isVisibleTo(view):
-            assert button.width() >= button.sizeHint().width(), (why, button.text(), button.width())
+    squeezed = [(type(part).__name__, part.text(), part.width(), part.sizeHint().width())
+                for part in view.findChildren(QAbstractButton) + view.findChildren(QLineEdit)
+                if part.isVisibleTo(view) and part.width() < part.sizeHint().width()]
+    assert squeezed == [], (why, "buttons or fields of the page narrower than they ask", squeezed)
+    name, shown = view.title.text(), view.title.shown()
     assert view.title.isVisibleTo(view) and view.title.width() > 0, (why, "the run's name is cut to nothing")
+    assert shown == name or not whole, (why, "a short name is cut", name, shown)
+    assert view.title.toolTip() == ("" if shown == name else name), (why, "the name's tooltip", view.title.toolTip())
     if view.axis_caption.isVisibleTo(view):
         under = view.axis.mapTo(column, QPoint(0, view.axis.height())).y()
         assert view.axis_caption.mapTo(column, QPoint(0, 0)).y() >= under, (why, "the caption runs into the axis")
@@ -3851,6 +3907,10 @@ def _in_its_column(view, column, why) -> None:
     if sentence.isVisibleTo(view):
         lines = sentence.heightForWidth(sentence.width())
         assert sentence.height() >= lines, (why, "the failure's row is lower than its lines", sentence.height(), lines)
+    low = [(label.text()[:40], label.height(), label.heightForWidth(label.width()))
+           for label in view.findChildren(QLabel) if label.isVisibleTo(view) and label.hasHeightForWidth()
+           and label.height() < label.heightForWidth(label.width())]
+    assert low == [], (why, "labels of the page lower than their lines", low)
     if view.health.isVisibleTo(view):
         table = view.health.view.model()
         metrics, (lead, gap) = QFontMetricsF(rule_table._face("text")), rule_table._pads(0, 3)
@@ -3859,6 +3919,53 @@ def _in_its_column(view, column, why) -> None:
         needs = max(metrics.horizontalAdvance(word) for word in words if word) + lead + gap
         assert view.health.view.columnWidth(0) >= needs, (why, "the health's first column is squeezed",
                                                           view.health.view.columnWidth(0), needs)
+        _health_holds(view, why)
+
+
+def _health_holds(view, why) -> None:
+    """The health table's "Now" column as wide as its widest word, and each row of the table as tall as its "Now" value's
+    lines at that column's width, and the space above and below them: the value laid out here as its cell sets it,
+    its figure semibold and its unit plain after one space, broken between words and inside a word only where the word
+    is wider than the line."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFontMetricsF, QTextCharFormat, QTextLayout, QTextOption
+    from core.gui import design
+    from core.gui.widgets import rule_table
+    table, rows = view.health.view, view.health.view.model()
+    figure, unit = rule_table._face("figure"), rule_table._face("unit")
+    lead, gap = rule_table._pads(1, 3)
+    room = table.columnWidth(1) - lead - gap
+    line, pad = design.scaled(design.TYPE["body"][1]), design.scaled(design.SIZE["table_pad"])
+    words = []
+    for row in range(rows.rowCount()):
+        cell = rows.index(row, 1).data(Qt.UserRole)
+        laid = QTextLayout(" ".join(part for part in (cell.figure, cell.unit) if part), unit)
+        if cell.figure:
+            bold = QTextLayout.FormatRange()
+            bold.start, bold.length = 0, len(cell.figure)
+            face = QTextCharFormat()
+            face.setFont(figure)
+            bold.format = face
+            laid.setFormats([bold])
+        option = QTextOption(Qt.AlignRight)
+        option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        laid.setTextOption(option)
+        laid.beginLayout()
+        count = 0
+        while True:
+            made = laid.createLine()
+            if not made.isValid():
+                break
+            made.setLineWidth(room)
+            count += 1
+        laid.endLayout()
+        needs = count * line + (design.scaled(design.TYPE["small"][1]) if cell.second else 0) + 2 * pad
+        assert table.rowHeight(row) >= needs, (why, "a health row is lower than its value's lines", cell.figure,
+                                               cell.unit, count, table.rowHeight(row), needs)
+        words += [(figure, cell.figure)] + [(unit, word) for word in cell.unit.split()]
+    widest = max(QFontMetricsF(face).horizontalAdvance(word) for face, word in words if word) + lead + gap
+    assert table.columnWidth(1) >= widest, (why, "the health's \"Now\" column is narrower than its widest word",
+                                            table.columnWidth(1), widest)
 
 
 def _written(table, monkeypatch) -> list:
@@ -3882,21 +3989,48 @@ def _written(table, monkeypatch) -> list:
     return written
 
 
+def _painted_name(title, monkeypatch) -> list:
+    """The words the run's name hands its style to write when it is drawn."""
+    written, style = [], title.style()
+
+    class Writer:
+        def drawItemText(self, painter, *told):
+            written.append(told[-2])
+            return style.drawItemText(painter, *told)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(title, "style", Writer)
+        title.grab()
+    return written
+
+
 @pytest.mark.parametrize("factor", [1.0, 1.5])
 def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path, monkeypatch, store):
     """At the window's least size, 900 x 600 grown with the text, a training's page fits the column it stands in,
-    at the ordinary text size and at one and a half times it, in each state where it holds the most: simulating, its
-    end firm; in its fit, with the fit's range named after a training of a long name, the health and the loss curve;
-    stopping, with three buttons; asking whether to keep the training its stop kept; failed in its fit, its own name
-    longer than the head's row and cut at its end with "…"; and failed so that only reopening PRISM can help, its
-    command naming a long path. At the opening size the page in the fit is as wide as in the simulation, and its
-    health table writes every word of its figures whole, a failed save's among them; there too, in each state seen
-    there, the page asks for no more width than the window's least size gives it. Before the page's first run, out of
-    sight, it asks for no width of its own, and the form beside the figures keeps its least width. The window is the
-    whole program's, in the look, on a screen as large as this computer's, its form and the run's page sharing the
-    room as they do there."""
+    at the ordinary text size and at one and a half times it, in each state where it holds the most: starting;
+    simulating, its end firm; in its fit, with the fit's range named after a training of a long name, the health and
+    the loss curve; stopping, with three buttons, two then one to a row at the ordinary text size; asking whether to
+    keep the training its stop kept; failed in its fit, its own name longer than the head's row, cut at its end with
+    "…" and drawn so, then with the error's kind and traceback shown; failed so that only reopening PRISM can help, its
+    command naming a long path; waiting to try again, with "Stop trying"; saving its posterior while the window waits
+    to close, with "Keep PRISM open"; and finished, its page brought back. A short name is whole in each. With the full
+    text shown and its find field open, each of its tools is at least as wide as it asks and stands inside the column.
+    At the opening size the page in the fit is as wide as in the simulation, the
+    line under its time axis stands beside the start while it fits there, and its health table writes every word of
+    its figures whole, a failed save's among them; there too, in each state seen there, the page asks for no more width
+    than the window's least size gives it, and the health's rows are as tall as their figures' lines. What a run's end
+    leaves to say is in sight when it comes on a page scrolled to its end: a kept stop's question, with the keyboard
+    on Keep, and a failure; a page whose end was in sight already is not scrolled again when Keep is answered; and
+    with the full text shown at the least size, the Keep the keyboard goes to is brought into sight. Before the page's first run, out of sight, it asks for no width of its own, and the form beside the
+    figures keeps its least width; back at the form after its last run it asks for none again. The window is the whole
+    program's, in the look, on a screen as large as this computer's, its form and the run's page sharing the room as
+    they do there."""
     import torch
+    from collections import Counter
     from types import SimpleNamespace
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
     from core.gui import design
     from core.gui.design import CONTROLS_MIN_W
     from core.gui.run import controller as controller_module
@@ -3904,7 +4038,7 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
     from tests._fixtures import build_fit_record, build_window, choose, qt_app
     from tests._look_helpers import _settle, _the_look, text_size
     from tests._runs import Clock, RunText, StandIn, turn_until
-    from tests._window_helpers import shown_off_screen
+    from tests._window_helpers import in_front, shown_off_screen
     app = qt_app()
     expected = (130, f"about 130 epochs: the last training of this kind, {_LONG_NAME}, ran 130")
     monkeypatch.setattr(controller_module, "_expected", lambda store, facts: expected)
@@ -3928,8 +4062,9 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
             view.minimumWidth(), host.controls_scroll.width())
         window.resize(*opening)
 
-        def begin(stand_in, *args, run_name="retrain_3", **kwargs):
-            host.run_spec = lambda fn, *a, **k: _training(name=run_name, stop_button="Stop training…")
+        def begin(stand_in, *args, run_name="retrain_3", retries=False, **kwargs):
+            host.run_spec = lambda fn, *a, **k: _training(name=run_name, stop_button="Stop training…",
+                                                           retries=retries)
             try:
                 assert host.dispatch(stand_in, *args, **kwargs), "the stand-in run was not started"
             finally:
@@ -3952,22 +4087,41 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
                 clock.advance(3780)
                 said(stand_in, _epoch(epoch), f"[fit] saved after pass {epoch}.")
 
-        def at(size, why):
+        def at(size, why, whole=True):
             window.resize(*size)
             _settle()
             if size == least:
-                _in_its_column(view, column, f"{why} at {factor}")
-            else:                                             # wide, it still asks for no more than the least gives it
-                asked = view.minimumSizeHint().width()
-                assert asked <= design.scaled(326), (f"{why} at {factor}", "the page asks for more width than the "
-                                                     "window's least size gives it", asked)
+                _in_its_column(view, column, f"{why} at {factor}", whole=whole)
+                return
+            asked = view.minimumSizeHint().width()             # wide, it still asks for no more than the least gives
+            assert asked <= design.scaled(326), (f"{why} at {factor}", "the page asks for more width than the "
+                                                 "window's least size gives it", asked)
+            if view.health.isVisibleTo(view):
+                _health_holds(view, f"{why} at {factor}")
 
         def kept(passes):
             return KeptNote(build_fit_record(store, passes=passes), passes, False, True, 1)
 
+        def to_the_end():
+            """The middle scrolled to its end, as a person who watches the loss curve leaves it."""
+            _settle()
+            bar = view.body.verticalScrollBar()
+            bar.setValue(bar.maximum())
+            _settle()
+            assert bar.value() == bar.maximum() > 0, ("the middle does not scroll here", bar.maximum())
+
+        def in_sight(*parts):
+            """Whether every part lies inside the middle's viewport, and where each one's top and bottom are in it."""
+            port = view.body.viewport()
+            spans = [(part.mapTo(port, QPoint(0, 0)).y(), part.mapTo(port, QPoint(0, part.height())).y())
+                     for part in parts]
+            return all(0 <= top and bottom <= port.height() for top, bottom in spans), spans, port.height()
+
         main = StandIn(takes_stops=False)
         main.kept_fit = kept(12)
         begin(main)
+        assert held.status.state == "starting", held.status.state
+        at(least, "starting")
         said(main, _LINES["budget"], _LINES["rotation_begins"])
         clock.advance(99)
         said(main, _LINES["rotation_done"], _LINES["simulation_writing"], _LINES["mem"])
@@ -3980,6 +4134,10 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
         framed(main, 6150)
         said(main, _LINES["patho_batch"], _LINES["chi_batch"], level="warning")
         at(opening, "simulating")
+        caption = view.axis_caption
+        assert caption.words.mapTo(caption, QPoint(0, 0)).y() == caption.started.mapTo(caption, QPoint(0, 0)).y(), (
+            "the line under the time axis stands under its start where it fits beside it",
+            caption.started.geometry(), caption.words.mapTo(caption, QPoint(0, 0)), caption.width())
         simulating = view.width()
         at(least, "simulating")
         clock.advance(3850 * 9.7)
@@ -3997,31 +4155,60 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
         cut = [words for words in _written(view.health, monkeypatch) if chr(0x2026) in words]
         assert cut == [], ("the health table cuts its words", cut)
         at(least, "in the fit")
-        view.stop_button.click()
-        turn_until(app, lambda: held.status.state == "stopping")
-        at(opening, "stopping")
-        at(least, "stopping")
-        clock.advance(3780)
-        main.say(_epoch(34, since=20))                        # the line at which the stop is taken
-        turn_until(app, lambda: not held.is_live(), 20)
+        with in_front(window):
+            view.stop_button.setFocus(Qt.TabFocusReason)
+            QTest.keyClick(view.stop_button, Qt.Key_Space)    # the stop asked with the keyboard
+            turn_until(app, lambda: held.status.state == "stopping")
+            assert QApplication.focusWidget() is view.withdraw_button, QApplication.focusWidget()
+            at(least, "stopping")
+            rows = Counter(button.mapTo(view.head, QPoint(0, 0)).y() for button in
+                           (view.text_button, view.stop_button, view.withdraw_button) if button.isVisibleTo(view))
+            assert factor != 1.0 or [rows[top] for top in sorted(rows)] == [2, 1], (
+                "stopping's three buttons do not stand two then one", sorted(rows.items()))
+            at(opening, "stopping")
+            to_the_end()
+            clock.advance(3780)
+            main.say(_epoch(34, since=20))                    # the line at which the stop is taken
+            turn_until(app, lambda: not held.is_live(), 20)
+            _settle()
+            seen = in_sight(view.end, view.keep_button)
+            assert (QApplication.focusWidget() is view.keep_button, seen[0]) == (True, True), (
+                "a kept stop's question came out of sight, or the keyboard did not go to Keep", seen,
+                QApplication.focusWidget())
         assert view.keep_block.isVisibleTo(view)
         at(least, "asking whether to keep the training")
         at(opening, "asking whether to keep the training")
         cut = [words for words in _written(view.health, monkeypatch) if chr(0x2026) in words]
         assert cut == [], ("the health table cuts its words", cut)
+        to_the_end()
+        view.keep_button.click()                              # answered: the offer to resume stays in sight
+        _settle()
+        bar = view.body.verticalScrollBar()
+        assert view.offers.isVisibleTo(view) and bar.value() == bar.maximum() > 0, (
+            "a page whose end was in sight already was scrolled again", bar.value(), bar.maximum())
         view.back_button.click()
 
         failing = StandIn()
         failing.kept_fit = kept(5)
         begin(failing, run_name=_LONG_NAME)
         fitted(failing, 5)
+        window.resize(*opening)
+        to_the_end()
         clock.advance(1800)
         failing.fail(TypeError("unsupported operand type(s) for +: 'int' and 'NoneType'"))
         turn_until(app, lambda: not held.is_live(), 20)
-        at(least, "failed in the fit, a long name")
+        _settle()
+        seen = in_sight(view.end)
+        assert seen[0], ("a failure's end came out of sight", seen)
+        at(least, "failed in the fit, a long name", whole=False)
         shown = view.title.shown()
         assert shown.endswith(chr(0x2026)) and view.title.text().startswith(shown[:-1]), (
             "a name longer than its row is not cut at its end", shown)
+        painted = _painted_name(view.title, monkeypatch)
+        assert painted == [shown], ("the name is not drawn as it is cut", painted, shown)
+        view.full_error_button.click()
+        assert view.full_error.isVisibleTo(view)
+        at(least, "failed in the fit, its error's kind and traceback shown", whole=False)
         view.back_button.click()
 
         reopening = StandIn()
@@ -4038,6 +4225,77 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
         assert _LONG_BOUNDS in view.command_line.text() and view.command_line.isVisibleTo(view)
         at(least, "only reopening can help")
         view.back_button.click()
+
+        trying = StandIn()
+        begin(trying, retries=True)
+        said(trying, _LINES["budget"], _LINES["rotation_begins"], _LINES["rotation_done"],
+             _LINES["simulation_writing"])
+        framed(trying, 236)
+        try:
+            raise RuntimeError("CUDA error: out of memory")
+        except RuntimeError as card:
+            try:
+                raise RuntimeError("the simulation of batch 237 failed") from card
+            except RuntimeError as raised:
+                trying.fail(raised)                           # the graphics card's lack of memory
+        turn_until(app, lambda: held.status.state == "retrying", 20)
+        assert view.stop_trying_button.isVisibleTo(view)
+        at(least, "waiting to try again")
+        view.stop_trying_button.click()
+        turn_until(app, lambda: not held.is_live(), 20)
+        view.back_button.click()
+
+        saving = StandIn()
+        begin(saving)
+        fitted(saving, 1)
+        clock.advance(3780)
+        said(saving, _epoch(2, since=20))                    # the fit ends, and the posterior is saved
+        turn_until(app, lambda: held.model.stage == "Saving", 20)
+        held.request_stop(closing=True)                      # the window's close, which waits for the save
+        turn_until(app, lambda: view.keep_open_button.isVisibleTo(view), 20)
+        at(least, "saving while the window waits to close")
+        view.keep_open_button.click()
+        saving.release(SimpleNamespace(kind="posterior", id="20261011T091800", name="retrain_3"))
+        turn_until(app, lambda: not held.is_live(), 20)
+        assert held.status.outcome == "finished", held.status.outcome
+        view.how_link.click()
+        _settle()
+        assert view.isVisibleTo(window) and view.mode == "ended", (view.isVisibleTo(window), view.mode)
+        at(least, "finished")
+        view.back_button.click()
+
+        reading = StandIn(takes_stops=False)
+        reading.kept_fit = kept(3)
+        begin(reading)
+        fitted(reading, 3)
+        window.resize(*opening)
+        _settle()
+        view.text_button.click()
+        view.find_button.click()                             # opened at the opening size, then the window made least
+        window.resize(*least)
+        _settle()
+        asked = view.minimumSizeHint().width()
+        tools = [(part.mapTo(column, QPoint(0, 0)).x(), part.width(), part.sizeHint().width())
+                 for part in (view.find_field, view.find_button, view.file_button, view.folder_button)]
+        assert asked <= design.scaled(326) and all(left >= 0 and left + wide <= column.width() and wide >= asks
+                                                   for left, wide, asks in tools), (
+            f"the full text's tools at {factor}", "the page asks for more width than the window's least size gives "
+            "it, or a tool is narrower than it asks, or stands outside the column", asked, column.width(), tools)
+        with in_front(window):
+            view.stop_button.setFocus(Qt.TabFocusReason)
+            QTest.keyClick(view.stop_button, Qt.Key_Space)
+            turn_until(app, lambda: held.status.state == "stopping")
+            clock.advance(3780)
+            reading.say(_epoch(4, since=20))                  # the line at which the stop is taken
+            turn_until(app, lambda: not held.is_live(), 20)
+            _settle()
+            seen = in_sight(view.keep_button)
+            assert (QApplication.focusWidget() is view.keep_button, seen[0]) == (True, True), (
+                "with the full text shown, the keyboard went to a Keep out of sight", seen, QApplication.focusWidget())
+        view.back_button.click()
+        _settle()
+        assert view.minimumWidth() == 0, ("back at the form, the run's page still holds its width",
+                                          view.minimumWidth())
         window.hide()
 
 

@@ -682,36 +682,97 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
         f"python -m core train --resume-fit {kept}", False, False), _failure(view)
 
 
-def _lines_needed(label) -> tuple:
-    """How many lines a label's words take at its width, and how high they stand, when they may break inside a word
-    that is wider than a line, as a long path is, and nowhere else but between words."""
+def _laid_out(label):
+    """A label's words laid out at its width, as they may break: inside a word that is wider than a line, as a long
+    path is, and nowhere else but between words; the lines one under the other from the label's top left."""
+    from PySide6.QtCore import QPointF
     from PySide6.QtGui import QTextLayout, QTextOption
     layout = QTextLayout(label.text().replace("\n", chr(0x2028)), label.font())
     option = QTextOption()
     option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
     layout.setTextOption(option)
     layout.beginLayout()
-    count, height = 0, 0.0
+    top = 0.0
     while True:
         line = layout.createLine()
         if not line.isValid():
             break
         line.setLineWidth(label.width())
-        count, height = count + 1, height + line.height()
+        line.setPosition(QPointF(0, top))
+        top += line.height()
     layout.endLayout()
-    return count, height
+    return layout
+
+
+def _lines_needed(label) -> tuple:
+    """How many lines a label's words take at its width, and how high they stand, laid out as ``_laid_out`` lays
+    them."""
+    layout = _laid_out(label)
+    return layout.lineCount(), sum(layout.lineAt(index).height() for index in range(layout.lineCount()))
+
+
+def _at_the_end_of(layout, index):
+    """The point at the end of the words of a line of ``layout``, and the place in the words it is nearest, counted
+    as the layout counts them."""
+    from PySide6.QtCore import QPoint
+    line = layout.lineAt(index)
+    x = line.naturalTextWidth() + 1
+    return QPoint(round(x), round(line.y() + line.height() / 2)), line.xToCursor(x)
+
+
+def _menu_of(label) -> tuple:
+    """The right button's menu of ``label``, opened as a person opens it, then closed: each entry's words, whether it
+    is a line, and whether it can be pressed; whether it stands in sight, is modal, and is deleted when it closes;
+    whether it ran a loop of its own, inside which a timer closes it; whether the label kept its selection while the
+    menu was open; and whether any menu is left once it has closed."""
+    from PySide6.QtCore import QEvent, QPoint, QTimer
+    from PySide6.QtGui import QContextMenuEvent
+    from PySide6.QtWidgets import QApplication, QMenu
+    looped = []
+
+    def close_inside():
+        looped.append(True)
+        for menu in label.findChildren(QMenu):
+            menu.close()
+
+    closer = QTimer()
+    closer.setSingleShot(True)
+    closer.timeout.connect(close_inside)
+    closer.start(0)                          # turned only by a loop the menu runs before the event returns
+    point = QPoint(2, 2)
+    QApplication.sendEvent(label, QContextMenuEvent(QContextMenuEvent.Mouse, point, label.mapToGlobal(point)))
+    closer.stop()
+    menus = label.findChildren(QMenu)
+    entries = [(action.text(), action.isSeparator(), action.isEnabled()) for menu in menus for action in menu.actions()]
+    kind = [(menu.isVisible(), menu.isModal(), menu.testAttribute(Qt.WA_DeleteOnClose)) for menu in menus]
+    kept = label.hasSelectedText()
+    for menu in menus:
+        menu.close()
+    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    return entries, kind, bool(looped), kept, bool(label.findChildren(QMenu))
 
 
 def test_a_long_command_and_a_long_message_wrap_within_a_narrow_page_and_the_command_is_copied_whole(tmp_path,
-                                                                                                    store):
+                                                                                                    store, monkeypatch):
     """On a run page 326 px wide, as at the window's least size, the command that resumes a training only reopening
     PRISM can help, naming its bounds file by a long path, takes as many lines as it needs, broken inside the path
-    where it must: its label is as tall as those lines. Selected whole and copied, it is the command exactly, one line
-    with nothing added. A failure's own message beneath, a long path among its words, wraps the same way."""
+    where it must: its label is as tall as those lines. A person selects it with the mouse, pressing at its first
+    character and letting go at the end of its last line: the press gives it the keyboard, and the keyboard's copy,
+    sent where the keyboard is, copies the command exactly, one line with nothing added. Neither the move of the drag
+    nor a repaint lays its words out again. Its right button's menu is the toolkit's own for a selectable label, entry
+    for entry: "Copy", a line, "Select All", each pressable as the toolkit's is, with a selection and without one, and
+    for no words; a popup, not modal and running no loop of its own, deleted once it closes, while which the selection
+    stays. The selection ends when the keyboard goes to another control; a double click selects the command whole. A
+    failure's own message beneath, a long path among its words and in it a character outside the Basic Multilingual
+    Plane, wraps the same way; a drag across that character copies exactly what is highlighted, and a double click
+    highlights it to its end. The clipboard is put back as it was."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QTextLayout
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
+    from core.gui.run import view as view_module
     from tests._look_helpers import _settle
-    from tests._window_helpers import shown_off_screen
+    from tests._window_helpers import in_front, shown_off_screen
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
@@ -737,23 +798,91 @@ def test_a_long_command_and_a_long_message_wrap_within_a_narrow_page_and_the_com
     assert (line.text(), line.isVisibleTo(view)) == (command, True), line.text()
     assert lines > 1 and line.width() <= view.width() and line.height() >= needed - 1, (
         "the command is not wrapped within the page", lines, line.height(), needed, line.width())
-    line.setSelection(0, len(line.text()))
-    QApplication.clipboard().clear()
-    QTest.keyClick(line, Qt.Key_C, Qt.ControlModifier)
-    assert QApplication.clipboard().text() == command, repr(QApplication.clipboard().text())
-    view.back_button.click()
-    path = f"C:/Users/J/PRISM/Artifacts/simulations/_unnamed__20261003T030211/{'very_long_batch_name_' * 3}6150.pt"
-    disk = StandIn()
-    start_run(host, disk, spec=_training())
-    _to_the_simulation(app, disk, text, held, _set(tmp_path, 236), 236)
-    disk.fail(OSError(28, "No space left on device", path))
-    _ended(app, held)
-    _settle()
-    message = view.failure_message
-    lines, needed = _lines_needed(message)
-    assert path in message.text() and lines > 1 and message.width() <= view.width(), (lines, message.text())
-    assert message.height() >= needed - 1, ("the message is not wrapped within the page", lines, message.height(),
-                                            needed)
+    clipboard = QApplication.clipboard()
+    was = clipboard.text()
+    toolkit = QLabel(host)                                   # the toolkit's own selectable label, for its menu
+    toolkit.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    toolkit.show()
+    try:
+        with in_front(host):
+            layout = _laid_out(line)
+            first = QPoint(1, round(layout.lineAt(0).height() / 2))
+            last, end = _at_the_end_of(layout, layout.lineCount() - 1)
+            QTest.mousePress(line, Qt.LeftButton, Qt.NoModifier, first)
+            assert QApplication.focusWidget() is line, ("a press does not give the command the keyboard",
+                                                        QApplication.focusWidget())
+            laid = []
+
+            class Counted(QTextLayout):
+                def __init__(self, *told):
+                    laid.append(told[0] if told else "")
+                    super().__init__(*told)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(view_module, "QTextLayout", Counted)
+                QTest.mouseMove(line, last)
+                line.grab()
+                line.grab()
+            QTest.mouseRelease(line, Qt.LeftButton, Qt.NoModifier, last)
+            assert laid == [], ("the command's words were laid out again", len(laid))
+            clipboard.clear()
+            QTest.keyClick(QApplication.focusWidget(), Qt.Key_C, Qt.ControlModifier)
+            assert (end, clipboard.text()) == (len(command), command), (
+                "the command dragged over and copied with the keyboard is not the command", end, repr(clipboard.text()))
+            toolkit.setText(command)
+            toolkit.setSelection(0, len(command))
+            ours, reference = _menu_of(line), _menu_of(toolkit)
+            assert ours == reference and reference[1:] == ([(True, False, True)], False, True, False), (
+                "the right button's menu is not the toolkit's", ours, reference)
+            view.back_button.setFocus(Qt.TabFocusReason)
+            assert not line.hasSelectedText(), ("the command keeps its selection after the keyboard left it",
+                                                line.selectedText())
+            toolkit.setSelection(0, 0)
+            assert _menu_of(line)[:3] == _menu_of(toolkit)[:3], "the menu with no selection"
+            QTest.mouseDClick(line, Qt.LeftButton, Qt.NoModifier, first)
+            assert (QApplication.focusWidget(), line.selectedText()) == (line, command), (
+                "a double click does not select the command whole", QApplication.focusWidget(), line.selectedText())
+        view.back_button.click()
+        path = (f"C:/Users/J/PRISM/Artifacts/simulations/_unnamed__20261003T030211/{chr(0x1F4C1)}"
+                f"{'very_long_batch_name_' * 3}6150.pt")
+        disk = StandIn()
+        start_run(host, disk, spec=_training())
+        _to_the_simulation(app, disk, text, held, _set(tmp_path, 236), 236)
+        disk.fail(OSError(28, "No space left on device", path))
+        _ended(app, held)
+        _settle()
+        message = view.failure_message
+        lines, needed = _lines_needed(message)
+        assert path in message.text() and lines > 1 and message.width() <= view.width(), (lines, message.text())
+        assert message.height() >= needed - 1, ("the message is not wrapped within the page", lines, message.height(),
+                                                needed)
+        words = message.text().encode("utf-16-le")
+        units = words.find(chr(0x1F4C1).encode("utf-16-le")) // 2                       # where the character is
+        layout = _laid_out(message)
+        holds = next(index for index in range(layout.lineCount())
+                     if layout.lineAt(index).textStart() + layout.lineAt(index).textLength() > units)
+        last, end = _at_the_end_of(layout, holds + 1)               # the end of the line after the character's
+        assert units + 2 <= end < len(words) // 2, ("the drag does not cross the character, or takes it all", units,
+                                                     end, len(words) // 2)
+        with in_front(host):
+            QTest.mousePress(message, Qt.LeftButton, Qt.NoModifier, QPoint(1, round(layout.lineAt(0).height() / 2)))
+            QTest.mouseMove(message, last)
+            QTest.mouseRelease(message, Qt.LeftButton, Qt.NoModifier, last)
+            marked = [(shown.start, shown.length) for shown in message._marked()]
+            clipboard.clear()
+            QTest.keyClick(QApplication.focusWidget(), Qt.Key_C, Qt.ControlModifier)
+            highlighted = words[:2 * end].decode("utf-16-le")
+            assert (marked, clipboard.text()) == ([(0, end)], highlighted), (
+                "the copy is not what is highlighted", marked, end, repr(clipboard.text()), repr(highlighted))
+            QTest.mouseDClick(message, Qt.LeftButton, Qt.NoModifier, last)
+            marked = [(shown.start, shown.length) for shown in message._marked()]
+            assert marked == [(0, len(words) // 2)], ("the whole message is not highlighted", marked, len(words) // 2)
+        message.setText("")
+        toolkit.setText("")
+        assert _menu_of(message)[:3] == _menu_of(toolkit)[:3], "the menu for no words"
+    finally:
+        clipboard.setText(was)
+        toolkit.deleteLater()
 
 
 # ── continuing and resuming from the run's page ──
