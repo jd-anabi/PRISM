@@ -264,11 +264,15 @@ def _appearance_over():
     rest is the stand-in's own: the fonts it sets for widget classes are only kept, Windows' scheme is ``windows``
     on the hints it hands out (a change of it told by their ``colorSchemeChanged``), and the application's windows
     are the list handed out, never asked of Windows or of the real application. Yields ``(appearance, windows,
-    hints)``; the palette, the sheet, the look's theme flag and the module's active Appearance are put back
-    afterwards."""
-    from PySide6.QtCore import QObject, Qt, Signal
+    hints)``. Afterwards, however the block ended, every window in the list is closed and deleted; the palette, the
+    sheet, the look's theme flag and the module's active Appearance are put back; and the fonts the real
+    application keeps for widget classes are PRISM's again if they were PRISM's before, as the first sheet an
+    application is given and the last one taken from it each give those classes the toolkit's font."""
+    import shiboken6
+    from PySide6.QtCore import QCoreApplication, QEvent, QObject, Qt, Signal
     from PySide6.QtGui import QPalette
-    from core.gui import design, theming
+    from PySide6.QtWidgets import QApplication
+    from core.gui import design, fonts, theming
 
     real = qt_app()
 
@@ -305,13 +309,27 @@ def _appearance_over():
         def topLevelWidgets(self):
             return list(self.windows)
 
+    class Given(dict):                                      # the font PRISM gives each widget class, by its name
+        def setFont(self, font, name):
+            self[name] = font
+
+    given = Given()
+    fonts.apply_class_fonts(given)
+    prisms = all(QApplication.font(name) == font for name, font in given.items())
     found = (real.styleSheet(), QPalette(real.palette()), design.is_dark(), theming._ACTIVE)
     stand_in = Application()
     try:
         yield theming.Appearance(stand_in), stand_in.windows, stand_in.hints
     finally:
+        for window in stand_in.windows:
+            if shiboken6.isValid(window):
+                window.close()
+                window.deleteLater()
+                QCoreApplication.sendPostedEvents(window, QEvent.DeferredDelete)
         del stand_in.windows[:]
         real.setStyleSheet(found[0])
+        if prisms:
+            fonts.apply_class_fonts(real)
         real.setPalette(found[1])
         design.set_dark(found[2])
         theming._ACTIVE = found[3]
@@ -345,71 +363,85 @@ def test_a_figure_windows_toolbar_draws_its_icons_for_each_theme_it_is_switched_
     window among them, draws them again for the new ground, at once: Light to Dark, Dark to Light, and Windows
     changing its scheme while PRISM follows it; on a window in sight, and on one held while a run is live, its
     toolbar hidden, which shows the new icons when it is let go. Read off the icons themselves, against the
-    toolbar's ground as it is painted. The figure of a held window is not drawn by the change. The icons are drawn
-    by the library's own call, which is not its public interface: the call must be there, or a window's icons would
+    toolbar's ground as it is painted. A held window stays held through the change: its toolbar and its canvas
+    hidden, its figure's picture in their place, and its figure neither drawn nor laid out. The icons are drawn by
+    the library's own call, which is not its public interface: the call must be there, or a window's icons would
     keep the colours of the theme it was built in."""
     import pickle
     import matplotlib.pyplot as plt
-    from PySide6.QtCore import QCoreApplication, QEvent, Qt
+    from PySide6.QtCore import Qt
     from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
     from core.gui.widgets.figure_window import build_interactive_window
+    from tests._look_helpers import _settle
+    from tests._runs import turn_until
     assert callable(getattr(NavigationToolbar2QT, "_icon", None)), (
         "the figure library's toolbar no longer has its own call that draws an icon for the ground it sees "
         "(_icon): a figure window's icons cannot follow the theme until the call that took its place is used")
     app = qt_app()
     figure = pickle.dumps(_tiny_fig())
     plt.close("all")
-    seen, drawn = {}, []
+    seen, drawn, held = {}, [], set()
 
     def watched(window, name):
-        """Record each drawing of ``window``'s figure, and whether the window was held then."""
-        real = window.canvas.draw
-        window.canvas.draw = lambda: drawn.append((name, window._held)) or real()
+        """Record each drawing of ``window``'s figure, and each laying out of it that makes no picture, both of which
+        go through the figure's own call to draw, and whether the test held the window then."""
+        real = window._fig.draw
+        window._fig.draw = lambda *args, **kwargs: drawn.append((name, name in held)) or real(*args, **kwargs)
+
+    def still_held(window):
+        """Whether ``window`` is held as a run holds it: so by its own account, its toolbar and its canvas hidden, and
+        its figure's picture in sight in their place."""
+        return window._held, window.toolbar.isHidden(), window.canvas.isHidden(), window.picture.isVisible()
 
     with _appearance_over() as (appearance, windows, hints):
         appearance.set_mode("light")
         early = build_interactive_window(figure, "built in the light theme")
         windows.append(early)
+        watched(early, "early")
         early.show()
         seen["built light"] = _toolbar_icons(early)
         appearance.set_mode("dark")
         seen["light to dark"] = _toolbar_icons(early)
         late = build_interactive_window(figure, "built in the dark theme")
         windows.append(late)
+        watched(late, "late")
         late.show()
         assert early in app.topLevelWidgets() and late in app.topLevelWidgets(), (
             "a figure window is not one of the application's own windows, which a change of theme goes through")
-        pump(app, 0.1)                                         # each figure drawn once, as it opens
-        watched(early, "early")
-        watched(late, "late")
-        late.hold(True)                                        # a run has started
+        turn_until(app, lambda: {"early", "late"} <= {name for name, _held in drawn})   # each drawn as it opens
+        held.add("late")                                       # a run has started
+        late.hold(True)
         seen["built dark, held"] = _toolbar_icons(late)
         appearance.set_mode("light")
-        pump(app, 0.1)                                         # whatever the change asked has had its turn
+        _settle()                                              # whatever the change asked has had its turn
         seen["dark to light"] = (_toolbar_icons(early), _toolbar_icons(late))
+        seen["held through dark to light"] = still_held(late)
         late.hold(False)                                       # the run has ended
+        held.discard("late")
         seen["let go"] = _toolbar_icons(late)
+        held.add("early")
         early.hold(True)
         appearance.set_mode("system")                          # Windows is light: nothing is drawn again
         hints.windows = Qt.ColorScheme.Dark
         hints.colorSchemeChanged.emit(Qt.ColorScheme.Dark)
-        pump(app, 0.1)
+        _settle()
         seen["windows to dark"] = (_toolbar_icons(early), _toolbar_icons(late))
+        seen["held through windows to dark"] = still_held(early)
         early.hold(False)
+        held.discard("early")
         seen["let go, dark"] = _toolbar_icons(early)
         hints.windows = Qt.ColorScheme.Light
         hints.colorSchemeChanged.emit(Qt.ColorScheme.Light)
         seen["windows to light"] = (_toolbar_icons(early), _toolbar_icons(late))
-        for window in (early, late):
-            window.close()
-            QCoreApplication.sendPostedEvents(window, QEvent.DeferredDelete)
-    dark, light = (True, []), (False, [])
+    dark, light, kept = (True, []), (False, []), (True, True, True, True)
     assert seen == {"built light": light, "light to dark": dark, "built dark, held": dark,
-                    "dark to light": (light, light), "let go": light, "windows to dark": (dark, dark),
-                    "let go, dark": dark, "windows to light": (light, light)}, (
-        "a change of theme left a figure window's toolbar icons in the colours of another theme", seen)
-    assert [name for name, held in drawn if held] == [], (
-        "a change of theme drew the figure of a window held while a run is live", drawn)
+                    "dark to light": (light, light), "held through dark to light": kept, "let go": light,
+                    "windows to dark": (dark, dark), "held through windows to dark": kept, "let go, dark": dark,
+                    "windows to light": (light, light)}, (
+        "a change of theme left a figure window's toolbar icons in the colours of another theme, or a held window "
+        "no longer held", seen)
+    assert [name for name, was_held in drawn if was_held] == [], (
+        "a change of theme drew or laid out the figure of a window held while a run is live", drawn)
 
 def test_a_change_of_theme_keeps_a_figure_windows_view_mode_history_size_and_place():
     """A change of theme changes nothing of a popped-out figure but its toolbar's icons: the figure keeps its view
@@ -417,8 +449,8 @@ def test_a_change_of_theme_keeps_a_figure_windows_view_mode_history_size_and_pla
     and its place. The history is read by going back and forward through it after the change."""
     import pickle
     import matplotlib.pyplot as plt
-    from PySide6.QtCore import QCoreApplication, QEvent
     from core.gui.widgets.figure_window import build_interactive_window
+    from tests._look_helpers import _settle
     app = qt_app()
     figure = pickle.dumps(_tiny_fig())
     plt.close("all")
@@ -438,7 +470,7 @@ def test_a_change_of_theme_keeps_a_figure_windows_view_mode_history_size_and_pla
         window.toolbar.push_current()
         window.toolbar.back()                                  # one step back: both ways open
         window.toolbar.zoom()                                  # the zoom tool on
-        pump(app, 0.1)
+        _settle()
 
         def state():
             """The view, the toolbar's mode as it holds it and as its two tools show it, whether it can go back and
@@ -453,15 +485,13 @@ def test_a_change_of_theme_keeps_a_figure_windows_view_mode_history_size_and_pla
         assert before == ((0.5, 1.5), "ZOOM", True, False, True, True, (700, 480), (40, 50)), (
             "the window is not where the test put it: nothing is tested", before)
         appearance.set_mode("dark")
-        pump(app, 0.1)
+        _settle()
         icons, after = _toolbar_icons(window), state()
         window.toolbar.back()
         went_back = tuple(axes.get_xlim())
         window.toolbar.forward()
         window.toolbar.forward()
         went_forward = tuple(axes.get_xlim())
-        window.close()
-        QCoreApplication.sendPostedEvents(window, QEvent.DeferredDelete)
     assert icons == (True, []), ("the change of theme did not draw the toolbar's icons again", icons)
     assert (after, went_back, went_forward) == (before, first, (0.8, 1.2)), (
         "a change of theme changed the figure's view, the toolbar's mode or its history, or the window's size or "
@@ -483,8 +513,9 @@ def test_a_change_of_theme_passes_over_a_figure_window_that_is_closed():
     with _appearance_over() as (appearance, windows, hints):
         appearance.set_mode("light")
         closed = build_interactive_window(figure, "closed")
+        windows.append(closed)                                 # the closed one first: an error there stops the rest
         kept = build_interactive_window(figure, "kept open")
-        windows.extend([closed, kept])                         # the closed one first: an error there stops the rest
+        windows.append(kept)
         for window in windows:
             window.show()
         closed.close()
@@ -494,8 +525,6 @@ def test_a_change_of_theme_passes_over_a_figure_window_that_is_closed():
         icons = _toolbar_icons(kept)
         QCoreApplication.sendPostedEvents(closed, QEvent.DeferredDelete)
         gone = not shiboken6.isValid(closed)
-        kept.close()
-        QCoreApplication.sendPostedEvents(kept, QEvent.DeferredDelete)
     assert (icons, gone) == ((True, []), True), (
         "the change of theme did not go on past a closed figure window to draw the icons of the next", icons, gone)
     closed.retheme()                                           # deleted, its canvas gone with it: nothing is done

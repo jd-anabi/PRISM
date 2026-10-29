@@ -3343,10 +3343,11 @@ def test_a_figure_closed_on_its_runs_page_takes_its_frame_and_the_way_back_still
 
 
 def test_the_way_back_from_a_run_with_no_figure_puts_the_figure_in_front_before_it_in_front_again(tmp_path):
-    """Two figures of earlier runs stand on a page, the first of them in front, when a run starts that makes none:
-    hiding them for the run's page leaves the second in front. However that run ends, failed and then "Back to the
-    form", or finished, which gives the figures back at once, both are in sight again in the order they came and
-    the first is in front, as it was before the run."""
+    """Three figures of earlier runs stand on a page, the second of them in front, when a run starts that makes none:
+    hiding them for the run's page moves the front on to the third, the next in sight. However that run ends,
+    failed and then "Back to the form", or finished, which gives the figures back at once, all three are in sight
+    again in the order they came and the second is in front, as it was before the run: not the first tab, nor the
+    one the start left in front."""
     from tests._fixtures import build_run_host, qt_app
     from tests._runs import Clock, StandIn, start_run, turn_until
     from tests._window_helpers import shown_off_screen
@@ -3355,11 +3356,11 @@ def test_the_way_back_from_a_run_with_no_figure_puts_the_figure_in_front_before_
     host = build_run_host()
     view, stack = host.run_view, host.figure_stack
     shown_off_screen(host, 1300, 1000)
-    stack.add_figure("the first", b"")
-    stack.add_figure("the second", b"")
+    for name in ("the first", "the second", "the third"):
+        stack.add_figure(name, b"")
     seen = []
     for failed in (True, False):
-        stack.setCurrentIndex(0)                    # a person looks at the first
+        stack.setCurrentIndex(1)                    # a person looks at the second
         run = StandIn()
         start_run(host, run, spec=_training())
         moved = stack.tabText(stack.currentIndex())
@@ -3372,7 +3373,7 @@ def test_the_way_back_from_a_run_with_no_figure_puts_the_figure_in_front_before_
             turn_until(app, lambda: not held.is_live())
         seen.append((moved, [stack.tabText(index) for index in range(stack.count()) if stack.isTabVisible(index)],
                      stack.tabText(stack.currentIndex()), host.results.currentWidget() is host.figures))
-    assert seen == [("the second", ["the first", "the second"], "the first", True)] * 2, (
+    assert seen == [("the third", ["the first", "the second", "the third"], "the second", True)] * 2, (
         "the way back from a run that made no figure did not put the figure in front before it in front again", seen)
 
 
