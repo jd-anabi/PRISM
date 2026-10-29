@@ -64,9 +64,9 @@ def build_interactive_window(fig_pickle, title, on_close=None, parent=None, pict
 
 
 class InteractiveFigureWindow(QWidget):
-    """A live matplotlib canvas for a (main-thread) figure, with the standard navigation toolbar. ``picture`` is the
-    figure's picture (a QPixmap, or None when none is held), which stands in the canvas's place while the window
-    holds (``hold``)."""
+    """A live matplotlib canvas for a (main-thread) figure, with the standard navigation toolbar, whose icons follow
+    the theme (``retheme``). ``picture`` is the figure's picture (a QPixmap, or None when none is held), which stands
+    in the canvas's place while the window holds (``hold``)."""
 
     def __init__(self, fig, title="Figure", on_close=None, parent=None, picture=None):
         super().__init__(parent)
@@ -125,6 +125,26 @@ class InteractiveFigureWindow(QWidget):
             self.canvas.setVisible(True)
             self.toolbar.setVisible(True)
             self.picture.setVisible(False)
+
+    def retheme(self) -> None:
+        """Draw the toolbar's icons again for the theme now in force, the window held or not. The figure library
+        picks their colour once, as it builds the toolbar, from the ground the toolbar has then (dark icons on a
+        light ground, light ones on a dark ground), and never again, so a window built in one theme kept its icons
+        through a change to the other. A change of theme calls this on every window of the application, once the
+        new palette and sheet are set. Each icon is made by the library's own call, as at the build; that call is
+        not its public interface, and were it gone the icons would stay as they were built, so the figures' tests
+        fail when it is missing. Nothing else of the window is touched: the figure's view, the toolbar's mode and
+        its history, the window's size and place; nothing of the figure is laid out or drawn. A window closed
+        meanwhile is passed over."""
+        if self.toolbar is None:
+            return
+        draw = getattr(self.toolbar, "_icon", None)
+        if not callable(draw):
+            return
+        images = {text: image for text, _tip, image, _call in self.toolbar.toolitems if text is not None}
+        for action in self.toolbar.actions():
+            if action.text() in images:
+                action.setIcon(draw(f"{images[action.text()]}.png"))
 
     def closeEvent(self, event):
         if self._on_close is not None:
