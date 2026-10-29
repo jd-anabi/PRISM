@@ -208,8 +208,13 @@ class FigureStack(QTabWidget):
         if on and not self._only:
             self._before = getattr(front, "_number", None)
         self._only = on
+        # Only a tab whose sight changes is told it. The toolkit's tab bar, told a sight a tab already has, forgets
+        # that a tab told before it asked for the tabs to be laid out again: a tab that came back would stay undrawn,
+        # with no arrows to reach the tabs past the bar's edge, until something else laid the bar out.
         for index in range(self.count()):
-            self.setTabVisible(index, self._shows(self.widget(index)))
+            shows = self._shows(self.widget(index))
+            if self.isTabVisible(index) != shows:
+                self.setTabVisible(index, shows)
         shown = [index for index in range(self.count()) if self.isTabVisible(index)]
         if on and shown and (front is None or not self._of_the_run(front)):
             self.setCurrentIndex(shown[-1])

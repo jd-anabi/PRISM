@@ -3303,6 +3303,84 @@ def test_a_runs_page_shows_only_the_figures_that_run_made(tmp_path):
     popped.close()
 
 
+@pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
+def test_every_figure_back_from_a_runs_page_can_be_reached_by_the_tab_bars_arrows(dark, tmp_path):
+    """A page holds a figure of an earlier run when a run starts that makes two, in a column as wide as those two
+    tabs and half the earlier one: the run's page shows its two alone, side by side. "Back to the form" brings the
+    earlier figure back, and then, in either theme, every tab is laid out at its own width, the run's newest is in
+    front and wholly in sight, and the tab bar's two scroll arrows are in sight, each drawn in at least ten pixels
+    that stand apart from the bar's ground by four tenths of the scale of lightness or more. Pressing the left arrow
+    until it greys brings the earlier figure's tab wholly into sight."""
+    from collections import Counter
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtWidgets import QToolButton
+    from tests._fixtures import build_run_host, qt_app
+    from tests._look_helpers import _settle, _the_look
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    image, data = QImage(40, 30, QImage.Format_RGB32), QByteArray()
+    image.fill(0xFFFFFF)
+    buffer = QBuffer(data)
+    buffer.open(QIODevice.WriteOnly)
+    image.save(buffer, "PNG")
+    picture = bytes(data)
+    with _the_look(dark):
+        held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+        host = build_run_host()
+        view, stack = host.run_view, host.figure_stack
+        shown_off_screen(host, 1300, 820)
+        wide = stack.width()                        # the stack's width in the form, at the host's width
+        earlier = StandIn()
+        start_run(host, earlier, spec=_training())
+        stack.add_figure("Training and validation loss", picture)
+        earlier.release()
+        turn_until(app, lambda: not held.is_live())
+        later = StandIn()
+        start_run(host, later, spec=_training(name="retrain_13"))
+        stack.add_figure("Training and validation loss, retrain_13", picture)
+        stack.add_figure("Pathological trajectories, retrain_13", picture)
+        bar = stack.tabBar()
+        sizes = [bar.tabSizeHint(index).width() for index in range(bar.count())]
+        host.resize(1300 + sizes[1] + sizes[2] + sizes[0] // 2 - wide, 820)
+        _settle()
+        later.fail(RuntimeError("the run broke"))
+        turn_until(app, lambda: not held.is_live())
+        view.back_button.click()
+        _settle()
+        left, right = (bar.findChild(QToolButton, name) for name in ("ScrollLeftButton", "ScrollRightButton"))
+        painted = bar.grab().toImage()
+
+        def drawn(arrow):
+            """Whether ``arrow`` is in sight and drawn: ten pixels or more over it stand apart from the ground, the
+            colour painted most over it, by four tenths of the scale of lightness."""
+            if not arrow.isVisible():
+                return False
+            pixels = [painted.pixelColor(x, y) for y in range(arrow.y(), arrow.y() + arrow.height())
+                      for x in range(arrow.x(), arrow.x() + arrow.width())]
+            ground = QColor(Counter(pixel.name() for pixel in pixels).most_common(1)[0][0]).lightnessF()
+            return sum(abs(pixel.lightnessF() - ground) >= 0.4 for pixel in pixels) >= 10
+
+        def whole(index):
+            """Whether the tab at ``index`` is laid out at its own width and stands wholly before the arrows."""
+            rect = bar.tabRect(index)
+            return rect.width() == sizes[index] and rect.left() >= 0 and rect.right() < left.x()
+
+        arrows = (drawn(left), drawn(right))
+        laid = [bar.tabRect(index).width() for index in range(bar.count())]
+        front = (stack.currentIndex(), whole(stack.currentIndex()))
+        for _ in range(bar.count()):
+            if left.isEnabled():
+                left.click()
+                _settle()
+        reached = (left.isEnabled(), whole(0))
+    seen = (arrows, laid, front, reached)
+    assert seen == ((True, True), sizes, (2, True), (False, True)), (
+        "a figure given back by the run's page cannot be reached: its tab is not laid out, the arrows are not shown "
+        "or not drawn, the front tab is out of sight, or the left arrow does not reach the first tab", seen)
+
+
 def test_a_figure_closed_on_its_runs_page_takes_its_frame_and_the_way_back_still_shows_the_figures(tmp_path,
                                                                                                   monkeypatch):
     """A run's page lays its figures out again at each figure that comes or goes: the run's one figure is in sight as
