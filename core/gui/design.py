@@ -472,7 +472,10 @@ QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 # The greyed main button names the ordinary weight, the one rule with a state that names a weight at all: bold
 # words on a greyed button read as a button one may press. A state otherwise names no weight because a control
 # is measured once, at the weight of its plain rule, and wider words would be cut; here the plain rule is the
-# bold one, so the lighter words are narrower than what was measured and cannot be cut.
+# bold one, so the lighter words are narrower than what was measured and cannot be cut. A tool of a popped-out
+# figure's toolbar that is on, its Zoom or its Pan, takes the ground of a button held down: the figure library
+# draws the tool's icon alike on and off, so that ground is the one mark of it. The rule names that toolbar by the
+# name the figure window gives it, and reaches no other tool button of the window.
 _QSS_INTERIM = Template("""
 QListWidget, QTextEdit { border: 1px solid $field_line; border-radius: ${px_radius}px; background: $field;
                          color: $ink; placeholder-text-color: $ink_3; }
@@ -538,6 +541,7 @@ QProgressBar::chunk { border-radius: 3px; background: $accent; }
 QToolButton { border: none; background: transparent; border-radius: ${px_radius}px; color: $ink; }
 QToolButton:hover   { background: $hover_fill; }
 QToolButton:pressed { background: $press_fill; }
+QToolBar#figureToolbar QToolButton:checked { background: $press_fill; }
 QToolButton#helpBadge {
     border: 1px solid $rule_light; border-radius: ${px_badge_r}px; color: $ink_2;
     font-size: ${px_i_badge}px; padding: 0px; background: transparent;
@@ -558,8 +562,8 @@ INTERIM_SELECTORS = (
     "QHeaderView::section", "QHeaderView::section:hover", "QHeaderView::section:last",
     "QHeaderView::section:only-one", "QGroupBox", "QGroupBox::title", "QTabWidget::pane", "QTabBar",
     "QTabBar::tab", "QTabBar::tab:hover", "QTabBar::tab:selected", "QTabBar::tab:disabled", "QProgressBar",
-    "QProgressBar::chunk", "QToolButton", "QToolButton:hover", "QToolButton:pressed", "QToolButton#helpBadge",
-    "QToolButton#helpBadge:hover")
+    "QProgressBar::chunk", "QToolButton", "QToolButton:hover", "QToolButton:pressed",
+    "QToolBar#figureToolbar QToolButton:checked", "QToolButton#helpBadge", "QToolButton#helpBadge:hover")
 
 # the icon font's glyph sizes at the ordinary text size; only rules of the old layout read them
 _GLYPH_PX = {"px_i_icon": 18, "px_i_nav": 20, "px_i_badge": 13}

@@ -529,6 +529,69 @@ def test_a_change_of_theme_passes_over_a_figure_window_that_is_closed():
         "the change of theme did not go on past a closed figure window to draw the icons of the next", icons, gone)
     closed.retheme()                                           # deleted, its canvas gone with it: nothing is done
 
+def _grounds(holder, buttons):
+    """The colour ``holder`` is painted with most over each of ``buttons``, as it is painted now: a button's ground,
+    which its thin icon leaves mostly bare."""
+    from collections import Counter
+    from PySide6.QtCore import QPoint
+    painted = holder.grab().toImage()
+    ratio = painted.devicePixelRatio()
+    grounds = []
+    for button in buttons:
+        corner = button.mapTo(holder, QPoint(0, 0))
+        left, top = round(corner.x() * ratio), round(corner.y() * ratio)
+        width, height = round(button.width() * ratio), round(button.height() * ratio)
+        counted = Counter(painted.pixelColor(x, y).name().upper()
+                          for y in range(top, top + height) for x in range(left, left + width))
+        grounds.append(counted.most_common(1)[0][0])
+    return grounds
+
+def test_a_figure_windows_zoom_and_pan_show_while_they_are_on_and_no_other_tool_button_changes():
+    """The figure library draws the Zoom and the Pan of a popped-out figure's toolbar with one icon each, on or off.
+    The tool that is on takes the ground of a button held down, in either theme, and the toolbar's own ground again
+    once it is off: Zoom on, then Pan on (which puts Zoom off), then Pan off. The mark is that toolbar's alone: a
+    tool button that is on anywhere else, by itself or on a tool bar of its own, keeps the ground under it."""
+    import pickle
+    import matplotlib.pyplot as plt
+    from PySide6.QtWidgets import QHBoxLayout, QToolBar, QToolButton, QWidget
+    from core.gui import design
+    from core.gui.widgets.figure_window import build_interactive_window
+    from tests._look_helpers import _settle
+    qt_app()
+    figure = pickle.dumps(_tiny_fig())
+    plt.close("all")
+    seen, wanted = {}, {}
+    with _appearance_over() as (appearance, windows, hints):
+        for mode in ("light", "dark"):
+            appearance.set_mode(mode)
+            window = build_interactive_window(figure, f"built in the {mode} theme")
+            windows.append(window)
+            elsewhere = QWidget()
+            windows.append(elsewhere)
+            alone, bar = QToolButton(), QToolBar()
+            on = bar.addAction("on")
+            for checkable in (alone, on):
+                checkable.setCheckable(True)
+                checkable.setChecked(True)
+            row = QHBoxLayout(elsewhere)
+            row.addWidget(alone)
+            row.addWidget(bar)
+            window.show()
+            elsewhere.show()
+            _settle()
+            toolbar = window.toolbar
+            tools = {action.text(): toolbar.widgetForAction(action) for action in toolbar.actions()}
+            steps = []
+            for tool in ("Zoom", "Pan", "Pan"):
+                tools[tool].click()
+                steps.append(_grounds(toolbar, (tools["Zoom"], tools["Pan"])))
+            seen[mode] = (steps, _grounds(elsewhere, (alone, bar.widgetForAction(on))))
+            ground, down = (design.hex_colour(name, mode == "dark") for name in ("paper", "press_fill"))
+            wanted[mode] = ([[down, ground], [ground, down], [ground, ground]], [ground, ground])
+    assert seen == wanted, (
+        "a figure window's Zoom or Pan is not marked while on, a tool that is off is, or a tool button that is on "
+        "elsewhere is marked too", seen)
+
 # ── Labels + units ───────────────────────────────────────────────────────────────────────────────
 def test_labels_axis_and_rescale_render_latex_with_units():
     from core.Helpers import labels as L

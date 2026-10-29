@@ -86,6 +86,9 @@ class InteractiveFigureWindow(QWidget):
 
         self.canvas = FigureCanvasQTAgg(fig)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        # named for the sheet's rule that marks a tool of this toolbar while it is on (its Zoom or its Pan), whose
+        # icon the figure library draws alike on and off; the rule reaches no other tool button
+        self.toolbar.setObjectName("figureToolbar")
         # the figure's picture, in the canvas's place while the window holds: scaled down to the room the window
         # has, so that a picture larger than the window is no reason for it to grow
         self.picture = _FitLabel()
