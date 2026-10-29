@@ -3118,7 +3118,7 @@ def _model_says(model, now, right) -> dict:
 
 def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, monkeypatch):
     """While a page's run shows, the run's page stands in the right-hand column in the place of the page's
-    figures, which it holds in sight under its messages; the form stays at the left, in sight and locked. A run
+    figures, which it holds under its messages; the form stays at the left, in sight and locked. A run
     that finishes gives the column back, the figures in their place at the heights they had and "How the run went"
     above them, which opens the run's page again, ended. A run that is stopped or fails keeps its page, ended, until
     "Back to the form", and the layout saved meanwhile keeps the heights the figures had in their place; a failure
@@ -3142,10 +3142,9 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
     store, key = settings.settings(), f"layout/{host.layout_key()}/results"
 
     def column():
-        """Which page the column shows, whether the run's page holds the figures in sight under its messages, the
-        link above the figures, and the form's state: in sight, and free."""
-        return (host.results.currentWidget().objectName(),
-                view.isAncestorOf(host.figure_stack) and view.figures.isVisibleTo(view),
+        """Which page the column shows, whether the run's page holds the figures under its messages (in sight, the
+        figures its run made alone), the link above the figures, and the form's state: in sight, and free."""
+        return (host.results.currentWidget().objectName(), view.isAncestorOf(host.figure_stack),
                 view.how_link.isVisibleTo(host), host.controls_scroll.isVisibleTo(host), host.controls.isEnabled())
 
     def page():
@@ -3224,6 +3223,79 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
     ended(refused, lambda stand_in: stand_in.fail(Refusal("The posterior name 'retrain_3' is taken.", field="name")))
     assert column() == ("figures", False, False, True, True), "a refusal before anything was spent kept the column"
     assert [status.outcome for status in text.ended] == ["finished", "finished", "stopped", "finished", "failed", None]
+
+
+def test_a_runs_page_shows_only_the_figures_that_run_made(tmp_path):
+    """A page keeps every figure its runs made, as tabs, until they are closed. A run's page shows under its messages
+    only the figures that run made, from its start to its end, and nothing where they stand while it has made none:
+    no empty frame. The page's other figures are kept, out of sight, and "Back to the form" shows them all again, in
+    the order they came, the run's newest in front; "How the run went" shows the run's own alone again. A figure
+    window popped out from an older figure is left as it is: open, in sight, its title and its size the same."""
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    from PySide6.QtGui import QImage
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    host = build_run_host()
+    view, stack = host.run_view, host.figure_stack
+    shown_off_screen(host, 1300, 1000)
+    image, data = QImage(40, 30, QImage.Format_RGB32), QByteArray()
+    image.fill(0xFFFFFF)
+    buffer = QBuffer(data)
+    buffer.open(QIODevice.WriteOnly)
+    image.save(buffer, "PNG")
+    picture = bytes(data)
+
+    def tabs():
+        """The titles of the figures in sight, in the order they stand, and the one in front."""
+        return ([stack.tabText(index) for index in range(stack.count()) if stack.isTabVisible(index)],
+                stack.tabText(stack.currentIndex()))
+
+    def drawn():
+        """The run's page drawn again from its run, as the run's controller draws it at each look."""
+        held.tick()
+        app.processEvents()
+
+    earlier = StandIn()
+    start_run(host, earlier, spec=_training())
+    stack.add_figure("retrain_3's loss", picture)
+    earlier.release()
+    turn_until(app, lambda: not held.is_live())
+    stack._pop_out(stack.widget(0))
+    (popped,) = stack._windows
+    before = (popped.isVisible(), popped.windowTitle(), popped.size())
+
+    later = StandIn()
+    start_run(host, later, spec=_training(name="retrain_6"))
+    drawn()
+    assert (view.isAncestorOf(stack), view.figures.isVisibleTo(view), tabs()[0]) == (True, False, []), (
+        "a run's page shows a figure an earlier run made, or a frame for none", tabs())
+    stack.add_figure("retrain_6's loss", picture)
+    stack.add_figure("retrain_6's simulations", picture)
+    drawn()
+    assert (view.figures.isVisibleTo(view), tabs()) == (
+        True, (["retrain_6's loss", "retrain_6's simulations"], "retrain_6's simulations")), tabs()
+    later.fail(RuntimeError("the run broke"))
+    turn_until(app, lambda: not held.is_live())
+    stack.add_figure("opened after its end", picture)
+    assert (view.mode, view.figures.isVisibleTo(view), tabs()) == (
+        "ended", True, (["retrain_6's loss", "retrain_6's simulations"], "retrain_6's simulations")), (
+        "the ended run's page shows a figure that came after its end", tabs())
+    assert ((popped.isVisible(), popped.windowTitle(), popped.size()), popped in stack._windows) == (before, True), (
+        "the window popped out from an older figure was touched")
+    view.back_button.click()
+    assert tabs() == (["retrain_3's loss", "retrain_6's loss", "retrain_6's simulations", "opened after its end"],
+                      "retrain_6's simulations"), ("'Back to the form' does not show every figure again in its order",
+                                                   tabs())
+    view.how_link.click()
+    assert (view.figures.isVisibleTo(view), tabs()[0]) == (True, ["retrain_6's loss", "retrain_6's simulations"]), (
+        "'How the run went' shows figures that are not the run's", tabs())
+    view.back_button.click()
+    assert tabs()[0] == ["retrain_3's loss", "retrain_6's loss", "retrain_6's simulations", "opened after its end"]
+    assert (popped.isVisible(), popped.windowTitle(), popped.size()) == before
+    popped.close()
 
 
 def test_how_the_run_went_stands_above_the_figures_at_the_looks_gap(tmp_path):
@@ -4395,8 +4467,8 @@ def test_with_no_message_the_figures_stand_where_they_stand_after_the_messages(f
         clock = Clock(_at(8, 19, 2, 11))
         held, host, stand_in = _controller_on(tmp_path, clock), build_run_host(), StandIn()
         view, text = host.run_view, RunText(held)
-        host.figure_stack.add_figure("a figure", b"")
         start_run(host, stand_in, spec=_training())
+        host.figure_stack.add_figure("a figure", b"")                # the run's own
         shown_off_screen(host, design.scaled(1300), design.scaled(1000))
 
         def said(line, level="info"):

@@ -12,6 +12,10 @@ panned and saved (core/gui/widgets/figure_window.py), a window of its own that n
 While a run is live every figure pops out as its picture, in the image viewer, and says so on its button, and an
 interactive window already open shows its picture until the run has ended (``hold``): the window's thread lays out
 no figure while a run builds its own.
+
+While a run's page holds the stack, only the figures that run made are in sight (``only_the_run``): the tabs added
+from the run's start (``run_begins``) to its end (``run_ends``). The others stay as they are, out of sight, and come
+back when the page's figures are given back; a window popped out from one of them is left as it is.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
@@ -68,6 +72,10 @@ class FigureStack(QTabWidget):
         # returns (the lifetime trap BasePanel.dispatch handles for its workers), and so that each is reached while
         # it is open (``hold``). Dropped on close.
         self._windows = set()
+        self._added = 0                      # the tabs added so far: each carries its number, in the order it came
+        self._run = None                     # the page's last run's tabs by number: [its first, the first after it]
+        self._only = False                   # whether only that run's tabs are in sight
+        self._before = None                  # the tab in front when they alone came into sight
 
     def add_figure(self, title: str, png_bytes: bytes, fig_pickle=None):
         """Show a figure rendered to PNG bytes on a worker thread. ``fig_pickle`` (when present) is the
@@ -108,6 +116,7 @@ class FigureStack(QTabWidget):
         container._pix = pix
         container._title = title
         container._pop = pop
+        container._number, self._added = self._added, self._added + 1
         self._tip(container, controller().is_live())
         pop.clicked.connect(lambda: self._pop_out(container))
 
@@ -121,7 +130,10 @@ class FigureStack(QTabWidget):
         layout.addWidget(scroll, 1)
 
         idx = self.addTab(container, title)
-        self.setCurrentIndex(idx)
+        if self._shows(container):
+            self.setCurrentIndex(idx)
+        else:
+            self.setTabVisible(idx, False)       # a figure of no run the page shows comes into sight with the others
 
     @staticmethod
     def _tip(container, live: bool) -> None:
@@ -169,6 +181,49 @@ class FigureStack(QTabWidget):
             held = getattr(window, "hold", None)
             if callable(held):
                 held(on)
+
+    def run_begins(self) -> None:
+        """A run of the page has begun: the tabs added from now until it ends are its figures."""
+        self._run = [self._added, None]
+
+    def run_ends(self) -> None:
+        """The page's run has ended: no tab added from now on is a figure of it."""
+        if self._run is not None and self._run[1] is None:
+            self._run[1] = self._added
+
+    def only_the_run(self, on: bool) -> None:
+        """While the run's page holds the stack (``on``), only the figures its last run made are in sight, the newest
+        of them in front; off, every tab is in sight again where it stands, in the order the tabs came unless a person
+        moved one, and the tab that was in front before is in front again, unless a figure of the run came since."""
+        front = self.currentWidget()
+        if on and not self._only:
+            self._before = front
+        self._only = on
+        for index in range(self.count()):
+            self.setTabVisible(index, self._shows(self.widget(index)))
+        shown = [index for index in range(self.count()) if self.isTabVisible(index)]
+        if on and shown and self.currentIndex() not in shown:
+            self.setCurrentIndex(shown[-1])
+        elif not on:
+            ran = front is not None and self._of_the_run(front)
+            back = front if ran or self._before is None or self.indexOf(self._before) < 0 else self._before
+            if back is not None and self.indexOf(back) >= 0:
+                self.setCurrentWidget(back)
+            self._before = None
+
+    def in_sight(self) -> int:
+        """How many tabs are in sight."""
+        return sum(1 for index in range(self.count()) if self.isTabVisible(index))
+
+    def _of_the_run(self, container) -> bool:
+        """Whether the tab ``container`` is a figure of the page's last run: added from its start to its end."""
+        number, run = getattr(container, "_number", None), self._run
+        return (number is not None and run is not None and run[0] <= number
+                and (run[1] is None or number < run[1]))
+
+    def _shows(self, container) -> bool:
+        """Whether the tab ``container`` is in sight: every tab, or only the run's while its page holds the stack."""
+        return not self._only or self._of_the_run(container)
 
     def _drop_window(self, window):
         self._windows.discard(window)

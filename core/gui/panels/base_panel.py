@@ -285,11 +285,13 @@ class BasePanel(QWidget):
         return held.is_live() and held.host() is self
 
     def show_run(self) -> None:
-        """The run's page in the right-hand column, holding this page's figures under its messages: while this
+        """The run's page in the right-hand column, holding this page's figures under its messages, of them only
+        those its run made in sight (the others stay, out of sight, until the figures are given back): while this
         page's run is live, after a stop or a failure until "Back to the form", and again from "How the run
         went"."""
         if self.results_split.indexOf(self.figure_stack) >= 0:
             self._split_sizes = self.results_split.sizes()
+        self.figure_stack.only_the_run(True)
         self.run_view.hold_figures(self.figure_stack)
         self.run_view.how_link.setVisible(False)
         self.results.setCurrentWidget(self.run_view)
@@ -322,18 +324,24 @@ class BasePanel(QWidget):
 
     def show_figures(self) -> None:
         """The right-hand column back to this page's figures over its own lines, the figures the run's page held
-        handed back to their place, at the heights they had."""
+        handed back to their place, at the heights they had, every one of them in sight again. A run of this page
+        that is not live has ended: no figure that comes from now on is one of its."""
+        if not self.is_running():
+            self.figure_stack.run_ends()
         stack = self.run_view.release_figures()
         if stack is not None:
             self.results_split.insertWidget(self.results_split.count() - 1, stack)
             if self._split_sizes is not None:
                 self.results_split.setSizes(self._split_sizes)
+        self.figure_stack.only_the_run(False)
         self.results.setCurrentWidget(self.figures)
 
     def _run_began(self, spec) -> None:
-        """This page's run has begun: its page takes the right-hand column, unless the run only loads a record.
-        Called by the run's controller, once the run's page has been handed the run."""
+        """This page's run has begun: its page takes the right-hand column, its figures those that come from now on,
+        unless the run only loads a record. Called by the run's controller, once the run's page has been handed the
+        run."""
         if not spec.loads_only:
+            self.figure_stack.run_begins()
             self.show_run()
 
     def _run_over(self, status) -> None:
@@ -346,6 +354,7 @@ class BasePanel(QWidget):
         panel is free again and the run's page has been drawn ended."""
         if status.loading:
             return
+        self.figure_stack.run_ends()
         focus = QApplication.focusWidget()
         keys = focus is not None and self.run_view.isAncestorOf(focus)
         if status.state == "idle" and status.outcome != "failed":

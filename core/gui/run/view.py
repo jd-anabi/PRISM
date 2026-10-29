@@ -4,9 +4,10 @@ page's results while it runs and after it has stopped or failed.
 The page shows the run's stages with the chain's markers and words, the one sentence that says where the run
 stands, the time axis of the stage running with the line under it and the line that names what follows, the
 training's health, the fit's loss by epoch from its first record on, the messages newest first and, under them,
-the figures the page that started the run holds and lends it while it shows. "Show the full text" opens every
-line the run wrote, which the run's controller hands over as it says them; "Open the file" and "Open its folder"
-open the run's text file and the folder of runs, whose path is never written on the page.
+the figures the run made, which the page that started the run holds and lends it while it shows (nothing stands
+there when it made none). "Show the full text" opens every line the run wrote, which the run's controller hands over
+as it says them; "Open the file" and "Open its folder" open the run's text file and the folder of runs, whose path is
+never written on the page.
 
 The stop button asks what the run's stage keeps before it stops the run (a run whose stop loses nothing is stopped
 with no question); while the stop is pending, "Don't stop after all" withdraws it, and, when the window waits for
@@ -1022,12 +1023,12 @@ class RunView(QWidget):
             self._draw()
 
     def hold_figures(self, widget: QWidget) -> None:
-        """Hold the figures of the page that started the run, under the messages, while the page shows."""
-        if widget is self._held:
-            return
-        self.release_figures()
-        self._held = widget
-        self._figures.addWidget(widget)
+        """Hold the figures of the page that started the run, under the messages, while the page shows: in sight while
+        any of them is (the run's own, as the page that holds them shows them), and nothing while none is."""
+        if widget is not self._held:
+            self.release_figures()
+            self._held = widget
+            self._figures.addWidget(widget)
         self._arrange()
 
     def release_figures(self) -> QWidget | None:
@@ -1161,7 +1162,7 @@ class RunView(QWidget):
         messages = bool(self._message_rows) and full
         for part in (self.messages_head, self._messages_gap, self.messages):
             part.setVisible(messages)
-        count = getattr(self._held, "count", None)
+        count = getattr(self._held, "in_sight", None) or getattr(self._held, "count", None)
         self.figures.setVisible(full and self._held is not None and (count is None or count() > 0))
         self.body.setVisible(full)
         self.text_block.setVisible(full and self._text_shown)
