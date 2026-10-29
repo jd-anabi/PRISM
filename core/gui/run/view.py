@@ -18,18 +18,24 @@ error's message, and its kind and traceback when asked for. While the window wai
 when, and "Stop trying" stands in the stop button's place. The page of a training that failed or was stopped offers
 "Continue from batch N" or "Resume the training" while its run's call is kept for it, and no longer.
 
+It is laid out to fit the column it stands in at any width: its buttons go to rows of their own under the run's name
+where the two do not fit one row, and what a run's end leaves to say (its failure, the question of keeping a training,
+what the page offers) stands at the head of what scrolls, so that the page's height never cuts it short.
+
 It is live while the run is, ended once it has ended, and past when it is drawn from a run's files alone. A run
 with a view of its own shows the page in its compact form: the sentence and the stop button. The page lives
 inside the page that started the run, never in the window's own stack of places. Nothing here draws with the
 figure library: the figures it holds are pictures already, and the loss by epoch is painted by the window itself.
 """
+import math
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
-                               QSizePolicy, QVBoxLayout, QWidget)
+from PySide6.QtCore import QPointF, QSize, Qt, QUrl, Signal
+from PySide6.QtGui import (QDesktopServices, QFontMetrics, QKeySequence, QPainter, QTextCharFormat, QTextLayout,
+                           QTextOption)
+from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit,
+                               QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
 from .. import design, fonts, style
 from ..reported import reported
@@ -66,6 +72,12 @@ FULL_TEXT_LINES = 16
 FULL_ERROR_LINES = 12
 #: The least height of the figures the page holds, in pixels at the ordinary text size.
 FIGURES_LEAST_H = 320
+#: The least width of the page while it shows in full, in pixels at the ordinary text size: the room the window's
+#: least size gives the column it stands in. Every part of the page is laid out to fit it.
+LEAST_W = 326
+#: The least room the head keeps for the run's name beside its buttons, in pixels at the ordinary text size: a short
+#: name whole. When the name at this room and the buttons do not fit one row, the buttons go to rows of their own.
+NAME_LEAST_W = 160
 #: The marker beside each state word of the health table.
 STATE_MARKERS = {"Fine": "fine", "Look closer": "warn", "Not compared": "warn"}
 _STAMP = "%Y-%m-%d %H:%M:%S"
@@ -117,7 +129,7 @@ def _entries(path: Path) -> list:
 
 class _StageLine(QWidget):
     """The run's stages on one line, each a marker, its name and its words; two to a line when one line is too
-    narrow for them all."""
+    narrow for them all, and one to a line when two are too wide for it."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -168,12 +180,15 @@ class _StageLine(QWidget):
         return tuple((label.text(), shown.kind, words.text()) for _holder, shown, label, words in self._items)
 
     def _fit(self) -> None:
-        """One line when the stages fit the width, else two to a line."""
+        """One line when the stages fit the width, else two to a line when two fit it, else one to a line."""
         if not self._items:
             return
         gap = self._grid.horizontalSpacing()
-        need = sum(holder.sizeHint().width() for holder, *_parts in self._items) + (len(self._items) - 1) * gap
-        columns = len(self._items) if need <= self.width() or len(self._items) <= 2 else 2
+        wide = [holder.sizeHint().width() for holder, *_parts in self._items]
+        if sum(wide) + (len(wide) - 1) * gap <= self.width():
+            columns = len(wide)
+        else:
+            columns = 2 if max(wide[0::2]) + gap + max(wide[1::2], default=0) <= self.width() else 1
         if columns == self._columns:
             return
         for holder, *_parts in self._items:
@@ -188,6 +203,260 @@ class _StageLine(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._fit()
+
+
+class _Name(QLabel):
+    """The run's name in the page's head, cut at its end with "…" where the room it has is narrower than it."""
+
+    def shown(self) -> str:
+        """The name as it is drawn in the room it has now: whole, or cut at its end with "…"."""
+        return QFontMetrics(self.font()).elidedText(self.text(), Qt.ElideRight, self.contentsRect().width())
+
+    @reported()
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        try:                                 # a raise below must not leave a live painter on the label
+            self.style().drawItemText(painter, self.contentsRect(), int(self.alignment()), self.palette(),
+                                      self.isEnabled(), self.shown(), self.foregroundRole())
+        finally:
+            painter.end()
+
+
+class _Head(QWidget):
+    """The page's head: the run's name at the left and its buttons at the right, each button at its own width. They
+    stand on one row while the name, at its least room, and the buttons in sight fit side by side; else the name
+    stands alone on its row and the buttons on rows of their own under it, at the right, as many to a row as fit.
+    The head never asks for more width than its widest button."""
+
+    def __init__(self, title: QLabel, buttons) -> None:
+        super().__init__()
+        self._title, self._buttons = title, tuple(buttons)
+        self._plan = None
+        self._box = QVBoxLayout(self)
+        self._box.setContentsMargins(0, 0, 0, 0)
+        self._box.setSpacing(design.scaled(design.GAP["head_table"]))
+        # The name's row: the room the buttons leave goes to the name, or, where the name is not shown (the compact
+        # form), to the stretch after it: never to a button, which keeps its own width at the right.
+        self._first = QHBoxLayout()
+        self._first.setSpacing(design.scaled(design.GAP["head_buttons"]))
+        self._first.addWidget(title, 1)
+        self._first.addStretch(0)
+        self._box.addLayout(self._first)
+        self._rows = []                      # the rows of buttons under the name's, as many as there are buttons
+        for _button in self._buttons:
+            row = QHBoxLayout()
+            row.setSpacing(design.scaled(design.GAP["head_buttons"]))
+            row.addStretch(1)
+            self._box.addLayout(row)
+            self._rows.append(row)
+        for button in self._buttons:
+            self._first.addWidget(button, 0, Qt.AlignTop)
+
+    @reported(QWidget.minimumSizeHint)
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        widest = max((button.sizeHint().width() for button in self._buttons if not button.isHidden()), default=0)
+        return QSize(widest, hint.height())
+
+    @reported(QWidget.resizeEvent)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.fit()
+
+    def fit(self) -> None:
+        """Lay the name and the buttons in sight out for the head's width now."""
+        shown = [button for button in self._buttons if not button.isHidden()]
+        gap, width = design.scaled(design.GAP["head_buttons"]), self.width()
+        wide = [button.sizeHint().width() for button in shown]
+        least = min(self._title.sizeHint().width(), design.scaled(NAME_LEAST_W))
+        if self._title.isHidden() or least + sum(gap + one for one in wide) <= width:
+            plan = (tuple(shown),)
+        else:
+            plan, row, used = [()], [], 0
+            for button, one in zip(shown, wide):
+                if row and used + gap + one > width:
+                    plan.append(tuple(row))
+                    row, used = [], 0
+                used += (gap if row else 0) + one
+                row.append(button)
+            plan = tuple(plan + [tuple(row)])
+        if plan == self._plan:
+            return
+        for button in self._buttons:
+            for row in (self._first, *self._rows):
+                row.removeWidget(button)
+        for row, buttons in zip((self._first, *self._rows), plan):
+            for button in buttons:
+                row.addWidget(button, 0, Qt.AlignTop)
+        self._plan = plan
+
+
+class _Wrapped(QLabel):
+    """Words wrapped within the page's width: between words where they can be, and inside a word wider than the line,
+    a long name or path most often, where they must, with nothing added to the words; a line break of the words' own
+    stays. Shown as written, in the font the label is given; never wider than the page."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setTextFormat(Qt.PlainText)
+        policy = QSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def _laid(self, width: float) -> QTextLayout:
+        """The words laid out in lines no wider than ``width``, from the top left."""
+        layout = QTextLayout(self.text().replace("\n", chr(0x2028)), self.font())      # one character for one
+        option = QTextOption()
+        option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        layout.setTextOption(option)
+        layout.beginLayout()
+        top = 0.0
+        while True:
+            line = layout.createLine()
+            if not line.isValid():
+                break
+            line.setLineWidth(max(1.0, width))
+            line.setPosition(QPointF(0, top))
+            top += line.height()
+        layout.endLayout()
+        return layout
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    @reported(QLabel.heightForWidth)
+    def heightForWidth(self, width):
+        if not self.text():
+            return 0
+        margins = self.contentsMargins()
+        layout = self._laid(width - margins.left() - margins.right())
+        last = layout.lineAt(layout.lineCount() - 1)
+        return math.ceil(last.y() + last.height()) + margins.top() + margins.bottom()
+
+    @reported(QLabel.sizeHint)
+    def sizeHint(self):
+        widest = max((QFontMetrics(self.font()).horizontalAdvance(line) for line in self.text().split("\n")),
+                     default=0)
+        return QSize(widest, self.heightForWidth(widest))
+
+    @reported(QLabel.minimumSizeHint)
+    def minimumSizeHint(self):
+        return QSize(0, self.heightForWidth(self.sizeHint().width()))
+
+    def _marked(self) -> list:
+        """What of the words is drawn marked: nothing here."""
+        return []
+
+    @reported()
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        try:                                 # a raise below must not leave a live painter on the label
+            room = self.contentsRect()
+            painter.setPen(self.palette().color(self.foregroundRole()))
+            self._laid(room.width()).draw(painter, QPointF(room.topLeft()), self._marked())
+        finally:
+            painter.end()
+
+
+class _Lines(_Wrapped):
+    """Wrapped words in the fixed-width face that a person selects with the mouse, a double click selecting them
+    whole, and copies as written: the keyboard's copy and select-all and the menu of the right button do that. A
+    command so copied is one line, as it was written."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFocusPolicy(Qt.ClickFocus)
+        self.setCursor(Qt.IBeamCursor)
+        self._anchor = self._cursor = 0
+
+    def setText(self, text: str) -> None:
+        """Show ``text``; nothing is selected."""
+        super().setText(text)
+        self._anchor = self._cursor = 0
+        self.update()
+
+    def selectedText(self) -> str:
+        """The words selected, as written."""
+        start, end = sorted((self._anchor, self._cursor))
+        return self.text()[start:end]
+
+    def hasSelectedText(self) -> bool:
+        return self._anchor != self._cursor
+
+    def setSelection(self, start: int, length: int) -> None:
+        """Select ``length`` characters of the words from ``start``."""
+        self._anchor = max(0, min(start, len(self.text())))
+        self._cursor = max(0, min(start + length, len(self.text())))
+        self.update()
+
+    def _marked(self) -> list:
+        """The selection, drawn in the colours of a selection."""
+        start, end = sorted((self._anchor, self._cursor))
+        if end == start:
+            return []
+        marked = QTextLayout.FormatRange()
+        marked.start, marked.length = start, end - start
+        shown = QTextCharFormat()
+        shown.setBackground(self.palette().highlight())
+        shown.setForeground(self.palette().highlightedText())
+        marked.format = shown
+        return [marked]
+
+    def _place(self, point) -> int:
+        """The place in the words nearest ``point``."""
+        room = self.contentsRect()
+        layout = self._laid(room.width())
+        for index in range(layout.lineCount()):
+            line = layout.lineAt(index)
+            if point.y() - room.top() < line.y() + line.height() or index == layout.lineCount() - 1:
+                return line.xToCursor(point.x() - room.left())
+        return 0
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self._anchor = self._cursor = self._place(event.position())
+        self.update()
+
+    def mouseMoveEvent(self, event):
+        if not event.buttons() & Qt.LeftButton:
+            super().mouseMoveEvent(event)
+            return
+        self._cursor = self._place(event.position())
+        self.update()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            super().mouseDoubleClickEvent(event)
+            return
+        self._select_all()
+
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.Copy):
+            self._copy()
+        elif event.matches(QKeySequence.SelectAll):
+            self._select_all()
+        else:
+            super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        copy = menu.addAction("&Copy\t" + QKeySequence(QKeySequence.Copy).toString(QKeySequence.NativeText))
+        copy.setEnabled(self.hasSelectedText())
+        copy.triggered.connect(self._copy)
+        every = menu.addAction("Select All\t" + QKeySequence(QKeySequence.SelectAll).toString(QKeySequence.NativeText))
+        every.triggered.connect(self._select_all)
+        menu.exec(event.globalPos())
+        menu.deleteLater()
+
+    def _select_all(self) -> None:
+        self.setSelection(0, len(self.text()))
+
+    def _copy(self) -> None:
+        """The selection to the clipboard, as written."""
+        if self.hasSelectedText():
+            QApplication.clipboard().setText(self.selectedText())
 
 
 class RunView(QWidget):
@@ -225,11 +494,7 @@ class RunView(QWidget):
         self._message_rows: list = []
 
         # the head: the run's name, and its actions at the right
-        self.head = QWidget()
-        head = QHBoxLayout(self.head)
-        head.setContentsMargins(0, 0, 0, 0)
-        head.setSpacing(design.scaled(design.GAP["head_buttons"]))
-        self.title = QLabel()
+        self.title = _Name()
         self.title.setTextFormat(Qt.PlainText)               # a name may hold "<" or "&"
         style.set_class(self.title, cls="head")
         self.title.setFont(fonts.inter("head"))
@@ -251,20 +516,13 @@ class RunView(QWidget):
         self.stop_trying_button.clicked.connect(self._stop_trying)
         self.back_button = QPushButton(BACK_TEXT)
         self.back_button.clicked.connect(self.back.emit)
-        head.addWidget(self.title, 1)
-        # The room the buttons leave goes to the title, or, in the compact form, where the title is not shown, to
-        # this stretch: never to a button, which keeps its own width at the right.
-        head.addStretch(0)
-        for button in (self.text_button, self.stop_button, self.withdraw_button, self.keep_open_button,
-                       self.stop_trying_button, self.back_button):
-            head.addWidget(button, 0, Qt.AlignTop)
+        self.head = _Head(self.title, (self.text_button, self.stop_button, self.withdraw_button, self.keep_open_button,
+                                       self.stop_trying_button, self.back_button))
 
         # where the run stands: its stages, its sentence, the time axis with its line, and what follows
         self.status = Ruled(top=design.SIZE["rule"], gap_top=design.scaled(design.GAP["status"][1]))
         self.stage_line = _StageLine()
-        self.sentence = QLabel()
-        self.sentence.setTextFormat(Qt.PlainText)
-        self.sentence.setWordWrap(True)
+        self.sentence = _Wrapped()              # a long name in it is wrapped inside, never let widen the page
         # The lettering face's heading size at the ordinary weight, its digits of equal width: the sentence's
         # counts and times change in place, and its words must not move with them. Given here, at build: a
         # font handed to a widget the sheet has already dressed is dropped at the next change of sheet.
@@ -274,8 +532,7 @@ class RunView(QWidget):
         self.axis_caption = AxisCaption(now, now)
         for label in (self.axis_caption.started, self.axis_caption.words):
             label.setFont(fonts.inter("body", tabular=True))
-        self.follows = QLabel()
-        self.follows.setTextFormat(Qt.PlainText)
+        self.follows = _Wrapped()               # within the page's width, a long name in it wrapped inside
         self.follows.setFont(fonts.inter("body", tabular=True))
         # under the sentence: what the page says of a stop and a close, and the question of keeping a training a
         # stop kept, which the page asks itself once the stop has landed
@@ -316,25 +573,15 @@ class RunView(QWidget):
         failure.setContentsMargins(0, 0, 0, 0)
         failure.setSpacing(design.scaled(design.GAP["head_table"]))
         self.failure_row = MessageRow("err", "", lead=LEADS["err"])
-        self.failure_message = QLabel()
-        self.failure_message.setTextFormat(Qt.PlainText)
-        self.failure_message.setWordWrap(True)
-        self.failure_message.setTextInteractionFlags(Qt.TextSelectableByMouse)
         # Console text: the fixed-width face, given at build. Its width is the page's: a long word of a message
-        # (a path) is cut at the page's edge, never let widen it.
+        # (a path) is wrapped inside it, never let widen the page.
+        self.failure_message = _Lines()
         self.failure_message.setFont(fonts.fixed())
-        wide = self.failure_message.sizePolicy()
-        wide.setHorizontalPolicy(QSizePolicy.Ignored)
-        self.failure_message.setSizePolicy(wide)
         # The command line a page sets off beneath its sentence (a kept training resumed outside the window): on a line
         # of its own, in the fixed-width face given at build, selectable, so that it is copied whole and nothing of
-        # the sentence with it.
-        self.command_line = QLabel()
-        self.command_line.setTextFormat(Qt.PlainText)
-        self.command_line.setWordWrap(True)
-        self.command_line.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # the sentence with it; wrapped within the page, inside a long path where it must, and copied as one line.
+        self.command_line = _Lines()
         self.command_line.setFont(fonts.fixed())
-        self.command_line.setSizePolicy(wide)
         self.noted = style.set_class(QLabel(retry.NOTED_TEXT), cls="quiet")
         self.file_line = style.set_class(QLabel(retry.FILE_TEXT), cls="quiet")
         for label in (self.noted, self.file_line):
@@ -375,11 +622,22 @@ class RunView(QWidget):
         offers.addWidget(self.resume_button)
         offers.addStretch(1)
         self.said = QWidget()
-        said = QVBoxLayout(self.said)
-        said.setContentsMargins(0, design.scaled(design.GAP["now"][1]), 0, 0)
-        said.setSpacing(design.scaled(design.GAP["head_table"]))
-        for part in (self.notice, self.closing_line, self.failure, self.keep_block, self.offers):
-            said.addWidget(part)
+        self._said = QVBoxLayout(self.said)
+        self._said.setContentsMargins(0, design.scaled(design.GAP["now"][1]), 0, 0)
+        self._said.setSpacing(design.scaled(design.GAP["head_table"]))
+        for part in (self.notice, self.closing_line):
+            self._said.addWidget(part)
+        # What the page says once its run has ended -- its failure, the question of keeping the training its stop kept,
+        # and what it offers -- stands at the head of what scrolls, so that no room the page has cuts it short; in the
+        # compact form, which shows nothing that scrolls, under the sentence (``_place_the_end``).
+        self.end = QWidget()
+        end = QVBoxLayout(self.end)
+        end.setContentsMargins(0, 0, 0, 0)
+        end.setSpacing(design.scaled(design.GAP["head_table"]))
+        for part in (self.failure, self.keep_block, self.offers):
+            end.addWidget(part)
+        self._end_gap = QWidget()                   # the gap after it at the head of what scrolls
+        self._end_gap.setFixedHeight(design.scaled(design.GAP["block"]))
         box = self.status.box
         box.addWidget(self.stage_line)
         box.addSpacing(design.scaled(design.GAP["now"][0]))
@@ -389,14 +647,16 @@ class RunView(QWidget):
         for part in (self.axis, self.axis_caption, self.follows):
             box.addWidget(part)
 
-        # what scrolls: the training's health, the fit's loss by epoch, the messages, the figures
+        # what scrolls: what the run's end leaves to say, the training's health, the fit's loss by epoch, the messages,
+        # the figures
         body = QWidget()
-        column = QVBoxLayout(body)
+        self._column = column = QVBoxLayout(body)
         column.setContentsMargins(0, design.scaled(design.GAP["status_to_body"]), 0, 0)
         column.setSpacing(0)
         self.health_head = SectionHead(HEALTH_TEXT)
-        self.health = RuleTable([Column("Measure"), Column("Now", "fit", right=True), Column("State", "fit")],
-                                selectable=False)
+        # a figure too long for its column goes on to a second line, and more, never cut
+        self.health = RuleTable([Column("Measure"), Column("Now", "fit", right=True, wrap=True),
+                                 Column("State", "fit")], selectable=False)
         # the gaps after the health's head and after its table, which come and go with them, as the curve's does
         self._health_head_gap, self._health_gap = QWidget(), QWidget()
         self._health_head_gap.setFixedHeight(design.scaled(design.GAP["head_table"]))
@@ -405,6 +665,8 @@ class RunView(QWidget):
         self._loss_gap = QWidget()                  # the gap after the curve, which comes and goes with it
         self._loss_gap.setFixedHeight(design.scaled(design.GAP["block"]))
         self.messages_head = SectionHead(MESSAGES_TEXT)
+        self._messages_gap = QWidget()              # the gap after the messages' head, which comes and goes with it
+        self._messages_gap.setFixedHeight(design.scaled(design.GAP["head_table"]))
         self.messages = QWidget()
         self._rows = QVBoxLayout(self.messages)
         self._rows.setContentsMargins(0, 0, 0, 0)
@@ -413,12 +675,9 @@ class RunView(QWidget):
         self._figures = QVBoxLayout(self.figures)
         self._figures.setContentsMargins(0, design.scaled(design.GAP["block"]), 0, 0)
         self.figures.setMinimumHeight(design.scaled(FIGURES_LEAST_H))
-        for part, after in ((self.health_head, None), (self._health_head_gap, None), (self.health, None),
-                            (self._health_gap, None), (self.loss, None), (self._loss_gap, None),
-                            (self.messages_head, "head_table"), (self.messages, None), (self.figures, None)):
+        for part in (self.end, self._end_gap, self.health_head, self._health_head_gap, self.health, self._health_gap,
+                     self.loss, self._loss_gap, self.messages_head, self._messages_gap, self.messages, self.figures):
             column.addWidget(part)
-            if after:
-                column.addSpacing(design.scaled(design.GAP[after]))
         self.body = Scroller(body)
 
         # the full text, hidden until asked for
@@ -493,6 +752,7 @@ class RunView(QWidget):
         (None for a run that keeps none), and the clock its moments are read from; its full text emptied. The
         page is live, in its compact form for a run with a view of its own."""
         self._mode, self._compact, self._model, self._stopping = "live", spec.own_view, None, False
+        self._place_the_end()
         self._closing, self._run, self._answered = False, None, False
         self._failed = self._noted = self._error_shown = self._resumable = self._close_saves = False
         self._retrying = self._refused = self._ended_words = ""
@@ -740,8 +1000,10 @@ class RunView(QWidget):
         main = "" if keeps else "primary"        # while Keep is asked, Keep is the main button and Resume beside it
         if self.resume_button.property("cls") != main:
             style.set_class(self.resume_button, cls=main)
-        shown = ((self.said, closing or notice or keeps or failed or continues or resumes), (self.notice, notice),
-                 (self.closing_line, closing), (self.failure, failed),
+        ended = keeps or failed or continues or resumes
+        shown = ((self.said, closing or notice or (ended and self._compact)), (self.notice, notice),
+                 (self.closing_line, closing), (self.end, ended), (self._end_gap, ended and not self._compact),
+                 (self.failure, failed),
                  (self.command_line, failed and bool(self.command_line.text())), (self.noted, failed and self._noted),
                  (self.file_line, failed and bool(self.file_line.text())),
                  (self._error_holder, failed and self._error_shown), (self.keep_block, keeps),
@@ -776,12 +1038,43 @@ class RunView(QWidget):
         self.loss.setVisible(full and self._fit_shown)
         self._loss_gap.setVisible(full and self._fit_shown)
         messages = bool(self._message_rows) and full
-        self.messages_head.setVisible(messages)
-        self.messages.setVisible(messages)
+        for part in (self.messages_head, self._messages_gap, self.messages):
+            part.setVisible(messages)
         count = getattr(self._held, "count", None)
         self.figures.setVisible(full and self._held is not None and (count is None or count() > 0))
         self.body.setVisible(full)
         self.text_block.setVisible(full and self._text_shown)
+        self.head.fit()
+        self._hold_width()
+
+    @reported(QWidget.showEvent)
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._hold_width()
+
+    @reported(QWidget.hideEvent)
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._hold_width()
+
+    def _place_the_end(self) -> None:
+        """What the page says once its run has ended at the head of what scrolls; in the compact form, which shows
+        nothing that scrolls, under the sentence."""
+        if (self._said.indexOf(self.end) >= 0) == self._compact:
+            return
+        if self._compact:
+            self._column.removeWidget(self.end)
+            self._said.addWidget(self.end)
+        else:
+            self._said.removeWidget(self.end)
+            self._column.insertWidget(0, self.end)
+
+    def _hold_width(self) -> None:
+        """The page asks for its least width while it shows in full, and for nothing more of its own while it is out
+        of sight or compact: the page of the column's other place never narrows the form beside it."""
+        least = design.scaled(LEAST_W) if self.isVisible() and not self._compact else 0
+        if self.minimumWidth() != least:
+            self.setMinimumWidth(least)
 
     def _hand_on(self, stops: bool, withdraws: bool, keeps: bool, retrying: bool) -> None:
         """The keyboard, held by a control of the page that goes or is greyed, to where the page's state now puts

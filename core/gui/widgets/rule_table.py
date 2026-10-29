@@ -3,8 +3,8 @@
 There are no lines between rows and none between columns. A cell is a small description (words, a value or
 a state) and one delegate paints all three kinds; the header paints its own words and the hairline under
 them, in one stroke across every column. A column is fixed, fitted to its widest cell, or takes the room
-left. The table is as tall as its rows and scrolls nothing itself: the page that holds it scrolls. Every
-row's height is set from its cells.
+left; a fitted column may wrap its values rather than cut them. The table is as tall as its rows and scrolls
+nothing itself: the page that holds it scrolls. Every row's height is set from its cells.
 
 Nothing is built when this module is imported, and no colour or font is kept between two paints: each is
 read from the look's table when a part is painted or measured, so a change of theme takes a repaint and
@@ -15,7 +15,8 @@ import math
 from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QFontMetricsF, QPainter, QPen, QStandardItem, QStandardItemModel, QTextLayout, QTextOption
+from PySide6.QtGui import (QFontMetricsF, QPainter, QPen, QStandardItem, QStandardItemModel, QTextCharFormat,
+                           QTextLayout, QTextOption)
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QSizePolicy, QStyle, QStyledItemDelegate,
                                QTableView)
 
@@ -56,10 +57,13 @@ class StateCell:
 
 @dataclass(frozen=True)
 class Column:
-    """One column of a table: the words over it and how wide it is."""
+    """One column of a table: the words over it and how wide it is. A fitted column that ``wrap``s sets a value too
+    long for it on as many lines as it needs, never cut, its row growing; in a table too narrow for every column it
+    gives up room, down to its own widest word, so that the column that takes the room left keeps its widest word."""
     title: str
     width: int | str | None = None    # pixels at ordinary text size, "fit", or None for the room left
     right: bool = False               # the header's words at the right, as over a column of values
+    wrap: bool = False                # a fitted column's values wrapped, never cut
 
 
 # One row to each lettered part of a table: the row of the look's type table it is set in, a weight that
@@ -112,6 +116,35 @@ def _wrapped(text: str, font, width: float, height: int):
                     for word in text.split(" "))
     layout = QTextLayout(laid, font)
     option = QTextOption()
+    option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+    layout.setTextOption(option)
+    layout.beginLayout()
+    count = 0
+    while True:
+        line = layout.createLine()
+        if not line.isValid():
+            break
+        line.setLineWidth(width)
+        line.setPosition(QPointF(0, count * height + (height - line.height()) / 2))
+        count += 1
+    layout.endLayout()
+    return layout, count
+
+
+def _wrapped_value(cell, width: float, height: int):
+    """A value laid out in lines no wider than ``width``, each ``height`` high, at the right: its figure semibold and
+    its unit plain after one space, broken between words where it can be and inside a word only where the word is
+    wider than ``width``. The layout, ready to be drawn from the top left of its place, and the number of its lines.
+    A second line is not laid out here."""
+    layout = QTextLayout(" ".join(part for part in (cell.figure, cell.unit) if part), _face("unit"))
+    if cell.figure:
+        bold = QTextLayout.FormatRange()
+        bold.start, bold.length = 0, len(cell.figure)
+        face = QTextCharFormat()
+        face.setFont(_face("figure"))
+        bold.format = face
+        layout.setFormats([bold])
+    option = QTextOption(Qt.AlignRight)
     option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
     layout.setTextOption(option)
     layout.beginLayout()
@@ -225,6 +258,16 @@ class RuleDelegate(QStyledItemDelegate):
                 painter.setFont(_face("word"))
                 painter.setPen(design.colour("ink"))
                 painter.drawText(line.adjusted(at, 0, 0, 0), Qt.AlignLeft | Qt.AlignVCenter, word)
+            elif isinstance(cell, ValueCell) and self.parent()._columns[index.column()].wrap:
+                layout, lines = _wrapped_value(cell, box.width(), height)
+                painter.setPen(design.colour("ink"))
+                layout.draw(painter, box.topLeft())
+                if cell.second:
+                    painter.setFont(_face("second"))
+                    painter.setPen(design.colour("ink_2"))
+                    under = QRectF(box.left(), box.top() + lines * height, box.width(),
+                                   design.scaled(design.TYPE["small"][1]))
+                    painter.drawText(under, Qt.AlignRight | Qt.AlignVCenter, _as_drawn(cell, box.width())[2])
             elif isinstance(cell, ValueCell):
                 plain = _face("unit")
                 figure, unit, second = _as_drawn(cell, box.width())
@@ -410,16 +453,53 @@ class RuleView(QTableView):
         width = min(design.scaled(design.SIZE["table_fit_most"]), math.ceil(need)) + lead + gap
         return max(width, design.scaled(design.SIZE["table_section_least"]))
 
+    def _widest(self, column: int) -> int:
+        """A column's widest word, its title's included, as its cells set their words, then the room the column keeps
+        clear of its words: the least that holds every word of the column whole. A state's marker and its word count
+        as one word."""
+        widest = QFontMetricsF(_face("title")).horizontalAdvance(self._columns[column].title)
+        model = self.model()
+        semibold = column == 0 and self.selectionMode() != QAbstractItemView.NoSelection
+        for row in range(model.rowCount()):
+            cell = model.index(row, column).data(Qt.UserRole)
+            if isinstance(cell, ValueCell):
+                words = [(_face("figure"), cell.figure)] + [(_face("unit"), word) for word in cell.unit.split()]
+            elif isinstance(cell, StateCell):
+                marker = design.scaled(design.SIZE["marker"]) + design.scaled(design.SIZE["state_gap"])
+                widest = max(widest, marker + QFontMetricsF(_face("word")).horizontalAdvance(cell.word))
+                continue
+            else:
+                words = [(_face("selected" if semibold else "text"), word) for word in cell.text.split()]
+            widest = max([widest] + [QFontMetricsF(face).horizontalAdvance(word) for face, word in words])
+        lead, gap = _pads(column, len(self._columns))
+        return max(math.ceil(widest) + lead + gap, design.scaled(design.SIZE["table_section_least"]))
+
     def _fit_columns(self) -> None:
-        """Give every column that has a width of its own that width, and the view its least width."""
+        """Give every column that has a width of its own that width, and the view its least width. A column that wraps
+        gives up room, down to its widest word, while the column that takes the room left is narrower than its own
+        widest word; the view's least width counts such a column at its widest word."""
         header = self.horizontalHeader()
         for index, column in enumerate(self._columns):
             if column.width is not None:
-                width = self._fit(index) if column.width == "fit" else design.scaled(column.width)
-                self._widths[index] = width
-                header.resizeSection(index, width)
+                self._widths[index] = self._fit(index) if column.width == "fit" else design.scaled(column.width)
+        stretch_least = design.scaled(design.SIZE["table_stretch_least"])
         taken = sum(width for width in self._widths if width is not None)
-        self.setMinimumWidth(taken + design.scaled(design.SIZE["table_stretch_least"]))
+        least = taken
+        wraps = [index for index, column in enumerate(self._columns) if column.wrap and column.width is not None]
+        if wraps:
+            left = next((index for index, width in enumerate(self._widths) if width is None), None)
+            want = stretch_least if left is None else max(stretch_least, self._widest(left))
+            over = taken + want - self.width()
+            for index in wraps:
+                floor = min(self._widths[index], self._widest(index))
+                give = max(0, min(over, self._widths[index] - floor))
+                self._widths[index] -= give
+                over -= give
+                least -= self._widths[index] + give - floor
+        for index, width in enumerate(self._widths):
+            if width is not None:
+                header.resizeSection(index, width)
+        self.setMinimumWidth(least + stretch_least)
 
     def _column_width(self, column: int) -> int:
         """A column's width as it WILL be: the one that takes the room left is not yet resized when the rows
@@ -443,6 +523,11 @@ class RuleView(QTableView):
             semibold = index.column() == 0 and self.selectionMode() != QAbstractItemView.NoSelection
             font = _face("selected" if semibold else "text")
             lines = line * _wrapped(cell.text, font, self._column_width(index.column()) - lead - gap, line)[1]
+        elif isinstance(cell, ValueCell) and self._columns[index.column()].wrap:
+            lead, gap = _pads(index.column(), len(self._columns))
+            lines = line * _wrapped_value(cell, self._column_width(index.column()) - lead - gap, line)[1]
+            if cell.second:
+                lines += design.scaled(design.TYPE["small"][1])
         elif isinstance(cell, ValueCell) and cell.second:
             lines = line + design.scaled(design.TYPE["small"][1])
         return max(lines + 2 * design.scaled(design.SIZE["table_pad"]), design.scaled(design.SIZE["table_row"]))
@@ -460,6 +545,8 @@ class RuleView(QTableView):
     @reported(QTableView.resizeEvent)
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if any(column.wrap for column in self._columns):
+            self._fit_columns()              # a column that wraps gives up room, or takes it back, at another width
         self._set_heights()                  # wrapped words take other lines at another width
 
     @reported()

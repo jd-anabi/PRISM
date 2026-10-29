@@ -6,9 +6,11 @@ two differ without their colours; each line named where it ends, in semibold; th
 "best so far: epoch 58", with a dotted drop to the epoch axis, its words set where no line runs through them, or,
 when no place near the ring is clear, on a ground of the page's colour; the newest epoch's tick in the ink and in
 semibold. Two choices sit in the top-right corner, the axes under them: "Recent", which draws the epochs from the
-tenth on, on a scale fitted to them, and "All epochs", set at first. A loss that is not a finite number leaves a gap
-in its line. The caption under it, in the book face, says what the loss is and when the fit ends. Given less room
-than its least width, the plot keeps that width and is cut at its right, and the page it stands on keeps its own.
+tenth on, on a scale fitted to them, and "All epochs", set at first. The highest loss stands a label's gap below the
+loss axis's name and the note of "Recent", so no line runs under them. A loss that is not a finite number leaves a gap
+in its line. The caption under it, in the book face, says what the loss is and when the fit ends. Its least width
+fits the run page's column at the window's least size; given less room than that, the plot keeps its least width and
+is cut at its right, and the page it stands on keeps its own.
 
 ``loss_layout`` works out where everything goes, as plain numbers, so it is tested without a painter; the curve
 paints only what it returns. Every colour, length and face is read from the look's table when the curve paints, so
@@ -129,7 +131,8 @@ def loss_layout(records: Sequence[EpochRecord], best: int | None, recent: bool, 
     "Recent" is chosen (taken only while ``recent_offered``), ``width`` and ``height`` the plot's size in pixels,
     ``measure(words, semibold)`` the width of words in the curve's lettering, and its ascent and descent, and
     ``corner`` the box the two choices take in the plot's top-right corner (its left, top, width and height), or
-    None. The axes then start under the choices, a label's gap below them, so that no line runs through them.
+    None. The axes then start under the choices, a label's gap below them, so that no line runs through them; and the
+    losses' scale ends a label's gap below the words at the head of the loss axis, so that no line runs under them.
 
     Keys: ``plot`` (the left, top, right and bottom of the axes' box); ``epochs`` (the epochs drawn); ``x_ticks``
     (each an x, its words and whether it is the newest epoch's) and ``y_ticks`` (each a y and its words);
@@ -165,14 +168,19 @@ def loss_layout(records: Sequence[EpochRecord], best: int | None, recent: bool, 
         return y + (ascent - descent) / 2
 
     # the axes' names: the epoch's centred under its axis; the loss's at the head of its axis, to its left, and the
-    # note of "Recent" beside the head, inside the axes
+    # note of "Recent" beside the head, inside the axes, or, in a plot too narrow for it beside the two choices, a
+    # label's gap under them
     head = top + design.scaled(shared["y_name_sink"])
     say(EPOCH_NAME, (left + right - measure(EPOCH_NAME, False)[0]) / 2, bottom + design.scaled(spec["x_name_drop"]),
         "ink")
     loss_name = say(LOSS_NAME, left - design.scaled(shared["y_name_gap"]) - measure(LOSS_NAME, False)[0], head,
                     "ink")
+    note = loss_name
     if out["note"]:
-        say(out["note"], left + design.scaled(shared["note_x"]), head, "ink_2")
+        x, (w, ascent, descent) = left + design.scaled(shared["note_x"]), measure(out["note"], False)
+        beside = QRectF(x, head - ascent, w, ascent + descent).adjusted(-gap, -gap, gap, gap)
+        meets = corner is not None and beside.intersects(QRectF(*corner))
+        note = say(out["note"], x, corner[1] + corner[3] + gap + ascent if meets else head, "ink_2")
     if not shown:
         return out
 
@@ -205,16 +213,19 @@ def loss_layout(records: Sequence[EpochRecord], best: int | None, recent: bool, 
         out["x_ticks"].append((x, words, newest))
         say(words, x - w / 2, under + measure(words, newest)[1], "ink" if newest else "ink_2", newest)
 
-    # the loss axis: the finite losses drawn, with a twentieth of their range more at each end
+    # the loss axis: the finite losses drawn, with a twentieth of their range more at each end; the highest stands a
+    # label's gap below the words at the head of the axis, its name and the note of "Recent", so that no line or
+    # marker runs under them
     losses = [value for record in shown for value in (record.validation_loss, record.training_loss)
               if _finite(value)]
     if not losses:
         return out
     low, high = min(losses), max(losses)
     low, high = (low - 1, high + 1) if high == low else (low - (high - low) * _MARGIN, high + (high - low) * _MARGIN)
+    ceiling = max(loss_name.bottom(), note.bottom()) + gap
 
     def at_y(value):
-        return bottom - (value - low) / (high - low) * (bottom - top)
+        return bottom - (value - low) / (high - low) * (bottom - ceiling)
 
     _w, ascent, descent = measure("0", False)
     tall = ascent + descent

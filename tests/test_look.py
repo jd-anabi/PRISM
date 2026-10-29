@@ -71,7 +71,7 @@ EXPECTED_COLOURS = {
     "disabled_fill": ("#F2F2F2", "#232323"), "disabled_line": ("#C4C4C4", "#4A4A4A"), "disabled_ink": ("#636363", "#9C9C9C"), "hatch": ("#4D4D4D", "#B8B8B8"),
     "elapsed": ("#1A1A1A", "#C8C8C8"), "series_2": ("#0072B2", "#56B4E9"), "series_6": ("#56B4E9", "#0072B2"), "series_7": ("#CC79A7", "#CC79A7"),
 }
-SIZES_DIGEST = "52347416e5db2d1e1206f3db9d868896c9cba54feea87fc4267038d7472158f7"
+SIZES_DIGEST = "b7bf76276dca53ed1b1ae072ad415ad363c1b2ac1f73e12ca3786d560f792c41"
 
 
 def test_the_colour_table_is_the_32_named_pairs_in_order():
@@ -105,6 +105,7 @@ def test_the_size_tables_are_the_agreed_numbers():
     assert (size["marker"], dialog["marker"], dialog["w"]) == (16, 24, 448)
     assert (size["rule"], size["hair"], size["bar"], size["focus_ring"], size["focus_gap"]) == (2, 1, 4, 2, 2)
     assert design.TYPE["small"][1] + 2 * size["table_pad"] + size["hair"] == 27          # a table's header
+    assert design.FIGURE["loss"]["min_w"] == 280         # the loss curve fits a run page's column at the least size
     text = json.dumps(tables, sort_keys=True, separators=(",", ":"))
     assert hashlib.sha256(text.encode("utf-8")).hexdigest() == SIZES_DIGEST, \
         "a size of the look's table changed: if it is meant, say which one and record the new digest here"
@@ -7554,9 +7555,10 @@ def test_the_loss_curve_marks_and_names_the_best_epoch(monkeypatch):
     With "Recent" chosen the ring stands at its epoch's place on the shorter axis. The drop stops at the axis: under
     it, clear of the tick labels, it leaves nothing. At every moment of the fit, from its first record to its 62nd,
     at the run page's width and at the least, in both choices, at two text sizes, no line runs through the words, a
-    line's half width counted, and they need no ground; for a fit whose lines swing across the whole plot, where no
-    place near the ring is clear, the words stand on a ground of the page's colour that covers them, painted after
-    the lines and before the words."""
+    line's half width counted: at the run page's width they need no ground, and at the least, where the plot is
+    narrow, a line that would run through them finds them on a ground that covers them; for a fit whose lines swing
+    across the whole plot, where no place near the ring is clear, the words stand on a ground of the page's colour
+    that covers them, painted after the lines and before the words."""
     loss = _lc()
     records, best = _fit(_LOSS_VALIDATION, _LOSS_TRAINING)
     assert best == 58
@@ -7642,8 +7644,10 @@ def test_the_loss_curve_marks_and_names_the_best_epoch(monkeypatch):
                         curve.set_epochs(prefix, best=best, patience=20)
                         for recent in (False, True) if curve.recent_button.isEnabled() else (False,):
                             curve.set_recent(recent)
-                            assert looked_at(curve, best) == (False, []), (
-                                factor, width, n, recent, "a line runs through the best epoch's words, or a ground")
+                            seen = looked_at(curve, best)
+                            assert seen == (False, []) or (width == least and seen == (True, [True])), (
+                                factor, width, n, recent, seen,
+                                "a line runs through the best epoch's words uncovered, or a ground with no need")
                         curve.set_recent(False)
                     swinging, best = _fit(swing, [value - 0.3 for value in swing])
                     curve.set_epochs(swinging, best=best, patience=20)
@@ -7680,12 +7684,15 @@ def test_recent_starts_at_epoch_ten_and_is_greyed_until_epoch_twelve():
         left, top, right, bottom = lay["plot"]
         assert (curve.recent, lay["epochs"], lay["note"]) == (True, list(range(10, 63)), "epochs 1 to 9 are left out")
         assert lay["x_ticks"][0][:2] == (left, "10") and lay["validation"][0][0][0] == left
-        # fitted to what it shows: the losses from the tenth epoch on fill the axis, a twentieth of their range to
-        # spare at each end
+        # fitted to what it shows: the losses from the tenth epoch on fill the axis below the words at its head, a
+        # twentieth of their range to spare at each end
         fitted = [f"{_LOSS_MINUS}{tick}" for tick in ("9.5", "9.0", "8.5", "8.0", "7.5", "7.0")]
         assert [words for _y, words in lay["y_ticks"]] == fitted
         heights = [y for run in lay["validation"] + lay["training"] for _x, y in run]
-        assert (min(heights), max(heights)) == pytest.approx((top + (bottom - top) / 22, bottom - (bottom - top) / 22))
+        ceiling = max(y + h for words, _x, y, _w, h, _s, _c in lay["words"] if words in (loss.LOSS_NAME, lay["note"]))
+        ceiling += design.FIGURE["line_label_gap"]
+        assert (min(heights), max(heights)) == pytest.approx((ceiling + (bottom - ceiling) / 22,
+                                                              bottom - (bottom - ceiling) / 22))
         assert curve.accessibleDescription() == "epochs 10 to 62; best so far: epoch 58; epochs 1 to 9 are left out"
         assert [entry[0] for entry in lay["words"] if entry[6] == "ink_2" and not entry[5]][0] == lay["note"]
         # a fit that got worse after its eighth epoch: "Recent" leaves its best out, and neither marks nor says it
@@ -7719,6 +7726,33 @@ def test_recent_starts_at_epoch_ten_and_is_greyed_until_epoch_twelve():
         assert [(words, newest) for _x, words, newest in lay["x_ticks"]] == [
             ("41", False), ("45", False), ("50", False), ("55", False), ("60", True)]
         assert curve.accessibleDescription() == "epochs 41 to 60"
+
+
+def test_no_line_of_the_loss_curve_runs_under_the_words_at_the_head_of_its_axis():
+    """The loss axis's name and, with "Recent" chosen, its note ("epochs 1 to 9 are left out") stand at the head of
+    the axis; the losses are drawn below them, the highest a label's gap below the lower of their two boxes. At every
+    moment of the fit, in both choices, at the run page's width and at the least, at two text sizes, every point of
+    both lines and the best epoch's ring stand that far below them."""
+    loss = _lc()
+    for factor in (1.0, 1.5):
+        with text_size(factor), _the_look(False):
+            gap = design.scaled(design.FIGURE["line_label_gap"])
+            radius = design.scaled(design.FIGURE["best_mark"]) / 2
+            least = design.scaled(design.FIGURE["loss"]["min_w"]) + design.scaled(design.GAP["figure_inset"])
+            for width in (design.scaled(_LOSS_W), least):
+                with _loss_standing(loss, (), None, width=width) as curve:
+                    for n in range(2, 63):
+                        prefix, best = _fit(_LOSS_VALIDATION[:n], _LOSS_TRAINING[:n])
+                        curve.set_epochs(prefix, best=best, patience=20)
+                        for recent in (False, True) if curve.recent_button.isEnabled() else (False,):
+                            curve.set_recent(recent)
+                            lay = curve.drawn()
+                            head = max(y + h for words, _x, y, _w, h, _s, _c in lay["words"]
+                                       if words in (loss.LOSS_NAME, lay["note"]))
+                            highest = min([y for run in lay["validation"] + lay["training"] for _x, y in run]
+                                          + ([lay["best"][1] - radius] if lay["best"] else []))
+                            assert highest >= head + gap - 1e-6, (factor, width, n, recent, highest, head)
+                        curve.set_recent(False)
 
 
 def test_the_loss_curve_follows_the_theme_and_draws_once_per_record():
@@ -7959,24 +7993,24 @@ def test_the_loss_curve_has_two_axes_with_round_ticks_outward_and_its_words_from
             spec, gap = design.FIGURE["loss"], design.scaled(design.FIGURE["line_label_gap"])
             least = design.scaled(spec["min_w"]) + design.scaled(design.GAP["figure_inset"])
             with _loss_standing(loss, records, best, width=least) as curve:
-                assert spaced(curve.drawn(), gap, factor) == [50, 1], factor
+                assert spaced(curve.drawn(), gap, factor) == [100, 1], factor
 
     def wide(words, semibold):
         return 20.0 * len(words), 40.0, 12.0
 
-    width, height = design.FIGURE["loss"]["min_w"], design.FIGURE["loss"]["h"]
+    width, height = 420, design.FIGURE["loss"]["h"]            # a plot as wide as the least once was
     lay = loss.loss_layout(records, best, False, width, height, wide)
     assert spaced(lay, design.FIGURE["line_label_gap"], "wide lettering") == [100, 2]
     level = _fit([-2.0] * 20, [-3.0] * 19 + [-2.0])[0]
     names = [entry for entry in loss.loss_layout(level, None, False, width, height, wide)["words"]
              if entry[0] in ("validation", "training")]
     assert len(names) == 2 and names[1][2] - names[0][2] == pytest.approx(names[0][4]), names
-    # two lines that end half a line's height apart: their names a line apart, about the middle of the two ends
+    # two lines that end less than a line's height apart: their names a line apart, about the middle of the two ends
     near = loss.loss_layout(_fit([-2.0] * 19 + [-2.5], [-3.0] * 19 + [-2.625])[0], None, False, width, height, wide)
     ends = [near[key][-1][-1][1] for key in ("validation", "training")]
     names = [entry for entry in near["words"] if entry[0] in ("validation", "training")]
     middles = [top + high / 2 for _words, _x, top, _w, high, _semibold, _colour in names]
-    assert abs(ends[1] - ends[0]) == pytest.approx(names[0][4] / 2, abs=1), (ends, names)
+    assert 0 < abs(ends[1] - ends[0]) < names[0][4], (ends, names)
     assert (abs(middles[1] - middles[0]), sum(middles) / 2) == pytest.approx((names[0][4], sum(ends) / 2)), (
         ends, middles)
     # an epoch of four digits, on the axis and in the best epoch's words

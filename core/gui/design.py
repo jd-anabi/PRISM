@@ -114,7 +114,7 @@ AXIS = {                          # the time axis, as painted
 }
 DIALOG = {"w": 448, "pad": (20, 16, 20, 18), "gap": 16, "marker": 24, "marker_gap": 14, "marker_drop": 1}
 FIGURE = {                        # figures: margins round the axes in pixels; the rest follows the widget's size
-    "loss":  {"h": 282, "min_w": 420, "left": 60, "top": 12, "right": 80, "bottom": 42, "x_name_drop": 38, "tick_pad": 5},
+    "loss":  {"h": 282, "min_w": 280, "left": 60, "top": 12, "right": 80, "bottom": 42, "x_name_drop": 38, "tick_pad": 5},
     "trace": {"h": 100, "min_w": 240, "left": 40, "top": 18, "right": 12, "bottom": 34, "x_name_drop": 31, "tick_pad": 4,
               "y_name_above": True},
     "tick": 5, "axis_w": 1, "line_w": 2, "y_name_gap": 10, "y_name_sink": 2, "y_name_lift": 8, "line_label_gap": 8,

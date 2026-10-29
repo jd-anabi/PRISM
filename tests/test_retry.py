@@ -682,6 +682,80 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
         f"python -m core train --resume-fit {kept}", False, False), _failure(view)
 
 
+def _lines_needed(label) -> tuple:
+    """How many lines a label's words take at its width, and how high they stand, when they may break inside a word
+    that is wider than a line, as a long path is, and nowhere else but between words."""
+    from PySide6.QtGui import QTextLayout, QTextOption
+    layout = QTextLayout(label.text().replace("\n", chr(0x2028)), label.font())
+    option = QTextOption()
+    option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+    layout.setTextOption(option)
+    layout.beginLayout()
+    count, height = 0, 0.0
+    while True:
+        line = layout.createLine()
+        if not line.isValid():
+            break
+        line.setLineWidth(label.width())
+        count, height = count + 1, height + line.height()
+    layout.endLayout()
+    return count, height
+
+
+def test_a_long_command_and_a_long_message_wrap_within_a_narrow_page_and_the_command_is_copied_whole(tmp_path,
+                                                                                                    store):
+    """On a run page 326 px wide, as at the window's least size, the command that resumes a training only reopening
+    PRISM can help, naming its bounds file by a long path, takes as many lines as it needs, broken inside the path
+    where it must: its label is as tall as those lines. Selected whole and copied, it is the command exactly, one line
+    with nothing added. A failure's own message beneath, a long path among its words, wraps the same way."""
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from tests._look_helpers import _settle
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    clock = Clock(_at(3, 3, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    view.setFixedWidth(326)
+    shown_off_screen(host, 1300, 1000)
+    bounds = (r"C:\Users\J\OneDrive - Hair Bundle Lab\PRISM inputs\Bounds\nadrowski"
+              r"\master_tier1_spontaneous_and_driven_wide_box_october_retrain.txt")
+    cfg = SimpleNamespace(sources={"bounds": bounds}, chi_mode=True,
+                          hw=SimpleNamespace(device=SimpleNamespace(type="cuda")))
+    prior = SimpleNamespace(kind="prior", id="20261001T150211", name="retrain_prior")
+    kept = build_fit_record(store, passes=2)
+    in_the_fit = StandIn()
+    in_the_fit.kept_fit = _note(kept, 2)
+    _start_with(host, in_the_fit, _training(), cfg, prior, None, True, name="retrain_3")
+    _to_the_fit(app, in_the_fit, text, clock, _set(tmp_path, 10_000, complete=True), [(1, 0), (2, 1)])
+    in_the_fit.fail(_device_failure(in_the_simulation=False))
+    _ended(app, held)
+    _settle()
+    line = view.command_line
+    command = f'python -m core train --resume-fit {kept} --bounds "{bounds}" --prior retrain_prior --chi'
+    lines, needed = _lines_needed(line)
+    assert (line.text(), line.isVisibleTo(view)) == (command, True), line.text()
+    assert lines > 1 and line.width() <= view.width() and line.height() >= needed - 1, (
+        "the command is not wrapped within the page", lines, line.height(), needed, line.width())
+    line.setSelection(0, len(line.text()))
+    QApplication.clipboard().clear()
+    QTest.keyClick(line, Qt.Key_C, Qt.ControlModifier)
+    assert QApplication.clipboard().text() == command, repr(QApplication.clipboard().text())
+    view.back_button.click()
+    path = f"C:/Users/J/PRISM/Artifacts/simulations/_unnamed__20261003T030211/{'very_long_batch_name_' * 3}6150.pt"
+    disk = StandIn()
+    start_run(host, disk, spec=_training())
+    _to_the_simulation(app, disk, text, held, _set(tmp_path, 236), 236)
+    disk.fail(OSError(28, "No space left on device", path))
+    _ended(app, held)
+    _settle()
+    message = view.failure_message
+    lines, needed = _lines_needed(message)
+    assert path in message.text() and lines > 1 and message.width() <= view.width(), (lines, message.text())
+    assert message.height() >= needed - 1, ("the message is not wrapped within the page", lines, message.height(),
+                                            needed)
+
+
 # ── continuing and resuming from the run's page ──
 def test_continue_from_batch_n_repeats_the_runs_own_call_with_the_must_continue_policy(tmp_path, monkeypatch):
     """"Continue from batch N" stands on the page of a training that failed, and of one that was stopped, while its

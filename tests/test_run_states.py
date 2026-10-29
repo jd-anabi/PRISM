@@ -3757,10 +3757,9 @@ def test_a_run_page_with_no_health_keeps_no_room_for_it(tmp_path):
 
 
 def test_the_loss_curve_never_widens_the_run_pages_column(tmp_path):
-    """At the window's least size the run's page is 326 px wide, narrower than the loss curve's least width. The
-    curve does not widen the page's scrolling column: before the fit's first record and after three, the column is
-    as wide as the room it scrolls in, and the health table, the messages and the curve end inside it. The plot keeps
-    its least width there and is cut at its right."""
+    """At the window's least size the run's page is 326 px wide. The curve does not widen the page's scrolling column:
+    before the fit's first record and after three, the column is as wide as the room it scrolls in, and the health
+    table, the messages and the curve end inside it; the plot, at its least width or wider, ends inside it too."""
     from PySide6.QtCore import QPoint
     from core.gui import design
     from tests._fixtures import build_run_host, qt_app
@@ -3799,7 +3798,295 @@ def test_the_loss_curve_never_widens_the_run_pages_column(tmp_path):
     assert wide == room, ("the loss curve widened the run page's column", room, wide)
     assert None not in (health, messages, curve), (health, messages, curve)
     assert max(health, messages, curve) <= room, (room, health, messages, curve)
-    least = design.scaled(design.FIGURE["loss"]["min_w"])
-    assert view.loss.plot.width() == least > view.loss.width(), (least, view.loss.plot.width(), view.loss.width())
+    least, plot = design.scaled(design.FIGURE["loss"]["min_w"]), view.loss.plot
+    ends = plot.mapTo(view.body.widget(), QPoint(plot.width(), 0)).x()
+    assert least <= plot.width() and ends <= room, ("the plot is cut at its right", least, plot.width(), ends, room)
     stand_in.release()
     turn_until(app, lambda: not held.is_live())
+
+
+# a training's name as long as a person may give it, and a bounds file a person keeps in a folder of a long name, as
+# the command that resumes a training names it
+_LONG_NAME = "retrain_of_the_october_box_with_its_twin_cell_and_a_wider_prior"
+_LONG_BOUNDS = (r"C:\Users\J\OneDrive - Hair Bundle Lab\PRISM inputs\Bounds\nadrowski"
+                r"\master_tier1_spontaneous_and_driven_wide_box_october_retrain.txt")
+
+
+def _in_its_column(view, column, why) -> None:
+    """The run's page as its column holds it: it asks for no more width than the column; every part of it in sight
+    begins at or right of the column's left edge and ends at or left of its right edge, and every label in sight that
+    keeps its words on one line, its name but, is as wide as its words; every button of its head is at least its own
+    size hint wide and its name is not cut to nothing; the line under the time axis stands under the axis; the
+    failure's row is as tall as its wrapped words need; and the health table's first column holds each word of it
+    whole, a word broken only after a hyphen. What the page let go of when its run began, deleted at the event loop's
+    next turn, is deleted first."""
+    import re
+    from PySide6.QtCore import QEvent, QPoint
+    from PySide6.QtGui import QFontMetricsF
+    from PySide6.QtWidgets import QApplication, QLabel, QWidget
+    from core.gui.widgets import rule_table
+    from tests._look_helpers import _settle
+    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    _settle()
+    wide = column.width()
+    asked = max(view.minimumSizeHint().width(), view.minimumWidth())
+    assert asked <= wide, (why, "the page asks for more width than its column", asked, wide)
+    out = [(type(part).__name__, part.mapTo(column, QPoint(0, 0)).x(), part.width())
+           for part in [view] + view.findChildren(QWidget) if part.isVisibleTo(view) or part is view]
+    out = [(name, x, x + width) for name, x, width in out if x < 0 or x + width > wide]
+    assert out == [], (why, "parts of the page stand outside its column", wide, out[:8])
+    cut = [(label.text(), label.width(), label.sizeHint().width()) for label in view.findChildren(QLabel)
+           if label.isVisibleTo(view) and label is not view.title and not label.hasHeightForWidth()
+           and label.width() < label.sizeHint().width()]
+    assert cut == [], (why, "labels of the page cut short", cut)
+    for button in (view.text_button, view.stop_button, view.withdraw_button, view.keep_open_button,
+                   view.stop_trying_button, view.back_button):
+        if button.isVisibleTo(view):
+            assert button.width() >= button.sizeHint().width(), (why, button.text(), button.width())
+    assert view.title.isVisibleTo(view) and view.title.width() > 0, (why, "the run's name is cut to nothing")
+    if view.axis_caption.isVisibleTo(view):
+        under = view.axis.mapTo(column, QPoint(0, view.axis.height())).y()
+        assert view.axis_caption.mapTo(column, QPoint(0, 0)).y() >= under, (why, "the caption runs into the axis")
+    sentence = view.failure_row.sentence
+    if sentence.isVisibleTo(view):
+        lines = sentence.heightForWidth(sentence.width())
+        assert sentence.height() >= lines, (why, "the failure's row is lower than its lines", sentence.height(), lines)
+    if view.health.isVisibleTo(view):
+        table = view.health.view.model()
+        metrics, (lead, gap) = QFontMetricsF(rule_table._face("text")), rule_table._pads(0, 3)
+        words = [word for row in range(table.rowCount())
+                 for word in re.split(r"(?<=-)|\s+", table.index(row, 0).data())]
+        needs = max(metrics.horizontalAdvance(word) for word in words if word) + lead + gap
+        assert view.health.view.columnWidth(0) >= needs, (why, "the health's first column is squeezed",
+                                                          view.health.view.columnWidth(0), needs)
+
+
+def _written(table, monkeypatch) -> list:
+    """Every text a ruled table writes when it is drawn: each run of words its painter writes, and each text it lays
+    out and draws."""
+    from PySide6.QtGui import QPainter, QTextLayout
+    written, kept_words, kept_layout = [], QPainter.drawText, QTextLayout.draw
+
+    def write(painter, *told):
+        written.append(told[-1])
+        return kept_words(painter, *told)
+
+    def draw(layout, *told):
+        written.append(layout.text())
+        return kept_layout(layout, *told)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(QPainter, "drawText", write)
+        patch.setattr(QTextLayout, "draw", draw)
+        table.grab()
+    return written
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path, monkeypatch, store):
+    """At the window's least size, 900 x 600 grown with the text, a training's page fits the column it stands in,
+    at the ordinary text size and at one and a half times it, in each state where it holds the most: simulating, its
+    end firm; in its fit, with the fit's range named after a training of a long name, the health and the loss curve;
+    stopping, with three buttons; asking whether to keep the training its stop kept; failed in its fit, its own name
+    longer than the head's row and cut at its end with "…"; and failed so that only reopening PRISM can help, its
+    command naming a long path. At the opening size the page in the fit is as wide as in the simulation, and its
+    health table writes every word of its figures whole, a failed save's among them; there too, in each state seen
+    there, the page asks for no more width than the window's least size gives it. Before the page's first run, out of
+    sight, it asks for no width of its own, and the form beside the figures keeps its least width. The window is the
+    whole program's, in the look, on a screen as large as this computer's, its form and the run's page sharing the
+    room as they do there."""
+    import torch
+    from types import SimpleNamespace
+    from core.gui import design
+    from core.gui.design import CONTROLS_MIN_W
+    from core.gui.run import controller as controller_module
+    from core.SBI.fit_state import KeptNote
+    from tests._fixtures import build_fit_record, build_window, choose, qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import Clock, RunText, StandIn, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    expected = (130, f"about 130 epochs: the last training of this kind, {_LONG_NAME}, ran 130")
+    monkeypatch.setattr(controller_module, "_expected", lambda store, facts: expected)
+    choose(monkeypatch, words="Stop training")                # the stop's question, answered
+    with text_size(factor), _the_look(False):
+        clock = Clock(_at(9, 18, 0))
+        held = _controller_on(tmp_path, clock)
+        text = RunText(held)
+        window = build_window()
+        design.set_room((3400, 1380))                          # what this computer's screen offers the window
+        window.setMinimumSize(1, 1)
+        opening, least = (design.scaled(1300), design.scaled(820)), (design.scaled(900), design.scaled(600))
+        shown_off_screen(window, *opening)
+        window.go_to("inference", "training")
+        host = window.part("inference").posterior_panel
+        view, column = host.run_view, host.results
+        window.resize(*least)
+        _settle()
+        assert (view.minimumWidth(), host.controls_scroll.width() >= CONTROLS_MIN_W) == (0, True), (
+            "the run's page, out of sight before its first run, narrows the form beside the figures",
+            view.minimumWidth(), host.controls_scroll.width())
+        window.resize(*opening)
+
+        def begin(stand_in, *args, run_name="retrain_3", **kwargs):
+            host.run_spec = lambda fn, *a, **k: _training(name=run_name, stop_button="Stop training…")
+            try:
+                assert host.dispatch(stand_in, *args, **kwargs), "the stand-in run was not started"
+            finally:
+                del host.run_spec
+
+        def said(stand_in, *lines, level="info"):
+            before = text.texts().count(lines[-1])
+            for line in lines:
+                stand_in.say(line, level)
+            turn_until(app, lambda: text.texts().count(lines[-1]) > before, 20)
+
+        def framed(stand_in, done):
+            stand_in.row(SIMULATION_ROW, done, 10_000)
+            turn_until(app, lambda: held.model.batches_done() == done, 20)
+
+        def fitted(stand_in, epochs):
+            said(stand_in, _LINES["budget"], _LINES["rotation_begins"], _LINES["rotation_done"],
+                 _LINES["simulation_writing"], _LINES["simulation_complete"])
+            for epoch in range(1, epochs + 1):
+                clock.advance(3780)
+                said(stand_in, _epoch(epoch), f"[fit] saved after pass {epoch}.")
+
+        def at(size, why):
+            window.resize(*size)
+            _settle()
+            if size == least:
+                _in_its_column(view, column, f"{why} at {factor}")
+            else:                                             # wide, it still asks for no more than the least gives it
+                asked = view.minimumSizeHint().width()
+                assert asked <= design.scaled(326), (f"{why} at {factor}", "the page asks for more width than the "
+                                                     "window's least size gives it", asked)
+
+        def kept(passes):
+            return KeptNote(build_fit_record(store, passes=passes), passes, False, True, 1)
+
+        main = StandIn(takes_stops=False)
+        main.kept_fit = kept(12)
+        begin(main)
+        said(main, _LINES["budget"], _LINES["rotation_begins"])
+        clock.advance(99)
+        said(main, _LINES["rotation_done"], _LINES["simulation_writing"], _LINES["mem"])
+        framed(main, 0)
+        clock.advance(194)
+        framed(main, 20)
+        clock.advance(5930 * 9.7)
+        framed(main, 5950)
+        clock.advance(200 * 9.7)
+        framed(main, 6150)
+        said(main, _LINES["patho_batch"], _LINES["chi_batch"], level="warning")
+        at(opening, "simulating")
+        simulating = view.width()
+        at(least, "simulating")
+        clock.advance(3850 * 9.7)
+        framed(main, 10_000)
+        said(main, _LINES["simulation_complete"], _LINES["chi_total"], _LINES["patho_total"])
+        for epoch in range(1, 34):
+            clock.advance(3780)
+            validation = -0.6 - 2.8 * min(epoch, 14) / 14 + 0.006 * max(0, epoch - 14)
+            said(main, _epoch(epoch, since=max(0, epoch - 14), training=validation - 0.1, validation=validation),
+                 f"[fit] saved after pass {epoch}.")
+        said(main, _LINES["fit_save_failed"], level="warning")
+        view.loss.set_recent(True)
+        at(opening, "in the fit")
+        assert view.width() == simulating, ("the fit's page is wider than the simulation's", view.width(), simulating)
+        cut = [words for words in _written(view.health, monkeypatch) if chr(0x2026) in words]
+        assert cut == [], ("the health table cuts its words", cut)
+        at(least, "in the fit")
+        view.stop_button.click()
+        turn_until(app, lambda: held.status.state == "stopping")
+        at(opening, "stopping")
+        at(least, "stopping")
+        clock.advance(3780)
+        main.say(_epoch(34, since=20))                        # the line at which the stop is taken
+        turn_until(app, lambda: not held.is_live(), 20)
+        assert view.keep_block.isVisibleTo(view)
+        at(least, "asking whether to keep the training")
+        at(opening, "asking whether to keep the training")
+        cut = [words for words in _written(view.health, monkeypatch) if chr(0x2026) in words]
+        assert cut == [], ("the health table cuts its words", cut)
+        view.back_button.click()
+
+        failing = StandIn()
+        failing.kept_fit = kept(5)
+        begin(failing, run_name=_LONG_NAME)
+        fitted(failing, 5)
+        clock.advance(1800)
+        failing.fail(TypeError("unsupported operand type(s) for +: 'int' and 'NoneType'"))
+        turn_until(app, lambda: not held.is_live(), 20)
+        at(least, "failed in the fit, a long name")
+        shown = view.title.shown()
+        assert shown.endswith(chr(0x2026)) and view.title.text().startswith(shown[:-1]), (
+            "a name longer than its row is not cut at its end", shown)
+        view.back_button.click()
+
+        reopening = StandIn()
+        reopening.kept_fit = kept(2)
+        cfg = SimpleNamespace(sources={"bounds": _LONG_BOUNDS}, chi_mode=True,
+                              hw=SimpleNamespace(device=SimpleNamespace(type="cuda")))
+        prior = SimpleNamespace(kind="prior", id="20261001T150211", name="retrain_prior")
+        begin(reopening, cfg, prior, None, True, name="retrain_11")
+        fitted(reopening, 2)
+        clock.advance(900)
+        reopening.fail(torch.AcceleratorError("CUDA error: an illegal memory access was encountered\nCUDA kernel "
+                                              "errors might be asynchronously reported at some other API call."))
+        turn_until(app, lambda: not held.is_live(), 20)
+        assert _LONG_BOUNDS in view.command_line.text() and view.command_line.isVisibleTo(view)
+        at(least, "only reopening can help")
+        view.back_button.click()
+        window.hide()
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_with_no_message_the_figures_stand_where_they_stand_after_the_messages(factor, tmp_path):
+    """The figures the page holds stand right after what precedes them: a block's gap under the loss curve when no
+    message shows, and right under the messages' last row when one does, the messages a block's gap under the curve;
+    the gap after the messages' head comes and goes with the head. At the ordinary text size and at one and a half
+    times it."""
+    from PySide6.QtCore import QPoint
+    from core.gui import design
+    from tests._fixtures import build_run_host, qt_app
+    from tests._look_helpers import _settle, text_size
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    with text_size(factor):
+        clock = Clock(_at(8, 19, 2, 11))
+        held, host, stand_in = _controller_on(tmp_path, clock), build_run_host(), StandIn()
+        view, text = host.run_view, RunText(held)
+        host.figure_stack.add_figure("a figure", b"")
+        start_run(host, stand_in, spec=_training())
+        shown_off_screen(host, design.scaled(1300), design.scaled(1000))
+
+        def said(line, level="info"):
+            stand_in.say(line, level)
+            turn_until(app, lambda: line in text.texts())
+
+        def top(part):
+            return part.mapTo(view.body.widget(), QPoint(0, 0)).y()
+
+        def bottom(part):
+            return top(part) + part.height()
+
+        said(_LINES["budget"])
+        said(_LINES["simulation_complete"])
+        for epoch in (1, 2, 3):
+            clock.advance(3780)
+            said(_epoch(epoch))
+        _settle()
+        block = design.scaled(design.GAP["block"])
+        assert (view.loss.isVisibleTo(view), view.messages.isVisibleTo(view), view.figures.isVisibleTo(view)) == (
+            True, False, True), "the page does not hold the curve and the figures with no message"
+        assert top(view.figures) - bottom(view.loss) == block, (
+            "with no message the figures stand lower than a block's gap under the curve",
+            top(view.figures) - bottom(view.loss), block)
+        said(_LINES["patho_batch"], "warning")
+        _settle()
+        assert view.messages.isVisibleTo(view) and top(view.messages_head) - bottom(view.loss) == block
+        assert top(view.figures) == bottom(view.messages), (top(view.figures), bottom(view.messages))
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())

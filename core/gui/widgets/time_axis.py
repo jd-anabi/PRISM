@@ -4,9 +4,9 @@ import datetime
 import math
 from collections.abc import Callable
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QFontMetricsF, QPainter
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
+from PySide6.QtCore import QRectF, QSize, Qt
+from PySide6.QtGui import QFontMetrics, QFontMetricsF, QPainter
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from .. import design, fonts, paint
 from ..reported import reported
@@ -216,7 +216,9 @@ class _HatchKey(QWidget):
 
 
 class AxisCaption(QWidget):
-    """The one line under a time axis: when the run started and, at the right, when it should end."""
+    """The line under a time axis: when the run started and, at the right, when it should end. When the two do not
+    fit side by side, what says when it should end stands on a line of its own under the start, at the left, its
+    words wrapped within the width; the caption never asks for more width than its widest word and the key."""
     started: QLabel
     words: QLabel
     key: QWidget             # the hatched range in small
@@ -225,20 +227,69 @@ class AxisCaption(QWidget):
     def __init__(self, start, now, end_from=None, end_by=None, *, unknown: str = "") -> None:
         _tried(start, now, end_from, end_by, unknown)        # before anything is built
         super().__init__()
+        line = design.scaled(design.SIZE["line_h"])
         self.started, self.words = QLabel(), QLabel()
         for label in (self.started, self.words):             # the application's lettering: no font is set here
             label.setTextFormat(Qt.PlainText)                # a sentence may hold "<" or "&": it is shown as written
-            label.setFixedHeight(design.scaled(design.SIZE["line_h"]))
+        self.started.setFixedHeight(line)
+        self.words.setWordWrap(True)
+        self.words.setMinimumHeight(line)
         self.key, self.marker = _HatchKey(), Marker("warn")
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(design.scaled(design.GAP["axis_key"]))
-        row.addWidget(self.started)
-        row.addStretch(1)
-        row.addWidget(self.key, 0, Qt.AlignVCenter)
-        row.addWidget(self.marker, 0, Qt.AlignVCenter)
-        row.addWidget(self.words)
+        gap = design.scaled(design.GAP["axis_key"])
+        # the key and the marker in a line's height, beside the words' first line
+        self._lead = QWidget()
+        self._lead.setFixedHeight(line)
+        beside = QHBoxLayout(self._lead)
+        beside.setContentsMargins(0, 0, 0, 0)
+        beside.setSpacing(gap)
+        beside.addWidget(self.key, 0, Qt.AlignVCenter)
+        beside.addWidget(self.marker, 0, Qt.AlignVCenter)
+        self._end = QWidget()                                # what says when the run should end
+        end = QHBoxLayout(self._end)
+        end.setContentsMargins(0, 0, 0, 0)
+        end.setSpacing(gap)
+        end.addWidget(self._lead, 0, Qt.AlignTop)
+        end.addWidget(self.words, 1)
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(gap)
+        self._grid.setVerticalSpacing(0)
+        self._grid.addWidget(self.started, 0, 0)
+        self._grid.setColumnStretch(1, 1)
+        self._side = None                                    # whether the two stand side by side; None: not laid yet
         self.set_times(start, now, end_from, end_by, unknown=unknown)
+
+    @reported(QWidget.minimumSizeHint)
+    def minimumSizeHint(self):
+        """The least the caption asks for: the start, or the key and the words' widest word, whichever is wider. It
+        is the same side by side as one under the other, so the room the page gives it decides which it takes."""
+        gap = self._grid.horizontalSpacing()
+        lead = sum(part.sizeHint().width() + gap for part in (self.key, self.marker) if not part.isHidden())
+        widest = max((QFontMetrics(self.words.font()).horizontalAdvance(word) for word in self.words.text().split()),
+                     default=0)
+        hint = super().minimumSizeHint()
+        return QSize(max(self.started.sizeHint().width(), lead + widest), hint.height())
+
+    @reported(QWidget.resizeEvent)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit()
+
+    def _fit(self) -> None:
+        """Side by side when the start, the key and the words fit the width on one line, else one under the other."""
+        gap = self._grid.horizontalSpacing()
+        lead = sum(part.sizeHint().width() + gap for part in (self.key, self.marker) if not part.isHidden())
+        words = math.ceil(QFontMetricsF(self.words.font()).horizontalAdvance(self.words.text()))
+        side = self.started.sizeHint().width() + gap + lead + words <= self.width()
+        self.words.setMinimumWidth(words if side else 0)     # side by side the words keep one line
+        if side == self._side:
+            return
+        self._grid.removeWidget(self._end)
+        if side:
+            self._grid.addWidget(self._end, 0, 2)
+        else:
+            self._grid.addWidget(self._end, 1, 0, 1, 3)
+        self._side = side
 
     def set_times(self, start, now, end_from=None, end_by=None, *, unknown: str = "") -> None:
         """Word the line for these moments. `unknown` is the caller's sentence for the right-hand side when
@@ -250,3 +301,6 @@ class AxisCaption(QWidget):
         self.words.setText(right)
         self.key.setVisible(form in ("inside", "ahead"))
         self.marker.setVisible(form == "late")
+        self._lead.setVisible(form in ("inside", "ahead", "late"))
+        self._fit()
+        self.updateGeometry()
