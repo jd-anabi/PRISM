@@ -359,7 +359,9 @@ class RunController(QObject):
         ``provide_stream`` hands it ``emit_chunk`` and ``should_stop``, and ``on_chunk`` hears each chunk;
         ``watch_dir`` is one folder, or several, whose new pictures go to the host's stack. None of these is handed
         on to ``fn``. An end that waits to be seen as the run starts is noted: the run sets it aside when it ends with
-        an end of its own, and gives it back when it ends into idle or is taken back (``_set_aside``)."""
+        an end of its own, and gives it back when it ends into idle or is taken back (``_set_aside``); a run that keeps
+        no file and fails leaves an end of its own, sets nothing aside, and gives it back once that end is seen
+        (``acknowledge``)."""
         if self.is_live():
             return False
         if self._unfiled_end():
@@ -801,8 +803,9 @@ class RunController(QObject):
         still waits: the window says this run's end from now on, and never says two, so that end is written seen in
         its history, as though it had been looked at, and is not said again at the next launch. Only a run that keeps
         a history file and leaves an end of its own sets an end aside: one that ends into idle (a refusal before
-        anything was spent, a load, a run that keeps no file) or is taken back gives that end back instead, as the
-        status (``_end``, ``_take_back``)."""
+        anything was spent, a load, a run that keeps no file and did not fail) or is taken back gives that end back
+        instead, as the status (``_end``, ``_take_back``); a run that keeps no file and fails leaves an end of its own,
+        sets nothing aside, and gives that end back once its own is seen (``acknowledge``)."""
         waiting, run.waiting = run.waiting, None
         if waiting is not None:
             self._write_seen(waiting.run)
@@ -1118,7 +1121,9 @@ class RunController(QObject):
         """The run's end, in this order: its watchers' last look; its state (ended, or idle for a run that leaves
         nothing to acknowledge), with how and when it ended and what it kept in words, read from the history it
         leaves (``ends.words``; a failure's sentence is its page's own); the end that waited to be seen as the run
-        started set aside when the run leaves an end of its own, or else the status again (``_set_aside``); the
+        started set aside when the run leaves an end of its own, or else the status again (``_set_aside``), but for the
+        failure of a run that keeps no file, which leaves an end of its own and holds that end until it is seen (its
+        id read from the folder of runs, or made without it when the folder cannot be read: nothing is written); the
         history's end written, and kept for every later write, and the text file closed, or both removed for a
         refusal made before anything was spent; every panel unlocked; the computer let sleep again and the reason
         against ending the session withdrawn; the payload let go, and the run's own call with it unless its page
@@ -1144,7 +1149,10 @@ class RunController(QObject):
         unfiled = (not spec.keeps_files and not spec.loads_only and not refused_early and run.outcome == "failed"
                    and spec.place is not None)
         if unfiled:
-            run.id = history.run_id(spec.word, model.started, run.folder)
+            try:
+                run.id = history.run_id(spec.word, model.started, run.folder)
+            except OSError:                      # the folder of runs cannot be read: as nothing is written, the stem
+                run.id = history.run_id(spec.word, model.started, None)
         idle = refused_early or spec.loads_only or (not spec.keeps_files and not unfiled)
         last = RunStatus(state="idle" if idle else "ended", word=spec.word, name=spec.name,
                          run=None if refused_early else run.id, place=spec.place, loading=spec.loads_only,

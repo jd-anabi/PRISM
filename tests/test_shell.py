@@ -1549,14 +1549,20 @@ def test_a_live_simulation_that_fails_is_said_at_the_foot_until_it_is_seen_and_w
     every other end is, and in Home's next step: until it is seen, as an end is seen (here by the foot pressed, which
     shows its page), or the next run starts. Nothing is written for it: the folder of runs holds what it held, and
     Home's "Last runs", which reads the runs' histories, lists what it listed. The end that waited to be seen before it
-    is neither set aside nor lost: once the failure is seen it is said again, and a run started while the failure
-    waits takes it as the end that waited, which a live simulation that ends without failing gives back, as before."""
+    is neither set aside nor lost: its history still says it was not seen, once the failure is seen it is said again,
+    and a run started while the failure waits takes it as the end that waited, which a live simulation that ends
+    without failing gives back, as before. The video's export, which keeps no file either, fails the same way. A
+    failure whose end cannot read the folder of runs ends all the same: its id is made without the folder."""
+    from pathlib import Path
     import numpy as np
     from core.gui.panels import simulate_panel as live_module
     from core.gui.panels.fdt_panel import FdtPanel
+    from core.gui.run import history
     from core.gui.run.model import RunSpec
     app = qt_app()
     held, clock = _on_the_runs_clock(tmp_path)
+    hooked = []
+    monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: hooked.append(f"{kind.__name__}: {error}"))
     window = build_window()
     home, folder = window.part("home"), tmp_path / "runs"
     cell = tmp_path / "cell.txt"
@@ -1586,7 +1592,7 @@ def test_a_live_simulation_that_fails_is_said_at_the_foot_until_it_is_seen_and_w
             live._on_chunk(np.zeros((1_200, 2)))
             clock.advance(20)
             how(stand_in)
-            turn_until(app, lambda: not held.is_live())
+            turn_until(app, lambda: not held.is_live() or hooked)
 
         def failed(stand_in):
             stand_in.fail(RuntimeError("NadrowskiSDE euler_compiled failed after 4500 steps (batch=1, segs=1, "
@@ -1599,6 +1605,8 @@ def test_a_live_simulation_that_fails_is_said_at_the_foot_until_it_is_seen_and_w
             "the foot does not say the live simulation's failure", _foot(window))
         assert (sorted(path.name for path in folder.iterdir()), _cells(home.runs_table), run is not None) == (
             listed, rows, True), "a file was written for the live simulation's failure, or Home's last runs changed"
+        assert history.read(folder / f"{waiting.run}.json")["acknowledged"] is False, (
+            "the end that waited was written seen")
         assert (home.next_heading.label.text(), home.next_button.text()) == (
             "Next: see what happened to the live simulation", "&See what happened"), home.next_heading.label.text()
         window.go_to_run()                              # the foot pressed: the failure's page, and it is seen
@@ -1615,6 +1623,33 @@ def test_a_live_simulation_that_fails_is_said_at_the_foot_until_it_is_seen_and_w
             "a run started while the failure waited did not take the end before it, or one that ended without failing "
             "did not give it back", held.status)
         assert (sorted(path.name for path in folder.iterdir()), _cells(home.runs_table)) == (listed, rows)
+
+        video = StandIn(word="Video")
+        start_run(live, video, spec=RunSpec("Video", ("live", None), stop_button="Stop saving…", keeps_files=False))
+        video.fail(RuntimeError("the video could not be written"))
+        turn_until(app, lambda: not held.is_live())
+        assert (_foot(window), sorted(path.name for path in folder.iterdir())) == (
+            ("err", "Video failed", "Thu 8 Oct, 19:03.", True), listed), (
+            "the video's failure is not said at the foot, or a file was written for it", _foot(window))
+        window.go_to_run()
+        assert (held.status, _foot(window)) == (waiting, compared), held.status
+        window.go_to("home")
+
+        exists = Path.exists
+
+        def unreadable(path, *args, **kwargs):
+            """The folder of runs cannot be read, as when access to it is denied."""
+            if Path(path).parent == folder:
+                raise PermissionError(13, "Access is denied", str(path))
+            return exists(path, *args, **kwargs)
+
+        with monkeypatch.context() as patched:
+            patched.setattr(Path, "exists", unreadable)
+            simulated(failed)
+        ended = (held.is_live(), _foot(window)[:2], live.controls.isEnabled(), hooked)
+        assert (ended, sorted(path.name for path in folder.iterdir())) == (
+            (False, ("err", "Live simulation failed"), True, []), listed), (
+            "a failure whose end could not read the folder of runs held up that end, or a file was written", ended)
     finally:
         window.hide()
 

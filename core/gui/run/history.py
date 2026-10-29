@@ -93,10 +93,14 @@ def runs_folder() -> Path:
     return Path(settings.settings().fileName()).parent / "runs"
 
 
-def run_id(word: str, started: datetime, folder: Path) -> str:
+def run_id(word: str, started: datetime, folder: Path | None) -> str:
     """A run's id, the stem of its two files: its local start and its word, lower-cased with its spaces as hyphens,
-    ``20261008T190211-training``; ``-2``, ``-3`` and on when a file of that stem is in ``folder`` already."""
+    ``20261008T190211-training``; ``-2``, ``-3`` and on when a file of that stem is in ``folder`` already. With no
+    folder (None), the stem alone, no folder read: the id of a run that writes no file, when its folder cannot be
+    read."""
     stem = f"{started.astimezone():%Y%m%dT%H%M%S}-{word.lower().replace(' ', '-')}"
+    if folder is None:
+        return stem
     folder, candidate, n = Path(folder), stem, 1
     while (folder / f"{candidate}.json").exists() or (folder / f"{candidate}.txt").exists():
         n += 1
