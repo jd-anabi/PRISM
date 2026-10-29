@@ -200,10 +200,10 @@ class FigureStack(QTabWidget):
         """While the run's page holds the stack (``on``), only the figures its last run made are in sight, the newest
         of them in front unless one of them was in front already; off, every tab is in sight again where it stands, in
         the order the tabs came unless a person moved one, and the tab that was in front before is in front again,
-        unless a figure of the run came since or that tab has been closed. That tab is kept by its number, never the
-        tab itself: a closed tab's page is deleted, and touching it raises, where a number no open tab carries is
-        simply not found. Which tab is in front is read before any tab is hidden, as hiding the one in front moves the
-        front to the next in sight."""
+        unless one of the run's figures is in front by then or that tab has been closed. That tab is kept by its
+        number, never the tab itself: a closed tab's page is deleted, and touching it raises, where a number no open
+        tab carries is simply not found. Which tab is in front is read before any tab is hidden, as hiding the one in
+        front moves the front to the next in sight."""
         front = self.currentWidget()
         if on and not self._only:
             self._before = getattr(front, "_number", None)

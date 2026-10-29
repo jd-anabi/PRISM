@@ -3342,6 +3342,40 @@ def test_a_figure_closed_on_its_runs_page_takes_its_frame_and_the_way_back_still
         "run's page", seen)
 
 
+def test_the_way_back_from_a_run_with_no_figure_puts_the_figure_in_front_before_it_in_front_again(tmp_path):
+    """Two figures of earlier runs stand on a page, the first of them in front, when a run starts that makes none:
+    hiding them for the run's page leaves the second in front. However that run ends, failed and then "Back to the
+    form", or finished, which gives the figures back at once, both are in sight again in the order they came and
+    the first is in front, as it was before the run."""
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    host = build_run_host()
+    view, stack = host.run_view, host.figure_stack
+    shown_off_screen(host, 1300, 1000)
+    stack.add_figure("the first", b"")
+    stack.add_figure("the second", b"")
+    seen = []
+    for failed in (True, False):
+        stack.setCurrentIndex(0)                    # a person looks at the first
+        run = StandIn()
+        start_run(host, run, spec=_training())
+        moved = stack.tabText(stack.currentIndex())
+        if failed:
+            run.fail(RuntimeError("the run broke"))
+            turn_until(app, lambda: not held.is_live())
+            view.back_button.click()
+        else:
+            run.release()
+            turn_until(app, lambda: not held.is_live())
+        seen.append((moved, [stack.tabText(index) for index in range(stack.count()) if stack.isTabVisible(index)],
+                     stack.tabText(stack.currentIndex()), host.results.currentWidget() is host.figures))
+    assert seen == [("the second", ["the first", "the second"], "the first", True)] * 2, (
+        "the way back from a run that made no figure did not put the figure in front before it in front again", seen)
+
+
 def test_a_saved_records_figure_closed_at_a_runs_end_is_not_sought_when_a_record_is_picked(tmp_path, monkeypatch):
     """On the temperature page, a saved record's figure is in front as a measurement starts; the measurement fails
     before it draws any, and its end closes the record's figure. A record picked then gives the column back to the
