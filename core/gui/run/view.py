@@ -13,10 +13,11 @@ with no question); while the stop is pending, "Don't stop after all" withdraws i
 the run before it closes, the page says so. A training saving its posterior is not stopped, and the window's close
 waits for the save with no stop: "Keep PRISM open" withdraws that close. Once a stop of a training has landed, the
 page asks whether to keep the training it kept, never in a box of its own. A run that failed says so on its page,
-never in a box: what failed, what was saved and what was lost, the command line it names on a line of its own, the
-error's message, and its kind and traceback when asked for. While the window waits to try a run again, the page says
-when, and "Stop trying" stands in the stop button's place. The page of a training that failed or was stopped offers
-"Continue from batch N" or "Resume the training" while its run's call is kept for it, and no longer.
+never in a box: when and where it failed, what was saved and what was lost, the command line it names on a line of its
+own, the error's message where it adds to that, and its kind and traceback when asked for. While the window waits to
+try a run again, the page says when, and "Stop trying" stands in the stop button's place. The page of a training that
+failed or was stopped offers "Continue from batch N" or "Resume the training" while its run's call is kept for it, and
+no longer.
 
 It is laid out to fit the column it stands in at any width: its buttons go to rows of their own under the run's name
 where the two do not fit one row, as the full text's tools do under its field, and what a run's end leaves to say (its
@@ -591,6 +592,7 @@ class RunView(QWidget):
         self._run: str | None = None             # the run's id, as its status names it
         self._answered = False                   # whether Keep or Discard was answered for the training it kept
         self._failed = False                     # whether the page says its run's failure
+        self._quoted = False                     # whether the error's own message adds to what its failure's block says
         self._noted = self._error_shown = False
         self._retrying = ""                      # while the run waits to be tried again: what the page says
         self._refused = ""                       # the refusal of a run that repeated an offer of the page
@@ -680,14 +682,15 @@ class RunView(QWidget):
         keep.addWidget(self.keep_words)
         keep.addWidget(self.keep_beneath)
         keep.addLayout(answers)
-        # at a failure: what failed, what was saved and what was lost, beside the error's marker; the error's own
-        # message, quoted in the fixed-width face; where the full error is kept, and the full error itself (its kind
-        # and its traceback), shown only when asked for
+        # at a failure: when and where it failed, what was saved and what was lost, beside the error's marker (the
+        # page's sentence says the run failed); the error's own message, quoted in the fixed-width face where it adds
+        # to that; where the full error is kept, and the full error itself (its kind and its traceback), shown only
+        # when asked for
         self.failure = QWidget()
         failure = QVBoxLayout(self.failure)
         failure.setContentsMargins(0, 0, 0, 0)
         failure.setSpacing(design.scaled(design.GAP["head_table"]))
-        self.failure_row = MessageRow("err", "", lead=LEADS["err"])
+        self.failure_row = MessageRow("err", "")
         # Console text: the fixed-width face, given at build. Its width is the page's: a long word of a message
         # (a path) is wrapped inside it, never let widen the page.
         self.failure_message = _Lines()
@@ -862,10 +865,10 @@ class RunView(QWidget):
         self._mode, self._compact, self._model, self._stopping = "live", spec.own_view, None, False
         self._place_the_end()
         self._closing, self._run, self._answered = False, None, False
-        self._failed = self._noted = self._error_shown = self._resumable = self._close_saves = False
+        self._failed = self._noted = self._error_shown = self._resumable = self._close_saves = self._quoted = False
         self._retrying = self._refused = self._ended_words = ""
         self._continue_from = None
-        self.failure_row.sentence.set_text("", lead=opening(LEADS["err"], None))
+        self.failure_row.sentence.set_text("")
         self.failure_message.setText("")
         self.command_line.setText("")
         self.full_error.setPlainText("")
@@ -932,13 +935,15 @@ class RunView(QWidget):
 
     def show_failure(self, sentence: str, message: str, detail: str, noted: bool, kept: bool,
                      command: str = "") -> None:
-        """The run failed: under the page's sentence, beside the error's marker, ``sentence`` (what failed and when,
-        what was saved and what was lost); the ``command`` line it names, on its own beneath it ("" for none); the
-        error's ``message``, quoted; that a stop had been asked for before it, when ``noted``; that the full error is
-        in the run's file, when the run ``kept`` one; and the full error, ``detail`` (its kind and traceback), behind
-        "Show the full error". Shown once the run has ended, until the page's next run."""
+        """The run failed: under the page's sentence, which says so, beside the error's marker, ``sentence`` (when and
+        where it failed, what was saved and what was lost); the ``command`` line it names, on its own beneath it (""
+        for none); the error's ``message``, quoted, where it adds to ``sentence``; that a stop had been asked for
+        before it, when ``noted``; that the full error is in the run's file, when the run ``kept`` one; and the full
+        error, ``detail`` (its kind and traceback), behind "Show the full error". Shown once the run has ended, until
+        the page's next run."""
         self._failed, self._noted, self._error_shown = True, noted, False
-        self.failure_row.sentence.set_text(sentence, lead=opening(LEADS["err"], None))
+        self._quoted = retry.adds_to(sentence, message)
+        self.failure_row.sentence.set_text(sentence)
         self.command_line.setText(command)
         self.failure_message.setText(message)
         self.file_line.setText(retry.FILE_TEXT if kept else "")
@@ -1065,16 +1070,20 @@ class RunView(QWidget):
         self._arrange()
 
     def _set_messages(self, messages, now) -> None:
-        """The message rows, newest first, built again only when what they say has changed."""
-        said = tuple((message.kind, message.sentence, opening(LEADS[message.kind], message.when, now))
-                     for message in messages)
+        """The message rows, newest first, built again only when what they say has changed. Each is one paragraph:
+        the line breaks and the runs of spaces of its words one space each, as a library's warning, written for a
+        console, comes with them. A message that came more than once says how many times in its opening, unless its
+        sentence says that count itself."""
+        rows = [(message.kind, " ".join(message.sentence.split()), message.when,
+                 1 if message.count_said else message.count) for message in messages]
+        said = tuple((kind, sentence, opening(LEADS[kind], when, now, times)) for kind, sentence, when, times in rows)
         if said == self._shown_messages:
             return
         for row in self._message_rows:
             self._rows.removeWidget(row)
             row.deleteLater()
-        self._message_rows = [MessageRow(message.kind, message.sentence, lead=LEADS[message.kind],
-                                         when=message.when, now=now) for message in messages]
+        self._message_rows = [MessageRow(kind, sentence, lead=LEADS[kind], when=when, now=now, times=times)
+                              for kind, sentence, when, times in rows]
         for row in self._message_rows:
             self._rows.addWidget(row)
         self._shown_messages = said
@@ -1112,7 +1121,7 @@ class RunView(QWidget):
         ended = keeps or failed or continues or resumes
         shown = ((self.said, closing or notice or (ended and self._compact)), (self.notice, notice),
                  (self.closing_line, closing), (self.end, ended), (self._end_gap, ended and not self._compact),
-                 (self.failure, failed),
+                 (self.failure, failed), (self.failure_message, failed and self._quoted),
                  (self.command_line, failed and bool(self.command_line.text())), (self.noted, failed and self._noted),
                  (self.file_line, failed and bool(self.file_line.text())),
                  (self._error_holder, failed and self._error_shown), (self.keep_block, keeps),

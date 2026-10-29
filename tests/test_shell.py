@@ -1419,7 +1419,9 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
 def test_the_foot_says_each_state_of_a_run_in_its_words(tmp_path, monkeypatch):
     """The foot says each state of a run from the run's status alone, with no clock: nothing running, and no
     control; a run live, titled by its word, with the stage it is in, in a few words, and that settings are locked;
-    a run that needs someone, with why; a run stopping, with when its stop is taken; a run that only loads a record;
+    a run with no stages that counts itself, with its count as its page's sentence says it after "is running: ", and
+    "Running" while that sentence says no more than that the run is starting or running; a run that needs someone,
+    with why; a run stopping, with when its stop is taken; a run that only loads a record;
     and an end nobody has seen: finished with its date, stopped and failed with the date and what was kept, and a
     run PRISM did not see end, as a failure dated when it was last heard. A date within seven days carries its
     weekday. Every state but the first is a button. No word the window writes there holds a hyphen, which the
@@ -1507,6 +1509,25 @@ def test_the_foot_says_each_state_of_a_run_in_its_words(tmp_path, monkeypatch):
     turn_until(app, lambda: not held.is_live())
     assert foot() == ("err", "Training failed", "Thu 8 Oct, 20:15. No simulation was saved.", True)
     seen()
+    prior = window.part("inference").prior_panel
+    builds = StandIn(word="Prior build")
+    start_run(prior, builds, spec=RunSpec("Prior build", ("inference", "prior"), name="prior_oct",
+                                          stop_button="Stop the prior build…", kinds=("prior",)))
+    counting = ("now", "Prior build is running", "Running. Settings are locked.", True)
+    assert (prior.run_view.sentence.text(), foot()) == ("Prior build prior_oct is starting.", counting)
+    said(builds, "Sweeping the box for accepted parameters.")
+    assert (prior.run_view.sentence.text(), foot()) == ("Prior build prior_oct is running.", counting)
+    builds.row("Added 37 sets to accepted parameters during global sweep", 12, 25)
+    turn_until(app, lambda: prior.run_view.sentence.text() == "Prior build prior_oct is running: 12 of 25.")
+    assert foot() == ("now", "Prior build is running", "12 of 25. Settings are locked.", True), (
+        "the foot of a run with no stages does not say the count its page says")
+    builds.release()
+    turn_until(app, lambda: not held.is_live())
+    seen()
+    live = RunModel(RunSpec("Live simulation", ("live", None), keeps_files=False, stop_asks=False), clock=clock)
+    live.set_count(1_200, 4_000, "samples")
+    assert (live.sentence(), live.doing()) == ("Live simulation is running: 1,200 of 4,000 samples.",
+                                               "1,200 of 4,000 samples")
     loads = StandIn(word="Prior load")
     start_run(host, loads, spec=RunSpec("Prior load", ("inference", "prior"), loads_only=True, keeps_files=False,
                                         stop_asks=False))

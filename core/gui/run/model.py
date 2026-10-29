@@ -187,12 +187,13 @@ class HealthRow:
 
 @dataclass(frozen=True)
 class Message:
-    """One message: its kind (a marker: "warn", "err", "info"), its sentence, when it was last said, and how many
-    lines it stands for."""
+    """One message: its kind (a marker: "warn", "err", "info"), its sentence, when it was last said, how many lines
+    it stands for, and whether its sentence says that count itself, so that nothing else says it again."""
     kind: str
     sentence: str
     when: datetime
     count: int
+    count_said: bool = False
 
 
 @dataclass(frozen=True)
@@ -476,9 +477,7 @@ class RunModel:
         if self._current is not None:
             return f"{who} is running: {self._stages[self._current].name}."
         if _OWN in self._samples:
-            done, total = self._numbers(_OWN)
-            unit = f" {self._unit}" if self._unit else ""
-            return f"{who} is running: {number_text(done)} of {number_text(total)}{unit}."
+            return f"{who} is running: {self._own_count()}."
         return f"{who} is starting." if self._stages or self._state == "starting" else f"{who} is running."
 
     def stage_line(self) -> tuple[StageWord, ...]:
@@ -581,7 +580,8 @@ class RunModel:
     def doing(self) -> str:
         """The stage the run is in, in a few words, as the foot of the rail says it: "Simulating, batch 6,150 of
         10,000", "Fitting, epoch 62 of about 130", "Computing the rotation", "Saving the posterior", the name of
-        another run's stage, or "Running"."""
+        another run's stage, the count of a run with no stage as its sentence says it ("12 of 25", "1,200 of 4,000
+        samples"), or "Running" while the sentence says no more than that the run is running."""
         kind = self._kind_of(self._current)
         if kind == "rotation":
             return "Computing the rotation"
@@ -598,6 +598,8 @@ class RunModel:
             return "Saving the posterior"
         if self._current is not None:
             return self._stages[self._current].name
+        if _OWN in self._samples:
+            return self._own_count()
         return "Running"
 
     def batches_done(self) -> int | None:
@@ -747,7 +749,7 @@ class RunModel:
         else:
             return
         if reading is not None and reading.name == "chi_batch":
-            key = "chi_batch"                        # one message, its count in its sentence: never summed
+            key, said = "chi_batch", True            # one message, its count in its sentence: never summed
             count = 1 + next((m.count for k, m in self._kept if k == key), 0)
             sentence = readings.sentence(reading, count=count)
         else:
@@ -755,10 +757,10 @@ class RunModel:
             if sentence is None:
                 line = text.strip()
                 sentence = f"From the engine: {line}" + ("" if line.endswith((".", "!", "?", "…")) else ".")
-            key = _DIGITS.sub("#", sentence)        # differing only in their numbers: one message, counted
+            key, said = _DIGITS.sub("#", sentence), False   # differing only in their numbers: one message, counted
             count = 1 + next((m.count for k, m in self._kept if k == key), 0)
-        self._kept = [(key, Message(kind, sentence, self._clock(), count))] + [(k, m) for k, m in self._kept
-                                                                                 if k != key]
+        self._kept = [(key, Message(kind, sentence, self._clock(), count, said))] + [(k, m) for k, m in self._kept
+                                                                                       if k != key]
         del self._kept[MESSAGES_KEPT:]
 
     # ── the stages ──
@@ -844,6 +846,13 @@ class RunModel:
         samples = self._samples.setdefault(key, [])
         if not samples or samples[-1][1] != done:
             samples.append((self._clock(), done))
+
+    def _own_count(self) -> str:
+        """How far a run that counts itself is, as its sentence says it after "is running: ": "12 of 25", "1,200 of
+        4,000 samples"."""
+        done, total = self._numbers(_OWN)
+        unit = f" {self._unit}" if self._unit else ""
+        return f"{number_text(done)} of {number_text(total)}{unit}"
 
     def _numbers(self, key) -> tuple[int, int | None]:
         """``(done, total)`` of a counted stage, or of the run's own count: the simulation's from its row, its

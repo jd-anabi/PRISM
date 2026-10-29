@@ -13,6 +13,7 @@ window's clock is moved by hand, and a pause runs out when the test moves the cl
 never by a real wait.
 """
 import gc
+import warnings
 import weakref
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -130,7 +131,8 @@ def _ended(app, held) -> None:
 
 
 def _failure(view) -> str:
-    """The failure's sentence as its page says it, the lead beside its marker included."""
+    """The failure's block as its page says it, beside its marker, under the page's sentence that says the run
+    failed."""
     return view.failure_row.sentence.plain_text()
 
 
@@ -203,8 +205,8 @@ def _waits(pause, which, batch, at=None) -> str:
 
 # the opening of a page that only reopening PRISM can help: after tries that did not help, and after a failure of the
 # graphics card that is no lack of memory, filled with the error's message's first line
-_REOPEN = "Error. Trying again here did not help: this copy of PRISM still holds the graphics card's memory."
-_DEVICE = "Error. The graphics card failed in a way only reopening PRISM can clear: {}."
+_REOPEN = "Trying again here did not help: this copy of PRISM still holds the graphics card's memory."
+_DEVICE = "The graphics card failed in a way only reopening PRISM can clear: {}."
 # what a page says when its offer is pressed after its session came to hold another model or another prior
 _CHANGED = "The model or its prior has changed since this run began; start it again from the form."
 
@@ -234,12 +236,14 @@ def _parsed(command):
 
 # ── the failure page ──
 def test_a_failure_is_a_state_of_the_run_page_and_no_box(tmp_path):
-    """A run that fails says so on its page, never in a box: beside the error's marker, what failed and when, what
-    was saved and what was lost; under it the error's own message, quoted in the fixed-width face, and that the
-    full error is in the run's file; the error's kind and traceback only behind "Show the full error", and in the
-    run's text file. A run of another kind says what failed and when, with the error's message: the sentence quotes
-    its first line alone, and the whole message stands beneath. A run that only loads a record has no page of its
-    own: its failure is told in the box, as a failure at a click is."""
+    """A run that fails says so on its page, never in a box, and says it once: the page's sentence says the run
+    failed, and beside the error's marker the failure's block says when and where, what was saved and what was lost,
+    never the run's word and "failed" again; under it the error's own message, quoted in the fixed-width face, only
+    where it adds to the block (a full disk's message is the block's cause word for word), and that the full error is
+    in the run's file; the error's kind and traceback only behind "Show the full error", and in the run's text file.
+    What the foot and Home are told keeps the run's word and "failed". A run of another kind says when it failed,
+    with the error's message: the block quotes its first line alone, and the whole message stands beneath. A run
+    that only loads a record has no page of its own: its failure is told in the box, as a failure at a click is."""
     from core.gui import fonts
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
@@ -255,12 +259,17 @@ def test_a_failure_is_a_state_of_the_run_page_and_no_box(tmp_path):
     assert (all_asked(), view.mode, held.status.outcome, view.failure.isVisibleTo(view),
             view.failure_row.marker.kind) == ([], "ended", "failed", True, "err"), (
         "the failure was told in a box, or its page does not say it")
-    assert _failure(view) == ("Error. Training failed on Sat 3 Oct, 03:12, during simulation: [Errno 28] No space left "
-                              "on device. Saved: the simulations up to batch 236. Lost: nothing else."), _failure(view)
-    assert (view.failure_message.text(), view.failure_message.font().family(), view.file_line.text(),
-            view.file_line.isVisibleTo(view), view.full_error_button.text(), view.full_error.isVisibleTo(view)) == (
-        "[Errno 28] No space left on device", fonts.fixed().family(), "The full error is in the run's file.", True,
-        "Show the full error", False)
+    said = ("during simulation: [Errno 28] No space left on device. Saved: the simulations up to batch 236. Lost: "
+            "nothing else.")
+    assert (view.sentence.text(), _failure(view), held.status.sentence) == (
+        "Training retrain_3 failed.", f"On Sat 3 Oct, 03:12, {said}", f"Training failed on Sat 3 Oct, 03:12, {said}"), (
+        "the failure is said twice on its page, or the foot and Home are not told which run failed",
+        view.sentence.text(), _failure(view), held.status.sentence)
+    assert (view.failure_message.text(), view.failure_message.isVisibleTo(view), view.failure_message.font().family(),
+            view.file_line.text(), view.file_line.isVisibleTo(view), view.full_error_button.text(),
+            view.full_error.isVisibleTo(view)) == (
+        "[Errno 28] No space left on device", False, fonts.fixed().family(), "The full error is in the run's file.",
+        True, "Show the full error", False), "a full disk's message, the block's own words, is quoted beneath it"
     in_sight = [label.text() for label in view.findChildren(QLabel) if label.isVisibleTo(view)] + [_failure(view)]
     assert not any("OSError" in words for words in in_sight), "the error's kind is shown outside the full error"
     view.full_error_button.click()
@@ -277,10 +286,12 @@ def test_a_failure_is_a_state_of_the_run_page_and_no_box(tmp_path):
     clock.advance(60)
     check.fail(ValueError("the coverage could not be computed.\n12 of 200 rows were not finite."))
     _ended(app, held)
-    assert (all_asked(), _failure(view), view.failure_message.text(), view.full_error.isVisibleTo(view)) == (
-        [], "Error. Check failed on Sat 3 Oct, 03:13: the coverage could not be computed.",
-        "the coverage could not be computed.\n12 of 200 rows were not finite.", False), (
-        "the sentence quotes more than the message's first line, or the message beneath is not whole")
+    assert (all_asked(), view.sentence.text(), _failure(view), view.failure_message.text(),
+            view.failure_message.isVisibleTo(view), view.full_error.isVisibleTo(view)) == (
+        [], "Check Calibration failed.", "On Sat 3 Oct, 03:13: the coverage could not be computed.",
+        "the coverage could not be computed.\n12 of 200 rows were not finite.", True, False), (
+        "the block quotes more than the message's first line, or the message beneath, which adds its second line, "
+        "is not whole or not in sight")
 
     loads = StandIn(word="Prior load")
     start_run(host, loads, spec=RunSpec("Prior load", ("inference", "prior"), stop_button="Stop loading",
@@ -417,10 +428,11 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
     view.stop_trying_button.click()
     _ended(app, held)
     assert (held.status.state, held.status.outcome, all_asked(), results) == ("ended", "failed", [], [])
-    assert (_failure(view), view.failure_message.text(), view.continue_button.isVisibleTo(view),
-            view.continue_button.text(), view.stop_trying_button.isVisibleTo(view)) == (
-        "Error. Training failed on Sat 3 Oct, 03:17, during simulation: the graphics card ran out of memory at batch "
-        "301. Saved: the simulations up to batch 300. Lost: nothing else.", "the simulation of batch 301 failed", True,
+    assert (_failure(view), view.failure_message.text(), view.failure_message.isVisibleTo(view),
+            view.continue_button.isVisibleTo(view), view.continue_button.text(),
+            view.stop_trying_button.isVisibleTo(view)) == (
+        "On Sat 3 Oct, 03:17, during simulation: the graphics card ran out of memory at batch 301. Saved: the "
+        "simulations up to batch 300. Lost: nothing else.", "the simulation of batch 301 failed", True, True,
         "Continue from batch 300", False)
     run = held.status.run
     said = [line for line in text.texts() if line.startswith("Try ")]
@@ -464,8 +476,8 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
             len(asked_to_stop.calls), held.status.outcome, view.noted.isVisibleTo(view)) == ([], 1, "failed", True), (
         "a run whose stop was asked for was tried again after its failure")
     assert (_failure(view), view.continue_button.text()) == (
-        "Error. Training failed on Sat 3 Oct, 03:18, during simulation: the graphics card ran out of memory at batch "
-        "237. Saved: the simulations up to batch 200. Lost: nothing else.", "Continue from batch 200"), (
+        "On Sat 3 Oct, 03:18, during simulation: the graphics card ran out of memory at batch 237. Saved: the "
+        "simulations up to batch 200. Lost: nothing else.", "Continue from batch 200"), (
         "the cause does not name the batch in progress, or what is saved is not what the set holds")
 
 
@@ -559,12 +571,12 @@ def test_stop_trying_pressed_as_the_pause_runs_out_begins_no_try(tmp_path):
 
 
 _REPORTED_AT_ONCE = {
-    "a full disk": (lambda: OSError(28, "No space left on device"), "[Errno 28] No space left on device"),
+    "a full disk": (lambda: OSError(28, "No space left on device"), "[Errno 28] No space left on device", False),
     "a programming error": (lambda: TypeError("unsupported operand type(s) for +: 'int' and 'NoneType'"),
-                            "unsupported operand type(s) for +: 'int' and 'NoneType'"),
+                            "unsupported operand type(s) for +: 'int' and 'NoneType'", False),
     "a refusal after the spend": (lambda: Refusal("The read-back of the posterior was refused.", field="name"),
-                                  f"The read-back of the posterior was refused. {fix_sentence('name')}"),
-    "the card's memory, in a check": (_out_of_memory, "the simulation of batch 237 failed"),
+                                  f"The read-back of the posterior was refused. {fix_sentence('name')}", True),
+    "the card's memory, in a check": (_out_of_memory, "the simulation of batch 237 failed", False),
 }
 
 
@@ -573,12 +585,14 @@ def test_any_other_failure_is_reported_at_once(failure, tmp_path):
     """A failure that the graphics card's lack of memory did not cause fails the same way again, so the window says
     it at once: no pause and no try, the run ended failed, its page saying what failed and offering to continue
     from the batches the simulation set holds; a refusal made once something was spent is quoted with where to fix
-    it, as the window says a refusal. A run that is no training is not tried again, whatever its failure."""
+    it, as the window says a refusal. The error's message stands beneath only where it adds to what the failure's
+    block says: a refusal's place to fix it does, a message the block quotes whole does not. A run that is no training
+    is not tried again, whatever its failure."""
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
     text, view = RunText(held), host.run_view
-    error, said = _REPORTED_AT_ONCE[failure]
+    error, said, adds = _REPORTED_AT_ONCE[failure]
     stand_in = StandIn()
     if failure.endswith("in a check"):
         start_run(host, stand_in, spec=RunSpec("Check", ("inference", "checks"), name="Calibration"))
@@ -588,11 +602,12 @@ def test_any_other_failure_is_reported_at_once(failure, tmp_path):
     stand_in.fail(error())
     _ended(app, held)
     assert ([status.state for status in text.statuses if status.state == "retrying"], len(stand_in.calls),
-            held.status.outcome, all_asked(), view.failure.isVisibleTo(view), view.failure_message.text()) == (
-        [], 1, "failed", [], True, said), "the failure was tried again, told in a box, or not said on its page"
+            held.status.outcome, all_asked(), view.failure.isVisibleTo(view), view.failure_message.text(),
+            view.failure_message.isVisibleTo(view)) == ([], 1, "failed", [], True, said, adds), (
+        "the failure was tried again, told in a box, or not said on its page, or its message is quoted beneath where "
+        "it adds nothing, or not where it adds")
     if failure.endswith("in a check"):
-        assert (_failure(view), view.continue_button.isVisibleTo(view)) == (
-            f"Error. Check failed on Sat 3 Oct, 03:02: {said}.", False)
+        assert (_failure(view), view.continue_button.isVisibleTo(view)) == (f"On Sat 3 Oct, 03:02: {said}.", False)
         from core.SBI.pipeline import _is_oom
         assert [retry.is_tried_again(error(), spec, is_oom=_is_oom) for spec in (
             RunSpec("Check", ("inference", "checks"), name="Calibration"), _training())] == [False, True], (
@@ -625,9 +640,10 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
 
     def reopened(message, opening=_REOPEN):
         return (held.status.state, held.status.outcome, held.status.reopen, all_asked(), _failure(view),
-                view.failure_message.text(), view.continue_button.isVisibleTo(view),
-                view.resume_button.isVisibleTo(view), view.stop_trying_button.isVisibleTo(view)) == (
-            "ended", "failed", True, [], f"{opening} {again}", message, False, False, False)
+                view.failure_message.text(), view.failure_message.isVisibleTo(view),
+                view.continue_button.isVisibleTo(view), view.resume_button.isVisibleTo(view),
+                view.stop_trying_button.isVisibleTo(view)) == (
+            "ended", "failed", True, [], f"{opening} {again}", message, True, False, False, False)
 
     stand_in = StandIn()
     start_run(host, stand_in, spec=_training())
@@ -842,13 +858,19 @@ def test_a_long_command_and_a_long_message_wrap_within_a_narrow_page_and_the_com
             QTest.mouseDClick(line, Qt.LeftButton, Qt.NoModifier, first)
             assert (QApplication.focusWidget(), line.selectedText()) == (line, command), (
                 "a double click does not select the command whole", QApplication.focusWidget(), line.selectedText())
+            with warnings.catch_warnings():                  # the toolkit marks the call as old, and keeps it
+                warnings.simplefilter("ignore", DeprecationWarning)
+                QApplication.setActiveWindow(None)           # the window loses the keyboard, to another program
+                away = line.selectedText()
+                QApplication.setActiveWindow(host)           # and is brought back
+            assert away == command, ("the command lost its selection as the window lost the keyboard", away)
         view.back_button.click()
         path = (f"C:/Users/J/PRISM/Artifacts/simulations/_unnamed__20261003T030211/{chr(0x1F4C1)}"
                 f"{'very_long_batch_name_' * 3}6150.pt")
-        disk = StandIn()
-        start_run(host, disk, spec=_training())
-        _to_the_simulation(app, disk, text, held, _set(tmp_path, 236), 236)
-        disk.fail(OSError(28, "No space left on device", path))
+        unwritten = StandIn()
+        start_run(host, unwritten, spec=_training())
+        _to_the_simulation(app, unwritten, text, held, _set(tmp_path, 236), 236)
+        unwritten.fail(RuntimeError(f"the batch could not be written to its file\n{path}"))    # the path adds to it
         _ended(app, held)
         _settle()
         message = view.failure_message
@@ -1124,8 +1146,8 @@ def test_a_failure_during_the_fit_offers_resume_and_says_what_was_saved(tmp_path
         stand_in.fail(TypeError(error))
         _ended(app, held)
         assert (all_asked(), _failure(view), view.resume_button.isVisibleTo(view),
-                view.continue_button.isVisibleTo(view)) == (
-            [], f"Error. Training failed on Sat 3 Oct, {when}, {said}", resumes, False), _failure(view)
+                view.continue_button.isVisibleTo(view)) == ([], f"On Sat 3 Oct, {when}, {said}", resumes, False), (
+            _failure(view))
     record = history.read(tmp_path / "runs" / f"20261003T030211-training.json")
     assert (record["fit"]["epochs"], record["tries"][-1]["epochs_after"], record["tries"][-1]["batches_after"]) == (
         41, 41, 10_000), "the history's fit or its last try holds the records seen, not the kept training and the set"
@@ -1210,10 +1232,12 @@ def test_a_failed_runs_history_keeps_its_failure_once_its_end_is_seen_or_set_asi
         "a history spoiled after the run's end was not written again from what its end wrote")
 
 
-def test_a_failure_while_the_posterior_is_saved_says_the_finished_training_is_kept(tmp_path, store):
-    """A training whose fit finished but whose posterior could not be written says so, and that the finished
-    training is kept, so that resuming it writes the posterior without training again, and offers to resume it; one
-    whose training was not saved as it went says that none was kept, and offers nothing."""
+def test_a_failure_while_the_posterior_is_saved_says_the_training_is_kept_with_its_fit_complete(tmp_path, store):
+    """A training whose fit finished but whose posterior could not be written says so, and that the training is kept
+    with its fit complete, so that resuming it writes the posterior without training again, and offers to resume it;
+    one whose training was not saved as it went says that none was kept, and offers nothing. One that ran out of the
+    graphics card's memory as its posterior was saved says, while it waits to be tried again, that the training is
+    kept with its fit complete."""
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
@@ -1221,8 +1245,8 @@ def test_a_failure_while_the_posterior_is_saved_says_the_finished_training_is_ke
     folder = _set(tmp_path, 10_000, complete=True)
     kept = build_fit_record(store, passes=2, complete=True)
     for saved, note, said in ((True, _note(kept, 2), "The fit finished but its record could not be written. The "
-                                                     "finished training is kept: resuming it writes the posterior "
-                                                     "without training again."),
+                                                     "training is kept with its fit complete: resuming it writes the "
+                                                     "posterior without training again."),
                               (False, None, "The fit finished but its record could not be written; the training was "
                                             "not kept.")):
         stand_in = StandIn()
@@ -1232,9 +1256,21 @@ def test_a_failure_while_the_posterior_is_saved_says_the_finished_training_is_ke
         assert held.model.stage == "Saving"
         stand_in.fail(OSError(13, "Permission denied"))
         _ended(app, held)
-        assert (all_asked(), _failure(view), view.failure_message.text(), view.resume_button.isVisibleTo(view),
-                view.continue_button.isVisibleTo(view)) == (
-            [], f"Error. {said}", "[Errno 13] Permission denied", saved, False), saved
+        assert (all_asked(), _failure(view), view.failure_message.text(), view.failure_message.isVisibleTo(view),
+                view.resume_button.isVisibleTo(view), view.continue_button.isVisibleTo(view)) == (
+            [], said, "[Errno 13] Permission denied", True, saved, False), saved
+    stand_in = StandIn()
+    stand_in.kept_fit = _note(kept, 2)
+    start_run(host, stand_in, spec=_training())
+    _to_the_fit(app, stand_in, text, clock, folder, [(1, 0), (2, 20)])
+    assert held.model.stage == "Saving"
+    stand_in.fail(_out_of_memory("the posterior's save"))
+    _waiting(app, held)
+    assert view.sentence.text() == ("The graphics card ran out of memory as the posterior was being saved. Trying "
+                                    "again in 1 minute: the first of three tries. The training is kept with its fit "
+                                    "complete."), view.sentence.text()
+    view.stop_trying_button.click()
+    _ended(app, held)
 
 
 def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_path, store):

@@ -67,8 +67,8 @@ OUT_OF_MEMORY = "the graphics card ran out of memory"
 NO_MESSAGE = "the error gave no message"
 #: The page of a training whose fit finished but whose posterior could not be written: with the training kept, and
 #: with none kept (its fit was not saved as it went).
-SAVING_KEPT_TEXT = ("The fit finished but its record could not be written. The finished training is kept: resuming "
-                    "it writes the posterior without training again.")
+SAVING_KEPT_TEXT = ("The fit finished but its record could not be written. The training is kept with its fit "
+                    "complete: resuming it writes the posterior without training again.")
 SAVING_LOST_TEXT = "The fit finished but its record could not be written; the training was not kept."
 
 
@@ -137,7 +137,7 @@ def resumed_call(spec, kept: str) -> dict:
     return kwargs
 
 
-def failure_words(status, model, exc, *, is_oom=None) -> tuple[str, str]:
+def failure_words(status, model, exc, *, is_oom=None, boxed=False) -> tuple[str, str]:
     """The page's sentence for a run that failed, as its ``status`` and its ``model`` read it, ``exc`` the error it
     failed with; and the words of the button that continues or resumes it, or ends its tries, "" for none. While the
     run waits to be tried again (``status.state`` "retrying"): what failed, when the next try begins and which of
@@ -148,15 +148,18 @@ def failure_words(status, model, exc, *, is_oom=None) -> tuple[str, str]:
     the epochs of the training it kept (its note's passes), never the records the run's text holds; but the batch that
     was in progress when the graphics card ran out of memory is the one after the last the run's text counted, which
     the set may not hold yet (``_failing``). ``is_oom`` is the engine's rule of a failure that is the graphics card
-    running out of memory; None: none is."""
+    running out of memory; None: none is. ``boxed``: the words of the failure's own block, under the page's sentence
+    that says the run failed, which begin with when ("On Sat 3 Oct, 03:12, during simulation: ..."), the run's word
+    and "failed" left to that sentence."""
     spec = model.spec
     word, kind, note = spec.word, model.stage_kind(), status.kept_fit
     if status.state == "retrying":
         return _retrying(status, model, kind, note), STOP_TRYING_TEXT
     when = date_text(status.ended, model.now())
+    failed = "On" if boxed else f"{word} failed on"
     said = _clause(message(exc).splitlines()[0])
     if word not in TRAINING_WORDS:
-        return f"{word} failed on {when}: {said}.", ""
+        return f"{failed} {when}: {said}.", ""
     oom = is_oom is not None and exc is not None and bool(is_oom(exc))
     if status.reopen:
         device = exc is not None and is_device_failure(exc) and not oom
@@ -168,19 +171,26 @@ def failure_words(status, model, exc, *, is_oom=None) -> tuple[str, str]:
     if kind == "fit":
         if note is not None:
             epochs = number_text(note.passes)
-            return (f"{word} failed on {when}, during the fit, at epoch {epochs}: {cause}. Saved: the simulations, "
+            return (f"{failed} {when}, during the fit, at epoch {epochs}: {cause}. Saved: the simulations, "
                     f"and the training up to epoch {epochs}. Lost: at most the epoch in progress.", RESUME_TEXT)
         lost = ("the fit, which is not saved as it goes" if model.fit_not_saved()
                 else "the epoch in progress; no epoch of the fit was kept")
-        return f"{word} failed on {when}, during the fit: {cause}. Saved: the simulations. Lost: {lost}.", ""
+        return f"{failed} {when}, during the fit: {cause}. Saved: the simulations. Lost: {lost}.", ""
     batches = status.continue_from or 0
     where = "during simulation" if kind == "simulation" else "before its simulation"
     if oom and kind == "simulation":
         cause = f"{OUT_OF_MEMORY} at batch {number_text(_failing(batches, model))}"
     if not batches:
-        return f"{word} failed on {when}, {where}: {cause}. No simulation was saved.", ""
-    return (f"{word} failed on {when}, {where}: {cause}. Saved: the simulations up to batch {number_text(batches)}. "
+        return f"{failed} {when}, {where}: {cause}. No simulation was saved.", ""
+    return (f"{failed} {when}, {where}: {cause}. Saved: the simulations up to batch {number_text(batches)}. "
             f"Lost: nothing else.", CONTINUE_TEXT.format(number_text(batches)))
+
+
+def adds_to(sentence: str, message: str) -> bool:
+    """Whether the error's own ``message``, quoted beneath the page's ``sentence`` of a failure, adds to what the
+    sentence says: it does unless the sentence holds it whole, its closing full stop aside, as it holds the one line
+    of a full disk's message that it names as the cause."""
+    return _clause(message.strip()) not in sentence
 
 
 def _retrying(status, model, kind, note) -> str:
@@ -191,7 +201,7 @@ def _retrying(status, model, kind, note) -> str:
     when = (f"Trying again in {minutes} minute{'' if minutes == 1 else 's'}: the "
             f"{_ORDINALS[max(status.trying, 1) - 1]} of {_COUNTS[TRIES]} tries.")
     if kind == "saving":
-        kept = "The finished training is kept." if note is not None else "The simulations are saved."
+        kept = "The training is kept with its fit complete." if note is not None else "The simulations are saved."
         return f"The graphics card ran out of memory as the posterior was being saved. {when} {kept}"
     if kind == "fit":
         if note is None:

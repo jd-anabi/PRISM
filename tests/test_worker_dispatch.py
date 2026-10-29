@@ -411,8 +411,8 @@ def test_inference_config_restore_with_a_stale_model_does_not_desync_the_bounds_
 def test_on_error_puts_the_traceback_in_details_not_the_body():
     """A failure's traceback is never pasted whole into the words that say it. A failure at a click,
     which a click handler hands to its page as it caught it, keeps the red box, its traceback in a
-    collapsible Details panel. A run's failure is told by no box: the run's page quotes the error's
-    message, and its kind and traceback are behind "Show the full error"."""
+    collapsible Details panel. A run's failure is told by no box: the run's page says when it failed with
+    the error's message, and its kind and traceback are behind "Show the full error"."""
     from tests._fixtures import all_asked, asked, forget_asked
 
     app = qt_app()
@@ -434,8 +434,8 @@ def test_on_error_puts_the_traceback_in_details_not_the_body():
     view = panel.run_view
     assert all_asked() == [], "a run's failure opened a box"
     said = (view.failure_row.sentence.plain_text(), view.failure_message.text())
-    assert (said[0].startswith("Error. Run failed on "), said[0].endswith(": Something failed."), said[1]) == (
-        True, True, "Something failed"), said
+    assert (said[0].startswith("On "), said[0].endswith(": Something failed."), said[1],
+            view.failure_message.isVisibleTo(view)) == (True, True, "Something failed", False), said
     assert not any("Traceback" in words or "RuntimeError" in words for words in said), said
     assert not view.full_error.isVisibleTo(view), "the full error was shown before it was asked for"
     assert (panel.results.currentWidget() is view, view.file_line.isVisibleTo(view)) == (True, False), (

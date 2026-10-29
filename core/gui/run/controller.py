@@ -1128,16 +1128,16 @@ class RunController(QObject):
                          stage=model.stage, outcome=None if refused_early else run.outcome, started=model.started,
                          ended=run.ended, continue_from=run.continue_from, kept_fit=run.kept_fit,
                          closing=run.closing, kinds=spec.kinds, records=spec.records, reopen=run.reopen)
-        page = None
+        page = said = None
         if failure is not None and not refused_early and not spec.loads_only:
-            page = self._failure_page(run, last, failure)
+            said, page = self._failure_page(run, last, failure)
         if not idle:
             try:
                 sentence, kept = ends.words(self._record(run), run.ended,
                                             too_late=run.stop_requested and run.outcome == "finished")
             except Exception:                    # noqa: BLE001 -- the end's words never hold up the run's end
                 sentence, kept = model.sentence(), ""
-            last = replace(last, sentence=sentence if page is None else page[0], kept=kept)
+            last = replace(last, sentence=sentence if page is None else said, kept=kept)
         run.last = last
         if spec.word == "Training" and not refused_early:
             self._training_kept = run.continue_from if run.outcome in ("stopped", "failed") else None
@@ -1202,16 +1202,19 @@ class RunController(QObject):
         return f"{exc.message} {gui_fields.fix_sentence(exc.field)}".rstrip()
 
     def _failure_page(self, run: _Run, last: RunStatus, failure) -> tuple:
-        """What the page of a run that failed shows: its sentence, then, as ``show_failure`` takes them, the error's
-        message (a refusal's with where to fix it, as the window says a refusal), its kind and traceback, whether a
-        stop had been asked for before it, whether the run keeps a file that holds them, and the command line the
-        page sets off beneath its sentence ("" for none)."""
+        """What a run that failed says of its failure: its sentence, as its status says it to the foot and Home; and
+        what its page shows, as ``show_failure`` takes it: the failure's block, which begins with when (the page's own
+        sentence says the run failed), the error's message (a refusal's with where to fix it, as the window says a
+        refusal), its kind and traceback, whether a stop had been asked for before it, whether the run keeps a file
+        that holds them, and the command line the page sets off beneath its sentence ("" for none)."""
         exc, trace, noted = failure
-        sentence, _button = retry.failure_words(last, self._model, exc, is_oom=_out_of_memory())
+        is_oom = _out_of_memory()
+        sentence, _button = retry.failure_words(last, self._model, exc, is_oom=is_oom)
+        boxed, _button = retry.failure_words(last, self._model, exc, is_oom=is_oom, boxed=True)
         said = retry.message(exc)
         quoted = self._refusal_words(exc) if isinstance(exc, Refusal) else said
-        return (sentence, quoted, trace or f"{type(exc).__name__}: {said}", bool(noted), run.text is not None,
-                retry.reopen_command(last, self._model))
+        return sentence, (boxed, quoted, trace or f"{type(exc).__name__}: {said}", bool(noted), run.text is not None,
+                          retry.reopen_command(last, self._model))
 
     def _set_holds(self, run: _Run) -> tuple[int, bool]:
         """The batches the run's simulation set holds, and whether it is complete, read from the set itself, in the

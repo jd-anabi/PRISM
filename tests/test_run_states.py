@@ -1227,6 +1227,67 @@ def test_messages_are_the_windows_own_sentences_newest_first_and_the_rest_from_t
     assert model.MESSAGES_KEPT == 50
 
 
+def test_a_message_that_came_again_says_how_many_times_and_each_message_is_one_paragraph(tmp_path):
+    """On the run's page a message of a kind that came more than once says how many times after its date, in its
+    bold opening, the date the newest's ("Attention, Sun 11 Oct, 12:13 (4 times)."); one that came once says no
+    count; the unusable driven recordings, whose sentence counts the batches that reported them, never say their
+    count twice. A library's warning written for a console, with its own line breaks and indentation, is one
+    paragraph on the page, each run of white space in it one space, while the run's full text and its text file keep
+    its words exactly as they came. Drawn again from the run's two files alone, past, the page says the same counts
+    and the same paragraphs."""
+    from core.gui.run import history
+    from core.gui.run.view import _entries
+    from core.gui.widgets.message_row import opening
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    clock = Clock(_at(11, 12, 10, 30))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    view, text, stand_in = host.run_view, RunText(held), StandIn()
+    rejection = ("library: rejection: Only 0.500% proposal samples were accepted. It\n"
+                 "                        may take a long time to collect the remaining 9950\n"
+                 "                        samples. You can prevent long runtimes by\n"
+                 "                        setting `max_sampling_time` to limit runtime.")
+    once = "UserWarning: Only 3.2 GiB free where the training checkpoint needs about 10.3 GiB"
+    start_run(host, stand_in, spec=_training())
+
+    def said(line):
+        before = text.texts().count(line)
+        stand_in.say(line, "warning")
+        turn_until(app, lambda: text.texts().count(line) > before)
+
+    for batch in range(4):                              # each kind four times, a minute apart, each with its numbers
+        said(_LINES["patho_batch"].replace("6149", str(6149 + batch)).replace("3 new", f"{3 + batch} new"))
+        said(_LINES["chi_batch"].replace("6150/", f"{6150 + batch}/").replace("9120/", f"{9120 - batch}/"))
+        clock.advance(60)
+    said(once)
+    said(rejection)
+    turn_until(app, lambda: len(view.message_rows()) == 4)
+    shown = [row.sentence.plain_text() for row in view.message_rows()]
+    paragraph = ("From the engine: library: rejection: Only 0.500% proposal samples were accepted. It may take a long "
+                 "time to collect the remaining 9950 samples. You can prevent long runtimes by setting "
+                 "`max_sampling_time` to limit runtime.")
+    assert shown == [
+        f"Attention, Sun 11 Oct, 12:14. {paragraph}",
+        "Attention, Sun 11 Oct, 12:14. From the engine: UserWarning: Only 3.2 GiB free where the training checkpoint "
+        "needs about 10.3 GiB.",
+        "Attention, Sun 11 Oct, 12:13. Unusable driven recordings were reported in 4 batches (latest: batch 6,153, "
+        "9,117 of 22,528).",
+        "Attention, Sun 11 Oct, 12:13 (4 times). Failed simulations: 6 more in batch 6,153."], shown
+    assert (opening("Attention", None, times=2), opening("Error", None, times=1_200)) == (
+        "Attention (2 times).", "Error (1,200 times)."), "a count with no date"
+    written = [said for _moment, level, said in _entries(tmp_path / "runs" / f"{held.status.run}.txt")
+               if level == "warning"]
+    assert (rejection in "\n".join(view.full_text.lines()), written[-1]) == (True, rejection), (
+        "the run's full text or its text file does not keep the warning's words as they came", written[-1:])
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    record = history.read(tmp_path / "runs" / f"{held.status.run}.json")
+    view.show_past(record, tmp_path / "runs" / f"{held.status.run}.txt", clock=clock)
+    assert (view.mode, [row.sentence.plain_text() for row in view.message_rows()]) == ("past", shown), (
+        "drawn from the run's files, the page does not say the same counts and paragraphs")
+
+
 def test_silence_is_said_in_minutes_and_needs_you_after_its_limit():
     """A run that says nothing, and whose solver does not move, is told: outside the fit "Attention" after 45 s and
     "needs you" after 10 minutes; in the fit it is information while the silence is shorter than twice the last
@@ -2308,8 +2369,8 @@ _RUNNING = ("Training retrain_3 is running. Shutting down stops it. Nothing has 
 _SIMULATING = "Training retrain_3 is simulating. Shutting down stops it; the simulations done so far are saved first."
 _FITTING = ("Training retrain_3 is fitting. Shutting down loses the epoch in progress; the epochs finished so far are "
             "kept.")
-_SAVING = ("Training retrain_3 is saving its posterior. Shutting down stops it; the finished training is kept, and "
-           "resuming it writes the posterior.")
+_SAVING = ("Training retrain_3 is saving its posterior. Shutting down stops it; the training is kept with its fit "
+           "complete, and resuming it writes the posterior.")
 _LOSES_THE_FIT = "Shutting down loses the fit: nothing of it can be saved. The simulations are kept."
 # Every other kind of run: its spec, as its page hands it, and the reason it gives.
 _OTHER_REASONS = (
@@ -3448,9 +3509,10 @@ def test_live_simulation_keeps_its_own_view_under_the_runs_sentence(tmp_path, mo
 
 def test_a_live_simulation_that_fails_says_so_under_its_sentence_on_its_compact_page(tmp_path, monkeypatch):
     """A live simulation that fails keeps its compact page above its own view, and says the failure there: under the
-    sentence that it failed, beside the error's marker, what failed and when, the error's own message quoted beneath
-    and "Show the full error"; nothing of what scrolls on a full page is in sight, and there is no way back to a form.
-    While compact, running or failed, the page asks for no width of its own."""
+    sentence that it failed, beside the error's marker, when it failed and the error's message, never the run's word
+    and "failed" again, the message not quoted a second time beneath, and "Show the full error"; nothing of what
+    scrolls on a full page is in sight, and there is no way back to a form. While compact, running or failed, the page
+    asks for no width of its own."""
     import numpy as np
     from PySide6.QtCore import QPoint
     from core.gui.panels import simulate_panel as live
@@ -3491,9 +3553,9 @@ def test_a_live_simulation_that_fails_says_so_under_its_sentence_on_its_compact_
     under = view.sentence.mapTo(view, QPoint(0, view.sentence.height())).y()
     assert view.failure.mapTo(view, QPoint(0, 0)).y() >= under, "the failure does not stand under the sentence"
     assert (view.sentence.text(), view.failure_row.sentence.plain_text(), view.failure_message.text(),
-            view.full_error_button.text()) == (
-        "Live simulation failed.", f"Error. Live simulation failed on Tue 20 Oct, 18:18: {message}.", message,
-        "Show the full error"), (view.sentence.text(), view.failure_row.sentence.plain_text())
+            view.failure_message.isVisibleTo(view), view.full_error_button.text()) == (
+        "Live simulation failed.", f"On Tue 20 Oct, 18:18: {message}.", message, False, "Show the full error"), (
+        view.sentence.text(), view.failure_row.sentence.plain_text(), view.failure_message.isVisibleTo(view))
     assert view.minimumWidth() == 0, ("the failed compact page asks for a width of its own", view.minimumWidth())
 
 
@@ -3923,10 +3985,10 @@ def _in_its_column(view, column, why, *, whole=True) -> None:
 
 
 def _health_holds(view, why) -> None:
-    """The health table's "Now" column as wide as its widest word, and each row of the table as tall as its "Now" value's
-    lines at that column's width, and the space above and below them: the value laid out here as its cell sets it,
-    its figure semibold and its unit plain after one space, broken between words and inside a word only where the word
-    is wider than the line."""
+    """The health table's "Now" column as wide as its widest word, and each row of the table as tall as its "Now"
+    value's lines at that column's width, and the space above and below them: the value laid out here as its cell sets
+    it, its figure semibold and its unit plain after one space, broken between words and inside a word only where the
+    word is wider than the line."""
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QFontMetricsF, QTextCharFormat, QTextLayout, QTextOption
     from core.gui import design
@@ -4006,25 +4068,26 @@ def _painted_name(title, monkeypatch) -> list:
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])
 def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path, monkeypatch, store):
-    """At the window's least size, 900 x 600 grown with the text, a training's page fits the column it stands in,
-    at the ordinary text size and at one and a half times it, in each state where it holds the most: starting;
-    simulating, its end firm; in its fit, with the fit's range named after a training of a long name, the health and
-    the loss curve; stopping, with three buttons, two then one to a row at the ordinary text size; asking whether to
-    keep the training its stop kept; failed in its fit, its own name longer than the head's row, cut at its end with
-    "…" and drawn so, then with the error's kind and traceback shown; failed so that only reopening PRISM can help, its
-    command naming a long path; waiting to try again, with "Stop trying"; saving its posterior while the window waits
-    to close, with "Keep PRISM open"; and finished, its page brought back. A short name is whole in each. With the full
-    text shown and its find field open, each of its tools is at least as wide as it asks and stands inside the column.
-    At the opening size the page in the fit is as wide as in the simulation, the
-    line under its time axis stands beside the start while it fits there, and its health table writes every word of
-    its figures whole, a failed save's among them; there too, in each state seen there, the page asks for no more width
-    than the window's least size gives it, and the health's rows are as tall as their figures' lines. What a run's end
-    leaves to say is in sight when it comes on a page scrolled to its end: a kept stop's question, with the keyboard
-    on Keep, and a failure; a page whose end was in sight already is not scrolled again when Keep is answered; and
-    with the full text shown at the least size, the Keep the keyboard goes to is brought into sight. Before the page's first run, out of sight, it asks for no width of its own, and the form beside the
-    figures keeps its least width; back at the form after its last run it asks for none again. The window is the whole
-    program's, in the look, on a screen as large as this computer's, its form and the run's page sharing the room as
-    they do there."""
+    """At the window's least size, 900 x 600 grown with the text, a training's page fits the column it stands in, at the
+    ordinary text size and at one and a half times it, in each state where it holds the most: starting; simulating, its
+    end firm; in its fit, with the fit's range named after a training of a long name, the health and the loss curve;
+    stopping, with three buttons, two then one to a row at the ordinary text size; asking whether to keep the training
+    its stop kept; failed in its fit, its own name longer than the head's row, cut at its end with "…" and drawn so,
+    then with the error's kind and traceback shown; failed so that only reopening PRISM can help, its command naming a
+    long path; waiting to try again, with "Stop trying"; saving its posterior while the window waits to close, with
+    "Keep PRISM open"; and finished, its page brought back. A short name is whole in each. With the full text shown and
+    its find field opened at the least size, each of its tools is at least as wide as it asks and stands inside the
+    column, at once and after the window was made larger, where the field and its buttons stand on one row again, and
+    least again. At the opening size the page in the fit is as wide as in the simulation, the line under its time axis
+    stands beside the start while it fits there, and its health table writes every word of its figures whole, a failed
+    save's among them; there too, in each state seen there, the page asks for no more width than the window's least size
+    gives it, and the health's rows are as tall as their figures' lines. What a run's end leaves to say is in sight when
+    it comes on a page scrolled to its end: a kept stop's question, with the keyboard on Keep, and a failure; a page
+    whose end was in sight already is not scrolled again when Keep is answered; and with the full text shown at the
+    least size, the Keep the keyboard goes to is brought into sight. Before the page's first run, out of sight, it asks
+    for no width of its own, and the form beside the figures keeps its least width; back at the form after its last run
+    it asks for none again. The window is the whole program's, in the look, on a screen as large as this computer's, its
+    form and the run's page sharing the room as they do there."""
     import torch
     from collections import Counter
     from types import SimpleNamespace
@@ -4268,19 +4331,35 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
         reading.kept_fit = kept(3)
         begin(reading)
         fitted(reading, 3)
-        window.resize(*opening)
-        _settle()
-        view.text_button.click()
-        view.find_button.click()                             # opened at the opening size, then the window made least
+
+        def tools_hold(when):
+            asked = view.minimumSizeHint().width()
+            tools = [(part.mapTo(column, QPoint(0, 0)).x(), part.width(), part.sizeHint().width())
+                     for part in (view.find_field, view.find_button, view.file_button, view.folder_button)]
+            assert asked <= design.scaled(326) and all(left >= 0 and left + wide <= column.width() and wide >= asks
+                                                       for left, wide, asks in tools), (
+                f"the full text's tools at {factor}, {when}", "the page asks for more width than the window's least "
+                "size gives it, or a tool is narrower than it asks, or stands outside the column", asked,
+                column.width(), tools)
+
         window.resize(*least)
         _settle()
-        asked = view.minimumSizeHint().width()
-        tools = [(part.mapTo(column, QPoint(0, 0)).x(), part.width(), part.sizeHint().width())
+        view.text_button.click()
+        _settle()
+        view.find_button.click()                             # opened at the least size: no resize follows it
+        _settle()
+        tools_hold("opened at the least size")
+        window.resize(*opening)
+        _settle()
+        spans = [(part.mapTo(column, QPoint(0, 0)).y(), part.height())
                  for part in (view.find_field, view.find_button, view.file_button, view.folder_button)]
-        assert asked <= design.scaled(326) and all(left >= 0 and left + wide <= column.width() and wide >= asks
-                                                   for left, wide, asks in tools), (
-            f"the full text's tools at {factor}", "the page asks for more width than the window's least size gives "
-            "it, or a tool is narrower than it asks, or stands outside the column", asked, column.width(), tools)
+        middle = spans[0][0] + spans[0][1] / 2
+        assert all(top <= middle <= top + high for top, high in spans[1:]), (
+            f"the full text's tools at {factor}", "made wider, the field and its buttons do not stand on one row again",
+            spans)
+        window.resize(*least)
+        _settle()
+        tools_hold("the window made larger and least again")
         with in_front(window):
             view.stop_button.setFocus(Qt.TabFocusReason)
             QTest.keyClick(view.stop_button, Qt.Key_Space)

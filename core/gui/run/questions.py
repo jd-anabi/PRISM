@@ -184,8 +184,8 @@ def shutdown_reason(status, model) -> str:
         if kind == "fit":
             return f"{who} is fitting. Shutting down loses the epoch in progress; the epochs finished so far are kept."
         if kind == "saving":
-            return (f"{who} is saving its posterior. Shutting down stops it; the finished training is kept, and "
-                    f"resuming it writes the posterior.")
+            return (f"{who} is saving its posterior. Shutting down stops it; the training is kept with its fit "
+                    f"complete, and resuming it writes the posterior.")
         return f"{who} is running. Shutting down stops it. {_training_question(spec, model).sentence}"
     kept = _kept(spec, _OTHERS.get(spec.word, _ANY)[1]) if spec.stop_asks else ""
     return f"{who} is running. Shutting down stops it." + (f" {kept}" if kept else "")

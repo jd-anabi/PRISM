@@ -11,21 +11,26 @@ from .marker import Marker
 from .page import Sentence
 
 
-def opening(lead: str | None, when: datetime | None, now: datetime | None = None) -> str:
-    """The bold opening of a message: its lead word, its date when it has one, and a full stop."""
+def opening(lead: str | None, when: datetime | None, now: datetime | None = None, times: int = 1) -> str:
+    """The bold opening of a message: its lead word, its date when it has one, how many times it came when it came
+    more than once ("(4 times)"), and a full stop."""
     word = (lead or "").strip().removesuffix(".").rstrip()   # the one full stop that closes the opening is set below
     said = [word] if word else []
     if when is not None:
         said.append(design.date_text(when, now))
-    return ", ".join(said) + "." if said else ""
+    opened = ", ".join(said)
+    if times > 1:
+        opened = f"{opened} ({design.number_text(times)} times)".lstrip()
+    return opened + "." if opened else ""
 
 
 class MessageRow(QWidget):
     """A marker and one sentence in the book face whose opening words are bold; a row with no marker keeps the
-    marker's room. An error has an edge at its left."""
+    marker's room. An error has an edge at its left. ``times``: how many times the message came, said in its opening
+    when more than once."""
 
     def __init__(self, kind: str, sentence: str, *, lead: str | None = None,
-                 when: datetime | None = None, now: datetime | None = None) -> None:
+                 when: datetime | None = None, now: datetime | None = None, times: int = 1) -> None:
         if kind and kind not in paint.MARKERS:       # refused before anything is built; a control's glyph is no marker
             raise ValueError(f"{kind!r} is not a marker")
         super().__init__()
@@ -45,7 +50,7 @@ class MessageRow(QWidget):
             # puts none of its spacing beside a space, so the space holds the gap as well
             row.addSpacing(design.scaled(design.SIZE["marker"]) + design.scaled(design.GAP["message_marker"]))
         self.sentence = Sentence()
-        self.sentence.set_text(sentence, lead=opening(lead, when, now) or None)
+        self.sentence.set_text(sentence, lead=opening(lead, when, now, times) or None)
         row.addWidget(self.sentence, 1)
 
     @reported()
