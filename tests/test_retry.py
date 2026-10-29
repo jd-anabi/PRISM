@@ -915,7 +915,8 @@ def test_continue_from_batch_n_repeats_the_runs_own_call_with_the_must_continue_
     saved; a load from the same page meanwhile, which is handed no page, leaves the offer and its call as they are.
     Pressed, it starts the run's own call again as the page's next run, with files of its own: its keywords
     as they were, the policy that must continue (``resume="require"``) the one new argument and N in none of them,
-    its result handed where the first run's was. A run stopped before its set held a batch offers nothing; neither
+    its result handed where the first run's was; the page, which held the failed run's figure, keeps no frame for the
+    new run's none from the moment it takes the run. A run stopped before its set held a batch offers nothing; neither
     does a page drawn from a run's files alone; and while another run is live, the press starts nothing and the page
     says so."""
     from core.gui.run import history
@@ -928,6 +929,7 @@ def test_continue_from_batch_n_repeats_the_runs_own_call_with_the_must_continue_
     base = {"name": "retrain_3", "note": "the retrain", "num_runs": 10_000}
     failed = StandIn()
     start_run(host, failed, spec=_training(), on_result=results.append, **base)
+    host.figure_stack.add_figure("retrain_3's loss", b"")
     _to_the_simulation(app, failed, text, held, folder, 236)
     failed.fail(OSError(28, "No space left on device"))
     _ended(app, held)
@@ -941,9 +943,13 @@ def test_continue_from_batch_n_repeats_the_runs_own_call_with_the_must_continue_
                                         loads_only=True, keeps_files=False, stop_asks=False))
     loads.release()
     _ended(app, held)
-    assert (view.continue_button.isVisibleTo(view), view.notice.text()) == (True, ""), (
-        "a load from the page took its offer away, or said something on it")
+    assert (view.continue_button.isVisibleTo(view), view.notice.text(), view.figures.isVisibleTo(view)) == (
+        True, "", True), "a load from the page took its offer away, or said something on it, or hid the run's figure"
+    shown, framed = host.show_run, []
+    # the page read as it takes the new run, before the run's controller draws it
+    monkeypatch.setattr(host, "show_run", lambda: (shown(), framed.append(view.figures.isVisibleTo(view))))
     view.continue_button.click()
+    assert framed == [False], "the page, holding the figures already, kept their frame for a run that has made none"
     turn_until(app, lambda: len(failed.calls) == 2)
     assert (held.is_live(), held.status.run != first, held.status.name, view.mode,
             view.continue_button.isVisibleTo(view)) == (True, True, "retrain_3", "live", False)
@@ -998,7 +1004,9 @@ def test_resume_the_training_repeats_the_runs_own_call_with_the_kept_training_na
     were, the kept training named (``resume_fit``) the one new argument; a narrowing round's call names no number of
     directions and no HPD level, which it resumes with from the kept training's own record. A resume the stage
     refuses before anything is spent, for a reason the kept training gives, is said on the run's page, with "Back to
-    the form", in no box. Once Discard has deleted the kept training, nothing is offered to resume."""
+    the form", in no box; once back at the form, that run has ended, and a figure that comes then is none of its own,
+    which "How the run went" does not show. Once Discard has deleted the kept training, nothing is offered to
+    resume."""
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
@@ -1032,6 +1040,11 @@ def test_resume_the_training_repeats_the_runs_own_call_with_the_kept_training_na
         True, False, True), "a refused resume was told in a box, or not on its page"
     view.back_button.click()
     assert host.results.currentWidget() is host.figures
+    host.figure_stack.add_figure("opened after the refusal", b"")       # a figure of no run: a saved record's
+    view.how_link.click()
+    assert (view.figures.isVisibleTo(view), host.figure_stack.in_sight()) == (False, 0), (
+        "a figure that came after the refused resume shows on that run's page as its own")
+    view.back_button.click()
 
     narrowing = StandIn(word="Narrowing round")
     narrowed = {**base, "n_directions": 4, "level": 0.95}

@@ -3209,6 +3209,8 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
     assert [box.title for box in all_asked()] == ["Stop training?"], "the failure was told in a box"
     assert (view.failure.isVisibleTo(view), view.failure_message.text()) == (True, "the run broke"), (
         "the failure is not said on its page")
+    assert view.failure_row.sentence.plain_text() == ("On Thu 8 Oct, 19:02, before its simulation: the run broke. No "
+                                                      "simulation was saved."), "the failure is said twice on its page"
     last = held.status.run
     record = history.read(tmp_path / "runs" / f"{last}.json")
     live_text = view.full_text.lines()
@@ -3229,8 +3231,9 @@ def test_a_runs_page_shows_only_the_figures_that_run_made(tmp_path):
     """A page keeps every figure its runs made, as tabs, until they are closed. A run's page shows under its messages
     only the figures that run made, from its start to its end, and nothing where they stand while it has made none:
     no empty frame. The page's other figures are kept, out of sight, and "Back to the form" shows them all again, in
-    the order they came, the run's newest in front; "How the run went" shows the run's own alone again. A figure
-    window popped out from an older figure is left as it is: open, in sight, its title and its size the same."""
+    the order they came, the run's newest in front; "How the run went" shows the run's own alone again, its newest in
+    front though an older figure was in front. A figure window popped out from an older figure is left as it is:
+    open, in sight, its title and its size the same."""
     from PySide6.QtCore import QBuffer, QByteArray, QIODevice
     from PySide6.QtGui import QImage
     from tests._fixtures import build_run_host, qt_app
@@ -3289,13 +3292,88 @@ def test_a_runs_page_shows_only_the_figures_that_run_made(tmp_path):
     assert tabs() == (["retrain_3's loss", "retrain_6's loss", "retrain_6's simulations", "opened after its end"],
                       "retrain_6's simulations"), ("'Back to the form' does not show every figure again in its order",
                                                    tabs())
+    stack.setCurrentIndex(0)                    # a person looks at the earlier run's figure, then at how the run went
     view.how_link.click()
-    assert (view.figures.isVisibleTo(view), tabs()[0]) == (True, ["retrain_6's loss", "retrain_6's simulations"]), (
-        "'How the run went' shows figures that are not the run's", tabs())
+    assert (view.figures.isVisibleTo(view), tabs()) == (
+        True, (["retrain_6's loss", "retrain_6's simulations"], "retrain_6's simulations")), (
+        "'How the run went' shows figures that are not the run's, or not its newest in front", tabs())
     view.back_button.click()
     assert tabs()[0] == ["retrain_3's loss", "retrain_6's loss", "retrain_6's simulations", "opened after its end"]
     assert (popped.isVisible(), popped.windowTitle(), popped.size()) == before
     popped.close()
+
+
+def test_a_figure_closed_on_its_runs_page_takes_its_frame_and_the_way_back_still_shows_the_figures(tmp_path,
+                                                                                                  monkeypatch):
+    """A run's page lays its figures out again at each figure that comes or goes: the run's one figure is in sight as
+    it comes, and, closed by its own close button on the page of the finished run ("How the run went"), takes the
+    figures' frame from the page with it: no empty frame stays under the messages. "Back to the form" then gives the
+    column back to the figures, "How the run went" above them, with no error, though the tab that was in front as the
+    run's page took the figures is gone."""
+    import shiboken6
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QTabBar
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    host, hooked = build_run_host(), []
+    view, stack = host.run_view, host.figure_stack
+    shown_off_screen(host, 1300, 1000)
+    monkeypatch.setattr("sys.excepthook", lambda kind, error, trace: hooked.append(f"{kind.__name__}: {error}"))
+    run = StandIn()
+    start_run(host, run, spec=_training())
+    stack.add_figure("retrain_3's loss", b"")
+    arrived = view.figures.isVisibleTo(view)                  # as it comes, before the page is drawn again
+    run.release()
+    turn_until(app, lambda: not held.is_live())
+    view.how_link.click()
+    assert (host.results.currentWidget() is view, view.figures.isVisibleTo(view)) == (True, True)
+    page, bar = stack.widget(0), stack.tabBar()
+    (bar.tabButton(0, QTabBar.RightSide) or bar.tabButton(0, QTabBar.LeftSide)).click()
+    QCoreApplication.sendPostedEvents(page, QEvent.DeferredDelete)
+    assert (shiboken6.isValid(page), stack.count()) == (False, 0), "the closed tab was not deleted: nothing is tested"
+    framed = view.figures.isVisibleTo(view)
+    view.back_button.click()
+    seen = (arrived, framed, hooked, host.results.currentWidget() is host.figures, view.how_link.isVisibleTo(host))
+    assert seen == (True, False, [], True, True), (
+        "a figure that came was not shown at once, a closed one left its frame, or the way back raised or kept the "
+        "run's page", seen)
+
+
+def test_a_saved_records_figure_closed_at_a_runs_end_is_not_sought_when_a_record_is_picked(tmp_path, monkeypatch):
+    """On the temperature page, a saved record's figure is in front as a measurement starts; the measurement fails
+    before it draws any, and its end closes the record's figure. A record picked then gives the column back to the
+    figures, with no error, the record's figure open again in front."""
+    import shiboken6
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.panels.fdt_panel import FdtPanel
+    from tests._fixtures import build_fdt_record, build_part, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    held, hooked = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), []
+    monkeypatch.setattr("sys.excepthook", lambda kind, error, trace: hooked.append(f"{kind.__name__}: {error}"))
+    with use_store(ArtifactStore(tmp_path / "Artifacts")) as store:
+        build_fdt_record(store)
+        panel = build_part(FdtPanel)
+        stack, combo = panel.figure_stack, panel.record_picker.combo
+        combo.activated.emit(combo.currentIndex())           # a person picks the record: its figure opens
+        page, title = stack.currentWidget(), stack.tabText(stack.currentIndex())
+        measured = StandIn(word="Measurement")
+        start_run(panel, measured, spec=RunSpec("Measurement", ("temperature", "one_cell"),
+                                                stop_button="Stop measurement…", kinds=("fdt",)))
+        measured.fail(RuntimeError("the run broke"))
+        turn_until(app, lambda: not held.is_live())
+        QCoreApplication.sendPostedEvents(page, QEvent.DeferredDelete)
+        assert (shiboken6.isValid(page), stack.count(), panel.results.currentWidget() is panel.run_view) == (
+            False, 0, True), "the record's figure was not closed at the run's end: nothing is tested"
+        combo.activated.emit(combo.currentIndex())
+        seen = (hooked, panel.results.currentWidget() is panel.figures, stack.count(),
+                stack.tabText(stack.currentIndex()))
+        assert seen == ([], True, 1, title), (
+            "a record picked raised, or did not give the column back to its figures", seen)
 
 
 def test_how_the_run_went_stands_above_the_figures_at_the_looks_gap(tmp_path):

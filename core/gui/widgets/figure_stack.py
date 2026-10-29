@@ -15,9 +15,10 @@ no figure while a run builds its own.
 
 While a run's page holds the stack, only the figures that run made are in sight (``only_the_run``): the tabs added
 from the run's start (``run_begins``) to its end (``run_ends``). The others stay as they are, out of sight, and come
-back when the page's figures are given back; a window popped out from one of them is left as it is.
+back when the page's figures are given back; a window popped out from one of them is left as it is. Each tab added or
+removed is said (``tabs_changed``), so that the page holding the stack shows its frame only while a tab is in sight.
 """
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QScrollArea, QTabWidget, QVBoxLayout,
                                QWidget)
@@ -63,6 +64,9 @@ class _FitLabel(QLabel):
 
 
 class FigureStack(QTabWidget):
+    #: A tab was added, or removed (closed by its own button, or by the saved-run viewer).
+    tabs_changed = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTabsClosable(True)
@@ -75,7 +79,7 @@ class FigureStack(QTabWidget):
         self._added = 0                      # the tabs added so far: each carries its number, in the order it came
         self._run = None                     # the page's last run's tabs by number: [its first, the first after it]
         self._only = False                   # whether only that run's tabs are in sight
-        self._before = None                  # the tab in front when they alone came into sight
+        self._before = None                  # the number of the tab in front when they alone came into sight
 
     def add_figure(self, title: str, png_bytes: bytes, fig_pickle=None):
         """Show a figure rendered to PNG bytes on a worker thread. ``fig_pickle`` (when present) is the
@@ -134,6 +138,7 @@ class FigureStack(QTabWidget):
             self.setCurrentIndex(idx)
         else:
             self.setTabVisible(idx, False)       # a figure of no run the page shows comes into sight with the others
+        self.tabs_changed.emit()                 # said once the tab is in sight, or not, as it stays
 
     @staticmethod
     def _tip(container, live: bool) -> None:
@@ -193,23 +198,36 @@ class FigureStack(QTabWidget):
 
     def only_the_run(self, on: bool) -> None:
         """While the run's page holds the stack (``on``), only the figures its last run made are in sight, the newest
-        of them in front; off, every tab is in sight again where it stands, in the order the tabs came unless a person
-        moved one, and the tab that was in front before is in front again, unless a figure of the run came since."""
+        of them in front unless one of them was in front already; off, every tab is in sight again where it stands, in
+        the order the tabs came unless a person moved one, and the tab that was in front before is in front again,
+        unless a figure of the run came since or that tab has been closed. That tab is kept by its number, never the
+        tab itself: a closed tab's page is deleted, and touching it raises, where a number no open tab carries is
+        simply not found. Which tab is in front is read before any tab is hidden, as hiding the one in front moves the
+        front to the next in sight."""
         front = self.currentWidget()
         if on and not self._only:
-            self._before = front
+            self._before = getattr(front, "_number", None)
         self._only = on
         for index in range(self.count()):
             self.setTabVisible(index, self._shows(self.widget(index)))
         shown = [index for index in range(self.count()) if self.isTabVisible(index)]
-        if on and shown and self.currentIndex() not in shown:
+        if on and shown and (front is None or not self._of_the_run(front)):
             self.setCurrentIndex(shown[-1])
         elif not on:
             ran = front is not None and self._of_the_run(front)
-            back = front if ran or self._before is None or self.indexOf(self._before) < 0 else self._before
-            if back is not None and self.indexOf(back) >= 0:
+            back = None if ran else self._numbered(self._before)
+            if back is None:
+                back = front
+            if back is not None:
                 self.setCurrentWidget(back)
             self._before = None
+
+    def _numbered(self, number):
+        """The open tab that carries ``number``; None for none (a closed tab's number, or no number)."""
+        for index in range(self.count()):
+            if number is not None and getattr(self.widget(index), "_number", None) == number:
+                return self.widget(index)
+        return None
 
     def in_sight(self) -> int:
         """How many tabs are in sight."""
@@ -234,6 +252,11 @@ class FigureStack(QTabWidget):
         a PNG the run's own watcher already put up is not opened a second time
         (core/gui/panels/record_view.py)."""
         return getattr(self.widget(index), "_png_path", None)
+
+    def tabRemoved(self, index: int) -> None:
+        """A tab has gone, by whatever closed it: said, as a tab added is."""
+        super().tabRemoved(index)
+        self.tabs_changed.emit()
 
     def _close_tab(self, index: int):
         widget = self.widget(index)

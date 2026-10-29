@@ -1024,17 +1024,24 @@ class RunView(QWidget):
 
     def hold_figures(self, widget: QWidget) -> None:
         """Hold the figures of the page that started the run, under the messages, while the page shows: in sight while
-        any of them is (the run's own, as the page that holds them shows them), and nothing while none is."""
+        any of them is (the run's own, as the page that holds them shows them), and nothing while none is, laid out
+        again at each tab added or removed among them (``tabs_changed``, when they say it)."""
         if widget is not self._held:
             self.release_figures()
             self._held = widget
             self._figures.addWidget(widget)
+            changed = getattr(widget, "tabs_changed", None)
+            if changed is not None:
+                changed.connect(self._arrange)
         self._arrange()
 
     def release_figures(self) -> QWidget | None:
         """Hand back the figures held, for their page to place again; None when none are held."""
         widget, self._held = self._held, None
         if widget is not None:
+            changed = getattr(widget, "tabs_changed", None)
+            if changed is not None:
+                changed.disconnect(self._arrange)
             self._figures.removeWidget(widget)
         self._arrange()
         return widget
