@@ -259,16 +259,21 @@ class AxisCaption(QWidget):
         self._side = None                                    # whether the two stand side by side; None: not laid yet
         self.set_times(start, now, end_from, end_by, unknown=unknown)
 
+    def _before_words(self) -> int:
+        """The width the key or the marker takes before the words, with the gap after it. Each is counted at the
+        width it is drawn at: a part of a fixed size with no layout of its own has no size hint (its hint is -1
+        wide), so its hint would count it as no width at all."""
+        gap = self._grid.horizontalSpacing()
+        return sum(part.width() + gap for part in (self.key, self.marker) if not part.isHidden())
+
     @reported(QWidget.minimumSizeHint)
     def minimumSizeHint(self):
         """The least the caption asks for: the start, or the key and the words' widest word, whichever is wider. It
         is the same side by side as one under the other, so the room the page gives it decides which it takes."""
-        gap = self._grid.horizontalSpacing()
-        lead = sum(part.sizeHint().width() + gap for part in (self.key, self.marker) if not part.isHidden())
         widest = max((QFontMetrics(self.words.font()).horizontalAdvance(word) for word in self.words.text().split()),
                      default=0)
         hint = super().minimumSizeHint()
-        return QSize(max(self.started.sizeHint().width(), lead + widest), hint.height())
+        return QSize(max(self.started.sizeHint().width(), self._before_words() + widest), hint.height())
 
     @reported(QWidget.resizeEvent)
     def resizeEvent(self, event):
@@ -278,9 +283,8 @@ class AxisCaption(QWidget):
     def _fit(self) -> None:
         """Side by side when the start, the key and the words fit the width on one line, else one under the other."""
         gap = self._grid.horizontalSpacing()
-        lead = sum(part.sizeHint().width() + gap for part in (self.key, self.marker) if not part.isHidden())
         words = math.ceil(QFontMetricsF(self.words.font()).horizontalAdvance(self.words.text()))
-        side = self.started.sizeHint().width() + gap + lead + words <= self.width()
+        side = self.started.sizeHint().width() + gap + self._before_words() + words <= self.width()
         self.words.setMinimumWidth(words if side else 0)     # side by side the words keep one line
         if side == self._side:
             return
