@@ -1,8 +1,31 @@
 # PRISM — state
 
-**Last updated:** 2026-10-30, morning (09:43 by the clock; the weekly bar 73 %, resetting on 1 November at 04:00
-UTC): stage 4's planning prompt is written, on the owner's "Write it now"; nothing else changed since the evening of
-29 October (17:14 by the clock), whose head follows.
+**Last updated:** 2026-10-30, afternoon (12:34 by the clock; the weekly bar 78 %, resetting on 1 November at 04:00 UTC):
+STAGE 4'S PLAN IS WRITTEN AND COMMITTED, FOR THE OWNER'S APPROVAL.
+
+`docs/superpowers/plans/2026-10-30-window-redesign-stage-4.md`, from the owner's pasted prompt
+`docs/superpowers/prompts/2026-10-30-window-redesign-stage-4-plan.md`. Nothing is built; no code changed.
+
+- **Its shape:** fourteen building tasks and two controller tasks: the front (tests only), the plan reader (E5, E8, four
+  refusal keys, 110 to 114), the differing settings and the kept training's facts (E2 and a card-free reading), the
+  run's record, Settings' "This computer", the run host with the firm requirement, the page's pieces, then steps 1, 2 and 3
+  (two tasks), plans, Home's "Continue with these", after a reopening Continue and Resume, the exit.
+- **Departures 126 to 161** are in the plan and the design's section 8. The owner's answers of 30 October are 136 (Home names a
+  training kept on purpose), 137 (a kept round's Resume after a reopening waits for stage 5), 143 (`CLAUDE.md`: three edits at
+  the exit, with two counts shown at the same yes), 144 (the room read again on a change of screen), 145 (Cascadia Mono is carried:
+  it is NOT installed on this computer, the window has shown Consolas all along, and the file needs a download the owner allows at
+  Task 7), 153 (the start's choice is the question, then the list).
+- **THE FIRM REQUIREMENT** is met on the rebuilt pages by their shape and in today's frame by departure 147; a test at text 1.0 and
+  1.5, and one at 150 % display scaling in a fresh interpreter; Windows' own scaling in the exit's pictures (departure 160).
+- **The card test is owed once, at the exit** (the five lines and run 5; no diagnostic card); the slow set waits for stage 5's exit.
+- **No function of `FIT_CODE` is touched by any task.** Engine changes beyond E2, E5 and E8 are named in the plan's owner section.
+- **`core/config.py` gains one line,** `PLANS_PATH`, approved in U21 and said to the owner with the plan.
+
+NEXT: the owner reads the plan and approves it or asks for changes. The build then starts from Task 0 in a new chat, from a hand-off
+prompt written on approval, after the week resets on 1 November at 04:00 UTC. Then stages 5 to 9, the code audit, the retrain from
+the window. The ledger's section "Stage 4 — steps 1 to 3 …(plan)" and `stage-4/plan-drafts/` hold the record.
+
+What follows is the head as the evening of 29 October left it (17:14 by the clock):
 
 STAGE 3 OF THE WINDOW REDESIGN, THE RUN, IS DONE: ITS EXIT (TASK 15) PASSED ON 29 OCTOBER, WITH THE OWNER. The
 session was started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-28-window-redesign-stage-3-exit.md`;
