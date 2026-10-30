@@ -61,6 +61,34 @@ def _no_sbi_logs():
         f"core.SBI.train._NoTracker (train_nn's tracker=None)")
 
 
+def check_plans_kept(folder: Path, held: "list[str] | None") -> None:
+    """Fail, by raising, when ``folder``, where the plans a person saves are kept, does not hold exactly what ``held``,
+    its listing at the start of the run (tests/_settings_folder.listing), says, naming the first five paths that came
+    or went. A plan the person saved before the run is in ``held`` and does no harm; a folder that was not there and now
+    is, fails. Raised rather than asserted, so the check survives a run with assertions switched off."""
+    from tests import _settings_folder
+    holds = _settings_folder.listing(folder)
+    if holds != held:
+        raise AssertionError(f"the suite changed what the real plans folder {folder} holds: "
+                             f"{sorted(set(holds or ()) ^ set(held or ()))[:5]}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_plans_written():
+    """The folder of saved plans, ``Resources/Plans``, holds at the end of the session exactly what it held at its
+    start. It sits beside _no_sbi_logs for the same reason: the suites leave the repository as they found it. A plan a
+    test wrote there would be read by the next launch as one of the person's own. The folder may be absent (it is until
+    a plan is saved), and a plan the person saved before the run is in the listing taken now and does no harm; a
+    folder that appears fails the run. The listing is tests/_settings_folder.py's and the check is
+    ``check_plans_kept`` above."""
+    from core import config
+    from tests import _settings_folder
+    folder = config.RESOURCES_ROOT / "Plans"
+    held = _settings_folder.listing(folder)
+    yield
+    check_plans_kept(folder, held)
+
+
 @pytest.fixture
 def store(tmp_path):
     """A fresh store that is ALSO the process default for the duration of the test."""

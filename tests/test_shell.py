@@ -3726,12 +3726,14 @@ def test_after_a_move_the_keyboard_is_on_the_pages_first_setting_never_on_a_butt
     Enter on its row of the rail, gives the keyboard to its error page's "Try again", as a shortcut gives it."""
     from PySide6.QtWidgets import QAbstractButton, QPushButton, QToolButton
     from core.gui import main_window
-    from core.gui.panels.base_panel import BasePanel
+    from core.gui.run.controller import RunController
     from tests._fixtures import all_asked, forget_asked
     qt_app()
     given = _given(monkeypatch)
     started = []
-    monkeypatch.setattr(BasePanel, "dispatch", lambda panel, *args, **kwargs: started.append(type(panel).__name__))
+    # the controller's own start, which every page reaches whether or not its class goes through its base class's dispatch
+    monkeypatch.setattr(RunController, "dispatch",
+                        lambda held, *args, **kwargs: started.append(type(kwargs.get("host")).__name__))
     window = build_window()
     moves = ([(sequence, *(("inference", does[5:]) if does.startswith("step ") else (does[5:], None)))
               for sequence, does in keys.BINDINGS if does.startswith(("part ", "step "))]

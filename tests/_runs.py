@@ -28,7 +28,8 @@ from datetime import datetime, timedelta, timezone
 from PySide6.QtCore import QEventLoop, QObject, QTimer
 
 #: Where the window places each panel's runs, by the panel's class: what a stand-in run on such a panel is told,
-#: unless its test hands it a spec of its own. A bare run host has no place.
+#: unless its test hands it a spec of its own. A bare run host has no place; a panel of any other class is refused by
+#: ``start_run`` when no spec is handed.
 PLACES = {"ConfigPanel": ("inference", "model"), "PriorPanel": ("inference", "prior"),
           "PosteriorPanel": ("inference", "training"), "ValidatePanel": ("inference", "checks"),
           "InferPanel": ("inference", "infer"), "TSNPEPanel": ("inference", "narrowing"),
@@ -221,12 +222,18 @@ class StandIn:
 
 def start_run(host, stand_in, *, spec=None, **kwargs) -> None:
     """Start ``stand_in`` through ``host``'s own ``dispatch``, the host's ``run_spec`` standing in for this one
-    start only: ``spec`` when it is handed, else a run of the stand-in's word at the place of the host's kind
-    (none for a bare run host). ``kwargs`` are the dispatch's own (``watch_dir``, ``provide_fig_sink``,
-    ``on_result``). Fails when a run is live already."""
+    start only: ``spec`` when it is handed, else a run of the stand-in's word at the place the window gives the host's
+    class (``PLACES``), or at none for a bare run host (the class every ``build_run_host()`` makes, named ``P``). A
+    host of any other class is refused with a ``KeyError`` naming it when no spec is handed: it would be started with
+    no place, and every test that leaned on the default would stay green with none. ``kwargs`` are the dispatch's own
+    (``watch_dir``, ``provide_fig_sink``, ``on_result``). Fails when a run is live already."""
     from core.gui.run.model import RunSpec
-    given = spec if spec is not None else RunSpec(stand_in.word, PLACES.get(type(host).__name__),
-                                                  stop_button="Stop the run…")
+    given = spec
+    if given is None:
+        kind = type(host).__name__
+        if kind != "P" and kind not in PLACES:
+            raise KeyError(f"the stand-in run has no place for a page of class {kind}: add it to PLACES")
+        given = RunSpec(stand_in.word, None if kind == "P" else PLACES[kind], stop_button="Stop the run…")
     host.run_spec = lambda fn, *args, **kw: given
     try:
         started = host.dispatch(stand_in, **kwargs)

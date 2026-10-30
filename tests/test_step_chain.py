@@ -846,12 +846,14 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
     every file chooser cancelled, and the session built again before each press: no run is started, nothing is
     raised, no drawing error is caught and nothing is shown but a question or a notice."""
     from core.gui import reported
-    from core.gui.panels.base_panel import BasePanel
+    from core.gui.run.controller import RunController
     from core.gui.session import SbiSession
     from tests._fixtures import all_asked, answer_chooser, build_window, forget_asked, qt_app
     qt_app()
     started, raised = [], []
-    monkeypatch.setattr(BasePanel, "dispatch", lambda panel, *args, **kwargs: started.append(type(panel).__name__))
+    # the controller's own start, which every page reaches whether or not its class goes through its base class's dispatch
+    monkeypatch.setattr(RunController, "dispatch",
+                        lambda held, *args, **kwargs: started.append(type(kwargs.get("host")).__name__))
     monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: raised.append(repr(error)))
     answer_chooser(monkeypatch, "")
     window = build_window()

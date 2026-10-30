@@ -1889,6 +1889,28 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
     assert held == _runs.PLACES, (held, _runs.PLACES)
 
 
+def test_the_stand_in_refuses_a_page_whose_place_it_does_not_know():
+    """A run the stand-in starts on a page without a spec of its own is told the place the window gives that page,
+    read from the table of tests/_runs.py by the page's class name; a bare run host has none. A page whose class the
+    table does not hold would be told no place at all, and every test that leaned on the default would stay green
+    with none: it is refused, naming the class, before anything starts. A spec handed in is the test's own, and
+    starts on any page."""
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.run.controller import controller
+    from tests import _runs
+    from tests._fixtures import build_run_host, qt_app
+    qt_app()
+    unknown = build_run_host(type("Unknown", (BasePanel,), {}))
+    with pytest.raises(KeyError, match="Unknown"):
+        _runs.start_run(unknown, _runs.StandIn())
+    assert not controller().is_live(), "a refused start left a run live"
+    with _runs.running(unknown, spec=RunSpec("Run", None, keeps_files=False)):
+        assert controller().is_live()
+    with _runs.running():                        # a bare run host: no place, and no refusal
+        assert controller().is_live()
+    assert not controller().is_live()
+
+
 def test_no_test_and_no_part_of_the_window_reaches_a_run_through_a_panels_flag():
     """Nothing under the program or the suites names a page's old run flag -- a name, an attribute, a name
     defined or imported, a keyword, or a string that is one of them -- read off each file's syntax tree, its
@@ -2451,6 +2473,53 @@ def test_a_test_that_ends_with_a_windows_request_standing_fails(request):
              for path in sorted((REPO / "core").rglob("*.py"))}
     assert {path: calls for path, calls in named.items() if calls} == {
         "core/gui/this_computer.py": list(_WINDOWS_CALLS)}, "a file under core/ but this_computer.py calls Windows"
+
+
+def test_a_plan_written_into_the_real_folder_fails_the_run(request, tmp_path):
+    """The plans a person saves live in a folder of the program's inputs, and no test may add a path to it, take one
+    from it or make the folder where there is none: a file left there would be read by the next launch as one of the
+    person's own. The session's guard lists that folder as the run begins and checks it as the run ends, through
+    ``check_plans_kept`` of tests/conftest.py, which is tried here on folders of this test's own: a folder that is not
+    there and stays so passes, and so does one that holds a plan the person saved before the run, unchanged; a file
+    added beside it, a plan taken away, the folder alone made where there was none and a file in it each fail the
+    check, all but the folder alone naming the path. And the guard lists ``Resources/Plans`` and calls that check,
+    which only the reading of its source can show."""
+    from tests import _settings_folder
+    check = _guards(request).check_plans_kept
+    words = "the suite changed what the real plans folder"
+    folder = tmp_path / "Plans"
+    check(folder, _settings_folder.listing(folder))                      # not there, and still not there
+    folder.mkdir()
+    (folder / "usual.txt").write_text("", encoding="utf-8")              # a plan the person saved before the run
+    held = _settings_folder.listing(folder)
+    check(folder, held)
+    added = folder / "new.txt"
+    added.write_text("", encoding="utf-8")
+    with pytest.raises(AssertionError, match=words) as failed:
+        check(folder, held)
+    assert repr(str(added)) in str(failed.value), f"the check did not name {added}: {failed.value}"
+    added.unlink()
+    (folder / "usual.txt").unlink()
+    with pytest.raises(AssertionError, match=words) as failed:
+        check(folder, held)
+    assert repr(str(folder / "usual.txt")) in str(failed.value), f"the check did not name the plan: {failed.value}"
+    appears = tmp_path / "appears"
+    held = _settings_folder.listing(appears)
+    appears.mkdir()
+    with pytest.raises(AssertionError, match=words):
+        check(appears, held)                                             # the folder alone, made where none was
+    (appears / "made.txt").write_text("", encoding="utf-8")
+    with pytest.raises(AssertionError, match=words) as failed:
+        check(appears, held)
+    assert repr(str(appears / "made.txt")) in str(failed.value), f"the check did not name the file: {failed.value}"
+
+    tree = ast.parse((REPO / "tests" / "conftest.py").read_text(encoding="utf-8"))
+    guard, = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_no_plans_written"]
+    said = {ast.unparse(node) for node in ast.walk(guard) if isinstance(node, (ast.Assign, ast.Call))}
+    assert [ast.unparse(one) for one in guard.decorator_list] == ["pytest.fixture(scope='session', autouse=True)"]
+    assert {"folder = config.RESOURCES_ROOT / 'Plans'", "held = _settings_folder.listing(folder)",
+            "check_plans_kept(folder, held)"} <= said, (
+        "the session no longer lists the folder of saved plans as it begins and checks it as it ends")
 
 
 def test_the_computer_is_kept_awake_from_the_start_of_a_run_to_its_end(tmp_path, windows_asked):
