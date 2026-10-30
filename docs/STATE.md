@@ -1,7 +1,7 @@
 # PRISM — state
 
-**Last updated:** 2026-10-30, afternoon (12:33 by the clock; the weekly bar 78 %, resetting on 1 November at 04:00 UTC):
-STAGE 4'S PLAN IS WRITTEN AND COMMITTED, FOR THE OWNER'S APPROVAL.
+**Last updated:** 2026-10-30, afternoon (13:08 by the clock; the weekly bar 78 % at 12:32, resetting on 1 November at 04:00
+UTC): STAGE 4'S PLAN IS WRITTEN, COMMITTED AND APPROVED ("I approve it", 30 October).
 
 `docs/superpowers/plans/2026-10-30-window-redesign-stage-4.md`, from the owner's pasted prompt
 `docs/superpowers/prompts/2026-10-30-window-redesign-stage-4-plan.md`. Nothing is built; no code changed.
@@ -21,9 +21,10 @@ STAGE 4'S PLAN IS WRITTEN AND COMMITTED, FOR THE OWNER'S APPROVAL.
 - **No function of `FIT_CODE` is touched by any task.** Engine changes beyond E2, E5 and E8 are named in the plan's owner section.
 - **`core/config.py` gains one line,** `PLANS_PATH`, approved in U21 and said to the owner with the plan.
 
-NEXT: the owner reads the plan and approves it or asks for changes. The build then starts from Task 0 in a new chat, from a hand-off
-prompt written on approval, after the week resets on 1 November at 04:00 UTC. Then stages 5 to 9, the code audit, the retrain from
-the window. The ledger's section "Stage 4 — steps 1 to 3 …(plan)" and `stage-4/plan-drafts/` hold the record.
+NEXT: the build from Task 0, in a new chat the owner starts from
+`docs/superpowers/prompts/2026-10-30-window-redesign-stage-4-build.md`, after the week resets on 1 November at 04:00 UTC. Then stages
+5 to 9, the code audit, the retrain from the window. The ledger's section "Stage 4 — steps 1 to 3 …(plan)" and
+`stage-4/plan-drafts/` hold the record.
 
 What follows is the head as the evening of 29 October left it (17:14 by the clock):
 
