@@ -1,6 +1,6 @@
 # PRISM — state
 
-**Last updated:** 2026-10-30, afternoon (12:34 by the clock; the weekly bar 78 %, resetting on 1 November at 04:00 UTC):
+**Last updated:** 2026-10-30, afternoon (12:33 by the clock; the weekly bar 78 %, resetting on 1 November at 04:00 UTC):
 STAGE 4'S PLAN IS WRITTEN AND COMMITTED, FOR THE OWNER'S APPROVAL.
 
 `docs/superpowers/plans/2026-10-30-window-redesign-stage-4.md`, from the owner's pasted prompt
