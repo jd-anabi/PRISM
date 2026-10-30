@@ -1,7 +1,8 @@
 # PRISM — state
 
-**Last updated:** 2026-10-29, evening (17:14 by the clock; the weekly bar 73 %, resetting on 1 November at 04:00
-UTC; this chat at 50 % of its room).
+**Last updated:** 2026-10-30, morning (09:43 by the clock; the weekly bar 73 %, resetting on 1 November at 04:00
+UTC): stage 4's planning prompt is written, on the owner's "Write it now"; nothing else changed since the evening of
+29 October (17:14 by the clock), whose head follows.
 
 STAGE 3 OF THE WINDOW REDESIGN, THE RUN, IS DONE: ITS EXIT (TASK 15) PASSED ON 29 OCTOBER, WITH THE OWNER. The
 session was started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-28-window-redesign-stage-3-exit.md`;
@@ -51,7 +52,9 @@ exit's folder `stage-3/exit/`.
   - the history's empty fields (departure 123).
 
 NEXT: the owner pushes. Then stage 4's plan (the Training page and steps 1 to 3 rebuilt, Resume after a reopening,
-Home's next step), in a new chat. Its hand-off prompt is not yet written. The walkthrough's rows G1, G2, G6, G7 and
+Home's next step), in a new chat the owner starts from
+`docs/superpowers/prompts/2026-10-30-window-redesign-stage-4-plan.md` (written 30 October; it gathers what stages 1 to
+3 and the fit-saving stage carry to stage 4). The walkthrough's rows G1, G2, G6, G7 and
 G34 to G36 are the owner's, on the real screen, whenever convenient.
 
 What follows is the head as the afternoon of 28 October left it:
