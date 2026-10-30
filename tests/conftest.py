@@ -61,32 +61,44 @@ def _no_sbi_logs():
         f"core.SBI.train._NoTracker (train_nn's tracker=None)")
 
 
-def check_plans_kept(folder: Path, held: "list[str] | None") -> None:
-    """Fail, by raising, when ``folder``, where the plans a person saves are kept, does not hold exactly what ``held``,
-    its listing at the start of the run (tests/_settings_folder.listing), says, naming the first five paths that came
-    or went. A plan the person saved before the run is in ``held`` and does no harm; a folder that was not there and now
-    is, fails. Raised rather than asserted, so the check survives a run with assertions switched off."""
+def check_plans_kept(folder: Path, held: "list[str] | None", kept: "dict[str, bytes]") -> None:
+    """Fail, by raising, when ``folder``, where the plans a person saves are kept, does not hold what it held at the
+    start of the run: ``held`` is its listing then (tests/_settings_folder.listing) and ``kept`` its files' bytes then.
+    The message names the first five of what changed: a plan rewritten under its own name comes first, marked so, since
+    it is the one change that loses work; then the paths that came or went; and the folder itself when it was made or
+    has gone, so that a folder empty before or after is not read as nothing. A plan the person saved before the run is
+    in both and does no harm; one saved by hand while the run was going fails the same way, and the message says so.
+    Raised rather than asserted, so the check survives a run with assertions switched off."""
     from tests import _settings_folder
     holds = _settings_folder.listing(folder)
-    if holds != held:
-        raise AssertionError(f"the suite changed what the real plans folder {folder} holds: "
-                             f"{sorted(set(holds or ()) ^ set(held or ()))[:5]}")
+    changed = [f"{path} (rewritten)" for path, was in kept.items()
+               if path in (holds or ()) and Path(path).read_bytes() != was]
+    changed += sorted(set(holds or ()) ^ set(held or ()))
+    if (holds is None) != (held is None):
+        changed.insert(0, f"the folder itself ({'gone' if holds is None else 'made'})")
+    if changed:
+        raise AssertionError(f"the suite changed what the real plans folder {folder} holds, or a plan was saved by "
+                             f"hand while the run was going, so look at the paths before blaming the code: "
+                             f"{changed[:5]}")
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _no_plans_written():
     """The folder of saved plans, ``Resources/Plans``, holds at the end of the session exactly what it held at its
-    start. It sits beside _no_sbi_logs for the same reason: the suites leave the repository as they found it. A plan a
-    test wrote there would be read by the next launch as one of the person's own. The folder may be absent (it is until
-    a plan is saved), and a plan the person saved before the run is in the listing taken now and does no harm; a
-    folder that appears fails the run. The listing is tests/_settings_folder.py's and the check is
-    ``check_plans_kept`` above."""
+    start: the same paths, and each file the same bytes. It sits beside _no_sbi_logs for the same reason: the suites
+    leave the repository as they found it. A plan a test wrote there would be read by the next launch as one of the
+    person's own, and the bytes are compared, as _settings_home compares the real settings file's, because a plan
+    written over leaves the listing as it was and cannot be brought back. The folder may be absent (it is until a plan
+    is saved), and a plan the person saved before the run is kept here as it stands and does no harm; a folder that
+    appears fails the run, and so does a plan saved by hand while the run is going. The listing is
+    tests/_settings_folder.py's and the check is ``check_plans_kept`` above."""
     from core import config
     from tests import _settings_folder
     folder = config.RESOURCES_ROOT / "Plans"
     held = _settings_folder.listing(folder)
+    kept = {path: Path(path).read_bytes() for path in held or () if Path(path).is_file()}
     yield
-    check_plans_kept(folder, held)
+    check_plans_kept(folder, held, kept)
 
 
 @pytest.fixture

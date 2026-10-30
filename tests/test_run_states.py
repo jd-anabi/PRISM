@@ -2475,51 +2475,94 @@ def test_a_test_that_ends_with_a_windows_request_standing_fails(request):
         "core/gui/this_computer.py": list(_WINDOWS_CALLS)}, "a file under core/ but this_computer.py calls Windows"
 
 
-def test_a_plan_written_into_the_real_folder_fails_the_run(request, tmp_path):
+def test_a_plan_written_into_the_real_folder_fails_the_run(request, tmp_path, monkeypatch):
     """The plans a person saves live in a folder of the program's inputs, and no test may add a path to it, take one
-    from it or make the folder where there is none: a file left there would be read by the next launch as one of the
-    person's own. The session's guard lists that folder as the run begins and checks it as the run ends, through
-    ``check_plans_kept`` of tests/conftest.py, which is tried here on folders of this test's own: a folder that is not
-    there and stays so passes, and so does one that holds a plan the person saved before the run, unchanged; a file
-    added beside it, a plan taken away, the folder alone made where there was none and a file in it each fail the
-    check, all but the folder alone naming the path. And the guard lists ``Resources/Plans`` and calls that check,
-    which only the reading of its source can show."""
+    from it, write over one or make the folder where there is none: a file left there would be read by the next launch
+    as one of the person's own, and a plan written over cannot be brought back. The session's guard keeps that folder's
+    listing and its files' bytes as the run begins and checks them as the run ends. Its own function is driven here as
+    the test runner drives it, with the program's inputs put in a folder of this test's own: a plan made where there
+    was no folder fails at the end of the run, a run that changes nothing passes, a subfolder beside the plan, and a
+    plan rewritten under its own name fails, named. ``check_plans_kept`` of tests/conftest.py, which the guard calls,
+    is then tried on folders of this test's own: a folder that is not there and stays so passes, and so does one that
+    holds a plan the person saved before the run, unchanged; a file added beside it, a plan rewritten, a plan taken
+    away, the folder alone made where there was none, a file in it and the folder alone gone each fail the check. A
+    failure names what changed: a path, a plan rewritten marked so and ahead of the paths that came or went, or the
+    folder itself, so that a folder empty before or after is not read as nothing; and it says that a plan saved by
+    hand during the run fails the same way. The guard stands for the whole session, by itself."""
+    from core import config
     from tests import _settings_folder
-    check = _guards(request).check_plans_kept
     words = "the suite changed what the real plans folder"
+    monkeypatch.setattr(config, "RESOURCES_ROOT", tmp_path / "inputs")
+    plans = tmp_path / "inputs" / "Plans"
+    plan = plans / "usual.txt"
+    around_the_run = _guards(request)._no_plans_written.__wrapped__      # the function the fixture was made from
+    run = around_the_run()
+    next(run)                                                            # as the run begins, no folder
+    plans.mkdir(parents=True)
+    plan.write_text("the person's", encoding="utf-8")
+    with pytest.raises(AssertionError, match=words):
+        next(run)                                                        # as it ends, a plan in a new folder
+    (plans / "older").mkdir()
+    run = around_the_run()
+    next(run)
+    with pytest.raises(StopIteration):
+        next(run)                                                        # nothing changed: the run passes
+    run = around_the_run()
+    next(run)
+    plan.write_text("a test's", encoding="utf-8")
+    with pytest.raises(AssertionError, match=words) as failed:
+        next(run)
+    assert repr(f"{plan} (rewritten)") in str(failed.value), f"the guard did not name {plan}: {failed.value}"
+
+    check = _guards(request).check_plans_kept
     folder = tmp_path / "Plans"
-    check(folder, _settings_folder.listing(folder))                      # not there, and still not there
+    check(folder, _settings_folder.listing(folder), {})                  # not there, and still not there
     folder.mkdir()
-    (folder / "usual.txt").write_text("", encoding="utf-8")              # a plan the person saved before the run
-    held = _settings_folder.listing(folder)
-    check(folder, held)
+    usual = folder / "usual.txt"
+    usual.write_text("the person's", encoding="utf-8")                   # a plan the person saved before the run
+    held, kept = _settings_folder.listing(folder), {str(usual): usual.read_bytes()}
+    check(folder, held, kept)
     added = folder / "new.txt"
     added.write_text("", encoding="utf-8")
     with pytest.raises(AssertionError, match=words) as failed:
-        check(folder, held)
+        check(folder, held, kept)
     assert repr(str(added)) in str(failed.value), f"the check did not name {added}: {failed.value}"
+    assert "a plan was saved by hand while the run was going" in str(failed.value), (
+        f"the check did not say a person can cause this too: {failed.value}")
     added.unlink()
-    (folder / "usual.txt").unlink()
+    usual.write_text("a test's", encoding="utf-8")
+    others = [folder / f"{number}.txt" for number in range(6)]           # more than are named, sorted ahead of the plan
+    for other in others:
+        other.write_text("", encoding="utf-8")
     with pytest.raises(AssertionError, match=words) as failed:
-        check(folder, held)
-    assert repr(str(folder / "usual.txt")) in str(failed.value), f"the check did not name the plan: {failed.value}"
+        check(folder, held, kept)
+    assert repr(f"{usual} (rewritten)") in str(failed.value), f"the rewritten plan was crowded out: {failed.value}"
+    for other in others:
+        other.unlink()
+    usual.unlink()
+    with pytest.raises(AssertionError, match=words) as failed:
+        check(folder, held, kept)
+    assert repr(str(usual)) in str(failed.value), f"the check did not name the plan: {failed.value}"
     appears = tmp_path / "appears"
     held = _settings_folder.listing(appears)
     appears.mkdir()
-    with pytest.raises(AssertionError, match=words):
-        check(appears, held)                                             # the folder alone, made where none was
+    with pytest.raises(AssertionError, match=words) as failed:
+        check(appears, held, {})                                         # the folder alone, made where none was
+    assert "['the folder itself (made)']" in str(failed.value), f"the check did not name the folder: {failed.value}"
     (appears / "made.txt").write_text("", encoding="utf-8")
     with pytest.raises(AssertionError, match=words) as failed:
-        check(appears, held)
+        check(appears, held, {})
     assert repr(str(appears / "made.txt")) in str(failed.value), f"the check did not name the file: {failed.value}"
+    (appears / "made.txt").unlink()
+    held = _settings_folder.listing(appears)
+    appears.rmdir()
+    with pytest.raises(AssertionError, match=words) as failed:
+        check(appears, held, {})                                         # the folder alone, gone
+    assert "['the folder itself (gone)']" in str(failed.value), f"the check did not name the folder: {failed.value}"
 
     tree = ast.parse((REPO / "tests" / "conftest.py").read_text(encoding="utf-8"))
     guard, = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_no_plans_written"]
-    said = {ast.unparse(node) for node in ast.walk(guard) if isinstance(node, (ast.Assign, ast.Call))}
     assert [ast.unparse(one) for one in guard.decorator_list] == ["pytest.fixture(scope='session', autouse=True)"]
-    assert {"folder = config.RESOURCES_ROOT / 'Plans'", "held = _settings_folder.listing(folder)",
-            "check_plans_kept(folder, held)"} <= said, (
-        "the session no longer lists the folder of saved plans as it begins and checks it as it ends")
 
 
 def test_the_computer_is_kept_awake_from_the_start_of_a_run_to_its_end(tmp_path, windows_asked):

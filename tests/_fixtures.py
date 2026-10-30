@@ -10,7 +10,9 @@ Moved out of ``tests/test_artifact_store.py`` so ``tests/test_user_sbi.py``,
 module (which pytest would then also collect a second time under a different name).
 
 It also holds what the GUI suites used to copy per file -- ``qt_app``, ``pump``, ``code_only``,
-``PaneCapture`` -- and re-exports the two records tests/conftest.py's session guards append to, the
+``PaneCapture``, the stubs ``budget_cfg``, ``prior_stub``, ``forced_cfg`` and ``spont_cfg`` and the
+record writers ``write_simulation_set`` and ``write_history`` -- and re-exports the two records
+tests/conftest.py's session guards append to, the
 dialogs in ``SHOWN`` and the file choosers in ``CHOOSER_CALLS``, with their helpers: they live in
 tests/_dialogs.py, whose import loads neither torch nor the program. ONE import spelling for each of
 the two modules, ``tests._fixtures`` and ``tests._dialogs`` (pytest.ini puts the repo root on the
@@ -810,10 +812,11 @@ def build_fit_record(store, *, passes: int = 3, stopped: "str | None" = "on_purp
     ``stopped`` is "on_purpose", "error" or None (a process that never recorded how it stopped);
     ``complete`` says its fit ended before its posterior was written; ``unresumable`` is the sentence
     that says why it cannot be resumed. ``identity`` is the identity the record keeps, a dict of every part of
-    ``fit_state.IDENTITY_PARTS`` as the training stage writes one for a configuration, so that a record can be made to
-    match a real training; with none handed it is the smallest one, whose parts are zeros and which matches no
-    configuration. ``cfg=None``, like ``build_browse_store``'s rows: nothing here reads a bounds file or trains
-    anything.
+    ``fit_state.IDENTITY_PARTS`` as the training stage writes one for a configuration; with none handed it is the
+    smallest one, whose parts are zeros and which matches no configuration. Handed alone it matches no training either:
+    a match also needs ``parents={"simulation": <folder's name>}`` naming a complete set of its batches
+    (``write_simulation_set`` with ``complete=True``) and the real code, constants and libraries in the identity.
+    ``cfg=None``, like ``build_browse_store``'s rows: nothing here reads a bounds file or trains anything.
 
     :returns: the record's id.
     """
@@ -828,7 +831,8 @@ def write_simulation_set(root, identity: dict, batches: int, *, complete: bool =
     ``identity``, a state saying ``batches`` batches are done (and whether the set is ``complete``), and an empty
     folder of shards. The folder is named as the engine names the set of that identity (``resolve_dir``), so the engine
     finds it as it finds a set it wrote; a set of another identity is another folder. Only what the engine's listing of
-    sets and its reading of a set's progress read is written: no rows and no rotation. Returns the folder."""
+    sets and its reading of a set's progress read is written: no rows, no rotation and no manifest, so the store's
+    listing shows it as interrupted. Returns the folder."""
     from core.SBI import training_checkpoint
     folder = training_checkpoint.resolve_dir(identity, root)
     (folder / "shards").mkdir(parents=True, exist_ok=True)
@@ -839,9 +843,11 @@ def write_simulation_set(root, identity: dict, batches: int, *, complete: bool =
 
 def write_history(folder, **fields) -> dict:
     """One run's history file in ``folder``, written through the window's own writer (``history.write``) with every name
-    of ``history.FIELDS`` in it: the names handed in as they are handed (``id`` is needed, and a time needs its zone),
-    the others None. A name the history does not keep is refused as the writer refuses it. Returns the record that was
-    written; its file is ``folder / f"{record['id']}.json"``."""
+    of ``history.FIELDS`` in it: the names handed in as they are handed, the others None. ``id`` is needed and a time
+    needs its zone; hand ``started`` as well, since the history's readers pass over a record with no start, and a test
+    that finds nothing offered would then pass for the wrong reason. A name the history does not keep is refused as the
+    writer refuses it. Returns the record as it was handed to the writer, a time still a ``datetime`` where the file
+    holds its text; the file is ``folder / f"{record['id']}.json"``."""
     from core.gui.run import history
     record = {name: None for name in history.FIELDS}
     record.update(fields)

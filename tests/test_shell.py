@@ -3721,19 +3721,20 @@ def test_after_a_move_the_keyboard_is_on_the_pages_first_setting_never_on_a_butt
     """After a move to any place -- by its key, each part and each step, and by ``go_to``, each page of a part that
     has several -- the keyboard is on the place's first setting, or on the button the place names to start at, which
     opens a place and starts nothing: Home's main button, and the button of Your own models' list that opens the
-    builder. It is never on a button that starts or stops a run. Enter there starts no run and asks nothing, and a
-    press of the button a place names starts none either. A part that cannot be built, opened by its key or by
-    Enter on its row of the rail, gives the keyboard to its error page's "Try again", as a shortcut gives it."""
+    builder. It is never on a button that starts or stops a run. Enter there starts no run, raises nothing and asks
+    nothing, and neither does a press of the button a place names. A part that cannot be built, opened by its key or
+    by Enter on its row of the rail, gives the keyboard to its error page's "Try again", as a shortcut gives it."""
     from PySide6.QtWidgets import QAbstractButton, QPushButton, QToolButton
     from core.gui import main_window
     from core.gui.run.controller import RunController
     from tests._fixtures import all_asked, forget_asked
     qt_app()
     given = _given(monkeypatch)
-    started = []
+    started, raised = [], []
     # the controller's own start, which every page reaches whether or not its class goes through its base class's dispatch
     monkeypatch.setattr(RunController, "dispatch",
                         lambda held, *args, **kwargs: started.append(type(kwargs.get("host")).__name__))
+    monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: raised.append(repr(error)))
     window = build_window()
     moves = ([(sequence, *(("inference", does[5:]) if does.startswith("step ") else (does[5:], None)))
               for sequence, does in keys.BINDINGS if does.startswith(("part ", "step "))]
@@ -3758,11 +3759,12 @@ def test_after_a_move_the_keyboard_is_on_the_pages_first_setting_never_on_a_butt
                     assert held is named, f"{place}: the keyboard is on a button the place does not name"
                 forget_asked()
                 QTest.keyClick(held, Qt.Key_Return)
-                assert (started, all_asked(), window.current_place()) == ([], [], place), (
-                    f"{place}: Enter started a run, asked something or moved: {started}")
+                assert (started, raised, all_asked(), window.current_place()) == ([], [], [], place), (
+                    f"{place}: Enter started a run, raised, asked something or moved: {started} {raised}")
                 if isinstance(held, QAbstractButton) and held is named:
                     held.click()
-                    assert (started, all_asked()) == ([], []), f"{place}: the button the place names started a run"
+                    assert (started, raised, all_asked()) == ([], [], []), (
+                        f"{place}: the button the place names started a run or raised: {started} {raised}")
     finally:
         window.hide()
 
