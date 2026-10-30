@@ -15,7 +15,7 @@ never by a real wait.
 import gc
 import warnings
 import weakref
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -24,51 +24,20 @@ from PySide6.QtWidgets import QLabel
 
 from core.gui.fields import fix_sentence
 from core.gui.run import retry
-from core.gui.run.controller import controller
 from core.gui.run.model import SIMULATION_ROW, RunSpec
 from core.refusals import Refusal
 from tests._fixtures import all_asked, build_fit_record, build_run_host, choose, qt_app
-from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+from tests._runs import (BUDGET as _BUDGET, ROTATING as _ROTATING, Clock, RunText, StandIn, at as _at,
+                         controller_on as _controller_on, ended as _ended, epoch_line as _epoch, note as _note,
+                         say as _say, start_run, to_the_fit as _to_the_fit,
+                         to_the_simulation as _to_the_simulation, training_spec as _training, turn_until)
 
-# local time with its zone, as the window's clock gives it
-_ZONE = timezone(timedelta(hours=-7))
-# a training's lines, as the engine writes them
-_BUDGET = "[budget] 10,000 batches x 2,048 rows = 20,480,000 training rows"
-_ROTATING = "Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)..."
-_ROTATED = "[fisher] eigenvalue spread (best/worst direction): 412"
-_NOT_SAVED = "[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."
 # the graphics card's own words for a failure that is no lack of memory, two lines of them; and the words the
 # simulator's error gives before the card's
 _ILLEGAL = ("CUDA error: an illegal memory access was encountered\nCUDA kernel errors might be asynchronously reported "
             "at some other API call, so the stacktrace below might be incorrect.")
 _SOLVER = ("NadrowskiSDE euler_compiled failed after 4500 steps (batch=2048, segs=1, device=cuda:0, "
            "dtype=torch.float32)")
-
-
-def _at(day, hour, minute, second=0) -> datetime:
-    """A moment of October 2026 in the test's local time (the 3rd is a Saturday)."""
-    return datetime(2026, 10, day, hour, minute, second, tzinfo=_ZONE)
-
-
-def _controller_on(tmp_path, clock):
-    """The process's run controller, its clock and its folder of runs this test's own; the end of the test puts
-    both back."""
-    held = controller()
-    held.use_clock(clock)
-    held.use_folder(tmp_path / "runs")
-    return held
-
-
-def _training(word="Training", **changed) -> RunSpec:
-    """A training as its page hands it to its run: its stages, its patience and its epoch limit, tried again by the
-    window."""
-    from core.gui.panels.inference.base import TRAINING_STAGES
-    button = "Stop training…" if word == "Training" else "Stop the narrowing round…"
-    return RunSpec(**{"word": word, "place": ("inference", "training"), "name": "retrain_3", "stop_button": button,
-                      "stages": TRAINING_STAGES, "kinds": ("posterior", "simulation", "fit"), "simulation_set": True,
-                      "retries": True, "patience": 20, "epoch_limit": 300,
-                      "facts": {"model": "NADROWSKI", "observation": "chi", "narrowed": word != "Training",
-                                "network": (256, 10)}, **changed})
 
 
 def _set(tmp_path, batches, *, complete=False):
@@ -78,56 +47,6 @@ def _set(tmp_path, batches, *, complete=False):
     folder.mkdir(parents=True, exist_ok=True)
     torch.save({"batches_done": batches, "complete": complete}, folder / "state.pt")
     return folder
-
-
-def _writing(folder) -> str:
-    return f"[checkpoint] writing to {folder} every 50 batches (~10.3 GiB total, 120.5 GiB free)"
-
-
-def _complete(folder) -> str:
-    return (f"[checkpoint] complete: 10000 batches in {folder}. Safe to delete once the posterior is saved; keeping "
-            f"it lets you retrain the flow without re-simulating.")
-
-
-def _epoch(epoch, since=0, took=3780.0) -> str:
-    """An epoch's record, as the training call writes it."""
-    return (f"[fit] epoch {epoch}: training loss -3, validation loss -3.1, took {took:.1f} s, epochs since the best "
-            f"{since}")
-
-
-def _say(app, stand_in, text, *lines, level="info") -> None:
-    """Have the stand-in run say ``lines``, and turn the event loop until the run's full text holds the last once
-    more than before: an earlier run of the test may have said the same line."""
-    said = text.texts().count(lines[-1])
-    for line in lines:
-        stand_in.say(line, level)
-    turn_until(app, lambda: text.texts().count(lines[-1]) > said)
-
-
-def _to_the_simulation(app, stand_in, text, held, folder, done) -> None:
-    """A training brought to its simulation in ``folder``, ``done`` of its 10,000 batches simulated."""
-    _say(app, stand_in, text, _BUDGET, _ROTATING, _ROTATED, _writing(folder))
-    stand_in.row(SIMULATION_ROW, done, 10_000)
-    turn_until(app, lambda: held.model.batches_done() == done)
-
-
-def _to_the_fit(app, stand_in, text, clock, folder, epochs, *, saved=True) -> None:
-    """A training brought to its fit on the set in ``folder``, one epoch's time later, its records ``epochs``
-    ((epoch, since the best), ...) said; its fit not saved as it goes when not ``saved``."""
-    _say(app, stand_in, text, _BUDGET, _ROTATING, _ROTATED, _writing(folder), *(() if saved else (_NOT_SAVED,)),
-         _complete(folder))
-    clock.advance(3780)
-    if epochs:
-        _say(app, stand_in, text, *(_epoch(epoch, since) for epoch, since in epochs))
-
-
-def _note(kept_id, passes, *, resumed=False, saved_here=True, processes=1):
-    from core.SBI.fit_state import KeptNote
-    return KeptNote(kept_id, passes, resumed, saved_here, processes)
-
-
-def _ended(app, held) -> None:
-    turn_until(app, lambda: not held.is_live(), 10)
 
 
 def _failure(view) -> str:

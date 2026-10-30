@@ -16,7 +16,7 @@ import ast
 import importlib
 import importlib.util
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,11 +25,10 @@ import pytest
 from core.gui import texts
 from core.gui.run import model, readings
 from core.gui.run.model import FIT_ENDED, SIMULATION_ROW, RunModel, RunSpec, Stage
+from tests._runs import at as _at, controller_on as _controller_on, epoch_line as _epoch, training_spec
 
 REPO = Path(__file__).resolve().parents[1]
 
-# local time with its zone, as the window's clock gives it
-_ZONE = timezone(timedelta(hours=-7))
 # a simulation set's folder as the engine names it
 _FOLDER = r"C:\Users\J\PRISM\Artifacts\simulations\_unnamed__20261008T190211"
 # the settings a training batch was simulated at, as the engine names the batch inside a line
@@ -167,16 +166,14 @@ class _Clock:
         self.now = moment
 
 
-def _at(day, hour, minute, second=0) -> datetime:
-    """A moment of October 2026 in the test's local time (the 4th is a Sunday)."""
-    return datetime(2026, 10, day, hour, minute, second, tzinfo=_ZONE)
-
-
-def _training(**changed) -> RunSpec:
-    return RunSpec(**{"word": "Training", "place": ("inference", "training"), "name": "retrain_3",
-                      "stages": _TRAINING, "simulation_set": True, "patience": 20, "epoch_limit": 300,
-                      "facts": {"model": "NADROWSKI", "observation": "chi", "narrowed": False, "network": (256, 10),
-                                "memory_limit": 6.0}, **changed})
+def _training(word="Training", **changed) -> RunSpec:
+    """A training as the model reads it: the page's own spec (tests/_runs.py), with the four fields these tests have
+    always read set back to what they were -- no stop button, no kinds of record, no tries again, and the facts of a
+    training with the graphics card's limit and without the page's own two (whether it rotates, the batches between two
+    saves) -- so that it is the very spec they had. A test that wants another passes it, whole, in ``changed``."""
+    return training_spec(word, **{"stop_button": "", "kinds": (), "retries": False,
+                                  "facts": {"model": "NADROWSKI", "observation": "chi", "narrowed": False,
+                                            "network": (256, 10), "memory_limit": 6.0}, **changed})
 
 
 def _load() -> RunSpec:
@@ -187,12 +184,6 @@ def _load() -> RunSpec:
 
 def _feed(run, *texts_, level="info"):
     run.feed([(text, level) for text in texts_])
-
-
-def _epoch(epoch, since=0, took=3780.0, training=-3.0, validation=-3.1) -> str:
-    """The window's literal copy of an epoch's record, as the training call writes it."""
-    return (f"[fit] epoch {epoch}: training loss {training:.6g}, validation loss {validation:.6g}, took {took:.1f} s, "
-            f"epochs since the best {since}")
 
 
 def _frame(done, total=10_000, desc=SIMULATION_ROW, row=0):
@@ -1427,16 +1418,6 @@ _DISPATCHES = {("core/gui/panels/crossval_panel.py", "CrossValPanel", "compare")
                ("core/gui/panels/reduction_panel.py", "ReductionPanel", "run_reduction_map"),
                ("core/gui/panels/simulate_panel.py", "SimulatePanel", "run_simulation_stream"),
                ("core/gui/panels/simulate_panel.py", "SimulatePanel", "export_animation")}
-
-
-def _controller_on(tmp_path, clock):
-    """The process's run controller, its clock and its folder of runs this test's own; the end of the test puts
-    both back."""
-    from core.gui.run.controller import controller
-    held = controller()
-    held.use_clock(clock)
-    held.use_folder(tmp_path / "runs")
-    return held
 
 
 def _entries(path) -> list:

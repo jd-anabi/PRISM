@@ -9,6 +9,11 @@ sleep of its own; a test says what it says next (``say``, ``row``, ``figure``, `
 engine stops at its next line. Told nothing for a minute, it raises, so a run its test never released cannot hold
 the process at its end.
 
+The helpers the run suites share stand beside the stand-in: a moment of the test's day (``at``), the controller on a
+test's own clock and folder (``controller_on``), a training as its page hands it to its run (``training_spec``), a
+training brought to a stage by the engine's own lines (``say``, ``to_the_simulation``, ``to_the_fit``) and those lines
+(``writing``, ``complete``, ``epoch_line``).
+
 At module level this file imports the standard library and the toolkit's core, nothing of torch and nothing of the
 program: what it needs of the program it imports where it needs it.
 """
@@ -18,7 +23,7 @@ import threading
 import time
 from collections import deque
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from PySide6.QtCore import QEventLoop, QObject, QTimer
 
@@ -40,6 +45,13 @@ WAIT_LIMIT_S = 60.0
 #: test's own line however long that takes.
 HELD_STOP_S = 5.0
 _LEVELS = {"info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR}
+#: The window's local time zone in a test, seven hours behind UTC: no test reads the computer's own.
+_ZONE = timezone(timedelta(hours=-7))
+#: A training's lines as the engine writes them, which a stand-in run says to be brought to a stage of its run.
+BUDGET = "[budget] 10,000 batches x 2,048 rows = 20,480,000 training rows"
+ROTATING = "Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)..."
+ROTATED = "[fisher] eigenvalue spread (best/worst direction): 412"
+NOT_SAVED = "[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."
 
 
 class Clock:
@@ -55,6 +67,12 @@ class Clock:
 
     def advance(self, seconds: float) -> None:
         self.now += timedelta(seconds=seconds)
+
+
+def at(day, hour, minute, second=0) -> datetime:
+    """A moment of October 2026 in the test's local time, with its zone (the 3rd is a Saturday, the 4th a Sunday, the
+    8th a Thursday)."""
+    return datetime(2026, 10, day, hour, minute, second, tzinfo=_ZONE)
 
 
 class StandIn:
@@ -248,6 +266,93 @@ def running(host=None, stand_in=None, **kwargs):
     finally:
         stand_in.release()
         turn_until(app, lambda: not controller().is_live(), 10.0)
+
+
+def controller_on(tmp_path, clock):
+    """The process's run controller, its clock and its folder of runs this test's own; the end of the test puts
+    both back."""
+    from core.gui.run.controller import controller
+    held = controller()
+    held.use_clock(clock)
+    held.use_folder(tmp_path / "runs")
+    return held
+
+
+def training_spec(word="Training", **changed):
+    """A training, or with another ``word`` a narrowing round, as its page hands it to its run: the page's own
+    ``training_spec`` is called, so the stages, the kinds of record, the tries again and the facts follow the page.
+    It is called with a stand-in configuration holding what the page reads of one (the model, the kind of observation
+    and whether the rotation is on) and with the knobs a call hands it: the name ``retrain_3``, a patience of 20
+    epochs, a limit of 300, a network of 256 hidden features and 10 transforms, and no saving of the simulation set
+    between batches, so that the spec does not depend on whether the engine's setting of it has been switched off yet.
+    The place is the training step's, for both words. ``changed`` then replaces any field of the spec, whole, as
+    ``dataclasses.replace`` does (``facts`` among them)."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from core.gui.panels.inference.base import training_spec as the_pages
+    cfg = SimpleNamespace(model="NADROWSKI", observation_mode="chi", reparam_rotate=True)
+    button = "Stop training…" if word == "Training" else "Stop the narrowing round…"
+    kwargs = {"name": "retrain_3", "stop_after_epochs": 20, "max_num_epochs": 300, "hidden_features": 256,
+              "num_transforms": 10, "checkpoint_every": 0}
+    spec = the_pages(word, ("inference", "training"), button, cfg, kwargs, narrowed=word != "Training")
+    return replace(spec, **changed)
+
+
+def writing(folder) -> str:
+    """The engine's line that names the simulation set's folder as the simulation begins."""
+    return f"[checkpoint] writing to {folder} every 50 batches (~10.3 GiB total, 120.5 GiB free)"
+
+
+def complete(folder) -> str:
+    """The engine's line that says the simulation set in ``folder`` is complete."""
+    return (f"[checkpoint] complete: 10000 batches in {folder}. Safe to delete once the posterior is saved; keeping "
+            f"it lets you retrain the flow without re-simulating.")
+
+
+def epoch_line(n, since=0, took=3780.0, training=-3.0, validation=-3.1) -> str:
+    """An epoch's record, as the training call writes it: epoch ``n``, ``took`` seconds, ``since`` epochs since the
+    best, and the two losses (written in the shortest form that keeps six digits, so -3.0 reads -3)."""
+    return (f"[fit] epoch {n}: training loss {training:.6g}, validation loss {validation:.6g}, took {took:.1f} s, "
+            f"epochs since the best {since}")
+
+
+def say(app, stand_in, text, *lines, level="info", again=True) -> None:
+    """Have the stand-in run say ``lines``, and turn the event loop until the run's full text holds the last. With
+    ``again`` the text must hold it once more than it did before the call, so that a run that follows an earlier one of
+    the same test, which said the same line, is waited for; without it one earlier is enough."""
+    said = text.texts().count(lines[-1]) if again else 0
+    for line in lines:
+        stand_in.say(line, level)
+    turn_until(app, lambda: text.texts().count(lines[-1]) > said)
+
+
+def to_the_simulation(app, stand_in, text, held, folder, done, *, again=True) -> None:
+    """A training brought to its simulation in ``folder``, ``done`` of its 10,000 batches simulated."""
+    from core.gui.run.model import SIMULATION_ROW
+    say(app, stand_in, text, BUDGET, ROTATING, ROTATED, writing(folder), again=again)
+    stand_in.row(SIMULATION_ROW, done, 10_000)
+    turn_until(app, lambda: held.model.batches_done() == done)
+
+
+def to_the_fit(app, stand_in, text, clock, folder, epochs, *, saved=True, again=True) -> None:
+    """A training brought to its fit on the set in ``folder``, one epoch's time later, its records ``epochs``
+    ((epoch, since the best), ...) said; its fit not saved as it goes when not ``saved``."""
+    say(app, stand_in, text, BUDGET, ROTATING, ROTATED, writing(folder), *(() if saved else (NOT_SAVED,)),
+        complete(folder), again=again)
+    clock.advance(3780)
+    if epochs:
+        say(app, stand_in, text, *(epoch_line(epoch, since) for epoch, since in epochs), again=again)
+
+
+def note(kept_id, passes=62, resumed=False, saved_here=True, processes=1):
+    """The note a training's stop or failure hands back of the training it kept."""
+    from core.SBI.fit_state import KeptNote
+    return KeptNote(kept_id, passes, resumed, saved_here, processes)
+
+
+def ended(app, held) -> None:
+    """Turn the event loop until the run has ended."""
+    turn_until(app, lambda: not held.is_live(), 10)
 
 
 class RunText(QObject):

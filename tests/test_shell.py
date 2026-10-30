@@ -24,7 +24,9 @@ from core.gui.screens.home_screen import HomeFacts, HomeScreen, RecordRow
 from core.gui.widgets.page import Columns, PageHead, Sentence
 from core.gui.widgets.rule_table import StateCell, TextCell
 from tests._fixtures import build_part, build_run_host, build_window, qt_app
-from tests._runs import RunText, StandIn, running, start_run, turn_until
+from tests._runs import (BUDGET as _BUDGET, ROTATED as _ROTATED, ROTATING as _ROTATING, RunText, StandIn, at as _at,
+                         epoch_line as _epoch, running, start_run, training_spec as _training_spec, turn_until,
+                         writing as _writing)
 from tests._window_helpers import (given as _given, in_front as _in_front, press as _press, session as _session,
                                    shown_off_screen as _shown_off_screen)
 
@@ -136,19 +138,8 @@ def _stand_in_store(listed):
     return SimpleNamespace(list=lambda kind: list(listed.get(kind, ())))
 
 
-# local time with its zone, as the window's clock gives it
-_ZONE = timezone(timedelta(hours=-7))
-# a training's lines, as the engine writes them
-_BUDGET = "[budget] 10,000 batches x 2,048 rows = 20,480,000 training rows"
-_ROTATING = "Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)..."
-_ROTATED = "[fisher] eigenvalue spread (best/worst direction): 412"
 _LIVE = ("and no other run can start until it ends. You can still move around and read results. Keep PRISM open; "
          "you can minimise it.")
-
-
-def _at(day, hour, minute, second=0):
-    """A moment of October 2026 in the test's local time (the 8th is a Thursday)."""
-    return datetime(2026, 10, day, hour, minute, second, tzinfo=_ZONE)
 
 
 def _on_the_runs_clock(tmp_path, start=None):
@@ -160,28 +151,6 @@ def _on_the_runs_clock(tmp_path, start=None):
     held.use_clock(clock)
     held.use_folder(tmp_path / "runs")
     return held, clock
-
-
-def _training_spec(**changed):
-    """A training as its page hands it to its run: its stages, its patience and its epoch limit."""
-    from core.gui.panels.inference.base import TRAINING_STAGES
-    from core.gui.run.model import RunSpec
-    return RunSpec(**{"word": "Training", "place": ("inference", "training"), "name": "retrain_3",
-                      "stop_button": "Stop training…", "stages": TRAINING_STAGES,
-                      "kinds": ("posterior", "simulation", "fit"), "simulation_set": True, "patience": 20,
-                      "epoch_limit": 300, "facts": {"model": "NADROWSKI", "observation": "chi", "narrowed": False,
-                                                    "network": (256, 10)}, **changed})
-
-
-def _writing(folder) -> str:
-    """The engine's line that names the simulation set's folder as the simulation begins."""
-    return f"[checkpoint] writing to {folder} every 50 batches (~10.3 GiB total, 120.5 GiB free)"
-
-
-def _epoch(epoch, since=0, took=3780.0) -> str:
-    """An epoch's record, as the training call writes it."""
-    return (f"[fit] epoch {epoch}: training loss -3, validation loss -3.1, took {took:.1f} s, epochs since the best "
-            f"{since}")
 
 
 def _foot(window):

@@ -10,95 +10,44 @@ clock is moved by hand, and every question is answered through the session's gua
 import logging
 import threading
 import warnings
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 import pytest
 
 from core.gui import this_computer
 from core.gui.run import questions
-from core.gui.run.controller import controller
-from core.gui.run.model import SILENCE_NEEDS_YOU_S, SIMULATION_ROW, RunSpec
+from core.gui.run.model import SILENCE_NEEDS_YOU_S, RunSpec
 from tests._fixtures import (all_asked, asked, build_fit_record, build_run_host, build_window, choose,
                              forget_asked, hold_open, qt_app)
-from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+from tests import _runs
+from tests._runs import (BUDGET as _BUDGET, ROTATED as _ROTATED, ROTATING as _ROTATING, Clock, RunText, StandIn,
+                         at as _at, controller_on as _controller_on, ended as _ended, epoch_line as _epoch,
+                         note as _note, start_run, training_spec as _training, turn_until)
 
-# local time with its zone, as the window's clock gives it
-_ZONE = timezone(timedelta(hours=-7))
 # a simulation set's folder as the engine names it
 _FOLDER = r"C:\Users\J\PRISM\Artifacts\simulations\_unnamed__20261008T190211"
 # a training's lines, as the engine writes them
-_BUDGET = "[budget] 10,000 batches x 2,048 rows = 20,480,000 training rows"
-_ROTATING = "Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)..."
-_ROTATED = "[fisher] eigenvalue spread (best/worst direction): 412"
 _WRITING = f"[checkpoint] writing to {_FOLDER} every 50 batches (~10.3 GiB total, 120.5 GiB free)"
 _COMPLETE = (f"[checkpoint] complete: 10000 batches in {_FOLDER}. Safe to delete once the posterior is saved; keeping "
              f"it lets you retrain the flow without re-simulating.")
-_NOT_SAVED = "[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."
 # what the stop of a training in its fit says while it is pending, an epoch having taken 63 minutes
 _STOPPING_FIT = "Stopping: takes effect when this epoch ends, up to about 63 minutes."
 
 
-def _at(day, hour, minute, second=0) -> datetime:
-    """A moment of October 2026 in the test's local time (the 8th is a Thursday)."""
-    return datetime(2026, 10, day, hour, minute, second, tzinfo=_ZONE)
-
-
-def _epoch(epoch, since=0, took=3780.0) -> str:
-    """An epoch's record, as the training call writes it."""
-    return (f"[fit] epoch {epoch}: training loss -3, validation loss -3.1, took {took:.1f} s, epochs since the best "
-            f"{since}")
-
-
-def _controller_on(tmp_path, clock):
-    """The process's run controller, its clock and its folder of runs this test's own; the end of the test puts
-    both back."""
-    held = controller()
-    held.use_clock(clock)
-    held.use_folder(tmp_path / "runs")
-    return held
-
-
-def _training(word="Training", **changed) -> RunSpec:
-    """A training as its page hands it to its run: its stages, its patience and its epoch limit."""
-    from core.gui.panels.inference.base import TRAINING_STAGES
-    button = "Stop training…" if word == "Training" else "Stop the narrowing round…"
-    return RunSpec(**{"word": word, "place": ("inference", "training"), "name": "retrain_3", "stop_button": button,
-                      "stages": TRAINING_STAGES, "kinds": ("posterior", "simulation", "fit"), "simulation_set": True,
-                      "retries": True, "patience": 20, "epoch_limit": 300,
-                      "facts": {"model": "NADROWSKI", "observation": "chi", "narrowed": word != "Training",
-                                "network": (256, 10)}, **changed})
-
-
 def _say(app, stand_in, text, *lines, level="info") -> None:
     """Have the stand-in run say ``lines``, and turn the event loop until the run's full text holds the last."""
-    for line in lines:
-        stand_in.say(line, level)
-    turn_until(app, lambda: lines[-1] in text.texts())
+    _runs.say(app, stand_in, text, *lines, level=level, again=False)
 
 
 def _to_the_simulation(app, stand_in, text, held, done=6_150) -> None:
     """A training brought to its simulation, ``done`` of its 10,000 batches simulated."""
-    _say(app, stand_in, text, _BUDGET, _ROTATING, _ROTATED, _WRITING)
-    stand_in.row(SIMULATION_ROW, done, 10_000)
-    turn_until(app, lambda: held.model.batches_done() == done)
+    _runs.to_the_simulation(app, stand_in, text, held, _FOLDER, done, again=False)
 
 
 def _to_the_fit(app, stand_in, text, clock, epochs, *, saved=True) -> None:
     """A training brought to its fit, one epoch's time later, its records ``epochs`` ((epoch, since the best), ...)
     said; its fit not saved as it goes when not ``saved``."""
-    _say(app, stand_in, text, _BUDGET, _ROTATING, _ROTATED, _WRITING, *(() if saved else (_NOT_SAVED,)), _COMPLETE)
-    clock.advance(3780)
-    if epochs:
-        _say(app, stand_in, text, *(_epoch(epoch, since) for epoch, since in epochs))
-
-
-def _note(kept_id, passes=62, resumed=False, saved_here=True, processes=1):
-    from core.SBI.fit_state import KeptNote
-    return KeptNote(kept_id, passes, resumed, saved_here, processes)
-
-
-def _ended(app, held) -> None:
-    turn_until(app, lambda: not held.is_live(), 10)
+    _runs.to_the_fit(app, stand_in, text, clock, _FOLDER, epochs, saved=saved, again=False)
 
 
 def _note_the_release(monkeypatch, folder, run, text, view) -> list:
