@@ -17,10 +17,28 @@ what is on disk, the last gate). Update it at the end of every session.
 - CUDA is available (RTX 5070 Ti, 16 GB shared with the desktop). Read free VRAM with
   `nvidia-smi --query-gpu=memory.used --format=csv`, never `torch.cuda.mem_get_info()` (it
   overstates free memory by the desktop's share).
-- Launch the GUI with `run.bat` (from a shell where `biophys-env` is on PATH; it sets
-  `KMP_DUPLICATE_LIB_OK` for you). A direct launch must set it by hand, because
-  `core/gui/__main__.py` sets only the Agg backend:
-  `$env:KMP_DUPLICATE_LIB_OK="TRUE"; & "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m core.gui`.
+- Launch the GUI with `run.bat`: double-click it, or type it in any shell. It finds `biophys-env`'s
+  `pythonw.exe` itself (the active environment's when that environment's folder holds PySide6 and torch,
+  else `envs\biophys-env` under `%USERPROFILE%\anaconda3`, `%USERPROFILE%\miniconda3`,
+  `%LOCALAPPDATA%\anaconda3`, `%ProgramData%\anaconda3` or `%ProgramData%\miniconda3`; when it finds
+  none, a Windows message says what to do), sets `KMP_DUPLICATE_LIB_OK`, starts PRISM with no console
+  window and returns at once; a second start brings the open window to the front. The first time, it
+  makes the desktop shortcut `PRISM.lnk` (the environment's `pythonw.exe -m core.gui`, started in the
+  repository) and the mark `shortcut-made` beside the settings file, and never again, even when the
+  shortcut was deleted. `run.bat --where` prints the Python it would use and whether, and where, it would
+  make the shortcut, and `run.bat --make-shortcut` makes it when it was never made (to make it again,
+  delete the mark first: `--where` names it); neither starts anything (`PRISM_DESKTOP`, the shortcut's
+  folder, is for the launcher's tests alone). Nothing the program prints is then on a
+  console: a run's full text is in the dated file its page opens, in the `runs` folder beside the
+  settings file (`%APPDATA%\PRISM`), and what the window prints outside a run, the records other
+  threads log during one, the toolkit's messages, an uncaught error and a crash go to `window-log.txt`
+  there, after a dated line per launch; a start that fails before the window is shown says so in a
+  plain Windows message naming that file, and a second start from `run.bat` or its shortcut that the
+  open PRISM does not answer says so in one too. The shortcut starts PRISM with Explorer's environment, so a
+  `PRISM_ARTIFACTS` or `PRISM_VRAM_CEILING_GIB` set in a shell reaches the window only through `run.bat`
+  started from that shell. A direct launch keeps its console and needs nothing set by hand:
+  `core/gui/__main__.py` sets `KMP_DUPLICATE_LIB_OK` and the Agg backend itself, before any torch
+  import: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m core.gui`.
   The command-line tool is `python -m core <subcommand>` (`core/tool/`; `--help` lists them): its
   entry sets `KMP_DUPLICATE_LIB_OK` and the Agg backend itself, before any torch or core import, so
   it needs no environment set up around it. Every tool flag maps 1:1 onto a stage argument;
@@ -37,19 +55,23 @@ what is on disk, the last gate). Update it at the end of every session.
 ## Tests
 
 - pytest. Fast gate: `pytest -m "not slow"` (the recorded one-process target is 16 minutes, piece-3
-  spec §8.4). Full: `pytest` (never timed in one process; the two halves at the piece-6 gates were
-  15 min 24 s + 1 h 15 min 27 s, so budget about 95 minutes. The slow set is five tests: the chi
-  full-pipeline test `test_chi_mode_full_sbi_pipeline` in `tests/test_user_sbi.py` (2618 s; 1397 s
-  at piece 5 — the open list), in `tests/test_tool.py` the Nadrowski sanity-path run
-  `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` (619 s) and the FDT/crossval tiny-size run
-  `test_fdt_and_crossval_run_at_tiny_size` (452 s), the tier-1 tiny `smoke`
-  `test_smoke_runs_every_stage_on_the_tier1_box` in `tests/test_tier1.py` (828 s) and the probes
+  spec §8.4; the last quiet gate of record took 27 min 16 s, 2010 passed, at `e17f1ec` on 29 October
+  2026). Full: `pytest` (never timed in one process; the two halves at the window redesign's stage-3
+  exit were 27 min 16 s + 1 h 0 min 49 s, so budget about 95 minutes. The slow set is five tests: the
+  chi full-pipeline test `test_chi_mode_full_sbi_pipeline` in `tests/test_user_sbi.py` (1528 s; 2618 s
+  at piece 6, 1397 s at piece 5 — the open list), in `tests/test_tool.py` the Nadrowski sanity-path
+  run `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` (612 s) and the FDT/crossval tiny-size
+  run `test_fdt_and_crossval_run_at_tiny_size` (349 s), the tier-1 tiny `smoke`
+  `test_smoke_runs_every_stage_on_the_tier1_box` in `tests/test_tier1.py` (1142 s) and the probes
   twin-cell check `test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin`
-  in `tests/test_diagnostics.py` (7 s): 1 h 15 min 27 s at `067eddc`; the slow set alone is
-  `pytest -m slow`). Count: `pytest --collect-only -q`.
+  in `tests/test_diagnostics.py` (7 s): 1 h 0 min 49 s at `e17f1ec` (1 h 15 min 27 s at `067eddc`);
+  the slow set alone is `pytest -m slow`). Count: `pytest --collect-only -q`.
 - Markers: `slow`; `gpu` (skipped when CUDA is absent); `display` (skipped offscreen). The
   display-marked tests run on the real screen with `QT_QPA_PLATFORM=windows pytest -m display`
-  (the root conftest only DEFAULTS the variable); they create hidden native windows, nothing shows.
+  (the root conftest only DEFAULTS the variable); they create hidden native windows, nothing shows;
+  the run's four also make PRISM's real Windows requests for a run (keeping the computer awake, the
+  reason against shutting down, the taskbar's flash, the answer to Windows' end of session) on those
+  hidden windows, and release each at once.
 - Do not edit a source file while a suite is running. Several tests assert on
   `inspect.getsource`, which reads the file as it is now with the line numbers the function was
   loaded with; an edit mid-run produces a failure that is not real. Never run two pytest
@@ -63,23 +85,32 @@ what is on disk, the last gate). Update it at the end of every session.
 - `tests/conftest.py` turns training checkpointing OFF for the session
   (`_checkpointing_off_unless_asked`, which rebinds `orchestrator.TRAINING_CHECKPOINT_EVERY`); it
   is the only session-wide KNOB default the suites install, and a test that wants a simulation
-  cache passes `checkpoint_every` explicitly. Five more session-wide autouse guards stand beside
+  cache passes `checkpoint_every` explicitly. Six more session-wide autouse guards stand beside
   it: a temp artifact root (`_sandbox_default_store`), a temp settings file so no panel reads the
   real `PRISM.ini` and no test can write it (`_settings_home`, plus a fresh `.ini` per test; at
   teardown the real file must be unchanged and its folder must hold exactly what it held, so a
   PRISM opened while a suite runs fails the run with its `PRISM.lock`), no
   modal dialog can stall the run (`_no_modal_dialogs`, on today's message boxes and on the shared
   question), no file chooser can open (`_no_file_choosers`: one a test did not answer is recorded
-  and answers "cancelled"), and `<repo>/sbi-logs` must not exist (`_no_sbi_logs`) — asserted at
-  SETUP too, so a leftover tree makes every pytest run error before the first test. Four per-test
-  checks fail a test at its teardown: a file chooser it opened and did not answer
-  (`_every_file_chooser_is_answered`); an error the window's own drawing code caught while it
-  ran (`_drawing_code_raises_nothing`; a test that causes one on purpose does it inside
-  `reported.expected()`); a run still live when it ends (`_built_widgets_let_go`, which then
-  deletes every window and part the builders made, so none outlives its test); and the lock of
-  one PRISM at a time still held (`brought_forward`, which also keeps any window from being
-  brought to the front, except in the tests marked for the real screen). After every test the
-  room the look's layout thresholds are held to is put back (`_layout_room_put_back`).
+  and answers "cancelled"), no plain Windows message can wait for an OK (`_no_native_boxes`: the
+  one the entry point shows when PRISM cannot start is recorded, never shown), and
+  `<repo>/sbi-logs` must not exist (`_no_sbi_logs`) — asserted at SETUP too, so a leftover tree
+  makes every pytest run error before the first test. Seven per-test checks fail a test at its
+  teardown: a file chooser it opened and did not answer (`_every_file_chooser_is_answered`); a
+  plain Windows message recorded and never read (`_every_native_box_is_read`); an error the
+  window's own drawing code caught while it ran (`_drawing_code_raises_nothing`; a test that
+  causes one on purpose does it inside `reported.expected()`); a run still live when it ends
+  (`_built_widgets_let_go`, which then deletes every window and part the builders made, so none
+  outlives its test); the lock of one PRISM at a time still held (`brought_forward`, which also
+  keeps any window from being brought to the front, except in the tests marked for the real
+  screen); the standard streams left bound to a window's log (`_streams_put_back`); and a request
+  of Windows left standing — the computer kept awake, a reason against ending the session
+  registered, or Windows reached at all (`windows_asked`, which stands in for keeping the computer
+  awake, that reason, the taskbar's flash and the watch on Windows' end of a session, except in the
+  tests marked for the real screen, which make each call for real and release it). One check
+  fails a whole module at its end: a panel built in it that outlives it (`_no_panel_outlives_its_module`;
+  every run locks and frees every panel still enrolled). After every test the room the look's
+  layout thresholds are held to is put back (`_layout_room_put_back`).
 - A green suite does not certify the GPU path. The gpu-marked tests do run on the card inside every
   fast gate when CUDA is present (`tests/test_gpu_paths.py`'s CUDA inference run, six in
   `tests/test_user_sbi.py` and one in `tests/test_diagnostics.py`), but they are not a substitute: no
@@ -117,8 +148,9 @@ what is on disk, the last gate). Update it at the end of every session.
     run; on the two chi runs (1 and 4) the training `[chi] masked probes` run-total line (the one
     scoped to every committed batch of the simulation cache; the calibration stage logs a second
     one, scoped to this process only, which is not the criterion) within ±12 pp of 37 %;
-  - runs 1, 3 and 4, also: one `[fit] saved after pass N.` per pass, and `artifacts list fit`
-    against each store (`$env:PRISM_ARTIFACTS` set to it) prints `nothing here yet`;
+  - runs 1, 3 and 4, also: one `[fit] saved after pass N.` per pass, each followed by that epoch's
+    record `[fit] epoch N: …`, and `artifacts list fit` against each store
+    (`$env:PRISM_ARTIFACTS` set to it) prints `nothing here yet`;
   - run 2: prints `Reusing the Fisher rotation stored with the training checkpoint` and
     `[checkpoint] resuming at batch 4/4`, `$LASTEXITCODE` 0;
   - run 2b: `$LASTEXITCODE` 1, the refusal names `n_runs`, no `[fisher]` line, no new directory
@@ -239,8 +271,9 @@ what is on disk, the last gate). Update it at the end of every session.
   50 batches): any stop loses at most the pass in progress (about an hour at full size), and the
   stopped training is kept as a record of its own (kind `fit`, under `Artifacts/fits/`). It is
   resumed by hand, from the command line with `train --resume-fit <id>`, given the same `--bounds`,
-  `--prior`, `--chi` and `--device` it was trained with (the window's Resume comes with its
-  redesign), only while its settings, its network's shape, the code that builds or trains the
+  `--prior`, `--chi` and `--device` it was trained with (the window offers Resume on the run's page
+  of a training that stopped or failed in its fit, until PRISM is closed; Resume after a reopening
+  comes with the Training page's rebuild), only while its settings, its network's shape, the code that builds or trains the
   network, the libraries and its simulation set are what it was trained with: an edit inside that
   code (`fit_state.FIT_CODE`), even a comment, makes every training kept before it unresumable, so
   finish a kept training you want before such an edit. A resume reads the simulation set back
@@ -272,20 +305,26 @@ what is on disk, the last gate). Update it at the end of every session.
 - `.superpowers/sdd/<date>-<slug>/` — a piece's gitignored execution workspace: the ledger
   (`progress.md`), the task briefs and reports, the review reports and the per-task gate logs.
   Piece 2 is `2026-09-12-one-flow`, piece 3 `2026-09-16-validation-and-logging`, piece 5
-  `2026-09-22-secondary-analyses`, piece 6 `2026-09-25-documentation-and-retrain-readiness`.
+  `2026-09-22-secondary-analyses`, piece 6 `2026-09-25-documentation-and-retrain-readiness`, and
+  the window redesign `2026-10-06-window-redesign`, with one folder per stage (`stage-N/`).
   Untracked, so no git command finds them.
 - `docs/checklists/display-walkthrough.md` — GUI features never exercised on a real screen.
 - `docs/guide/` — the reader pages, starting at its `README.md`: getting started, the window, the
   command line, bringing recordings, the science, the architecture, the rules and traps, testing,
   and the retrain runbook. They cite no working document (the source scan walks them), and each
   opens with the commit it was checked against.
-- `tests/` — the twenty-six suites (`test_fit_saving.py` the kept training's: its files, lock and
+- `tests/` — the thirty suites (`test_fit_saving.py` the kept training's: its files, lock and
   identity, the training call's per-pass hook and restore, the training stage's saving and resuming;
   `test_look.py` the look's: no torch; the table of colours,
   type and sizes, the lettering, the style sheet, the painted devices and the shared question;
   `test_shell.py` the window's places — the rail, moving between places, the run's foot — and
-  Home, the keys, one PRISM at a time and the last-resort error; `test_step_chain.py` the
-  torch-free rules of the places, the keys and the six steps' states;
+  Home, the keys, one PRISM at a time, the last-resort error and the launcher; `test_step_chain.py`
+  the torch-free rules of the places, the keys and the six steps' states; `test_run_text.py` the
+  run's text file and history file; `test_run_states.py` the run's model, the table of the engine's
+  lines it reads, the run's controller and the run's page; `test_stop_and_close.py` stopping a run,
+  keeping or discarding the training a stop kept, the close during a run and Windows' end of a
+  session; `test_retry.py` a run's failure on its page, the window's tries after the card ran out
+  of memory, and Continue and Resume;
   `test_artifact_store.py` is the store's, `test_tool.py` the
   command-line tool's, `test_diagnostics.py` the diagnostics' (the five and the three `probes`
   modes), `test_refusals.py` the torch-free rules', tables' and run-buffer's,
@@ -298,10 +337,12 @@ what is on disk, the last gate). Update it at the end of every session.
   not, written in seconds) and `compare_preflight_refusals` (every comparison refusal made after
   the records are read, shared by the API's and the tool's tests), and `CODE_ROOTS` plus
   `CODE_FILES`, the directories and top-level files the source scans walk; `_dialogs.py` the record
-  of every box and file chooser a test opens; `_built.py` the record of every window and part the
-  builders made, deleted when its test ends; `_settings_folder.py` the listing of the real
-  settings folder that the session checks; `_look_helpers.py` the look's torch-free test
-  helpers); `core/Reduction/tests/`
+  of every box, plain Windows message and file chooser a test opens; `_built.py` the record of every
+  window and part the builders made, deleted when its test ends; `_settings_folder.py` the listing of
+  the real settings folder that the session checks; `_look_helpers.py` the look's torch-free test
+  helpers; `_runs.py` the stand-in run, the window's clock moved by hand and the run's full text;
+  `_window_helpers.py` what the window suites share (the session, a window shown where no screen
+  shows it, keys and focus)); `core/Reduction/tests/`
   — the reduction map's (out of scope).
 - `core/tool/` — the command-line tool: `python -m core --help` lists every subcommand (the stages
   `prior train validate infer tsnpe`, the diagnostics `sbc identifiability ablation probes`

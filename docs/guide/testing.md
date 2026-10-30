@@ -208,8 +208,9 @@ Pass criteria, read off `$LASTEXITCODE` and the printed lines after each command
   run; on the two chi runs (1 and 4) the training `[chi] masked probes` run-total line (the one
   scoped to every committed batch of the simulation cache; the calibration stage logs a second
   one, scoped to this process only, which is not the criterion) within ±12 pp of 37 %;
-- runs 1, 3 and 4, also: one `[fit] saved after pass N.` per pass, and `artifacts list fit`
-  against each store (`$env:PRISM_ARTIFACTS` set to it) prints `nothing here yet`;
+- runs 1, 3 and 4, also: one `[fit] saved after pass N.` per pass, each followed by that epoch's
+  record `[fit] epoch N: …`, and `artifacts list fit` against each store
+  (`$env:PRISM_ARTIFACTS` set to it) prints `nothing here yet`;
 - run 2: prints `Reusing the Fisher rotation stored with the training checkpoint` and
   `[checkpoint] resuming at batch 4/4`, `$LASTEXITCODE` 0;
 - run 2b: `$LASTEXITCODE` 1, the refusal names `n_runs`, no `[fisher]` line, no new directory
