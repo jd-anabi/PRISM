@@ -1,6 +1,60 @@
 # PRISM — state
 
-**Last updated:** 2026-10-28, afternoon.
+**Last updated:** 2026-10-29, evening (17:14 by the clock; the weekly bar 73 %, resetting on 1 November at 04:00
+UTC; this chat at 50 % of its room).
+
+STAGE 3 OF THE WINDOW REDESIGN, THE RUN, IS DONE: ITS EXIT (TASK 15) PASSED ON 29 OCTOBER, WITH THE OWNER. The
+session was started from the owner's pasted prompt `docs/superpowers/prompts/2026-10-28-window-redesign-stage-3-exit.md`;
+its record is the ledger's stage-3 exit lines (`.superpowers/sdd/2026-10-06-window-redesign/progress.md`) and the
+exit's folder `stage-3/exit/`.
+
+- **The order the owner chose:** pictures first, then any change asked for as its own small task with three readers,
+  then the gates of record once on the final head.
+  - **28 October:** fifteen answers on the first pictures (at `5573d6f`).
+  - **29 October:**
+    - three small tasks, each with one fix round:
+      - A, the run page at any width (`cd7e9c1`, `52c43f5`, `fd49412`);
+      - B, the run page's words and figures (`f53995e`, `59df181`, `0689a9a`, `e3db0a5`, `a577b4a`);
+      - C, the figure window's toolbar follows the theme (`1b5fbb3`, `66faa5c`, with the owner's yes to marking Zoom
+        and Pan: `9b48cc6`, `7f560af`).
+    - The second pictures (at `7f560af`) found two of A's cures not holding. On the owner's three answers:
+      - A's second fix round (`b88c833`, `e17f1ec`): the caption counts the hatched key's real width, and the
+        figures' tab bar is laid out again when a run's page gives its figures back. That was not a light-theme fault,
+        as first thought.
+      - The form drawn over the run page at 900 x 600 goes to STAGE 4 AS A FIRM REQUIREMENT.
+      - Three cosmetic faults go to the audit.
+    - The third pictures (at `e17f1ec`): both cures hold, no fault.
+- **THE CODE IS FINAL AT `e17f1ec`.** Fourteen commits from `5573d6f`, in `core/gui/` and `tests/` alone. 1989 → 2010
+  passed. No engine file changed since `5573d6f`.
+- **THE NAMED TRAINING CODE'S DIGESTS ARE UNCHANGED.** The seventeen of `fit_state.code_digests()` at the head are equal
+  to `stage-3/gates/digests-after-task03.json`, read just before 17:13 by the clock on 29 October. `core.refusals.FIELDS` is 110.
+- **THE GATES OF RECORD ARE ALL GREEN ON `e17f1ec`** (the table "Last gate" has each in full):
+  - the quiet fast gate: 2010 passed, 9 skipped, 5 deselected, in 27 min 16 s;
+  - the slow set: 5 passed, in 1 h 0 min 49 s;
+  - the card run: every criterion held, in 31 minutes;
+  - the real-screen run: 9 passed, with nothing of PRISM's in `powercfg /requests` (read by the owner);
+  - the collection: 2024, and the carried-over list `missing 0`.
+- **The documents:**
+  - `5af4c23`: the guide follows the window's runs (seven pages);
+  - `e83bc6c`: `CLAUDE.md`, ON THE OWNER'S YES to all four changes (the launcher, the guards and suites, Resume, the
+    measured facts);
+  - `2d3bca6`: the walkthrough's redesign rows G1, G2, G6 (with task C's figure-window checks), G7, G34, G35 and G36,
+    owed to the owner on the real screen;
+  - `49621f2`: the plan and the design record the stage as built (departures 122 to 125, the File Map, the registry's
+    `discard`, the words of departures 87 and 106, Tasks 4's and 14's "As built");
+  - `1524c8e`: the code audit's list in ONE file, `docs/superpowers/notes/2026-10-29-the-code-audits-list.md`;
+  - then this file.
+- **What was decided without the owner** is listed for the owner in `stage-3/exit/rulings-for-the-owner.md`.
+- **CARRIED TO STAGE 4**, beside this file's earlier stage-4 lines:
+  - THE FIRM REQUIREMENT: "at the window's least size, and at every width above it, nothing of the run page is hidden
+    under the form; the form and the run page share the width with neither drawn over the other" (departure 125);
+  - the history's empty fields (departure 123).
+
+NEXT: the owner pushes. Then stage 4's plan (the Training page and steps 1 to 3 rebuilt, Resume after a reopening,
+Home's next step), in a new chat. Its hand-off prompt is not yet written. The walkthrough's rows G1, G2, G6, G7 and
+G34 to G36 are the owner's, on the real screen, whenever convenient.
+
+What follows is the head as the afternoon of 28 October left it:
 
 THE BUILD OF STAGE 3 OF THE WINDOW REDESIGN, THE RUN, IS BUILT AND REVIEWED: TASKS 0 TO 14 ARE COMPLETE, AND THE
 STAGE'S LAST REVIEW AND ITS ONE FIX WAVE ARE DONE. What is left is TASK 15, THE EXIT, which needs the owner. It is
@@ -188,7 +242,9 @@ modal box opened during Windows' end-message wait; a process ended between the p
 training's removal; `_end` letting go of keep-awake and the reason partway; the history's readings unbounded on a
 folder of many runs (about 60 ms per 1,000 warm, 3 s cold); the past view's replay (about 12 µs a line, half a second
 near 40,000 lines); the claim's two warnings printed bare; `platform.release()`'s fallback to `ver` through a shell.
-Taken off: `core/gui/streams.py:58` and `core/gui/worker.py:197-199` (settled by Task 10). The whole list is this
+Taken off: `core/gui/streams.py:58` and `core/gui/worker.py:197-199` (settled by Task 10). GATHERED AT THE EXIT
+(2026-10-29) into ONE file the audit reads: `docs/superpowers/notes/2026-10-29-the-code-audits-list.md` (134 items as
+recorded on 28 October, then what the exit's small tasks and documents added). The whole list was this
 file's "The code audit's list gains" sentences (search "audit's list"), the ledger's "Engine changes landed", and the
 sorting's section 5; Task 15's Step 9 gathers it.
 
@@ -3011,6 +3067,12 @@ Piece 3
 | **fast gate of record, the fit-saving stage**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-10-22 at `a95cf73` (code `c8a15d4`; the last review's fix wave `bb2857c` and the re-read's words), alone, the owner's machine said quiet: **1660 passed**, 5 skipped, 5 deselected, 242 warnings, **30 min 4 s**, exit 0 (1670 collected). Not a quiet time against the 16-minute target: its slowest tests ran about 25 % slower than in the gate half an hour earlier (cause not found; the machine idle after it). Ground after identical (428 entries, `PRISM.ini` unchanged). |
 | **slow set, the fit-saving stage**, `pytest -m slow -q --durations=5` | 2026-10-22 at `de6f288`, alone: **5 passed**, 1665 deselected, 154 warnings, **1 h 33 min 22 s**, exit 0. `test_chi_mode_full_sbi_pipeline` 2879 s (2159 at stage 1); `test_smoke_runs_every_stage_on_the_tier1_box` 1382 s (882); `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` 843 s (664); `test_fdt_and_crossval_run_at_tiny_size` 476 s (243); the probes twin-cell check 10 s (9): all slower, the same slow day. The real `Artifacts/` and `PRISM.ini` unchanged. |
 | **GPU card run, the fit-saving stage** (`CLAUDE.md`'s five command lines verbatim from PowerShell, the diagnostic card, and the new run 5, at `de6f288`) | 2026-10-22, 13:22 to 14:01, alone on the card (told to the owner first): **run 1** prior 139 s, posterior 141 s, validate 24 s, infer 58 s, exit 0, training masked probes 230 of 704 (32.7 %, as 1 October), one `[fit] saved after pass N.` per pass; **run 2** the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 10 s; **run 2b** exit 1 in 7 s, "differs only in n_runs: this run 2, that cache 4" ending `(--new-run)`, no `[fisher]` line, `simulations/` unchanged; **run 3** 137/43/13/23 s, exit 0; **run 4** 137/230/31/67 s, exit 0, both `[tier1]` lines, the rescale order, masked 227 of 704 (32.2 %), `T` in the keys, `config.tier1`; runs 1, 3, 4 leave no kept training. **Diagnostic card:** sbc 21 s, jacobian 85 s, ablation 7 s, probes mask 43 s, tier-1 jacobian 84 s, probes band 30 s, probes drive 14 s, each exit 0 with one record; **`identifiability laplace` EXIT 1** (`assert self._inv is not None` while sampling the stored posterior's training prior): the code before the stage (`82424f5`) fails the same way end to end, so an older fault, FIXED the same day at the owner's word (`05c0123`; run 3 and the laplace then both exit 0 on the card, the laplace in 131 s; the paragraph "THE FIT-SAVING STAGE'S LAST REVIEW AND EXIT"). **Run 5** (its first verbatim run): the drill exit 9 after `[fit] saved after pass 3.`, the listing 3 passes "stopped unexpectedly", the resume exit 0 in about 16 s from pass 3 to 30 with the reuse line, no `[fisher]` line and `resuming at batch 4/4`, the last listing "nothing here yet", the manifest `resumed_fit: true`, `fit_processes: 2`, its `fit_id`; added to the block below on the owner's yes (`abe5579`). No OOM line, no traceback; prior stages about 20 s longer than 1 October (the slow day). Scratch stores deleted. |
+| **fast gate of record, stage 3 of the window redesign (the run)**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-10-29, 14:30 to 14:57, at `e17f1ec` (the exit's final code, after the three small tasks and A's two fix rounds), the machine quiet by the owner's word: **2010 passed, 9 skipped** (the display-marked tests), 5 deselected (the slow set), 254 warnings, **27 min 16 s**, exit 0; the slowest `test_train_and_validate_without_a_loaded_cell` 182 s, the calibration's theta-star 80 s, the forcing-free user model 46 s, the narrowing round's basis 46 s, the chi rotation 45 s, the smoke tool's resume drill 44 s. The stage's true one-process time (stage 2's 19 min 21 s; `CLAUDE.md` records both). The real `Artifacts/` listing identical (428), `PRISM.ini` unchanged. |
+| **slow set, stage 3**, `pytest -m slow -q --durations=5` | 2026-10-29, 14:58 to 15:58, at `e17f1ec`: **5 passed**, 2019 deselected, 151 warnings, **1 h 0 min 49 s**, exit 0: `test_chi_mode_full_sbi_pipeline` 1528 s, `test_smoke_runs_every_stage_on_the_tier1_box` 1142 s, `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` 612 s, `test_fdt_and_crossval_run_at_tiny_size` 349 s, the probes' twin-cell check 7 s (22 October: 1 h 33 min). |
+| **GPU card run, stage 3** (`CLAUDE.md`'s five command lines, run 5 and the diagnostic card, by one script, `s3\card\card-gate.ps1`, logs kept under `s3\card\logs-e17f1ec\`) | 2026-10-29, 15:59 to 16:30 (31 minutes), at `e17f1ec`, alone on the card (told to the owner first): **run 1** 118/141/21/57 s, exit 0, training masked probes 230 of 704 (32.7 %); **run 2** the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 9 s; **run 2b** exit 1 in 6 s, "differs only in n_runs: this run 2, that cache 4" ending `(--new-run)`, no `[fisher]` line, `simulations/` unchanged; **run 3** 117/42/10/21 s, exit 0; **run 4** 119/232/28/66 s, exit 0, both `[tier1]` lines, `[cfg] rescale order: ['x_scale', 't_scale', 'T']`, masked 227 of 704 (32.2 %), `T` in the keys, `config.tier1`; runs 1, 3, 4 each six `[fit] saved after pass N.`, each followed by its `[fit] epoch N: …` record, and no kept training left. **Run 5:** the drill exit 9 after `[fit] saved after pass 3.`, the listing 3 passes "stopped unexpectedly", the resume exit 0 in 12 s from pass 3 to 30 with the reuse line, no `[fisher]` line and `resuming at batch 4/4`, `[prism] posterior smoke_posterior__…`, the last listing "nothing here yet", the manifest `resumed_fit: True`, `fit_processes: 2`, its `fit_id`. **Diagnostic card:** sbc 18 s, jacobian 84 s, ablation 7 s, laplace 128 s, tier-1 jacobian 85 s, probes band 31 s, drive 14 s, mask 43 s, each exit 0 with one record. No OOM line; the card 1,890 MiB before and 1,888 after; the scratch stores deleted. |
+| **display-marked run, stage 3**, `QT_QPA_PLATFORM=windows pytest -m display -q` | 2026-10-29, 16:31, at `e17f1ec`: **9 passed**, 2015 deselected, none skipped, 12 s, exit 0; Windows' foreground window the same before and after, nothing shown; `powercfg /requests` afterwards, read by the owner in an elevated prompt with PRISM closed: nothing of PRISM's. |
+| **`pytest --collect-only -q` after stage 3** | 2026-10-29 at `e17f1ec`: **2024 collected**; `-m "not slow"` 2019/2024 (5 deselected); the carried-over list's check `all rows 950; twice []; missing 0: []; gone 41`. |
+| **pictures, stage 3** (not a gate) | Three rounds, each in three sets (plain, 150 % text, 150 % scaling), light and dark, on hidden windows with the real settings folder and `Artifacts/` unchanged: 28 October at `5573d6f` (266 pictures a set; the owner's fifteen answers); 29 October at `7f560af` (320; two of task A's cures found not to hold); 29 October at `e17f1ec` (324; both cures hold, no fault). |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
 copied verbatim; keep the copies identical (the documents review compares them). Run it from the
@@ -3048,8 +3110,9 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
     run; on the two chi runs (1 and 4) the training `[chi] masked probes` run-total line (the one
     scoped to every committed batch of the simulation cache; the calibration stage logs a second
     one, scoped to this process only, which is not the criterion) within ±12 pp of 37 %;
-  - runs 1, 3 and 4, also: one `[fit] saved after pass N.` per pass, and `artifacts list fit`
-    against each store (`$env:PRISM_ARTIFACTS` set to it) prints `nothing here yet`;
+  - runs 1, 3 and 4, also: one `[fit] saved after pass N.` per pass, each followed by that epoch's
+    record `[fit] epoch N: …`, and `artifacts list fit` against each store
+    (`$env:PRISM_ARTIFACTS` set to it) prints `nothing here yet`;
   - run 2: prints `Reusing the Fisher rotation stored with the training checkpoint` and
     `[checkpoint] resuming at batch 4/4`, `$LASTEXITCODE` 0;
   - run 2b: `$LASTEXITCODE` 1, the refusal names `n_runs`, no `[fisher]` line, no new directory
