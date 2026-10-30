@@ -27,39 +27,12 @@ matplotlib.use("Agg")                                            # match the app
 import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
-from tests._fixtures import (build_inference, build_part, build_run_host,  # noqa: E402
-                             code_only, pump, qt_app)
+from tests._fixtures import (budget_cfg as _budget_cfg, build_inference, build_part, build_run_host,  # noqa: E402
+                             code_only, prior_stub as _prior_stub, pump, qt_app, write_simulation_set)
 import contextlib                                                  # noqa: E402
 import pytest                                                      # noqa: E402
 
 # -- the training budget (Posterior tab) ----------------------------------------------------------
-def _budget_cfg():
-    """Stub SimConfig carrying exactly the fields the budget lines read.
-
-    A stub, not a real build: the arithmetic under test is geometry -> elements -> GiB, and a real
-    make_sim_config drags in bounds files and a 300k-point time grid for nothing.
-    """
-    from core import config
-
-    class Cfg:
-        hw = config.detect_device()
-        t = type("T", (), {"shape": (250_000,)})()
-        inits_dict = {"x": 0.0, "xa": 0.0, "f": 0.0}
-        # training_preview reads n_vars as orchestrator._observation_inits(cfg).shape[-1], and with
-        # inits_dict set that function returns this tensor.
-        inits_tensor = torch.zeros(1, 3)
-        steady_idx = 500
-        forcing_idx = {}
-        model = "NADROWSKI"
-        chi_mode = False
-        chi_k_pad = 12
-        observation_mode = "spontaneous"
-    return Cfg()
-def _prior_stub():
-    """A LoadedPrior-shaped stub: the Posterior tab now reads ``.prior``/``.force_prior`` off
-    session.inf_prior rather than carrying the physical prior and forcing prior as separate session
-    fields, so a bare ``object()`` no longer stands in where a dispatched call is actually reached."""
-    return type("LoadedPriorStub", (), {"prior": object(), "force_prior": object()})()
 def _budget_panel(cfg=None, prior=None):
     from core.gui.session import SbiSession
 
@@ -809,9 +782,7 @@ def test_a_one_field_near_miss_blocks_a_fresh_run_until_confirmed():
         root = Path(root)
         # A committed sibling that differs in exactly ONE field.
         sib = dict(base, prior_fingerprint="bbbb")
-        d = tc.resolve_dir(sib, root); (d / "shards").mkdir(parents=True)
-        torch.save({"identity": sib}, d / "header.pt")
-        torch.save({"batches_done": 3989, "complete": False, "rng": None}, d / "state.pt")
+        d = write_simulation_set(root, sib, 3989)
 
         near = tc.near_miss_siblings(base, root)
         assert len(near) == 1, f"expected the one-field sibling, got {near}"
@@ -819,9 +790,7 @@ def test_a_one_field_near_miss_blocks_a_fresh_run_until_confirmed():
 
         # TWO differing fields is a different experiment -- it must NOT warn.
         far = dict(base, prior_fingerprint="cccc", n_runs=5000)
-        d2 = tc.resolve_dir(far, root); (d2 / "shards").mkdir(parents=True)
-        torch.save({"identity": far}, d2 / "header.pt")
-        torch.save({"batches_done": 500, "complete": False, "rng": None}, d2 / "state.pt")
+        d2 = write_simulation_set(root, far, 500)
         names = {r["name"] for r in tc.near_miss_siblings(base, root)}
         assert d2.name not in names, "a two-field difference must not be reported as a near miss"
 

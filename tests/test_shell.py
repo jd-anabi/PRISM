@@ -23,7 +23,7 @@ from core.gui.run.controller import controller
 from core.gui.screens.home_screen import HomeFacts, HomeScreen, RecordRow
 from core.gui.widgets.page import Columns, PageHead, Sentence
 from core.gui.widgets.rule_table import StateCell, TextCell
-from tests._fixtures import build_part, build_run_host, build_window, qt_app
+from tests._fixtures import build_part, build_run_host, build_window, card_and_programs as _card_and_programs, qt_app
 from tests._runs import (BUDGET as _BUDGET, ROTATED as _ROTATED, ROTATING as _ROTATING, RunText, StandIn, at as _at,
                          epoch_line as _epoch, running, start_run, training_spec as _training_spec, turn_until,
                          writing as _writing)
@@ -2687,60 +2687,6 @@ def test_a_panels_column_lays_each_item_at_its_height_for_the_columns_width():
 
 class _CannotBeBuilt(Exception):
     """An error of a kind no part of the window raises: its name is looked for in what the window shows."""
-
-
-def _card_and_programs(monkeypatch) -> list:
-    """Every question put to the graphics card and every program started, from now to the test's end, each named in
-    the list handed back: a program run (by the program's name), whether there is a card, the card's free memory,
-    the memory the card holds for the program and the memory it uses, and the device check. Each of these six
-    stand-ins records its call and answers as a card with room to spare would, so that the code behind it goes on
-    as it goes on a computer with one, whatever an earlier test woke on the card. Beneath them every other public
-    function of the card's package and of its memory module, and the other ways to start a program, are recorded by
-    their names, each under the path it was called by, and passed through to the real call: a question put to the
-    card some other way is named too."""
-    import os
-    import subprocess
-    import torch
-    from torch.cuda import memory as cuda_memory
-    from core import config
-    calls = []
-    card = config.DeviceConfig(device=torch.device("cuda"), dtype=torch.float32, batch_size=2 ** 11)
-
-    def passed_through(name, real):
-        def stand_in(*args, **kwargs):
-            calls.append(name)
-            return real(*args, **kwargs)
-        return stand_in
-
-    # A function of the memory module is reachable by two paths, the package's name for it and the module's own, and
-    # a call by the second passes through no stand-in set on the first: both are recorded, each by its own path.
-    for space, prefix in ((torch.cuda, "torch.cuda"), (cuda_memory, "torch.cuda.memory")):
-        for name in dir(space):
-            value = getattr(space, name)
-            if (not name.startswith("_") and callable(value) and not isinstance(value, type)
-                    and str(getattr(value, "__module__", "")).startswith("torch.cuda")):
-                monkeypatch.setattr(space, name, passed_through(f"{prefix}.{name}", value))
-    monkeypatch.setattr(subprocess, "Popen", passed_through("subprocess.Popen", subprocess.Popen))
-    monkeypatch.setattr(os, "system", passed_through("os.system", os.system))
-
-    def recorded(words, answer):
-        def stand_in(*args, **kwargs):
-            calls.append(words(*args, **kwargs) if callable(words) else words)
-            return answer
-        return stand_in
-
-    def program(command=(), *_args, **_kwargs):
-        """The program a run was asked for, by its name: the first word of its command."""
-        words = list(command) if isinstance(command, (list, tuple)) else str(command).split()
-        return "the program " + (str(words[0]) if words else "")
-
-    monkeypatch.setattr(subprocess, "run", recorded(program, subprocess.CompletedProcess((), 1, "", "")))
-    monkeypatch.setattr(torch.cuda, "is_available", recorded("whether there is a card", True))
-    monkeypatch.setattr(torch.cuda, "mem_get_info", recorded("the card's free memory", (8 * 2 ** 30, 16 * 2 ** 30)))
-    monkeypatch.setattr(torch.cuda, "memory_reserved", recorded("the card's memory held", 0))
-    monkeypatch.setattr(torch.cuda, "memory_allocated", recorded("the card's memory in use", 0))
-    monkeypatch.setattr(config, "detect_device", recorded("the device check", card))
-    return calls
 
 
 # What the first opening of a part asks of the card or starts, by name and how often: Parameter inference's six

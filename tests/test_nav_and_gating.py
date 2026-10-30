@@ -32,19 +32,17 @@ import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
 from tests._fixtures import (build_inference, build_part, build_run_host,  # noqa: E402
-                             build_window, qt_app)
+                             build_window, forced_cfg as _forced_cfg, prior_stub, qt_app,
+                             spont_cfg as _spont_cfg)
 import contextlib                                                  # noqa: E402
+import functools                                                   # noqa: E402
 import pytest                                                      # noqa: E402
 from PySide6.QtCore import Qt as _Qt                              # noqa: E402
 
 _USER_ROLE = _Qt.UserRole
 
-def _prior_stub(id_="p1", name=""):
-    """A LoadedPrior-shaped stub: the tabs now read ``.prior``/``.force_prior`` off session.inf_prior
-    rather than carrying the physical prior and forcing prior as separate session fields, so a bare
-    ``object()`` no longer stands in wherever a dispatched call is actually reached."""
-    return type("LoadedPriorStub", (), {"prior": object(), "force_prior": object(),
-                                         "id": id_, "name": name})()
+# the stub the pages read the prior from, named "" unless a test names it: the shared one is named "retrain_prior"
+_prior_stub = functools.partial(prior_stub, name="")
 def _posterior_stub(id_="post1", name="", truncation=None, x_obs_digest=None):
     """A LoadedPosterior-shaped stub: the tabs now read ``.posterior`` (the TransformedPosterior) off
     session.posterior rather than carrying it directly, so a bare ``object()`` no longer stands in
@@ -67,51 +65,6 @@ def _chi_cfg(k=3, pad=12):
         chi_freq_bounds = config.CHI_FREQ_BOUNDS
         chi_max_cycles = config.CHI_MAX_CYCLES
         observation_mode = "chi"
-    return Cfg()
-
-
-def _forced_cfg(names=("amp", "freq", "phase", "offset")):
-    """Stub config that puts the Infer tab on its DRIVEN page, with one drive row per forcing name --
-    the four the nadrowski master bounds declare, by default (mirrors the SimConfig fields the tab
-    reads; ``force_params_dict`` values are ``(value, (lo, hi))`` as on a SimConfig). ``names=()`` is
-    the PASSIVE page: no drive rows and no forced recording."""
-    from core import config
-
-    class Cfg:
-        model = "NADROWSKI"
-        params_dict = {}
-        rescale_params = {}
-        force_params_dict = {n: (0.0, (0.0, 1.0)) for n in names}
-        has_forcing = bool(names)
-        chi_mode = False
-        chi_n_freqs = config.CHI_N_FREQS
-        chi_k_pad = config.CHI_K_PAD
-        chi_freq_bounds = config.CHI_FREQ_BOUNDS
-        chi_max_cycles = config.CHI_MAX_CYCLES
-        observation_mode = "forced" if names else "spontaneous"
-    return Cfg()
-
-
-def _spont_cfg():
-    """A stub config that survives the Prior tab's post-build path and install_config: the SimConfig
-    fields the "Config built" line, check_unit_consistency and the Infer tab's on_config_built read,
-    with chi OFF (its twin _chi_cfg puts the Infer tab on the chi page instead). A bare object()
-    stops at cfg.check_unit_consistency(), so a test that wants the Prior click to REACH its
-    dispatch needs this much."""
-    from core import config
-
-    class Cfg:
-        model = "NADROWSKI"
-        params_dict = {}
-        rescale_params = {}
-        force_params_dict = {}
-        has_forcing = False
-        chi_mode = False
-        chi_k_pad = config.CHI_K_PAD
-        observation_mode = "spontaneous"
-
-        def check_unit_consistency(self):
-            return []
     return Cfg()
 
 
@@ -1231,7 +1184,7 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
     that raises. A warning that can block a run is worse than no warning."""
     from core import orchestrator
     from core.gui.session import SbiSession
-    from tests._fixtures import PaneCapture
+    from tests._fixtures import page_lines
 
     qt_app()
     inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub()))
@@ -1282,7 +1235,7 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
         raise RuntimeError("unreadable header")
 
     monkeypatch.setattr(orchestrator, "fresh_run_near_misses", _boom)
-    pane = PaneCapture(pp)              # both pane channels, as (level, text) -- the stub's own order
+    pane = page_lines(pp)               # both pane channels, as (level, text) -- the stub's own order
     lines = pane.lines
     pp._build_posterior()
     assert sent["kwargs"]["new_run"] is False
@@ -1730,7 +1683,7 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
     from core.gui import fields as gui_fields
     from core.gui.panels.inference import posterior_tab as post_mod, prior_tab as prior_mod
     from core.gui.session import SbiSession
-    from tests._fixtures import PaneCapture, asked, forget_asked, qt_app
+    from tests._fixtures import asked, forget_asked, page_lines, qt_app
 
     qt_app()
     inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub(),
@@ -1748,7 +1701,7 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
              inf.prior_panel._save_prior, inf.session.inf_prior),
             ("posterior", post_mod, inf.posterior_panel, inf.posterior_panel.post_name,
              inf.posterior_panel._save_posterior, inf.session.posterior)):
-        pane = PaneCapture(panel)
+        pane = page_lines(panel)
         name_box.setText("p")
 
         monkeypatch.setattr(mod, "default_store", lambda: types.SimpleNamespace(rename=_taken))
@@ -1793,7 +1746,7 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
     from core.gui import fields as gui_fields
     from core.gui.session import SbiSession
     from core.refusals import Refusal
-    from tests._fixtures import PaneCapture, asked, forget_asked, qt_app
+    from tests._fixtures import asked, forget_asked, page_lines, qt_app
 
     qt_app()
     inf = build_inference()
@@ -1802,7 +1755,7 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
     inf.install_config = lambda cfg: reached.append(("installed", cfg))
     pp.dispatch = lambda fn, *a, **k: reached.append(("dispatched", fn))
     pp.bounds_picker.selected_path = lambda: "Resources/Bounds/nadrowski/master.txt"
-    pane = PaneCapture(pp)
+    pane = page_lines(pp)
 
     def _refusing(bounds_path=None, *, bounds_dicts=None):
         raise Refusal("The units are not parseable: 'furlong' is not a length unit.", field="units")
@@ -3274,7 +3227,7 @@ def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():
     from core.config import BOUNDS_PATH
     from core.gui.panels.inference.help_text import HELP
     from core.SBI.run_guards import _assert_chi_config_is_deliberate
-    from tests._fixtures import PaneCapture, qt_app
+    from tests._fixtures import page_lines, qt_app
 
     qt_app()
     screen = build_inference()
@@ -3288,7 +3241,7 @@ def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():
     assert cfgp.chi_f0.value() == config.CHI_F0
     assert cfgp.chi_range.value() == tuple(config.CHI_FREQ_BOUNDS)
 
-    cap = PaneCapture(cfgp)
+    cap = page_lines(cfgp)
     cfgp.chi_check.setChecked(True)
     cfgp.chi_f0.setText("0.05")                          # a programmatic write: the draft must ignore it
     cfgp.chi_range.lo.setText("0.1")
@@ -4524,7 +4477,7 @@ def test_apply_confirms_before_it_discards_the_session(monkeypatch):
     Anything but the destructive button leaves the session object identical.
     """
     from core.gui.session import SbiSession
-    from tests._fixtures import PaneCapture, all_asked, asked, choose, forget_asked, qt_app
+    from tests._fixtures import all_asked, asked, choose, forget_asked, page_lines, qt_app
 
     qt_app()
     inf = build_inference()
@@ -4533,7 +4486,7 @@ def test_apply_confirms_before_it_discards_the_session(monkeypatch):
     cfgp._on_model_changed("NADROWSKI")
     cfgp.units_toggle.set_direct(False)
     cfgp.chi_check.setChecked(False)
-    cap = PaneCapture(cfgp)
+    cap = page_lines(cfgp)
 
     def applied():
         return [text for _level, text in cap.lines if text.startswith("Model applied")]

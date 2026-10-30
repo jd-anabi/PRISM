@@ -157,6 +157,13 @@ class PaneCapture:
         self.lines.append((level, text))
 
 
+def page_lines(panel) -> PaneCapture:
+    """The lines a page says itself (a refusal's sentence, "Model applied", a record written), as ``(level, text)`` in
+    order in the ``lines`` of what is handed back, instead of rendering them. A page's own lines are read through this
+    one call, whatever the page is built on; a page with a log pane has them captured there, as ``PaneCapture`` does."""
+    return PaneCapture(panel)
+
+
 def _nad_cfg(**over):
     """A real NADROWSKI SimConfig off the master bounds file, CPU device."""
     from core import cli, registry
@@ -167,6 +174,82 @@ def _nad_cfg(**over):
                               str(BOUNDS_PATH / "nadrowski" / "master.txt"), **over)
     cfg.hw = config.cpu_device()
     return cfg
+
+
+def budget_cfg():
+    """Stub SimConfig carrying exactly the fields the budget lines read.
+
+    A stub, not a real build: the arithmetic under test is geometry -> elements -> GiB, and a real
+    make_sim_config drags in bounds files and a 300k-point time grid for nothing.
+    """
+    from core import config
+
+    class Cfg:
+        hw = config.detect_device()
+        t = type("T", (), {"shape": (250_000,)})()
+        inits_dict = {"x": 0.0, "xa": 0.0, "f": 0.0}
+        # training_preview reads n_vars as orchestrator._observation_inits(cfg).shape[-1], and with
+        # inits_dict set that function returns this tensor.
+        inits_tensor = torch.zeros(1, 3)
+        steady_idx = 500
+        forcing_idx = {}
+        model = "NADROWSKI"
+        chi_mode = False
+        chi_k_pad = 12
+        observation_mode = "spontaneous"
+    return Cfg()
+
+
+def prior_stub(id_="p1", name="retrain_prior"):
+    """A LoadedPrior-shaped stub: the pages read ``.prior``/``.force_prior`` off session.inf_prior rather than
+    carrying the physical prior and forcing prior as separate session fields, so a bare ``object()`` no longer stands
+    in wherever a dispatched call is actually reached. ``.id`` and ``.name`` are what a record is known by."""
+    return type("LoadedPriorStub", (), {"prior": object(), "force_prior": object(),
+                                         "id": id_, "name": name})()
+
+
+def forced_cfg(names=("amp", "freq", "phase", "offset")):
+    """Stub config that puts the Infer page on its DRIVEN page, with one drive row per forcing name -- the four the
+    nadrowski master bounds declare, by default (mirrors the SimConfig fields the page reads; ``force_params_dict``
+    values are ``(value, (lo, hi))`` as on a SimConfig). ``names=()`` is the PASSIVE page: no drive rows and no forced
+    recording. A stub, not a real build: the engine suites build real configurations of their own."""
+    from core import config
+
+    class Cfg:
+        model = "NADROWSKI"
+        params_dict = {}
+        rescale_params = {}
+        force_params_dict = {n: (0.0, (0.0, 1.0)) for n in names}
+        has_forcing = bool(names)
+        chi_mode = False
+        chi_n_freqs = config.CHI_N_FREQS
+        chi_k_pad = config.CHI_K_PAD
+        chi_freq_bounds = config.CHI_FREQ_BOUNDS
+        chi_max_cycles = config.CHI_MAX_CYCLES
+        observation_mode = "forced" if names else "spontaneous"
+    return Cfg()
+
+
+def spont_cfg():
+    """A stub config that survives the Prior page's post-build path and install_config: the SimConfig fields the
+    "Config built" line, check_unit_consistency and the Infer page's on_config_built read, with chi OFF. A bare
+    object() stops at cfg.check_unit_consistency(), so a test that wants the Prior click to REACH its dispatch needs
+    this much. A stub, not a real build: the engine suites build real configurations of their own."""
+    from core import config
+
+    class Cfg:
+        model = "NADROWSKI"
+        params_dict = {}
+        rescale_params = {}
+        force_params_dict = {}
+        has_forcing = False
+        chi_mode = False
+        chi_k_pad = config.CHI_K_PAD
+        observation_mode = "spontaneous"
+
+        def check_unit_consistency(self):
+            return []
+    return Cfg()
 
 
 def _gmm_in_box(lows, highs, mask, seed=0, weights=None):
@@ -694,10 +777,11 @@ _FIT_STOPS = {"on_purpose": (True, "cancelled"), "error": (False, "RuntimeError:
 
 
 def _fit_body(*, passes: int = 3, stopped: "str | None" = "on_purpose", posterior_name: str = "",
-              complete: bool = False, unresumable: "str | None" = None) -> dict:
+              complete: bool = False, unresumable: "str | None" = None, identity: "dict | None" = None) -> dict:
     """A kept training's manifest body at its smallest, every key of its kind present: an identity with
-    each of its parts, a progress of ``passes`` passes with finite losses, and the stop ``stopped`` names
-    ("on_purpose", "error", or None for a record whose process never wrote how it stopped)."""
+    each of its parts (the one handed in, else one whose parts are zeros), a progress of ``passes`` passes with
+    finite losses, and the stop ``stopped`` names ("on_purpose", "error", or None for a record whose process
+    never wrote how it stopped)."""
     from datetime import datetime, timezone
     if stopped is not None and stopped not in _FIT_STOPS:
         raise ValueError(f"stopped must be one of {sorted(_FIT_STOPS)} or None, not {stopped!r}")
@@ -706,8 +790,9 @@ def _fit_body(*, passes: int = 3, stopped: "str | None" = "on_purpose", posterio
     if stopped is not None:
         on_purpose, reason = _FIT_STOPS[stopped]
         stop = {"on_purpose": on_purpose, "at": at, "reason": reason}
-    identity = {"simulation": {"digest": "0" * 12}, "batches": 4, "settings": {"hidden_features": 8},
-                "code": {}, "constants": {}, "libraries": {}, "network": "0" * 16}
+    if identity is None:
+        identity = {"simulation": {"digest": "0" * 12}, "batches": 4, "settings": {"hidden_features": 8},
+                    "code": {}, "constants": {}, "libraries": {}, "network": "0" * 16}
     return {"posterior_name": posterior_name, "identity": identity, "region": None,
             "progress": {"passes": int(passes), "best_validation_loss": 1.5, "passes_since_best": 0,
                          "last_validation_loss": 1.5, "saved_at": at, "wall_seconds": 12.0,
@@ -717,21 +802,51 @@ def _fit_body(*, passes: int = 3, stopped: "str | None" = "on_purpose", posterio
 
 def build_fit_record(store, *, passes: int = 3, stopped: "str | None" = "on_purpose",
                      posterior_name: str = "", note: str = "", parents: "dict | None" = None,
-                     complete: bool = False, unresumable: "str | None" = None) -> str:
+                     complete: bool = False, unresumable: "str | None" = None,
+                     identity: "dict | None" = None) -> str:
     """A kept training's record, its manifest alone (no header and no state), written in an instant
     through ``write_fit_manifest`` into a new folder of ``store`` (``store.new_fit_dir()``).
 
     ``stopped`` is "on_purpose", "error" or None (a process that never recorded how it stopped);
     ``complete`` says its fit ended before its posterior was written; ``unresumable`` is the sentence
-    that says why it cannot be resumed. ``cfg=None``, like ``build_browse_store``'s rows: nothing here
-    reads a bounds file or trains anything.
+    that says why it cannot be resumed. ``identity`` is the identity the record keeps, a dict of every part of
+    ``fit_state.IDENTITY_PARTS`` as the training stage writes one for a configuration, so that a record can be made to
+    match a real training; with none handed it is the smallest one, whose parts are zeros and which matches no
+    configuration. ``cfg=None``, like ``build_browse_store``'s rows: nothing here reads a bounds file or trains
+    anything.
 
     :returns: the record's id.
     """
     from core.artifacts import write_fit_manifest
     body = _fit_body(passes=passes, stopped=stopped, posterior_name=posterior_name, complete=complete,
-                     unresumable=unresumable)
+                     unresumable=unresumable, identity=identity)
     return write_fit_manifest(store.new_fit_dir(), body=body, note=note, parents=parents).id
+
+
+def write_simulation_set(root, identity: dict, batches: int, *, complete: bool = False) -> Path:
+    """A simulation set's folder under ``root``, written as the engine writes what it is known by: a header holding
+    ``identity``, a state saying ``batches`` batches are done (and whether the set is ``complete``), and an empty
+    folder of shards. The folder is named as the engine names the set of that identity (``resolve_dir``), so the engine
+    finds it as it finds a set it wrote; a set of another identity is another folder. Only what the engine's listing of
+    sets and its reading of a set's progress read is written: no rows and no rotation. Returns the folder."""
+    from core.SBI import training_checkpoint
+    folder = training_checkpoint.resolve_dir(identity, root)
+    (folder / "shards").mkdir(parents=True, exist_ok=True)
+    torch.save({"identity": identity}, folder / "header.pt")
+    torch.save({"batches_done": batches, "complete": complete, "rng": None}, folder / "state.pt")
+    return folder
+
+
+def write_history(folder, **fields) -> dict:
+    """One run's history file in ``folder``, written through the window's own writer (``history.write``) with every name
+    of ``history.FIELDS`` in it: the names handed in as they are handed (``id`` is needed, and a time needs its zone),
+    the others None. A name the history does not keep is refused as the writer refuses it. Returns the record that was
+    written; its file is ``folder / f"{record['id']}.json"``."""
+    from core.gui.run import history
+    record = {name: None for name in history.FIELDS}
+    record.update(fields)
+    history.write(folder, record)
+    return record
 
 
 def compare_preflight_refusals(store) -> list:
@@ -798,6 +913,60 @@ def compare_preflight_refusals(store) -> list:
         ("slice rows that share no band", "sweeps", [low, off_band], {}, "compare_records",
          "must share a frequency band"),
     ]
+
+
+def card_and_programs(monkeypatch) -> list:
+    """Every question put to the graphics card and every program started, from now to the test's end, each named in
+    the list handed back: a program run (by the program's name), whether there is a card, the card's free memory,
+    the memory the card holds for the program and the memory it uses, and the device check. Each of these six
+    stand-ins records its call and answers as a card with room to spare would, so that the code behind it goes on
+    as it goes on a computer with one, whatever an earlier test woke on the card. Beneath them every other public
+    function of the card's package and of its memory module, and the other ways to start a program, are recorded by
+    their names, each under the path it was called by, and passed through to the real call: a question put to the
+    card some other way is named too."""
+    import os
+    import subprocess
+    import torch
+    from torch.cuda import memory as cuda_memory
+    from core import config
+    calls = []
+    card = config.DeviceConfig(device=torch.device("cuda"), dtype=torch.float32, batch_size=2 ** 11)
+
+    def passed_through(name, real):
+        def stand_in(*args, **kwargs):
+            calls.append(name)
+            return real(*args, **kwargs)
+        return stand_in
+
+    # A function of the memory module is reachable by two paths, the package's name for it and the module's own, and
+    # a call by the second passes through no stand-in set on the first: both are recorded, each by its own path.
+    for space, prefix in ((torch.cuda, "torch.cuda"), (cuda_memory, "torch.cuda.memory")):
+        for name in dir(space):
+            value = getattr(space, name)
+            if (not name.startswith("_") and callable(value) and not isinstance(value, type)
+                    and str(getattr(value, "__module__", "")).startswith("torch.cuda")):
+                monkeypatch.setattr(space, name, passed_through(f"{prefix}.{name}", value))
+    monkeypatch.setattr(subprocess, "Popen", passed_through("subprocess.Popen", subprocess.Popen))
+    monkeypatch.setattr(os, "system", passed_through("os.system", os.system))
+
+    def recorded(words, answer):
+        def stand_in(*args, **kwargs):
+            calls.append(words(*args, **kwargs) if callable(words) else words)
+            return answer
+        return stand_in
+
+    def program(command=(), *_args, **_kwargs):
+        """The program a run was asked for, by its name: the first word of its command."""
+        words = list(command) if isinstance(command, (list, tuple)) else str(command).split()
+        return "the program " + (str(words[0]) if words else "")
+
+    monkeypatch.setattr(subprocess, "run", recorded(program, subprocess.CompletedProcess((), 1, "", "")))
+    monkeypatch.setattr(torch.cuda, "is_available", recorded("whether there is a card", True))
+    monkeypatch.setattr(torch.cuda, "mem_get_info", recorded("the card's free memory", (8 * 2 ** 30, 16 * 2 ** 30)))
+    monkeypatch.setattr(torch.cuda, "memory_reserved", recorded("the card's memory held", 0))
+    monkeypatch.setattr(torch.cuda, "memory_allocated", recorded("the card's memory in use", 0))
+    monkeypatch.setattr(config, "detect_device", recorded("the device check", card))
+    return calls
 
 
 # The builders: every window, part, inference screen and bare run host a suite needs is made by one
