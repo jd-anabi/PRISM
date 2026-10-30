@@ -247,23 +247,34 @@ each group is on the page linked at its head.
 How `core/gui/` runs a stage off the GUI thread is in [The window](architecture.md#the-window).
 
 - **Keep a worker's reference until it finishes.** Otherwise Qt drops the worker's queued result and
-  `finished` signals and the panel stays busy for ever. Guard: `BasePanel.dispatch`
-  (`core.gui.panels.base_panel`), which keeps each worker in `_workers` until `finished`; never start
-  a raw `Worker` outside it.
+  `finished` signals and the run never ends. Guard: the run controller
+  (`core.gui.run.controller.RunController.dispatch`), which keeps the run's worker, with auto-delete
+  off, until the run has ended and its signals have been heard; never start a raw `Worker` outside
+  it.
 - **Never paint a figure built on a worker.** Painting one in a live canvas deadlocks on
   matplotlib's global lock, with no traceback. Guard: `base_panel._png_fig_sink`, which renders each
   figure to PNG on the worker.
 - **Force the Agg backend first.** Under Agg a stray `plt.show()` in a stage is a no-op, which is
-  what makes a stage safe to run on a worker thread. Guard: `core.gui.__main__` and `core.__main__`
-  call `matplotlib.use("Agg")` before any `core` import; do not move either line.
+  what makes a stage safe to run on a worker thread. Guard: each entry module calls
+  `matplotlib.use("Agg")` before any module that draws is imported, `core.__main__` before its first
+  `core` import and `core.gui.__main__.main` before it imports the window (`core.gui.app`); do not
+  move either line. The first place is pinned by
+  `tests/test_tool.py::test_the_tool_reads_no_environment_and_writes_no_knob`, the second by no test,
+  and `tests/test_figures.py::test_nothing_changes_the_figure_settings_but_the_windows_theme_as_it_starts`
+  holds these two calls as the only ones.
 - **One run in the whole window.** A run redirects `sys.stdout` and `sys.stderr` for the whole
-  process, so two at once would corrupt both. Guard: `BasePanel._running` is a class attribute, and
-  the `_REDIRECT` lock in `core.gui.streams` declines a second redirect with a warning
-  ([One run at a time](window.md#one-run-at-a-time)).
+  process, so two at once would corrupt both. Guard: the process has one run controller
+  (`core.gui.run.controller.controller()`), which starts nothing while a run is live, and the
+  `_REDIRECT` lock in `core.gui.streams` declines a second redirect with a warning
+  ([One run at a time](window.md#one-run-at-a-time)). Pinned by
+  `tests/test_run_states.py::test_one_run_at_a_time_in_the_whole_program`.
 - **Save a figure with `visualizers.save_figure`, never `savefig`.** matplotlib bakes artist colours
-  when a figure is built but reads the saved background when it is saved, and the window rewrites
-  matplotlib's settings on every appearance change, so a long run that straddles one saves unreadable
-  figures. Guard: `core.Helpers.visualizers.save_figure` pins the save to the figure's own colours.
+  when a figure is built but reads the saved background when it is saved, so a change of its settings
+  between the two splits one figure across two palettes; when the window rewrote them at every change
+  of appearance, a long run that straddled one saved unreadable figures. Nothing changes them during
+  a run now: the window writes its figure settings once, as the application is built, and the tool
+  writes none. Guard: `core.Helpers.visualizers.save_figure` pins the save to the figure's own
+  colours, for anything that ever changes them.
   Not yet followed: the FDT figures (`core.FDT.plots`: `plot_eff_temp_ratio`,
   `plot_spontaneous_trajectory`, `plot_psd`, `plot_chi_components`; and
   `core.FDT.cross_validation_plots.plot_fdt_3d_vs_param`) and the reduction map's
@@ -293,7 +304,7 @@ How `core/gui/` runs a stage off the GUI thread is in [The window](architecture.
   files. Guard: `ArtifactPicker.repoint`, called whenever a picker's model changes; records are
   listed by the store, not by folder.
 
-### Progress, the solver meter and cancellation
+### Progress, the solver's sign of life and stopping
 
 The design is in [The window](architecture.md#the-window); these are the rules it depends on.
 
@@ -312,23 +323,23 @@ The design is in [The window](architecture.md#the-window); these are the rules i
 - **Key rows by tqdm position, never by description.** The prior sweeps rewrite their description
   with a live counter, so a description-keyed map would mint a row per iteration. Guard:
   `StreamRouter._key`.
-- **The overall bar is the live row with the largest total above 1.** The outermost bar wraps a
-  single step, and the deepest, the segment bar, would sweep the overall bar from 0 to 100 % every
-  few seconds. When nothing reports a percentage, the caption falls back to the deepest row whose
-  total is not 1, sbi's epoch counter during training; without it the longest phase shows an
-  indeterminate bar with no caption. Guard: `core.gui.widgets.progress_pane.ProgressPane._retarget`
-  and `_paint_caption`. Pinned by
-  `tests/test_vt_progress.py::test_the_overall_bar_follows_the_largest_non_degenerate_total` and
-  `tests/test_vt_progress.py::test_the_caption_falls_back_to_the_sbi_epoch_counter`.
-- **The solver meter reads the step counter, never the bar's text.** A solver call shorter than its
-  bar's refresh interval never paints a rate, which CUDA graphs made the norm. Guard: the meter
-  differences `core.progress.SOLVER`. The solver bar is found by its description
-  (`config.SOLVER_BAR_DESC`) only to exclude it from the overall bar, whose election it would
-  otherwise win; it is never rendered as a row, since every time segment of every simulation makes
-  one; and it stays enabled, because the cancel checkpoint and the stall detector depend on its
-  writes. `vt.parse_rate` still inverts tqdm's `s/it`, though nothing acts on the rate now. Pinned by
-  `tests/test_vt_progress.py::test_the_solver_meter_reads_the_step_counter_not_a_rendered_bar` and
-  `tests/test_vt_progress.py::test_the_solver_bar_never_drives_the_overall_bar_and_is_not_the_caption`.
+- **A run is measured by the live row with the largest total above 1.** The outermost bar wraps a
+  single step, and the deepest, the segment bar, would sweep the run's count from 0 to 3 every few
+  seconds. When nothing reports a percentage, as during sbi's training, the fit is found through
+  sbi's printed epoch counter; without it the longest phase would say nothing. Guard:
+  `core.gui.run.model.driving_row` and `fit_counter`. Pinned by
+  `tests/test_vt_progress.py::test_the_row_that_drives_is_the_largest_non_degenerate_total` and
+  `tests/test_vt_progress.py::test_the_fit_is_found_through_the_training_librarys_epoch_counter`.
+- **The solver's sign of life is the step counter, never the bar's text.** A solver call shorter
+  than its bar's refresh interval never paints a rate, which CUDA graphs made the norm. Guard: the
+  run's controller hands the run's model `core.progress.SOLVER`'s count on every tick
+  (`RunModel.solver`), and a count that moved is a sign of life. The solver bar is found by its
+  description (`config.SOLVER_BAR_DESC`) only to keep it from measuring the run, which it would
+  otherwise do every time; and it stays enabled, because the stop's checkpoint and the run's silence
+  warning depend on its writes. `vt.parse_rate` still inverts tqdm's `s/it`, though nothing acts on
+  the rate now. Pinned by
+  `tests/test_vt_progress.py::test_a_moving_solver_count_is_a_sign_of_life_with_no_bar_drawn` and
+  `tests/test_vt_progress.py::test_the_solver_bar_never_drives_and_never_counts_a_run`.
 - **Reset tqdm's lock after a cancel.** tqdm's `refresh()` releases its write lock by hand, so a
   cancel raised inside a redraw leaks it and the next bar deadlocks. Guard: `redirect_streams` calls
   `streams.reset_tqdm_lock` when the token fired. Pinned by
@@ -381,20 +392,23 @@ What the window remembers, and why, is in
 - **Hand entry edits numbers, never the schema.** Parameter names and order belong to the model and
   bind by position. Guard: the grids always load from the selected file
   (`core.gui.widgets.param_grid`) and are never persisted.
-- **The control lock covers all six tabs.** A model changed on a sibling tab mid-run would repoint
-  pickers and re-seed inputs under the running worker. Guard: `BasePanel._set_busy`, over
-  `BasePanel._instances`.
-- **`core/gui/panels/inference_tabs.py` is a re-export shim.** The six tabs live in
-  `core/gui/panels/inference/`, one module per tab. Deleting the shim fails the suites, which import
-  through it, but Settings, which reads its help text by string path, skips it without a word. No
-  guard beyond those imports.
+- **The control lock covers every panel.** A model changed on a sibling step mid-run would repoint
+  pickers and re-seed inputs under the running worker. Guard: the run controller calls
+  `set_controls_enabled(False)` on every panel in `BasePanel._instances` at a run's start and frees
+  them at its end (`core.gui.run.controller.RunController.dispatch`), and a part built while a run is
+  live comes up locked (`MainWindow._wire`). Pinned by
+  `tests/test_run_states.py::test_a_part_built_during_a_run_asks_the_controller_and_comes_up_locked`.
+- **`core/gui/panels/inference_tabs.py` is a re-export shim.** The six steps' panels live in
+  `core/gui/panels/inference/`, one module per step. Deleting the shim fails the suites, which import
+  through it, but Help, which reads its help text by string path, skips it without a word. No guard
+  beyond those imports.
 - **Read a numeric box through `value_or_none()`.** `FloatField.value()` and `IntField.value()`
   (`core.gui.widgets.labeled_inputs`) read a blank or half-typed box as 0, a legal value for several
   boxes; `value_or_none()` returns None, which the tab refuses as blank. No guard: each tab must
   choose the call.
 - **Help text lives in the panel module's `HELP` dict.** Each badge takes it as `HELP[key]` through
-  `core.gui.widgets.help_badge.add_help_row`, and Settings assembles its help reference from each
-  section module's `HELP`, so text written only into a call shows as a badge and never reaches that
+  `core.gui.widgets.help_badge.add_help_row`, and Help assembles its reference from each section
+  module's `HELP`, so text written only into a call shows as a badge and never reaches that
   reference. No guard: the panels follow the convention.
 
 ### Simulate and video export
@@ -461,7 +475,8 @@ The rules themselves are in
   `MainWindow._refresh_model_combos`.
 - **The builder refuses while a run is live.** Its short integration runs on the GUI thread and would
   write into the running task's redirected streams, and the control lock does not reach a screen that
-  is not a panel. Guard: `ModelBuilderScreen._validate` and `_save` check `BasePanel._running`.
+  is not a panel. Guard: `ModelBuilderScreen._validate` and `_save` ask the run controller
+  (`controller().is_live()`), as Your own models does before it deletes a model.
 
 ### The chi probe set and its Fisher
 
@@ -726,8 +741,11 @@ The narrowing-round rules themselves are in the table above.
   the process loaded it, with the versions of torch, sbi and nflows. Any edit inside one of them, a
   comment included, a changed constant or another library refuses every resume of a training kept
   before it, naming what changed; an edit outside them changes nothing. Guard: the refusal itself,
-  made before anything is read (`fit_state.kept_fits`, the training stage's checks). Before editing
-  them, look for a kept training you mean to resume (`artifacts list fit`) and finish it first.
+  made before anything is read (`fit_state.kept_fits`, the training stage's checks), and
+  `tests/test_fit_saving.py::test_the_named_training_code_is_as_recorded`, which holds each named
+  function and class to its digest, so that an edit inside one fails the fast gate first; an edit
+  meant changes the digests there in the same commit. Before editing them, look for a kept training
+  you mean to resume (`artifacts list fit`) and finish it first.
 - **A transform pickled inside a posterior must not be torch's own inverse.** A posterior is saved
   whole, its training prior inside it, and torch's `t.inv` holds the transform it inverts in an
   attribute torch clears whenever a transform is pickled: a prior built on it comes back from disk

@@ -111,11 +111,12 @@ identity finds that cache; the flow's settings are not part of it.
 
 - `--resume auto|require|never` — what to do with this run's own cache. `auto`, the default,
   resumes it when it holds committed batches and starts it otherwise. `require` resumes it, and
-  refuses when there is none to resume, so a run you meant to continue cannot silently start again
-  from zero; the refusal names the directory it looked in and any cache one setting away. `never`
+  refuses `(--resume)` when there is none to resume, so a run you meant to continue cannot silently
+  start again from zero; the refusal names the directory it looked in, then lists each committed
+  cache one setting away, at most three, a line each, and `(--resume)` ends the last of them. `never`
   starts a new cache, and refuses `(--resume)` when this run's own cache already holds batches,
   rather than overwrite them. With checkpointing off there is no cache, so `require` and `never` are
-  refused.
+  refused `(--resume)`.
 - `--new-run` — consent to start a new cache when a committed cache exactly one setting away
   exists. Without it that case is refused before the Fisher step and before any simulation, naming
   the setting and both values `(--new-run)`: a cache one setting away is almost always the same
@@ -340,6 +341,14 @@ run goes and keeps no `log.txt`. On the way it prints:
   names;
 - on a box that declares temperature in place of the force scale, `[tier1]` lines: the force scale
   it derives over the prior and, in chi mode, the chi drive amplitude that follows from it;
+- with `--checkpoint-every 0`, among its first lines,
+  `[fit] the simulation set is not kept (checkpointing off), so this training is not saved as it goes and cannot be resumed.`;
+- while the flow fits, one record per epoch,
+  `[fit] epoch <n>: training loss <a>, validation loss <b>, took <s> s, epochs since the best <k>`
+  (`core.SBI.train.fit_epoch_line`), which the record's `log.txt` keeps; with the cache kept, each
+  follows its pass's `[fit] saved after pass <n>.`;
+- when the training's loss figure cannot be drawn or saved, a warning that says so and why; the
+  posterior is saved all the same, without that figure, and its `loss.npz` holds the curves;
 - when the cache holds shards an earlier save left uncommitted, the line that sets them aside, or,
   on a resume that could not read `state.pt`, a warning instead;
   [What to watch](retrain.md#what-to-watch) quotes both and says what each asks of you.

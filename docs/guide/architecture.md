@@ -20,8 +20,13 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 
 - `core/__main__.py`: `python -m core`. Sets `KMP_DUPLICATE_LIB_OK` and matplotlib's Agg backend
   before anything imports torch, then exits with `core.tool.main`'s return code.
-- `core/gui/__main__.py`: `python -m core.gui`. Forces the Agg backend before any `core` import, then
-  builds and shows the window.
+- `core/gui/__main__.py`: `python -m core.gui`. Imports only `os` and `sys`, and sets
+  `KMP_DUPLICATE_LIB_OK` as it is imported. Its `main` binds the standard streams to
+  `window-log.txt` beside the settings file when PRISM starts with no console or detached
+  (`PRISM_DETACHED`), switches matplotlib to the Agg backend, makes the application and claims the
+  one PRISM (`one_instance`): a second start ends there, handed over to the open one or giving up.
+  Only then does it import the window (`core.gui.app.build_app`), which loads torch and the engine,
+  and show it.
 
 ### The top of `core`
 
@@ -48,7 +53,8 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 - `forcing.py`: the drive builders (`build_nondim_force_tensor`, `build_nondim_sin_force_tensor`,
   `build_user_force_tensor`), the zero drive, the drive-channel rule (`n_force_channels`) and the
   check that raises `RuntimeError` on an inferred rescale index (`require_simulator_index`).
-- `progress.py`: `SOLVER`, the step counter the solver publishes and the window's solver meter reads.
+- `progress.py`: `SOLVER`, the step counter the solver publishes, which a run's page reads as the
+  solver's sign of life.
 
 ### `core/SBI`
 
@@ -72,6 +78,9 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 - `training_checkpoint.py`: the simulation cache on disk: its header, state and shards, the resume
   check (`verify`), the set-aside of uncommitted shards (`set_aside_uncommitted`) and the search for
   caches one setting away.
+- `fit_state.py`: a kept training on disk: its header, its two generations of state, its lock, and
+  the digests of the code, the constants and the libraries that make up its identity (`FIT_CODE`,
+  `FIT_CONSTANTS`).
 - `run_guards.py`: the checks that stop an expensive run before the spend, and the prior's
   fingerprint.
 - `prior_screen.py`: `gen_prior`, the entry to the stability screen.
@@ -136,7 +145,7 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 
 ### `core/diagnostics`
 
-- `__init__.py`: re-exports the five diagnostics and the three probe checks.
+- `__init__.py`: re-exports the five diagnostics, the three probe checks and the card test.
 - `sbc.py`: SBC repeated on one posterior: the spread of each parameter's KS p-value, optionally one
   probe count at a time (`sbc_repeats`).
 - `identifiability.py`: what a posterior kept (`identifiability_rotation`) and whether the data
@@ -148,7 +157,11 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
   probe settings on a lab's cell and change none of them.
 - `probe_math.py`: the pure helpers the probe checks share: recording geometry, default grids and
   spectrum measures.
-- `rng.py`: the old address of `core.rng.seeded`, kept as a re-export of the same object.
+- `card.py`: the card test (`card_test`): the `smoke` command's four stages, the prior, the training,
+  the calibration and a simulated inference, run end to end at tiny sizes as one step, which
+  `smoke` calls; it prints nothing of its own and tells its caller each stage's start and end.
+- `rng.py`: the old address of `core.rng.seeded`, kept as a re-export of the same object, which the
+  card test reads each time it runs.
 
 ### `core/tool`
 
@@ -169,64 +182,132 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 
 ### `core/gui`
 
-- `app.py`: builds the `QApplication` and `MainWindow`, installs the root-logger handler, and a
-  last-resort exception hook that shows an unhandled error in a dialog.
-- `main_window.py`: `MainWindow`: the navigation shell over Home, the four section screens, the
-  Artifacts screen, Settings and the model builder; saves every panel's state on close.
-- `screens/nav_shell.py`: the navigation shell: the PRISM title, the back arrow and the screen stack.
-- `screens/home_screen.py`: Home, one button per section (`SECTIONS`).
-- `screens/section_screen.py`: a section: a heading over a tab widget of its panels.
-- `screens/inference_screen.py`: Parameter Inference: six tabs over one shared `SbiSession`, and the
-  tab gates (`refresh_gates`).
-- `screens/artifact_screen.py`: the Artifacts screen, over `core.artifacts`.
-- `screens/settings_screen.py`: Settings, and the help reference assembled from each section.
+- `app.py`: builds the program: the `QApplication` and `MainWindow`, the root-logger handler, the
+  figure settings (`mpl_theme.install`), the watch on Windows' end of a session, and a last-resort
+  exception hook that shows an unhandled error in the window's question.
+- `main_window.py`: `MainWindow`: the rail and, beside it, the page of the part in sight (Home,
+  Parameter inference, Effective temperature, Live simulation, Reduction map, Records, Your own
+  models, Settings and Help), each part but Home built the first time it is opened; `go_to` moves
+  between them, and a close it accepts saves the panels' state.
+- `screens/shell.py`: the window's two regions, the rail and the stack of the parts' pages, and the
+  page a part shows in its place when it could not be built.
+- `screens/home_screen.py`: Home: the next step, where each step of parameter inference stands, what
+  each part is for, the newest records and the latest runs.
+- `screens/inference_screen.py`: Parameter inference: six steps over one shared `SbiSession`, each a
+  page of its own, and the step gates (`refresh_gates`).
+- `screens/temperature_screen.py`: Effective temperature: the row of its two pages' names, One cell
+  and Sweep study, over the page shown.
+- `screens/artifact_screen.py`: the part Records, over `core.artifacts`.
+- `screens/models_screen.py`: Your own models: the list of the user models, and the model builder.
 - `screens/model_builder_screen.py`: the user-model builder.
-- `panels/base_panel.py`: `BasePanel`: a controls column, a results area (figures, progress, log),
-  `dispatch()` onto a worker thread, the one-run-at-a-time rule and the refusal box.
-- `panels/inference_tabs.py`: the import surface of the six inference tabs; Settings reads it by
+- `screens/settings_screen.py`: Settings: the appearance.
+- `screens/help_screen.py`: Help: the reference assembled from each part's help text, and the
+  window's keys.
+- `panels/base_panel.py`: `BasePanel`: a controls column, a results column (the page's figures over
+  its own lines, or the run's page in their place), `dispatch()` to the run controller, and the
+  refusal box.
+- `panels/inference_tabs.py`: the import surface of the six inference steps' panels; Help reads it by
   string path.
-- `panels/inference/base.py`: the tabs' shared base classes and the training-budget lines.
-- `panels/inference/config_tab.py`: the Config tab: the model and its options.
-- `panels/inference/prior_tab.py`: the Prior tab, which builds the configuration and dispatches
+- `panels/inference/base.py`: the steps' shared base classes and the training-budget lines.
+- `panels/inference/config_tab.py`: step 1, Model and options: the model and its options.
+- `panels/inference/prior_tab.py`: step 2, Prior, which builds the configuration and dispatches
   `build_prior`.
-- `panels/inference/posterior_tab.py`: the Posterior tab, which dispatches `build_posterior` and asks
+- `panels/inference/posterior_tab.py`: step 3, Training, which dispatches `build_posterior` and asks
   the near-miss question first.
-- `panels/inference/validate_tab.py`: the Validate tab, which dispatches `validate_calibration`.
-- `panels/inference/infer_tab.py`: the Infer tab, which dispatches `simulated_inference` or
+- `panels/inference/validate_tab.py`: step 4, Checks, which dispatches `validate_calibration`.
+- `panels/inference/infer_tab.py`: step 5, Inference, which dispatches `simulated_inference` or
   `experimental_inference`.
-- `panels/inference/tsnpe_tab.py`: the TSNPE tab, which dispatches `tsnpe_round`.
-- `panels/inference/help_text.py`: the tabs' help text, keyed by field.
+- `panels/inference/tsnpe_tab.py`: step 6, Narrowing round, which dispatches `tsnpe_round`.
+- `panels/inference/help_text.py`: the steps' help text, keyed by field.
 - `panels/inference/rows.py`: the chi band and probe rows.
-- `panels/fdt_panel.py`: the FDT analysis tab.
-- `panels/crossval_panel.py`: the sweep-study tab.
+- `panels/fdt_panel.py`: Effective temperature's page One cell: the measurement on one cell.
+- `panels/crossval_panel.py`: Effective temperature's page Sweep study.
 - `panels/record_view.py`: reads an `fdt` record back onto its panel.
-- `panels/reduction_panel.py`: the reduction-map tab.
-- `panels/simulate_panel.py`: the live simulation's tab.
-- `panels/simulate_runner.py`: the live simulation's worker side, which streams frames to the tab.
+- `panels/reduction_panel.py`: the Reduction map's page.
+- `panels/simulate_panel.py`: the Live simulation's page.
+- `panels/simulate_runner.py`: the live simulation's worker side, which streams frames to the page.
 - `panels/simulate_export.py`: the live simulation's video export, on a worker.
-- `session.py`: `SbiSession` and `ConfigDraft`, what the six inference tabs share.
+- `run/controller.py`: the one run of the process (`controller()`): its start, its worker, the lock on
+  every panel, its two files, its stop, its tries and its end.
+- `run/model.py`: a run as the window reads it (`RunModel`): its state, sentence, stage line, time
+  axis, health and messages, read from its lines and progress rows with no window and no thread;
+  what the page knows of a run (`RunSpec`) and what the shell reads of it (`RunStatus`).
+- `run/readings.py`: the one table of the engine's lines the run's page reads, each matched on its
+  whole shape, and the window's own sentence for each warning and error it can say.
+- `run/view.py`: the run's page (`RunView`), drawn from the run's model, with its stop button.
+- `run/questions.py`: what a stop and a close ask, the question of keeping a training a stop kept,
+  and the reason Windows is given not to end the session while a run is live.
+- `run/ends.py`: how a run ended, in words, and the rail's foot in each state of a run.
+- `run/retry.py`: a failure as the run's page says it, and the window's tries after the card ran out
+  of memory.
+- `run/loss.py`: the fit's loss by epoch, drawn by the window itself from the epoch records.
+- `run/history.py`: a run's history file, `<run id>.json` in the folder `runs` beside the settings
+  file, written whole, by the window alone.
+- `run/textfile.py`: a run's dated text file, `<run id>.txt` beside it: every finished line the run
+  writes, stamped, as it is written.
+- `chain.py`: the six steps' rules, with no widget: what each holds or waits for, the step in hand,
+  and Home's next step.
+- `keys.py`: the window's places and keys as tables, with no widget: the parts in the rail's order,
+  the six steps, the pages of a part that has several, and the keys that open each.
+- `session.py`: `SbiSession` and `ConfigDraft`, what the six inference steps share.
 - `worker.py`: `Worker`, which runs a callable on the global thread pool with its output routed to Qt
-  signals.
-- `streams.py`: the routing of a run's output to the panes, `CancelToken` and `WorkerCancelled`.
+  signals and, given the run's text file, every line written there.
+- `streams.py`: the routing of a run's output to its lines, its progress rows and its text file,
+  `CancelToken` and `WorkerCancelled`.
 - `vt.py`: turns what tqdm writes into progress rows and log lines.
 - `plot_watcher.py`: shows each PNG a run saves into its record's `figures/` folder.
+- `one_instance.py`: one PRISM at a time: the lock beside the settings file, and the local server a
+  second start knocks on.
+- `this_computer.py`: every request PRISM makes of Windows for a run (staying awake, the reason not
+  to end the session, the taskbar's flash), and the watch on Windows' end of a session.
+- `texts.py`: how the window writes a date, a number and a length of time, the same whatever
+  Windows' regional setting.
+- `record_words.py`: what a record is called on screen, the same in every list, table and sentence.
+- `reported.py`: drawing code that reports its own errors (`reported`).
+- `file_chooser.py`: the one place PRISM's own code opens a file chooser (`choose_file`).
 - `fields.py`: which control answers each refusal field.
 - `settings.py`: the one `QSettings` store and its typed helpers.
-- `design.py`: the design tokens and the palette and stylesheet builders.
-- `theming.py`: the appearance modes (follow the system, light, dark, by time of day).
-- `fonts.py`: the bundled Inter font.
+- `design.py`: the look's one table of colours, type and sizes, and the palette and style sheet built
+  from it.
+- `style.py`: `PrismStyle`, Fusion with what a style sheet cannot do, and the focus ring.
+- `paint.py`: the painters of the look's small marks: the tick box, the radio dot, the markers and
+  the glyphs.
+- `theming.py`: the appearance (Follow Windows, Light, Dark), and the one place that applies it.
+- `fonts.py`: the window's lettering: Inter, a book face and a fixed-width face, made in code.
 - `icons.py`: the bundled icon font.
-- `mpl_theme.py`: matplotlib's settings, following the theme.
+- `mpl_theme.py`: matplotlib's process-wide settings for every figure the engine builds, written once
+  as the application is built: the light side of the look in either appearance, so a change of
+  appearance leaves them, and every figure saved, as they were.
 - `app_icon.py`: the application icon, loaded from its PNG set.
 - `assets/app/build_app_icon.py`: renders the icon's editable SVG source to the PNGs that ship.
 - `assets/icons/build_prism_icons.py`: generates the five-glyph icon font.
+- `widgets/rail.py`: the rail: PRISM's name, a row for each part, the six steps under their part
+  while it is open, and the run's state at its foot.
+- `widgets/page.py`: the devices every page is built from: the sentence in the book face, the
+  heading, the page with a middle that scrolls, and two columns that become one.
+- `widgets/page_names.py`: the row of a part's page names, above its page.
+- `widgets/ask.py`: the one dialog the window asks and tells through: a question, a notice, a refusal
+  or a failure.
+- `widgets/marker.py`: the state marker, as a widget and as an icon.
+- `widgets/message_row.py`: a message row: a marker and one sentence in the book face.
+- `widgets/rule_table.py`: a table with three ruled lines, and none between its rows or columns.
+- `widgets/ruled.py`: a block with a ruled line along its top or bottom edge, and the section heading
+  built on it.
+- `widgets/time_axis.py`: a run's time axis, as plain numbers, the widget that paints them and the
+  line of words under it.
+- `widgets/choice.py`: the drop-down of the look.
 - `widgets/artifact_picker.py`: the input-file picker (`ArtifactPicker`) and its store twin
   (`StorePicker`).
-- `widgets/artifact_table.py`: the Artifacts screen's table and its one row formatter.
-- `widgets/progress_pane.py`: one overall bar, one caption and the solver rate.
-- `widgets/log_pane.py`: the read-only log.
-- `widgets/figure_stack.py`: a run's figures, as tabs.
-- `widgets/figure_window.py`: a figure popped out into its own window.
+- `widgets/artifact_table.py`: Records' table and its one row formatter.
+- `widgets/log_pane.py`: a read-only pane of text lines: a page's own lines under its figures, and a
+  run's full text on its page.
+- `widgets/figure_stack.py`: a page's figures, as tabs of pictures, each with "Pop out"; while a run's
+  page holds the stack, only that run's figures are in sight, and while a run is live a figure pops
+  out as its picture.
+- `widgets/figure_window.py`: a figure popped out into a window of its own: an interactive copy,
+  unpickled on the GUI thread, with matplotlib's toolbar, whose icons follow the theme (`retheme`)
+  and whose Zoom and Pan show while they are on; or, for a figure held only as a picture, a zoomable
+  picture. An interactive window shows its picture while a run is live (`hold`).
 - `widgets/refusal_box.py`: the one "Check your inputs" box.
 - `widgets/param_grid.py`: grids for typing bounds and cell values.
 - `widgets/labeled_inputs.py`: the typed numeric fields and file pickers.
@@ -237,7 +318,6 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 - `widgets/field_row.py`: labelled fields in one row.
 - `widgets/forms.py`: the one place a form layout is built.
 - `widgets/adaptive_stack.py`: a stacked widget sized to the visible page, not the tallest.
-- `widgets/anim.py`: screen and tab transitions.
 
 ### `core/FDT`
 
@@ -260,6 +340,8 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 - `model_store.py`: saving and loading user models.
 - `visualizers.py`: shared plotting: `save_figure`, the predictive-check, overlay and loss figures,
   and `emit_figure`.
+- `plot_colours.py`: the four named colours every figure the engine draws takes a colour from; it
+  imports nothing.
 - `fdt.py`: two old torch helpers (`gen_freqs`, `force`) above a disabled block of numpy spectrum
   and lock-in helpers; nothing in `core` imports it.
 - `model_helpers.py`: rescaling helpers; nothing in `core` imports it.
@@ -297,7 +379,7 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
   façade. The same re-export pattern holds in `core/config.py` (its re-export of `SimConfig`), in
   `inference_tabs.py`, at the end of `core/orchestrator.py` (the bench-recording builders, which the
   suites patch there) and in `core/diagnostics/rng.py`. Deleting one of those fails loudly too, with
-  one exception: Settings reads `core/gui/panels/inference_tabs.py`'s `HELP` by string path and skips
+  one exception: Help reads `core/gui/panels/inference_tabs.py`'s `HELP` by string path and skips
   it when it is absent.
 - **Reduction is not used by inference.** Only the Reduction Map panel imports `core.Reduction`.
 
@@ -642,62 +724,98 @@ This section is how `core/tool/` is put together.
 The screens and their controls are on [The window](window.md). This section is how `core/gui/` runs a
 stage without freezing, shows its output and stops it.
 
-- **Screens and panels.** `MainWindow` is a navigation shell over Home, the four section screens, the
-  Artifacts screen, Settings and the model builder ([Screens](window.md#screens)). Every tab is a
-  `BasePanel`: a controls column, a results area (a figure stack over a log pane, with the progress
-  pane and its Cancel button beneath them), and `dispatch()`, which runs a callable on a worker
-  thread with its output wired to those panes. The six inference tabs share one `SbiSession`, owned
-  by `InferenceScreen`, which greys the tabs through `refresh_gates`. `BasePanel._running` is
-  class-level, so one run is live in the whole window
+- **Parts and panels.** `MainWindow` is the rail down the window's left edge beside the page of the
+  part in sight (`screens/shell.py`); every part but Home is built the first time it is opened. The
+  six steps of parameter inference share one `SbiSession`, owned by `InferenceScreen`, which greys
+  the steps through `refresh_gates`. Every page that runs something is a `BasePanel`: a controls
+  column, a results column that holds the page's figures over its own lines and, while a run of the
+  page shows, the run's page in their place (`core.gui.run.view.RunView`), and `dispatch()`, which
+  hands the call to the process's one run controller (`core.gui.run.controller.controller()`). The
+  controller starts nothing while a run is live, so one run is live in the whole window
   ([One run at a time](window.md#one-run-at-a-time)); the `_REDIRECT` lock in `streams` is the
   backstop.
+- **The run controller** (`core/gui/run/controller.py`) runs a call on a worker, locks the controls of
+  every panel in `BasePanel._instances` at the start and frees them at the end, feeds the run's model
+  (`run/model.py`, which reads the run's state, stage, health and messages from its lines and
+  progress rows, with no window and no thread) and draws the run's page from it. For every run that
+  keeps files it writes two, named by the run's id, in the folder `runs` beside the settings file:
+  the dated text file of every line the run writes (`run/textfile.py`) and the history file
+  (`run/history.py`), which Home and the rail's foot read, in a later launch too. A run that only
+  loads a record keeps no file and has no page of its own.
+  - While a run is live the computer is kept awake and Windows is given the reason not to end the
+    session (`core/gui/this_computer.py`); the window's taskbar button flashes when the run comes to
+    need someone, and at an end that waits to be seen.
+  - The stop button asks first what the stop keeps, unless the stop loses nothing (`run/questions.py`;
+    a training's button reads "Stop training…"). A stop asked for is taken at the run's next point
+    where a stop is taken, and can be withdrawn until then; a training saving its posterior is not
+    stopped. Once a training's stop has landed, its page asks "Keep this training so you can resume it
+    later?".
+  - The window never closes under a live run (`MainWindow.closeEvent`): the close asks, and "Stop the
+    run and close" stops the run, then closes the window and every figure window once the run has
+    stopped; a run that fails instead leaves the window open.
+  - A failure is a state of the run's page, never a box (`run/retry.py`). After the card ran out of
+    memory, a training or a narrowing round is tried again, three times in a row at most, after pauses
+    of one, three and ten minutes, continuing its simulation set or resuming its kept training. The
+    page of a training that failed or was stopped offers "Continue from batch N" or "Resume the
+    training".
+  - When Windows asks to end the session, a close asks nothing and, with a run live, Windows is told
+    that PRISM blocks the end. "Shut down anyway" stops the run as a person's stop would, its history
+    saying that Windows shut down, and the window waits for the run's end
+    (`MainWindow.session_asked`, `session_ending`).
 - **Worker threads.** `Worker` is a `QRunnable` on the global thread pool.
-  - `BasePanel` keeps each worker in `_workers`, with auto-delete off, until the worker reports
-    `finished`; otherwise Qt deletes the signal sender as soon as `run()` returns and drops the
-    result still queued. On `finished` it clears the worker's callable and arguments, which would
-    otherwise pin the configuration, the prior and the posterior for the life of the process.
+  - The run controller keeps the run's worker, with auto-delete off, until the run has ended and its
+    signals have been heard; otherwise Qt deletes the signal sender as soon as `run()` returns and
+    drops the result still queued. At the run's end it lets go of the run's call and its arguments,
+    which would otherwise pin the configuration, the prior and the posterior for the life of the
+    process, unless the page offers to continue or resume that run.
   - A figure is rendered to PNG on the worker (`base_panel._png_fig_sink`), and pickled for the
     pop-out window; the GUI thread shows the image and never paints a figure built on the worker,
     which deadlocks on matplotlib's global lock. A run that saves its figures to disk instead is shown
     through `plot_watcher`, which watches the folder the run writes its figures into: an `fdt`
     record's `figures/`, or the Reduction map's own folder.
-  - `core.gui.__main__` forces matplotlib's Agg backend before any `core` import, so a stray
-    `plt.show()` in a stage is a no-op on a worker thread.
+  - `core.gui.__main__.main` switches matplotlib to its Agg backend before it imports the window, and
+    so before any module that draws, so a stray `plt.show()` in a stage is a no-op on a worker thread.
 - **Stream routing.** `streams.redirect_streams` swaps `sys.stdout` and `sys.stderr` for two
-  `_SignalStream`s, puts `_PumpLogHandler` on the `core` logger, and routes Python warnings to the log
-  pane. Each stream feeds a `vt.StreamRouter`, which classifies each atomic chunk tqdm writes rather
-  than scanning for line ends: a paint sits at row n exactly when the next chunk is an up-move of n.
-  A daemon `_Pump` publishes to Qt at 15 Hz; that pump is load-bearing, because tqdm redraws without
-  any time gate on every `set_description` and `reset`. `_SignalStream` must never gain a `fileno()`
-  or an `encoding` attribute: tqdm probes for both, and finding them changes the frames `vt` parses.
-- **Progress.** The progress pane shows one overall bar, which follows the live row with the largest
-  total above 1, and one caption, which falls back to the deepest row whose total is not 1 when nothing
-  reports a percentage, as during sbi's training, whose only output is a printed epoch counter.
-  - The solver meter reads `core.progress.SOLVER`, the step count the solver publishes, differenced
-    on the pane's 100 ms tick, and never the solver bar's text: a solver call shorter than the bar's
-    refresh interval never paints a rate, which is what CUDA graphs made happen.
-  - The solver bar is found by its description (`config.SOLVER_BAR_DESC`) only to exclude it from
-    the overall bar. It stays enabled, unlike the segment bar `config.QUIET_SEGMENT_BAR` silences,
-    because the cooperative cancel and the stall detector both depend on its writes.
-- **Cancellation** is cooperative, through a `streams.CancelToken`.
+  `_SignalStream`s, puts `_PumpLogHandler` on the `core` logger, and routes Python warnings to the
+  run's lines; each finished line also goes, as it is written, to the run's text file. Each stream
+  feeds a `vt.StreamRouter`, which classifies each atomic chunk tqdm writes rather than scanning for
+  line ends: a paint sits at row n exactly when the next chunk is an up-move of n. A daemon `_Pump`
+  publishes to Qt at 15 Hz; that pump is load-bearing, because tqdm redraws without any time gate on
+  every `set_description` and `reset`. `_SignalStream` must never gain a `fileno()` or an `encoding`
+  attribute: tqdm probes for both, and finding them changes the frames `vt` parses.
+- **What the run's page reads.** A run is measured by the live row with the largest total above 1,
+  the solver's own row left out (`run.model.driving_row`). When nothing reports a percentage, as
+  during sbi's training, whose only output is a printed epoch counter, the model finds the fit
+  through that counter (`run.model.fit_counter`) and through the training stage's record of each
+  epoch (`run/readings.py` reads every engine line it knows by its whole shape).
+  - The solver's sign of life is `core.progress.SOLVER`, the step count the solver publishes, read on
+    the controller's one-second tick, and never the solver bar's text: a solver call shorter than the
+    bar's refresh interval never paints a rate, which is what CUDA graphs made happen.
+  - The solver bar is found by its description (`config.SOLVER_BAR_DESC`) only to keep it from
+    measuring the run. It stays enabled, unlike the segment bar `config.QUIET_SEGMENT_BAR` silences,
+    because the cooperative stop and the run's silence warning both depend on its writes.
+- **Stopping** is cooperative, through a `streams.CancelToken`.
   - Its checkpoints are `_SignalStream.write` and `_PumpLogHandler.emit`: every print, tqdm redraw
-    and `core` record of the run passes through one of them, sbi's per-epoch print included.
+    and `core` record of the run passes through one of them, sbi's per-epoch print and the training
+    stage's record of each epoch included.
   - The raise is `WorkerCancelled`, which derives from `BaseException`, so it passes every
     `except Exception` in the pipeline and in sbi; `Worker.run` catches it by name.
   - Latency is about a second almost everywhere, and longer only where a run writes nothing for a
     while: up to one training epoch while the flow trains, and the calibration's C2ST block.
     `pipeline._cancellable_wait` sleeps in one-second slices and logs every five, so a waiting retry
     is cancellable too.
-  - tqdm's `refresh()` releases its write lock by hand, so a cancel raised inside a redraw leaks the
+  - A stop asked for can be withdrawn until it is taken (`CancelToken.withdraw`): the token reads the
+    request again under its lock before it raises, so a withdraw and a raise are one decision.
+  - tqdm's `refresh()` releases its write lock by hand, so a stop raised inside a redraw leaks the
     lock and the next bar would deadlock; `redirect_streams` calls `reset_tqdm_lock` when the token
     fired.
   - The token raises only on its owner thread: tqdm's monitor thread also writes to the stream, and
-    consuming the token there would lose the cancel.
-  - A cancel is deferred, never discarded, inside a `runs.cancel_deferred()` section and while the
+    consuming the token there would lose the stop.
+  - A stop is deferred, never discarded, inside a `runs.cancel_deferred()` section and while the
     thread is handling an exception (`runs.cancel_is_deferred`), so it can neither split a checkpoint
     commit nor replace a crash that is still unwinding.
-  - A hard cancel, running each job in its own process so it can be killed at once, was considered
-    and declined in favour of the cooperative one.
+  - A hard stop, running each job in its own process so it can be killed at once, was considered and
+    declined in favour of the cooperative one.
 - **Settings persistence.** `core/gui/settings.py` is the one `QSettings` store and its typed helpers,
   which survive the store's string round-trip; `use_ini_file` points it at a test's file. The restore
   order for a picker lives in one place, `ArtifactPicker.repoint`: point at the folder, rescan, then

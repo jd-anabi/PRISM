@@ -474,18 +474,20 @@ $LASTEXITCODE
   fit is part of the key).
 - **The two refusals** ([Training-cache flags](command-line.md#training-cache-flags)):
   - with `--resume require` and no committed batch in this run's own cache,
-    `prism train: refused: resume='require' but there is no resumable cache at <dir>.`, followed by
-    any committed cache one setting away. Either the first process committed nothing (above), or the
+    `prism train: refused: resume='require' but there is no resumable cache at <dir>. (--resume)`;
+    when a committed cache one setting away exists, the sentence is followed by
+    `A committed cache ONE setting away exists:` and a line for each such cache, at most three, the
+    last ending `(--resume)`. Either the first process committed nothing (above), or the
     command differs from the first run's in the setting a listed cache names, or neither state file
     of the cache can be read. In that last case do not re-run the first command, which would start
     over from zero: stop for the owner. A listed cache that differs in `prior_fingerprint`, on the
     new-prior route, is the earlier attempt's: never set the prior back to reach it;
   - without `require`, a run one setting away from a committed cache is refused before the Fisher
     step: `This run would start a NEW simulation cache at <dir> from zero, but a committed cache ONE setting away exists:`,
-    a line naming the setting and both values, and a line ending `(--new-run)`. Set the setting back
-    to continue that cache, unless it is the earlier attempt's. `--new-run` is right only when that
-    one setting was changed on purpose and a new run from zero is what you want; it never forces a
-    fresh start over this run's own cache.
+    a line for each such cache, at most three, naming the setting and both values, and a line ending
+    `(--new-run)`. Set the setting back to continue that cache, unless it is the earlier attempt's.
+    `--new-run` is right only when that one setting was changed on purpose and a new run from zero is
+    what you want; it never forces a fresh start over this run's own cache.
 
   A resume refused because the cache holds two shards that overlap names both: move the one that
   does not fit the committed run, with its `th_` twin, into the cache's `uncommitted` folder, as the

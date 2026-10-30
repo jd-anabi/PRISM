@@ -1,6 +1,6 @@
 # Getting started
 
-Checked against commit 30ff8a3.
+Checked against commit e17f1ec.
 
 This page takes you from a fresh installation to a first run in each front end, and shows where
 PRISM keeps what it reads and what it writes.
@@ -24,11 +24,16 @@ PRISM's dependencies installed.
   run, a record another thread logs during one, the toolkit's own messages, an error nothing else
   caught and a crash of the interpreter go to `window-log.txt` beside the settings file, after a dated
   line for each launch; a run's full text is on the run's page and in the dated file it opens, in the
-  `runs` folder there. A start that fails before its window is shown writes why to that file and, on
-  Windows only, says so in a plain Windows message that names it, and a second start from `run.bat`
-  or its shortcut that the open PRISM does not answer says so in one too. On macOS and Linux no
-  message is shown: `run.sh` prints where to look as it starts. A direct launch keeps its console and
-  writes there instead.
+  `runs` folder there. A block in that file that opens `Windows fatal exception:` and lists the
+  threads' Python stacks, followed by more of the same launch's lines, is not a crash: Python's fault
+  handler, which PRISM points at that file to keep a crash of the interpreter, writes such a block
+  for an exception Windows reports to the process even when the code that raised it handles it, and
+  PRISM went on. After a real crash nothing of that launch follows the block; the next line, if any,
+  is the next launch's dated one. A start that fails before its window is shown writes why to that
+  file and, on Windows only, says so in a plain Windows message that names it, and a second start from
+  `run.bat` or its shortcut that the open PRISM does not answer says so in one too. On macOS and
+  Linux no message is shown: `run.sh` prints where to look as it starts. A direct launch keeps its
+  console and writes there instead.
 - **Which Python `run.bat` uses.** The active environment's `pythonw.exe`, when it is started from a
   prompt whose active environment holds PySide6 and torch (a prompt left in conda's `base`
   environment holds neither); else `envs\biophys-env\pythonw.exe` under `anaconda3` or `miniconda3`
@@ -60,7 +65,7 @@ PRISM keeps its inputs apart from the records its runs generate.
   what order and over what box), `Cells/` (one cell's initial conditions and parameter values),
   `Units/` (the unit system a model's files are written in) and `Models/` (the definitions of
   user-defined models). Bounds, cell and units files are edited by hand. The window's model builder,
-  reached from Settings, writes a user model's definition into `Models/`, and a first bounds file,
+  under Your own models, writes a user model's definition into `Models/`, and a first bounds file,
   cell file and units file for that model into the other three folders
   (`core.Helpers.model_store.save_user_model`). [Bringing recordings](recordings.md#input-files)
   describes each format.
@@ -101,33 +106,39 @@ export PRISM_ARTIFACTS="$HOME/prism-scratch"
 
 ## A first run in the window
 
-The window opens on Home. The inference chain lives in Parameter Inference, whose tabs are used in
-order ([Screens](window.md#screens) lists every section and tab, and
-[The Parameter Inference tabs](window.md#the-parameter-inference-tabs) says when each tab is
-enabled).
+The window opens on Home, which says what to do next. The inference chain is the six steps of
+Parameter inference, which the rail lists under that part while it is open; each step is a page of
+its own, Alt+1 to Alt+6 open them from anywhere, and they are used in order.
+[The window](window.md), which describes the window as it was before its layout was redesigned, names
+the steps by their old tab names, Config, Prior, Posterior, Validate, Infer and TSNPE, and
+[The Parameter Inference tabs](window.md#the-parameter-inference-tabs) says when each is enabled.
 
-1. **Config.** Choose the model and its options (tick "Multi-frequency χ(ω) conditioning" for chi
-   mode), then press **Apply model & options**.
+1. **Model and options.** Choose the model and its options (tick "Multi-frequency χ(ω)
+   conditioning" for chi mode), then press **Apply model & options**.
 2. **Prior.** Choose a bounds file, leave the Prior picker on its "(from scratch)" entry and press
    **Build / Load prior**, which runs the stability sweep and fits the prior. Picking a saved prior
    instead loads it.
-3. **Posterior.** Leave the Posterior picker on its "(from scratch)" entry, set the Training budget,
+3. **Training.** Leave the Posterior picker on its "(from scratch)" entry, set the Training budget,
    and press **Train / Load posterior**.
-4. **Validate.** Press **Run calibration** to calibrate the posterior on data simulated from its own
+4. **Checks.** Press **Run calibration** to calibrate the posterior on data simulated from its own
    prior.
-5. **Infer.** Choose "Simulated (cell ground truth)" and a cell, or "Experimental data" and your
+5. **Inference.** Choose "Simulated (cell ground truth)" and a cell, or "Experimental data" and your
    recordings, set the recording length T_obs, and press **Run inference**.
-6. **TSNPE**, when you want it: **Run TSNPE round** trains a narrowed posterior around a recorded
-   observation (the Infer tab records one each time it runs).
+6. **Narrowing round**, when you want it: **Run TSNPE round** trains a narrowed posterior around a
+   recorded observation (step 5 records one each time it runs).
 
-Each stage writes its record when it completes. The Save button beside a name box on the Prior and
-Posterior tabs names the record just made; saving is a rename, and nothing is simulated again.
+While a step's run goes, the run's own page stands in place of the step's results: where the run
+stands, its messages and the figures it made, and a stop button that asks before it stops anything
+that would be lost. The foot of the rail says what is running from any part, and pressing it goes to
+the run. Each stage writes its record when it completes. The Save button beside a name box on the
+Prior and Training steps names the record just made; saving is a rename, and nothing is simulated
+again.
 
-A small training budget (a few batches in the Posterior tab's Batches box) gives a posterior that
+A small training budget (a few batches in the Training step's Batches box) gives a posterior that
 shows the chain working and nothing more: at that size neither the posterior nor its calibration
 means anything. The default budget is a full-size training run. In chi mode, give a simulated cell a
 T_obs of a few seconds rather than the 1 s default, for the reason given for `--t-obs` below.
-[The window](window.md) covers every screen and setting, and
+[The window](window.md) covers every setting, and
 [The inference settings](window.md#the-inference-settings) says what each setting really changes.
 
 ## A first run on the command line
@@ -177,22 +188,22 @@ named in the singular; eight have a plural directory, and `fdt` keeps its own na
 
 | kind | directory under the root | written by the tool | written by the window |
 |---|---|---|---|
-| `prior` | `priors/` | `prior` | the Prior tab |
-| `simulation` | `simulations/` | `train`, `tsnpe` | the Posterior and TSNPE tabs |
-| `posterior` | `posteriors/` | `train`, `tsnpe` | the Posterior and TSNPE tabs |
-| `observation` | `observations/` | `infer` | the Infer tab |
-| `calibration` | `calibrations/` | `validate` | the Validate tab |
-| `inference` | `inferences/` | `infer` | the Infer tab |
+| `prior` | `priors/` | `prior` | step 2, Prior |
+| `simulation` | `simulations/` | `train`, `tsnpe` | steps 3 and 6, Training and Narrowing round |
+| `posterior` | `posteriors/` | `train`, `tsnpe` | steps 3 and 6, Training and Narrowing round |
+| `observation` | `observations/` | `infer` | step 5, Inference |
+| `calibration` | `calibrations/` | `validate` | step 4, Checks |
+| `inference` | `inferences/` | `infer` | step 5, Inference |
 | `diagnostic` | `diagnostics/` | `sbc`, `identifiability`, `ablation`, `probes` | none |
-| `fdt` | `fdt/` | `fdt`, `crossval`, `compare` | the FDT Analysis screen |
-| `fit` | `fits/` | `train`, `tsnpe` | the Posterior and TSNPE tabs |
+| `fdt` | `fdt/` | `fdt`, `crossval`, `compare` | Effective temperature |
+| `fit` | `fits/` | `train`, `tsnpe` | steps 3 and 6, Training and Narrowing round |
 
 `smoke` writes the first six kinds into its own root; it writes a simulation cache only with
 `--checkpoint`. A few things are saved outside the kinds, with no manifest:
 
-- the Reduction Map writes plain files into `reduction/` under the records root
+- the Reduction map writes plain files into `reduction/` under the records root
   (`core.config.artifacts_root()`);
-- Simulate's video, a figure window's **Save As…**, the Artifacts screen's **Save…** and **Lineage
+- Live simulation's **Save video…**, a figure window's **Save As…**, Records' **Save…** and **Lineage
   report…**, and `artifacts summary --out` each write where you choose;
 - the model builder writes into the inputs root, as described under
   [Inputs and records](#inputs-and-records).
@@ -207,14 +218,17 @@ named in the singular; eight have a plural directory, and `fdt` keeps its own na
 - its payload files, such as `prior.pt`, `posterior.pt`, `results.json` or `data.h5`, and a
   `figures/` folder of its figures.
 
-A record is written when its run completes. A run that fails or is cancelled leaves no record, with
-two exceptions:
+A record is written when its run completes. A run that fails or is stopped leaves no record, with
+three exceptions:
 
 - **The simulation cache** holds a training run's simulated rows. Its directory is named by a
   12-character digest of the run's identity, it is committed batch by batch, and a training run with
   the same identity resumes from it. It has no `log.txt`: it has no writer of its own.
+- **A kept training** (`fit`) is a training saved after every pass while its rows are in a kept
+  simulation set; one that stops or fails partway stays kept at its last saved pass, to be resumed,
+  and it is removed once its posterior is written.
 - **An `fdt` record is progressive**: its directory and a first manifest exist from the moment the
-  run starts and are rewritten as it goes, so a cancel or a crash keeps the folder, marked unfinished.
+  run starts and are rewritten as it goes, so a stop or a crash keeps the folder, marked unfinished.
 
 **Names and ids.**
 
@@ -239,10 +253,11 @@ the recorded settings it leaves unchecked. The load path has exactly two escape 
 of `core.artifacts.Accept`, and neither lets a mismatch through:
 
 - `truncated`: load a posterior that a narrowing round (TSNPE) trained, which is valid only near the
-  observation its region was drawn around (`--accept-truncated`; in the window, a confirmation on the
-  Posterior tab);
+  observation its region was drawn around (`--accept-truncated`; in the window, a confirmation at
+  step 3, Training);
 - `other_observation`: run such a posterior on an observation other than its region's
-  (`--accept-other-observation`; in the window, "Run on a different observation" on the Infer tab).
+  (`--accept-other-observation`; in the window, "Run on a different observation" at step 5,
+  Inference).
 
 Each use is recorded downstream: an inference, a calibration and every diagnostic that loads a
 posterior record the acceptances they ran under, and a narrowing round records the ones its parent
@@ -250,7 +265,7 @@ was loaded under.
 
 ## Browsing the store
 
-**In the window**, the Artifacts screen (Home's fifth section) reads the store:
+**In the window**, the part Records (Ctrl+6), whose page is headed Artifacts, reads the store:
 
 - choose a kind, and a table lists its records;
 - select a record, and the detail pane shows its manifest and its run's log; **Save…** writes what is

@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit ae1b21c.
+Checked against commit e17f1ec.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green
@@ -16,8 +16,10 @@ suite does not certify, and notes for writing tests. What each flag means is on
   `python` on this page means `biophys-env`'s; the card's command lines below call it `$py`.
 - sbi 0.26.1 is installed, as `requirements.txt` pins it, with its two new dependencies, skorch and
   tabulate (since 1 October 2026; sbi 0.25.0 before). A later upgrade must check again that sbi's
-  per-epoch print still fires: the window's cooperative cancel hooks into it, and without it a Cancel
-  pressed while the flow trains waits for the whole fit instead of one epoch
+  trainer still summarises each pass and still prints its epoch counter: the training stage wraps that
+  summary to save the fit and to say each epoch in one record (`core.SBI.train`), and a stop asked for
+  in the window while the flow trains is taken at the next line the run writes, the epoch's record or
+  sbi's counter; with neither, the stop waits for the whole fit instead of one epoch
   ([The window](architecture.md#the-window)). It must also keep `tests/test_fit_saving.py` green:
   saving a training as it goes and resuming it read and write sbi's private trainer attributes (the
   per-pass summary, the network builder, the counters, the best weights and the histories), and that
@@ -36,9 +38,10 @@ is who sets which, for a check.
 
 - `KMP_DUPLICATE_LIB_OK=TRUE` is needed by anything that imports torch
   ([Launching PRISM](getting-started.md#launching-prism) says why). The root `conftest.py` defaults
-  it for pytest, the tool's entry (`core.__main__`) sets it before torch is imported, and `run.bat`
-  and `run.sh` set it for the window. A bare `python -c` or a script sets neither this nor the next
-  one: set them yourself there.
+  it for pytest; both entry modules set it before torch is imported, the tool's (`core.__main__`) and
+  the window's (`core.gui.__main__`, as it is imported); and `run.bat` and `run.sh` set it for the
+  window too. A bare `python -c` or a script sets neither this nor the next one: set them yourself
+  there.
 - `QT_QPA_PLATFORM=offscreen` is for headless checks that import PySide6, and only those. The root
   `conftest.py` defaults it; the launchers do not set it, because the window needs a real platform
   plugin.
@@ -63,10 +66,27 @@ and the session guards).
 - **The fast gate** is `python -m pytest -m "not slow" -q`, run as one process, with a target of 16
   minutes. One process, because the session installs its temporary records root once: only a single
   process can catch code that swaps the default store and never puts it back, and a gate split
-  across processes hides it.
+  across processes hides it. Its time of record is taken in one process on a quiet machine, nothing
+  else running: at commit e17f1ec, on 29 October 2026, 2010 passed, 9 skipped (the display-marked
+  tests) and 5 deselected (the slow set) in 27 min 16 s, the card present, so the gpu-marked tests
+  ran on it. `--durations=15` named its slowest, all in `tests/test_user_sbi.py` but the last:
+  `test_train_and_validate_without_a_loaded_cell` (182 s),
+  `test_calibration_theta_star_lies_inside_the_region_when_one_is_given` (80 s),
+  `test_no_forcing_user_model_full_sbi_pipeline` (46 s),
+  `test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch` (46 s),
+  `test_chi_fisher_rotation_builds_over_the_chi_feature_set` (45 s) and
+  `tests/test_tool.py::test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud` (44 s).
 - **The full run** is `python -m pytest`; budget about an hour and a half, and log it to a file.
   `python -m pytest -m slow --collect-only -q` lists the slow set, the real simulations the fast gate
   leaves out.
+- **The slow set**, `python -m pytest -m slow`, is five tests:
+  `tests/test_user_sbi.py::test_chi_mode_full_sbi_pipeline`, in `tests/test_tool.py`
+  `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` and `test_fdt_and_crossval_run_at_tiny_size`,
+  `tests/test_tier1.py::test_smoke_runs_every_stage_on_the_tier1_box` and
+  `tests/test_diagnostics.py::test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin`.
+  At commit e17f1ec it ran in 1 h 0 min 49 s: the chi pipeline 1528 s, the tier-1 `smoke` 1142 s,
+  the Nadrowski sanity path 612 s, the FDT and crossval run at tiny size 349 s and the probes'
+  twin-cell check 7 s.
 - **The markers**, registered in `pytest.ini` and turned into skips by the root `conftest.py`:
   - `slow`: left out of the fast gate;
   - `gpu`: needs CUDA, and is skipped when `torch.cuda.is_available()` is false; with a card
@@ -74,7 +94,10 @@ and the session guards).
   - `display`: needs a real screen, and is skipped offscreen. In PowerShell,
     `$env:QT_QPA_PLATFORM = "windows"; python -m pytest -m display; Remove-Item Env:QT_QPA_PLATFORM`
     runs these on the real screen, since the root `conftest.py` only defaults the variable; they
-    create hidden native windows, and nothing shows.
+    create hidden native windows, and nothing shows. There are nine at commit e17f1ec. Four of them
+    make for real the requests a run makes of Windows, each on a window never shown, and release each:
+    keeping the computer awake, the reason against ending the session, the taskbar's flash, and the
+    answer to Windows' question whether the session may end.
 - **Counting.** `python -m pytest --collect-only -q` counts the tests. Count them; never trust a
   number written down.
 - **One pytest process at a time.** Two would share the card and the test model the fixtures install
@@ -83,18 +106,60 @@ and the session guards).
 - **Never edit a source file while a suite runs.** Several tests read source with
   `inspect.getsource`, which reads the file as it is now with the line numbers the function was loaded
   with, so an edit mid-run produces a failure that is not real.
-- **The session guards**, autouse fixtures in `tests/conftest.py`:
+- **The session guards**, autouse fixtures in `tests/conftest.py` that stand for the whole process:
   - `_sandbox_default_store`: a temporary records root for the whole session, and a check at teardown
     that the real `Artifacts/` gained nothing;
   - `_checkpointing_off_unless_asked`: training keeps no simulation cache, so a complete cache left by
     one test cannot skip another's generation; a test that wants a cache passes `checkpoint_every` to
     `build_posterior`;
-  - `_settings_home`, with `_isolated_settings` for each test: a temporary settings file, so no panel
-    reads the real `PRISM.ini` and no test writes it, checked at teardown;
-  - `_no_modal_dialogs`: a message box records itself and returns at once, because offscreen a modal
-    dialog nobody expected stalls the run instead of failing it;
+  - `_settings_home`: a temporary settings file for the session, so no panel reads the real
+    `PRISM.ini` and no test writes it; at teardown the real file must be unchanged and its folder must
+    hold exactly what it held (`tests/_settings_folder.py`), so a PRISM opened while a suite runs
+    fails the run with its `PRISM.lock`;
+  - `_no_modal_dialogs`: a message box or the window's shared question records itself
+    (`tests/_dialogs.py`) and returns at once with no answer, which the questions read as their safe
+    answer, because offscreen a modal dialog nobody expected stalls the run instead of failing it; a test
+    that wants an answer gives one with `tests/_dialogs.choose`;
+  - `_no_file_choosers`: the two file choosers the window calls, to save and to open, record the call
+    and answer "cancelled" unless the test answered them (`answer_chooser`), for the same reason;
+  - `_no_native_boxes`: the plain Windows message the entry module shows when PRISM cannot start
+    (`core.gui.__main__._native_box`) keeps its words and shows nothing, on the real screen as much as
+    off it, since it waits for a person's OK;
   - `_no_sbi_logs`: `<repo>/sbi-logs` must not exist, checked at setup as well as teardown, so a
     leftover tree makes every run error before its first test.
+- **The module check**, `_no_panel_outlives_its_module`: once a module's tests and fixtures have all
+  ended, the set of panels every run locks (`BasePanel._instances`) holds no panel it did not hold
+  when the module began. A panel left there would be locked and freed by every later module's runs,
+  and refreshed at their end through whatever records that module has in use.
+- **The per-test fixtures**, autouse for every test. Three set a test up or put something back:
+  - `_isolated_settings`: a fresh settings file for each test, then the session's again;
+  - `_clear_shown`: the record of dialogs holds this test's alone;
+  - `_layout_room_put_back`: the room the screen offers the window, which the look's two layout
+    thresholds are held to, is put back to none after each test.
+
+  The others fail a test at its teardown:
+  - `_every_file_chooser_is_answered`: a file chooser the test opened and did not answer;
+  - `_every_native_box_is_read`: a plain Windows message the test did not read
+    (`tests/_dialogs.native_boxes()`), a start that failed where none was expected;
+  - `_streams_put_back`: the standard streams left bound to a window's log, as the entry module binds
+    them when PRISM starts with no console; they are put back first;
+  - `_drawing_code_raises_nothing`: an error the window's own drawing code caught and recorded while
+    the test ran (`core.gui.reported`); a test that causes one on purpose does it inside
+    `reported.expected()`;
+  - `_built_widgets_let_go`: a run still live at the test's end, which is asked to stop and waited
+    for; then every window, part, inference screen and bare run host the builders of
+    `tests/_fixtures.py` made is deleted, so none outlives its test, and the process's run controller
+    is put back as the next test must find it;
+  - `brought_forward`: the test ends holding the claim of a start of PRISM, its lock and its
+    listener, which is let go first. In a test not marked for the real screen it also stands in for
+    bringing a window to the front and letting a process take it, keeping each call;
+  - `windows_asked`: the test ends with the computer still kept awake, a reason against ending the
+    session still registered, or Windows reached by a test not marked for the real screen. It stands
+    in for every request PRISM makes of Windows for a run (`core/gui/this_computer.py`: staying
+    awake, the reason, the taskbar's flash and the watch on Windows' end of a session), each answering
+    that Windows took it and each call kept; a test marked for the real screen makes them for real.
+
+  A test reads what the last two kept by asking for them by name.
 - **The source scans**, which read files rather than run code:
   - `tests/test_source_hygiene.py`: no scanned file cites a working document or a label one coined
     ([Rules the code keeps](rules-and-traps.md#rules-the-code-keeps) lists what it scans, under the
@@ -257,6 +322,13 @@ run 4 137 / 230 / 31 / 67 s, with the same masked-probe counts as above; run 3 1
 run 2 exited 0 in 10 s and run 2b exited 1 in 7 s; run 5's drill ran about 7 minutes to its cut
 after pass 3, and its resume exited 0 in about 16 s.
 
+It ran again at commit e17f1ec, once the window's runs were rebuilt, and every check held: run 1
+118 / 141 / 21 / 57 s, run 3 117 / 42 / 10 / 21 s and run 4 119 / 232 / 28 / 66 s, with the same
+masked-probe counts as above; each `[fit] saved after pass N.` followed by that epoch's
+`[fit] epoch N: …` record; run 2 exited 0 in 9 s and run 2b exited 1 in 6 s; run 5's drill ran about
+7 minutes to its cut after pass 3, and its resume exited 0 in 12 s; the diagnostic card's eight
+commands each exited 0 and wrote one record. The whole gate took 31 minutes.
+
 sbi 0.26 warns when its calibration tests get fewer than 100 datasets, so runs 1, 3 and 4, which
 calibrate on 40, each log `Number of TARP samples should be on the order of 100s to give reliable results.`
 beside the SBC-count warnings; at that size the calibration means nothing anyway
@@ -344,6 +416,12 @@ Then delete the scratch folder, as the recipe says.
   samples), `stand_in_gen_obs` (a cheap simulator of the right shape) and `build_fdt_record` (an fdt
   record in seconds); and `build_tiny_run`, behind the `tiny_run` fixture, when a test needs a real
   prior and posterior at tiny size.
+- **A run in a window test is the stand-in run** of `tests/_runs.py` (`StandIn`, `start_run`,
+  `running`): a plain function the real worker runs through a page's real `dispatch`, saying what
+  the test tells it to, line by line, and ending as the test says. The window's clock is moved by
+  hand (`Clock`) and the event loop turned until something is so (`turn_until`), never by a sleep;
+  `build_run_host` (`tests/_fixtures.py`) makes a bare page to host it, and the window's suites share
+  their other helpers in `tests/_window_helpers.py`.
 - **The test model lives in the real `Resources/` while it is installed.** `install_sbitest`
   (`tests/_fixtures.py`), which `build_tiny_run` and `tests/test_tool.py`'s module fixture call,
   writes a one-variable model, SBITEST, into `Resources/Bounds/sbitest/`, `Resources/Cells/sbitest/`,

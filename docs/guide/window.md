@@ -69,19 +69,26 @@ check to read before a long run: it must begin "Resumes" when you mean to contin
 ### One run at a time
 
 Only one run can be live in the whole window, because a run's output is captured process-wide
-(`core.gui.panels.base_panel.BasePanel`).
+(`core.gui.run.controller`, the one run controller of the process).
 
-- While a run is live, every panel's controls are locked; the running panel's **Cancel** button
-  stays live, and you can still move between screens and tabs.
-- The header shows what is running and for how long ("Running: Posterior — 4:07"); clicking it goes
-  to that tab. The running section's Home tile and its tab carry a marker.
-- **Cancel** is a request: the run stops at its next checkpoint, which can take about a minute
-  during training.
-- Closing the window during a run asks first. **Cancel task & quit**, the default, cancels the run;
-  **Quit anyway** closes the window and leaves the run going in the background until it finishes;
-  **Don't quit** keeps the window open.
-- The model builder refuses to validate or save, and Settings refuses to delete a user model, while
-  a run is live. The Artifacts screen's own rule is in
+- While a run is live, every panel's controls are locked, and the run has its own page, which takes
+  the place of its panel's results: its stages, where it stands, its health, its messages and the
+  figures it made. Its stop button stays live, and you can still move between the window's parts.
+- The foot of the rail says what is running ("Training is running"); pressing it, or Ctrl+R, goes to
+  the run's page. Once a run has ended, its page, the foot and Home say how and when it ended until
+  it is seen.
+- A stop asks first what it keeps, unless it loses nothing: on a training the button reads
+  **Stop training…** and its question says what is kept, **Keep training** being the default. A stop
+  is a request: it is taken at the run's next line of output, and during the fit when the epoch in
+  progress ends, and until then **Don't stop after all** withdraws it. A training saving its
+  posterior is not stopped. Once a training's stop has landed, its page asks "Keep this training so
+  you can resume it later?".
+- Closing the window during a run asks first. **Keep running** is the default; **Stop the run and
+  close** stops the run and closes the window, with every figure window, once the run has stopped,
+  and until then the run's page offers to withdraw the stop and the close. A run that fails instead
+  leaves the window open.
+- The model builder refuses to validate or save, and Your own models refuses to delete a user model,
+  while a run is live. Records has its own rule, in
   [Browsing the store](getting-started.md#browsing-the-store).
 
 ### The dialogs
@@ -116,7 +123,10 @@ Only one run can be live in the whole window, because a run's output is captured
 
 ### What a run shows
 
-Each tab has a log pane, a progress pane and the run's figures, which appear as the stage draws them.
+Each step has its own lines under its figures; while a run of the step shows, the run's page stands in
+their place, with the figures the run made under its messages, which appear as the stage draws them.
+**Show the full text** shows every line the run wrote, and the run's page opens its dated text file,
+kept in the folder `runs` beside the settings file.
 
 - **Validate** draws a fresh seed for each run (`ValidatePanel._validate`) and the calibration record
   keeps it; there is no Seed box, and the window remembers no seed. To repeat a calibration set, pass
