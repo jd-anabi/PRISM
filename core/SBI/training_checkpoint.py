@@ -70,7 +70,7 @@ the rule, and the section is what enforces it.
 import hashlib
 import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
@@ -371,11 +371,12 @@ class SiblingDifference:
     """One other committed checkpoint and everything it differs in: its directory's name, the batches it
     holds, whether it is complete, and one ``{"field", "mine", "theirs"}`` per differing identity field, in
     sorted key order, each value raw and uncut, as ``near_miss_siblings`` hands its one. No field at all is a
-    checkpoint with this very identity under another name, which only a directory moved by hand can be."""
+    checkpoint with this very identity under another name, which only a directory moved by hand can be. Its hash leaves
+    the fields out, since a dict has none, so that a row and what holds it can be hashed."""
     name: str
     batches: int
     complete: bool
-    fields: tuple
+    fields: tuple = field(hash=False)
 
 
 def _differing(identity: dict, rows) -> tuple:

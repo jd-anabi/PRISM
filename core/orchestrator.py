@@ -545,10 +545,11 @@ def training_reading(cfg, prior, *, num_runs: int, run_size_cap: int, checkpoint
 def matching_fits(cfg, prior, *, num_runs, run_size_cap, hidden_features, num_transforms, learning_rate,
                   stop_after_epochs, max_num_epochs, checkpoint_every, store=None) -> tuple:
     """The kept trainings build_posterior would name as ones it could resume instead of this training: what
-    it hands ``fit_state.matching_kept_fits`` before its fit, asked before anything is spent. Each argument
-    is the stage's, None for the configuration's own. () when the cadence is off (the stage then keeps no
-    fit), a config or a prior is missing, or the kept trainings cannot be listed. Reads the store and the
-    records, writes nothing, asks the graphics card nothing, NEVER RAISES.
+    it hands ``fit_state.matching_kept_fits`` before its fit, asked before anything is spent. It answers for an
+    amortized training that keeps its fit: a narrowing round's identity holds its region, which this does not
+    take. Each argument is the stage's, None for the configuration's own. () when the cadence is off (the stage
+    then keeps no fit), a config or a prior is missing, or the kept trainings cannot be listed. Reads the store
+    and the records, writes nothing, asks the graphics card nothing, NEVER RAISES.
 
     THE ONE LINE THAT IS NOT THE STAGE'S is ``z_score_x``. The stage reads it off the network it has built,
     which does not exist here: a network standardises its own summaries exactly when it holds a probe set,
@@ -1724,7 +1725,7 @@ def build_posterior(
             # its simulation set is read back (minutes at full size, inside the training call), a check
             # that fails once the rows are read, a stop during the fit or the posterior's write, the end.
             session = fit_state.FitSession.reopen(store, kept, cfg=cfg)
-            session.posterior_name = name        # the kept record's name, from its next saved pass on
+            session.posterior_name = name        # the kept record's name, from the record's next write on
         # hf, nt, lr, patience and max_ep were resolved (and range-checked) above, before any spend -- not
         # inlined into this call -- so the manifest records what was actually used.
         posterior_latent, pos_diagnostics = pipeline.train_nn(

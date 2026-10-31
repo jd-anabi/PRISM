@@ -2986,6 +2986,11 @@ def test_the_preview_carries_the_differing_sets_only_for_a_new_set(store, monkey
     expected = (tc.SiblingDifference(other.name, 2, True, ({"field": "n_runs", "mine": 3, "theirs": 9},)),)
     assert read() == expected
     assert read(orchestrator.training_reading) == expected
+    held = orchestrator.training_preview(cfg, prior, **every)
+    assert hash(held) == hash(orchestrator.training_preview(cfg, prior, **every))
+    reading = orchestrator.training_reading(cfg, prior, **every)
+    assert hash(reading) == hash(orchestrator.training_reading(cfg, prior, **every))
+    assert hash(reading.sibling_diffs[0]) == hash(held.sibling_diffs[0])
     assert read(checkpoint_every=0) == ()
     assert read(held=None) == ()
     assert read(config_=None, hw=config.cpu_device()) == ()

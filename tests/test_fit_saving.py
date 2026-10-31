@@ -2425,6 +2425,8 @@ def test_the_note_and_the_listing_carry_how_a_training_stopped(tiny_run, fits_le
                  (None, None, None), id="a fraction of a process and a list of seconds"),
     pytest.param({"progress": {"processes": 2, "wall_seconds": 90}}, (True, "at", "cancelled"), (2, 90.0, None),
                  id="whole seconds are seconds"),
+    pytest.param({"progress": {"processes": 1, "wall_seconds": 10 ** 400}}, (True, "at", "cancelled"), (1, None, None),
+                 id="seconds past any float"),
     pytest.param({"save_error": 5}, (True, "at", "cancelled"), (1, 12.0, None), id="a failure that is no sentence"),
 ])
 def test_a_record_hand_edited_to_another_shape_reads_as_nothing_said(store, edited, stop, sums):
