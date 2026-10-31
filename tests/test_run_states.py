@@ -2159,7 +2159,10 @@ def test_what_a_history_cannot_hold_costs_the_run_nothing(tmp_path):
     a time as its text, a key as its text, anything else in words. Plain values stay as they are, None among them, and
     a second making plain changes nothing. The page's own dicts are not the run's: what the page does to its plan or its
     settings during the run, at any depth, reaches no write. And nothing a page can hand fails the start: a value that
-    cannot say what it is, an array that cannot be read, a dict or a list that holds itself."""
+    cannot say what it is, an array that cannot be read, a dict or a list that holds itself, a whole number too long to
+    write, which is said in words where the longest that can be written stays a number, as a bool stays a bool and an
+    array's whole number becomes a plain one."""
+    import sys
     import numpy
     from core.gui.run import history
     from tests._fixtures import build_run_host, qt_app
@@ -2236,6 +2239,20 @@ def test_what_a_history_cannot_hold_costs_the_run_nothing(tmp_path):
     while isinstance(deep, list):
         deep, through = deep[0], through + 1
     assert (isinstance(deep, str), through) == (True, history.PLAIN_DEPTH - 1), written
+
+    limit = sys.get_int_max_str_digits()
+    too_long, longest, words = 10 ** limit, 10 ** (limit - 1), "a whole number too long to write"
+    stand_in, path = run_of(_training(settings={
+        "too long": too_long, "too long below nought": -too_long, "longest": longest, "on": True, "off": False,
+        "whole": 12, "array's whole": numpy.int64(2 ** 62), "array": numpy.array([too_long, 7], dtype=object),
+        too_long: "a key"}))
+    written = history.read(path)
+    end(stand_in)
+    assert written["settings"] == {"too long": words, "too long below nought": words, "longest": longest, "on": True,
+                                   "off": False, "whole": 12, "array's whole": 2 ** 62, "array": [words, 7],
+                                   words: "a key"}
+    assert [type(written["settings"][name]) for name in ("on", "off", "whole", "array's whole", "longest")] == [
+        bool, bool, int, int, int]
     assert [line for line in text.texts() if "history" in line] == []
 
 

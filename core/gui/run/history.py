@@ -79,8 +79,8 @@ TRY_FIELDS = ("started", "ended", "outcome", "failure", "batches_before", "batch
 #: tried before the refusal is raised.
 REPLACE_TRIES = 5
 REPLACE_PAUSE_S = 0.2
-#: How deep ``plain`` follows a value before it says the rest in words: nothing a page hands goes so deep, and a value
-#: that holds itself goes on for ever.
+#: How deep ``plain`` follows a value before it says the rest in words: this bounds how deep, not how much. Nothing a
+#: page hands goes so deep, and a value that holds itself goes on for ever.
 PLAIN_DEPTH = 16
 #: What a name of a history holds when it holds anything but None, as the window writes it, for each name a reader
 #: takes as such; a place's two parts and each try are of their own shape too.
@@ -148,13 +148,16 @@ def write(folder: Path, record: dict) -> Path:
 
 def plain(value, depth: int = 0):
     """``value`` as a history can hold it: what JSON holds as it is; a mapping with text for its keys; a sequence or a
-    set as a list; an array or an array's number as plain numbers; a time as its text; anything else in words. A new
-    value each time, none of it the one handed, and plain of plain is the same. ``write`` raises for a whole record over
-    one value it cannot hold, so what a page hands a run for its history comes through here at the run's start, and
-    nothing here raises: what cannot be gone through is said in words."""
-    if value is None or isinstance(value, (bool, int, float, str)):
+    set as a list; an array or an array's number as plain numbers; a time as its text; anything else in words, a whole
+    number too long to write among it. A new value each time, none of it the one handed, and plain of plain is the same.
+    ``write`` raises for a whole record over one value it cannot hold, so what a page hands a run for its history comes
+    through here at the run's start, and nothing here raises: what cannot be gone through is said in words."""
+    if value is None or isinstance(value, (bool, float, str)):
         return value
     try:
+        if isinstance(value, int):
+            int.__repr__(value)                  # what the writer asks of a whole number, which past a limit raises
+            return value
         if depth < PLAIN_DEPTH:
             if isinstance(value, dict):
                 return {_words(key): plain(held, depth + 1) for key, held in value.items()}
@@ -174,7 +177,7 @@ def _words(value) -> str:
     try:
         return str(value)
     except Exception:                            # noqa: BLE001 -- a run's start never fails over its history
-        return f"a {type(value).__name__}"
+        return "a whole number too long to write" if isinstance(value, int) else f"a {type(value).__name__}"
 
 
 def read(path: Path) -> dict | None:
