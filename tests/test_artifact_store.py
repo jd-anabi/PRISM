@@ -2803,14 +2803,16 @@ def test_the_training_preview_resolves_without_a_config_and_never_raises(store, 
 
 # ── what a training would do with the saved simulation sets ──────────────────────────────────────
 def _budget(store, cfg=None):
-    """A real config at 8 rows a batch with its rotation off, its prior in ``store``, the store's folder of simulation
-    sets, and the identity of the run's own set at 3 batches."""
+    """A real config at 8 rows a batch with its rotation off and, as a build leaves it, no time grid made yet; its prior
+    in ``store``, the store's folder of simulation sets, and the identity of the run's own set at 3 batches."""
     from core import orchestrator
     cfg = _nad_cfg() if cfg is None else cfg
     cfg.hw.batch_size = 8
     cfg.reparam_rotate = False
     prior = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
-    return cfg, prior, store.kind_dir("simulation"), orchestrator.training_identity(cfg, prior, 8, 3)
+    identity = orchestrator.training_identity(cfg, prior, 8, 3)
+    cfg.__dict__.pop("t", None)
+    return cfg, prior, store.kind_dir("simulation"), identity
 
 
 def test_every_differing_setting_of_a_saved_set_is_listed_with_both_values(tmp_path):
@@ -3006,17 +3008,18 @@ def test_the_preview_carries_the_differing_sets_only_for_a_new_set(store, monkey
 def test_the_training_reading_touches_no_card(store, monkeypatch):
     """STANDING. A page reads this as a person types and when it opens, so it asks the graphics card nothing, in any
     state: no question of the card, no device check, none of the planner's figures, no tensor for the run's device, and
-    not the preview. The configuration here names the card, as the retrain's does. A reading swallows what is raised
-    and says it in ``checkpoint_error``, so every stand-in records as well, and each reading is read for that field.
-    The kept trainings' reading is held to the same. The last lines show the stand-ins can tell: the preview reaches
-    them."""
+    not the preview. The configuration here names a card no computer has, with no time grid made yet, so that a tensor
+    made for it raises, card or no card, and no cached value hides the road. A reading swallows what is raised and says
+    it in ``checkpoint_error``, so every stand-in records as well, and each reading is read for that field. The kept
+    trainings' reading is held to the same, over a kept training it must find. Neither writes: nothing on the
+    configuration, nothing in the store. The last lines show the stand-ins can tell: the preview reaches them."""
     import types
     from core import orchestrator
-    from core.SBI import pipeline
+    from core.SBI import fit_state, pipeline
 
     cfg, prior, root, _ = _budget(store)
-    cfg.hw = types.SimpleNamespace(device=torch.device("cuda"), dtype=torch.float32, batch_size=8)
-    ident = orchestrator.training_identity(cfg, prior, 8, 3)
+    cfg.hw = types.SimpleNamespace(device=torch.device("cuda", 99), dtype=torch.float64, batch_size=8)
+    ident = orchestrator.training_identity(orchestrator._cfg_for_a_reading(cfg), prior, 8, 3)
     preview = orchestrator.training_preview
     asked, reached = card_and_programs(monkeypatch), []
 
@@ -3031,24 +3034,55 @@ def test_the_training_reading_touches_no_card(store, monkeypatch):
                         (config, "memory_budget_elements")):
         monkeypatch.setattr(space, name, stand_in(name))
     every = dict(num_runs=3, run_size_cap=0, checkpoint_every=5, store=store)
+    fit = dict(hidden_features=8, num_transforms=1, learning_rate=None, stop_after_epochs=3, max_num_epochs=None,
+               **every)
 
-    readings = [orchestrator.training_reading(cfg, prior, **{**every, "checkpoint_every": 0}),
-                orchestrator.training_reading(cfg, None, **every), orchestrator.training_reading(None, None, **every),
-                orchestrator.training_reading(cfg, prior, **every)]
+    def tree() -> list:
+        return sorted(str(path.relative_to(store.root)) for path in store.root.rglob("*"))
+
+    def leaving_nothing(read, *args, **given):
+        before = tree()
+        answer = read(*args, **given)
+        assert tree() == before, "a reading writes nothing in the store"
+        assert "t" not in vars(cfg), "a reading writes nothing on the configuration"
+        return answer
+
+    def read(config_=cfg, held=prior, **given):
+        return leaving_nothing(orchestrator.training_reading, config_, held, **{**every, **given})
+
+    readings = [read(checkpoint_every=0), read(held=None), read(None, None), read()]
     write_simulation_set(root, {**ident, "n_runs": 9}, 2)
-    readings.append(orchestrator.training_reading(cfg, prior, **every))
+    readings.append(read())
     write_simulation_set(root, ident, 2)
-    readings.append(orchestrator.training_reading(cfg, prior, **every))
-    write_simulation_set(root, ident, 3, complete=True)
-    readings.append(orchestrator.training_reading(cfg, prior, **every))
+    readings.append(read())
+    folder = write_simulation_set(root, ident, 3, complete=True)
+    readings.append(read())
     assert [reading.checkpoint for reading in readings] == [
         "off", "needs_config", "needs_config", "new", "new_with_siblings", "resume_partial", "resume_complete"]
     assert [reading.checkpoint_error for reading in readings] == [None] * 7
     assert [reading.width for reading in readings] == [8, 8, None, 8, 8, 8, 8]
-    assert orchestrator.matching_fits(cfg, prior, hidden_features=8, num_transforms=1, learning_rate=None,
-                                      stop_after_epochs=3, max_num_epochs=None, **every) == ()
+    assert leaving_nothing(orchestrator.matching_fits, cfg, prior, **fit) == ()
     assert (asked, reached) == ([], [])
 
+    named = []
+    with monkeypatch.context() as patch:
+        patch.setattr(fit_state, "matching_kept_fits", lambda _store, identity: named.append(identity) or [])
+        orchestrator.matching_fits(cfg, prior, **fit)
+    identity, = named
+    assert (identity["settings"]["device"], identity["settings"]["dtype"]) == ("cuda", "torch.float64")
+    ref = build_fit_record(store, identity={**identity, "network": "0" * 16}, parents={"simulation": folder.name})
+    assert (asked, reached) == (["the program git"], []), "the record's writer, not the reading"
+    asked.clear()
+    assert [kept.id for kept in leaving_nothing(orchestrator.matching_fits, cfg, prior, **fit)] == [ref]
+    assert (asked, reached) == ([], [])
+
+    with pytest.raises(RuntimeError):
+        torch.linspace(0, 1, 2, device=cfg.hw.device)
+    lost = preview(cfg, prior, **every)
+    assert lost.estimate_error is not None, "the card's failure is the memory figures' to say"
+    assert (lost.checkpoint, lost.batches_done, lost.checkpoint_error) == ("resume_complete", 3, None)
+    asked.clear()
+    cfg.__dict__["t"] = torch.zeros(3)
     assert preview(cfg, prior, **every).estimate_error == "AssertionError: _observation_inits was reached"
     assert reached == ["_observation_inits"]
     assert preview(None, None, num_runs=3, run_size_cap=0).device_type == "cuda"
@@ -3218,12 +3252,37 @@ def test_the_matching_fits_ask_what_the_stage_asks(store, monkeypatch, bounds, c
             assert orchestrator.matching_fits(cfg, prior, store=store, **call) == ()
         assert asked == [stage]
         assert stage["settings"]["z_score_x"] == ("none" if chi else "independent")
+        assert "t" not in vars(cfg)
     asked.clear()
     with monkeypatch.context() as patch:
         patch.setattr(fit_state, "matching_kept_fits", lambda _store, identity: asked.append(identity) or [])
         for held, config_, every in ((None, cfg, 4), (prior, None, 4), (prior, cfg, 0)):
             assert orchestrator.matching_fits(config_, held, store=store, **{**given, "checkpoint_every": every}) == ()
     assert asked == [], "nothing is listed where the stage would keep no fit"
+
+
+@_EACH_KIND
+def test_a_reading_sees_the_identity_with_the_time_grid_on_no_device(store, bounds, chi):
+    """A configuration makes its time grid the first time it is read, on its own device, and keeps it, and the identity
+    asks that grid its length. So a reading hands the identity a view of the configuration, which holds the grid the
+    configuration's own lines make on the device that allocates nothing: every entry of the identity, the folder's name
+    and the grid's shape and kind are the configuration's, and nothing is written on it. A configuration that holds its
+    grid, and a stand-in with none to make, are handed back as they are."""
+    import types
+    from core import orchestrator
+    from core.SBI import training_checkpoint as tc
+
+    cfg, prior, *_ = _budget(store, _cfg_of(bounds, chi))
+    view = orchestrator._cfg_for_a_reading(cfg)
+    assert view is not cfg and view.hw is cfg.hw and view.t.device.type == "meta"
+    seen = orchestrator.training_identity(view, prior, 8, 3)
+    assert "t" not in vars(cfg)
+    assert seen == orchestrator.training_identity(cfg, prior, 8, 3)
+    assert tc.identity_digest(seen) == tc.identity_digest(orchestrator.training_identity(cfg, prior, 8, 3))
+    assert (view.t.shape, view.t.dtype) == (cfg.t.shape, cfg.t.dtype)
+    assert orchestrator._cfg_for_a_reading(cfg) is cfg
+    for stand_in in (object(), types.SimpleNamespace(t=torch.zeros(3)), type("Held", (), {"t": torch.zeros(3)})()):
+        assert orchestrator._cfg_for_a_reading(stand_in) is stand_in
 
 
 @_EACH_KIND

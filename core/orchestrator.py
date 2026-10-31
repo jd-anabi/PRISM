@@ -5,6 +5,7 @@ No input() anywhere; the front ends (core/gui, core/tool) call these stages.
 This module owns the pipeline flow: observe -> prior -> posterior -> validate.
 """
 import contextlib
+import copy
 import importlib
 import json
 import logging
@@ -456,6 +457,22 @@ def fresh_run_near_misses(cfg: SimConfig, prior, *, num_runs=None, run_size_cap=
     return training_checkpoint.near_miss_siblings(ident, root)
 
 
+def _cfg_for_a_reading(cfg):
+    """``cfg`` as a reading may hand it to the simulation identity, which asks the time grid its length. A config makes
+    that grid the first time it is read, on its own device, and keeps it, so a reading would leave millions of points
+    on the graphics card, and fail with the card. A config that holds its grid, or a stand-in with none to make, is
+    handed back as it is. Any other gets a shallow copy holding the grid ``SimConfig.t``'s own lines make for a twin of
+    it on the ``meta`` device, which has a shape and allocates nothing. Nothing is written on ``cfg``."""
+    make = getattr(getattr(type(cfg), "t", None), "func", None)
+    if make is None or "t" in vars(cfg):
+        return cfg
+    twin, view = copy.copy(cfg), copy.copy(cfg)
+    twin.hw = copy.copy(cfg.hw)
+    twin.hw.device = torch.device("meta")
+    view.__dict__["t"] = make(twin)
+    return view
+
+
 @dataclass(frozen=True)
 class TrainingReading:
     """What a training at a given budget WOULD do with the saved simulation sets, read from the disk alone:
@@ -506,7 +523,7 @@ def training_reading(cfg, prior, *, num_runs: int, run_size_cap: int, checkpoint
     else:
         try:
             width = _training_run_size(cfg, size_cap) if width is None else width
-            ident = training_identity(cfg, prior, width, n_runs, truncation=truncation)
+            ident = training_identity(_cfg_for_a_reading(cfg), prior, width, n_runs, truncation=truncation)
             root = resolve_store(store).kind_dir("simulation")
             state = training_checkpoint.peek(training_checkpoint.resolve_dir(ident, root)) or {}
             if state.get("batches_done"):
@@ -554,9 +571,9 @@ def matching_fits(cfg, prior, *, num_runs, run_size_cap, hidden_features, num_tr
             batch_size=TRAINING_BATCH_SIZE,
             z_score_x="none" if cfg.chi_mode else "independent",
             device=cfg.hw.device, dtype=cfg.hw.dtype, num_rounds=TRAINING_NUM_ROUNDS)
-        identity = {"simulation": training_identity(cfg, prior, _training_run_size(cfg, size_cap), n_runs),
-                    "batches": n_runs, "code": fit_state.loaded_code(), "constants": fit_state.constants(),
-                    "libraries": fit_state.libraries(), "settings": settings}
+        simulation = training_identity(_cfg_for_a_reading(cfg), prior, _training_run_size(cfg, size_cap), n_runs)
+        identity = {"simulation": simulation, "batches": n_runs, "code": fit_state.loaded_code(),
+                    "constants": fit_state.constants(), "libraries": fit_state.libraries(), "settings": settings}
         return tuple(fit_state.matching_kept_fits(resolve_store(store), identity))
     except Exception:                        # noqa: BLE001 -- a page's fact must never raise
         return ()
