@@ -355,10 +355,12 @@ From Task 3 (the differing settings and the kept training's facts), `.superpower
 5. **The engine changes of this task, registered for the audit (not a fault).** `core/SBI/training_checkpoint.py`: `_sibling_diffs`
    yields a fifth element, `complete`; `SiblingDifference`, `sibling_differences` (E2, departure 128); the private `_siblings_line`
    and `_differing`, which `core/orchestrator.py` calls across the module so that the sets are walked once. `core/orchestrator.py`:
-   `TrainingReading`, `training_reading`, the disk's half of `training_preview`, which now calls it, its text unchanged;
+   `TrainingReading`, `training_reading`, the disk's half of `training_preview`, which now calls it, its text unchanged but on the
+   one path departure 168 names (and a hand-built configuration with no `dt_exp` or `t_max_exp`, which no builder makes);
+   `training_preview`'s docstring says it copies nothing, which its lost-grid path now does, a shallow copy;
    `TrainingPreview.sibling_diffs`; `matching_fits`; `session.posterior_name = name` after the reopen in `build_posterior`
    (departures 129, 138). `core/SBI/fit_state.py`: `KeptNote.wall_seconds` and `save_error` (`compare=False`), `KeptFit`'s six new
-   fields, `_held`. `core/plans.py`: `_read` gathers a setting line above the first heading into `unread`. Nothing inside `FIT_CODE`;
+   fields, `_held`, `OverflowError` in `_finite`; `SiblingDifference.fields` is `hash=False`. `core/plans.py`: `_read` gathers a setting line above the first heading into `unread`. Nothing inside `FIT_CODE`;
    `_canonical`, `identity_digest`, `resolve_dir` and `fresh_run_near_misses` as they were.
 6. **`matching_fits` is a fourth place that names the fit's settings** (items 29, 46). It calls `pipeline.fit_settings` and
    `fit_state.matching_kept_fits` rather than copying them, but it repeats the stage's resolution of each knob (None to the

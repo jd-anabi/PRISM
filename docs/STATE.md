@@ -1,7 +1,35 @@
 # PRISM — state
 
-**Last updated:** 2026-10-30, afternoon (13:08 by the clock; the weekly bar 78 % at 12:32, resetting on 1 November at 04:00
-UTC): STAGE 4'S PLAN IS WRITTEN, COMMITTED AND APPROVED ("I approve it", 30 October).
+**Last updated:** 2026-10-30, late evening (23:42 by the clock; the weekly bar 87 %, resetting on 1 November at 04:00 UTC):
+STAGE 4'S BUILD STANDS WITH TASKS 0 TO 3 COMPLETE. The session was started from the owner's pasted prompt
+`docs/superpowers/prompts/2026-10-30-window-redesign-stage-4-build.md`; it opened before the reset, told the owner the bar
+and recommended waiting, and the owner pressed "Start Task 0", so the build ran under the 90 % rule.
+
+- **Task 0:** the workspace, the gate scripts into `stage-4/gates/`, the ledger's build section, the carried-over list's
+  marks, the digests confirmed.
+- **Task 1, the front (tests only):** `5ee1039`..`d0dde06`. One training spec, the shared helpers and stubs, two tripwires
+  at the controller, the guard on the plans folder, which holds the files' bytes after review.
+- **Task 2, the plan reader:** `e73dcf6`..`917f936`. `core/plans.py`, `core.config.PLANS_PATH` (one line), four keys
+  (`FIELDS` 114). Departures 162 to 167.
+- **Task 3, the differing settings:** `92ce7e7`..`496c133`. `sibling_differences`, `training_reading`, `matching_fits`, the
+  kept training's facts, a resume's name. **Its review found the reading did reach the card** through the time grid the
+  identity reads; the cure asks `SimConfig.t`'s own lines on the `meta` device inside `core/orchestrator.py`, with
+  `identity.py` and `sim_config.py` unopened. Measured: 0 bytes on the card. Departure 168.
+- **The gate:** 2265 passed, 9 skipped, 5 deselected, 2279 collected, 27 min 8 s at `496c133`. Each task's review is clean
+  and its gate green on the same head, with one fix round each. The seventeen digests are equal. `Artifacts/` is untouched,
+  with no `fits/`; no `Resources/Plans`; `PRISM.ini` unchanged.
+- **THE ENGINE IS CLOSED:** no later task opens an engine file.
+- **Measured:** about 3 points of the weekly bar a task; what is left reads about 40 to 45 points, not the plan's whole bar.
+- **The owner's to read:** extra usage is switched on (531.36 of 1,000.00 USD this month); it is not counted on.
+
+NEXT: Task 4, the run's record, in a new chat the owner starts from
+`docs/superpowers/prompts/2026-10-31-window-redesign-stage-4-build-from-task-4.md`, after the reset on 1 November at 04:00 UTC
+(21:00 on 31 October, the owner's time), or on the owner's word before it. That prompt lists what is carried to each task.
+The owner's two questions are ahead: the font's download while Task 6's gate runs, the greyed button's picture while Task
+8's runs. The ledger's section "Stage 4 — … (build of …)" is the record.
+
+What follows is the head as the afternoon of 30 October left it (13:08 by the clock; the weekly bar 78 % at 12:32):
+STAGE 4'S PLAN IS WRITTEN, COMMITTED AND APPROVED ("I approve it", 30 October).
 
 `docs/superpowers/plans/2026-10-30-window-redesign-stage-4.md`, from the owner's pasted prompt
 `docs/superpowers/prompts/2026-10-30-window-redesign-stage-4-plan.md`. Nothing is built; no code changed.
