@@ -346,3 +346,7 @@ From Task 2 (the plan reader), `.superpowers/sdd/2026-10-06-window-redesign/stag
    handed a text that is no number raises a bare `ValueError` (`require_at_least`, `require_positive`, `require_between`,
    `require_finite`, `core/refusals.py`). Every caller hands a number today, from a field that holds its kind; the plan reader
    is the first with free text, so it checks the kind first. Cure if wanted: the rule refuses a value that is not whole.
+4. **A stability length past the grid is cut by a slice.** `n_stab_fine = int(stab_units / cfg.dt_nd_min)`, then
+   `cfg.t[:n_stab_fine]` (`core/orchestrator.py:723-724`; the number asked for goes into the record at `:750`): a
+   `stability_units` longer than the grid (`t_nd_max`) stops at the grid's end without a word, and below one step the
+   slice is empty. Today's box does the same, and a plan is a second way in. From Task 2's review, seat two, Minor 6.

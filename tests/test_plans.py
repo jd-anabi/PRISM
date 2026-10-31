@@ -109,6 +109,15 @@ def test_every_problem_is_listed_with_its_line_and_nothing_is_returned(tmp_path)
     assert single.message == "This plan cannot be used: 1 problem in retrain.txt"
 
 
+def test_a_line_under_a_misspelt_heading_is_still_judged(tmp_path):
+    """What the line itself can be told is told at the first reading: its value, and a name a plan may not hold."""
+    problems = _refused(tmp_path, "# Trainng\nnum_runs = abc\n").problems
+    assert [problem.line for problem in problems] == [1, 2]
+    assert problems[1].message == f"line 2: {_what('num_runs')} must be a whole number; got 'abc'."
+    problems = _refused(tmp_path, "# Trainng\nseed = 1\n").problems
+    assert [(problem.line, problem.key) for problem in problems] == [(1, None), (2, "seed")]
+
+
 @pytest.mark.parametrize("text, line, key, sentence", [
     pytest.param("\n# Trainng\n", 2, None, f"'# Trainng' is not a heading a plan has. {THE_HEADINGS}",
                  id="unknown heading"),
@@ -123,6 +132,7 @@ def test_every_problem_is_listed_with_its_line_and_nothing_is_returned(tmp_path)
                  id="unknown with a near name"),
     pytest.param("# Training\nmemory = 1\n", 2, None, "'memory' is not a setting PRISM has.",
                  id="unknown with none near"),
+    pytest.param("# Training\nruns = 1\n", 2, None, "'runs' is not a setting PRISM has.", id="a name just too far off"),
     pytest.param("# Training\nNum_Runs = 1\n", 2, None,
                  "'Num_Runs' is not a setting PRISM has. The nearest is num_runs.", id="a name in another case"),
     pytest.param("# Training\nsed = 1\n", 2, None, "'sed' is not a setting PRISM has. The nearest is seed.",
@@ -167,6 +177,8 @@ def test_every_problem_is_listed_with_its_line_and_nothing_is_returned(tmp_path)
                  id="not above nought"),
     pytest.param("# Narrowing round\nhpd_level = 1\n", 2, "hpd_level",
                  _rule(require_between, "hpd_level", 1.0, 0, 1, open_lo=True, open_hi=True), id="outside its band"),
+    pytest.param("# Narrowing round\nhpd_level = 0\n", 2, "hpd_level",
+                 _rule(require_between, "hpd_level", 0.0, 0, 1, open_lo=True, open_hi=True), id="below its band"),
     pytest.param(f"{OPTIONS}chi_n_freqs = 1\n", 3, "chi_n_freqs", _rule(require_at_least, "chi_n_freqs", 1, 2),
                  id="fewer probes than two"),
     pytest.param(f"{OPTIONS}chi_k_pad = 1\n", 3, "chi_k_pad", _rule(require_at_least, "chi_k_pad", 1, 2),
@@ -181,16 +193,15 @@ def test_every_problem_is_listed_with_its_line_and_nothing_is_returned(tmp_path)
     pytest.param(f"{OPTIONS}chi_max_cycles = 1e999\n", 3, "chi_max_cycles",
                  f"{_what('chi_max_cycles')} must be a finite number; got inf (default 20.0).",
                  id="a ceiling past what a float holds"),
-    pytest.param("# Model and options\nchi_k_pad = 12\n", 2, "chi_k_pad",
-                 f"{_what('chi_k_pad')} needs chi_mode = on in the same plan.", id="a chi setting with no switch"),
-    pytest.param("# Model and options\nchi_mode = off\nchi_max_cycles = 20\n", 3, "chi_max_cycles",
-                 f"{_what('chi_max_cycles')} needs chi_mode = on in the same plan.", id="a chi setting, switch off"),
     pytest.param(f"{OPTIONS}chi_n_freqs = 14\n", 3, "chi_n_freqs",
-                 f"{_what('chi_n_freqs')} must be at most the number of slots, 12; got 14.",
+                 f"{_what('chi_n_freqs')} must be at most the number of slots, 12 (the built-in); got 14.",
                  id="more probes than the built-in slots"),
     pytest.param(f"{OPTIONS}chi_k_pad = 4\n", 3, "chi_n_freqs",
-                 f"{_what('chi_n_freqs')} must be at most the number of slots, 4; got 6.",
+                 f"{_what('chi_n_freqs')} must be at most the number of slots, 4; got 6 (the built-in).",
                  id="fewer slots than the built-in probes"),
+    pytest.param(f"{OPTIONS}chi_k_pad = 4\n\nchi_n_freqs = 6\n", 5, "chi_n_freqs",
+                 f"{_what('chi_n_freqs')} must be at most the number of slots, 4; got 6.",
+                 id="both counts in the file, said on the probes' line"),
 ])
 def test_each_kind_of_problem_says_the_sentence_of_the_table(tmp_path, text, line, key, sentence):
     """One case for each thing a hand-edited plan can get wrong: the one problem, its line, the setting it
@@ -200,6 +211,40 @@ def test_each_kind_of_problem_says_the_sentence_of_the_table(tmp_path, text, lin
     assert len(problems) == 1, problems
     assert (problems[0].line, problems[0].key) == (line, key)
     assert problems[0].message == f"line {line}: {sentence}"
+
+
+@pytest.mark.parametrize("switch", ["", "chi_mode = off\n"], ids=["no switch", "the switch off"])
+@pytest.mark.parametrize("name, value", [("chi_n_freqs", 4), ("chi_k_pad", 12), ("chi_max_cycles", 20)])
+def test_each_chi_setting_needs_the_switch(tmp_path, switch, name, value):
+    """With the switch off the window sends none of the three, so a plan that holds one would say what no run reads."""
+    problems = _refused(tmp_path, f"# Model and options\n{switch}{name} = {value}\n").problems
+    assert [(problem.heading, problem.key) for problem in problems] == [("Model and options", name)]
+    assert problems[0].message.endswith(f": {_what(name)} needs chi_mode = on in the same plan.")
+
+
+def test_a_count_equal_to_the_slots_is_read(tmp_path):
+    """"At most" holds at the end it names, each way round: the probes up to the built-in slots, the slots down to the
+    built-in probes."""
+    assert read_plan(_plan(tmp_path, f"{OPTIONS}chi_n_freqs = 12\n")).values[("Model and options", "chi_n_freqs")] == 12
+    assert read_plan(_plan(tmp_path, f"{OPTIONS}chi_k_pad = 6\n")).values[("Model and options", "chi_k_pad")] == 6
+
+
+@pytest.mark.parametrize("text, line, key", [
+    pytest.param("# Training\nchi_mode = on\n\n# Model and options\nchi_k_pad = 12\n", 2, "chi_mode",
+                 id="the switch under the wrong heading"),
+    pytest.param("# Model and optins\nchi_mode = on\n\n# Model and options\nchi_k_pad = 12\n", 1, None,
+                 id="the switch under a misspelt heading"),
+    pytest.param("# Prior\nchi_k_pad = 24\n\n# Model and options\nchi_mode = on\nchi_n_freqs = 14\n", 2, "chi_k_pad",
+                 id="the slots under the wrong heading"),
+    pytest.param("# Model and options\nchi_n_freqs = 14\n", 2, "chi_n_freqs", id="past the slots with no switch"),
+    pytest.param("# Model and options\nchi_mode = off\nchi_k_pad = 4\n", 3, "chi_k_pad",
+                 id="below the probes with the switch off"),
+])
+def test_one_slip_is_one_problem(tmp_path, text, line, key):
+    """A file that is wrong in one place is told one thing: not that it lacks a line it holds, and not of a comparison
+    that means nothing without the switch. A line refused wherever it stands is not read by the rules across lines."""
+    problems = _refused(tmp_path, text).problems
+    assert [(problem.line, problem.key) for problem in problems] == [(line, key)]
 
 
 NOT_FOUND = "The plan was not found: '{path}'."
@@ -253,6 +298,10 @@ def test_what_a_plan_may_not_hold_is_refused_with_its_reason(tmp_path, key, reas
     assert problems[0].message == f"line 2: {_what(key)} cannot be set by a plan: {reason}."
 
 
+def test_a_whole_number_may_carry_its_sign(tmp_path):
+    assert read_plan(_plan(tmp_path, "# Training\nnum_runs = +5\n")).values == {("Training", "num_runs"): 5}
+
+
 def test_a_kind_is_checked_before_the_registrys_rule(tmp_path):
     """The rule alone would have read this value and truncated it to 10000: the reader refuses the text."""
     problems = _refused(tmp_path, "# Training\nnum_runs = 10000.5\n").problems
@@ -262,11 +311,24 @@ def test_a_kind_is_checked_before_the_registrys_rule(tmp_path):
 
 def test_every_registered_key_is_allowed_or_refused_for_a_stated_reason():
     """STANDING. Every key of the registry is a setting a plan holds or has its reason not to be, so a key
-    added to the registry cannot slip past the reader unclassified. The picks are listed by name: "every key
-    that begins with drive" would take in the drive check's own knobs."""
+    added to the registry cannot slip past the reader unclassified, and which heading holds which name is written
+    out here and not read back from the table under test. The picks are listed by name: "every key that begins
+    with drive" would take in the drive check's own knobs."""
     names = {name for held in ALLOWED.values() for name in held}
     assert not names & set(CLASSES)
     assert names | set(CLASSES) == set(FIELDS)
+    assert ALLOWED == {
+        "Model and options": ("chi_mode", "chi_n_freqs", "chi_k_pad", "chi_max_cycles", "reparam_rotate", "units"),
+        "Prior": ("bounds", "num_iterations", "sweep_batch", "max_sets", "walk_step", "stability_units",
+                  "min_cluster_size", "min_samples"),
+        "Training": ("num_runs", "run_size_cap", "hidden_features", "num_transforms", "learning_rate",
+                     "stop_after_epochs", "max_num_epochs", "checkpoint_every", "fisher_m", "fisher_dz",
+                     "fisher_points", "expected_epochs"),
+        "Calibration": ("n_cal", "cal_n_scales", "num_posterior_samples"),
+        "Inference": ("n_samples",),
+        "Narrowing round": ("n_directions", "hpd_level", "num_runs", "run_size_cap", "hidden_features",
+                            "num_transforms", "learning_rate", "stop_after_epochs", "max_num_epochs",
+                            "checkpoint_every")}
     assert tuple(ALLOWED) == HEADINGS[1:]
     assert [len(ALLOWED[heading]) for heading in HEADINGS[1:]] == [6, 8, 12, 3, 1, 10]
     assert sum(len(held) for held in ALLOWED.values()) == 40 and len(names) == 32
@@ -282,7 +344,7 @@ def test_every_registered_key_is_allowed_or_refused_for_a_stated_reason():
         "recording_forced", "recording_probe", "drive_amplitude", "drive_frequency", "drive_phase"}
 
 
-# One value for each allowed name: its least, unless the rules across lines refuse that with the built-ins beside it.
+# One value for each allowed name: a value the rules allow, with the built-ins beside it.
 ONE_VALUE_EACH = {
     "chi_mode": True, "chi_n_freqs": 2, "chi_k_pad": 24, "chi_max_cycles": 2.5, "reparam_rotate": False,
     "units": "nm ms pN kHz", "bounds": "sub/master_tier1.txt", "num_iterations": 1, "sweep_batch": 0, "max_sets": 1,
@@ -311,6 +373,27 @@ def test_read_plan_of_plan_text_gives_the_values_and_the_description_back(tmp_pa
     assert plan.values == values
     assert type(plan.values[pair]) is type(ONE_VALUE_EACH[pair[1]])
     assert plan.about == DESCRIPTION
+
+
+# The least of every whole number, written out here and not read from the module.
+LEAST = {
+    "chi_n_freqs": 2, "chi_k_pad": 2, "num_iterations": 1, "sweep_batch": 0, "max_sets": 1, "min_cluster_size": 2,
+    "min_samples": 1, "num_runs": 1, "run_size_cap": 0, "hidden_features": 1, "num_transforms": 1,
+    "stop_after_epochs": 1, "max_num_epochs": 1, "checkpoint_every": 0, "fisher_m": 1, "fisher_points": 1,
+    "expected_epochs": 1, "n_cal": 1, "cal_n_scales": 1, "num_posterior_samples": 1, "n_samples": 1, "n_directions": 1}
+
+
+@pytest.mark.parametrize("pair", [pair for pair in PAIRS if pair[1] in LEAST], ids=lambda pair: f"{pair[0]}: {pair[1]}")
+def test_one_below_every_whole_numbers_least_is_refused(tmp_path, pair):
+    """Each under each heading that holds it: the value the rule's own sentence names, one step past what the
+    table allows."""
+    assert set(LEAST) == {name for name, value in ONE_VALUE_EACH.items() if type(value) is int}
+    heading, name = pair
+    below = LEAST[name] - 1
+    top = OPTIONS if heading == "Model and options" else f"# {heading}\n"
+    problems = _refused(tmp_path, f"{top}{name} = {below}\n").problems
+    assert [problem.message.split(": ", 1)[1] for problem in problems] == [
+        _rule(require_at_least, name, below, LEAST[name])]
 
 
 def test_every_plan_setting_at_once_reads_back(tmp_path):
@@ -361,13 +444,50 @@ def test_plan_text_writes_the_form_a_person_reads():
     pytest.param({("Prior", "bounds"): "../a.txt"}, "", "bounds", id="a bounds name that leaves the folder"),
 ])
 def test_plan_text_refuses_what_could_not_be_read_back(values, about, key):
-    """The inverse holds or nothing is written: a file the reader would refuse, or one it would read as
-    something else, is a refusal at the saving and not a surprise at the next reading."""
+    """The inverse holds or nothing is written: a file the reader would refuse is a refusal at the saving, and not a
+    surprise at the next reading."""
     with pytest.raises(PlanRefusal) as refused:
         plan_text(values, about)
     assert refused.value.field == "plan"
     assert [problem.key for problem in refused.value.problems] == [key]
     assert all(problem.line is None for problem in refused.value.problems)
+
+
+BOUNDS, UNITS, RUNS = ("Prior", "bounds"), ("Model and options", "units"), ("Training", "num_runs")
+SWITCH = ("Model and options", "chi_mode")
+LINE_ENDS = " nm\nchi_k_pad = 4\nchi_n_freqs = 4"
+
+
+@pytest.mark.parametrize("values, remarks, key, sentence", [
+    pytest.param({BOUNDS: None}, None, "bounds", f"{_what('bounds')} would not read back as it was given; got None.",
+                 id="no bounds file picked"),
+    pytest.param({UNITS: None}, None, "units", f"{_what('units')} would not read back as it was given; got None.",
+                 id="no units"),
+    pytest.param({UNITS: ("nm", "ms")}, None, "units",
+                 f"{_what('units')} would not read back as it was given; got ('nm', 'ms').",
+                 id="the units as the tuple a stage takes"),
+    pytest.param({("About this plan", "num_runs"): 1}, None, None,
+                 "The description would not read back as it was given.", id="a pair under the description"),
+    pytest.param({SWITCH: True, UNITS: LINE_ENDS}, None, "units",
+                 f"{_what('units')} would not read back as it was given; got {LINE_ENDS!r}.",
+                 id="a value that holds line ends"),
+    pytest.param({RUNS: 1}, {RUNS: "Batches\nhidden_features = 8"}, "hidden_features",
+                 f"{_what('hidden_features')} would not read back as it was given; got None.",
+                 id="a remark that holds a line end"),
+    pytest.param({("training", "num_runs"): 1}, None, "num_runs",
+                 f"{_what('num_runs')} would not read back as it was given; got 1.", id="a heading in another case"),
+    pytest.param({RUNS: "10000"}, None, "num_runs",
+                 f"{_what('num_runs')} would not read back as it was given; got '10000'.", id="a whole number as text"),
+])
+def test_plan_text_refuses_what_would_read_back_as_something_else(values, remarks, key, sentence):
+    """The reader would take each of these without a problem and hand back something else, so reading the text back
+    for problems alone would save a plan that does not say what was given. What it reads is compared, and the sentence
+    shows the value as it was given."""
+    with pytest.raises(PlanRefusal) as refused:
+        plan_text(values, "", remarks)
+    assert refused.value.message == "This plan cannot be used: 1 problem"
+    assert [(problem.line, problem.key, problem.message) for problem in refused.value.problems] == [
+        (None, key, sentence)]
 
 
 def test_a_refusal_at_the_saving_says_the_readers_sentence_with_no_line():
@@ -398,8 +518,11 @@ def test_what_only_the_saving_can_refuse_says_so_in_its_own_sentence(values, abo
     assert [problem.message for problem in refused.value.problems] == [sentence]
 
 
-def test_a_value_written_with_spaces_around_it_is_written_without_them():
-    assert plan_text({("Model and options", "units"): "  nm ms  "}) == "# Model and options\nunits = nm ms\n"
+def test_what_reads_back_equal_is_written_though_it_was_handed_in_another_form():
+    """The comparison is of what the setting means: a whole number handed for a number reads back equal, and a text is
+    written stripped, as a description's lines are."""
+    assert plan_text({UNITS: "  nm ms  "}) == "# Model and options\nunits = nm ms\n"
+    assert plan_text({("Training", "learning_rate"): 1}) == "# Training\nlearning_rate = 1\n"
 
 
 def test_a_plan_saved_with_a_byte_order_mark_reads_as_any_other(tmp_path):
@@ -484,8 +607,9 @@ def test_a_remark_is_never_read_and_the_mark_needs_white_space_before_it(tmp_pat
 
 def test_the_rules_across_lines_keep_to_file_order_and_do_not_judge_a_refused_line_twice(tmp_path):
     """A problem found only at the end of the file is listed where its line is. A value already refused is not
-    judged again: a switch with a bad word does not also call every chi line lost, and a count already out of
-    range is not also compared with the slots."""
+    judged again: a switch with a bad word does not also call every chi line lost, and a count refused on its own
+    line is not compared with the other. A chi line with a bad value and no switch is two things to correct, and says
+    both."""
     problems = _refused(tmp_path, "# Model and options\nchi_k_pad = 12\n\n# Training\nnum_runs = abc\n").problems
     assert [problem.line for problem in problems] == [2, 5]
     problems = _refused(tmp_path, "# Model and options\nchi_mode = maybe\nchi_k_pad = 12\n").problems
@@ -494,6 +618,8 @@ def test_the_rules_across_lines_keep_to_file_order_and_do_not_judge_a_refused_li
     assert [problem.key for problem in problems] == ["chi_n_freqs"]
     problems = _refused(tmp_path, f"{OPTIONS}chi_n_freqs = 14\nchi_k_pad = abc\n").problems
     assert [problem.key for problem in problems] == ["chi_k_pad"]
+    problems = _refused(tmp_path, "# Model and options\nchi_k_pad = abc\n").problems
+    assert [(problem.line, problem.key) for problem in problems] == [(2, "chi_k_pad"), (2, "chi_k_pad")]
 
 
 def test_a_whole_number_of_absurd_length_is_a_problem_and_no_traceback(tmp_path):
@@ -504,14 +630,26 @@ def test_a_whole_number_of_absurd_length_is_a_problem_and_no_traceback(tmp_path)
 
 
 @pytest.mark.parametrize("name", ["../../Cells/nadrowski/x.txt", "C:/x.txt", "C:x.txt", "/x.txt", "//server/x.txt",
-                                  "a\\b.txt", "sub/../../x.txt", ".."])
+                                  "sub/../../x.txt", "..", "./master.txt", "sub//master.txt", "sub/./master.txt",
+                                  "sub/"])
 def test_a_bounds_name_that_leaves_the_folder_is_a_problem(tmp_path, name):
-    """The window checks that the named file exists under the model's folder, and that check alone would accept
-    a name that climbs out of it. A name that could leave the folder is refused here, with its line."""
+    """The window checks that the named file exists under the model's folder, and that check alone would accept a
+    name that climbs out of it, or one the computer resolves and the list shows under no such name. Either is refused
+    here, with its line."""
     problems = _refused(tmp_path, f"# Prior\nbounds = {name}\n").problems
     assert [(problem.line, problem.key) for problem in problems] == [(2, "bounds")]
     assert problems[0].message == (f"line 2: {_what('bounds')} must name a file in the model's bounds folder; "
                                    f"got '{name}'.")
+
+
+@pytest.mark.parametrize("name", ["a\\b.txt", "sub\\master.txt", "C:\\x.txt"])
+def test_a_backslash_is_told_to_be_a_forward_slash(tmp_path, name):
+    """On Windows it is the natural way to write a path, and the file may well be there, so the sentence says what to
+    change."""
+    problems = _refused(tmp_path, f"# Prior\nbounds = {name}\n").problems
+    assert [problem.message for problem in problems] == [
+        f"line 2: {_what('bounds')} must name a file in the model's bounds folder; got '{name}'. "
+        "Write a sub-folder with a forward slash."]
 
 
 @pytest.mark.parametrize("name", ["master.txt", "sub/master.txt", "master.v2.txt"])
@@ -558,6 +696,25 @@ def test_the_plans_folder_stands_beside_the_other_inputs():
     assert config.PLANS_PATH == config.RESOURCES_ROOT / "Plans"
     source = (REPO / "core" / "config.py").read_text(encoding="utf-8")
     assert len([line for line in source.splitlines() if "PLANS_PATH" in line]) == 1
+
+
+def _names_a_plan(path) -> bool:
+    """Whether a file names the plans folder or imports the reader, however the import is written."""
+    source = path.read_text(encoding="utf-8")
+    imports = [node for node in ast.walk(ast.parse(source)) if isinstance(node, (ast.Import, ast.ImportFrom))]
+    modules = [*(alias.name for node in imports for alias in node.names),
+               *(getattr(node, "module", None) or "" for node in imports)]
+    return "PLANS_PATH" in source or any(module.split(".")[-1] == "plans" for module in modules)
+
+
+def test_nothing_outside_the_window_reads_a_plan():
+    """STANDING. Filling the forms is the only thing a plan does, so no stage and no command reads one. The reader and
+    the folder are the window's: under the engine only their own two files name them."""
+    core = REPO / "core"
+    files = [path for path in core.rglob("*.py") if path.relative_to(core).parts[0] != "gui"
+             and path not in (core / "plans.py", core / "config.py")]
+    assert len(files) >= 20
+    assert [path.relative_to(REPO).as_posix() for path in files if _names_a_plan(path)] == []
 
 
 def test_the_plan_key_names_the_file_to_correct_on_screen(tmp_path):

@@ -190,16 +190,15 @@ def plan_text(values, about: str = "", remarks=None) -> str:
     """The text of a plan holding ``values`` (keyed as ``Plan.values``) and the description ``about``, each
     setting followed by its remark from ``remarks``, keyed the same way. ``read_plan`` of this text gives
     ``values`` and ``about`` back, so what could not be read back is a ``PlanRefusal`` and not a file: a
-    description line that starts with ``#``, a value that holds a remark's mark, and whatever the reader would
-    refuse. A description's lines are stripped and its blank lines dropped."""
+    description line that starts with ``#``, a value that holds a remark's mark, whatever the reader would refuse,
+    and whatever it would read as something else. A description's lines are stripped and its blank lines dropped."""
     remarks = remarks or {}
     lines = [line.strip() for line in about.splitlines() if line.strip()]
     problems = [PlanProblem(None, _ABOUT, None, f"A line of the description cannot start with #; got '{line}'.")
                 for line in lines if line.startswith("#")]
     blocks = [[f"# {_ABOUT}", *lines]] if lines else []
     # a pair the reader would not take is written all the same, last, so that reading it back refuses it
-    ordered = sorted(values, key=lambda pair: _FILE_ORDER.get(pair, len(_FILE_ORDER)))
-    for heading, held in groupby(ordered, key=lambda pair: pair[0]):
+    for heading, held in groupby(_in_file_order(values), key=lambda pair: pair[0]):
         block = [f"# {heading}"]
         for pair in held:
             name, written = pair[1], _written(values[pair])
@@ -210,21 +209,41 @@ def plan_text(values, about: str = "", remarks=None) -> str:
         blocks.append(block)
     text = "\n".join("\n".join(block) + "\n" for block in blocks)
     if not problems:
-        problems = [replace(problem, line=None) for problem in _read(text)[2]]
+        back, read, found = _read(text)
+        problems = [replace(problem, line=None) for problem in found] or _differences(values, lines, read, back)
     if problems:
         raise PlanRefusal(f"This plan cannot be used: {_counted(problems)}", tuple(problems))
     return text
+
+
+def _in_file_order(pairs) -> list:
+    return sorted(pairs, key=lambda pair: _FILE_ORDER.get(pair, len(_FILE_ORDER)))
 
 
 def _written(value) -> str:
     return "on" if value is True else "off" if value is False else str(value).strip()
 
 
+def _differences(values, about: list[str], read: dict, back: str) -> list[PlanProblem]:
+    """What the reader took without a problem and would hand back as something else. A value is compared for what it
+    means: a text stripped, as it is written, and a whole number handed for a number is the same number. Only the
+    first kind of difference is said, since one slip can show as several: a setting nobody handed in is looked for
+    last, and a pair under the description shows as the description."""
+    if back != "\n".join(about):
+        return [PlanProblem(None, _ABOUT, None, "The description would not read back as it was given.")]
+    wanted = {pair: value.strip() if isinstance(value, str) else value for pair, value in values.items()}
+    differ = [pair for pair, value in wanted.items() if pair not in read or read[pair] != value]
+    return [PlanProblem(None, pair[0], pair[1],
+                        f"{_what(pair[1])} would not read back as it was given; got {values.get(pair)!r}.")
+            for pair in _in_file_order(differ or [pair for pair in read if pair not in wanted])]
+
+
 def _read(text: str) -> tuple[str, dict[tuple[str, str], object], list[PlanProblem]]:
     """The description, the values and every problem of a plan's text, the problems in file order, each
     sentence without its line. A setting under a heading the reader does not know is still judged on its own
-    line, so one misspelt heading does not hide what stands under it, nor call every line there a fault."""
-    about, values, problems, set_on = [], {}, [], {}
+    line, so one misspelt heading does not hide what stands under it, nor call every line there a fault. ``unread``
+    gathers each name met on a setting line and not accepted, for the rules across lines."""
+    about, values, problems, set_on, unread = [], {}, [], {}, set()
     heading, past_the_top = None, False
     for number, raw in enumerate(_LINE_END.split(text), 1):
         line = raw.strip()
@@ -249,15 +268,19 @@ def _read(text: str) -> tuple[str, dict[tuple[str, str], object], list[PlanProbl
         refused = _refused_name(name, heading, number, set_on)
         if refused is not None:
             problems.append(PlanProblem(number, heading, *refused))
+            unread.add(name)
             continue
         try:
             checked = _checked(name, written)
         except Refusal as refusal:
             problems.append(PlanProblem(number, heading, refusal.field, refusal.message))
+            unread.add(name)
             continue
-        if heading is not None:
+        if heading is None:
+            unread.add(name)
+        else:
             values[(heading, name)] = checked
-    problems += _across_lines(values, set_on)
+    problems += _across_lines(values, set_on, unread)
     problems.sort(key=lambda problem: problem.line)
     return "\n".join(about), values, problems
 
@@ -326,30 +349,37 @@ def _in_range(name: str, number: float) -> float:
 
 def _bounds_name(text: str) -> str:
     """A name under the model's bounds folder, with forward slashes as the picker shows it. One that could
-    leave that folder is refused here: the window's check that the file exists would accept it."""
-    if not text or "\\" in text or ":" in text or text.startswith("/") or ".." in text.split("/"):
-        raise Refusal(f"{_what('bounds')} must name a file in the model's bounds folder; got '{text}'.",
+    leave that folder is refused here, and so is an empty or a ``.`` part, which the computer resolves and the list
+    shows under no such name: the window's check that the file exists would accept either."""
+    if "\\" in text or ":" in text or {"", ".", ".."} & set(text.split("/")):
+        advice = " Write a sub-folder with a forward slash." if "\\" in text else ""
+        raise Refusal(f"{_what('bounds')} must name a file in the model's bounds folder; got '{text}'.{advice}",
                       field="bounds")
     return text
 
 
-def _across_lines(values: dict, set_on: dict) -> list[PlanProblem]:
-    """The two rules that need more than one line. ``set_on`` holds every setting that stands under its own
-    heading and ``values`` those whose line was also accepted, so a value already refused is not judged twice,
-    and a chi setting is not called lost when the fault is the switch's own line."""
+def _across_lines(values: dict, set_on: dict, unread: set) -> list[PlanProblem]:
+    """The two rules that need more than one line, so that one slip gives one problem. ``set_on`` holds the line of
+    every setting under its own heading, ``values`` those accepted, and ``unread`` each name met on a line not
+    accepted, wherever it stood. So a chi setting is not called lost when the fault is the switch's own line, a count
+    not read is not compared, and a line told it needs the switch is not told of the slots as well, a comparison that
+    means nothing without it. A chi line with a bad value and no switch has two things to correct, and says both."""
     found, where = [], {name: line for (heading, name), line in set_on.items() if heading == _OPTIONS}
-    switch_unread = "chi_mode" in where and (_OPTIONS, "chi_mode") not in values
-    if not switch_unread and values.get((_OPTIONS, "chi_mode")) is not True:
+    if "chi_mode" not in unread and values.get((_OPTIONS, "chi_mode")) is not True:
         found += [PlanProblem(where[name], _OPTIONS, name, f"{_what(name)} needs chi_mode = on in the same plan.")
                   for name in _ONLY_WITH_CHI_MODE if name in where]
 
     def count(name: str) -> int | None:
-        """The plan's value, the built-in when the plan holds none, None when its own line was refused."""
-        return values.get((_OPTIONS, name)) if name in where else int(FIELDS[name].default)
+        """The plan's value, the built-in when the file holds none, None when a line of it was not accepted."""
+        return None if name in unread else values.get((_OPTIONS, name), int(FIELDS[name].default))
+
+    def said(name: str) -> str:
+        """A number as the sentence shows it: one the file does not hold says so, or a person looks for a line."""
+        return f"{count(name)}" if name in where else f"{count(name)} (the built-in)"
 
     probes, slots = count("chi_n_freqs"), count("chi_k_pad")
-    if probes is not None and slots is not None and probes > slots:
+    if not found and probes is not None and slots is not None and probes > slots:
         found.append(PlanProblem(where.get("chi_n_freqs", where.get("chi_k_pad")), _OPTIONS, "chi_n_freqs",
-                                 f"{_what('chi_n_freqs')} must be at most the number of slots, {slots}; "
-                                 f"got {probes}."))
+                                 f"{_what('chi_n_freqs')} must be at most the number of slots, {said('chi_k_pad')}; "
+                                 f"got {said('chi_n_freqs')}."))
     return found
