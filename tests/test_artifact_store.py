@@ -3050,6 +3050,8 @@ def test_the_training_reading_touches_no_card(store, monkeypatch):
     ident = orchestrator.training_identity(orchestrator._cfg_for_a_reading(cfg), prior, 8, 3)
     preview = orchestrator.training_preview
     asked, reached = card_and_programs(monkeypatch), []
+    held = sorted(vars(cfg))
+    assert "t" not in held
 
     def stand_in(name):
         def reach(*args, **kwargs):
@@ -3072,7 +3074,7 @@ def test_the_training_reading_touches_no_card(store, monkeypatch):
         before = tree()
         answer = read(*args, **given)
         assert tree() == before, "a reading writes nothing in the store"
-        assert "t" not in vars(cfg), "a reading writes nothing on the configuration"
+        assert sorted(vars(cfg)) == held, "a reading writes nothing on the configuration"
         return answer
 
     def read(config_=cfg, held=prior, **given):
