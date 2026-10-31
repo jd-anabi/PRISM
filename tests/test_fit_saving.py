@@ -54,7 +54,7 @@ from core.SBI.fit_state import (FIT_CODE, FIT_CONSTANTS, SBI_TRAINER_FILES, STAT
                                 FitLock, code_digests, constants, first_difference, indices_digest,
                                 libraries, load_state, network_digest, running, save_state,
                                 trainer_files_digest)
-from tests._fixtures import calls_that_speak, code_only
+from tests._fixtures import build_fit_record, calls_that_speak, code_only
 
 
 # ── the two generations of the state ─────────────────────────────────────────────────────────────
@@ -2340,6 +2340,138 @@ def test_the_stop_the_training_stage_raises_names_the_training_it_kept(tiny_run,
     note = stopped.value.kept_fit
     assert (note.passes, note.resumed, note.saved_here, note.processes) == (1, False, True, 1), note
     assert r.store.get("fit", note.id).body["region"] is not None
+
+
+def test_the_note_and_the_listing_carry_how_a_training_stopped(tiny_run, fits_left, monkeypatch):
+    """The stop's note says how the kept training stood and the listing says what its record holds: a stop on purpose,
+    its time and its reason, an error as no stop on purpose, the processes, the fit's time, a failed save's sentence.
+    The note's time runs to the moment of the stop and the listing's to the last pass saved. Neither of the note's two
+    is part of what identifies a note, and a process that has saved nothing yet has only the earlier ones' time to
+    give. A record whose process never wrote how it stopped has nothing to say of it."""
+    from core.SBI import training_checkpoint
+    r = tiny_run
+
+    def listed(ref: str):
+        return next(kept for kept in fit_state.kept_fits(r.store) if kept.id == ref)
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 2, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt) as stopped:
+            _train(r, 6, 6, name="fit_how_it_stopped")
+    note = stopped.value.kept_fit
+    kept, body = listed(note.id), r.store.get("fit", note.id).body
+    assert note == fit_state.KeptNote(note.id, 2, False, True, 1, wall_seconds=note.wall_seconds + 1.0, save_error="x")
+    assert hash(note) == hash(fit_state.KeptNote(note.id, 2, False, True, 1))
+    assert note.wall_seconds >= kept.wall_seconds > 0 and note.save_error is None
+    assert kept.wall_seconds == body["progress"]["wall_seconds"] and kept.processes == 1
+    assert (kept.stopped_on_purpose, kept.stop_reason) == (True, "KeyboardInterrupt")
+    assert kept.stopped_at == body["stopped"]["at"] and kept.stopped_at is not None
+    assert kept.save_error is None
+
+    with monkeypatch.context() as patch:
+        patch.setattr(training_checkpoint, "load_rows", interrupted)
+        with pytest.raises(KeyboardInterrupt) as stopped:
+            _resume(r, note.id)
+    assert stopped.value.kept_fit.wall_seconds == kept.wall_seconds, "nothing of this process counts until it saves"
+
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 1, RuntimeError("the flow diverged"))
+        with pytest.raises(RuntimeError) as stopped:
+            _train(r, 6, 7, name="fit_how_it_failed")
+    failed = listed(stopped.value.kept_fit.id)
+    assert (failed.stopped_on_purpose, failed.stop_reason) == (False, "RuntimeError: the flow diverged")
+
+    real_save, real_pass = fit_state.save_state, fit_state.FitSession.save_pass
+
+    def full_disk(path, state):
+        if state["passes"] >= 2:
+            raise OSError("No space left on device")
+        real_save(path, state)
+
+    def stop_at_the_failure(self, take):
+        real_pass(self, take)
+        if self._save_error is not None:
+            raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fit_state, "save_state", full_disk)
+        patch.setattr(fit_state.FitSession, "save_pass", stop_at_the_failure)
+        with pytest.raises(KeyboardInterrupt) as stopped:
+            _train(r, 6, 8, name="fit_how_its_save_failed")
+    failure = "the last save failed (OSError: No space left on device); the kept training stands at pass 1"
+    note = stopped.value.kept_fit
+    assert (note.passes, note.save_error, listed(note.id).save_error) == (1, failure, failure)
+
+    silent = listed(build_fit_record(r.store, stopped=None))
+    assert (silent.stopped_on_purpose, silent.stopped_at, silent.stop_reason) == (None, None, None)
+    assert (silent.processes, silent.wall_seconds, silent.save_error) == (1, 12.0, None)
+
+
+@pytest.mark.parametrize("edited, stop, sums", [
+    pytest.param({"stopped": "by hand"}, (None, None, None), (1, 12.0, None), id="a stop that is no record"),
+    pytest.param({"stopped": {"on_purpose": "yes", "at": 5, "reason": ["a"]}}, (None, None, None), (1, 12.0, None),
+                 id="a stop of other kinds"),
+    pytest.param({"stopped": {"on_purpose": 1, "reason": "by hand"}}, (None, None, "by hand"), (1, 12.0, None),
+                 id="a number for the truth"),
+    pytest.param({"progress": "far"}, (True, "at", "cancelled"), (None, None, None), id="a progress that is no record"),
+    pytest.param({"progress": {"processes": "two", "wall_seconds": "long"}}, (True, "at", "cancelled"),
+                 (None, None, None), id="a progress of other kinds"),
+    pytest.param({"progress": {"processes": True, "wall_seconds": False}}, (True, "at", "cancelled"),
+                 (None, None, None), id="a truth for a number"),
+    pytest.param({"progress": {"processes": 2.5, "wall_seconds": [12.0]}}, (True, "at", "cancelled"),
+                 (None, None, None), id="a fraction of a process and a list of seconds"),
+    pytest.param({"progress": {"processes": 2, "wall_seconds": 90}}, (True, "at", "cancelled"), (2, 90.0, None),
+                 id="whole seconds are seconds"),
+    pytest.param({"save_error": 5}, (True, "at", "cancelled"), (1, 12.0, None), id="a failure that is no sentence"),
+])
+def test_a_record_hand_edited_to_another_shape_reads_as_nothing_said(store, edited, stop, sums):
+    """A body below its key set is not checked by the store, so a hand edit can leave anything there. Such a part reads
+    as saying nothing: the record is listed, the rest of it stands, and no page has to ask what kind a value is."""
+    from core.artifacts import write_fit_manifest
+
+    ref = build_fit_record(store)
+    written = store.get("fit", ref)
+    write_fit_manifest(store.path("fit", ref), body={**written.body, **edited})
+    kept, = fit_state.kept_fits(store)
+    at = written.body["stopped"]["at"] if stop[1] == "at" else stop[1]
+    assert (kept.stopped_on_purpose, kept.stopped_at, kept.stop_reason) == (stop[0], at, stop[2])
+    assert (kept.processes, kept.wall_seconds, kept.save_error) == sums
+    assert type(kept.wall_seconds) in (float, type(None))
+
+
+def test_a_name_given_at_a_resume_is_carried_into_the_kept_record(tiny_run, fits_left, monkeypatch):
+    """A kept training with no name is given one when it is resumed. Stopped before the new process has saved a pass,
+    the record stays as it was found, every file of it, so the name is asked for again at the next resume. Stopped
+    after a pass of the new process, its record holds the name, so that the next resume, given nothing, writes the
+    posterior under it. The note stays the one the store first kept, and the training is the same training."""
+    from core.SBI import training_checkpoint
+    r = tiny_run
+    kept = _keep(r, 6, 5, note="the first note")
+    assert r.store.get("fit", kept.id).body["posterior_name"] == ""
+    found = _bytes(kept.path)
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(training_checkpoint, "load_rows", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            _resume(r, kept.id, name="fit_named_again")
+    assert _bytes(kept.path) == found
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 2, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            _resume(r, kept.id, name="fit_named_again")
+    record = r.store.get("fit", kept.id)
+    assert (record.body["posterior_name"], record.note) == ("fit_named_again", "the first note")
+    assert record.body["progress"]["processes"] == 2
+    assert _row(r, kept.id).fit_for == "fit_named_again"
+    final = _resume(r, kept.id)
+    assert (final.name, final.manifest.note) == ("fit_named_again", "the first note")
+    assert _new_fits(r, fits_left) == []
 
 
 def test_a_posterior_whose_name_was_taken_during_its_fit_is_saved_unnamed_when_asked_and_its_kept_training_goes(

@@ -350,3 +350,29 @@ From Task 2 (the plan reader), `.superpowers/sdd/2026-10-06-window-redesign/stag
    `cfg.t[:n_stab_fine]` (`core/orchestrator.py:723-724`; the number asked for goes into the record at `:750`): a
    `stability_units` longer than the grid (`t_nd_max`) stops at the grid's end without a word, and below one step the
    slice is empty. Today's box does the same, and a plan is a second way in. From Task 2's review, seat two, Minor 6.
+
+From Task 3 (the differing settings and the kept training's facts), `.superpowers/sdd/2026-10-06-window-redesign/stage-4/briefs/task-03-brief.md`:
+5. **The engine changes of this task, registered for the audit (not a fault).** `core/SBI/training_checkpoint.py`: `_sibling_diffs`
+   yields a fifth element, `complete`; `SiblingDifference`, `sibling_differences` (E2, departure 128); the private `_siblings_line`
+   and `_differing`, which `core/orchestrator.py` calls across the module so that the sets are walked once. `core/orchestrator.py`:
+   `TrainingReading`, `training_reading`, the disk's half of `training_preview`, which now calls it, its text unchanged;
+   `TrainingPreview.sibling_diffs`; `matching_fits`; `session.posterior_name = name` after the reopen in `build_posterior`
+   (departures 129, 138). `core/SBI/fit_state.py`: `KeptNote.wall_seconds` and `save_error` (`compare=False`), `KeptFit`'s six new
+   fields, `_held`. Nothing inside `FIT_CODE`; `_canonical`, `identity_digest`, `resolve_dir` and `fresh_run_near_misses` as they were.
+6. **`matching_fits` is a fourth place that names the fit's settings** (items 29, 46). It calls `pipeline.fit_settings` and
+   `fit_state.matching_kept_fits` rather than copying them, but it repeats the stage's resolution of each knob (None to the
+   configuration's constant), and `z_score_x`, which the stage reads off the network it has built, is a rule there: "none" exactly in
+   chi mode (`EmbeddedNet.owns_standardization`, `build_embedding_net`). `tests/test_artifact_store.py::test_the_matching_fits_ask_what_the_stage_asks`
+   holds the two equal for four kinds of observation and box. Cure if wanted: one function that resolves the knobs, called by both.
+7. **`kept_fits` could be cheaper; not built** (probe 5's two cures, `core/SBI/fit_state.py`): `store.get` re-lists the kind for every
+   record, so the listing is quadratic, and `_why_not` peeks the simulation set once per record even when all share one. Measured at
+   this task, on the window's thread: 13 ms at 3 records, 44 at 10, 190 at 30, the same as before it; `matching_fits` is that and 4 ms.
+8. **The reading of the other simulation sets could be cheaper; not built** (probe 6): `_sibling_diffs` unpickles each set's state and
+   header, about 3 ms a set, where each set's `manifest.json` holds the same identity, batches and completeness in 0.045 ms. A manifest can
+   be one save behind the state, which is enough for a fact on a page and not for the stage's binding refusal.
+9. **Item 108 says more than holds.** The named code's digests do not change between CRLF and LF: `inspect.getsource` reads through
+   `tokenize.open`, which turns either line end into a newline. `fit_state.code_digests()` on an LF copy of the tree equals the digests
+   recorded from this CRLF working tree. An edit that changes a named function's line ends alone moves no digest; each file keeps its
+   line ends all the same, so that a diff stays a diff.
+10. **A page's guard knows only this window's runs.** A run of the command line beside an open window can meet `training_reading` or
+    `matching_fits` in a simulation set's `state.pt`, the hazard of probe 6, at one reading per edit. Left so by the controller's ruling of 30 October.

@@ -1707,6 +1707,7 @@ def build_posterior(
             # its simulation set is read back (minutes at full size, inside the training call), a check
             # that fails once the rows are read, a stop during the fit or the posterior's write, the end.
             session = fit_state.FitSession.reopen(store, kept, cfg=cfg)
+            session.posterior_name = name        # the kept record's name, from its next saved pass on
         # hf, nt, lr, patience and max_ep were resolved (and range-checked) above, before any spend -- not
         # inlined into this call -- so the manifest records what was actually used.
         posterior_latent, pos_diagnostics = pipeline.train_nn(

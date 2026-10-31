@@ -57,7 +57,7 @@ import math
 import os
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -480,12 +480,17 @@ class KeptNote:
     re-raises carries it (``kept_fit``): its id, the passes kept, whether it was resumed from an earlier
     process, whether this process saved a pass into it, and the processes that have trained it and saved a
     pass, as its record counts them. Whoever catches the stop reads it to ask whether to keep the training,
-    to offer to resume it, and to say when a resumed training was stopped before it kept anything new."""
+    to offer to resume it, and to say when a resumed training was stopped before it kept anything new.
+    ``wall_seconds`` and ``save_error`` say how it stood when the note was taken, the fit's time up to then in
+    every process and a failed last save's sentence. They are no part of what the note identifies: two
+    notes of one kept training taken a moment apart are the same note."""
     id: str
     passes: int
     resumed: bool
     saved_here: bool
     processes: int
+    wall_seconds: "float | None" = field(default=None, compare=False)
+    save_error: "str | None" = field(default=None, compare=False)
 
 
 class FitSession:
@@ -843,14 +848,16 @@ class FitSession:
         if not self._kept or self.id is None:
             return None
         processes = self.processes - (1 if self.resumed and not self._saved_here else 0)
-        return KeptNote(self.id, self.passes, self.resumed, self._saved_here, processes)
+        return KeptNote(self.id, self.passes, self.resumed, self._saved_here, processes,
+                        wall_seconds=self.wall_seconds(), save_error=self._save_error)
 
 
 # ── the listing ──────────────────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class KeptFit:
     """A kept fit as the listing reads it from its record: what it is for, how far it went, what it was
-    trained with, and whether it can be resumed now (and, when it cannot, why)."""
+    trained with, whether it can be resumed now (and, when it cannot, why), and how it stopped. The last six
+    are None where the record says nothing of them, or holds another shape there."""
     id: str
     path: Path
     created: str
@@ -868,6 +875,18 @@ class KeptFit:
     config: dict
     can_resume: bool
     why_not: "str | None"
+    stopped_on_purpose: "bool | None" = None
+    stopped_at: "str | None" = None
+    stop_reason: "str | None" = None
+    processes: "int | None" = None
+    wall_seconds: "float | None" = None
+    save_error: "str | None" = None
+
+
+def _held(value, *kinds):
+    """``value`` when it is exactly of one of ``kinds``, else None: a hand edit can leave anything in a record,
+    and a truth value is no number."""
+    return value if type(value) in kinds else None
 
 
 def _why_not(store, state: str, body: dict, parents: dict, identity: dict, now: dict) -> "str | None":
@@ -919,6 +938,7 @@ def kept_fits(store) -> "list[KeptFit]":
         # that cannot be resumed (an empty identity names no rows and no batches).
         identity = body.get("identity") if isinstance(body.get("identity"), dict) else {}
         progress = body.get("progress") if isinstance(body.get("progress"), dict) else {}
+        stopped = body.get("stopped") if isinstance(body.get("stopped"), dict) else {}
         state = row.fit_state or state_word(row.path, body)
         why = _why_not(store, state, body, dict(m.parents), identity, now)
         out.append(KeptFit(id=m.id, path=row.path, created=m.created, posterior_name=body.get("posterior_name") or "",
@@ -926,7 +946,12 @@ def kept_fits(store) -> "list[KeptFit]":
                            best_validation_loss=progress.get("best_validation_loss"),
                            passes_since_best=progress.get("passes_since_best"), saved_at=progress.get("saved_at"),
                            parents=dict(m.parents), inputs=dict(m.inputs), identity=identity,
-                           region=body.get("region"), config=dict(m.config), can_resume=why is None, why_not=why))
+                           region=body.get("region"), config=dict(m.config), can_resume=why is None, why_not=why,
+                           stopped_on_purpose=_held(stopped.get("on_purpose"), bool),
+                           stopped_at=_held(stopped.get("at"), str), stop_reason=_held(stopped.get("reason"), str),
+                           processes=_held(progress.get("processes"), int),
+                           wall_seconds=_finite(_held(progress.get("wall_seconds"), float, int)),
+                           save_error=_held(body.get("save_error"), str)))
     return out
 
 
