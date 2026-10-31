@@ -384,3 +384,12 @@ From Task 3 (the differing settings and the kept training's facts), `.superpower
     of `training_identity` put it there. The pages' two readings do not: `orchestrator._cfg_for_a_reading` hands the identity a shallow copy holding the grid
     `SimConfig.t`'s own lines make on the `meta` device (Task 3's fix round). Cure if wanted: a plain property for the length, which the identity reads, and
     the view goes; that opens the identity's code, which the owner's lines name.
+12. **A training that ends with none of the three outcomes never ends** (`core/gui/run/controller.py`, `_on_finished`, `_tried_again`). `Worker.run` can end with no result, no error
+    and no cancel (a library's `SystemExit`, or the capture's exit raising). `_on_finished` then sets `run.outcome = "failed"` with `run.failure` None, and for a run with a simulation
+    set calls `_tried_again`, whose first line is `exc = run.failure[0]`: a `TypeError` in the slot. `_end` is not reached, the run stays live, the panels locked, and a stop has nothing
+    left to stop. Older than stage 4. Cure: `run.failure is not None and self._tried_again(run)`; then the history's `out_of_memory` also wants `run.failure is not None`, or `_begin_try`
+    wants to clear `failure_kind`, which nothing clears today (Task 4's seat two).
+13. **In a run tried again, `health`'s two counts are the last try's alone** (`core/gui/run/model.py`, `core/SBI/pipeline.py`). The engine's count starts at nought in each generation
+    call and each `[patho]` reading replaces the model's, so after a try `failed` and `simulated` cover that try, while `memory_peak` and `batches_split` beside them cover the whole run.
+    A later Continue adds the shorter count to its "over N runs" (`_name_the_set`). Older than stage 4. Cure: sum across a run's tries, or say the scope in `history.py`'s docstring
+    (Task 4's seat two).
