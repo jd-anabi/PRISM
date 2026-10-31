@@ -2357,15 +2357,32 @@ def test_the_note_and_the_listing_carry_how_a_training_stopped(tiny_run, fits_le
     def interrupted(*args, **kwargs):
         raise KeyboardInterrupt
 
+    class Later:
+        """The record's clock, moved on by hand between the save and the stop."""
+        ahead = 0.0
+
+        @classmethod
+        def time(cls):
+            return time.time() + cls.ahead
+
+    save_it = fit_state.FitSession.save_pass
+
+    def a_minute_after_the_second_save(self, take):
+        save_it(self, take)
+        if self.passes == 2:
+            Later.ahead = 60.0
+            raise KeyboardInterrupt
+
     with monkeypatch.context() as patch:
-        _stop_after(patch, 2, KeyboardInterrupt())
+        patch.setattr(fit_state, "time", Later)
+        patch.setattr(fit_state.FitSession, "save_pass", a_minute_after_the_second_save)
         with pytest.raises(KeyboardInterrupt) as stopped:
             _train(r, 6, 6, name="fit_how_it_stopped")
     note = stopped.value.kept_fit
     kept, body = listed(note.id), r.store.get("fit", note.id).body
     assert note == fit_state.KeptNote(note.id, 2, False, True, 1, wall_seconds=note.wall_seconds + 1.0, save_error="x")
     assert hash(note) == hash(fit_state.KeptNote(note.id, 2, False, True, 1))
-    assert note.wall_seconds >= kept.wall_seconds > 0 and note.save_error is None
+    assert note.wall_seconds >= kept.wall_seconds + 60.0 and kept.wall_seconds > 0 and note.save_error is None
     assert kept.wall_seconds == body["progress"]["wall_seconds"] and kept.processes == 1
     assert (kept.stopped_on_purpose, kept.stop_reason) == (True, "KeyboardInterrupt")
     assert kept.stopped_at == body["stopped"]["at"] and kept.stopped_at is not None
@@ -2466,13 +2483,18 @@ def test_a_name_given_at_a_resume_is_carried_into_the_kept_record(tiny_run, fits
     with monkeypatch.context() as patch:
         _stop_after(patch, 2, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
-            _resume(r, kept.id, name="fit_named_again")
+            _resume(r, kept.id, name="fit_named_again", note="a note given at the resume")
     record = r.store.get("fit", kept.id)
     assert (record.body["posterior_name"], record.note) == ("fit_named_again", "the first note")
     assert record.body["progress"]["processes"] == 2
     assert _row(r, kept.id).fit_for == "fit_named_again"
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 3, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            _resume(r, kept.id, name="fit_named_twice")
+    assert r.store.get("fit", kept.id).body["posterior_name"] == "fit_named_twice"
     final = _resume(r, kept.id)
-    assert (final.name, final.manifest.note) == ("fit_named_again", "the first note")
+    assert (final.name, final.manifest.note) == ("fit_named_twice", "the first note")
     assert _new_fits(r, fits_left) == []
 
 

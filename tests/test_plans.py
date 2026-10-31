@@ -499,10 +499,11 @@ def test_what_would_not_read_back_is_said_in_the_order_of_the_file():
     """Several values that would read back as something else are told as the reader tells its problems, top of the
     file first, in whatever order they were handed in."""
     with pytest.raises(PlanRefusal) as refused:
-        plan_text({BOUNDS: None, UNITS: None})
+        plan_text({("Calibration", "n_cal"): "5", BOUNDS: None, UNITS: None})
     assert [(problem.key, problem.message) for problem in refused.value.problems] == [
         ("units", f"{_what('units')} would not read back as it was given; got None."),
-        ("bounds", f"{_what('bounds')} would not read back as it was given; got None.")]
+        ("bounds", f"{_what('bounds')} would not read back as it was given; got None."),
+        ("n_cal", f"{_what('n_cal')} would not read back as it was given; got '5'.")]
 
 
 def test_a_refusal_at_the_saving_says_the_readers_sentence_with_no_line():

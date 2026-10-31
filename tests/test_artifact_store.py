@@ -2829,6 +2829,7 @@ def test_every_differing_setting_of_a_saved_set_is_listed_with_both_values(tmp_p
     three = {**mine, "nd_lows": lows[:-1] + [-1.0], "prior_fingerprint": "cccc", "truncation": region}
     one = {**mine, "n_runs": 400}
     rounds = {**mine, "truncation": region}
+    lopsided = {**{key: value for key, value in mine.items() if key != "model"}, "added_since": 5}
     said_two = ({"field": "n_runs", "mine": 10000, "theirs": 5000},
                 {"field": "prior_fingerprint", "mine": "aaaa", "theirs": "bbbb"})
     said_three = ({"field": "nd_lows", "mine": lows, "theirs": lows[:-1] + [-1.0]},
@@ -2841,6 +2842,7 @@ def test_every_differing_setting_of_a_saved_set_is_listed_with_both_values(tmp_p
     write_simulation_set(tmp_path, late, 3989, complete=True)
     write_simulation_set(tmp_path, early, 120)
     write_simulation_set(tmp_path, one, 3989)
+    write_simulation_set(tmp_path, lopsided, 7)
     write_simulation_set(tmp_path, rounds, 1, complete=True)
 
     level = sorted([(tc.identity_digest(late), True, said_late), (tc.identity_digest(one), False, said_one)],
@@ -2848,6 +2850,9 @@ def test_every_differing_setting_of_a_saved_set_is_listed_with_both_values(tmp_p
     assert tc.sibling_differences(mine, tmp_path) == (
         *(tc.SiblingDifference(name, 3989, complete, said) for name, complete, said in level),
         tc.SiblingDifference(tc.identity_digest(early), 120, False, said_early),
+        tc.SiblingDifference(tc.identity_digest(lopsided), 7, False,
+                             ({"field": "added_since", "mine": None, "theirs": 5},
+                              {"field": "model", "mine": "X", "theirs": None})),
         tc.SiblingDifference(tc.identity_digest(rounds), 1, True,
                              ({"field": "truncation", "mine": None, "theirs": region},)))
     assert tc.near_miss_siblings(mine, tmp_path) == [
@@ -2898,7 +2903,7 @@ def test_the_preview_says_word_for_word_what_it_said(store, monkeypatch):
     fixed = {"n_runs": 3, "width": 8, "hw_batch": 8, "n_fine": min(config.N_ND_MAX, int(cfg.t.shape[0])), "n_vars": 3,
              "need_elements": None, "have_elements": None, "estimate_error": None, "batches_done": 0, "siblings": "",
              "cadence": 5, "checkpoint_error": None, "device_type": "cpu", "itemsize": 4}
-    walks, peeks, real_walk, real_peek = [], [], tc._sibling_diffs, tc.peek
+    walks, peeks, heads, real_walk, real_peek, real_head = [], [], [], tc._sibling_diffs, tc.peek, tc.read_header
 
     def walk(identity, root=None):
         walks.append(root)
@@ -2908,12 +2913,18 @@ def test_the_preview_says_word_for_word_what_it_said(store, monkeypatch):
         peeks.append(Path(path).name)
         return real_peek(path)
 
+    def head(path):
+        heads.append(Path(path).name)
+        return real_head(path)
+
     monkeypatch.setattr(tc, "_sibling_diffs", walk)
     monkeypatch.setattr(tc, "peek", peek)
+    monkeypatch.setattr(tc, "read_header", head)
 
     def preview(held=prior, every=5):
         walks.clear()
         peeks.clear()
+        heads.clear()
         return orchestrator.training_preview(cfg, held, num_runs=3, run_size_cap=0, checkpoint_every=every, store=store)
 
     def said(p) -> dict:
@@ -2940,15 +2951,18 @@ def test_the_preview_says_word_for_word_what_it_said(store, monkeypatch):
     moved = write_simulation_set(root, {**ident, "n_runs": 13}, 4)
     torch.save({"identity": ident}, moved / "header.pt")
     moved.rename(root / "moved_by_hand")
+    both = write_simulation_set(root, {**ident, "n_runs": 15, "truncation": {"dims": [1]}}, 3)
     notes = {near.name: "2 batches, differs in n_runs",
              rounds.name: "7 batches, differs in truncation -- a TSNPE round and an amortized run never share rows",
-             other.name: "5 batches, differs in model", "moved_by_hand": "4 batches, differs in nothing recorded"}
-    line = ("[checkpoint] 4 other checkpoint(s) exist and do NOT match this run: "
+             other.name: "5 batches, differs in model", "moved_by_hand": "4 batches, differs in nothing recorded",
+             both.name: "3 batches, differs in n_runs"}
+    line = ("[checkpoint] 5 other checkpoint(s) exist and do NOT match this run: "
             + "; ".join(f"{name} ({notes[name]})" for name in sorted(notes)))
     p = preview()
     assert said(p) == {**fixed, "checkpoint": "new_with_siblings", "siblings": line}
     assert (walks, peeks) == ([root], [own.name, *sorted(notes)])
-    assert [row.name for row in p.sibling_diffs] == [rounds.name, other.name, "moved_by_hand", near.name]
+    assert heads == sorted(notes)
+    assert [row.name for row in p.sibling_diffs] == [rounds.name, other.name, "moved_by_hand", both.name, near.name]
     assert p.siblings == tc.describe_siblings(ident, root)
 
     class Broken:
@@ -3008,6 +3022,15 @@ def test_the_preview_carries_the_differing_sets_only_for_a_new_set(store, monkey
     assert read() == expected, "a set of the run's own with no batch continues nothing"
     write_simulation_set(root, ident, 1)
     assert read() == ()
+
+    class Region:
+        def identity_fields(self):
+            return {"dims": [0], "level": 0.999}
+
+    write_simulation_set(root, {**ident, "truncation": Region().identity_fields()}, 4)
+    for what in (orchestrator.training_preview, orchestrator.training_reading):
+        reading = what(cfg, prior, truncation=Region(), **every)
+        assert (reading.checkpoint, reading.batches_done) == ("resume_partial", 4), reading
 
 
 def test_the_training_reading_touches_no_card(store, monkeypatch):
@@ -3247,6 +3270,7 @@ def test_the_matching_fits_ask_what_the_stage_asks(store, monkeypatch, bounds, c
 
     cfg, prior, *_ = _budget(store, _cfg_of(bounds, chi))
     monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 6)
+    monkeypatch.setattr(config, "TRAINING_CHECKPOINT_EVERY", 0)
     given = dict(num_runs=3, run_size_cap=5, hidden_features=16, num_transforms=2, learning_rate=1e-3,
                  stop_after_epochs=7, max_num_epochs=9, checkpoint_every=4)
     for call in (given, dict.fromkeys(given)):

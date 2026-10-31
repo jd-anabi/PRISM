@@ -358,7 +358,8 @@ From Task 3 (the differing settings and the kept training's facts), `.superpower
    `TrainingReading`, `training_reading`, the disk's half of `training_preview`, which now calls it, its text unchanged;
    `TrainingPreview.sibling_diffs`; `matching_fits`; `session.posterior_name = name` after the reopen in `build_posterior`
    (departures 129, 138). `core/SBI/fit_state.py`: `KeptNote.wall_seconds` and `save_error` (`compare=False`), `KeptFit`'s six new
-   fields, `_held`. Nothing inside `FIT_CODE`; `_canonical`, `identity_digest`, `resolve_dir` and `fresh_run_near_misses` as they were.
+   fields, `_held`. `core/plans.py`: `_read` gathers a setting line above the first heading into `unread`. Nothing inside `FIT_CODE`;
+   `_canonical`, `identity_digest`, `resolve_dir` and `fresh_run_near_misses` as they were.
 6. **`matching_fits` is a fourth place that names the fit's settings** (items 29, 46). It calls `pipeline.fit_settings` and
    `fit_state.matching_kept_fits` rather than copying them, but it repeats the stage's resolution of each knob (None to the
    configuration's constant), and `z_score_x`, which the stage reads off the network it has built, is a rule there: "none" exactly in
@@ -376,3 +377,8 @@ From Task 3 (the differing settings and the kept training's facts), `.superpower
    line ends all the same, so that a diff stays a diff.
 10. **A page's guard knows only this window's runs.** A run of the command line beside an open window can meet `training_reading` or
     `matching_fits` in a simulation set's `state.pt`, the hazard of probe 6, at one reading per edit. Left so by the controller's ruling of 30 October.
+11. **`SimConfig.t` is made on the card by whatever reads it first** (`core/sim_config.py:156`): a cached property made on `hw.device`, about 10 MB, and
+    `SimulationIdentity.from_cfg` asks it for its length alone (`core/artifacts/identity.py:107`), so `training_preview`, `fresh_run_near_misses` and any other caller
+    of `training_identity` put it there. The pages' two readings do not: `orchestrator._cfg_for_a_reading` hands the identity a shallow copy holding the grid
+    `SimConfig.t`'s own lines make on the `meta` device (Task 3's fix round). Cure if wanted: a plain property for the length, which the identity reads, and
+    the view goes; that opens the identity's code, which the owner's lines name.
