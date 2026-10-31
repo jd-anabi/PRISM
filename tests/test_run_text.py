@@ -21,6 +21,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from core import runs
 from core.gui import streams
 from core.gui.run import textfile
@@ -626,11 +628,13 @@ def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
         "acknowledged": False,
         "tries": [{"started": started, "ended": ended, "outcome": "stopped", "failure": None, "batches_before": 0,
                    "batches_after": 10000, "epochs_before": 0, "epochs_after": 62}],
-        "plan": "retrain", "settings": {"num_runs": 10000, "hidden_features": 128, "num_transforms": 5},
-        "memory_limit": "The graphics card's memory limit in force is 6 GiB, set in Settings.",
+        "plan": {"name": "retrain", "sha256": "ab" * 32},
+        "settings": {"num_runs": 10000, "hidden_features": 128, "num_transforms": 5},
+        "memory_limit": {"gib": 6.0, "source": "setting", "computer": "LAB-PC"},
         "simulation_set": {"folder": "eda5c2a1e468", "batches": 10000, "at_start": 0, "at_end": 10000,
                            "per_batch": 2048, "seconds_per_batch": 9.7},
-        "health": {"failed_simulations": 3, "memory_peak_gib": 5.8},
+        "health": {"failed": 3, "simulated": 20480000, "memory_peak": 5.8, "batches_split": 2,
+                   "out_of_memory": False},
         "fit": {"epochs": 62, "best_epoch": 58, "best_validation_loss": -3.39812, "seconds_per_epoch": 3780.0,
                 "ended_by": "stopped", "network": [128, 5], "simulations": 20480000, "kept_id": "20261014T141000-1",
                 "passes": 62, "resumed": False, "processes": 1, "wall_seconds": 234360.0, "save_error": None},
@@ -694,6 +698,18 @@ def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
     (folder / "20261011T090000-training.json").write_text('{"id": "20261011T09', encoding="utf-8")
     assert history.read(folder / "20261011T090000-training.json") is None
     assert _ids(history.latest(folder, records_root=str(tmp_path / "records"), n=9)) == ["20261008T190211-training"]
+
+
+def test_a_character_no_encoding_holds_does_not_cost_a_run_its_history(tmp_path):
+    """A lone surrogate, which a library's message can let through and a file's name on Windows can hold, cannot be
+    written as UTF-8: a run's history writes it as its escape, and it reads back as it was, as the run's text file keeps
+    such a character. It would otherwise cost the run every write, and at its end leave it said to be running."""
+    from core.gui.run import history
+    words = "a file named \udc80 could not be read"
+    record = {"id": "20261008T190211-training", "word": "Training", "started": _at(8, 19, 2, 11),
+              "failure": {"type": "ValueError", "message": words}}
+    path = history.write(tmp_path / "runs", record)
+    assert history.read(path)["failure"]["message"] == words
 
 
 def test_a_rename_another_program_holds_up_is_tried_again(tmp_path, monkeypatch):
@@ -903,6 +919,35 @@ def test_the_runs_of_a_simulation_set_are_found_by_its_folder(tmp_path):
     assert _ids(history.runs_for(folder, "eda5c2a1e468")) == ["20261001T120000-training", "20261003T120000-training"]
     assert _ids(history.runs_for(folder, "0a1b2c3d4e5f")) == ["20261002T120000-narrowing-round"]
     assert history.runs_for(folder, "ffffffffffff") == []
+
+
+def test_the_length_of_the_last_finished_run_of_a_word(tmp_path):
+    """How long the last run of a word took on this computer: the newest of that word that finished and says both its
+    times, its length in seconds and its name, whichever records it wrote to. A newer run that did not finish, or that
+    finished and does not say when, is passed over, and so is a run of another word. With none, nothing is said."""
+    from core.gui.run import history
+    from tests._fixtures import write_history
+    folder = tmp_path / "runs"
+
+    def run(day, *, word="Prior build", took=92, name="retrain_prior", **changed):
+        started, stem = _at(day, 9), word.lower().replace(" ", "-")
+        write_history(folder, **{"id": f"2026100{day}T090000-{stem}", "word": word, "name": name, "started": started,
+                                 "ended": started + timedelta(seconds=took), "outcome": "finished",
+                                 "records_root": str(tmp_path / f"records{day}"), **changed})
+
+    assert history.duration(folder, "Prior build") is None
+    run(1, took=300, name="oldest")
+    run(2)
+    run(3, outcome="failed", took=5, name="failed")
+    run(4, outcome="stopped", took=6, name="stopped")
+    run(5, outcome="not seen to end", took=7, name="unseen")
+    run(6, took=8, name="no end", ended=None)
+    run(7, word="Training", took=9, name="retrain_3")
+    assert history.duration(folder, "Prior build") == (92.0, "retrain_prior")
+    assert history.duration(folder, "Training") == (9.0, "retrain_3")
+    assert history.duration(folder, "Calibration") is None
+    run(8, name=None, took=30)
+    assert history.duration(folder, "Prior build") == (30.0, "")
 
 
 def test_a_run_still_marked_running_is_closed_as_not_seen_to_end(tmp_path):
@@ -1182,3 +1227,56 @@ def test_home_counts_only_the_runs_of_the_records_folder_in_use(tmp_path):
                 False, ["20261003T010000-training"], True)
         finally:
             window.hide()
+
+
+@pytest.mark.parametrize("limit", [6.0, None, "not in the file"], ids=["a bare number", "none", "not in the file"])
+def test_every_reader_of_a_history_treats_what_is_missing_as_no_information(tmp_path, limit):
+    """A history written before the run's record grew holds no plan, no settings and no check, the two counts alone
+    for its health, no wall time and no failed save for its fit, and the memory limit as a bare number, as None or not
+    at all. Every reader says of it what it says of any run: how it ended, in its words and its status, at the foot
+    after a reopening and on its page in the past view; its paces, for the next run; its length. Seen, it is written
+    again with all it held."""
+    from core.gui.run import ends, history
+    from tests._fixtures import build_run_host
+    from tests._runs import Clock, controller_on
+    root, folder = tmp_path / "Artifacts", tmp_path / "runs"
+    run = "20261003T010000-training"
+    held_limit = None if limit == "not in the file" else limit
+    path = _training_history(
+        folder, run, root, outcome="finished", ended=_at(3, 9), stage="Saving", memory_limit=held_limit,
+        health={"failed": 3, "simulated": 2_048},
+        simulation_set={"folder": "eda5c2a1e468", "batches": 10_000, "at_start": 0, "at_end": 10_000,
+                        "per_batch": 2_048, "seconds_per_batch": 9.7},
+        fit={"epochs": 62, "best_epoch": 58, "best_validation_loss": -3.4, "seconds_per_epoch": 3780.0,
+             "ended_by": "patience", "network": [256, 10], "simulations": 20_480_000, "expected": 130,
+             "discarded": False},
+        result={"kind": "posterior", "id": "q1", "name": "retrain_3", "asked": ""})
+    if limit == "not in the file":
+        written = json.loads(path.read_text(encoding="utf-8"))
+        for name in ("plan", "settings", "check", "memory_limit"):
+            del written[name]
+        path.write_text(json.dumps(written), encoding="utf-8")
+    now = _at(8, 19, 2)
+    sentence = ("Training finished on Sat 3 Oct, 09:00, after 8 hours. The posterior retrain_3 is saved. The fit ended "
+                "at epoch 62, earlier than the estimate of about 130: validation had not improved for 4 epochs (best "
+                "at epoch 58).")
+    record = history.read(path)
+    assert ends.words(record, now) == (sentence, "")
+    status = ends.status_of(record, now)
+    assert (status.state, status.outcome, status.sentence) == ("ended", "finished", sentence)
+    assert history.estimate(folder, word="Training", per="batch", size={"per_batch": 2_048}) == (
+        9.7, "the last training of this size, retrain_3, took 9.7 s per batch")
+    assert history.estimate(folder, word="Training", per="epoch",
+                            size={"network": (256, 10), "simulations": 20_480_000}) == (
+        3780.0, "the last training of this size, retrain_3, took about 63 minutes per epoch")
+    assert history.duration(folder, "Training") == (8 * 3600.0, "retrain_3")
+    held = controller_on(tmp_path, Clock(now))
+    held.recall(str(root))
+    assert (held.status.run, held.status.outcome, held.status.sentence) == (run, "finished", sentence)
+    host = build_run_host()
+    assert held.show_past(run, host)
+    assert (host.past_view.mode, host.past_view.sentence.text()) == ("past", sentence)
+    held.acknowledge(run)
+    kept = history.read(path)
+    assert (kept["acknowledged"], kept["memory_limit"], kept["health"], kept["plan"], kept["settings"]) == (
+        True, held_limit, {"failed": 3, "simulated": 2_048}, None, None), kept

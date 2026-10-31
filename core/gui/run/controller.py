@@ -59,6 +59,7 @@ import json
 import logging
 import math
 import os
+import socket
 import statistics
 import threading
 import weakref
@@ -75,7 +76,7 @@ from .. import this_computer
 from ..streams import CancelToken
 from ..worker import Worker
 from . import ends, history, questions, retry
-from .model import FIT_PACE_RECORDS, IDLE, RunModel, RunSpec, RunStatus, moved
+from .model import FIT_PACE_RECORDS, IDLE, TYPED_EPOCHS_TEXT, RunModel, RunSpec, RunStatus, moved
 from .textfile import FSYNC_EVERY_S, SEPARATOR_TEXT, RunTextFile
 
 log = logging.getLogger(__name__)
@@ -106,20 +107,30 @@ def _local_now() -> datetime:
     return datetime.now().astimezone()
 
 
-def _memory_limit() -> tuple[float | None, str]:
-    """The memory limit in force for each batch of simulations, in GiB (None when there is none), and the run's
-    line that says it and where it was set: by the variable of the environment, or in the window's step 1."""
+def _memory_limit() -> tuple[float | None, str, str]:
+    """The memory limit in force for each batch of simulations, in GiB (None when there is none), the run's line
+    that says it and where it was set (by the variable of the environment, or in the window's step 1), and that
+    source as the run's history keeps it: "environment" for a number in the variable, 0 among them, which is no limit;
+    else "setting" for a limit and "none" for none."""
     from core.SBI import pipeline
     gib = pipeline.vram_ceiling_gib()
-    if gib <= 0:
-        return None, NO_LIMIT_TEXT
-    raw = os.environ.get(pipeline.VRAM_CEILING_ENV)
     try:
-        by_variable = raw is not None and bool(raw.strip()) and float(raw) >= 0
-    except ValueError:
+        float(os.environ.get(pipeline.VRAM_CEILING_ENV, ""))
+        by_variable = True
+    except ValueError:                           # blank, or no number: the planner passes over it as well
         by_variable = False
+    if gib <= 0:
+        return None, NO_LIMIT_TEXT, "environment" if by_variable else "none"
     source = f"set by {pipeline.VRAM_CEILING_ENV}" if by_variable else "set in step 1, Model and options"
-    return gib, LIMIT_TEXT.format(f"{gib:g}", source)
+    return gib, LIMIT_TEXT.format(f"{gib:g}", source), "environment" if by_variable else "setting"
+
+
+def _computer() -> str:
+    """This computer's name; "" when it cannot say: a run goes on without it."""
+    try:
+        return socket.gethostname()
+    except (OSError, ValueError):
+        return ""
 
 
 def _out_of_memory():
@@ -246,7 +257,7 @@ class _Run:
         self.closing = False                       # the window closes once the run has ended
         self.ended: datetime | None = None
         self.result: tuple | None = None           # (kind, id, name) of the record a finished run wrote
-        self.asked = ""                            # the name its call was handed for that record ("" for none)
+        self.asked = ""                            # the name that record was asked to have ("" for none)
         self.record: dict | None = None            # the history its end wrote, which every later write starts from
         self.waiting: RunStatus | None = None      # the end that waited to be seen as it started, until it is set aside
         self.last: RunStatus | None = None         # its status at its end, which its page is drawn with after it
@@ -347,9 +358,10 @@ class RunController(QObject):
                  provide_stream: bool = False, on_chunk=None, watch_dir=None, **kwargs) -> bool:
         """Start ``fn(*args, **kwargs)`` as the process's run, described by ``spec``, for the page ``host``. False,
         and nothing started, while a run is live. Else, in this order: the memory limit in force is read once; the
-        spec is given the call and the limit; its model; where the run keeps files, its id and its text file; the
-        host's run page handed the run (none for a run that only loads a record); where the run keeps files, the
-        text file's head, said on ``lines``, and its history file; the controls of every panel locked; the run's
+        spec is given the call, the limit, where it was set and this computer's name, and what it hands for the run's
+        history is made plain; its model; where the run keeps files, its id and its text file; the host's run page
+        handed the run (none for a run that only loads a record); where the run keeps files, the text file's head, said
+        on ``lines``, and its history file; the controls of every panel locked; the run's
         page shown in its host and drawn; the status published; the worker queued. A start that raises from the
         moment its page is handed the run to the moment its worker is queued is taken back -- every panel free, the
         host's results given back, the status idle again, the run's two files removed -- and the error is raised as
@@ -373,13 +385,16 @@ class RunController(QObject):
         from ..panels.base_panel import BasePanel
         from ..plot_watcher import NewPngWatcher
         clock = self._clock or _local_now
-        gib, limit_text = _memory_limit()
+        gib, limit_text, limit_source = _memory_limit()
         spec = spec.with_call(fn, args, kwargs)
-        spec = replace(spec, facts={**spec.facts, "memory_limit": gib})
+        spec = replace(spec, plan=history.plain(spec.plan), settings=history.plain(spec.settings),
+                       facts={**spec.facts, "memory_limit": gib, "memory_source": limit_source,
+                              "computer": _computer()})
         store = default_store()
         folder = self._folder if self._folder is not None else history.runs_folder()
         run = _Run(spec, host, store, folder)
-        run.asked, run.waiting = _asked(kwargs), waiting
+        run.asked = _asked(kwargs) or (spec.name if "resume_fit" in kwargs else "")
+        run.waiting = waiting
         run.keywords = {"on_result": on_result, "provide_fig_sink": provide_fig_sink,
                         "provide_stream": provide_stream, "on_chunk": on_chunk}
         run.solver_at_start, run.real_start = SOLVER.steps, datetime.now(timezone.utc)
@@ -387,7 +402,7 @@ class RunController(QObject):
         # has gone. A run that only loads a record is handed no page, and leaves the page's offer as it is.
         self._offers = {key: offered for key, offered in self._offers.items()
                         if _alive(offered.host) and (offered.host is not host or spec.loads_only)}
-        expected = _expected(store, spec.facts) if "model" in spec.facts else None
+        expected = self.expected_epochs(spec)
         word = spec.word
         model = RunModel(spec, clock=clock, expected=expected,
                          estimate=lambda per, size: history.estimate(folder, word=word, per=per, size=size))
@@ -444,6 +459,18 @@ class RunController(QObject):
         run.worker, run.token = worker, token
         QThreadPool.globalInstance().start(worker)
         return True
+
+    def expected_epochs(self, spec: RunSpec) -> tuple[int, str] | None:
+        """The epochs the fit of the run ``spec`` is expected to run, with the words that say where the number comes
+        from: the number typed on its page, or else that of the newest finished training of its kind in the store in
+        use, or else None, and None for a run with no kind. A run's start asks this, and so does a page before one:
+        it lists the store's posteriors and reads their manifests, so no page asks it while a run is live."""
+        if spec.expected_epochs:
+            return spec.expected_epochs, TYPED_EPOCHS_TEXT.format(spec.expected_epochs)
+        if "model" not in spec.facts:
+            return None
+        from core.artifacts import default_store
+        return _expected(default_store(), spec.facts)
 
     def _worker(self, run: _Run, kwargs: dict):
         """A worker for the run's own call, its keywords ``kwargs``, with a new token: the run's text file its line
@@ -1415,8 +1442,8 @@ class RunController(QObject):
         "stopped", with that reason, until the run has ended, and its end the moment the reason was said, and the same
         of the try it is in, with the moment the run was last heard, at each write: a process Windows ends before the
         run leaves them said, and leaves said that the run's own end was never written. The reason stays unless the
-        run finished. The record's name asked is the name the run's call was handed, never the run's own word for
-        itself."""
+        run finished. The record's name asked is the name the run's call was handed, or for a resume, whose call hands
+        none, the kept name its page put in the run's own; never the run's own word for itself."""
         spec, model = run.spec, self._model
         reason = run.stop_reason if run.stop_reason and run.outcome != "finished" else None
         ended = run.ended if run.ended is not None or reason is None else run.reason_at
@@ -1437,7 +1464,8 @@ class RunController(QObject):
                    "network": list(network) if network else None, "simulations": budget.get("simulations"),
                    "kept_id": getattr(note, "id", None), "passes": getattr(note, "passes", None),
                    "resumed": getattr(note, "resumed", None), "processes": getattr(note, "processes", None),
-                   "wall_seconds": None, "save_error": None, "expected": model.expected_epochs(),
+                   "wall_seconds": getattr(note, "wall_seconds", None),
+                   "save_error": getattr(note, "save_error", None), "expected": model.expected_epochs(),
                    "discarded": False}
         failure = None
         if run.failure is not None and run.outcome == "failed":
@@ -1448,6 +1476,10 @@ class RunController(QObject):
                 message = ""
             failure = {"type": type(exc).__name__, "message": message, "kind": run.failure_kind,
                        "reopen": run.reopen}
+        peak, split = model.memory_peak(), model.batches_split()
+        lacked = run.outcome == "failed" and run.failure_kind == "out of memory"     # a try's lack is not the run's end
+        known = failed is not None or peak is not None or split or lacked
+        failed = failed or (None, None)
         done = model.batches_done()
         tries = list(run.attempts)               # each try that failed and was tried again
         if run.attempt_open:                     # the try running, or the one the run ended with
@@ -1470,11 +1502,14 @@ class RunController(QObject):
                 "stage": model.stage,
                 "stages": [[stage.name, list(stage.begins), stage.counts] for stage in spec.stages],
                 "acknowledged": False, "tries": tries,
-                "plan": None, "settings": None, "memory_limit": spec.facts.get("memory_limit"),
+                "plan": spec.plan, "settings": spec.settings,
+                "memory_limit": {"gib": spec.facts.get("memory_limit"), "source": spec.facts.get("memory_source"),
+                                 "computer": spec.facts.get("computer")},
                 "simulation_set": None if folder is None else {
                     "folder": folder, "batches": budget.get("batches"), "at_start": run.at_start, "at_end": done,
                     "per_batch": budget.get("rows"), "seconds_per_batch": model.seconds_per_batch()},
-                "health": None if failed is None else {"failed": failed[0], "simulated": failed[1]},
+                "health": None if not known else {"failed": failed[0], "simulated": failed[1], "memory_peak": peak,
+                                                  "batches_split": split, "out_of_memory": lacked},
                 "fit": fit, "check": None,
                 "result": None if run.result is None else dict(zip(("kind", "id", "name"), run.result),
                                                                asked=run.asked),

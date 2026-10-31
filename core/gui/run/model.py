@@ -38,6 +38,8 @@ SILENCE_NEEDS_YOU_S = 600.0
 MESSAGES_KEPT = 50
 #: The share of failed simulations up to which their count reads "Fine".
 FAILED_FINE = 0.01
+#: Where the fit's expected epochs come from when its page was given the number; filled with the number.
+TYPED_EPOCHS_TEXT = "about {0} epochs: the number given on the Training page"
 
 STATES = ("idle", "starting", "running", "stopping", "retrying", "ended", "not_seen", "acknowledged")
 OUTCOMES = ("finished", "stopped", "failed", "not seen to end")
@@ -76,10 +78,12 @@ class RunSpec:
     """What a page knows of the run it starts and the run does not say: its word and name, its place, its stages,
     whether it only loads a record, what it writes, whether it has a simulation set to continue, the patience, the
     epoch limit and the expected epochs it was started with, how it stops, and the call itself, for a try again.
-    ``facts`` are what a pace and the expected epochs are looked up by ("model", "observation": the kind of
-    observation, "narrowed", "network": hidden features and transforms), and what the page knows before the run
-    says it ("rotated": False for a training with no rotation; "memory_limit": the graphics card's limit in GiB;
-    "cadence": the batches between two saves of a simulation set the run continues)."""
+    ``plan`` and ``settings`` are what its history keeps of what it was started with, as its page hands them (None
+    until a page hands them), made plain at its start. ``facts`` are what a pace and the expected epochs are looked up
+    by ("model", "observation": the kind of observation, "narrowed", "network": hidden features and transforms), and
+    what is known before the run says it ("rotated": False for a training with no rotation; "memory_limit": the graphics
+    card's limit in GiB; "memory_source": where that limit was set, as the history keeps it; "computer": this computer's
+    name; "cadence": the batches between two saves of a simulation set the run continues)."""
     word: str
     place: tuple[str, str | None]
     name: str = ""
@@ -96,6 +100,8 @@ class RunSpec:
     retries: bool = False
     stop_asks: bool = True
     own_view: bool = False
+    plan: dict | None = None
+    settings: dict | None = None
     facts: dict = field(default_factory=dict)
     fn: Callable | None = None
     args: tuple = ()
@@ -241,8 +247,7 @@ class RunModel:
         self._estimate = estimate
         self._estimates: dict = {}
         if spec.expected_epochs:                    # a number typed on the page wins over the last training's
-            expected = (spec.expected_epochs,
-                        f"about {spec.expected_epochs} epochs: the number given on the Training page")
+            expected = (spec.expected_epochs, TYPED_EPOCHS_TEXT.format(spec.expected_epochs))
         self._expected = expected
         self.started = clock()
         self.kept_fit = None
@@ -277,6 +282,7 @@ class RunModel:
         self._peak: float | None = None
         self._card: float | None = None
         self._memory_trouble = False
+        self._split: set[int] = set()
         self._saved: int | None = None
         self._save_failed = False
         self._saving_shown = False
@@ -639,6 +645,14 @@ class RunModel:
         first count."""
         return self._failed
 
+    def memory_peak(self) -> float | None:
+        """The largest memory peak the run's lines have said so far, in GiB; None before the first."""
+        return self._peak
+
+    def batches_split(self) -> int:
+        """The batches the run's lines say were split for lack of memory, each once however often it was halved."""
+        return len(self._split)
+
     def seconds_per_batch(self) -> float | None:
         """The simulation's own pace, in seconds per batch, once its first ``TIMED_BATCHES`` are timed; None before,
         and for a run with no simulation. Never the history's estimate."""
@@ -699,6 +713,8 @@ class RunModel:
             self._card = values["card"]
         elif name in ("oom_split_simulation", "oom_split_rows", "batch_failed"):
             self._memory_trouble = True
+            if name != "batch_failed":
+                self._split.add(values["batch"])
         elif name in ("fit_saving_off", "fit_not_kept"):
             self._not_saved = True
         elif name in ("fit_saved", "fit_resuming"):

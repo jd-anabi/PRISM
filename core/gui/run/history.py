@@ -21,14 +21,20 @@ A file holds every name of ``FIELDS``, in that order, None where its run has not
 - ``tries``: one entry per try, each of ``TRY_FIELDS``: its start and end, how it ended, the kind of failure, and
   the batches and the epochs the run had kept before the try began and after it ended. The try a run is in as
   Windows ends the session is written "stopped" with the run, from the moment that stop is asked.
-- ``plan``, ``settings``, ``memory_limit``: what the run was started with; ``settings`` is for every argument,
-  enough to start the same run again. Until the window's forms hand them over, ``plan`` and ``settings`` are
-  written None, and so is ``check``, and ``health`` holds the failed and the simulated counts alone.
+- ``plan``, ``settings``, ``memory_limit``: what the run was started with. ``plan`` and ``settings`` are what its page
+  hands, made plain (``plain``), None until it hands them; ``settings`` is for every argument, enough to start the
+  same run again.
+  ``memory_limit`` is ``{"gib", "source", "computer"}``: the limit in force for each batch of simulations (None for
+  none), where it was set ("setting", "environment" or "none") and the computer the run ran on. A file written before
+  these were kept holds a bare number or None, which names no computer.
 - ``simulation_set``, of ``SET_FIELDS``: the set's folder, its batches in all, at the start and at the end, the
   simulations per batch and the median seconds per batch.
 - ``health``, ``fit``, ``check``, ``result``, ``failure``, ``text``: what the run's page measured, the fit, a
   check's own result, the record the run wrote (its kind, its id, its name and the name it was asked to have, which
   differ when another record took the name while the run was going), how it failed, and its text file's name.
+  ``health`` is ``{"failed", "simulated", "memory_peak", "batches_split", "out_of_memory"}`` once any of it is known,
+  else None; ``check`` is None until a check hands one over. A file written before these were kept holds the first two
+  alone. A name a reader finds missing or None, in a file of any age, is no information.
 
 ``fit``, of ``FIT_FIELDS``: the epochs, the best epoch and its validation loss, the median seconds per epoch, what
 ended the fit by itself ("patience" or "limit"), the network (hidden features, transforms) and the number of
@@ -73,6 +79,9 @@ TRY_FIELDS = ("started", "ended", "outcome", "failure", "batches_before", "batch
 #: tried before the refusal is raised.
 REPLACE_TRIES = 5
 REPLACE_PAUSE_S = 0.2
+#: How deep ``plain`` follows a value before it says the rest in words: nothing a page hands goes so deep, and a value
+#: that holds itself goes on for ever.
+PLAIN_DEPTH = 16
 #: What a name of a history holds when it holds anything but None, as the window writes it, for each name a reader
 #: takes as such; a place's two parts and each try are of their own shape too.
 SHAPES = {"id": str, "place": list, "records_root": str, "outcome": str, "stage": str, "stages": list,
@@ -111,9 +120,10 @@ def run_id(word: str, started: datetime, folder: Path | None) -> str:
 def write(folder: Path, record: dict) -> Path:
     """Write ``record`` as its run's history file in ``folder``, which is made when missing, and return the file's
     path. Every name of ``FIELDS`` is written, in that order; a time with its offset. Written whole: to a temporary
-    file, made to reach the disk, then renamed over the old file (``_replace``). Raises ValueError, writing nothing,
-    for a record with no id, a name the history does not keep, or a time with no zone; an error of the disk is
-    raised as it comes, the temporary file removed."""
+    file, made to reach the disk, then renamed over the old file (``_replace``). A character no encoding can hold, a
+    lone surrogate, is written as its escape, and reads back as it was. Raises ValueError, writing nothing, for a record
+    with no id, a name the history does not keep, or a time with no zone; an error of the disk is raised as it comes,
+    the temporary file removed."""
     _check(record)
     text = json.dumps({name: record.get(name) for name in FIELDS}, default=_time_text, ensure_ascii=False,
                       indent=1)
@@ -122,7 +132,7 @@ def write(folder: Path, record: dict) -> Path:
     path = folder / f"{record['id']}.json"
     temporary = folder / f"{record['id']}.json.tmp"
     try:
-        with open(temporary, "w", encoding="utf-8") as file:
+        with open(temporary, "w", encoding="utf-8", errors="backslashreplace") as file:
             file.write(text)
             file.flush()
             os.fsync(file.fileno())
@@ -134,6 +144,37 @@ def write(folder: Path, record: dict) -> Path:
             pass
         raise
     return path
+
+
+def plain(value, depth: int = 0):
+    """``value`` as a history can hold it: what JSON holds as it is; a mapping with text for its keys; a sequence or a
+    set as a list; an array or an array's number as plain numbers; a time as its text; anything else in words. A new
+    value each time, none of it the one handed, and plain of plain is the same. ``write`` raises for a whole record over
+    one value it cannot hold, so what a page hands a run for its history comes through here at the run's start, and
+    nothing here raises: what cannot be gone through is said in words."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    try:
+        if depth < PLAIN_DEPTH:
+            if isinstance(value, dict):
+                return {_words(key): plain(held, depth + 1) for key, held in value.items()}
+            if isinstance(value, (list, tuple, set, frozenset)):
+                return [plain(held, depth + 1) for held in value]
+            if hasattr(value, "tolist"):
+                return plain(value.tolist(), depth + 1)
+        if isinstance(value, datetime):
+            return value.isoformat()
+    except Exception:                            # noqa: BLE001 -- a run's start never fails over its history
+        pass
+    return _words(value)
+
+
+def _words(value) -> str:
+    """``value`` in words, or by its kind when it cannot say what it is."""
+    try:
+        return str(value)
+    except Exception:                            # noqa: BLE001 -- a run's start never fails over its history
+        return f"a {type(value).__name__}"
 
 
 def read(path: Path) -> dict | None:
@@ -255,6 +296,17 @@ def estimate(folder: Path, *, word: str, per: str, size: dict) -> tuple[float, s
         pace = f"{seconds:.1f} s per batch" if per == "batch" else f"about {_duration(seconds)} per epoch"
         who = f", {record['name']}," if record.get("name") else ""
         return seconds, f"the last {word.lower()} of this size{who} took {pace}"
+    return None
+
+
+def duration(folder: Path, word: str) -> tuple[float, str] | None:
+    """How long the newest finished run of ``word`` took, in seconds, and its name ("" for none); None when no such
+    run says both its times. Every run in ``folder`` counts, whichever records it wrote to: this says what this
+    computer took."""
+    for record in reversed(_records(folder)):
+        started, ended = _time(record.get("started")), _time(record.get("ended"))
+        if record.get("word") == word and record.get("outcome") == "finished" and started and ended:
+            return (ended - started).total_seconds(), str(record.get("name") or "")
     return None
 
 

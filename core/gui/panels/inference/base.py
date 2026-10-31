@@ -20,7 +20,9 @@ TRAINING_STAGES = (Stage("Rotation", ("rotation_begins",)),
                    Stage("Saving", (FIT_ENDED, "sbi_converged")))
 
 
-def training_spec(word: str, place: tuple, stop_button: str, cfg, kwargs: dict, *, narrowed: bool) -> RunSpec:
+def training_spec(word: str, place: tuple, stop_button: str, cfg, kwargs: dict, *, narrowed: bool,
+                  expected_epochs: int | None = None, plan: dict | None = None,
+                  settings: dict | None = None) -> RunSpec:
     """The run of a training or of a narrowing round, as its page knows it: its stages; the patience and the epoch
     limit it trains with, the call's own or else the settings' (read, never written); and the facts its pace and
     its expected epochs are looked up by (the model, the kind of observation, whether it is narrowed, the network)
@@ -33,6 +35,7 @@ def training_spec(word: str, place: tuple, stop_button: str, cfg, kwargs: dict, 
                    kinds=("posterior", "simulation", "fit"), simulation_set=True, retries=True,
                    patience=given("stop_after_epochs", config.TRAINING_STOP_AFTER_EPOCHS),
                    epoch_limit=given("max_num_epochs", config.TRAINING_MAX_NUM_EPOCHS),
+                   expected_epochs=expected_epochs, plan=plan, settings=settings,
                    facts={"model": cfg.model, "observation": cfg.observation_mode, "narrowed": narrowed,
                           "network": (given("hidden_features", config.NSF_HIDDEN_FEATURES),
                                       given("num_transforms", config.NSF_NUM_TRANSFORMS)),

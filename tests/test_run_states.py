@@ -1443,6 +1443,7 @@ def test_a_run_goes_from_starting_to_running_to_ended_and_its_files_say_so(tmp_p
     set), every line of the run and how it ended, and the run's full text holds every line the file holds, in the
     file's order. The fit's pace, network and simulations in the history are what the next training of that size
     finds its pace by."""
+    import socket
     from core.artifacts import default_store
     from core.gui.run import history
     from tests._fixtures import build_run_host, qt_app
@@ -1462,7 +1463,8 @@ def test_a_run_goes_from_starting_to_running_to_ended_and_its_files_say_so(tmp_p
     first = record()
     assert (first["outcome"], first["stage"], first["word"], first["name"], first["place"], first["memory_limit"],
             first["records_root"], first["started"], first["text"]) == (
-        "running", None, "Training", "retrain_3", ["inference", "training"], 6.0, str(default_store().root),
+        "running", None, "Training", "retrain_3", ["inference", "training"],
+        {"gib": 6.0, "source": "environment", "computer": socket.gethostname()}, str(default_store().root),
         "2026-10-08T19:02:11-07:00", f"{run}.txt")
     head = [("window", f"Training retrain_3, run {run}."),
             ("window", "Memory limit: 6 GiB for each batch of simulations (set by PRISM_VRAM_CEILING_GIB).")]
@@ -1752,6 +1754,10 @@ def test_a_continued_runs_failed_simulations_count_its_earlier_runs(tmp_path):
         history.write(folder, {"id": f"2026100{day}T090000-training", "word": "Training", "started": _at(day, 9, 0),
                                "outcome": "failed", "simulation_set": {"folder": _FOLDER},
                                "health": {"failed": failed, "simulated": 10_000}})
+    history.write(folder, {"id": "20261004T090000-training", "word": "Training", "started": _at(4, 9, 0),
+                           "outcome": "failed", "simulation_set": {"folder": _FOLDER},
+                           "health": {"failed": None, "simulated": None, "memory_peak": 5.4, "batches_split": 0,
+                                      "out_of_memory": True}})
     held, stand_in = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), StandIn()
     start_run(build_run_host(), stand_in, spec=_training())
     stand_in.say(_LINES["simulation_resuming"])
@@ -1761,8 +1767,8 @@ def test_a_continued_runs_failed_simulations_count_its_earlier_runs(tmp_path):
     stand_in.release()
     turn_until(app, lambda: not held.is_live())
     kept = history.read(folder / "20261008T190211-training.json")
-    assert (kept["health"], kept["simulation_set"]["at_start"]) == (
-        {"failed": 30_720, "simulated": 20_480_000}, 236), kept
+    assert (kept["health"]["failed"], kept["health"]["simulated"], kept["simulation_set"]["at_start"]) == (
+        30_720, 20_480_000, 236), kept
 
 
 def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
@@ -2066,19 +2072,20 @@ def test_the_head_says_the_memory_limit_in_force_and_where_it_was_set(tmp_path, 
     """The run's head names the memory limit in force for each batch of simulations, read once at its start, and
     where it was set: by the variable of the environment, which wins, or in step 1 of the window, which a variable
     that is not a number leaves in force; or says that none is set. The limit is the page's fact the health table
-    reads."""
+    reads, and where it was set the fact the run's history reads."""
     from core import config
     from tests._fixtures import build_run_host, qt_app
     from tests._runs import Clock, RunText, StandIn, start_run, turn_until
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
-    for variable, setting, said, limit in (
-            ("6", 2.5, "Memory limit: 6 GiB for each batch of simulations (set by PRISM_VRAM_CEILING_GIB).", 6.0),
+    for variable, setting, said, limit, source in (
+            ("6", 2.5, "Memory limit: 6 GiB for each batch of simulations (set by PRISM_VRAM_CEILING_GIB).", 6.0,
+             "environment"),
             (None, 2.5, "Memory limit: 2.5 GiB for each batch of simulations (set in step 1, Model and options).",
-             2.5),
+             2.5, "setting"),
             ("abc", 2.5, "Memory limit: 2.5 GiB for each batch of simulations (set in step 1, Model and options).",
-             2.5),
-            (None, 0.0, "No memory limit is set on this computer.", None)):
+             2.5, "setting"),
+            (None, 0.0, "No memory limit is set on this computer.", None, "none")):
         if variable is None:
             monkeypatch.delenv("PRISM_VRAM_CEILING_GIB", raising=False)
         else:
@@ -2087,9 +2094,384 @@ def test_the_head_says_the_memory_limit_in_force_and_where_it_was_set(tmp_path, 
         text, stand_in = RunText(held), StandIn()
         start_run(build_run_host(), stand_in, spec=_training())
         assert text.lines[1] == ("window", said), text.lines
-        assert held.model.spec.facts["memory_limit"] == limit
+        assert (held.model.spec.facts["memory_limit"], held.model.spec.facts["memory_source"]) == (limit, source)
         stand_in.release()
         turn_until(app, lambda: not held.is_live())
+
+
+def _memory_line(peak) -> str:
+    """The engine's line on a batch's memory, its peak ``peak`` GiB, every other figure of it another number."""
+    return _LINES["mem"].replace("peak allocated 10.42", f"peak allocated {peak}")
+
+
+def test_a_run_writes_what_it_was_handed(tmp_path):
+    """The plan a training followed and every setting it was started with, as its page hands them through its own
+    ``training_spec``, stand in its history as they were handed, each in its own field, from the first write to the
+    last, and the page's number of expected epochs goes with them. A page that hands none leaves both None. The check's
+    field stays None. The training's page offering to resume it starts a run of its own, with a history of its own that
+    holds the same."""
+    from core.gui.panels.inference.base import training_spec as the_pages
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, note, start_run, turn_until
+    app = qt_app()
+    plan = {"name": "retrain", "path": "NADROWSKI/retrain.txt", "sha256": "ab" * 32, "changed": False}
+    settings = {"rows": [{"step": "Training", "name": "num_runs", "label": "Batches", "value": 10_000}],
+                "model": "NADROWSKI", "name": "retrain_3", "note": ""}
+    cfg = SimpleNamespace(model="NADROWSKI", observation_mode="chi", reparam_rotate=True)
+
+    def pages(**handed):
+        return the_pages("Training", ("inference", "training"), "Stop training…", cfg, {"checkpoint_every": 0},
+                         narrowed=False, **handed)
+
+    spec = pages(expected_epochs=130, plan=plan, settings=settings)
+    assert (spec.expected_epochs, spec.plan, spec.settings) == (130, plan, settings)
+    assert (pages().expected_epochs, pages().plan, pages().settings) == (None, None, None)
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    for handed, kept_plan, kept_settings in ((spec, plan, settings), (pages(), None, None)):
+        stand_in = StandIn()
+        start_run(build_run_host(), stand_in, spec=handed)
+        path = tmp_path / "runs" / f"{held.status.run}.json"
+        first = history.read(path)
+        assert (first["outcome"], first["plan"], first["settings"]) == ("running", kept_plan, kept_settings), first
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())
+        last = history.read(path)
+        assert (last["outcome"], last["plan"], last["settings"], last["check"]) == (
+            "finished", kept_plan, kept_settings, None), last
+    stand_in = StandIn()
+    stand_in.kept_fit = note("20261011T121000")
+    start_run(build_run_host(), stand_in, spec=spec)
+    stopped = held.status.run
+    held.request_stop()
+    turn_until(app, lambda: not held.is_live())
+    assert held.resume_training(stopped)
+    again = history.read(tmp_path / "runs" / f"{held.status.run}.json")
+    assert (again["id"] != stopped, again["plan"], again["settings"]) == (True, plan, settings), again
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+
+
+def test_what_a_history_cannot_hold_costs_the_run_nothing(tmp_path):
+    """One value a history cannot hold would lose a run its whole history file, at every write. So what a page hands a
+    run for its history is made plain at the run's start, in its plan as in its settings, and reads back so at the first
+    write and the last: a path as its text, a tuple or a set as a list, an array or an array's number as plain numbers,
+    a time as its text, a key as its text, anything else in words. Plain values stay as they are, None among them, and
+    a second making plain changes nothing. The page's own dict is not the run's: what the page does to it during the run
+    reaches no write. And nothing a page can hand fails the start: a value that cannot say what it is, an array that
+    cannot be read, a dict that holds itself."""
+    import numpy
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text = RunText(held)
+
+    def run_of(spec):
+        stand_in = StandIn()
+        start_run(build_run_host(), stand_in, spec=spec)
+        return stand_in, tmp_path / "runs" / f"{held.status.run}.json"
+
+    def end(stand_in):
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())
+
+    settings = {"bounds": Path("Bounds/master.txt"), "pair": (1, 2), "batches": numpy.int64(3),
+                "rate": numpy.float32(0.5), "on": numpy.bool_(True), "limits": numpy.arange(3.0), "kinds": {"chi"},
+                (1, 2): "a key", "at": _at(8, 19, 2).replace(tzinfo=None), "dtype": numpy.dtype("float32")}
+    plain = {"bounds": str(Path("Bounds/master.txt")), "pair": [1, 2], "batches": 3, "rate": 0.5, "on": True,
+             "limits": [0.0, 1.0, 2.0], "kinds": ["chi"], "(1, 2)": "a key", "at": "2026-10-08T19:02:00",
+             "dtype": "float32"}
+    stand_in, path = run_of(_training(plan={"path": Path("Plans/retrain.txt")}, settings=settings))
+    first = history.read(path)
+    assert (first["plan"], first["settings"]) == ({"path": str(Path("Plans/retrain.txt"))}, plain), first
+    end(stand_in)
+    last = history.read(path)
+    assert (last["outcome"], last["plan"], last["settings"]) == (
+        "finished", {"path": str(Path("Plans/retrain.txt"))}, plain), last
+    assert (history.plain(None), history.plain(plain)) == (None, plain)
+
+    pages_own = {"rows": [{"value": 1e-9}], "name": "retrain_3"}
+    stand_in, path = run_of(_training(settings=pages_own))
+    pages_own["rows"].append("put in by the page during the run")
+    pages_own["name"] = "changed by the page during the run"
+    end(stand_in)
+    assert history.read(path)["settings"] == {"rows": [{"value": 1e-9}], "name": "retrain_3"}
+
+    class Mute:
+        """A value that cannot say what it is."""
+
+        def __str__(self):
+            raise RuntimeError("no words")
+
+    class Lost:
+        """An array whose numbers cannot be read: one on a card that has gone."""
+
+        def __str__(self):
+            return "an array on a lost card"
+
+        def tolist(self):
+            raise RuntimeError("the card is lost")
+
+    loop = {}
+    loop["itself"] = loop
+    stand_in, path = run_of(_training(plan={"mute": Mute()}, settings={"lost": Lost(), Mute(): 1, "loop": loop}))
+    written = history.read(path)
+    end(stand_in)
+    assert written["plan"] == {"mute": "a Mute"}, written
+    assert (written["settings"]["lost"], written["settings"]["a Mute"]) == ("an array on a lost card", 1), written
+    deep, through = written["settings"]["loop"], 0
+    while isinstance(deep, dict):
+        deep, through = deep["itself"], through + 1
+    assert (isinstance(deep, str), through) == (True, history.PLAIN_DEPTH - 1), written
+    assert [line for line in text.texts() if "history" in line] == []
+
+
+def test_the_history_names_the_limit_its_source_and_this_computer(tmp_path, monkeypatch):
+    """A run's history names the memory limit in force at its start, where it was set and the computer it ran on: the
+    setting alone is "setting"; a number in the variable wins over the setting and is "environment", at 0 too, where
+    the planner reads no limit; a variable that is blank or no number leaves the setting in force; with neither there
+    is no limit and no source. The health table's number stays a number, and the source stands beside it. The training
+    its page resumes reads all three again at its own start. A computer that cannot say its name costs the run
+    nothing."""
+    import socket
+    from core import config
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, note, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    monkeypatch.setattr(socket, "gethostname", lambda: "LAB-PC")
+    for variable, setting, limit, source in (
+            (None, 6.0, 6.0, "setting"), ("2.5", 6.0, 2.5, "environment"), ("abc", 6.0, 6.0, "setting"),
+            ("  ", 6.0, 6.0, "setting"), ("0", 6.0, None, "environment"), (None, 0.0, None, "none")):
+        if variable is None:
+            monkeypatch.delenv("PRISM_VRAM_CEILING_GIB", raising=False)
+        else:
+            monkeypatch.setenv("PRISM_VRAM_CEILING_GIB", variable)
+        monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", setting)
+        stand_in = StandIn()
+        start_run(build_run_host(), stand_in, spec=_training())
+        run = history.read(tmp_path / "runs" / f"{held.status.run}.json")
+        assert run["memory_limit"] == {"gib": limit, "source": source, "computer": "LAB-PC"}, (variable, setting)
+        assert (held.model.spec.facts["memory_limit"], held.model.spec.facts["memory_source"]) == (limit, source)
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())
+
+    stand_in = StandIn()
+    stand_in.kept_fit = note("20261011T121000")
+    start_run(build_run_host(), stand_in, spec=_training())
+    stopped = held.status.run
+    held.request_stop()
+    turn_until(app, lambda: not held.is_live())
+    monkeypatch.setenv("PRISM_VRAM_CEILING_GIB", "2.5")
+    monkeypatch.setattr(socket, "gethostname", lambda: "OTHER-PC")
+    assert held.resume_training(stopped)
+    assert history.read(tmp_path / "runs" / f"{held.status.run}.json")["memory_limit"] == {
+        "gib": 2.5, "source": "environment", "computer": "OTHER-PC"}
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+
+    def no_name():
+        raise OSError("this computer has no name")
+
+    monkeypatch.setattr(socket, "gethostname", no_name)
+    stand_in = StandIn()
+    start_run(build_run_host(), stand_in, spec=_training())
+    run = held.status.run
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert history.read(tmp_path / "runs" / f"{run}.json")["memory_limit"] == {
+        "gib": 2.5, "source": "environment", "computer": ""}, "a computer with no name cost the run its history"
+
+
+def test_the_health_of_a_run_is_written_whole(tmp_path):
+    """A run's history holds its whole health once any part of it is known: the failed and the simulated counts, the
+    largest memory peak its lines said (not the last, not what was reserved, not the card's size), the batches split,
+    each once however often it was halved and by either way of halving (the line of a batch that failed after both
+    splits is no split), and whether it ended for lack of memory. A run that said none of it holds none; a run that said
+    some of it holds that, the rest None, nought or False. A run that ran out of memory and was tried again did not end
+    for lack of memory unless it ended so: finishing or stopped afterwards, it holds no such end; ended by "Stop
+    trying", it does."""
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, say, start_run, turn_until
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held = _controller_on(tmp_path, clock)
+    text = RunText(held)
+    other_rows = _LINES["oom_split_rows"].replace("6151", "6152")
+    other_simulation = _LINES["oom_split_simulation"].replace("6151", "6153")
+    nothing = {"failed": None, "simulated": None, "memory_peak": None, "batches_split": 0, "out_of_memory": False}
+
+    def health(*lines, ending=None):
+        stand_in = StandIn()
+        start_run(build_run_host(), stand_in, spec=_training())
+        run = held.status.run
+        if lines:
+            say(app, stand_in, text, *lines)
+        if ending is None:
+            stand_in.release()
+        else:
+            stand_in.fail(ending)
+        turn_until(app, lambda: not held.is_live())
+        return history.read(tmp_path / "runs" / f"{run}.json")["health"]
+
+    lack = RuntimeError("CUDA error: out of memory")
+    assert health(_memory_line(3.25), _memory_line(5.4), _memory_line(4.75), _LINES["oom_split_simulation"],
+                  _LINES["oom_split_rows"], _LINES["batch_failed"], other_rows, other_simulation, _LINES["patho_total"],
+                  ending=lack) == {
+        "failed": 30_720, "simulated": 20_480_000, "memory_peak": 5.4, "batches_split": 3, "out_of_memory": True}
+    assert health() is None
+    assert health(ending=ValueError("a failure of another kind")) is None
+    assert health(_memory_line(5.4), ending=ValueError("a failure of another kind")) == {
+        **nothing, "memory_peak": 5.4}
+    assert health(other_rows) == {**nothing, "batches_split": 1}
+    assert health(other_simulation) == {**nothing, "batches_split": 1}
+    assert health(_LINES["patho_total"]) == {**nothing, "failed": 30_720, "simulated": 20_480_000}
+    assert health(ending=RuntimeError("CUDA error: out of memory")) == {**nothing, "out_of_memory": True}
+
+    def tried_again(*tried, end):
+        """A training that ran out of memory, and how it ended: at its pause, or tried again first."""
+        stand_in = StandIn()
+        start_run(build_run_host(), stand_in, spec=_training(retries=True))
+        run = held.status.run
+        stand_in.fail(RuntimeError("CUDA error: out of memory"))
+        turn_until(app, lambda: held.status.state == "retrying")
+        if tried:
+            clock.advance(60)
+            held.tick()
+            turn_until(app, lambda: len(stand_in.calls) == 2)
+        end(stand_in)
+        turn_until(app, lambda: not held.is_live())
+        return history.read(tmp_path / "runs" / f"{run}.json")["health"]
+
+    assert tried_again(1, end=lambda stand_in: stand_in.release()) is None, "a run that finished ended well"
+    assert tried_again(1, end=lambda _stand_in: held.request_stop()) is None, "a stop is no lack of memory"
+    assert tried_again(end=lambda _stand_in: held.stop_trying()) == {**nothing, "out_of_memory": True}
+
+
+def test_the_fits_wall_time_and_a_failed_save_come_from_the_note(tmp_path):
+    """The note of a kept training says how long it has trained and the last save that failed: the history's fit holds
+    each in its own field, after a stop as after a failure. A note that says neither, and a fit with no note, leave
+    both None."""
+    from dataclasses import replace
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, note, say, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text = RunText(held)
+    told = replace(note("20261011T121000"), wall_seconds=120.0, save_error="disk full")
+
+    def fit(kept, end):
+        stand_in = StandIn()
+        stand_in.kept_fit = kept
+        start_run(build_run_host(), stand_in, spec=_training())
+        run = held.status.run
+        say(app, stand_in, text, _epoch(1))
+        end(stand_in)
+        turn_until(app, lambda: not held.is_live())
+        record = history.read(tmp_path / "runs" / f"{run}.json")["fit"]
+        return record["wall_seconds"], record["save_error"]
+
+    def stop(_stand_in):
+        held.request_stop()
+
+    def fail(stand_in):
+        stand_in.fail(ValueError("a failure of another kind"))
+
+    assert fit(told, stop) == (120.0, "disk full")
+    assert fit(told, fail) == (120.0, "disk full")
+    assert fit(note("20261011T121000"), stop) == (None, None)
+    assert fit(None, lambda stand_in: stand_in.release()) == (None, None)
+
+
+def test_the_expected_epochs_are_the_typed_number_else_the_last_trainings(tmp_path, monkeypatch):
+    """The epochs a fit is expected to run are the number typed on its page, with the words that say so, and the store
+    is not read for it; else those of the newest finished training of its kind, with the words that name it; else there
+    are none. A run of no kind reads no store. A run's start asks the very same question: what the public call answers
+    is what its model and its axis hold."""
+    import json
+    from core.artifacts import use_store
+    from core.artifacts.store import MANIFEST, Summary
+    from core.gui.run.controller import RunController
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    root = tmp_path / "Artifacts"
+    path = root / "posteriors" / "retrain_aug__x"
+    path.mkdir(parents=True)
+    (path / MANIFEST).write_text(json.dumps({"config": {"model": "NADROWSKI"}, "body": {
+        "mode": "chi", "training": {"epochs_trained": 90}}}), encoding="utf-8")
+    newest = Summary("posterior", "retrain_aug", "retrain_aug", _at(5, 10, 0).isoformat(), "", path, True, None,
+                     mode="chi", amortized=True)
+    listed, calls = [newest], []
+    store = SimpleNamespace(root=root, list=lambda kind: (calls.append(kind), listed if kind == "posterior" else [])[1])
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    typed = (130, "about 130 epochs: the number given on the Training page")
+    last = (90, "about 90 epochs: the last training of this kind, retrain_aug, ran 90")
+
+    def started_with(spec):
+        stand_in = StandIn()
+        start_run(build_run_host(), stand_in, spec=spec)
+        stand_in.say(_LINES["budget"])
+        stand_in.say(_epoch(1, took=60.0))
+        turn_until(app, lambda: held.model.stage == "Fitting")
+        said = held.model.expected_epochs(), held.model.axis().follows
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())
+        return said
+
+    with use_store(store):
+        assert (held.expected_epochs(_training(expected_epochs=130)), calls) == (typed, [])
+        assert (held.expected_epochs(RunSpec("Prior", ("inference", "prior"))), calls) == (None, [])
+        assert (held.expected_epochs(_training()), calls) == (last, ["posterior"])
+        listed.clear()
+        assert held.expected_epochs(_training()) is None
+        listed.append(newest)
+        calls.clear()
+        assert started_with(_training(expected_epochs=130)) == (
+            130, "About 130 epochs: the number given on the Training page.")
+        assert [kind for kind in calls if kind == "posterior"] == [], "a typed number read the store"
+        assert started_with(_training()) == (
+            90, "About 90 epochs: the last training of this kind, retrain_aug, ran 90.")
+        monkeypatch.setattr(RunController, "expected_epochs", lambda _held, _spec: (77, "about 77 epochs: one rule"))
+        assert started_with(_training()) == (77, "About 77 epochs: one rule."), "a run's start has a rule of its own"
+
+
+def test_a_resume_that_passes_no_name_still_says_when_the_kept_name_was_taken(tmp_path):
+    """A resume's call hands no name: its page puts the kept training's name in the run's own, and that is the name the
+    run was asked to have. Saved without it, because another record took it while the run was going, the end says so and
+    the history keeps the name asked; saved with it, nothing more is said. A call's own name wins, and a run that is no
+    resume asks for no name but its call's."""
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    taken = "It was saved without its name: 'retrain_3' was taken while the run was going."
+
+    def saved_as(saved, **call):
+        stand_in = StandIn()
+        start_run(build_run_host(), stand_in, spec=_training(), **call)
+        run = held.status.run
+        stand_in.release(SimpleNamespace(kind="posterior", id="q1", name=saved))
+        turn_until(app, lambda: not held.is_live())
+        assert stand_in.calls == [((), call)], stand_in.calls
+        return held.status.sentence, history.read(tmp_path / "runs" / f"{run}.json")["result"]
+
+    for saved in ("", "another_name"):
+        said, result = saved_as(saved, resume_fit="20261011T121000")
+        assert taken in said, said
+        assert result == {"kind": "posterior", "id": "q1", "name": saved, "asked": "retrain_3"}
+    said, result = saved_as("retrain_3", resume_fit="20261011T121000")
+    assert ("without its name" not in said, result["asked"]) == (True, "retrain_3"), said
+    said, result = saved_as("", resume_fit="20261011T121000", name="again")
+    assert ("It was saved without its name: 'again' was taken" in said, result["asked"]) == (True, "again"), said
+    said, result = saved_as("")
+    assert ("without its name" not in said, result["asked"]) == (True, ""), said
 
 
 def test_the_controllers_look_hands_the_model_the_solvers_count_and_the_time(tmp_path):
