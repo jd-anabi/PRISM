@@ -3039,19 +3039,20 @@ def test_the_training_reading_touches_no_card(store, monkeypatch):
     not the preview. The configuration here names a card no computer has, with no time grid made yet, so that a tensor
     made for it raises, card or no card, and no cached value hides the road. A reading swallows what is raised and says
     it in ``checkpoint_error``, so every stand-in records as well, and each reading is read for that field. The kept
-    trainings' reading is held to the same, over a kept training it must find. Neither writes: nothing on the
-    configuration, nothing in the store. The last lines show the stand-ins can tell: the preview reaches them."""
+    trainings' reading is held to the same, over a kept training it must find. Neither writes: on the configuration no
+    name is added and none is bound anew, from before the first reading of it on, and nothing in the store. The last
+    lines show the stand-ins can tell: the preview reaches them."""
     import types
     from core import orchestrator
     from core.SBI import fit_state, pipeline
 
     cfg, prior, root, _ = _budget(store)
     cfg.hw = types.SimpleNamespace(device=torch.device("cuda", 99), dtype=torch.float64, batch_size=8)
+    held = {name: id(value) for name, value in vars(cfg).items()}
+    assert "t" not in held
     ident = orchestrator.training_identity(orchestrator._cfg_for_a_reading(cfg), prior, 8, 3)
     preview = orchestrator.training_preview
     asked, reached = card_and_programs(monkeypatch), []
-    held = sorted(vars(cfg))
-    assert "t" not in held
 
     def stand_in(name):
         def reach(*args, **kwargs):
@@ -3074,7 +3075,8 @@ def test_the_training_reading_touches_no_card(store, monkeypatch):
         before = tree()
         answer = read(*args, **given)
         assert tree() == before, "a reading writes nothing in the store"
-        assert sorted(vars(cfg)) == held, "a reading writes nothing on the configuration"
+        assert {name: id(value) for name, value in vars(cfg).items()} == held, (
+            "a reading writes nothing on the configuration")
         return answer
 
     def read(config_=cfg, held=prior, **given):

@@ -924,7 +924,8 @@ def test_the_runs_of_a_simulation_set_are_found_by_its_folder(tmp_path):
 def test_the_length_of_the_last_finished_run_of_a_word(tmp_path):
     """How long the last run of a word took on this computer: the newest of that word that finished and says both its
     times, its length in seconds and its name, whichever records it wrote to. A newer run that did not finish, or that
-    finished and does not say when, is passed over, and so is a run of another word. With none, nothing is said."""
+    finished and does not say when, is passed over, and so is a run of another word. Newest is by when a run started,
+    not by its file's name. With none, nothing is said."""
     from core.gui.run import history
     from tests._fixtures import write_history
     folder = tmp_path / "runs"
@@ -948,6 +949,8 @@ def test_the_length_of_the_last_finished_run_of_a_word(tmp_path):
     assert history.duration(folder, "Calibration") is None
     run(8, name=None, took=30)
     assert history.duration(folder, "Prior build") == (30.0, "")
+    run(9, id="20261000T090000-prior-build", took=40, name="newest by its start")
+    assert history.duration(folder, "Prior build") == (40.0, "newest by its start")
 
 
 def test_a_run_still_marked_running_is_closed_as_not_seen_to_end(tmp_path):
@@ -1234,8 +1237,9 @@ def test_every_reader_of_a_history_treats_what_is_missing_as_no_information(tmp_
     """A history written before the run's record grew holds no plan, no settings and no check, the two counts alone
     for its health, no wall time and no failed save for its fit, and the memory limit as a bare number, as None or not
     at all. Every reader says of it what it says of any run: how it ended, in its words and its status, at the foot
-    after a reopening and on its page in the past view; its paces, for the next run; its length. Seen, it is written
-    again with all it held."""
+    after a reopening and on its page in the past view; its words at any other end, in any stage; its paces, for the
+    next run; its length; its place among the latest runs and those of its simulation set. Seen, it is written again
+    with all it held."""
     from core.gui.run import ends, history
     from tests._fixtures import build_run_host
     from tests._runs import Clock, controller_on
@@ -1270,6 +1274,13 @@ def test_every_reader_of_a_history_treats_what_is_missing_as_no_information(tmp_
                             size={"network": (256, 10), "simulations": 20_480_000}) == (
         3780.0, "the last training of this size, retrain_3, took about 63 minutes per epoch")
     assert history.duration(folder, "Training") == (8 * 3600.0, "retrain_3")
+    for outcome, failure in (("failed", {"kind": "other", "message": "a failure of another kind"}), ("stopped", None),
+                             ("not seen to end", None)):
+        for stage in ("Rotation", "Simulation", "Fitting", "Saving"):
+            ended = {**record, "outcome": outcome, "failure": failure, "stage": stage}
+            assert ends.words(ended, now)[0], (outcome, stage)
+    assert [one["id"] for one in history.latest(folder, records_root=str(root), n=1)] == [run]
+    assert [one["id"] for one in history.runs_for(folder, "eda5c2a1e468")] == [run]
     held = controller_on(tmp_path, Clock(now))
     held.recall(str(root))
     assert (held.status.run, held.status.outcome, held.status.sentence) == (run, "finished", sentence)

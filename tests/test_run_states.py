@@ -2157,9 +2157,9 @@ def test_what_a_history_cannot_hold_costs_the_run_nothing(tmp_path):
     run for its history is made plain at the run's start, in its plan as in its settings, and reads back so at the first
     write and the last: a path as its text, a tuple or a set as a list, an array or an array's number as plain numbers,
     a time as its text, a key as its text, anything else in words. Plain values stay as they are, None among them, and
-    a second making plain changes nothing. The page's own dict is not the run's: what the page does to it during the run
-    reaches no write. And nothing a page can hand fails the start: a value that cannot say what it is, an array that
-    cannot be read, a dict that holds itself."""
+    a second making plain changes nothing. The page's own dicts are not the run's: what the page does to its plan or its
+    settings during the run, at any depth, reaches no write. And nothing a page can hand fails the start: a value that
+    cannot say what it is, an array that cannot be read, a dict or a list that holds itself."""
     import numpy
     from core.gui.run import history
     from tests._fixtures import build_run_host, qt_app
@@ -2179,10 +2179,11 @@ def test_what_a_history_cannot_hold_costs_the_run_nothing(tmp_path):
 
     settings = {"bounds": Path("Bounds/master.txt"), "pair": (1, 2), "batches": numpy.int64(3),
                 "rate": numpy.float32(0.5), "on": numpy.bool_(True), "limits": numpy.arange(3.0), "kinds": {"chi"},
-                (1, 2): "a key", "at": _at(8, 19, 2).replace(tzinfo=None), "dtype": numpy.dtype("float32")}
+                (1, 2): "a key", "at": _at(8, 19, 2).replace(tzinfo=None), "dtype": numpy.dtype("float32"),
+                "frozen": frozenset({"chi"}), "array of paths": numpy.array([Path("a")], dtype=object)}
     plain = {"bounds": str(Path("Bounds/master.txt")), "pair": [1, 2], "batches": 3, "rate": 0.5, "on": True,
              "limits": [0.0, 1.0, 2.0], "kinds": ["chi"], "(1, 2)": "a key", "at": "2026-10-08T19:02:00",
-             "dtype": "float32"}
+             "dtype": "float32", "frozen": ["chi"], "array of paths": [str(Path("a"))]}
     stand_in, path = run_of(_training(plan={"path": Path("Plans/retrain.txt")}, settings=settings))
     first = history.read(path)
     assert (first["plan"], first["settings"]) == ({"path": str(Path("Plans/retrain.txt"))}, plain), first
@@ -2192,12 +2193,16 @@ def test_what_a_history_cannot_hold_costs_the_run_nothing(tmp_path):
         "finished", {"path": str(Path("Plans/retrain.txt"))}, plain), last
     assert (history.plain(None), history.plain(plain)) == (None, plain)
 
-    pages_own = {"rows": [{"value": 1e-9}], "name": "retrain_3"}
-    stand_in, path = run_of(_training(settings=pages_own))
+    pages_own, plan_own = {"rows": [{"value": 1e-9}], "name": "retrain_3"}, {"name": "retrain"}
+    stand_in, path = run_of(_training(plan=plan_own, settings=pages_own))
+    pages_own["rows"][0]["value"] = "changed inside by the page during the run"
     pages_own["rows"].append("put in by the page during the run")
     pages_own["name"] = "changed by the page during the run"
+    plan_own["name"] = "changed by the page during the run"
     end(stand_in)
-    assert history.read(path)["settings"] == {"rows": [{"value": 1e-9}], "name": "retrain_3"}
+    kept = history.read(path)
+    assert (kept["plan"], kept["settings"]) == (
+        {"name": "retrain"}, {"rows": [{"value": 1e-9}], "name": "retrain_3"}), kept
 
     class Mute:
         """A value that cannot say what it is."""
@@ -2214,9 +2219,11 @@ def test_what_a_history_cannot_hold_costs_the_run_nothing(tmp_path):
         def tolist(self):
             raise RuntimeError("the card is lost")
 
-    loop = {}
+    loop, ring = {}, []
     loop["itself"] = loop
-    stand_in, path = run_of(_training(plan={"mute": Mute()}, settings={"lost": Lost(), Mute(): 1, "loop": loop}))
+    ring.append(ring)
+    stand_in, path = run_of(_training(plan={"mute": Mute()},
+                                      settings={"lost": Lost(), Mute(): 1, "loop": loop, "ring": ring}))
     written = history.read(path)
     end(stand_in)
     assert written["plan"] == {"mute": "a Mute"}, written
@@ -2224,6 +2231,10 @@ def test_what_a_history_cannot_hold_costs_the_run_nothing(tmp_path):
     deep, through = written["settings"]["loop"], 0
     while isinstance(deep, dict):
         deep, through = deep["itself"], through + 1
+    assert (isinstance(deep, str), through) == (True, history.PLAIN_DEPTH - 1), written
+    deep, through = written["settings"]["ring"], 0
+    while isinstance(deep, list):
+        deep, through = deep[0], through + 1
     assert (isinstance(deep, str), through) == (True, history.PLAIN_DEPTH - 1), written
     assert [line for line in text.texts() if "history" in line] == []
 
@@ -2233,8 +2244,8 @@ def test_the_history_names_the_limit_its_source_and_this_computer(tmp_path, monk
     setting alone is "setting"; a number in the variable wins over the setting and is "environment", at 0 too, where
     the planner reads no limit; a variable that is blank or no number leaves the setting in force; with neither there
     is no limit and no source. The health table's number stays a number, and the source stands beside it. The training
-    its page resumes reads all three again at its own start. A computer that cannot say its name costs the run
-    nothing."""
+    its page resumes reads all three again at its own start, and at no write after it. A computer that cannot say its
+    name, or says one that cannot be read, costs the run nothing."""
     import socket
     from core import config
     from core.gui.run import history
@@ -2245,7 +2256,8 @@ def test_the_history_names_the_limit_its_source_and_this_computer(tmp_path, monk
     monkeypatch.setattr(socket, "gethostname", lambda: "LAB-PC")
     for variable, setting, limit, source in (
             (None, 6.0, 6.0, "setting"), ("2.5", 6.0, 2.5, "environment"), ("abc", 6.0, 6.0, "setting"),
-            ("  ", 6.0, 6.0, "setting"), ("0", 6.0, None, "environment"), (None, 0.0, None, "none")):
+            ("  ", 6.0, 6.0, "setting"), ("0", 6.0, None, "environment"), (None, 0.0, None, "none"),
+            ("abc", 0.0, None, "none")):
         if variable is None:
             monkeypatch.delenv("PRISM_VRAM_CEILING_GIB", raising=False)
         else:
@@ -2268,10 +2280,16 @@ def test_the_history_names_the_limit_its_source_and_this_computer(tmp_path, monk
     monkeypatch.setenv("PRISM_VRAM_CEILING_GIB", "2.5")
     monkeypatch.setattr(socket, "gethostname", lambda: "OTHER-PC")
     assert held.resume_training(stopped)
-    assert history.read(tmp_path / "runs" / f"{held.status.run}.json")["memory_limit"] == {
+    resumed = held.status.run
+    assert history.read(tmp_path / "runs" / f"{resumed}.json")["memory_limit"] == {
         "gib": 2.5, "source": "environment", "computer": "OTHER-PC"}
+    monkeypatch.setenv("PRISM_VRAM_CEILING_GIB", "1.5")
+    monkeypatch.setattr(socket, "gethostname", lambda: "THIRD-PC")
     stand_in.release()
     turn_until(app, lambda: not held.is_live())
+    assert history.read(tmp_path / "runs" / f"{resumed}.json")["memory_limit"] == {
+        "gib": 2.5, "source": "environment", "computer": "OTHER-PC"}, "read once, at the start"
+    monkeypatch.setenv("PRISM_VRAM_CEILING_GIB", "2.5")
 
     def no_name():
         raise OSError("this computer has no name")
@@ -2285,6 +2303,17 @@ def test_the_history_names_the_limit_its_source_and_this_computer(tmp_path, monk
     assert history.read(tmp_path / "runs" / f"{run}.json")["memory_limit"] == {
         "gib": 2.5, "source": "environment", "computer": ""}, "a computer with no name cost the run its history"
 
+    def odd_name():
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "this computer's name is no text")
+
+    monkeypatch.setattr(socket, "gethostname", odd_name)
+    stand_in = StandIn()
+    start_run(build_run_host(), stand_in, spec=_training())
+    run = held.status.run
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert history.read(tmp_path / "runs" / f"{run}.json")["memory_limit"]["computer"] == ""
+
 
 def test_the_health_of_a_run_is_written_whole(tmp_path):
     """A run's history holds its whole health once any part of it is known: the failed and the simulated counts, the
@@ -2292,8 +2321,9 @@ def test_the_health_of_a_run_is_written_whole(tmp_path):
     each once however often it was halved and by either way of halving (the line of a batch that failed after both
     splits is no split), and whether it ended for lack of memory. A run that said none of it holds none; a run that said
     some of it holds that, the rest None, nought or False. A run that ran out of memory and was tried again did not end
-    for lack of memory unless it ended so: finishing or stopped afterwards, it holds no such end; ended by "Stop
-    trying", it does."""
+    for lack of memory unless it ended so: finishing, stopped or failing otherwise afterwards, it holds no such end;
+    ended by "Stop trying", it does; and its file says no such thing during the pause. What its tries met stays: a try's
+    peak and its splits outlive it. A write while the run is live holds what is known by then."""
     from core.gui.run import history
     from tests._fixtures import build_run_host, qt_app
     from tests._runs import Clock, RunText, StandIn, say, start_run, turn_until
@@ -2332,13 +2362,17 @@ def test_the_health_of_a_run_is_written_whole(tmp_path):
     assert health(_LINES["patho_total"]) == {**nothing, "failed": 30_720, "simulated": 20_480_000}
     assert health(ending=RuntimeError("CUDA error: out of memory")) == {**nothing, "out_of_memory": True}
 
-    def tried_again(*tried, end):
+    def tried_again(*tried, end, said=()):
         """A training that ran out of memory, and how it ended: at its pause, or tried again first."""
         stand_in = StandIn()
         start_run(build_run_host(), stand_in, spec=_training(retries=True))
         run = held.status.run
+        if said:
+            say(app, stand_in, text, *said)
         stand_in.fail(RuntimeError("CUDA error: out of memory"))
         turn_until(app, lambda: held.status.state == "retrying")
+        paused = history.read(tmp_path / "runs" / f"{run}.json")["health"]
+        assert not (paused or {}).get("out_of_memory"), "the file during the pause says how the run ended"
         if tried:
             clock.advance(60)
             held.tick()
@@ -2350,12 +2384,23 @@ def test_the_health_of_a_run_is_written_whole(tmp_path):
     assert tried_again(1, end=lambda stand_in: stand_in.release()) is None, "a run that finished ended well"
     assert tried_again(1, end=lambda _stand_in: held.request_stop()) is None, "a stop is no lack of memory"
     assert tried_again(end=lambda _stand_in: held.stop_trying()) == {**nothing, "out_of_memory": True}
+    assert tried_again(1, end=lambda stand_in: stand_in.release(), said=(_memory_line(5.4), other_rows)) == {
+        **nothing, "memory_peak": 5.4, "batches_split": 1}, "a try that recovered keeps what the run met"
+    assert tried_again(1, end=lambda stand_in: stand_in.fail(ValueError("a failure of another kind"))) is None
+
+    stand_in = StandIn()
+    start_run(build_run_host(), stand_in, spec=_training())
+    run = held.status.run
+    say(app, stand_in, text, _memory_line(5.4), _epoch(1))
+    assert history.read(tmp_path / "runs" / f"{run}.json")["health"]["memory_peak"] == 5.4, "a live write holds it"
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
 
 
 def test_the_fits_wall_time_and_a_failed_save_come_from_the_note(tmp_path):
     """The note of a kept training says how long it has trained and the last save that failed: the history's fit holds
-    each in its own field, after a stop as after a failure. A note that says neither, and a fit with no note, leave
-    both None."""
+    each in its own field, after a stop as after a failure, and during the pause after a failure that is tried again. A
+    note that says neither, and a fit with no note, leave both None."""
     from dataclasses import replace
     from core.gui.run import history
     from tests._fixtures import build_run_host, qt_app
@@ -2387,12 +2432,24 @@ def test_the_fits_wall_time_and_a_failed_save_come_from_the_note(tmp_path):
     assert fit(note("20261011T121000"), stop) == (None, None)
     assert fit(None, lambda stand_in: stand_in.release()) == (None, None)
 
+    stand_in = StandIn()
+    stand_in.kept_fit = told
+    start_run(build_run_host(), stand_in, spec=_training(retries=True))
+    run = held.status.run
+    say(app, stand_in, text, _epoch(1))
+    stand_in.fail(RuntimeError("CUDA error: out of memory"))
+    turn_until(app, lambda: held.status.state == "retrying")
+    record = history.read(tmp_path / "runs" / f"{run}.json")["fit"]
+    assert (record["wall_seconds"], record["save_error"]) == (120.0, "disk full")
+    held.stop_trying()
+    turn_until(app, lambda: not held.is_live())
+
 
 def test_the_expected_epochs_are_the_typed_number_else_the_last_trainings(tmp_path, monkeypatch):
     """The epochs a fit is expected to run are the number typed on its page, with the words that say so, and the store
     is not read for it; else those of the newest finished training of its kind, with the words that name it; else there
-    are none. A run of no kind reads no store. A run's start asks the very same question: what the public call answers
-    is what its model and its axis hold."""
+    are none. A run of no kind reads no store, and a typed number needs no kind. A run's start asks the very same
+    question: what the public call answers is what its model and its axis hold."""
     import json
     from core.artifacts import use_store
     from core.artifacts.store import MANIFEST, Summary
@@ -2426,6 +2483,7 @@ def test_the_expected_epochs_are_the_typed_number_else_the_last_trainings(tmp_pa
 
     with use_store(store):
         assert (held.expected_epochs(_training(expected_epochs=130)), calls) == (typed, [])
+        assert held.expected_epochs(RunSpec("Prior", ("inference", "prior"), expected_epochs=130)) == typed
         assert (held.expected_epochs(RunSpec("Prior", ("inference", "prior"))), calls) == (None, [])
         assert (held.expected_epochs(_training()), calls) == (last, ["posterior"])
         listed.clear()
