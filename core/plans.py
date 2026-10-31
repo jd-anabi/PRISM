@@ -263,6 +263,8 @@ def _read(text: str) -> tuple[str, dict[tuple[str, str], object], list[PlanProbl
         if setting is None or not past_the_top:
             problems.append(PlanProblem(number, heading, None, f"'{line}' is not a setting line. "
                                                                "Write name = value under a heading."))
+            if setting is not None:
+                unread.add(setting.group(1))
             continue
         name, written = setting.groups()
         refused = _refused_name(name, heading, number, set_on)

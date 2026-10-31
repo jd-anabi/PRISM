@@ -219,6 +219,7 @@ def test_each_chi_setting_needs_the_switch(tmp_path, switch, name, value):
     """With the switch off the window sends none of the three, so a plan that holds one would say what no run reads."""
     problems = _refused(tmp_path, f"# Model and options\n{switch}{name} = {value}\n").problems
     assert [(problem.heading, problem.key) for problem in problems] == [("Model and options", name)]
+    assert problems[0].line == 2 + bool(switch)
     assert problems[0].message.endswith(f": {_what(name)} needs chi_mode = on in the same plan.")
 
 
@@ -239,6 +240,10 @@ def test_a_count_equal_to_the_slots_is_read(tmp_path):
     pytest.param("# Model and options\nchi_n_freqs = 14\n", 2, "chi_n_freqs", id="past the slots with no switch"),
     pytest.param("# Model and options\nchi_mode = off\nchi_k_pad = 4\n", 3, "chi_k_pad",
                  id="below the probes with the switch off"),
+    pytest.param("chi_mode = on\n# Model and options\nchi_k_pad = 12\n", 1, None,
+                 id="the switch above the first heading"),
+    pytest.param("chi_k_pad = 24\n# Model and options\nchi_mode = on\nchi_n_freqs = 14\n", 1, None,
+                 id="the slots above the first heading"),
 ])
 def test_one_slip_is_one_problem(tmp_path, text, line, key):
     """A file that is wrong in one place is told one thing: not that it lacks a line it holds, and not of a comparison
@@ -488,6 +493,16 @@ def test_plan_text_refuses_what_would_read_back_as_something_else(values, remark
     assert refused.value.message == "This plan cannot be used: 1 problem"
     assert [(problem.line, problem.key, problem.message) for problem in refused.value.problems] == [
         (None, key, sentence)]
+
+
+def test_what_would_not_read_back_is_said_in_the_order_of_the_file():
+    """Several values that would read back as something else are told as the reader tells its problems, top of the
+    file first, in whatever order they were handed in."""
+    with pytest.raises(PlanRefusal) as refused:
+        plan_text({BOUNDS: None, UNITS: None})
+    assert [(problem.key, problem.message) for problem in refused.value.problems] == [
+        ("units", f"{_what('units')} would not read back as it was given; got None."),
+        ("bounds", f"{_what('bounds')} would not read back as it was given; got None.")]
 
 
 def test_a_refusal_at_the_saving_says_the_readers_sentence_with_no_line():
