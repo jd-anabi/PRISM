@@ -1632,6 +1632,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
                           "Your own models."),
         "frame_steps": "Set it in the 'Steps / frame' box in Live simulation.",
         "fps": "Set it in the 'Max FPS' box in Live simulation.",
+        # the thing to correct is the file, so the sentence names no box
+        "plan": "Correct the file, then choose the plan again.",
     }
     rendered = {key: gui_fields.fix_sentence(key) for key in gui_fields.CONTROL if gui_fields.fix_sentence(key)}
     differ = {key: (rendered.get(key), sentences.get(key)) for key in sorted(rendered.keys() | sentences.keys())
@@ -1659,7 +1661,9 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         # the five FDT settings neither front end exposes
         "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd",
         # the kept training to resume: the window's Resume comes with its training page
-        "resume_fit"}
+        "resume_fit",
+        # settings a plan holds: no box is named for them until the rebuilt pages show them
+        "chi_mode", "reparam_rotate", "expected_epochs"}
 
     # (e) the drive labels, as the Infer tab builds them
     for key, name in (("drive_amplitude", "amp"), ("drive_frequency", "freq"), ("drive_phase", "phase")):

@@ -327,3 +327,22 @@ From the exit's documents (`.../briefs/exit-docs-brief.md`, PROPOSED and not bui
     exit's documents say anything about it. `.../reviews/exit-c-seat2.md`, Minor 2.
 
 Items 13 and 14 were for the exit's documents, not the audit: 13 is done in `5af4c23` (the guide's architecture page now says what `mpl_theme.py` does); 14 needed nothing, since no guide page speaks of the Subplots dialog.
+
+---
+
+# Stage 4: what its engine tasks send to the code audit's list
+
+From Task 2 (the plan reader), `.superpowers/sdd/2026-10-06-window-redesign/stage-4/briefs/task-02-brief.md`:
+1. **The engine changes of the plan reader, registered for the audit (not a fault).** New `core/plans.py`
+   (`HEADINGS`, `ALLOWED`, `CLASSES`, `read_plan`, `plan_text`, `Plan`, `PlanProblem`, `PlanRefusal`), which imports the
+   standard library and `core.refusals` and which no stage reads; `core.config.PLANS_PATH`, one line, read by nothing in
+   the engine (E8); the registry's four keys `plan`, `chi_mode`, `reparam_rotate`, `expected_epochs` (E5), 110 to 114, each
+   mapped in both front ends' tables.
+2. **The reader keeps its own copy of the file manager's number form.** `core.plans.NUMBER_FORM` is
+   `core/Helpers/file_manager.py`'s `FLOAT_REGEX` as a literal, because the file manager imports torch and the reader may not.
+   `tests/test_plans.py::test_the_limits_no_rule_holds_are_the_configurations_own` holds the two equal. Cure if wanted: move
+   the form to a module with no torch that both import.
+3. **`require_at_least` truncates a float without a word.** `int(value)` reads 10000.5 as 10000 and passes it, and a rule
+   handed a text that is no number raises a bare `ValueError` (`require_at_least`, `require_positive`, `require_between`,
+   `require_finite`, `core/refusals.py`). Every caller hands a number today, from a field that holds its kind; the plan reader
+   is the first with free text, so it checks the kind first. Cure if wanted: the rule refuses a value that is not whole.

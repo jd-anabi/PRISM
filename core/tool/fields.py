@@ -17,7 +17,9 @@ constants only ``config.py`` sets (``chi_k_pad``, ``chi_max_cycles``, ``chi_f0``
 (``artifacts show <kind> <ref>``) -- there is no flag to print, and the refusal's own sentence already
 quotes the ref -- the five FDT settings neither front end exposes (the frequency band, the
 burn-in, the two durations and the step), the model builder's seven numeric fields, which live on
-a window-only screen, and the live simulation's two frame settings, on a window-only panel. One
+a window-only screen, the live simulation's two frame settings, on a window-only panel, and the four
+keys of a run plan (``plan``, ``chi_mode``, ``reparam_rotate``, ``expected_epochs``): the tool reads no
+plan, so none of them is ever a refusal of the tool's, whatever flag sets the same setting. One
 repeatable flag can carry several keys:
 ``--forced PATH[@HZ]`` is both the driven recording and a chi probe's, ``--drive NAME=VALUE`` is the
 amplitude, frequency and phase.
@@ -111,6 +113,8 @@ FLAG: dict[str, str | None] = {
     "chi_max_cycles": None,
     "chi_f0": None,
     "chi_freq_bounds": None,
+    # a run plan: the tool reads none
+    "plan": None, "chi_mode": None, "reparam_rotate": None, "expected_epochs": None,
     # tool-only: the diagnostics' knobs
     "repeats": "--repeats",
     "n_points": "--n-points",

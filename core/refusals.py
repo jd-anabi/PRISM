@@ -140,6 +140,12 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("compare_records", "the saved runs to compare", None),
     Field("prefactor", "the normalisation constant", None),
     Field("slice_at", "the operating point to slice at", None),
+    # a run plan (core/plans.py): the file to correct, and the three settings a plan holds that no stage's
+    # rule names. None has a default: a plan's own sentences say what a setting left out means.
+    Field("plan", "the plan", None),
+    Field("chi_mode", "the kind of observation", None),
+    Field("reparam_rotate", "the rotation", None),
+    Field("expected_epochs", "the expected number of epochs", None),
     # the two secondary analyses: the knobs both front ends expose. n_freqs and ensemble_m have two
     # effective defaults, the dataclass's and the sweep preset's.
     Field("n_freqs", "the number of drive frequencies", "60, or the preset's in a sweep"),        # FDTConfig.n_freqs

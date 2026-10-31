@@ -18,12 +18,15 @@ Three shapes of entry:
   order (the parts as the rail lists them, a part's steps or pages as it shows them): the cell picker
   is in five of them.
 * one sentence, for a consent, a dialog, a table, the name box, a value fixed by measurement, a
-  control in Records, whose list and Note box are not form rows, or the model builder's forcing
-  fields, whose rows are labelled by parameter name; the sentence quotes the control's own text
-  ("Run on a different observation") and names its places as a box's sentence does.
+  control in Records, whose list and Note box are not form rows, the model builder's forcing
+  fields, whose rows are labelled by parameter name, or a plan, whose file is what is corrected; the
+  sentence quotes the control's own text ("Run on a different observation") and names its places as
+  a box's sentence does.
 * ``None`` for a key the window has no control for: the tool-only diagnostics knobs, and the six
   settings the window never exposes (the checkpoint cadence, the resume policy, the device, the
-  two sample counts, the epoch ceiling), and the five FDT settings neither front end exposes.
+  two sample counts, the epoch ceiling), the five FDT settings neither front end exposes, and the
+  three settings of a plan no box names yet (the kind of observation, the rotation, the expected
+  epochs).
 
 A place is written in the words the rail's places are written in (``keys.place_words``), and several
 are joined as ``keys.places_words`` joins them, so a place is named in one table and its joining is
@@ -145,6 +148,10 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "chi_max_cycles": ("model", "χ lock-in ceiling (cycles)"),
     "chi_f0": _FIXED,
     "chi_freq_bounds": _FIXED,
+    # a run plan: the thing to correct is the file, so the sentence names no box. The three settings a plan
+    # holds have no box of their own to name until the rebuilt pages show them.
+    "plan": "Correct the file, then choose the plan again.",
+    "chi_mode": None, "reparam_rotate": None, "expected_epochs": None,
     # the two secondary analyses, one page each: the label is the row the panel builds, so label(key)
     # keeps a box and its hint sentence from drifting apart; the Seed rows too are built from
     # label("seed") on both panels.

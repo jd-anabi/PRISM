@@ -51,6 +51,8 @@ BASE_KEYS = (
     # comparing saved FDT records -- which records, and the two mode settings the comparison checks
     # before its record opens
     "compare_records", "prefactor", "slice_at",
+    # a run plan: the file to correct, and the three settings a plan holds that no stage's rule names
+    "plan", "chi_mode", "reparam_rotate", "expected_epochs",
 )
 TOOL_ONLY_KEYS = ("repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
                   "n_sweep", "chi_k_fixed",
@@ -113,7 +115,7 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     reader and refuses an unknown key with a KeyError: a message can only be built for a field a
     front end can map."""
     assert set(FIELDS) == set(BASE_KEYS) | set(TOOL_ONLY_KEYS)
-    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 110, "a key is listed twice above"
+    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 114, "a key is listed twice above"
     control_words = re.compile(r"\b(tab|box|flag|button|click|tick|dialog)\b")
     for key, f in FIELDS.items():
         assert isinstance(f, Field) and f.key == key, key
@@ -130,6 +132,11 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     # text and an artifact is chosen, not defaulted.
     assert FIELDS["artifact"] == Field("artifact", "the artifact", None)
     assert FIELDS["note"] == Field("note", "the note", None)
+    # the run plan's four: the words a plan's sentences open with, and no default, since a setting left
+    # out of a plan is said by the plan's own sentences
+    for key, what in (("plan", "the plan"), ("chi_mode", "the kind of observation"),
+                      ("reparam_rotate", "the rotation"), ("expected_epochs", "the expected number of epochs")):
+        assert FIELDS[key] == Field(key, what, None)
     with pytest.raises(KeyError):
         describe("t_obs_seconds")
     with pytest.raises(FrozenInstanceError):
@@ -1242,6 +1249,7 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
         "mask_run_size": "--run-size", "drive_t_obs": "--t-obs", "drive_repeats": "--repeats",
         "drive_detune": "--detune", "drive_strengths": "--strengths", "free_min": "--free-min",
         "captured_max": "--captured-max", "drive_peak_window": "--peak-window", "clarity_min": "--clarity-min",
+        "plan": None, "chi_mode": None, "reparam_rotate": None, "expected_epochs": None,
     }
     differ = {key: (tool_fields.FLAG.get(key), flags.get(key)) for key in sorted(tool_fields.FLAG.keys() | flags.keys())
               if tool_fields.FLAG.get(key) != flags.get(key)}

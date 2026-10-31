@@ -182,6 +182,7 @@ CELL_PATH    = RESOURCES_ROOT / "Cells"
 BOUNDS_PATH  = RESOURCES_ROOT / "Bounds"
 UNITS_PATH   = RESOURCES_ROOT / "Units"
 MODELS_PATH  = RESOURCES_ROOT / "Models"      # user-defined model definitions (see core/registry.py)
+PLANS_PATH   = RESOURCES_ROOT / "Plans"       # plan files, one folder per model
 
 
 def artifacts_root() -> Path:
