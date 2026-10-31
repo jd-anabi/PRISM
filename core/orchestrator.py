@@ -457,6 +457,112 @@ def fresh_run_near_misses(cfg: SimConfig, prior, *, num_runs=None, run_size_cap=
 
 
 @dataclass(frozen=True)
+class TrainingReading:
+    """What a training at a given budget WOULD do with the saved simulation sets, read from the disk alone:
+    the half of ``TrainingPreview`` that asks the graphics card nothing, for a page that reads it as a person
+    types. ``checkpoint``, ``batches_done``, ``siblings``, ``cadence`` and ``checkpoint_error`` are the
+    preview's. ``sibling_diffs``: every other saved set with everything it differs in
+    (``training_checkpoint.SiblingDifference``, the most batches first), held only when this run would start
+    a set of its own: () with the cadence off, a config or a prior missing, batches in this run's own set, or
+    a ``checkpoint_error``. ``width``: the rows per batch in every state, the one handed in, else the stage's
+    for this config; None with no config, or one that cannot say.
+    """
+    checkpoint: str
+    batches_done: int
+    siblings: str
+    sibling_diffs: tuple
+    cadence: int
+    checkpoint_error: str | None
+    width: int | None
+
+
+def training_reading(cfg, prior, *, num_runs: int, run_size_cap: int, checkpoint_every=None, truncation=None,
+                     store=None, width=None) -> TrainingReading:
+    """The saved simulation sets as build_posterior would meet them at this budget. Reads the store, writes
+    nothing, asks the graphics card nothing, and NEVER RAISES on what it reads: a failure building the
+    identity, resolving the store, peeking the state or walking the other sets lands in ``checkpoint_error``,
+    with ``checkpoint`` "new" and nothing else held. ``training_preview`` is this and the memory figures.
+
+    ONE RESOLUTION, THE STAGE'S, as the preview's docstring tells it, and every other set is read once: the
+    line and the differences are made from the same walk. ``width`` is handed in by the preview, which has
+    resolved its hardware; else it is the stage's own, read from the config in every state, since a page says
+    what a training will simulate before a prior is held. No hardware is detected for it: a config that cannot
+    say holds none, and is said only inside the guarded block, where the cache is read. INTS ONLY, as the
+    preview's: ``num_runs``, ``run_size_cap`` and ``checkpoint_every`` are what the boxes hold after their rules
+    passed.
+    """
+    n_runs, size_cap = int(num_runs), int(run_size_cap)
+    if width is None and cfg is not None:
+        with contextlib.suppress(Exception):
+            width = _training_run_size(cfg, size_cap)
+    # The cache, in build_posterior's order: the cadence first (nothing is read when it is off), then
+    # the identity, the directory under the store the run writes to, and its committed state.
+    cadence = TRAINING_CHECKPOINT_EVERY if checkpoint_every is None else int(checkpoint_every)
+    checkpoint, batches_done, siblings, sibling_diffs, checkpoint_error = "new", 0, "", (), None
+    if not cadence:
+        checkpoint = "off"
+    elif cfg is None or prior is None:
+        checkpoint = "needs_config"
+    else:
+        try:
+            width = _training_run_size(cfg, size_cap) if width is None else width
+            ident = training_identity(cfg, prior, width, n_runs, truncation=truncation)
+            root = resolve_store(store).kind_dir("simulation")
+            state = training_checkpoint.peek(training_checkpoint.resolve_dir(ident, root)) or {}
+            if state.get("batches_done"):
+                batches_done = int(state["batches_done"])
+                checkpoint = "resume_complete" if state.get("complete") else "resume_partial"
+            else:
+                rows = list(training_checkpoint._sibling_diffs(ident, root))
+                siblings = training_checkpoint._siblings_line(rows)
+                sibling_diffs = training_checkpoint._differing(ident, rows)
+                checkpoint = "new_with_siblings" if siblings else "new"
+        except Exception as e:               # noqa: BLE001 -- a status line must never raise
+            checkpoint, batches_done, siblings, sibling_diffs = "new", 0, "", ()
+            checkpoint_error = f"{type(e).__name__}: {e}"
+    return TrainingReading(checkpoint=checkpoint, batches_done=batches_done, siblings=siblings,
+                           sibling_diffs=sibling_diffs, cadence=cadence, checkpoint_error=checkpoint_error,
+                           width=width)
+
+
+def matching_fits(cfg, prior, *, num_runs, run_size_cap, hidden_features, num_transforms, learning_rate,
+                  stop_after_epochs, max_num_epochs, checkpoint_every, store=None) -> tuple:
+    """The kept trainings build_posterior would name as ones it could resume instead of this training: what
+    it hands ``fit_state.matching_kept_fits`` before its fit, asked before anything is spent. Each argument
+    is the stage's, None for the configuration's own. () when the cadence is off (the stage then keeps no
+    fit), a config or a prior is missing, or the kept trainings cannot be listed. Reads the store and the
+    records, writes nothing, asks the graphics card nothing, NEVER RAISES.
+
+    THE ONE LINE THAT IS NOT THE STAGE'S is ``z_score_x``. The stage reads it off the network it has built,
+    which does not exist here: a network standardises its own summaries exactly when it holds a probe set,
+    and ``build_embedding_net`` gives it one exactly in chi mode.
+    """
+    try:
+        ck_every = TRAINING_CHECKPOINT_EVERY if checkpoint_every is None else int(checkpoint_every)
+        if not ck_every or cfg is None or prior is None:
+            return ()
+        n_runs = TRAINING_NUM_RUNS if num_runs is None else int(num_runs)
+        size_cap = TRAINING_RUN_SIZE if run_size_cap is None else int(run_size_cap)
+        max_ep = TRAINING_MAX_NUM_EPOCHS if max_num_epochs is None else int(max_num_epochs)
+        hf = NSF_HIDDEN_FEATURES if hidden_features is None else int(hidden_features)
+        nt = NSF_NUM_TRANSFORMS if num_transforms is None else int(num_transforms)
+        lr = TRAINING_LEARNING_RATE if learning_rate is None else float(learning_rate)
+        patience = TRAINING_STOP_AFTER_EPOCHS if stop_after_epochs is None else int(stop_after_epochs)
+        settings = pipeline.fit_settings(
+            model=DENSITY_ESTIMATOR, hidden_features=hf, num_transforms=nt, num_bins=NSF_NUM_BINS,
+            learning_rate=lr, stop_after_epochs=patience, max_num_epochs=max_ep,
+            batch_size=TRAINING_BATCH_SIZE,
+            z_score_x="none" if cfg.chi_mode else "independent",
+            device=cfg.hw.device, dtype=cfg.hw.dtype, num_rounds=TRAINING_NUM_ROUNDS)
+        identity = {"simulation": training_identity(cfg, prior, _training_run_size(cfg, size_cap), n_runs),
+                    "batches": n_runs, "code": fit_state.loaded_code(), "constants": fit_state.constants(),
+                    "libraries": fit_state.libraries(), "settings": settings}
+        return tuple(fit_state.matching_kept_fits(resolve_store(store), identity))
+    except Exception:                        # noqa: BLE001 -- a page's fact must never raise
+        return ()
+
+
+@dataclass(frozen=True)
 class TrainingPreview:
     """What a training run at a given budget WOULD do, as build_posterior resolves it: every number the
     budget group's three lines show, so the lines only format.
@@ -471,6 +577,7 @@ class TrainingPreview:
     the cache; ``checkpoint`` is then "new" with ``batches_done`` 0 and ``siblings`` "", so a front end
     reads the error first. ``cadence``: the checkpoint cadence the run would use, 0 = off.
     ``device_type`` / ``itemsize``: the resolved hardware, for the CUDA-only line and the GiB figure.
+    ``sibling_diffs``: ``TrainingReading``'s.
     """
     n_runs: int
     width: int
@@ -487,6 +594,7 @@ class TrainingPreview:
     checkpoint_error: str | None
     device_type: str
     itemsize: int
+    sibling_diffs: tuple = ()
 
 
 def training_preview(cfg, prior, *, num_runs: int, run_size_cap: int, truncation=None,
@@ -545,34 +653,15 @@ def training_preview(cfg, prior, *, num_runs: int, run_size_cap: int, truncation
         n_fine = n_vars = need = have = None
         estimate_error = f"{type(e).__name__}: {e}"
 
-    # The cache, in build_posterior's order: the cadence first (nothing is read when it is off), then
-    # the identity, the directory under the store the run writes to, and its committed state.
-    cadence = TRAINING_CHECKPOINT_EVERY if checkpoint_every is None else int(checkpoint_every)
-    checkpoint, batches_done, siblings, checkpoint_error = "new", 0, "", None
-    if not cadence:
-        checkpoint = "off"
-    elif cfg is None or prior is None:
-        checkpoint = "needs_config"
-    else:
-        try:
-            ident = training_identity(cfg, prior, width, n_runs, truncation=truncation)
-            root = resolve_store(store).kind_dir("simulation")
-            state = training_checkpoint.peek(training_checkpoint.resolve_dir(ident, root)) or {}
-            if state.get("batches_done"):
-                batches_done = int(state["batches_done"])
-                checkpoint = "resume_complete" if state.get("complete") else "resume_partial"
-            else:
-                siblings = training_checkpoint.describe_siblings(ident, root)
-                checkpoint = "new_with_siblings" if siblings else "new"
-        except Exception as e:               # noqa: BLE001 -- a status line must never raise
-            checkpoint, batches_done, siblings = "new", 0, ""
-            checkpoint_error = f"{type(e).__name__}: {e}"
+    reading = training_reading(cfg, prior, num_runs=n_runs, run_size_cap=size_cap, truncation=truncation,
+                               checkpoint_every=checkpoint_every, store=store, width=width)
     return TrainingPreview(n_runs=n_runs, width=width, hw_batch=int(hw.batch_size), n_fine=n_fine,
                            n_vars=n_vars, need_elements=need, have_elements=have,
-                           estimate_error=estimate_error, checkpoint=checkpoint,
-                           batches_done=batches_done, siblings=siblings, cadence=cadence,
-                           checkpoint_error=checkpoint_error, device_type=hw.device.type,
-                           itemsize=int(hw.dtype.itemsize))
+                           estimate_error=estimate_error, checkpoint=reading.checkpoint,
+                           batches_done=reading.batches_done, siblings=reading.siblings,
+                           cadence=reading.cadence, checkpoint_error=reading.checkpoint_error,
+                           device_type=hw.device.type, itemsize=int(hw.dtype.itemsize),
+                           sibling_diffs=reading.sibling_diffs)
 
 
 def _near_miss_lines(ckpt_dir, near) -> str:

@@ -17,7 +17,8 @@ from core.refusals import Refusal
 
 from tests._fixtures import (CODE_FILES, CODE_ROOTS, _FakeDP, _gmm_in_box, _nad_cfg,
                              _posterior_artifact, _prior_artifact, _set_path, assert_cfg_unchanged,
-                             backdate_tree, snapshot_cfg)
+                             backdate_tree, build_fit_record, card_and_programs, snapshot_cfg,
+                             write_simulation_set)
 
 
 def _close(title, fig):
@@ -2798,6 +2799,466 @@ def test_the_training_preview_resolves_without_a_config_and_never_raises(store, 
     # checkpointing off is decided before anything is read, so there is nothing to fail
     p = orchestrator.training_preview(cfg, lp, num_runs=2, run_size_cap=0, store=store, checkpoint_every=0)
     assert (p.checkpoint, p.checkpoint_error, p.cadence) == ("off", None, 0), p
+
+
+# ── what a training would do with the saved simulation sets ──────────────────────────────────────
+def _budget(store, cfg=None):
+    """A real config at 8 rows a batch with its rotation off, its prior in ``store``, the store's folder of simulation
+    sets, and the identity of the run's own set at 3 batches."""
+    from core import orchestrator
+    cfg = _nad_cfg() if cfg is None else cfg
+    cfg.hw.batch_size = 8
+    cfg.reparam_rotate = False
+    prior = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+    return cfg, prior, store.kind_dir("simulation"), orchestrator.training_identity(cfg, prior, 8, 3)
+
+
+def test_every_differing_setting_of_a_saved_set_is_listed_with_both_values(tmp_path):
+    """The one-line account names a set's first difference and the near-miss question keeps only sets one setting
+    away, and a person deciding to simulate from zero is owed all of it: every other set with a batch, the most
+    batches first and then by name, each with whether it is complete and every setting it differs in, in key order,
+    both values raw and uncut. A narrowing round's set is listed, though it is never a near miss."""
+    from core.SBI import training_checkpoint as tc
+
+    lows = [float(i) for i in range(300)]
+    region = {"dims": [0], "level": 0.999, "lo": [-1.0], "hi": [1.0], "V_digest": "0" * 16}
+    mine = {"model": "X", "n_runs": 10000, "nd_lows": lows, "prior_fingerprint": "aaaa", "truncation": None}
+    two = {**mine, "n_runs": 5000, "prior_fingerprint": "bbbb"}
+    three = {**mine, "nd_lows": lows[:-1] + [-1.0], "prior_fingerprint": "cccc", "truncation": region}
+    one = {**mine, "n_runs": 400}
+    rounds = {**mine, "truncation": region}
+    said_two = ({"field": "n_runs", "mine": 10000, "theirs": 5000},
+                {"field": "prior_fingerprint", "mine": "aaaa", "theirs": "bbbb"})
+    said_three = ({"field": "nd_lows", "mine": lows, "theirs": lows[:-1] + [-1.0]},
+                  {"field": "prior_fingerprint", "mine": "aaaa", "theirs": "cccc"},
+                  {"field": "truncation", "mine": None, "theirs": region})
+    said_one = ({"field": "n_runs", "mine": 10000, "theirs": 400},)
+    # the set with more batches has the later name, so a list left in the folders' order is seen
+    (early, said_early), (late, said_late) = sorted(((two, said_two), (three, said_three)),
+                                                    key=lambda row: tc.identity_digest(row[0]))
+    write_simulation_set(tmp_path, late, 3989, complete=True)
+    write_simulation_set(tmp_path, early, 120)
+    write_simulation_set(tmp_path, one, 3989)
+    write_simulation_set(tmp_path, rounds, 1, complete=True)
+
+    level = sorted([(tc.identity_digest(late), True, said_late), (tc.identity_digest(one), False, said_one)],
+                   key=lambda row: row[0])
+    assert tc.sibling_differences(mine, tmp_path) == (
+        *(tc.SiblingDifference(name, 3989, complete, said) for name, complete, said in level),
+        tc.SiblingDifference(tc.identity_digest(early), 120, False, said_early),
+        tc.SiblingDifference(tc.identity_digest(rounds), 1, True,
+                             ({"field": "truncation", "mine": None, "theirs": region},)))
+    assert tc.near_miss_siblings(mine, tmp_path) == [
+        {"name": tc.identity_digest(one), "batches": 3989, "field": "n_runs", "mine": 10000, "theirs": 400}]
+
+
+def test_a_set_with_no_batches_or_an_unreadable_header_is_not_listed(tmp_path):
+    """Only a set that holds a batch and can say what it was made with is listed, and never the run's own. A set whose
+    newest state is torn is read from the one before it, as the run would read it. A folder that holds this run's very
+    identity under another name differs in nothing, and is listed so: only a hand can have moved it there."""
+    from core.SBI import training_checkpoint as tc
+
+    mine = {"model": "X", "n_runs": 10}
+    good = write_simulation_set(tmp_path, {**mine, "n_runs": 20}, 4)
+    write_simulation_set(tmp_path, {**mine, "n_runs": 30}, 0)
+    torn = write_simulation_set(tmp_path, {**mine, "n_runs": 40}, 4)
+    (torn / "header.pt").write_bytes(b"torn")
+    lost = write_simulation_set(tmp_path, {**mine, "n_runs": 50}, 4)
+    (lost / "state.pt").write_bytes(b"torn")
+    (tmp_path / "no_header").mkdir()
+    write_simulation_set(tmp_path, mine, 9)
+    assert [(row.name, row.batches) for row in tc.sibling_differences(mine, tmp_path)] == [(good.name, 4)]
+    assert tc.sibling_differences(mine, tmp_path / "does-not-exist") == ()
+
+    torch.save({"batches_done": 3, "complete": True, "rng": None}, lost / "state.prev.pt")
+    moved = write_simulation_set(tmp_path, {**mine, "n_runs": 60}, 2)
+    torch.save({"identity": mine}, moved / "header.pt")
+    assert tc.sibling_differences(mine, tmp_path) == (
+        tc.SiblingDifference(good.name, 4, False, ({"field": "n_runs", "mine": 10, "theirs": 20},)),
+        tc.SiblingDifference(lost.name, 3, True, ({"field": "n_runs", "mine": 10, "theirs": 50},)),
+        tc.SiblingDifference(moved.name, 2, False, ()))
+
+
+_OLD_FIELDS = ("n_runs", "width", "hw_batch", "n_fine", "n_vars", "need_elements", "have_elements", "estimate_error",
+               "checkpoint", "batches_done", "siblings", "cadence", "checkpoint_error", "device_type", "itemsize")
+
+
+def test_the_preview_says_word_for_word_what_it_said(store, monkeypatch):
+    """STANDING. The preview hands the cache's half to the reading and today's page reads every word of it: each of
+    its fifteen fields in each state, its one line in the order of the folders whatever order the differences are held
+    in, each failure's text, and the other sets walked once however much is made of them."""
+    import shutil
+    from core import orchestrator
+    from core.SBI import training_checkpoint as tc
+
+    cfg, prior, root, ident = _budget(store)
+    own = tc.resolve_dir(ident, root)
+    fixed = {"n_runs": 3, "width": 8, "hw_batch": 8, "n_fine": min(config.N_ND_MAX, int(cfg.t.shape[0])), "n_vars": 3,
+             "need_elements": None, "have_elements": None, "estimate_error": None, "batches_done": 0, "siblings": "",
+             "cadence": 5, "checkpoint_error": None, "device_type": "cpu", "itemsize": 4}
+    walks, peeks, real_walk, real_peek = [], [], tc._sibling_diffs, tc.peek
+
+    def walk(identity, root=None):
+        walks.append(root)
+        return real_walk(identity, root)
+
+    def peek(path):
+        peeks.append(Path(path).name)
+        return real_peek(path)
+
+    monkeypatch.setattr(tc, "_sibling_diffs", walk)
+    monkeypatch.setattr(tc, "peek", peek)
+
+    def preview(held=prior, every=5):
+        walks.clear()
+        peeks.clear()
+        return orchestrator.training_preview(cfg, held, num_runs=3, run_size_cap=0, checkpoint_every=every, store=store)
+
+    def said(p) -> dict:
+        return {name: getattr(p, name) for name in _OLD_FIELDS}
+
+    assert said(preview(every=0)) == {**fixed, "checkpoint": "off", "cadence": 0}
+    assert (walks, peeks) == ([], [])
+    assert said(preview(held=None, every=0)) == {**fixed, "checkpoint": "off", "cadence": 0}
+    assert said(preview(held=None)) == {**fixed, "checkpoint": "needs_config"}
+    assert (walks, peeks) == ([], [])
+    assert said(preview()) == {**fixed, "checkpoint": "new"}
+    assert (walks, peeks) == ([root], [own.name])
+    write_simulation_set(root, ident, 2)
+    assert said(preview()) == {**fixed, "checkpoint": "resume_partial", "batches_done": 2}
+    assert (walks, peeks) == ([], [own.name])
+    write_simulation_set(root, ident, 3, complete=True)
+    assert said(preview()) == {**fixed, "checkpoint": "resume_complete", "batches_done": 3}
+    assert (walks, peeks) == ([], [own.name])
+    shutil.rmtree(own)
+
+    near = write_simulation_set(root, {**ident, "n_runs": 9}, 2)
+    rounds = write_simulation_set(root, {**ident, "truncation": {"dims": [0]}}, 7, complete=True)
+    other = write_simulation_set(root, {**ident, "model": "X", "n_runs": 11}, 5)
+    moved = write_simulation_set(root, {**ident, "n_runs": 13}, 4)
+    torch.save({"identity": ident}, moved / "header.pt")
+    moved.rename(root / "moved_by_hand")
+    notes = {near.name: "2 batches, differs in n_runs",
+             rounds.name: "7 batches, differs in truncation -- a TSNPE round and an amortized run never share rows",
+             other.name: "5 batches, differs in model", "moved_by_hand": "4 batches, differs in nothing recorded"}
+    line = ("[checkpoint] 4 other checkpoint(s) exist and do NOT match this run: "
+            + "; ".join(f"{name} ({notes[name]})" for name in sorted(notes)))
+    p = preview()
+    assert said(p) == {**fixed, "checkpoint": "new_with_siblings", "siblings": line}
+    assert (walks, peeks) == ([root], [own.name, *sorted(notes)])
+    assert [row.name for row in p.sibling_diffs] == [rounds.name, other.name, "moved_by_hand", near.name]
+    assert p.siblings == tc.describe_siblings(ident, root)
+
+    class Broken:
+        def kind_dir(self, kind):
+            raise OSError("the store went away")
+
+    def unreadable(path):
+        raise OSError("disk gone")
+
+    failed = {**fixed, "checkpoint": "new"}
+    p = orchestrator.training_preview(object(), object(), num_runs=3, run_size_cap=0, checkpoint_every=5,
+                                      hw=config.cpu_device())
+    assert said(p) == {**failed, "width": 64, "hw_batch": 64, "n_fine": None, "n_vars": None,
+                       "estimate_error": "AttributeError: 'object' object has no attribute 't'",
+                       "checkpoint_error": "AttributeError: 'object' object has no attribute 'chi_mode'"}
+    p = orchestrator.training_preview(cfg, prior, num_runs=3, run_size_cap=0, checkpoint_every=5, store=Broken())
+    assert said(p) == {**failed, "checkpoint_error": "OSError: the store went away"}
+    monkeypatch.setattr(tc, "peek", unreadable)
+    assert said(preview()) == {**failed, "checkpoint_error": "OSError: disk gone"}
+
+
+def test_the_preview_carries_the_differing_sets_only_for_a_new_set(store, monkeypatch):
+    """The differences are read for a run that would start a set of its own, and for nothing else: not with the cadence
+    off, a config or a prior missing, batches in the run's own set, or a failure. The preview's are the reading's."""
+    from core import orchestrator
+    from core.SBI import training_checkpoint as tc
+
+    cfg, prior, root, ident = _budget(store)
+    other = write_simulation_set(root, {**ident, "n_runs": 9}, 2, complete=True)
+    every = dict(num_runs=3, run_size_cap=0, checkpoint_every=5, store=store)
+
+    def read(what=orchestrator.training_preview, held=prior, config_=cfg, **given):
+        return what(config_, held, **{**every, **given}).sibling_diffs
+
+    expected = (tc.SiblingDifference(other.name, 2, True, ({"field": "n_runs", "mine": 3, "theirs": 9},)),)
+    assert read() == expected
+    assert read(orchestrator.training_reading) == expected
+    assert read(checkpoint_every=0) == ()
+    assert read(held=None) == ()
+    assert read(config_=None, hw=config.cpu_device()) == ()
+
+    def half_said(identity, rows):
+        raise RuntimeError("a difference could not be made")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(tc, "_differing", half_said)
+        p = orchestrator.training_preview(cfg, prior, **every)
+    assert (p.sibling_diffs, p.siblings, p.checkpoint) == ((), "", "new"), p
+    assert p.checkpoint_error == "RuntimeError: a difference could not be made"
+
+    write_simulation_set(root, ident, 0)
+    assert read() == expected, "a set of the run's own with no batch continues nothing"
+    write_simulation_set(root, ident, 1)
+    assert read() == ()
+
+
+def test_the_training_reading_touches_no_card(store, monkeypatch):
+    """STANDING. A page reads this as a person types and when it opens, so it asks the graphics card nothing, in any
+    state: no question of the card, no device check, none of the planner's figures, no tensor for the run's device, and
+    not the preview. The configuration here names the card, as the retrain's does. A reading swallows what is raised
+    and says it in ``checkpoint_error``, so every stand-in records as well, and each reading is read for that field.
+    The kept trainings' reading is held to the same. The last lines show the stand-ins can tell: the preview reaches
+    them."""
+    import types
+    from core import orchestrator
+    from core.SBI import pipeline
+
+    cfg, prior, root, _ = _budget(store)
+    cfg.hw = types.SimpleNamespace(device=torch.device("cuda"), dtype=torch.float32, batch_size=8)
+    ident = orchestrator.training_identity(cfg, prior, 8, 3)
+    preview = orchestrator.training_preview
+    asked, reached = card_and_programs(monkeypatch), []
+
+    def stand_in(name):
+        def reach(*args, **kwargs):
+            reached.append(name)
+            raise AssertionError(f"{name} was reached")
+        return reach
+
+    for space, name in ((orchestrator, "training_preview"), (orchestrator, "_observation_inits"),
+                        (pipeline, "sim_memory_budget_elements"), (pipeline, "peak_sim_elements"),
+                        (config, "memory_budget_elements")):
+        monkeypatch.setattr(space, name, stand_in(name))
+    every = dict(num_runs=3, run_size_cap=0, checkpoint_every=5, store=store)
+
+    readings = [orchestrator.training_reading(cfg, prior, **{**every, "checkpoint_every": 0}),
+                orchestrator.training_reading(cfg, None, **every), orchestrator.training_reading(None, None, **every),
+                orchestrator.training_reading(cfg, prior, **every)]
+    write_simulation_set(root, {**ident, "n_runs": 9}, 2)
+    readings.append(orchestrator.training_reading(cfg, prior, **every))
+    write_simulation_set(root, ident, 2)
+    readings.append(orchestrator.training_reading(cfg, prior, **every))
+    write_simulation_set(root, ident, 3, complete=True)
+    readings.append(orchestrator.training_reading(cfg, prior, **every))
+    assert [reading.checkpoint for reading in readings] == [
+        "off", "needs_config", "needs_config", "new", "new_with_siblings", "resume_partial", "resume_complete"]
+    assert [reading.checkpoint_error for reading in readings] == [None] * 7
+    assert [reading.width for reading in readings] == [8, 8, None, 8, 8, 8, 8]
+    assert orchestrator.matching_fits(cfg, prior, hidden_features=8, num_transforms=1, learning_rate=None,
+                                      stop_after_epochs=3, max_num_epochs=None, **every) == ()
+    assert (asked, reached) == ([], [])
+
+    assert preview(cfg, prior, **every).estimate_error == "AssertionError: _observation_inits was reached"
+    assert reached == ["_observation_inits"]
+    assert preview(None, None, num_runs=3, run_size_cap=0).device_type == "cuda"
+    assert asked == ["the device check"] and reached[1:] == ["peak_sim_elements"]
+
+
+def test_the_reading_never_raises_and_says_what_it_could_not_read(store, monkeypatch):
+    """What cannot be read is said in ``checkpoint_error``, and the reading then holds nothing else. A width handed in
+    is the one used, the preview's, resolved from the hardware it was given; with none the stage's is read from the
+    configuration, so that a configuration with no hardware is said, and no device is detected for it."""
+    from core import orchestrator
+    from core.SBI import training_checkpoint as tc
+
+    cfg, prior, root, ident = _budget(store)
+    every = dict(num_runs=3, run_size_cap=0, checkpoint_every=5, store=store)
+    asked = card_and_programs(monkeypatch)
+
+    class Broken:
+        def kind_dir(self, kind):
+            raise OSError("the store went away")
+
+    class NoFingerprint:
+        @property
+        def fingerprint(self):
+            raise ValueError("no fingerprint")
+
+    def failure(config_=cfg, held=prior, **given) -> tuple:
+        reading = orchestrator.training_reading(config_, held, **{**every, **given})
+        assert (reading.checkpoint, reading.batches_done, reading.siblings, reading.sibling_diffs) == ("new", 0, "", ())
+        assert reading.cadence == 5
+        return reading.checkpoint_error, reading.width
+
+    assert failure(store=Broken()) == ("OSError: the store went away", 8)
+    assert failure(config_=object()) == ("AttributeError: 'object' object has no attribute 'hw'", None)
+    assert failure(config_=object(), held=object(), width=8) == (
+        "AttributeError: 'object' object has no attribute 'chi_mode'", 8)
+    assert failure(held=NoFingerprint()) == ("ValueError: no fingerprint", 8)
+    other = write_simulation_set(root, {**ident, "n_runs": 9}, 2)
+    torch.save({"identity": ["held", "as", "a", "list"]}, other / "header.pt")
+    assert failure() == ("AttributeError: 'list' object has no attribute 'get'", 8)
+
+    def unreadable(path):
+        raise OSError("disk gone")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(tc, "peek", unreadable)
+        assert failure() == ("OSError: disk gone", 8)
+    assert asked == []
+
+    narrower = orchestrator.training_identity(cfg, prior, 4, 3)
+    write_simulation_set(root, narrower, 2)
+    handed = orchestrator.training_reading(cfg, prior, **every, width=4)
+    assert (handed.checkpoint, handed.batches_done, handed.width) == ("resume_partial", 2, 4), handed
+
+
+def test_the_width_is_read_in_every_state_the_configuration_can_give_it(store, monkeypatch):
+    """A page says what a training will simulate before a prior is held and with the cadence off, so the width does not
+    wait for the cache: each state holds the stage's width for the configuration, a ceiling and not a replacement, or
+    the one handed in. No configuration, or one that cannot say, holds none, and no device is detected for it; only
+    where the cache is read is that said as a failure."""
+    from core import orchestrator
+
+    cfg, prior, root, ident = _budget(store)
+    every = dict(num_runs=3, run_size_cap=0, checkpoint_every=5, store=store)
+    asked = card_and_programs(monkeypatch)
+
+    class NoHardware:
+        @property
+        def hw(self):
+            raise ValueError("no hardware here")
+
+    def state_and_width(config_=cfg, held=prior, **given) -> tuple:
+        reading = orchestrator.training_reading(config_, held, **{**every, **given})
+        return reading.checkpoint, reading.width
+
+    assert state_and_width(checkpoint_every=0) == ("off", 8)
+    assert state_and_width(held=None) == ("needs_config", 8)
+    assert state_and_width() == ("new", 8)
+    write_simulation_set(root, {**ident, "n_runs": 9}, 2)
+    assert state_and_width() == ("new_with_siblings", 8)
+    write_simulation_set(root, ident, 2)
+    assert state_and_width() == ("resume_partial", 8)
+    write_simulation_set(root, ident, 3, complete=True)
+    assert state_and_width() == ("resume_complete", 8)
+
+    assert state_and_width(checkpoint_every=0, run_size_cap=5) == ("off", 5)
+    assert state_and_width(held=None, run_size_cap=5) == ("needs_config", 5)
+    assert state_and_width(checkpoint_every=0, run_size_cap=100) == ("off", 8)
+    assert state_and_width(held=None, run_size_cap=100) == ("needs_config", 8)
+    assert state_and_width(checkpoint_every=0, width=4) == ("off", 4)
+    assert state_and_width(held=None, width=4) == ("needs_config", 4)
+
+    assert state_and_width(config_=None, checkpoint_every=0) == ("off", None)
+    assert state_and_width(config_=None, held=None) == ("needs_config", None)
+    assert state_and_width(config_=object(), checkpoint_every=0) == ("off", None)
+    assert state_and_width(config_=object(), held=None) == ("needs_config", None)
+    assert state_and_width(config_=NoHardware(), checkpoint_every=0) == ("off", None)
+    assert state_and_width(config_=NoHardware(), held=None) == ("needs_config", None)
+    failed = orchestrator.training_reading(NoHardware(), prior, **every)
+    assert (failed.checkpoint, failed.width, failed.checkpoint_error) == ("new", None, "ValueError: no hardware here")
+    assert asked == []
+
+
+def _cfg_of(bounds: str, chi: bool):
+    """A real NADROWSKI config off a bounds file of the model, as ``_nad_cfg`` builds one off the master."""
+    from core import cli, registry
+    from core.config import BOUNDS_PATH, VALID_LABELS, VALID_MODELS
+    cfg = cli.make_sim_config("NADROWSKI", VALID_LABELS[VALID_MODELS.index("NADROWSKI")],
+                              registry.state_dep_drift("NADROWSKI"), str(BOUNDS_PATH / "nadrowski" / bounds),
+                              chi_mode=chi)
+    cfg.hw = config.cpu_device()
+    return cfg
+
+
+class _AtTheNaming(BaseException):
+    """Ends the training stage on the line that names the kept trainings. Not an ``Exception``, which that line would
+    catch and warn of."""
+
+
+def _what_the_stage_asks(store, monkeypatch, cfg, prior, **given) -> dict:
+    """What ``build_posterior`` hands ``matching_kept_fits`` for this call, ending there. That line stands before its
+    fit, so nothing is simulated, and the train call beyond it fails should the line ever be passed."""
+    from core import orchestrator
+    from core.SBI import fit_state
+
+    asked = []
+
+    def at_the_naming(_store, identity):
+        asked.append(identity)
+        raise _AtTheNaming()
+
+    def beyond(*args, **kwargs):
+        raise AssertionError("the training stage went on past the line that names the kept trainings")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fit_state, "matching_kept_fits", at_the_naming)
+        patch.setattr(orchestrator.pipeline, "train_nn", beyond)
+        with pytest.raises(_AtTheNaming):
+            orchestrator.build_posterior(cfg, prior, None, True, store=store, **given)
+    return asked[0]
+
+
+_EACH_KIND = pytest.mark.parametrize(
+    "bounds, chi",
+    [("master.txt", False), ("master.txt", True), ("master_spont.txt", False), ("master_tier1.txt", True)],
+    ids=["driven", "frequency response", "spontaneous", "the temperature box"])
+
+
+@_EACH_KIND
+def test_the_matching_fits_ask_what_the_stage_asks(store, monkeypatch, bounds, chi):
+    """A page may not ask its own question of the kept trainings: with the same arguments, in each kind of observation,
+    ``matching_fits`` hands ``matching_kept_fits`` the very identity the stage hands it on the line before its fit,
+    every setting given and every setting left to the configuration. The summaries' z-scoring is the one thing it
+    cannot read where the stage reads it, off the network the stage builds; this test holds its rule to that network."""
+    from core import orchestrator
+    from core.SBI import fit_state
+
+    cfg, prior, *_ = _budget(store, _cfg_of(bounds, chi))
+    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 6)
+    given = dict(num_runs=3, run_size_cap=5, hidden_features=16, num_transforms=2, learning_rate=1e-3,
+                 stop_after_epochs=7, max_num_epochs=9, checkpoint_every=4)
+    for call in (given, dict.fromkeys(given)):
+        stage = _what_the_stage_asks(store, monkeypatch, cfg, prior, **call)
+        asked = []
+        with monkeypatch.context() as patch:
+            patch.setattr(fit_state, "matching_kept_fits", lambda _store, identity: asked.append(identity) or [])
+            assert orchestrator.matching_fits(cfg, prior, store=store, **call) == ()
+        assert asked == [stage]
+        assert stage["settings"]["z_score_x"] == ("none" if chi else "independent")
+    asked.clear()
+    with monkeypatch.context() as patch:
+        patch.setattr(fit_state, "matching_kept_fits", lambda _store, identity: asked.append(identity) or [])
+        for held, config_, every in ((None, cfg, 4), (prior, None, 4), (prior, cfg, 0)):
+            assert orchestrator.matching_fits(config_, held, store=store, **{**given, "checkpoint_every": every}) == ()
+    assert asked == [], "nothing is listed where the stage would keep no fit"
+
+
+@_EACH_KIND
+def test_the_matching_fits_are_those_the_stage_would_name(store, monkeypatch, bounds, chi):
+    """A kept training made with the identity the stage itself would record is found, and one setting of the fit, the
+    batches or the width away it is not; a ceiling above the hardware's batch is no other width, and the cadence no
+    part of what is matched. Nothing is found with the cadence off, a config or a prior missing, or a store that
+    cannot list its kept trainings: this is a fact on a page, and it never raises."""
+    from core import orchestrator
+
+    cfg, prior, root, _ = _budget(store, _cfg_of(bounds, chi))
+    given = dict(num_runs=3, run_size_cap=0, hidden_features=16, num_transforms=2, learning_rate=1e-3,
+                 stop_after_epochs=7, max_num_epochs=9, checkpoint_every=4)
+    asked = _what_the_stage_asks(store, monkeypatch, cfg, prior, **given)
+    folder = write_simulation_set(root, asked["simulation"], 3, complete=True)
+    ref = build_fit_record(store, identity={**asked, "network": "0" * 16}, parents={"simulation": folder.name})
+
+    def found(config_=cfg, held=prior, kept_in=store, **changed) -> tuple:
+        return orchestrator.matching_fits(config_, held, store=kept_in, **{**given, **changed})
+
+    assert [kept.id for kept in found()] == [ref]
+    assert [kept.id for kept in found(run_size_cap=100)] == [ref]
+    assert [kept.id for kept in found(checkpoint_every=9)] == [ref]
+    for changed in ({"stop_after_epochs": 8}, {"num_runs": 4}, {"run_size_cap": 4}, {"hidden_features": 32},
+                    {"num_transforms": 3}, {"learning_rate": 2e-3}, {"max_num_epochs": 10}, {"checkpoint_every": 0}):
+        assert found(**changed) == (), changed
+    assert found(held=None) == ()
+    assert found(config_=None) == ()
+    assert found(config_=object()) == ()
+
+    class Unlisted(type(store)):
+        def list(self, kind=None, **kwargs):
+            raise OSError("the kept trainings' folder could not be read")
+
+    assert found(kept_in=Unlisted(store.root)) == ()
 
 
 # ── the compositions: one flow under the GUI and the command line ────────────────────────────────

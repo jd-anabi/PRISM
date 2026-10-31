@@ -70,6 +70,7 @@ the rule, and the section is what enforces it.
 import hashlib
 import json
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -272,7 +273,7 @@ def verify(path, identity: dict, probe=None, *, probe_atol: float = 1e-6) -> dic
 
 
 def _sibling_diffs(identity: dict, root=None):
-    """Yield ``(dir, batches_done, diff_fields, stored_identity)`` for every OTHER committed
+    """Yield ``(dir, batches_done, diff_fields, stored_identity, complete)`` for every OTHER committed
     checkpoint under ``root``.
 
     Extracted so describe_siblings and near_miss_siblings cannot drift: they ask the same question of
@@ -292,20 +293,26 @@ def _sibling_diffs(identity: dict, root=None):
             continue
         diff = [k for k in sorted(set(stored) | set(identity))
                 if _canonical(identity.get(k)) != _canonical(stored.get(k))]
-        yield d, int(st["batches_done"]), diff, stored
+        yield d, int(st["batches_done"]), diff, stored, bool(st.get("complete"))
+
+
+def _siblings_line(rows) -> str:
+    """The rows of ``_sibling_diffs`` as ``describe_siblings`` says them, for a caller that keeps the rows
+    for more than the line, so that the directories are read once."""
+    notes = [f"{d.name} ({done} batches, differs in "
+             f"{'truncation -- a TSNPE round and an amortized run never share rows' if diff == ['truncation'] else (diff[0] if diff else 'nothing recorded')})"
+             for d, done, diff, *_ in rows]
+    if not notes:
+        return ""
+    return (f"[checkpoint] {len(notes)} other checkpoint(s) exist and do NOT match this run: "
+            + "; ".join(notes))
 
 
 def describe_siblings(identity: dict, root=None) -> str:
     """A one-line account of other checkpoints under ``root``, and the first identity field each one
     differs in. Turns the commonest silent restart -- 'I rebuilt the prior, so the digest changed and
     it started from zero' -- into a message that names the reason."""
-    notes = [f"{d.name} ({done} batches, differs in "
-             f"{'truncation -- a TSNPE round and an amortized run never share rows' if diff == ['truncation'] else (diff[0] if diff else 'nothing recorded')})"
-             for d, done, diff, _ in _sibling_diffs(identity, root)]
-    if not notes:
-        return ""
-    return (f"[checkpoint] {len(notes)} other checkpoint(s) exist and do NOT match this run: "
-            + "; ".join(notes))
+    return _siblings_line(_sibling_diffs(identity, root))
 
 
 def checkpoints_using_prior(fingerprint: str, root=None) -> list:
@@ -354,9 +361,37 @@ def near_miss_siblings(identity: dict, root=None) -> list:
     """
     out = [{"name": d.name, "batches": done, "field": diff[0],
             "mine": identity.get(diff[0]), "theirs": stored.get(diff[0])}
-           for d, done, diff, stored in _sibling_diffs(identity, root)
+           for d, done, diff, stored, _ in _sibling_diffs(identity, root)
            if len(diff) == 1 and diff[0] != "truncation"]
     return sorted(out, key=lambda r: -r["batches"])
+
+
+@dataclass(frozen=True)
+class SiblingDifference:
+    """One other committed checkpoint and everything it differs in: its directory's name, the batches it
+    holds, whether it is complete, and one ``{"field", "mine", "theirs"}`` per differing identity field, in
+    sorted key order, each value raw and uncut, as ``near_miss_siblings`` hands its one. No field at all is a
+    checkpoint with this very identity under another name, which only a directory moved by hand can be."""
+    name: str
+    batches: int
+    complete: bool
+    fields: tuple
+
+
+def _differing(identity: dict, rows) -> tuple:
+    """The rows of ``_sibling_diffs`` as ``SiblingDifference``s, the most batches first, then by name."""
+    return tuple(SiblingDifference(d.name, done, complete,
+                                   tuple({"field": name, "mine": identity.get(name), "theirs": stored.get(name)}
+                                         for name in diff))
+                 for d, done, diff, stored, complete in sorted(rows, key=lambda row: (-row[1], row[0].name)))
+
+
+def sibling_differences(identity: dict, root=None) -> tuple:
+    """Every other committed checkpoint under ``root`` that holds a batch, with everything it differs in, as
+    ``SiblingDifference``s, the most batches first. ``near_miss_siblings`` keeps the ones a single field away;
+    this keeps them all, for a front end that names every difference before a new simulation set is
+    started. Reads what ``describe_siblings`` reads and writes nothing."""
+    return _differing(identity, _sibling_diffs(identity, root))
 
 
 # ── rows ─────────────────────────────────────────────────────────────────────────────────────────
