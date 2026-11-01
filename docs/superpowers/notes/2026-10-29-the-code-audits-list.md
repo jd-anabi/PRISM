@@ -393,3 +393,9 @@ From Task 3 (the differing settings and the kept training's facts), `.superpower
     call and each `[patho]` reading replaces the model's, so after a try `failed` and `simulated` cover that try, while `memory_peak` and `batches_split` beside them cover the whole run.
     A later Continue adds the shorter count to its "over N runs" (`_name_the_set`). Older than stage 4. Cure: sum across a run's tries, or say the scope in `history.py`'s docstring
     (Task 4's seat two).
+14. **`PRISM_VRAM_CEILING_GIB` set to `inf` or `1e999` passes the planner's own test** (`core/SBI/pipeline.py`, `vram_ceiling_gib`, `sim_memory_budget_elements`). The window then says it is in
+    force and the run's line says "Memory limit: inf GiB", and the planner raises `OverflowError` at the first batch of a run that simulates. Reachable by the environment alone: the
+    window's own field refuses the same values since Task 5. Cure: the planner's test refuses what is not finite (Task 5's skeptic).
+15. **The engine's warning after a lack of memory sends a person to a constant** (`core/SBI/pipeline.py:1872-1875`): "consider setting a per-batch VRAM ceiling
+    (config.SIM_VRAM_CEILING_GIB, or PRISM_VRAM_CEILING_GIB for one run)". Since Task 5 the limit is set in Settings, This computer, and no person edits the constant. Cure: a message that
+    says the limit in plain words and leaves the place to the front end (Task 5's skeptic).
