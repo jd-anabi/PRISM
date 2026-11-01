@@ -1,7 +1,35 @@
 # PRISM — state
 
-**Last updated:** 2026-10-30, late evening (23:42 by the clock; the weekly bar 87 %, resetting on 1 November at 04:00 UTC):
-STAGE 4'S BUILD STANDS WITH TASKS 0 TO 3 COMPLETE. The session was started from the owner's pasted prompt
+**Last updated:** 2026-10-31, early evening (17:07 by the clock; the weekly bar 90 %, resetting on 1 November at 04:00 UTC):
+STAGE 4'S BUILD STANDS WITH TASKS 0 TO 4 COMPLETE. The session was started from the owner's pasted prompt
+`docs/superpowers/prompts/2026-10-31-window-redesign-stage-4-build-from-task-4.md`; it opened before the reset, told the owner the bar
+(87 %) and recommended waiting, and the owner said "Start", which covered Task 4 alone.
+
+- **Task 4, the run's record:** `46bcf64`..`ebf918f` (`core/gui/run/model.py`, `controller.py`, `history.py`, `core/gui/panels/inference/base.py`
+  and tests; no page changes). A run's history now holds its plan and settings, the memory limit with its source and computer,
+  its whole health, and the fit's wall time and failed save; `history.duration`, a public `expected_epochs`, and the kept name
+  on a resume.
+- **Three of the section's rules were wrong, found by its skeptic before the build, so the design's words stand:** `out_of_memory`
+  is true only when the run ended failed (a try that ran out of memory left the flag on a run that recovered and finished);
+  `batches_split` counts batches, not the engine's halvings; `plan` and `settings` are made plain at the start, or one
+  `Path` cost a run its whole history. Departures 169 and 170.
+- **The review:** nothing wrong in the product but one small thing (a whole number too long to write, now said in words); five
+  Important, all tests, each a rule held at one place and not at the place next to it. One fix round, `260e3f3`, `ebf918f`.
+- **The gate:** 2277 passed, 9 skipped, 5 deselected, 2291 collected, 27 min 20 s at `ebf918f`. Review clean and gate green on the same
+  head. `Artifacts/` untouched, with no `fits/`; no `Resources/Plans`; `PRISM.ini` unchanged. No engine file in the task.
+- **Two older faults went on the code audit's list,** items 12 and 13 of its second part: a run whose worker ends with no outcome
+  never ends, and a run tried again keeps only its last try's failed and simulated counts.
+- **Measured:** Task 4 about 2.1 M agents' tokens; the bar 87 % to 90 %. Ten building tasks with the last review and the exit read
+  about 35 to 40 points.
+
+NEXT: Task 5, Settings' "This computer", in a new chat the owner starts from
+`docs/superpowers/prompts/2026-10-31-window-redesign-stage-4-build-from-task-5.md`, after the reset on 1 November at 04:00 UTC
+(21:00 on 31 October, the owner's time). That prompt lists what is carried to each task. It was not checked by a reader, to spare the bar.
+The owner's two questions are ahead: the font's download while Task 6's gate runs, the greyed button's picture while Task
+8's runs. The ledger's section "Stage 4 — … (build of …)" is the record.
+
+What follows is the head as the late evening of 30 October left it (23:42 by the clock; the weekly bar 87 %):
+STAGE 4'S BUILD STOOD WITH TASKS 0 TO 3 COMPLETE. The session was started from the owner's pasted prompt
 `docs/superpowers/prompts/2026-10-30-window-redesign-stage-4-build.md`; it opened before the reset, told the owner the bar
 and recommended waiting, and the owner pressed "Start Task 0", so the build ran under the 90 % rule.
 
