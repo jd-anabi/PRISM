@@ -1711,17 +1711,18 @@ def test_ctrl_r_opens_the_run_whenever_the_foot_is_a_button(tmp_path):
 
 
 def test_during_a_run_every_setting_is_locked_but_appearance_and_every_page_reads(tmp_path, monkeypatch):
-    """From a run's start to its end every setting of every page that starts runs is locked; Records' note, its
-    delete and its clearing of leftovers, and Your own models' validate, save and delete, are refused after the
-    click, each with its own sentence, as they are today, and change nothing; while the rail, every part and every
-    step, Home, Help, Records' lists and the choice of appearance stay usable. At the run's end every setting is
-    free again."""
+    """From a run's start to its end every setting of every page that starts runs is locked, and in Settings the memory
+    limit and the reading of the free memory; Records' note, its delete and its clearing of leftovers, and Your own
+    models' validate, save and delete, are refused after the click, each with its own sentence, as they are today, and
+    change nothing; while the rail, every part and every step, Home, Help, Records' lists, the choice of appearance and
+    the keep-awake switch stay usable. At the run's end every setting is free again."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels.crossval_panel import CrossValPanel
     from tests._fixtures import all_asked, build_browse_store, forget_asked
     qt_app()
     _on_the_runs_clock(tmp_path)
     ids = build_browse_store(tmp_path / "Artifacts")
+    monkeypatch.setattr(this_computer, "on_windows", lambda: True)
     store = ArtifactStore(tmp_path / "Artifacts")
     with use_store(store):
         window = build_window()
@@ -1769,9 +1770,15 @@ def test_during_a_run_every_setting_is_locked_but_appearance_and_every_page_read
             assert (records.table.isEnabled(), records.kind_combo.isEnabled()) == (True, True)
             records.kind_combo.setCurrentIndex(records.kind_combo.findData("posterior"))
             assert records.kind() == "posterior", "Records' list could not be changed"
-            radios = window.part("settings")._radios
+            settings = window.part("settings")
+            radios = settings._radios
             assert radios and all(radio.isEnabled() for radio in radios.values()), "appearance was locked"
+            assert settings.awake_box.isEnabled(), "the switch was locked"
+            locked = (settings.no_limit, settings.limited, settings.limit_field, settings.read_button)
+            assert not any(part.isEnabled() for part in locked), "the memory limit was left free"
         assert all(panel.controls.isEnabled() for panel in panels), "a setting stayed locked after the run"
+        assert all(part.isEnabled() for part in (settings.no_limit, settings.limited, settings.read_button)), (
+            "the memory limit stayed locked after the run")
 
 
 def test_the_chain_says_stopping_and_the_batch_a_stopped_training_kept(tmp_path, monkeypatch):
@@ -2588,7 +2595,10 @@ def test_free_memory_is_read_only_on_a_press_and_off_the_windows_thread(tmp_path
         window.go_to("settings")
         QApplication.processEvents()
         page = window.part("settings")
-        assert (threads, calls) == ([], []), "the page read the card as it was built or shown"
+        with running():
+            pass
+        turn_until(app, lambda: not controller().is_live())
+        assert (threads, calls) == ([], []), "the page read the card as it was built or shown, or as a run ended"
         assert (page.free_memory.plain_text(), page.read_button.text()) == (
             "Free graphics-card memory: not read yet.", "Read now")
         page.read_button.click()
@@ -2653,14 +2663,15 @@ def test_a_late_answer_of_the_free_memory_reading_is_dropped(monkeypatch):
 
 
 def test_a_setting_that_could_not_be_remembered_says_so(monkeypatch):
-    """A settings file that cannot be written stops nothing: the limit is in force. But it will not be there at the next
-    launch, and the page says so where a person reads it; a change that reaches the file takes that back. The real file
-    is made read-only, as a person or a synchronising program makes it."""
+    """A settings file that cannot be written stops nothing: the limit and the switch are in force. But they will not be
+    there at the next launch, and the page says so where a person reads it; a change that reaches the file takes that
+    back. The real file is made read-only, as a person or a synchronising program makes it."""
     import os
     import stat
     from pathlib import Path
     from core import config
     from core.gui import memory_limit, settings as st
+    monkeypatch.setattr(this_computer, "on_windows", lambda: True)
     memory_limit.set_memory_limit(4.0)
     path = Path(st.settings().fileName())
     page = _settings_page()
@@ -2678,6 +2689,16 @@ def test_a_setting_that_could_not_be_remembered_says_so(monkeypatch):
         os.chmod(path, stat.S_IWRITE)
     page.limited.click()
     assert (config.SIM_VRAM_CEILING_GIB, page.not_kept.isHidden()) == (4.0, True), "the sentence outlived its trouble"
+    os.chmod(path, stat.S_IREAD)
+    try:
+        page.awake_box.click()
+        assert (controller().keep_awake_wish(), page.not_kept.isHidden()) == (False, False), "the page said nothing"
+        assert b"keep_awake" not in path.read_bytes(), "the write reached the file"
+        assert memory_limit.set_keep_awake_wish(False) is False, "a write that failed was said to have reached the file"
+    finally:
+        os.chmod(path, stat.S_IWRITE)
+    page.awake_box.click()
+    assert (controller().keep_awake_wish(), page.not_kept.isHidden()) == (True, True), "the sentence stayed"
 
 
 _ENDED = _at(5, 9, 12).isoformat()
@@ -2801,6 +2822,272 @@ def test_the_last_run_that_measured_its_batches_is_said_when_the_last_did_not(tm
         "The last run on this computer (cell_4) ran with a limit of 6 GiB. It ended for lack of graphics-card memory. "
         "The last run that measured its batches (retrain, ended 5 Oct 2026, 09:12): the largest held 5.4 GiB.")
     assert ends.last_run_sentence(failed, now, None).endswith("It ended for lack of graphics-card memory.")
+
+
+def test_a_settings_page_built_during_a_run_comes_up_locked(tmp_path, monkeypatch):
+    """A Settings first built during a run comes up as one built before it stands: the limit, its field and the reading
+    of the free memory greyed, the line saying the limit the run started with, and neither the card nor the history
+    read, which it says. The appearance and the switch stay free. It reads once when the run ends, and what it reads
+    then holds that run."""
+    from core.gui import memory_limit
+    from core.SBI import pipeline
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    monkeypatch.setattr(this_computer, "on_windows", lambda: True)
+    app = qt_app()
+    held, clock = _on_the_runs_clock(tmp_path)
+    memory_limit.set_memory_limit(6.0)
+    reads = _each_reading_of_the_last_run(monkeypatch)
+    calls = _card_and_programs(monkeypatch)
+    window = build_window()
+    try:
+        _shown_off_screen(window)
+        with running():
+            del calls[:]
+            clock.advance(3600)
+            window.go_to("settings")
+            QApplication.processEvents()
+            page = window.part("settings")
+            assert (calls, reads) == ([], []), "a first opening during a run read the card or the history"
+            assert not any(part.isEnabled() for part in (page.no_limit, page.limited, page.limit_field,
+                                                         page.limit_unit, page.read_button))
+            assert page.awake_line.plain_text() == "Windows has been asked to stay awake since 8 Oct 2026, 19:02."
+            assert page.awake_box.isEnabled() and all(radio.isEnabled() for radio in page._radios.values())
+            assert page.in_force.plain_text() == "Locked while a run is live. This run started with a limit of 6 GiB."
+            assert page.free_memory.plain_text() == (
+                "Free graphics-card memory: not read yet. Not read while a run is live.")
+            assert page.last_run.plain_text() == "A run is live. Not read yet; read when it ends."
+        turn_until(app, lambda: not held.is_live())
+        QApplication.processEvents()
+        assert len(reads) == 2, "the page did not read once as the run ended"
+        assert page.last_run.plain_text() == (
+            "The last run on this computer (ended Thu 8 Oct, 20:02) ran with a limit of 6 GiB.")
+    finally:
+        window.hide()
+
+
+def test_settings_is_freed_when_the_run_ends(tmp_path, monkeypatch):
+    """A Settings built before a run is locked at its start and freed at its end, and what it locked comes back as it
+    was: the field open only under its option, the line saying what is in force, the free memory as it last stood, and
+    the options still greyed when a number in the variable decides. A limit that was being typed as the run began is not
+    applied, and neither is a press that reaches the page during the run. A page out of sight reads no history as a run
+    ends. The window's one bound method is all the process's controller holds of it, and a window deleted leaves nothing
+    behind."""
+    from PySide6.QtCore import QCoreApplication, QEvent, SIGNAL
+    from core import config
+    from core.artifacts import provenance
+    from core.gui import memory_limit
+    from core.SBI import pipeline
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    app = qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    memory_limit.set_memory_limit(6.0)
+    written = _each_write(monkeypatch)
+    monkeypatch.setattr(provenance, "_nvidia_smi_free_gib", lambda: 12.5)
+    reads = _each_reading_of_the_last_run(monkeypatch)
+    signal = SIGNAL("status_changed(PyObject)")
+    before = held.receivers(signal)
+    window = build_window()
+    assert held.receivers(signal) == before + 1
+    page = window.part("settings")
+    assert held.receivers(signal) == before + 1, "Settings holds a connection of its own to the process's controller"
+    page.read_button.click()
+    turn_until(app, lambda: page.read_button.text() == "Read again")
+    assert page.free_memory.plain_text() == "Free graphics-card memory: 12.5 GiB, read 8 Oct 2026, 19:02."
+    page.limit_field.setText("9")
+    with running() as stand_in:
+        assert not page.limit_field.isEnabled()
+        page.limit_field.editingFinished.emit()
+        page.read_button.click()
+        page.no_limit.click()
+        assert (config.SIM_VRAM_CEILING_GIB, written) == (6.0, []), "the limit changed during a run"
+        assert page.free_memory.plain_text() == (
+            "Free graphics-card memory: 12.5 GiB, read 8 Oct 2026, 19:02. Not read while a run is live.")
+        assert stand_in is not None
+    turn_until(app, lambda: not held.is_live())
+    assert (page.no_limit.isEnabled(), page.limited.isEnabled(), page.limit_field.isEnabled(),
+            page.read_button.isEnabled()) == (True, True, True, True)
+    assert page.in_force.plain_text() == "In force: 6 GiB."
+    assert page.free_memory.plain_text() == "Free graphics-card memory: 12.5 GiB, read 8 Oct 2026, 19:02."
+    assert reads == [], "a page out of sight read the history as the run ended"
+    monkeypatch.setenv(pipeline.VRAM_CEILING_ENV, "2")
+    with running():
+        pass
+    turn_until(app, lambda: not held.is_live())
+    assert not any(part.isEnabled() for part in (page.no_limit, page.limited, page.limit_field)), (
+        "the end of a run freed what the variable decides")
+    assert page.in_force.plain_text().startswith("Set outside PRISM by PRISM_VRAM_CEILING_GIB = 2.")
+    window.deleteLater()
+    QCoreApplication.sendPostedEvents(window, QEvent.DeferredDelete)
+    assert held.receivers(signal) == before, "a deleted window left a connection on the process's controller"
+
+
+def test_a_run_says_the_limit_it_started_with_and_no_limit_when_it_had_none(tmp_path, monkeypatch):
+    """The locked line says the limit the run itself started with, as its start read it, not what the constant holds
+    now, and says when it had none."""
+    from core.gui import memory_limit
+    from core.SBI import pipeline
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    app = qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    page = _settings_page()
+    page.set_locked(held.is_live())
+    with running():
+        page.set_locked(held.is_live())
+        assert page.in_force.plain_text() == "Locked while a run is live. This run started with no limit."
+        memory_limit.set_memory_limit(6.0)                      # no page can: what the run started with is what is said
+        page.set_locked(False)
+        page.set_locked(True)
+        assert page.in_force.plain_text() == "Locked while a run is live. This run started with no limit."
+    turn_until(app, lambda: not held.is_live())
+
+
+def test_the_keep_awake_switch_stays_free_during_a_run_and_says_what_windows_answered(tmp_path, monkeypatch,
+                                                                                      windows_asked):
+    """The switch can be changed during a run, and acts on it at once, once for each press: the request ends and the
+    line goes; it is made again, with the moment it was made, by the clock of the runs. When Windows does not take the
+    request the line says so, and the computer may sleep. Each press is remembered for this computer. Nothing in the
+    page reaches Windows itself: the controller holds the request. Off a run no line stands."""
+    from core.gui import memory_limit, settings as st
+    from core.gui.screens import settings_screen
+    from tests._fixtures import code_only
+    monkeypatch.setattr(this_computer, "on_windows", lambda: True)
+    app = qt_app()
+    held, clock = _on_the_runs_clock(tmp_path)
+    window = build_window()
+    page = window.part("settings")
+    key = f"computer/{memory_limit.computer()}/keep_awake"
+
+    def awake():
+        return [args[0] for name, args, _thread in windows_asked if name == "keep_awake"]
+
+    assert (page.awake_box.isChecked(), page.awake_box.isEnabled(), page.awake_line.isHidden()) == (True, True, True)
+    with running():
+        assert awake() == [True]
+        assert page.awake_line.plain_text() == "Windows has been asked to stay awake since 8 Oct 2026, 19:02."
+        assert not page.awake_line.isHidden()
+        page.awake_box.click()
+        assert awake() == [True, False]
+        assert page.awake_line.isHidden() and st.settings().value(key) == "0"
+        clock.advance(3600)
+        page.awake_box.click()
+        assert awake() == [True, False, True]
+        assert page.awake_line.plain_text() == "Windows has been asked to stay awake since 8 Oct 2026, 20:02."
+        assert st.settings().value(key) == "1"
+        taken = this_computer.keep_awake
+        monkeypatch.setattr(this_computer, "keep_awake", lambda on: taken(on) and not on)
+        page.awake_box.click()
+        page.awake_box.click()
+        assert page.awake_line.plain_text() == (
+            "Windows did not accept the request. This computer may go to sleep during the run.")
+        assert held.awake_since() is None
+        page.awake_box.click()
+        assert (page.awake_line.isHidden(), held.awake_refused()) == (True, False), "a refused request stood turned off"
+        monkeypatch.setattr(this_computer, "keep_awake", taken)
+        page.awake_box.click()
+        assert page.awake_line.plain_text() == "Windows has been asked to stay awake since 8 Oct 2026, 20:02."
+    turn_until(app, lambda: not held.is_live())
+    assert page.awake_line.isHidden(), "the line outlived the run"
+    assert "this_computer.keep_awake" not in code_only(settings_screen.SettingsScreen)
+
+
+def test_the_switch_is_greyed_off_windows(tmp_path):
+    """Away from Windows the switch is greyed and says why, and neither of Windows' two sentences shows during a run,
+    though the request is refused there as a matter of course."""
+    app = qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    assert not this_computer.on_windows(), "this suite runs off the screen"
+    window = build_window()
+    page = window.part("settings")
+    assert (page.awake_box.isEnabled(), page.awake_line.plain_text()) == (False, "Only on Windows.")
+    assert not page.awake_line.isHidden()
+    with running():
+        assert page.awake_line.plain_text() == "Only on Windows."
+    turn_until(app, lambda: not held.is_live())
+    assert page.awake_line.plain_text() == "Only on Windows."
+
+
+def test_the_switch_is_remembered_for_this_computer_and_on_unless_turned_off(monkeypatch):
+    """The switch opens on: with nothing remembered, with a word that is no answer and with another computer's answer.
+    Turned off here it stays off at the next launch, and the page that is built then shows it off."""
+    import socket
+    from core.gui import memory_limit, settings as st
+    from core.gui.run.controller import controller
+    qt_app()
+    monkeypatch.setattr(socket, "gethostname", lambda: "LAB-PC")
+    held = controller()
+    written = st.settings()
+    written.setValue("computer/OTHER-PC/keep_awake", "0")
+    written.sync()
+    memory_limit.apply_remembered()
+    assert held.keep_awake_wish() is True, "another computer's answer was taken"
+    written.setValue("computer/LAB-PC/keep_awake", "maybe")
+    written.sync()
+    memory_limit.apply_remembered()
+    assert held.keep_awake_wish() is True, "a word that is no answer turned the switch off"
+    memory_limit.set_keep_awake_wish(False)
+    assert held.keep_awake_wish() is False
+    assert st.settings().value("computer/LAB-PC/keep_awake") == "0"
+    held.set_keep_awake(True)                                   # as the next launch finds it
+    memory_limit.apply_remembered()
+    assert held.keep_awake_wish() is False, "the switch did not come back off"
+    assert _settings_page().awake_box.isChecked() is False
+
+
+@pytest.mark.parametrize("factor, width, height", ((1.0, 900, 600), (1.5, 1350, 900)))
+def test_tab_walks_settings_in_view_at_the_smallest_window(factor, width, height, monkeypatch):
+    """At the window's least size, at the ordinary text size and a larger one, Tab reaches each control of the page, in
+    the page's order, and each stands in sight when it is reached: what is below the fold is scrolled to. No control but
+    the field takes the keys for its own, and the page holds no access key: those are a main button's."""
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QAbstractButton, QScrollArea
+    from core.gui import memory_limit
+    from tests._look_helpers import text_size
+    monkeypatch.setattr(this_computer, "on_windows", lambda: True)
+    qt_app()
+    memory_limit.set_memory_limit(6.0)
+    with text_size(factor):
+        window = build_window()
+        try:
+            _shown_off_screen(window, width, height)
+            window.go_to("settings")
+            QApplication.processEvents()
+            page = window.part("settings")
+            area, stops = page.findChild(QScrollArea), []
+            assert area.verticalScrollBar().maximum() > 0, "the page fits: the walk proves nothing here"
+            with _in_front(window):
+                page._radios["system"].setFocus(Qt.TabFocusReason)
+                for _step in range(4):
+                    QTest.keyClick(window.focusWidget(), Qt.Key_Tab)
+                    QApplication.processEvents()
+                    now = window.focusWidget()
+                    stops.append(now)
+                    at = QRect(now.mapTo(area.viewport(), QPoint(0, 0)), now.size())
+                    assert area.viewport().rect().contains(at), (type(now).__name__, at, area.viewport().rect())
+            assert stops == [page.no_limit, page.limit_field, page.read_button, page.awake_box], stops
+            assert not [button.text() for button in page.findChildren(QAbstractButton) if "&" in button.text()]
+        finally:
+            window.hide()
+
+
+def test_the_whole_program_puts_back_what_this_computer_remembers(tmp_path, monkeypatch):
+    """The whole program puts the limit and the switch this computer remembers in force as it starts, and whoever
+    builds it in a test finds the process as it was once it has gone: the next test plans with neither."""
+    from core import config
+    from core.gui import memory_limit
+    from tests._fixtures import process_state, whole_program
+    app = qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    memory_limit.set_memory_limit(6.0)
+    memory_limit.set_keep_awake_wish(False)
+    config.SIM_VRAM_CEILING_GIB = 0.0                           # as a launch finds them
+    controller().set_keep_awake(True)
+    keys, found = ("memory limit", "keep awake wish"), process_state(app)
+    with whole_program():
+        during = process_state(app)
+    after = process_state(app)
+    assert [found[key] for key in keys] == [0.0, True]
+    assert [during[key] for key in keys] == [6.0, False], "what this computer remembers was not put in force"
+    assert [after[key] for key in keys] == [0.0, True], "the whole program left them in force"
 
 
 def test_your_own_models_lists_the_models_and_opens_the_builder_and_back(monkeypatch):

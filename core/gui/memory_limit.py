@@ -1,5 +1,6 @@
-"""The memory limit: the most graphics-card memory one batch of simulations may plan to use, set in Settings and
-remembered for this computer, since it belongs to the card and not to the science.
+"""What belongs to this computer and not to the science, set in Settings and remembered for this computer: the memory
+limit, the most graphics-card memory one batch of simulations may plan to use, and the wish to keep the computer awake
+while a run is live.
 
 This is the one module of the window that assigns ``core.config.SIM_VRAM_CEILING_GIB``. Every other setting reaches
 its stage as an argument; this one the planner reads live at every batch (``pipeline.vram_ceiling_gib``), so a plain
@@ -7,9 +8,10 @@ assignment reaches every stage that simulates. It splits batches and costs time,
 simulation set's identity. The variable ``PRISM_VRAM_CEILING_GIB``, when it holds a number, wins over it, as it does for
 the planner; what the screen says is in force is the planner's own answer, so the two cannot disagree.
 
-It is stored under this computer's name, so that a settings file carried to another machine applies no limit there:
-``computer/<name>/memory_limit_gib``, the text ``none`` or a number. Reading it reads the settings file and never the
-card. The command line reads none of this.
+Both are stored under this computer's name, so that a settings file carried to another machine applies no limit there:
+``computer/<name>/memory_limit_gib``, the text ``none`` or a number, and ``computer/<name>/keep_awake``. Reading them
+reads the settings file and never the card. The command line reads none of this. The request itself is the run
+controller's, the one place that asks Windows to keep the computer awake.
 """
 import math
 import os
@@ -95,6 +97,12 @@ def limit_line(force: InForce, held: float | None, read: bool) -> str:
     return said
 
 
+def locked_line(gib: float | None) -> str:
+    """The line under the two options while a run is live, ``gib`` being the limit that run started with."""
+    started = "no limit" if gib is None else f"a limit of {gib:g} GiB"
+    return f"Locked while a run is live. This run started with {started}."
+
+
 def judged(text: str, force: InForce) -> tuple[float | None, str]:
     """What the field's ``text`` comes to, with the limit ``force`` in force: the number it sets and "", or None and
     the line beside the field that says why it is not applied."""
@@ -136,12 +144,27 @@ def stored_limit() -> tuple[float | None, bool]:
     return (gib, True) if math.isfinite(gib * GIB_BYTES) and gib > 0 else (None, False)
 
 
+def keep_awake_wish() -> bool:
+    """Whether this computer is to stay awake while a run is live, as remembered: yes unless it was turned off."""
+    return settings.get_bool(settings.settings(), _key("keep_awake"), True)
+
+
+def set_keep_awake_wish(on: bool) -> bool:
+    """Remember the wish for this computer, and hand it to the run's controller, which acts on it at once while a run
+    is live. True when it was remembered."""
+    from .run.controller import controller           # here: the controller imports this module
+    controller().set_keep_awake(on)
+    return remembered.put(_key("keep_awake"), "1" if on else "0")
+
+
 def apply_remembered() -> None:
     """What this computer remembers, in force: called once as the program starts, before the window is built. A limit
     that is absent, ``none`` or cannot be read assigns nothing. Reads the settings file alone."""
+    from .run.controller import controller           # here: the controller imports this module
     gib, _read = stored_limit()
     if gib is not None:
         config.SIM_VRAM_CEILING_GIB = gib
+    controller().set_keep_awake(keep_awake_wish())
 
 
 def _key(name: str) -> str:

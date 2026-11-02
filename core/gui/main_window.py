@@ -425,6 +425,8 @@ class MainWindow(QMainWindow):
         elif name == "records":
             # A change of the store works out the gates and the states again, after the pickers have listed it.
             widget.store_changed.connect(self._store_changed)
+        elif name == "settings":
+            widget.set_locked(controller().is_live())            # no panel, so the run's own lock does not reach it
         panels = self._panels_of(name, widget)
         for panel, page in zip(panels, _PAGES.get(name, (None,) * len(panels))):
             self._places[panel] = (name, page)
@@ -773,8 +775,8 @@ class MainWindow(QMainWindow):
         the rail. When what the steps read of the run changes (it began, ended or was seen to end, or began or ceased
         to stop or to wait to be tried again), the steps' states are worked out again, which has Home read; at any
         other change Home reads again, while it is shown, the run's status and not the store, which it reads again
-        only after a run has ended, as it is opened and when the store changes. An end is seen at once when the run's
-        page is in sight in the window in front (``_seen``).
+        only after a run has ended, as it is opened and when the store changes. Settings, once built, is told whether a
+        run is live. An end is seen at once when the run's page is in sight in the window in front (``_seen``).
 
         Connected to the process's run controller, which every window built in the process hears until it is
         deleted: this handler touches only its own window's widgets, and is safe to run on a window nobody is
@@ -798,6 +800,9 @@ class MainWindow(QMainWindow):
             self._ends_tries = self._ends_tries and self._close_at_end
         began, ended = status.live and not self._run_live, self._run_live and not status.live
         self._run_live = status.live
+        shown = self._built.get("settings")
+        if shown is not None:
+            shown.set_locked(status.live)
         if began or ended:
             for panel in self._all_panels():
                 panel.figure_stack.hold(status.live)

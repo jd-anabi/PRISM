@@ -52,7 +52,7 @@ def keep_awake(on: bool) -> bool:
     """Ask Windows to keep the computer awake (``on``), or end that request; the request is this thread's. True when
     Windows took it."""
     _requested["awake"] = bool(on)
-    if not _on_windows():
+    if not on_windows():
         return False
     try:
         import ctypes
@@ -69,7 +69,7 @@ def block_shutdown(window, reason: str | None) -> bool:
     (``fitted``). True when Windows took the request."""
     words = None if reason is None else fitted(reason)
     _requested["reason"] = words
-    if window is None or not _on_windows():
+    if window is None or not on_windows():
         return False
     try:
         from ctypes import wintypes
@@ -96,7 +96,7 @@ def flash(window) -> bool:
     """Flash ``window``'s button on the taskbar until the window is brought to the front. True when Windows was
     asked; off Windows, on a real screen, the toolkit's alert is asked instead, which each system shows its own way
     (a dock's icon, a window marked urgent), and True when it was."""
-    if window is None or not (_on_windows() or _on_a_screen_elsewhere()):
+    if window is None or not (on_windows() or _on_a_screen_elsewhere()):
         return False
     try:
         from PySide6.QtWidgets import QApplication
@@ -117,7 +117,7 @@ def watch_session_end(app, *, asked, ending) -> "SessionWatch | None":
     held. Off Windows, and off the toolkit's real ``windows`` platform, nothing is installed and None is handed
     back."""
     global _watch
-    if not _on_windows():
+    if not on_windows():
         return None
     if _watch is not None:
         _watch.remove()
@@ -203,7 +203,7 @@ class _EndFilter(QAbstractNativeEventFilter):
         return False, 0
 
 
-def _on_windows() -> bool:
+def on_windows() -> bool:
     """Whether this process can make a request of Windows for its window: on Windows, with the toolkit's application
     made on its real ``windows`` platform. Before the application is made the toolkit names its default platform,
     which is that one, so the application is asked for first."""

@@ -1114,6 +1114,8 @@ def process_state(app) -> dict:
         # What the process last asked of Windows for a run: the computer kept awake, and the reason against ending
         # the session registered. A run's end lets go of both, and the end of a test puts the record back.
         "keep awake": this_computer.state()[0],
+        # The switch, which the whole program sets from what this computer remembers as it starts.
+        "keep awake wish": controller().keep_awake_wish(),
         "shutdown reason": this_computer.state()[1],
         # The watch on Windows' end of a session, which the whole program installs and ``whole_program`` removes.
         "session watch": this_computer.watching(),
@@ -1173,6 +1175,7 @@ def whole_program(*, held_by_another: bool = False):
     from core.gui import app as gui_app
     from core.gui import design, one_instance, settings, theming, this_computer
     from core.gui import style as small_style
+    from core.gui.run.controller import controller
     if not os.environ.get("PRISM_ARTIFACTS"):
         raise AssertionError("whole_program() needs PRISM_ARTIFACTS set to a temporary folder: "
                              "build_app makes the folder it names and installs it as the process's "
@@ -1186,7 +1189,7 @@ def whole_program(*, held_by_another: bool = False):
              "quiet": config.QUIET_SEGMENT_BAR, "limit": config.SIM_VRAM_CEILING_GIB,
              "handler": logging_root.installed(),
              "store": default_store(), "factor": design.text_scale(), "dark": design.is_dark(),
-             "room": design._room, "bound": entry._bound is not None}
+             "room": design._room, "bound": entry._bound is not None, "wish": controller().keep_awake_wish()}
     with matplotlib.rc_context():                     # the figure settings, exactly as found
         built = held = None
         try:
@@ -1215,6 +1218,7 @@ def whole_program(*, held_by_another: bool = False):
             # The process's run controller as the next test must find it: a run that ended in the block
             # acknowledged, and what the block handed it let go.
             _built.put_back_the_run()
+            controller().set_keep_awake(found["wish"])
             # The watch on Windows' end of a session, which calls the window, off the application before it goes.
             watch = this_computer.watching()
             if watch is not None:

@@ -3561,6 +3561,72 @@ def test_at_the_end_the_run_lets_go_of_everything_and_is_published_last(tmp_path
         held.status.sentence)
 
 
+def test_the_keep_awake_switch_off_asks_nothing_of_windows(tmp_path, windows_asked):
+    """With the switch off a run asks Windows nothing, from its start to its end, and the next run after it is turned on
+    again asks as a run does. Turning it while no run is live asks nothing either."""
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    held, host = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_run_host()
+
+    def awake():
+        return [args[0] for name, args, _thread in windows_asked if name == "keep_awake"]
+
+    held.set_keep_awake(False)
+    assert held.keep_awake_wish() is False
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=_training())
+    assert (awake(), held.awake_since(), held.awake_refused()) == ([], None, False)
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert awake() == [], "a run with the switch off asked Windows"
+    held.set_keep_awake(True)
+    assert awake() == [], "turning the switch asked Windows with no run live"
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=_training())
+    assert awake() == [True] and held.awake_since() == held.model.started
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert awake() == [True, False] and held.awake_since() is None
+
+
+def test_the_keep_awake_switch_changed_during_a_run_acts_once_each_way(tmp_path, windows_asked):
+    """Changed during a run the switch acts on it at once, once each way, however often it is told the same; and it
+    holds for the next run. The request stands through a run's end as a run's end lets it go, once."""
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+
+    def awake():
+        return [args[0] for name, args, _thread in windows_asked if name == "keep_awake"]
+
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=_training())
+    assert awake() == [True]
+    held.set_keep_awake(True)
+    assert awake() == [True], "told what it holds, the switch asked again"
+    held.set_keep_awake(False)
+    held.set_keep_awake(False)
+    assert (awake(), held.awake_since()) == ([True, False], None)
+    clock.advance(60)
+    held.set_keep_awake(True)
+    assert (awake(), held.awake_since()) == ([True, False, True], clock.now)
+    held.set_keep_awake(False)
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert awake() == [True, False, True, False], "the run's end asked though nothing stood"
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=_training())
+    assert awake() == [True, False, True, False], "the next run did not hold to the switch"
+    held.set_keep_awake(True)
+    assert awake() == [True, False, True, False, True]
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert awake() == [True, False, True, False, True, False]
+
+
 def test_the_taskbar_flashes_for_an_end_and_for_needs_you(tmp_path, windows_asked):
     """The taskbar flashes on the newest window built, from the window's thread, once a run has come to need someone,
     after the status that says so is published, and not again while it still does, a stop asked meanwhile

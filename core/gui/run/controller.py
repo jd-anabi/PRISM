@@ -45,10 +45,11 @@ moment it is asked, the history saying the run was stopped and why; a training s
 it either, and its history says so only should it not finish. A
 training a stop kept stays kept until its page's Discard deletes it (``discard``), once the run has ended.
 
-While a run is live the computer is kept awake, from its start to its end, and Windows is given the reason it should
-not end the session, registered on the newest window built (``use_window``) from the run's first line to its end and
-set again at each change of the run's stage (``core/gui/this_computer.py``); both are asked from the window's thread,
-from the controller's slots and its own timer, and both stand through a stop and a wait to be tried again.
+While a run is live the computer is kept awake, from its start to its end, unless the switch in Settings says not
+(``set_keep_awake``, which acts at once on a live run), and Windows is given the reason it should not end the session,
+registered on the newest window built (``use_window``) from the run's first line to its end and set again at each
+change of the run's stage (``core/gui/this_computer.py``); both are asked from the window's thread, from the
+controller's slots and its own timer, and both stand through a stop and a wait to be tried again.
 
 The run's page is its host's: the controller hands it the run at the start and draws it again from the run's model
 at every change the model hears and at each look; the run's full text reaches it through ``lines``. A run that only
@@ -269,7 +270,10 @@ class RunController(QObject):
         # page starts its next run, or goes.
         self._offers: dict[str, _Run] = {}
         self._window = None                        # the newest window built, held weakly: the reason goes on it
+        self._wish = True                          # the switch: a run keeps the computer awake
         self._awake = False                        # Windows is asked to keep the computer awake
+        self._awake_since: datetime | None = None  # when it took the request standing now
+        self._awake_refused = False                # it did not take the request standing now
         self._reason: tuple | None = None          # the live run's stage and the reason registered for it
         self._training_kept: int | None = None     # the batch the latest training of this process kept
 
@@ -305,6 +309,25 @@ class RunController(QObject):
         """The batch the latest training of this process kept in its simulation set when it was stopped or failed,
         which it can be continued from; None when it finished, kept no batch, or no training has ended."""
         return self._training_kept
+
+    def keep_awake_wish(self) -> bool:
+        """Whether a run keeps the computer awake: the switch as it stands."""
+        return self._wish
+
+    def set_keep_awake(self, on: bool) -> None:
+        """The switch: a run keeps the computer awake (``on``) or does not, from now on, and at once while a run is
+        live."""
+        self._wish = bool(on)
+        if self.is_live():
+            self._stay_awake(self._wish)
+
+    def awake_since(self) -> datetime | None:
+        """When Windows took the request to stay awake that stands now; None when none stands."""
+        return self._awake_since
+
+    def awake_refused(self) -> bool:
+        """Whether Windows did not take the request to stay awake that this run made last."""
+        return self._awake_refused
 
     def use_clock(self, clock) -> None:
         """The clock every moment of the next runs is read from, local time with its zone; None for the
@@ -407,7 +430,7 @@ class RunController(QObject):
                 self._timer.setInterval(TICK_MS)
                 self._timer.timeout.connect(self.tick)
             self._timer.start()
-            self._stay_awake(True)
+            self._stay_awake(self._wish)
             self.status_changed.emit(self._status)
 
             worker, token = self._worker(run, kwargs)
@@ -1334,10 +1357,12 @@ class RunController(QObject):
 
     # ── this computer, while a run is live ──
     def _stay_awake(self, on: bool) -> None:
-        """Ask Windows to keep the computer awake, or let it sleep again: once each way."""
+        """Ask Windows to keep the computer awake, or let it sleep again: once each way, its answer kept."""
         if on != self._awake:
             self._awake = on
-            this_computer.keep_awake(on)
+            answered = this_computer.keep_awake(on)
+            self._awake_since = (self._clock or _local_now)() if on and answered else None
+            self._awake_refused = on and not answered
 
     def _the_window(self):
         """The newest window built, while it is there; None otherwise."""

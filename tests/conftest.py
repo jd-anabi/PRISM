@@ -393,9 +393,9 @@ def _layout_room_put_back():
 
 @pytest.fixture(autouse=True)
 def _memory_limit_put_back():
-    """The memory limit is put back as this test found it after every test: it is the one setting the window assigns
-    on the configuration, a test that sets it through the window leaves it there, and every later run would plan with
-    it. The configuration is read where its module is kept."""
+    """The memory limit and the keep-awake switch are put back as this test found them after every test: the first is
+    the one setting the window assigns on the configuration, and every later run would plan with it; the second is the
+    process's run controller's, and every later run would ask Windows nothing. Each is read where its module is kept."""
     import sys
     config = sys.modules.get("core.config")
     found = None if config is None else config.SIM_VRAM_CEILING_GIB
@@ -403,6 +403,9 @@ def _memory_limit_put_back():
     config = sys.modules.get("core.config")
     if config is not None:
         config.SIM_VRAM_CEILING_GIB = 0.0 if found is None else found
+    runs = sys.modules.get("core.gui.run.controller")
+    if runs is not None:
+        runs.controller()._wish = True
 
 
 @pytest.fixture(autouse=True)
