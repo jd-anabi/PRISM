@@ -4914,7 +4914,7 @@ def test_after_a_move_the_keyboard_is_on_the_pages_first_setting_never_on_a_butt
                 # Enter presses a button the place names, which moves and starts nothing; on a setting it does nothing.
                 assert (started, raised, all_asked()) == ([], [], []), (
                     f"{place}: Enter started a run, raised or asked something: {started} {raised}")
-                assert isinstance(held, QPushButton) or window.current_place() == place, f"{place}: Enter moved"
+                assert (window.current_place() != place) == isinstance(held, QPushButton), f"{place}: the wrong move"
                 if isinstance(held, QAbstractButton) and held is named:
                     held.click()
                     assert (started, raised, all_asked()) == ([], [], []), (
@@ -6802,7 +6802,8 @@ def test_the_launcher_for_macos_and_linux_starts_prism_detached():
 
 def _stand_in_step(window, monkeypatch):
     """A page of the look in the first step's place: a heading's button first in the widget order, two fields under it,
-    the second of which it names for the keyboard to start at. It answers what a step answers."""
+    the second of which it names for the keyboard to start at. It answers what a step answers. A second such page,
+    ``neighbour``, stands in the fourth step's place, out of sight."""
     from PySide6.QtWidgets import QLineEdit, QVBoxLayout, QWidget
     from core.gui.widgets.page import Page
 
@@ -6825,9 +6826,12 @@ def _stand_in_step(window, monkeypatch):
             pass
 
     inference, step = window.part("inference"), Step()
+    step.neighbour = Step()
     inference.pages.removeWidget(inference.config_panel)
     inference.pages.insertWidget(0, step)
-    monkeypatch.setattr(inference, "panels", lambda: [step])
+    inference.pages.removeWidget(inference.validate_panel)
+    inference.pages.insertWidget(3, step.neighbour)
+    monkeypatch.setattr(inference, "panels", lambda: [step, step.neighbour])
     return step
 
 
@@ -6857,9 +6861,11 @@ def test_the_step_shown_hears_the_low_window_and_names_where_the_keyboard_starts
     window.resize(1300, design.small_below() - 1)
     app.processEvents()
     assert step.is_small(), "the step shown was not told the window is low"
+    assert step.neighbour.is_small(), "a step not shown was not told the window is low"
     window.resize(1300, 820)
     app.processEvents()
     assert not step.is_small(), "the step shown was not told the window is high again"
+    assert not step.neighbour.is_small(), "a step not shown was not told the window is high again"
 
 
 def test_a_part_that_comes_up_low_tells_its_steps_at_once(monkeypatch):
@@ -6923,17 +6929,11 @@ def test_a_page_asks_the_window_to_go_somewhere_through_the_screen():
 
 def test_the_margin_of_parameter_inference_stands_on_each_old_panel_and_on_no_page_of_the_look(monkeypatch):
     """The place's margin stands on each old panel, which so stands where it stood, and not on the part: a page of the
-    look brings its own margin, and takes none here, at either text size."""
+    look brings its own margin, and takes none here, at either text size, though it hosts a run as a panel does."""
     from PySide6.QtCore import QMargins
     from core.gui.screens.inference_screen import InferenceScreen
-    from core.gui.widgets.page import Page
     from tests._look_helpers import text_size
     qt_app()
-
-    class Step(Page):
-        def refresh_local_gates(self):
-            pass
-
     today, step = InferenceScreen.panels, None
 
     def with_a_step(screen):
@@ -6942,7 +6942,7 @@ def test_the_margin_of_parameter_inference_stands_on_each_old_panel_and_on_no_pa
     monkeypatch.setattr(InferenceScreen, "panels", with_a_step)
     for factor in (1.0, 1.5):
         with text_size(factor):
-            step = Step()
+            step = build_run_host(on_a_page=True)
             window = build_window()
             inference = window.part("inference")
             margin = design.scaled(12) - 6
@@ -6995,6 +6995,12 @@ def test_the_window_reads_the_room_again_when_it_moves_to_another_screen():
         window._screen_moved(_a_screen_of(3440, 1440))
         app.processEvents()
         assert columns.stacked(), "the two columns did not follow it back"
+        window.go_to("help")
+        app.processEvents()
+        window._screen_moved(_a_screen_of(1200, 1440))
+        app.processEvents()
+        assert not columns.stacked(), "a part not in sight was left with the other screen's columns"
+        window._screen_moved(_a_screen_of(3440, 1440))
     assert main_window._room_on_screen(_a_screen_of(1200, 900)) == (1160, 840)
     primary = window.screen().availableGeometry()
     assert main_window._room_on_screen() == (primary.width() - 40, primary.height() - 60), "the built window's room moved"
@@ -7237,6 +7243,9 @@ def test_enter_presses_the_button_that_shows_the_ring(tmp_path, monkeypatch):
         assert pressed == [1], "Enter did not press the ringed button once"
         QTest.keyClick(button, Qt.Key_Enter, Qt.KeypadModifier)
         assert pressed == [1, 1], "the keypad's Enter did not press it"
+        QTest.keyClick(button, Qt.Key_A)
+        QTest.keyClick(button, Qt.Key_F2)
+        assert pressed == [1, 1], "a key that is not Enter pressed the button"
         window.go_to("home")
         main = window.part("home").first_focus()
         assert isinstance(main, QPushButton)
@@ -7290,7 +7299,8 @@ def test_a_held_enter_cannot_land_on_the_stop_button(tmp_path, monkeypatch):
         turn_until(QApplication.instance(), lambda: not controller().is_live())
 
 
-@pytest.mark.parametrize("control", ["with Ctrl", "with Shift", "a number field", "a line of text", "a closed list",
+@pytest.mark.parametrize("control", ["with Ctrl", "with Shift", "with Alt", "a number field", "a line of text",
+                                     "a closed list",
                                      "a tick box", "a radio button", "a button clicked with the mouse", "a greyed button",
                                      "a scrolling area"])
 def test_enter_with_a_modifier_in_a_field_or_on_a_tick_box_presses_nothing(control, tmp_path, monkeypatch):
@@ -7305,7 +7315,8 @@ def test_enter_with_a_modifier_in_a_field_or_on_a_tick_box_presses_nothing(contr
         panel = window.panel(ReductionPanel)
         window.go_to("reduction")
         button, pressed = _button_in(panel)
-        modifiers = {"with Ctrl": Qt.ControlModifier, "with Shift": Qt.ShiftModifier}.get(control, Qt.NoModifier)
+        modifiers = {"with Ctrl": Qt.ControlModifier, "with Shift": Qt.ShiftModifier,
+                     "with Alt": Qt.AltModifier}.get(control, Qt.NoModifier)
         made = {"a number field": IntField("5"), "a line of text": QLineEdit("5"), "a closed list": QComboBox(),
                 "a tick box": QCheckBox("Tick"), "a radio button": QRadioButton("One")}.get(control)
         target = button
@@ -7345,26 +7356,37 @@ def test_a_question_keeps_its_own_enter(tmp_path, monkeypatch):
     with _the_whole_window(tmp_path, monkeypatch) as window:
         heard = []
         monkeypatch.setattr(MainWindow, "keyPressEvent", lambda self, event: heard.append(event.key()))
-        question = Ask(window, "Stop?", "Stop it?", "Keep it", "Stop it")
-        question.setAttribute(Qt.WA_DontShowOnScreen, True)
-        question.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        answers = []
-        question.finished.connect(answers.append)
-        question.show()
-        QApplication.processEvents()
-        question.other_button.setFocus(Qt.TabFocusReason)
-        QTest.keyClick(question.other_button, Qt.Key_Return)
-        QApplication.processEvents()
-        assert answers == [QDialog.Rejected], "Enter on the other answer did not give the safe one"
-        assert heard == [], "the window heard a key of its question"
-        question.close()
-        _gone(question)
+        for press in (lambda button: QTest.keyClick(button, Qt.Key_Return), _a_repeat):
+            question = Ask(window, "Stop?", "Stop it?", "Keep it", "Stop it")
+            question.setAttribute(Qt.WA_DontShowOnScreen, True)
+            question.setAttribute(Qt.WA_ShowWithoutActivating, True)
+            answers = []
+            question.finished.connect(answers.append)
+            question.show()
+            QApplication.processEvents()
+            question.other_button.setFocus(Qt.TabFocusReason)
+            press(question.other_button)
+            QApplication.processEvents()
+            assert answers == [QDialog.Rejected], "Enter on the other answer did not give the safe one"
+            assert heard == [], "the window heard a key of its question"
+            question.close()
+            _gone(question)
 
 
 # What a first opening during a run still reads of what it may not read then, by name and how often: one look at the
 # card, by the Prior page as it is built, whose rebuilt page reads nothing. The list may only shrink: the test below holds
 # it exactly, and holds it to its ceiling, so that to grow it is to change two lines that say it must not.
 _READ_DURING_A_RUN = {"the device check": 1}
+
+
+def _a_store_that_holds_a_set(tmp_path, monkeypatch) -> None:
+    """A store of this test's own in force until it ends, holding one simulation set: in a store with no set a reading
+    of the sets finds no file, and a test that counts such readings would count none whatever the page did."""
+    from core.artifacts import ArtifactStore, store as stores
+    from tests._fixtures import write_simulation_set
+    store = ArtifactStore(tmp_path / "Artifacts")
+    monkeypatch.setattr(stores, "_DEFAULT", store)
+    write_simulation_set(store.kind_dir("simulation"), {"a": 1}, 4)
 
 
 def test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end(tmp_path, monkeypatch):
@@ -7378,6 +7400,7 @@ def test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end(tmp_pat
     from tests._fixtures import readings_of_a_run
     app = qt_app()
     _on_the_runs_clock(tmp_path)
+    _a_store_that_holds_a_set(tmp_path, monkeypatch)
     window = build_window()
     runner = window.panel(ReductionPanel)
     _shown_off_screen(window)
@@ -7409,6 +7432,23 @@ def test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end(tmp_pat
     assert window.part("settings").last_run.plain_text() != NOT_READ_YET_TEXT
 
 
+def test_no_module_of_the_window_binds_at_its_import_a_reading_the_tests_count():
+    """The readings a run's tests count are stood in for on the modules that define them, so a module of the window that
+    took one by name at its own import, ``from .history import latest`` at its head, would read past the count unseen.
+    None does: such a reading is imported where it is called, or reached through its module."""
+    import ast
+    from pathlib import Path
+    from tests._fixtures import COUNTED_READINGS
+    gui = Path(__file__).resolve().parents[1] / "core" / "gui"
+    found = []
+    for path in sorted(gui.rglob("*.py")):
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(node, ast.ImportFrom):
+                counted = COUNTED_READINGS.get((node.module or "").rpartition(".")[2], ())
+                found += [f"{path.relative_to(gui)}: {alias.name}" for alias in node.names if alias.name in counted]
+    assert found == [], found
+
+
 def test_a_store_change_during_a_run_changes_nothing_on_a_page_until_it_ends(tmp_path, monkeypatch):
     """What a page read before a run stands through the run: a record deleted or written from Records while a run is live
     has every picker list the store again, and reads nothing else; the lines keep what they said; and the run's end reads
@@ -7417,6 +7457,7 @@ def test_a_store_change_during_a_run_changes_nothing_on_a_page_until_it_ends(tmp
     from tests._fixtures import readings_of_a_run
     app = qt_app()
     _on_the_runs_clock(tmp_path)
+    _a_store_that_holds_a_set(tmp_path, monkeypatch)
     window = build_window()
     runner = window.panel(ReductionPanel)
     window.go_to("inference")

@@ -348,7 +348,7 @@ class MainWindow(QMainWindow):
 
     def _screen_moved(self, screen) -> None:
         """The window stands on ``screen`` now: the look's two layout thresholds and the window's least size are held to
-        what that screen offers, and the pages lay themselves out for it, at every text size, for at the ordinary one the
+        what that screen offers, and the pages lay themselves out for it, at every text size; at the ordinary one the
         thresholds' table keeps its own numbers. The window is not resized here: only the toolkit brings a window up to a
         larger least size. A screen taken away with no other left comes as None and is not read."""
         if screen is None:

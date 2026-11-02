@@ -976,12 +976,20 @@ def card_and_programs(monkeypatch) -> list:
     return calls
 
 
+# What ``readings_of_a_run`` stands in for, by the last word of the module that defines each.
+COUNTED_READINGS = {"orchestrator": ("training_preview", "training_reading", "matching_fits"),
+                    "fit_state": ("kept_fits",), "training_checkpoint": ("checkpoints_using_prior", "peek"),
+                    "history": ("read", "latest", "newest_unseen", "last_on", "last_measured_on", "duration")}
+
+
 def readings_of_a_run(monkeypatch) -> list:
     """Every reading a page's first opening may not make while a run is live, from now to the test's end, each named in
     the list handed back: the card's and the programs' of ``card_and_programs``; the preview and the reading of a
-    training; the kept trainings; a simulation set's files, whoever reads them, by the one call that loads one; and the
-    run history's readers. Each is passed through to the real call. Home, whose "Last runs" lists the live run, reads the
-    history at every opening, so a test that opens Home during a run finds ``latest`` here."""
+    training; the kept trainings; a simulation set's files, whoever reads them, by the one call that loads one, and
+    ``peek``, which finds no file and loads nothing in a store with no set; and the run history's readers, ``read``
+    among them, which every history file goes through, whichever reader asks. Each is passed through to the real call.
+    Home, whose "Last runs" lists the live run, reads the history at every opening, so a test that opens Home during a
+    run finds ``latest`` and ``read`` here."""
     import torch
     from core import orchestrator
     from core.SBI import fit_state, training_checkpoint
@@ -997,11 +1005,11 @@ def readings_of_a_run(monkeypatch) -> list:
 
         monkeypatch.setattr(space, name, stand_in)
 
-    for space, names in ((orchestrator, ("training_preview", "training_reading", "matching_fits")),
-                         (fit_state, ("kept_fits",)), (training_checkpoint, ("checkpoints_using_prior",)),
-                         (history, ("latest", "newest_unseen", "last_on", "last_measured_on", "duration"))):
+    spaces = {"orchestrator": orchestrator, "fit_state": fit_state, "training_checkpoint": training_checkpoint,
+              "history": history}
+    for home, names in COUNTED_READINGS.items():
         for name in names:
-            counted(space, name, name)
+            counted(spaces[home], name, name)
     counted(torch, "load", "a simulation set's file")
     return calls
 

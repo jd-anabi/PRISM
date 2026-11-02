@@ -3818,6 +3818,7 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
             assert (column(), page(), view.full_text.lines() == kept) == (
                 ("run", True, False, True, True), ("ended", False, True, said), True), (
                 "a load's end lost the stopped run's page")
+        host.show_run()                                 # as the foot opens it again: the heights kept stand
         view.back_button.click()
         assert column() == ("figures", False, True, True, True), said
         assert (split.indexOf(host.figure_stack), split.sizes()) == (0, heights), (
@@ -5393,6 +5394,7 @@ def test_nothing_of_the_run_page_is_hidden_under_the_form_at_any_width(page, fac
         for width in widths + widths[::-1]:
             window.resize(width, least[1])
             _settle()
+            assert window.width() == width, ("the window did not take the width", window.width(), width)
             _the_two_share_the_width(window, host, (page, factor, width))
         assert not host.run_view.isHidden() and not host.run_view.compact, "the sweep measured something else"
         window.go_to("home")
@@ -5640,6 +5642,32 @@ def test_a_start_taken_back_gives_the_form_its_least_width_again(tmp_path):
                 host.controls_scroll.minimumWidth()) == (True, design.CONTROLS_MIN_W)
 
 
+def test_a_page_of_the_look_draws_a_past_run_and_gives_its_column_back(tmp_path):
+    """A page of the look that hosts runs on the mixin draws a run that is over beside its run's page, and "Back to the
+    form" and a saved record's figures each give its column back, as on a panel: nothing it must declare."""
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._look_helpers import _settle
+    from tests._runs import Clock
+    qt_app()
+    held = _controller_on(tmp_path, Clock(_at(9, 18, 0)))
+    host = build_run_host(on_a_page=True)
+    run = "20261001T090000-narrowing-round"
+    history.write(tmp_path / "runs", {"id": run, "word": "Narrowing round", "started": _at(1, 9, 0),
+                                      "ended": _at(1, 9, 30), "outcome": "finished", "place": list(_NARROWING)})
+    assert held.show_past(run, host), "the past view was not shown"
+    _settle()
+    assert host.results.currentWidget() is host.past_view
+    host.past_view.back_button.click()
+    _settle()
+    assert host.results.currentWidget() is host.figures
+    assert held.show_past(run, host)
+    _settle()
+    host._to_the_figures()
+    _settle()
+    assert host.results.currentWidget() is host.figures
+
+
 def test_a_page_of_the_look_hosts_a_run_through_the_same_mixin(tmp_path):
     """What hosts a run is a mixin that stands first in a page's bases, declares no signal and has no constructor, so a
     page that is no panel takes it as a panel does: a page of the look, its column a stack it hands the page, joins the
@@ -5684,6 +5712,10 @@ def test_a_page_of_the_look_hosts_a_run_through_the_same_mixin(tmp_path):
     assert (host.results.currentWidget() is host.figures, host.controls.isEnabled(), host.seams) == (
         True, True, ["leaving", host.figure_stack]), host.seams
     assert host.gates == 1
+    for asked in (lambda: RunHost.own_line(host, "a line"), lambda: RunHost._figures_leaving(host),
+                  lambda: RunHost._figures_back(host, host.figure_stack)):
+        with pytest.raises(NotImplementedError):
+            asked()
     host.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     assert not shiboken6.isValid(host) and all(shiboken6.isValid(panel) for panel in BasePanel._instances)
@@ -5786,6 +5818,7 @@ def test_nothing_of_the_run_page_is_hidden_at_150_percent_display_scaling(tmp_pa
     assert child.returncode == 0, child.stderr[-2000:]
     report = json.loads(child.stdout.splitlines()[-1])
     assert report["ratio"] == 1.5, "the scaling was not in force"
+    assert len(report["frame"]) == len(report["rebuilt"]) == 9, "a leg measured nothing"
     for name in ("frame", "rebuilt"):
         for row in report[name]:
             assert row["window"] == row["width"], (name, row)
@@ -5800,8 +5833,8 @@ def test_nothing_of_the_run_page_is_hidden_at_150_percent_display_scaling(tmp_pa
                          ids=["a screen that holds the table's size", "a screen smaller than it", "text 1.5"])
 def test_nothing_of_the_run_page_is_hidden_after_a_move_to_another_screen(factor, screen, tmp_path):
     """Moved to another screen with a run live and made as small as that screen lets it, the window still has the form
-    and the run's page sharing its width with neither drawn over the other: the least size follows the screen, and the
-    owner's sentence follows the least size."""
+    and the run's page sharing its width with neither drawn over the other: the least size follows the screen, and that
+    rule holds at the least size, wherever the window stands."""
     from PySide6.QtCore import QRect
     from core.gui import design
     from core.gui.run.controller import controller
