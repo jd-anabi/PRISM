@@ -330,10 +330,10 @@ def test_the_rules_and_tables_import_no_toolkit_and_no_engine():
     fresh interpreter for each, which imports every module those statements name, from this repository or not,
     and calls the rules down every branch."""
     for module, forbidden in (("core.gui.keys", _RULES_FORBIDDEN), ("core.gui.chain", _RULES_FORBIDDEN),
-                              ("core.gui.record_words", _WORDS_FORBIDDEN)):
+                              ("core.gui.step_facts", _RULES_FORBIDDEN), ("core.gui.record_words", _WORDS_FORBIDDEN)):
         found = _reaching(_imports(module), forbidden)
         assert not found, f"{module} imports {found}, itself or through a module of this repository it imports"
-    rules = _imports("core.gui.keys") | _imports("core.gui.chain")
+    rules = _imports("core.gui.keys") | _imports("core.gui.chain") | _imports("core.gui.step_facts")
     for code, named, forbidden in ((_FRESH_RULES, rules, _RULES_FORBIDDEN),
                                    (_FRESH_WORDS, _imports("core.gui.record_words"), _WORDS_FORBIDDEN)):
         r = subprocess.run([sys.executable, "-c", code, ",".join(forbidden), ",".join(sorted(named))],

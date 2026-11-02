@@ -58,7 +58,7 @@ LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.g
                 "core.gui.widgets.rule_table", "core.gui.widgets.time_axis",
                 "core.gui.widgets.message_row", "core.gui.widgets.page",
                 "core.gui.widgets.choice", "core.gui.widgets.ask", "core.gui.widgets.rail",
-                "core.gui.widgets.page_names", "core.gui.run.loss")
+                "core.gui.widgets.page_names", "core.gui.run.loss", "core.gui.step_facts")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
 

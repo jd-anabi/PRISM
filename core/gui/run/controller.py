@@ -72,6 +72,7 @@ from PySide6.QtCore import QObject, QThreadPool, QTimer, Signal
 from core.refusals import Refusal
 
 from .. import memory_limit, this_computer
+from ..step_facts import LIVE_TEXT, NOT_READ_YET_TEXT  # noqa: F401 -- the pages' words, read from here too
 from ..streams import CancelToken
 from ..worker import Worker
 from . import ends, history, questions, retry
@@ -84,10 +85,6 @@ log = logging.getLogger(__name__)
 #: text file's request to the disk.
 TICK_MS = 1000
 
-#: Said among a page's own lines when it asks for a run while one is live.
-LIVE_TEXT = "A run is live. Only one runs at a time."
-#: What a page says of what it has not read yet, having been first opened while a run is live.
-NOT_READ_YET_TEXT = "A run is live. Not read yet; read when it ends."
 #: Said in the run's full text when its history file cannot be written; filled with the error's kind and message.
 HISTORY_BROKEN_TEXT = ("The run's history file could not be written ({}); the run goes on, and the file is tried "
                        "again at the run's next change.")
