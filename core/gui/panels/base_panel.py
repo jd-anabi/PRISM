@@ -189,7 +189,7 @@ class BasePanel(RunHost, QWidget):
         self.results.addWidget(self.figures)
         self.results.addWidget(self.run_view)
         self.results.currentChanged.connect(self._fit_the_form)
-        self._split_sizes = None            # the figures' and the lines' heights, kept while the run's page holds them
+        self._split_sizes = None             # the figures' and the lines' heights, kept while the run's page holds them
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.controls_scroll)
