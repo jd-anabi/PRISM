@@ -21,7 +21,7 @@ from core.artifacts import provenance
 from .. import design, fonts, memory_limit, texts, this_computer
 from ..reported import reported
 from ..run import ends, history
-from ..run.controller import controller
+from ..run.controller import NOT_READ_YET_TEXT, controller
 from ..theming import MODE_LABELS
 from ..widgets.labeled_inputs import FloatField
 from ..widgets.page import Page, PageHead, Sentence
@@ -41,7 +41,6 @@ _FREE_READ = "Free graphics-card memory: {:.1f} GiB, read {}."
 _FREE_UNREADABLE = "Free graphics-card memory: could not be read."
 _READ_NOW, _READ_AGAIN = "Read now", "Read again"
 _NOT_READ_LIVE = "Not read while a run is live."
-_LAST_RUN_LATER = "A run is live. Not read yet; read when it ends."
 _AWAKE_BOX = "Keep this computer awake while a run is live"
 _AWAKE_NOTE = ("PRISM asks Windows not to go to sleep from the start of a run until it ends. The screen may still turn "
                "off. Shutting down or signing out is separate: Windows then shows PRISM's reason and waits for your "
@@ -318,7 +317,7 @@ class SettingsScreen(QWidget):
         if self._last_run_read or not self.isVisible():
             return
         if self._locked:
-            self.last_run.set_text(_LAST_RUN_LATER)
+            self.last_run.set_text(NOT_READ_YET_TEXT)
             return
         self._last_run_read = True
         held = controller()

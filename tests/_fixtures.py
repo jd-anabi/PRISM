@@ -10,9 +10,9 @@ Moved out of ``tests/test_artifact_store.py`` so ``tests/test_user_sbi.py``,
 module (which pytest would then also collect a second time under a different name).
 
 It also holds what the GUI suites used to copy per file -- ``qt_app``, ``pump``, ``code_only``,
-``PaneCapture``, ``page_lines``, ``card_and_programs``, the stubs ``budget_cfg``, ``prior_stub``,
-``forced_cfg`` and ``spont_cfg`` and the record writers ``write_simulation_set`` and
-``write_history`` -- and re-exports the two records
+``PaneCapture``, ``page_lines``, ``card_and_programs``, ``readings_of_a_run``, the stubs
+``budget_cfg``, ``prior_stub``, ``forced_cfg`` and ``spont_cfg`` and the record writers
+``write_simulation_set`` and ``write_history`` -- and re-exports the two records
 tests/conftest.py's session guards append to, the
 dialogs in ``SHOWN`` and the file choosers in ``CHOOSER_CALLS``, with their helpers: they live in
 tests/_dialogs.py, whose import loads neither torch nor the program. ONE import spelling for each of
@@ -973,6 +973,36 @@ def card_and_programs(monkeypatch) -> list:
     monkeypatch.setattr(torch.cuda, "memory_reserved", recorded("the card's memory held", 0))
     monkeypatch.setattr(torch.cuda, "memory_allocated", recorded("the card's memory in use", 0))
     monkeypatch.setattr(config, "detect_device", recorded("the device check", card))
+    return calls
+
+
+def readings_of_a_run(monkeypatch) -> list:
+    """Every reading a page's first opening may not make while a run is live, from now to the test's end, each named in
+    the list handed back: the card's and the programs' of ``card_and_programs``; the preview and the reading of a
+    training; the kept trainings; a simulation set's files, whoever reads them, by the one call that loads one; and the
+    run history's readers. Each is passed through to the real call. Home, whose "Last runs" lists the live run, reads the
+    history at every opening, so a test that opens Home during a run finds ``latest`` here."""
+    import torch
+    from core import orchestrator
+    from core.SBI import fit_state, training_checkpoint
+    from core.gui.run import history
+    calls = card_and_programs(monkeypatch)
+
+    def counted(space, name, words):
+        real = getattr(space, name)
+
+        def stand_in(*args, **kwargs):
+            calls.append(words)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(space, name, stand_in)
+
+    for space, names in ((orchestrator, ("training_preview", "training_reading", "matching_fits")),
+                         (fit_state, ("kept_fits",)), (training_checkpoint, ("checkpoints_using_prior",)),
+                         (history, ("latest", "newest_unseen", "last_on", "last_measured_on", "duration"))):
+        for name in names:
+            counted(space, name, name)
+    counted(torch, "load", "a simulation set's file")
     return calls
 
 

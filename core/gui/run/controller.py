@@ -86,6 +86,8 @@ TICK_MS = 1000
 
 #: Said among a page's own lines when it asks for a run while one is live.
 LIVE_TEXT = "A run is live. Only one runs at a time."
+#: What a page says of what it has not read yet, having been first opened while a run is live.
+NOT_READ_YET_TEXT = "A run is live. Not read yet; read when it ends."
 #: Said in the run's full text when its history file cannot be written; filled with the error's kind and message.
 HISTORY_BROKEN_TEXT = ("The run's history file could not be written ({}); the run goes on, and the file is tried "
                        "again at the run's next change.")

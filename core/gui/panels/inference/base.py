@@ -8,6 +8,7 @@ from core.config import CELL_PATH
 
 from ..base_panel import BasePanel
 from ...fields import label
+from ...run.controller import NOT_READ_YET_TEXT, controller
 from ...run.model import FIT_ENDED, SIMULATION_ROW, RunSpec, Stage
 from ...widgets.artifact_picker import ArtifactPicker
 
@@ -156,12 +157,20 @@ class _TrainingBudgetMixin:
         refresh_gates() and take the whole tab down with it. The preview never raises -- a config it
         cannot read comes back as estimate_error / checkpoint_error, shown as "unavailable" -- and the
         formatters below read the preview, plus the config's chi flag through getattr.
+
+        THESE LINES READ NOTHING WHILE A RUN IS LIVE. The preview reads the card and the saved simulation sets, and a
+        reader beside a run can make its saves fail, so they keep what they said, and a page built during the run says it
+        has read nothing yet. The run's end unlocks the page, which brings it back here with no run live.
         """
         problem = self._budget_problem()
         if problem is not None:
             self.budget_total.setText(problem)
             self.budget_mem.setText("")
             self.budget_ckpt.setText("")
+            return
+        if controller().is_live():
+            if not self.budget_total.text():
+                self.budget_total.setText(NOT_READ_YET_TEXT)
             return
         cfg = self.session.cfg
         n_runs, cap = self._budget_values()

@@ -7325,3 +7325,117 @@ def test_a_question_keeps_its_own_enter(tmp_path, monkeypatch):
         assert heard == [], "the window heard a key of its question"
         question.close()
         _gone(question)
+
+
+# What a first opening during a run still reads of what it may not read then, by name and how often: one look at the
+# card, by the Prior page as it is built, whose rebuilt page reads nothing. The list may only shrink: the test below holds
+# it exactly, and holds it to its ceiling, so that to grow it is to change two lines that say it must not.
+_READ_DURING_A_RUN = {"the device check": 1}
+
+
+def test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end(tmp_path, monkeypatch):
+    """Parameter inference and Settings, first opened while a run is live, read no simulation set, no kept training, no
+    run history, and of the card nothing but what is listed, and start no program. The two pages whose lines the card and
+    the saved sets feed say they have read nothing yet. When the run ends each reads once, and the lines say what they
+    read; Settings, in sight, reads the last run once."""
+    from collections import Counter
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.run.controller import NOT_READ_YET_TEXT
+    from tests._fixtures import readings_of_a_run
+    app = qt_app()
+    _on_the_runs_clock(tmp_path)
+    window = build_window()
+    runner = window.panel(ReductionPanel)
+    _shown_off_screen(window)
+    assert set(_READ_DURING_A_RUN) <= {"the device check"} and sum(_READ_DURING_A_RUN.values()) <= 1, (
+        "the list of what a first opening reads during a run grew")
+    assert NOT_READ_YET_TEXT == "A run is live. Not read yet; read when it ends."
+    with running(runner):
+        calls = readings_of_a_run(monkeypatch)
+        window.go_to("inference")
+        app.processEvents()
+        assert Counter(calls) == _READ_DURING_A_RUN, f"a first opening during a run read: {Counter(calls)}"
+        calls.clear()
+        inference = window.part("inference")
+        pages = (inference.posterior_panel, inference.tsnpe_panel)
+        for page in pages:
+            assert (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text()) == (
+                NOT_READ_YET_TEXT, "", ""), type(page).__name__
+        window.go_to("settings")
+        app.processEvents()
+        assert calls == [], f"Settings, first opened during a run, read: {calls}"
+        assert window.part("settings").last_run.plain_text() == NOT_READ_YET_TEXT
+    turn_until(app, lambda: not controller().is_live())
+    app.processEvents()
+    assert calls.count("training_preview") == len(pages), f"each page reads once at the run's end: {calls}"
+    assert (calls.count("last_on"), calls.count("last_measured_on")) == (1, 1), calls
+    for page in pages:
+        assert page.budget_total.text().endswith(".") and NOT_READ_YET_TEXT not in page.budget_total.text()
+        assert page.budget_mem.text() and page.budget_ckpt.text(), type(page).__name__
+    assert window.part("settings").last_run.plain_text() != NOT_READ_YET_TEXT
+
+
+def test_a_store_change_during_a_run_changes_nothing_on_a_page_until_it_ends(tmp_path, monkeypatch):
+    """What a page read before a run stands through the run: a record deleted or written from Records while a run is live
+    has every picker list the store again, and reads nothing else; the lines keep what they said; and the run's end reads
+    them once. A page's own gates, run for any reason during the run, read nothing either."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._fixtures import readings_of_a_run
+    app = qt_app()
+    _on_the_runs_clock(tmp_path)
+    window = build_window()
+    runner = window.panel(ReductionPanel)
+    window.go_to("inference")
+    records = window.part("records")
+    inference = window.part("inference")
+    page = inference.tsnpe_panel
+    said = (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text())
+    assert said[0] and said[2]
+    with running(runner):
+        calls = readings_of_a_run(monkeypatch)
+        records.store_changed.emit()
+        inference.refresh_gates()
+        page.refresh_local_gates()
+        app.processEvents()
+        assert calls == [], f"a change of the store during a run read: {calls}"
+        assert (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text()) == said
+    turn_until(app, lambda: not controller().is_live())
+    assert calls.count("training_preview") == 2, calls
+
+
+def test_a_start_taken_back_leaves_the_budget_lines_as_they_were(tmp_path):
+    """A start that fails after the pages were locked unlocks them with the run still called live, so they do not read:
+    what they said before the start stands, and none of them says a run is live, for only a page built during a run can
+    say so, and such a page has read by the end of that run."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.run.controller import NOT_READ_YET_TEXT
+    qt_app()
+    _on_the_runs_clock(tmp_path)
+    window = build_window()
+    runner = window.panel(ReductionPanel)
+    window.go_to("inference")
+    page = window.part("inference").tsnpe_panel
+    said = (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text())
+    with pytest.raises(TypeError):
+        start_run(runner, StandIn(), spec=_training_spec(place=("reduction", None)), watch_dir=5)
+    assert not controller().is_live()
+    assert (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text()) == said
+    assert NOT_READ_YET_TEXT not in said
+
+
+def test_a_panel_with_a_problem_says_the_problem_while_a_run_is_live(tmp_path):
+    """A box left blank is said as ever during a run, for it reads nothing, and a line that says the problem is no line a
+    run keeps."""
+    from core.gui.fields import label
+    from core.gui.panels.reduction_panel import ReductionPanel
+    qt_app()
+    _on_the_runs_clock(tmp_path)
+    window = build_window()
+    runner = window.panel(ReductionPanel)
+    window.go_to("inference")
+    page = window.part("inference").tsnpe_panel
+    with running(runner):
+        page.num_runs.setText("")
+        page._sync_budget()
+        assert page.budget_total.text() == f"{label('num_runs')} is blank."
+        assert (page.budget_mem.text(), page.budget_ckpt.text()) == ("", "")
