@@ -103,9 +103,9 @@ def _local_now() -> datetime:
 
 
 def _out_of_memory():
-    """The engine's rule of a failure that is the graphics card running out of memory, loaded when a run has failed
-    and never at import: the rule's module loads the graphics library. The rule handed back answers False for an
-    error the engine's rule cannot read (one whose message cannot be had), so that no error holds up a run's end."""
+    """The engine's rule of a failure that is the graphics card running out of memory, asked for when a run has failed.
+    The rule handed back answers False for an error the engine's rule cannot read (one whose message cannot be had), so
+    that no error holds up a run's end."""
     from core.SBI.pipeline import _is_oom
 
     def is_oom(exc) -> bool:

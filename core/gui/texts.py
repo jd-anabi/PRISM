@@ -28,6 +28,18 @@ def number_text(value) -> str:
     raise TypeError(f"not a quantity: {type(value).__name__}")
 
 
+def is_size(value) -> bool:
+    """Whether ``value`` is a size a sentence can say: a number above nought that a float can hold, and no truth value.
+    A run that says 0 has measured nothing, and a whole number past a float's reach is no reading: what a history holds
+    is only as good as the file, and a person can edit a file."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return 0 < float(value) < math.inf
+    except OverflowError:
+        return False
+
+
 def date_text(when: datetime, now: datetime | None = None) -> str:
     """A date and time as the window writes it on every computer: "3 Oct 2026, 14:02", the hours on the 24-hour
     clock and the seconds dropped. Handed the present moment, a date less than seven days from it, ahead of it or

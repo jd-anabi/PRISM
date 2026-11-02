@@ -60,6 +60,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import settings
+from ..texts import is_size
 
 log = logging.getLogger(__name__)
 
@@ -331,7 +332,7 @@ def last_measured_on(folder: Path, computer: str) -> dict | None:
         return None
     for record in reversed(_records(folder)):
         limit, health = record.get("memory_limit"), record.get("health") or {}
-        if isinstance(limit, dict) and limit.get("computer") == computer and health.get("memory_peak"):
+        if isinstance(limit, dict) and limit.get("computer") == computer and is_size(health.get("memory_peak")):
             return record
     return None
 

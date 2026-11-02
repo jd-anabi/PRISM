@@ -10,6 +10,8 @@ is read from the run history when the page is shown.
 While a run is live the memory limit is locked and neither the card nor the run history is read, which the window
 says (``set_locked``); the appearance and the switch stay usable, the switch acting on the run at once.
 """
+import logging
+
 from PySide6.QtCore import QRunnable, Qt, QThreadPool, QTimer
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QHBoxLayout, QLabel, QPushButton, QRadioButton, QVBoxLayout,
                                QWidget)
@@ -24,6 +26,8 @@ from ..theming import MODE_LABELS
 from ..widgets.labeled_inputs import FloatField
 from ..widgets.page import Page, PageHead, Sentence
 from ..widgets.ruled import SectionHead
+
+log = logging.getLogger(__name__)
 
 _TEXT_SIZE = "Text size follows the text size set in Windows."
 _LIMIT_NAME = "Memory limit"
@@ -47,6 +51,7 @@ _AWAKE_REFUSED = "Windows did not accept the request. This computer may go to sl
 _ONLY_ON_WINDOWS = "Only on Windows."
 #: How often, in milliseconds, a page looks for the answer of a reading under way; the program takes about 50 ms here.
 READING_LOOK_MS = 50
+_LAST_RUN_NOT_READ = "The last run could not be read from the history (%s): Settings says that none is recorded."
 _NOT_KEPT = ("What you just set could not be remembered: the settings file cannot be written. It holds until PRISM "
              "closes.")
 
@@ -170,7 +175,7 @@ class SettingsScreen(QWidget):
         column = self._lines(body, design.scaled(design.GAP["block"]))
         for part in (SectionHead("Appearance"), self.appearance, SectionHead("This computer"), computer):
             column.addWidget(part)
-        self.page.add_scrolling(body)
+        self._scroller = self.page.add_scrolling(body)
 
     @staticmethod
     def _lines(block: QWidget, gap: int | None = None) -> QVBoxLayout:
@@ -239,10 +244,23 @@ class SettingsScreen(QWidget):
 
     def _apply(self, gib: float | None) -> None:
         """``gib`` is accepted: the limit, stored once for each change, and what the page says of it."""
-        if gib != memory_limit.chosen():
-            self.not_kept.setVisible(not memory_limit.set_memory_limit(gib))
+        if gib != memory_limit.chosen() or not self.not_kept.isHidden():
+            self._say_kept(memory_limit.set_memory_limit(gib))
         self._say_why("")
         self._show_limit()
+
+    def _say_kept(self, kept: bool) -> None:
+        """The last write reached the settings file, or it did not: the line follows the answer. A line that has just come
+        is brought into sight, since it stands at the foot of a page that scrolls."""
+        coming = not kept and self.not_kept.isHidden()
+        self.not_kept.setVisible(not kept)
+        if coming:
+            QTimer.singleShot(0, self, self._bring_the_line_into_sight)
+
+    def _bring_the_line_into_sight(self) -> None:
+        """At the loop's next turn, once the line has a place."""
+        if not self.not_kept.isHidden():
+            self._scroller.ensureWidgetVisible(self.not_kept)
 
     def _no_limit_pressed(self) -> None:
         self._apply(None)
@@ -294,7 +312,8 @@ class SettingsScreen(QWidget):
     # ── the last run ──
     def _read_last_run(self) -> None:
         """The last run on this computer, read from the run history, once until a run has ended; while a run is live
-        nothing is read, and a page that has read nothing yet says so. Only a page in sight reads."""
+        nothing is read, and a page that has read nothing yet says so. Only a page in sight reads. A history no reading
+        foresaw is said as none recorded, and one warning in the window's log names what went wrong."""
         if self._last_run_read or not self.isVisible():
             return
         if self._locked:
@@ -305,13 +324,15 @@ class SettingsScreen(QWidget):
         try:
             record = history.last_on(held.folder(), memory_limit.computer())
             measured = history.last_measured_on(held.folder(), memory_limit.computer())
-        except (OSError, ValueError):        # a folder of runs that cannot be read holds no run that can be said
-            record = measured = None
-        self.last_run.set_text(ends.last_run_sentence(record, held.now(), measured))
+            said = ends.last_run_sentence(record, measured)
+        except Exception as error:           # noqa: BLE001 -- a history no reading foresaw opens no window's end
+            log.warning(_LAST_RUN_NOT_READ, f"{type(error).__name__}: {error}")
+            said = ends.NO_LAST_RUN_TEXT
+        self.last_run.set_text(said)
 
     # ── the switch ──
     def _awake_changed(self, on: bool) -> None:
-        self.not_kept.setVisible(not memory_limit.set_keep_awake_wish(on))
+        self._say_kept(memory_limit.set_keep_awake_wish(on))
         self._show_awake()
 
     def _show_awake(self) -> None:

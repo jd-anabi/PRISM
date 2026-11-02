@@ -223,9 +223,9 @@ class MainWindow(QMainWindow):
     and the page in sight after every move. Owns the QSettings write that runs at quit (``_save_state``, reached
     from closeEvent): the selections of the panels of the parts built in this launch, and the Artifacts screen's
     own when it was built (called by name, because _all_panels() is panel-typed and that screen is not); a part
-    never opened writes nothing and keeps what it remembered. Two other write sites exist on purpose: a
-    panel's splitter position is written 1.5 s after it was last dragged (see base_panel.py), and appearance settings
-    are written eagerly, as they are applied immediately.
+    never opened writes nothing and keeps what it remembered. Three other write sites exist on purpose: a panel's
+    splitter position is written 1.5 s after it was last dragged (see base_panel.py), appearance settings are written
+    eagerly, as they are applied immediately, and a setting of this computer goes through ``remembered`` as it is changed.
     """
     place_changed = Signal(str, object)
 
@@ -931,10 +931,14 @@ class MainWindow(QMainWindow):
         shown window inside Windows' end message, where a question would wait inside that message. With a run live
         the close is refused, which keeps PRISM and its run going until Windows ends them; with none it is accepted.
 
-        A close accepted, with no run live, writes the window's own settings, closes every other window of the
-        program (the figure windows the pages opened among them), so that the program's event loop ends, and lets
-        go of the one-PRISM claim last, in a ``finally``: after the run's last history write, and also when the
-        settings cannot be written, since a window that has closed must not keep the claim."""
+        A close accepted, with no run live, first takes the keyboard from whatever holds it, so that what is being typed
+        in a field is judged as leaving the field would judge it: the window's X takes no keyboard, and otherwise a limit
+        typed in Settings would be kept or lost by the order of Windows' messages. It then writes the window's own
+        settings, closes every other window of the program (the figure windows the pages opened among them), so that the
+        program's event loop ends, and lets go of the one-PRISM claim last, in a ``finally``: after the run's last history
+        write, and also when the settings cannot be written, since a window that has closed must not keep the claim.
+        Windows' end of a session takes no such care: it may give the window no time, and nothing is judged inside its
+        message."""
         held = controller()
         if held.is_live():
             event.ignore()
@@ -953,6 +957,9 @@ class MainWindow(QMainWindow):
                 if self._close_at_end:
                     self.go_to_run()
             return
+        held_keyboard = self.focusWidget()
+        if held_keyboard is not None and not self._session_ending:
+            held_keyboard.clearFocus()
         try:
             self._save_state()
         finally:

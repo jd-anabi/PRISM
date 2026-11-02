@@ -89,7 +89,7 @@ def limit_line(force: InForce, held: float | None, read: bool) -> str:
     if force.source == "environment":
         meaning = "" if force.gib is not None else ", which means no limit"
         here = (f"the limit remembered here ({held:g} GiB) is not in use" if held is not None
-                else "no limit is remembered here")
+                else "no limit is remembered here" if read else "the remembered limit could not be read")
         return f"Set outside PRISM by {named} = {force.raw.strip()}{meaning}. It takes precedence; {here}."
     said = NOT_READ_TEXT if not read and force.gib is None else f"In force: {_force_words(force)}."
     if force.raw.strip():

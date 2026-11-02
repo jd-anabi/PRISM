@@ -837,6 +837,10 @@ def test_a_remembered_limit_that_cannot_be_read_is_no_limit_and_says_so(written,
     screen = build_part(SettingsScreen, on_mode=lambda _mode: None)
     assert screen.in_force.plain_text() == "The remembered limit could not be read; no limit is in force."
     assert screen.no_limit.isChecked(), "no limit is what is in force"
+    monkeypatch.setenv(pipeline.VRAM_CEILING_ENV, "6.5")
+    assert build_part(SettingsScreen, on_mode=lambda _mode: None).in_force.plain_text() == (
+        "Set outside PRISM by PRISM_VRAM_CEILING_GIB = 6.5. It takes precedence; the remembered limit could not be read.")
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV)
     assert path.read_bytes() == held, "reading the limit wrote the file"
     memory_limit.set_memory_limit(6.0)
     assert memory_limit.stored_limit() == (6.0, True), "a new limit puts the file right"

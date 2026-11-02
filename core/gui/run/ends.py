@@ -12,7 +12,7 @@ tested with no window.
 """
 from datetime import datetime
 
-from ..texts import date_text, duration_text, number_text
+from ..texts import date_text, duration_text, is_size, number_text
 from .model import OUTCOMES, RunStatus, _gib
 from .questions import TRAINING_WORDS, what_a_stop_keeps
 from .retry import NO_MESSAGE, OUT_OF_MEMORY, WAITING_LINE, WAITING_TITLE
@@ -92,36 +92,36 @@ def words(record: dict, now: datetime, *, too_late: bool = False) -> tuple[str, 
     return f"PRISM closed while this {word.lower()} was running; last heard {when}{at}.", kept
 
 
-def last_run_sentence(record: dict | None, now: datetime, measured: dict | None = None) -> str:
+def last_run_sentence(record: dict | None, measured: dict | None = None) -> str:
     """What the history ``record`` says of the last run on this computer, for Settings and "Before you start": its name
     and when it ended, or was last heard, the limit it ran with and, when it measured one, its largest batch, and that
-    it ended for lack of memory when it did; for no record, that none has been recorded. ``now`` is the moment the date
-    is written against. What a file does not hold is left out. When the run measured no batch, ``measured``, the last
-    run that did, says what it measured: a run that only reads a record, or draws from a posterior, says none."""
+    it ended for lack of memory when it did; for no record, that none has been recorded. What a file does not hold is
+    left out. When the run measured no batch, ``measured``, the last run that did, says what it measured: a run that
+    only reads a record, or draws from a posterior, says none."""
     if record is None:
         return NO_LAST_RUN_TEXT
-    about = _which_run(record, now)
     limit = record.get("memory_limit") if isinstance(record.get("memory_limit"), dict) else {}
     gib, health = limit.get("gib"), record.get("health") if isinstance(record.get("health"), dict) else {}
-    said = [f"The last run on this computer{f' ({about})' if about else ''} ran with "
-            f"{f'a limit of {gib:g} GiB' if _size(gib) else 'no limit'}."]
-    if _size(health.get("memory_peak")):
+    said = [f"The last run on this computer{_which_run(record)} ran with "
+            f"{f'a limit of {gib:g} GiB' if is_size(gib) else 'no limit'}."]
+    if is_size(health.get("memory_peak")):
         said.append(f"Its largest batch held {_gib(health['memory_peak'])} GiB.")
     if health.get("out_of_memory"):
         said.append(ENDED_FOR_LACK_TEXT)
     other = None if measured is None else (measured.get("health") or {}).get("memory_peak")
-    if _size(other) and not _size(health.get("memory_peak")):
-        said.append(f"The last run that measured its batches ({_which_run(measured, now)}): the largest held "
-                    f"{_gib(other)} GiB.")
+    if is_size(other) and not is_size(health.get("memory_peak")):
+        said.append(f"The last run that measured its batches{_which_run(measured)}: the largest held {_gib(other)} GiB.")
     return " ".join(said)
 
 
-def _which_run(record: dict, now: datetime) -> str:
-    """A run's name and when it ended or was last heard, as far as its file holds them."""
+def _which_run(record: dict) -> str:
+    """A run's name and when it ended or was last heard, as far as its file holds them, in brackets after a space; nothing
+    when it holds neither. The date is written whole, as a sentence writes one."""
     ended, heard = _moment(record.get("ended")), _moment(record.get("last_heard"))
-    when = (f"ended {date_text(ended, now)}" if ended is not None
-            else f"last heard {date_text(heard, now)}" if heard is not None else "")
-    return ", ".join(part for part in (str(record.get("name") or ""), when) if part)
+    when = (f"ended {date_text(ended)}" if ended is not None
+            else f"last heard {date_text(heard)}" if heard is not None else "")
+    about = ", ".join(part for part in (str(record.get("name") or ""), when) if part)
+    return f" ({about})" if about else ""
 
 
 def status_of(record: dict, now: datetime) -> RunStatus:
@@ -314,11 +314,6 @@ def _counted(count: int, unit: str) -> str:
 def _count(value) -> bool:
     """Whether ``value`` is a whole number above nought, as a count the history holds is."""
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
-
-
-def _size(value) -> bool:
-    """Whether ``value`` is a size above nought, as a size the history holds is."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value < float("inf")
 
 
 def _moment(value) -> datetime | None:

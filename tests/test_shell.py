@@ -2439,7 +2439,7 @@ def _each_write(monkeypatch):
 
     def put(key, value):
         written.append((key, value))
-        kept(key, value)
+        return kept(key, value)
 
     monkeypatch.setattr(remembered, "put", put)
     return written
@@ -2770,9 +2770,8 @@ def test_no_run_of_this_computer_is_said_for_older_files_and_for_none(tmp_path, 
     from tests._fixtures import write_history
     monkeypatch.setattr(socket, "gethostname", lambda: "LAB-PC")
     folder = tmp_path / "runs"
-    now = _at(20, 12, 0)
     assert history.last_on(folder, "LAB-PC") is None, "no folder of runs yet"
-    assert ends.last_run_sentence(None, now) == "No run on this computer has been recorded yet."
+    assert ends.last_run_sentence(None) == "No run on this computer has been recorded yet."
     write_history(folder, id="20261006T090000-training", word="Training", started=_at(6, 9, 0), memory_limit=6.0)
     write_history(folder, id="20261007T090000-training", word="Training", started=_at(7, 9, 0),
                   memory_limit={"gib": 6.0, "source": "setting", "computer": "OTHER-PC"})
@@ -2785,15 +2784,16 @@ def test_no_run_of_this_computer_is_said_for_older_files_and_for_none(tmp_path, 
 
 def test_the_last_run_that_measured_its_batches_is_said_when_the_last_did_not(tmp_path, monkeypatch):
     """An inference after a training measures no batch, and what the training measured is what a person setting the
-    limit wants: the page says it, with which run it was, the newest of this computer that measured, not an older one
-    and not another computer's. A last run that measured its own says only that, and the sentence that one ended for
-    lack of memory stays with the run it is said of."""
+    limit wants: the page says it, with which run it was, the newest of this computer that measured, not an older one,
+    not another computer's, and not one that said 0 or what is no size, which measured nothing. A last run that measured
+    its own says only that, and the sentence that one ended for lack of memory stays with the run it is said of. A
+    measured run of neither name nor date takes no brackets."""
     import socket
     from core.gui.run import ends
     from tests._fixtures import write_history
     _on_the_runs_clock(tmp_path, _at(20, 12, 0))
     monkeypatch.setattr(socket, "gethostname", lambda: "LAB-PC")
-    folder, now = tmp_path / "runs", _at(20, 12, 0)
+    folder = tmp_path / "runs"
     limit = {"gib": 6.0, "source": "setting", "computer": "LAB-PC"}
     training = {"name": "retrain", "ended": _ENDED, "memory_limit": limit, "health": {"memory_peak": 5.4}}
     write_history(folder, id="20261001T090000-training", word="Training", started=_at(1, 9, 0), name="older",
@@ -2802,6 +2802,10 @@ def test_the_last_run_that_measured_its_batches_is_said_when_the_last_did_not(tm
     write_history(folder, id="20261005T100000-training", word="Training", started=_at(5, 10, 0), name="elsewhere",
                   ended=_at(5, 11, 0), health={"memory_peak": 9.0},
                   memory_limit={"gib": 9.0, "source": "setting", "computer": "OTHER-PC"})
+    write_history(folder, id="20261005T120000-training", word="Training", started=_at(5, 12, 0), name="said nought",
+                  ended=_at(5, 13, 0), memory_limit=limit, health={"memory_peak": 0})
+    write_history(folder, id="20261005T140000-training", word="Training", started=_at(5, 14, 0), name="said words",
+                  ended=_at(5, 15, 0), memory_limit=limit, health={"memory_peak": "a lot"})
     write_history(folder, id="20261006T080000-inference", word="Inference", started=_at(6, 8, 0), name="cell_3",
                   ended=_at(6, 9, 0), memory_limit=limit)
     window = build_window()
@@ -2814,14 +2818,17 @@ def test_the_last_run_that_measured_its_batches_is_said_when_the_last_did_not(tm
             "that measured its batches (retrain, ended 5 Oct 2026, 09:12): the largest held 5.4 GiB.")
     finally:
         window.hide()
-    assert ends.last_run_sentence(training, now, training) == (
+    assert ends.last_run_sentence(training, training) == (
         "The last run on this computer (retrain, ended 5 Oct 2026, 09:12) ran with a limit of 6 GiB. Its largest batch "
         "held 5.4 GiB.")
     failed = {"name": "cell_4", "memory_limit": limit, "health": {"out_of_memory": True}}
-    assert ends.last_run_sentence(failed, now, training) == (
+    assert ends.last_run_sentence(failed, training) == (
         "The last run on this computer (cell_4) ran with a limit of 6 GiB. It ended for lack of graphics-card memory. "
         "The last run that measured its batches (retrain, ended 5 Oct 2026, 09:12): the largest held 5.4 GiB.")
-    assert ends.last_run_sentence(failed, now, None).endswith("It ended for lack of graphics-card memory.")
+    assert ends.last_run_sentence(failed, None).endswith("It ended for lack of graphics-card memory.")
+    assert ends.last_run_sentence(failed, {"health": {"memory_peak": 5.4}}) == (
+        "The last run on this computer (cell_4) ran with a limit of 6 GiB. It ended for lack of graphics-card memory. "
+        "The last run that measured its batches: the largest held 5.4 GiB.")
 
 
 def test_a_settings_page_built_during_a_run_comes_up_locked(tmp_path, monkeypatch):
@@ -2860,7 +2867,7 @@ def test_a_settings_page_built_during_a_run_comes_up_locked(tmp_path, monkeypatc
         QApplication.processEvents()
         assert len(reads) == 2, "the page did not read once as the run ended"
         assert page.last_run.plain_text() == (
-            "The last run on this computer (ended Thu 8 Oct, 20:02) ran with a limit of 6 GiB.")
+            "The last run on this computer (ended 8 Oct 2026, 20:02) ran with a limit of 6 GiB.")
     finally:
         window.hide()
 
@@ -3088,6 +3095,227 @@ def test_the_whole_program_puts_back_what_this_computer_remembers(tmp_path, monk
     assert [found[key] for key in keys] == [0.0, True]
     assert [during[key] for key in keys] == [6.0, False], "what this computer remembers was not put in force"
     assert [after[key] for key in keys] == [0.0, True], "the whole program left them in force"
+
+
+@pytest.mark.parametrize("value, a_size", (
+    (5.4, True), (6, True), (0.02, True), (0, False), (0.0, False), (-1, False), (True, False), (False, False),
+    (None, False), ("5.4", False), (float("nan"), False), (float("inf"), False), (10 ** 400, False)))
+def test_a_size_is_a_number_above_nought_that_a_float_can_hold(value, a_size):
+    """One rule for a limit and a peak, wherever a history is read: a run that says 0 has measured nothing, and a whole
+    number past a float's reach, which only a file edited by hand can hold, is no reading."""
+    from core.gui.texts import is_size
+    assert is_size(value) is a_size
+
+
+_LIMIT_OF_SIX = {"gib": 6.0, "source": "setting", "computer": "LAB-PC"}
+
+
+@pytest.mark.parametrize("record, measured, sentence", (
+    ({"memory_limit": {"gib": 10 ** 400, "computer": "LAB-PC"}}, None,
+     "The last run on this computer ran with no limit."),
+    ({"memory_limit": _LIMIT_OF_SIX, "health": {"memory_peak": 10 ** 400}}, None,
+     "The last run on this computer ran with a limit of 6 GiB."),
+    ({"memory_limit": _LIMIT_OF_SIX}, {"name": "y", "health": {"memory_peak": 10 ** 400}},
+     "The last run on this computer ran with a limit of 6 GiB."),
+    ({"memory_limit": {"gib": 0, "computer": "LAB-PC"}}, None, "The last run on this computer ran with no limit."),
+    ({"memory_limit": _LIMIT_OF_SIX, "health": {"memory_peak": 0}}, None,
+     "The last run on this computer ran with a limit of 6 GiB."),
+    ({"memory_limit": _LIMIT_OF_SIX, "health": {"memory_peak": 0}}, {"name": "y", "health": {"memory_peak": 5.4}},
+     "The last run on this computer ran with a limit of 6 GiB. The last run that measured its batches (y): the largest "
+     "held 5.4 GiB.")),
+    ids=("a limit too long for a float", "a peak too long for a float", "the other run's peak too long for a float",
+         "a limit of nought", "a peak of nought", "a peak of nought and another run's"))
+def test_what_is_no_size_is_left_out_of_the_last_run_sentence(record, measured, sentence):
+    """What is no size is said as nothing: no number written from a value that cannot be written, no "held 0 GiB" and no
+    "a limit of 0 GiB"."""
+    from core.gui.run import ends
+    assert ends.last_run_sentence(record, measured) == sentence
+
+
+@pytest.mark.parametrize("ways", ("a number too long for a float", "a reading that raises", "a sentence that raises"))
+def test_a_history_no_reading_foresaw_does_not_hold_up_a_runs_end(ways, tmp_path, monkeypatch, caplog):
+    """Settings reads the history at a run's end while the window is still saying that end, in the handler that says it.
+    Whatever a file holds, the foot says the run ended and nothing is raised: a file edited by hand is read past, and a
+    reading or a sentence that raises leaves the page saying that no run is recorded, and one warning in the window's log
+    naming what went wrong."""
+    import json
+    from core.gui import memory_limit
+    from core.gui.run import ends, history
+    app = qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    raised = []
+    monkeypatch.setattr(sys, "excepthook", lambda *error: raised.append(error))
+    window = build_window()
+    try:
+        _shown_off_screen(window)
+        window.go_to("settings")
+        QApplication.processEvents()
+        page = window.part("settings")
+        folder = tmp_path / "runs"
+        folder.mkdir(exist_ok=True)
+        file = {"id": "20261001T090000-training", "word": "Training", "name": "edited", "started": _at(1, 9, 0).isoformat(),
+                "ended": _at(1, 10, 0).isoformat(), "health": {"memory_peak": 10 ** 400},
+                "memory_limit": {"gib": 6.0, "source": "setting", "computer": memory_limit.computer()}}
+        (folder / "20261001T090000-training.json").write_bytes(json.dumps(file).encode("utf-8"))
+        def raises(*_args):
+            raise KeyError("what no reading foresaw")
+
+        if ways == "a reading that raises":
+            monkeypatch.setattr(history, "last_measured_on", raises)
+        elif ways == "a sentence that raises":
+            monkeypatch.setattr(ends, "last_run_sentence", raises)
+        with running():
+            pass
+        turn_until(app, lambda: not held.is_live())
+        QApplication.processEvents()
+        assert raised == [], "the handler of a run's end raised"
+        assert _foot(window)[:2] == ("done", "Training finished"), _foot(window)
+        assert page.last_run.plain_text() == (
+            "The last run on this computer (ended 8 Oct 2026, 19:02) ran with no limit."
+            if ways == "a number too long for a float" else "No run on this computer has been recorded yet.")
+        named = [record.getMessage() for record in caplog.records
+                 if record.levelname == "WARNING" and "could not be read from the history" in record.getMessage()]
+        assert len(named) == (0 if ways == "a number too long for a float" else 1), "the window's log and the page disagree"
+        assert all("KeyError: 'what no reading foresaw'" in said for said in named), "the log named nothing of what went wrong"
+    finally:
+        window.hide()
+
+
+@pytest.mark.parametrize("factor, width, height", ((1.0, 900, 600), (1.5, 1350, 900)))
+def test_the_line_of_what_could_not_be_remembered_comes_into_sight(factor, width, height, monkeypatch):
+    """The line stands at the foot of a page that scrolls, far from the option that was pressed. When it comes, the page
+    brings it into sight, once it has a place; a line that was already shown, and a line that goes, move nothing."""
+    import os
+    import stat
+    from pathlib import Path
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QScrollArea
+    from core.gui import memory_limit, settings as st
+    from tests._look_helpers import text_size
+    qt_app()
+    memory_limit.set_memory_limit(4.0)
+    path = Path(st.settings().fileName())
+    with text_size(factor):
+        window = build_window()
+        try:
+            _shown_off_screen(window, width, height)
+            window.go_to("settings")
+            QApplication.processEvents()
+            page = window.part("settings")
+            area = page.findChild(QScrollArea)
+            bar = area.verticalScrollBar()
+
+            def in_sight():
+                QApplication.processEvents()
+                at = QRect(page.not_kept.mapTo(area.viewport(), QPoint(0, 0)), page.not_kept.size())
+                return area.viewport().rect().contains(at)
+
+            os.chmod(path, stat.S_IREAD)
+            try:
+                bar.setValue(0)
+                page.no_limit.click()
+                assert not page.not_kept.isHidden()
+                assert in_sight(), "the line came below the fold"
+                bar.setValue(0)
+                assert bar.maximum() > 0 and not in_sight(), "at the top of the page the line is out of sight"
+                page.limited.click()
+                assert (not page.not_kept.isHidden(), bar.value()) == (True, 0), "a line already shown moved the page"
+                QApplication.processEvents()
+                assert bar.value() == 0, "a line already shown moved the page"
+            finally:
+                os.chmod(path, stat.S_IWRITE)
+            page.no_limit.click()
+            QApplication.processEvents()
+            assert (page.not_kept.isHidden(), bar.value()) == (True, 0), "a line that went moved the page"
+        finally:
+            window.hide()
+
+
+def test_enter_on_the_same_value_after_a_failed_write_tries_again(monkeypatch):
+    """While the line stands the same value is written again and the line follows the answer, so that it never says "could
+    not be remembered" of a value the file holds. With the line down a same value writes nothing."""
+    import os
+    import stat
+    from pathlib import Path
+    from core import config
+    from core.SBI import pipeline
+    from core.gui import memory_limit, settings as st
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    memory_limit.set_memory_limit(4.0)
+    path = Path(st.settings().fileName())
+    page, written = _settings_page(), _each_write(monkeypatch)
+    os.chmod(path, stat.S_IREAD)
+    try:
+        _type_the_limit(page.limit_field, "5")
+        assert (config.SIM_VRAM_CEILING_GIB, page.not_kept.isHidden(), len(written)) == (5.0, False, 1)
+        QTest.keyClick(page.limit_field, Qt.Key_Return)
+        assert (page.not_kept.isHidden(), len(written)) == (False, 2), "tried again, and the file still refuses"
+    finally:
+        os.chmod(path, stat.S_IWRITE)
+    assert b"memory_limit_gib=4" in path.read_bytes()
+    QTest.keyClick(page.limit_field, Qt.Key_Return)
+    assert (page.not_kept.isHidden(), len(written)) == (True, 3), "the line said it of a value the file now holds"
+    assert b"memory_limit_gib=5" in path.read_bytes()
+    QTest.keyClick(page.limit_field, Qt.Key_Return)
+    assert len(written) == 3, "with the line down a same value wrote"
+
+
+@pytest.mark.parametrize("ending, limit", ((False, 69.0), (True, 6.0)), ids=("a close", "Windows ending the session"))
+def test_a_limit_typed_and_not_left_is_judged_as_the_window_closes(ending, limit, tmp_path, monkeypatch):
+    """The window's X takes no keyboard from a field, so a limit typed and not left would be kept or lost by the order of
+    Windows' messages. A close accepted ends the editing first: the limit is judged and stored before the window's own
+    state is written. Windows' end of a session stays as it was: nothing is judged inside its message."""
+    from core import config
+    from core.SBI import pipeline
+    from core.gui import memory_limit, settings as st
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    qt_app()
+    _on_the_runs_clock(tmp_path)
+    memory_limit.set_memory_limit(6.0)
+    window = build_window()
+    try:
+        _shown_off_screen(window)
+        window.go_to("settings")
+        QApplication.processEvents()
+        page = window.part("settings")
+        seen, write = [], window._save_state
+        monkeypatch.setattr(window, "_save_state", lambda: (seen.append(config.SIM_VRAM_CEILING_GIB), write())[1])
+        window._session_ending = ending
+        with _in_front(window):
+            page.limit_field.setFocus(Qt.TabFocusReason)
+            QApplication.processEvents()
+            assert page.limit_field.hasFocus(), "the keyboard is not in the field: the test proves nothing"
+            QTest.keyClick(page.limit_field, Qt.Key_End)
+            QTest.keyClicks(page.limit_field, "9")
+            assert (page.limit_field.text(), config.SIM_VRAM_CEILING_GIB) == ("69", 6.0)
+            assert window.close()
+        assert seen == [limit], "the limit was not judged before the window's state was written"
+        if not ending:
+            assert memory_limit.stored_limit() == (limit, True)
+    finally:
+        window.hide()
+
+
+def test_a_close_refused_takes_the_keyboard_from_nothing(tmp_path, monkeypatch):
+    """A close during a run is refused, or asks, and the person goes on where they were: the keyboard stays."""
+    from tests._fixtures import forget_asked
+    qt_app()
+    _on_the_runs_clock(tmp_path)
+    window = build_window()
+    try:
+        _shown_off_screen(window)
+        window.go_to("settings")
+        QApplication.processEvents()
+        radio = window.part("settings")._radios["system"]
+        with _in_front(window), running():
+            radio.setFocus(Qt.TabFocusReason)
+            QApplication.processEvents()
+            assert radio.hasFocus()
+            assert not window.close()
+            assert radio.hasFocus(), "a close that was refused took the keyboard"
+        forget_asked()
+    finally:
+        window.hide()
 
 
 def test_your_own_models_lists_the_models_and_opens_the_builder_and_back(monkeypatch):
