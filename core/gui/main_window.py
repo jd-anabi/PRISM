@@ -454,6 +454,7 @@ class MainWindow(QMainWindow):
             widget.open_run.connect(self._open_run)
         elif name == "inference":
             widget.navigate.connect(self.go_to)
+            widget.go_to_run.connect(self.go_to_run)
             # The six steps' states go to the rail and to Home each time they are worked out again.
             widget.states_changed.connect(self._states_changed)
         elif name == "temperature":

@@ -1117,8 +1117,8 @@ def test_the_check_of_the_real_settings_folder_sees_a_path_come_or_go_at_any_dep
 
 
 def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypatch):
-    """The suites reach a window, a part, the inference screen and a bare run host through four
-    plain functions of tests/_fixtures.py, so a constructor's arguments are written once. Three
+    """The suites reach a window, a part, the inference screen, a bare run host and a step of the look through
+    five plain functions of tests/_fixtures.py, so a constructor's arguments are written once. Three
     things make them safe under tests that build twice to stand for a relaunch, or build after a
     patch, after a settings write or inside ``use_store``: each call builds anew, at the moment of
     the call; the helpers keep nothing they built, but for a weak reference in the record of
@@ -1128,11 +1128,12 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
     from core.gui.main_window import MainWindow
     from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.inference.config_tab import ConfigPanel
+    from core.gui.panels.inference.step_page import StepPage
     from core.gui.panels.reduction_panel import ReductionPanel
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from tests import _fixtures
-    from tests._fixtures import build_inference, build_part, build_run_host, build_window
+    from tests._fixtures import build_inference, build_part, build_run_host, build_step_page, build_window
 
     def kept(widget):
         held = []
@@ -1177,6 +1178,10 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
     assert "refresh_gates" not in code_only(build_inference), \
         "the builder leaves the gates to the test that builds with it"
 
+    page, another = build_step_page(), build_step_page()
+    assert isinstance(page, StepPage) and type(page).__name__ == "_Page" and page is not another
+    assert page._screen is not another._screen and page._screen.panels()[2] is page
+    assert type(build_step_page(type(page))) is type(page)
     host, other = build_run_host(), build_run_host()
     assert isinstance(host, BasePanel) and type(host) is not BasePanel and host is not other
     assert host.layout_key() == other.layout_key() == "P", "two hosts must share one layout name"
@@ -1185,7 +1190,7 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
     window, again = build_window(), build_window()
     assert type(window) is MainWindow and type(again) is MainWindow and window is not again
 
-    for widget in (first, second, step, plain, held, built, host, other, window, again):
+    for widget in (first, second, step, plain, held, built, page, another, host, other, window, again):
         assert kept(widget) == [], f"tests/_fixtures.py keeps what it built: {kept(widget)}"
 
 
@@ -1198,8 +1203,8 @@ _SEEN_AS_IT_WENT: list = []
 
 @pytest.mark.parametrize("turn", ["builds", "after"])
 def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_module_scope):
-    """A window, a part, the inference screen and a bare run host, of either kind, that a test made through the
-    builders are deleted when that test ends, though something still holds them
+    """A window, a part, the inference screen, a bare run host of either kind and a step of the look that a test made
+    through the builders are deleted when that test ends, though something still holds them
     (tests/conftest.py::_built_widgets_let_go): left alive, each would be dressed again by every later change of
     sheet, style or font on the one application. The first turn builds one of each and keeps them in this
     module's list, beside a part it deletes itself, which the fixture must pass over; the second turn, the next
@@ -1220,7 +1225,7 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
     from core.gui import settings as st
     from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.reduction_panel import ReductionPanel
-    from tests._fixtures import build_window
+    from tests._fixtures import build_step_page, build_window
 
     module_panel = _panel_built_at_module_scope[0]
     if turn == "builds":
@@ -1234,18 +1239,18 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
         watched.destroyed.connect(lambda *_: _SEEN_AS_IT_WENT.extend(
             [st._override_path, "unread" in reported.COUNTS, design._room]))
         _MADE_IN_THE_FIRST_TURN[:] = [build_window(), build_part(ReductionPanel), build_inference(),
-                                      build_run_host(), build_run_host(BasePanel), watched, gone,
+                                      build_run_host(), build_run_host(BasePanel), build_step_page(), watched, gone,
                                       st._override_path]
-        assert [shiboken6.isValid(widget) for widget in _MADE_IN_THE_FIRST_TURN[:7]] == [True] * 6 + [False]
+        assert [shiboken6.isValid(widget) for widget in _MADE_IN_THE_FIRST_TURN[:8]] == [True] * 7 + [False]
         design.set_room((1366, 728))         # the room this turn leaves in force, as a window it built would
         return
-    assert len(_MADE_IN_THE_FIRST_TURN) == 8, (
+    assert len(_MADE_IN_THE_FIRST_TURN) == 9, (
         "the first turn did not run before this one: the two turns run together, in this order, in one process")
     *made, _deleted_by_the_test, written = _MADE_IN_THE_FIRST_TURN
     seen = list(_SEEN_AS_IT_WENT)
     _MADE_IN_THE_FIRST_TURN.clear()
     _SEEN_AS_IT_WENT.clear()
-    assert [shiboken6.isValid(widget) for widget in made] == [False] * 6, (
+    assert [shiboken6.isValid(widget) for widget in made] == [False] * 7, (
         "a widget a builder made outlived the test that built it")
     assert [panel for panel in BasePanel._instances if not shiboken6.isValid(panel)] == [], (
         "a deleted panel is still among the panels a run locks")
@@ -1270,7 +1275,7 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
              "ReductionPanel", "ModelBuilderScreen", "ArtifactScreen", "ConfigPanel", "PriorPanel",
              "PosteriorPanel", "ValidatePanel", "InferPanel", "TSNPEPanel", "BasePanel",
              "HomeScreen", "SettingsScreen", "TemperatureScreen", "RecordViewer", "Shell", "HelpScreen",
-             "ModelsScreen", "PartError", "RunView"}
+             "ModelsScreen", "PartError", "RunView", "StepPage"}
     # The list is kept closed over the program. Every class with a base that a file of the window's own
     # folder, of its screens, of its panels or of its runs defines under a public name is named above, or here among
     # those a suite still builds itself, or among the classes of the window's folder that are no window,

@@ -52,6 +52,8 @@ class InferenceScreen(QWidget):
     states_changed = Signal(object)
     # A page asks the window to go somewhere: a part, and a page of it or None.
     navigate = Signal(str, object)
+    # A page's "Go to the run" was pressed.
+    go_to_run = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -96,6 +98,13 @@ class InferenceScreen(QWidget):
         then starts at its first setting."""
         first = getattr(self.pages.currentWidget(), "first_focus", None)
         return first() if callable(first) else None
+
+    def stale_store(self) -> None:
+        """The store changed: each step that reads it reads again now when it is shown, else at its next show."""
+        for panel in self.panels():
+            told = getattr(panel, "stale_store", None)
+            if callable(told):
+                told()
 
     def pending(self) -> frozenset[str]:
         """The steps whose page holds a choice not yet applied: none, while no step tells what it holds from what it

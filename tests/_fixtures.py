@@ -20,9 +20,9 @@ the two modules, ``tests._fixtures`` and ``tests._dialogs`` (pytest.ini puts the
 path; tests/ has no __init__.py): ``from _dialogs import SHOWN`` would import that module a second
 time under another name, with a second, empty SHOWN that the guard never touches.
 
-A window, a part of it, the inference screen and a bare run host are built by the four builders
-here -- ``build_window``, ``build_part``, ``build_inference``, ``build_run_host`` -- and by no suite
-itself, so a constructor's arguments are written in one place.
+A window, a part of it, the inference screen, a bare run host and a step of the look are built by the
+five builders here -- ``build_window``, ``build_part``, ``build_inference``, ``build_run_host``,
+``build_step_page`` -- and by no suite itself, so a constructor's arguments are written in one place.
 """
 import ast
 import inspect
@@ -160,11 +160,20 @@ class PaneCapture:
         self.lines.append((level, text))
 
 
-def page_lines(panel) -> PaneCapture:
+class _OwnLines:
+    """The lines a page of the look says itself, as ``(level, text)`` in order, instead of drawing them: its ``own_line``
+    is replaced on that one page."""
+
+    def __init__(self, page):
+        self.lines: list[tuple[str, str]] = []
+        page.own_line = lambda text, level="info": self.lines.append((level, text))
+
+
+def page_lines(panel):
     """The lines a page says itself (a refusal's sentence, "Model applied", a record written), as ``(level, text)`` in
     order in the ``lines`` of what is handed back, instead of rendering them. A page's own lines are read through this
     one call, whatever the page is built on; a page with a log pane has them captured there, as ``PaneCapture`` does."""
-    return PaneCapture(panel)
+    return PaneCapture(panel) if hasattr(panel, "log_pane") else _OwnLines(panel)
 
 
 def _nad_cfg(**over):
@@ -989,12 +998,13 @@ def readings_of_a_run(monkeypatch) -> list:
     """Every reading a page's first opening may not make while a run is live, from now to the test's end, each named in
     the list handed back: the card's and the programs' of ``card_and_programs``; the preview and the reading of a
     training; the kept trainings; a simulation set's files, whoever reads them, by the one call that loads one, and
-    ``peek``, which finds no file and loads nothing in a store with no set; and the run history's readers, ``read``
-    among them, which every history file goes through, whichever reader asks. Each is passed through to the real call.
-    Home, whose "Last runs" lists the live run, reads the history at every opening, so a test that opens Home during a
-    run finds ``latest`` and ``read`` here."""
+    ``peek``, which finds no file and loads nothing in a store with no set; the run history's readers, ``read``
+    among them, which every history file goes through, whichever reader asks; and the check of a record's name, which
+    reads every record of its kind. Each is passed through to the real call. Home, whose "Last runs" lists the live run,
+    reads the history at every opening, so a test that opens Home during a run finds ``latest`` and ``read`` here."""
     import torch
     from core import orchestrator
+    from core.artifacts import ArtifactStore
     from core.SBI import fit_state, training_checkpoint
     from core.gui.run import history
     calls = card_and_programs(monkeypatch)
@@ -1014,11 +1024,12 @@ def readings_of_a_run(monkeypatch) -> list:
         for name in names:
             counted(spaces[home], name, name)
     counted(torch, "load", "a simulation set's file")
+    counted(ArtifactStore, "assert_name_free", "assert_name_free")
     return calls
 
 
 # The builders: every window, part, inference screen and bare run host a suite needs is made by one
-# of these four, so a constructor's arguments are written in one place. Plain functions, never
+# of these, so a constructor's arguments are written in one place. Plain functions, never
 # fixtures: a module-scoped fixture builds before any function-scoped one is set up. Each hands what
 # it made to the record in tests/_built.py, and tests/conftest.py's _built_widgets_let_go deletes it
 # when the test that built it ends; what a fixture of wider scope built is left alone.
@@ -1058,61 +1069,106 @@ def build_inference(*, session=None, cfg=None):
     return screen
 
 
-def build_run_host(cls=None, *, on_a_page=False):
+def build_run_host(cls=None):
     """A bare run host: a panel with the shared run machinery and no controls of its own. With no
     argument it is an instance of a new subclass of ``BasePanel`` made at this call, whose runs are any
     call it is handed, described alike: a run with no place in the window, which keeps no file and
     leaves nothing to acknowledge; with a class, an instance of that class. The made class is always
     named ``P``: a panel stores its layout under its class's name, and one test saves the layout with
-    one host and restores it with a second, so two hosts must share that name. With ``on_a_page`` it
-    is no panel but a page of the look, on the same mixin, its column a stack it hands the page; it
-    keeps what it is told: ``lines``, its own lines as ``(level, text)``; ``seams``, "leaving" as the
-    run's page takes the figures and the figures as they come back; ``gates``, how often its gates
-    were run. It is let go when the test that built it ends."""
+    one host and restores it with a second, so two hosts must share that name. It is let go when the
+    test that built it ends."""
     qt_app()
     from core.gui.panels.base_panel import BasePanel
     from core.gui.run.model import RunSpec
     if cls is not None:
         return _built.keep(cls())
-    if on_a_page:
-        from PySide6.QtWidgets import QStackedWidget, QWidget
-        from core.gui.panels.run_host import RunHost
-        from core.gui.run.view import RunView
-        from core.gui.widgets.figure_stack import FigureStack
-        from core.gui.widgets.page import Page
-
-        class Host(RunHost, Page):
-            def __init__(self):
-                super().__init__()
-                self._enrol()
-                self.controls, self.figures, self.figure_stack = QWidget(self), QWidget(), FigureStack()
-                self.run_view, self.results = RunView(), QStackedWidget()
-                self.run_view.back.connect(self._back_to_the_form)
-                self.run_view.how_link.clicked.connect(self.show_run)
-                self.results.addWidget(self.figures)
-                self.results.addWidget(self.run_view)
-                self.add_stack(self.results)
-                self.lines, self.seams, self.gates = [], [], 0
-
-            def refresh_local_gates(self):
-                self.gates += 1
-
-            def own_line(self, text, level="info"):
-                self.lines.append((level, text))
-
-            def _figures_leaving(self):
-                self.seams.append("leaving")
-
-            def _figures_back(self, stack):
-                self.seams.append(stack)
-
-        return _built.keep(Host())
 
     class P(BasePanel):
         def run_spec(self, fn, *args, **kwargs):
             return RunSpec("Run", None, keeps_files=False)
 
     return _built.keep(P())
+
+
+# Two sentences of the length a real fact has at the window's least width: each wraps to two lines at 900 wide.
+TWO_LINES = ("The saved set for these settings holds 4,812 of 5,000 batches, so this run continues it from where it "
+             "stopped and adds the rest; nothing that was saved is simulated again.")
+
+
+def _the_stand_in_page():
+    """The class of the page ``build_step_page`` makes when it is handed none: a step as awkward as a real one. Its form
+    holds a grouped number, a float, a list and a ticked field among the main settings and in the fold, the name and the
+    note of a required record, and a value that is only shown; its main button has the longest words a real one has. It
+    keeps what it is told: ``readings``, how often its disk was read; ``pressed``, how often its button got through;
+    ``said``, the facts it hands the foot; ``in_use``'s words in ``held``."""
+    from PySide6.QtWidgets import QPushButton
+    from core.gui.panels.inference.step_page import StepPage
+    from core.gui.widgets.choice import Choice
+    from core.gui.widgets.form import NameAndNote, TickedField
+    from core.gui.widgets.labeled_inputs import FloatField, IntField
+
+    class _Page(StepPage):
+        def __init__(self, screen, parent=None):
+            super().__init__(screen, "A step", "One plain sentence under the page's title.", step="training",
+                             parent=parent)
+            self.readings = self.pressed = 0
+            self.said, self.held, self.words = (), ("", ""), "Build a new prior (about a minute and a half)"
+            self.nothing = False
+            self.head_button = QPushButton("&Use a saved one instead…")
+            self.head.add_action(self.head_button)
+            self.kind_choice = Choice()
+            self.kind_choice.addItem("Set by the bounds file", False)
+            self.kind_choice.addItem("Frequency response", True)
+            form = self.form
+            form.set_side_heading("This run")
+            form.add("num_runs", IntField(5000, grouped=True), "batches", usual=5000)
+            form.add("chi_mode", self.kind_choice, usual=False, label="Kind of observation")
+            form.add("learning_rate", FloatField("0.0005"), usual=0.0005, folded=True, help_text="How far a step goes.")
+            form.add("run_size_cap", TickedField(IntField("0", grouped=True), "Automatic", 0), usual=0, folded=True)
+            form.add("max_num_epochs", TickedField(IntField(None, grouped=True), "No limit", None), "epochs", usual=None,
+                     folded=True, label="Epoch limit")
+            self.use_names(NameAndNote("prior", required=True))
+            form.add_text("chi_f0", "Drive amplitude in training: 0.15 (no unit).", "fixed by measurement", side=True)
+            self.refresh_local_gates()
+
+        def main_words(self):
+            return self.words
+
+        def main_pressed(self):
+            self.pressed += 1
+
+        def nothing_to_apply(self):
+            return self.nothing
+
+        def read_disk(self):
+            self.readings += 1
+
+        def facts_from_form(self):
+            return (*(fact for fact in (self.names.name_fact(), self.names.note_fact()) if fact), *self.said)
+
+        def in_use_words(self):
+            return self.held
+
+    return _Page
+
+
+def build_step_page(cls=None, *, session=None, window=None):
+    """A step of the look on the inference screen, in the place of step 3: an instance of ``cls``, called with the screen
+    alone, or of the stand-in page. The screen is built anew, holding ``session`` when one is handed, unless ``window``
+    is: the page then stands in that window's Parameter inference, at step 3's place, as a rebuilt page will. The stand-in
+    is built here and not at this module's head: a class of the window read at import would load the window's whole
+    program with every suite that imports these helpers. The page goes with its screen, when the test that built it
+    ends."""
+    qt_app()
+    screen = build_inference(session=session) if window is None else window.part("inference")
+    page = _built.keep((cls or _the_stand_in_page())(screen))
+    old, at = screen.posterior_panel, screen.pages.indexOf(screen.posterior_panel)
+    screen.pages.removeWidget(old)
+    screen.pages.insertWidget(at, page)
+    screen.posterior_panel = page
+    if window is not None:
+        window._places[page] = window._places.pop(old)
+    return page
 
 
 def process_state(app) -> dict:

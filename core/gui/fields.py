@@ -197,6 +197,14 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
 }
 
 
+#: What a page of the look says where the table's own sentence lists every old page's box.
+ON_THIS_PAGE: dict[str, str] = {
+    "new_run": "Answer the question that the start button asks on this page.",
+    "name": "Choose another name in 'Name' on this page.",
+    "note": "Change it in 'Note' on this page.",
+}
+
+
 def label(key: str) -> str:
     """The row label of a box entry; the inference tabs build their static rows from it.
 
@@ -211,16 +219,27 @@ def label(key: str) -> str:
     raise KeyError(f"{key!r} has no box: its window control is {entry!r}")
 
 
-def fix_sentence(key: str | None) -> str:
+def fix_sentence(key: str | None, here: str | None = None) -> str:
     """What the yellow box says under the message: ``"Set it in the 'T_obs (s)' box in step 5, Inference,
     or in Live simulation."`` for a box entry, the sentence itself for a sentence entry, ``""`` for
     ``field=None``, a None entry or an unknown key. It runs while a refusal is being shown, so it never
     raises for a key of the table: every place the table names is a place of the window, and the pin
-    renders every entry."""
+    renders every entry.
+
+    ``here`` is the place a page of the look stands on, a step or a part, whose rows are named without the word for a
+    box: ``"Set it in 'Batches' on this page."`` when the row stands there, and else
+    ``"Set it in 'Batches' in step 3, Training, or step 6, Narrowing round."``; a sentence entry says what
+    ``ON_THIS_PAGE`` gives for it, when it gives anything. With no ``here`` a page not rebuilt yet keeps its own
+    words."""
     if key is None:
         return ""
     entry = CONTROL.get(key)
     if isinstance(entry, tuple):
         place, text = entry
-        return f"Set it in the '{text}' box {_in(place)}."
+        if here is None:
+            return f"Set it in the '{text}' box {_in(place)}."
+        return f"Set it in '{text}' " + ("on this page." if here in (place if isinstance(place, tuple) else (place,))
+                                         else f"{_in(place)}.")
+    if here is not None and key in ON_THIS_PAGE:
+        return ON_THIS_PAGE[key]
     return entry or ""

@@ -23,7 +23,8 @@ from core.gui.run.controller import controller
 from core.gui.screens.home_screen import HomeFacts, HomeScreen, RecordRow
 from core.gui.widgets.page import Columns, PageHead, Sentence
 from core.gui.widgets.rule_table import StateCell, TextCell
-from tests._fixtures import build_part, build_run_host, build_window, card_and_programs as _card_and_programs, qt_app
+from tests._fixtures import (build_part, build_run_host, build_step_page, build_window,
+                             card_and_programs as _card_and_programs, qt_app)
 from tests._runs import (BUDGET as _BUDGET, ROTATED as _ROTATED, ROTATING as _ROTATING, RunText, StandIn, at as _at,
                          epoch_line as _epoch, running, start_run, training_spec as _training_spec, turn_until,
                          writing as _writing)
@@ -6934,17 +6935,14 @@ def test_the_margin_of_parameter_inference_stands_on_each_old_panel_and_on_no_pa
     from core.gui.screens.inference_screen import InferenceScreen
     from tests._look_helpers import text_size
     qt_app()
-    today, step = InferenceScreen.panels, None
-
-    def with_a_step(screen):
-        return [step, *today(screen)]
-
-    monkeypatch.setattr(InferenceScreen, "panels", with_a_step)
+    today = InferenceScreen.panels
     for factor in (1.0, 1.5):
         with text_size(factor):
-            step = build_run_host(on_a_page=True)
-            window = build_window()
-            inference = window.part("inference")
+            step = build_step_page()
+            with monkeypatch.context() as patched:
+                patched.setattr(InferenceScreen, "panels", lambda screen, page=step: [page, *today(screen)])
+                window = build_window()
+                inference = window.part("inference")
             margin = design.scaled(12) - 6
             assert inference.contentsMargins() == QMargins(0, 0, 0, 0), "the part keeps a margin of its own"
             assert step.contentsMargins() == QMargins(0, 0, 0, 0), "a page of the look was given the margin"

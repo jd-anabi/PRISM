@@ -1234,7 +1234,7 @@ class RunController(QObject):
         host = run.host
         said_on_the_page = refused_early and run.repeats is not None and _alive(run.view)
         if said_on_the_page:
-            run.view.refused(self._refusal_words(failure[0]))
+            run.view.refused(self._refusal_words(failure[0], run))
         elif _alive(host) and hasattr(host, "_run_over"):
             host._run_over(last)
         if failure is not None and _alive(host) and not said_on_the_page:
@@ -1244,11 +1244,12 @@ class RunController(QObject):
                 host._on_error(failure[0], failure[1], failure[2], run.kept_fit)
 
     @staticmethod
-    def _refusal_words(exc) -> str:
-        """A refusal as a page says it: the stage's sentence, then where to fix it, when the window names a
-        place."""
+    def _refusal_words(exc, run: _Run) -> str:
+        """A refusal as a page says it: the stage's sentence, then where to fix it, when the window names a place. A
+        page of the look says it as it says one made at its own button: where to fix it is said from the step it stands
+        on."""
         from .. import fields as gui_fields
-        return f"{exc.message} {gui_fields.fix_sentence(exc.field)}".rstrip()
+        return f"{exc.message} {gui_fields.fix_sentence(exc.field, here=getattr(run.host, 'step', None))}".rstrip()
 
     def _failure_page(self, run: _Run, last: RunStatus, failure) -> tuple:
         """What a run that failed says of its failure: its sentence, as its status says it to the foot and Home; and
@@ -1261,7 +1262,7 @@ class RunController(QObject):
         sentence, _button = retry.failure_words(last, self._model, exc, is_oom=is_oom)
         boxed, _button = retry.failure_words(last, self._model, exc, is_oom=is_oom, boxed=True)
         said = retry.message(exc)
-        quoted = self._refusal_words(exc) if isinstance(exc, Refusal) else said
+        quoted = self._refusal_words(exc, run) if isinstance(exc, Refusal) else said
         return sentence, (boxed, quoted, trace or f"{type(exc).__name__}: {said}", bool(noted), run.text is not None,
                           retry.reopen_command(last, self._model))
 

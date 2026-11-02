@@ -58,7 +58,8 @@ LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.g
                 "core.gui.widgets.rule_table", "core.gui.widgets.time_axis",
                 "core.gui.widgets.message_row", "core.gui.widgets.page",
                 "core.gui.widgets.choice", "core.gui.widgets.ask", "core.gui.widgets.rail",
-                "core.gui.widgets.page_names", "core.gui.run.loss", "core.gui.step_facts")
+                "core.gui.widgets.page_names", "core.gui.run.loss", "core.gui.step_facts", "core.gui.widgets.facts",
+                "core.gui.widgets.in_use")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
 
@@ -4958,7 +4959,7 @@ def test_a_time_axis_and_its_key_whose_paint_fails_draw_nothing_end_their_painte
 # the page devices
 BOOK_FACE_MODULES = ("core/gui/widgets/message_row.py", "core/gui/widgets/page.py", "core/gui/widgets/ask.py",
                      "core/gui/screens/home_screen.py", "core/gui/screens/settings_screen.py",
-                     "core/gui/run/loss.py", "core/gui/widgets/form.py")
+                     "core/gui/run/loss.py", "core/gui/widgets/form.py", "core/gui/widgets/in_use.py")
 SENTENCE_LINES = {16: 22}      # a sentence's pixel size and its line height, in a book face or, with none, the lettering's
 
 

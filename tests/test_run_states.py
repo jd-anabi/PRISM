@@ -5633,6 +5633,93 @@ def test_a_past_view_on_the_live_simulations_page_shares_the_width_too(tmp_path)
         assert host.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W
 
 
+@pytest.mark.parametrize("factor, room", [(1.0, _LARGE_SCREEN), (1.5, _LARGE_SCREEN), (1.5, _SMALL_SCREEN)],
+                         ids=["text 1.0", "text 1.5", "text 1.5 on a small screen"])
+def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room, tmp_path):
+    """A rebuilt page holds no form beside its run's page: the run's page takes the place of everything under the heading.
+    At every width a window of the text size at hand can have, the run's page and then a past run's stand whole inside
+    the window with nothing over them, what stands hidden behind them in the page's stack not widening it, with the
+    longest main button a page has and a block for the run beside the form. The window is made as narrow as it can be
+    and as wide as the screen, then narrow again."""
+    from core.gui import design
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_step_page, build_window, qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    past = "20261001T090000-training"
+    with text_size(factor), _the_look(False):
+        _controller_on(tmp_path, Clock(_at(9, 18, 0)))
+        history.write(tmp_path / "runs", {"id": past, "word": "Training", "started": _at(1, 9, 0), "ended": _at(1, 9, 30),
+                                          "outcome": "finished", "place": ["inference", "training"]})
+        window = build_window()
+        design.set_room(room)
+        window.setMinimumSize(1, 1)
+        opening, least = design.window_sizes(room)
+        host = build_step_page(window=window)
+        shown_off_screen(window, *opening)
+        window.go_to("inference", "training")
+        widths = sorted({*range(least[0], least[0] + _WHERE_THEY_MEET, 3), *range(least[0], opening[0], 40), opening[0],
+                         room[0]})
+
+        def across(why):
+            for width in widths + widths[::-1]:
+                window.resize(width, least[1])
+                _settle()
+                assert window.width() == width, ("the window did not take the width", window.width(), width)
+                _the_two_share_the_width(window, host, (why, factor, width))
+                assert host.results.currentWidget().width() >= design.scaled(326), (why, width)
+
+        controller().show_past(past, host)
+        _settle()
+        assert host.results.currentWidget() is host.past_view
+        across("the past view")
+        host.past_view.back_button.click()
+        _settle()
+        stand_in = StandIn()
+        start_run(host, stand_in, spec=_training(stop_button="Stop the run…", place=("inference", "training")))
+        _settle()
+        assert host.results.currentWidget() is host.run_view
+        across("the run's page")
+        _in_its_column(host.run_view, host.results, factor)
+        stand_in.release()
+        turn_until(app, lambda: not controller().is_live())
+
+
+def test_a_past_view_over_a_failed_videos_page_is_what_is_measured(tmp_path):
+    """A failed video's page stands among Live simulation's figures; a past run drawn on the page stands over those
+    figures, and the run's page is then out of sight though not hidden. What is read is what the column shows, the
+    form sharing the width with that."""
+    from core.gui.panels.simulate_export import export_animation
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from tests._fixtures import qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import StandIn, start_run, turn_until
+    app = qt_app()
+    run = "20261001T090000-live-simulation"
+    with text_size(1.0), _the_look(False):
+        window, host, _opening, least = _in_the_look_at(_LARGE_SCREEN, tmp_path, ("live", None))
+        history.write(tmp_path / "runs", {"id": run, "word": "Live simulation", "started": _at(1, 9, 0),
+                                          "ended": _at(1, 9, 30), "outcome": "finished", "place": ["live", None]})
+        stand_in = StandIn(word="Video")
+        start_run(host, stand_in, spec=host.run_spec(export_animation))
+        stand_in.fail(RuntimeError("the stand-in failed"))
+        turn_until(app, lambda: not controller().is_live())
+        window.resize(*least)
+        _settle()
+        assert not host.run_view.isHidden() and host.run_view.isVisible()
+        assert controller().show_past(run, host)
+        _settle()
+        assert not host.run_view.isHidden() and not host.run_view.isVisible(), "the page is hidden or still in sight"
+        _the_two_share_the_width(window, host, "a past view over a failed video's page")
+        host.past_view.back_button.click()
+        _settle()
+        host.run_view.back_button.click()
+
+
 def test_a_start_taken_back_gives_the_form_its_least_width_again(tmp_path):
     """A start that fails after its page has taken the column gives the column back, and the form its least width."""
     from core.gui import design
@@ -5653,12 +5740,12 @@ def test_a_page_of_the_look_draws_a_past_run_and_gives_its_column_back(tmp_path)
     """A page of the look that hosts runs on the mixin draws a run that is over beside its run's page, and "Back to the
     form" and a saved record's figures each give its column back, as on a panel: nothing it must declare."""
     from core.gui.run import history
-    from tests._fixtures import build_run_host, qt_app
+    from tests._fixtures import build_step_page, qt_app
     from tests._look_helpers import _settle
     from tests._runs import Clock
     qt_app()
     held = _controller_on(tmp_path, Clock(_at(9, 18, 0)))
-    host = build_run_host(on_a_page=True)
+    host = build_step_page()
     run = "20261001T090000-narrowing-round"
     history.write(tmp_path / "runs", {"id": run, "word": "Narrowing round", "started": _at(1, 9, 0),
                                       "ended": _at(1, 9, 30), "outcome": "finished", "place": list(_NARROWING)})
@@ -5684,41 +5771,45 @@ def test_a_page_of_the_look_hosts_a_run_through_the_same_mixin(tmp_path):
     from PySide6.QtCore import QCoreApplication, QEvent, Signal
     from PySide6.QtWidgets import QWidget
     from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.inference.step_page import StepPage
     from core.gui.panels.run_host import RunHost
     from core.gui.run.controller import LIVE_TEXT
     from core.gui.widgets.page import Page
-    from tests._fixtures import build_run_host, qt_app
+    from tests._fixtures import build_step_page, page_lines, qt_app
     from tests._runs import Clock, StandIn, start_run, turn_until
     assert BasePanel.__mro__[:2] == (BasePanel, RunHost) and BasePanel._instances is RunHost._instances
+    assert StepPage.__mro__[:2] == (StepPage, RunHost)
     assert "__init__" not in vars(RunHost) and RunHost.__bases__ == (object,)
     assert not any(isinstance(value, Signal) for value in vars(RunHost).values())
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(9, 18, 0)))
-    host = build_run_host(on_a_page=True)
+    host = build_step_page()
     assert host in BasePanel._instances
     told = []
     host.results.set_small = told.append
     host.set_small(True)
     host.set_small(False)
     assert told == [True, False], "the stack handed to the page was not told its form"
-    assert host.box.stretch(host.box.indexOf(host.results)) == 1, "the stack does not take the room"
+    assert host.page.box.stretch(host.page.box.indexOf(host.results)) == 1, "the stack does not take the room"
     low, later = Page(), QWidget()
     low.set_small(True)
     later.set_small = told.append
     low.add_stack(later)
     assert told[-1] is True, "a stack handed to a low page was not told at once"
     low.deleteLater()
+    said, gates, kept = page_lines(host), [], host.refresh_local_gates
+    host.refresh_local_gates = lambda: (gates.append(1), kept())[1]
     stand_in = StandIn()
     start_run(host, stand_in, spec=RunSpec("Run", None, stop_button="Stop the run…", keeps_files=False))
-    assert (host.results.currentWidget() is host.run_view, host.controls.isEnabled(), host.seams) == (
-        True, False, ["leaving"]), host.seams
+    assert (host.results.currentWidget() is host.run_view, host.controls.isEnabled(),
+            host.run_view.isAncestorOf(host.figure_stack)) == (True, False, True)
     assert host.is_running() and host.dispatch(StandIn()) is False
-    assert host.lines == [("warning", LIVE_TEXT)], host.lines
+    assert said.lines == [("warning", LIVE_TEXT)], said.lines
     stand_in.release()
     turn_until(app, lambda: not held.is_live())
-    assert (host.results.currentWidget() is host.figures, host.controls.isEnabled(), host.seams) == (
-        True, True, ["leaving", host.figure_stack]), host.seams
-    assert host.gates == 1
+    assert (host.results.currentWidget() is host.figures, host.controls.isEnabled(),
+            host.scroller.isAncestorOf(host.figure_stack)) == (True, True, True)
+    assert gates == [1]
     for asked in (lambda: RunHost.own_line(host, "a line"), lambda: RunHost._figures_leaving(host),
                   lambda: RunHost._figures_back(host, host.figure_stack)):
         with pytest.raises(NotImplementedError):
@@ -5749,7 +5840,7 @@ appearance = theming.Appearance(app)
 appearance.set_mode("light")
 from core.gui.run.controller import controller
 from core.gui.run.model import RunSpec
-from tests._fixtures import build_run_host, build_window
+from tests._fixtures import build_step_page, build_window
 from tests._runs import StandIn, turn_until
 from tests._window_helpers import shown_off_screen
 
@@ -5761,8 +5852,7 @@ window.setMinimumSize(1, 1)
 shown_off_screen(window, 1300, 820)
 window.go_to("inference", "narrowing")
 frame = window.part("inference").tsnpe_panel
-rebuilt = build_run_host(on_a_page=True)
-window.shell.add_part("rebuilt", rebuilt)
+rebuilt = build_step_page(window=window)
 
 
 def settle():
@@ -5793,7 +5883,7 @@ def measured(host, form):
 report = {"ratio": window.devicePixelRatioF()}
 for name, host, form in (("frame", frame, frame.controls_scroll), ("rebuilt", rebuilt, None)):
     if host is rebuilt:
-        window.shell.show_part("rebuilt")
+        window.go_to("inference", "training")
     stand_in = StandIn()
     spec = RunSpec("Run", None, stop_button="Stop the run…", keeps_files=False)
     host.run_spec = lambda fn, *a, **k: spec
