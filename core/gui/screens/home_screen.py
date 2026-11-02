@@ -79,11 +79,6 @@ class HomeFacts:
     runs: tuple[RunRow, ...] = ()
 
 
-def _access_key(words: str) -> str:
-    """A main button's words with its access key on their first letter: Alt and that letter press it."""
-    return "&" + words.replace("&", "&&")
-
-
 def _capital(words: str) -> str:
     """Words as a table's cell begins them, with a capital letter."""
     return words[:1].upper() + words[1:]
@@ -200,7 +195,7 @@ class HomeScreen(QWidget):
         grid.setColumnStretch(1, 1)
         self.choices = []
         for row, (words, sentence, part, page) in enumerate(_CHOICES):
-            button = QPushButton(_access_key(words) if row == 0 else words)
+            button = QPushButton(style.access_key(words) if row == 0 else words)
             if row == 0:
                 style.set_class(button, cls="primary")
             button.clicked.connect(self._choice_pressed)
@@ -294,7 +289,7 @@ class HomeScreen(QWidget):
         self.next_heading.set_text(self._next.heading)
         self._next_sentence.set_text(self._next.sentence)
         self._next_sentence.setVisible(bool(self._next.sentence))
-        self.next_button.setText(_access_key(self._next.button))
+        self.next_button.setText(style.access_key(self._next.button))
         self._set_rows(self.steps_table,
                        [[TextCell(f"{state.number} {keys.step(state.key).name}"), StateCell(state.marker, state.word),
                          TextCell(state.detail, wrap=True)] for state in facts.states],

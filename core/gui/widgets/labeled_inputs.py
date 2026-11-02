@@ -26,8 +26,8 @@ _DECIMAL_KEYS = re.compile(r"[+-]?[0-9,]*\.?[0-9,]*(?:[eE][+-]?[0-9]*)?")   # ty
 def _whole(text) -> "int | None":
     """The whole number a text reads as, or None when it is not one: digits under an optional leading minus,
     with a comma only where grouping puts it ("20,480,000" is a number, "1,5" is not), and never a plus. More
-    digits than Python reads as one number are no number either: no text makes this raise."""
-    text = text.strip()
+    digits than Python reads as one number are no number either: no text makes this raise, and neither does None."""
+    text = "" if text is None else text.strip()
     if _WHOLE.fullmatch(text):
         try:
             return int(text.replace(",", ""))
@@ -82,10 +82,11 @@ class _NumberField(QLineEdit):
 
     def set_error(self, sentence: str = "") -> None:
         """Put the field in error under ``sentence``, or take the error back with an empty one. The tool tip
-        the field had comes back with it. Setting the sentence already in force does nothing."""
+        the field had comes back with it, or the one a caller gave it while it was in error. Setting the sentence
+        already in force does nothing."""
         if sentence == self._error:
             return
-        if not self._error:
+        if not self._error or self.toolTip() != self._error:
             self._tip = self.toolTip()
         self._error = sentence
         set_class(self, state="error" if sentence else "")
@@ -117,6 +118,11 @@ class FloatField(_NumberField):
             self.set_error(COMMA_SENTENCE)
             self._comma_told = True
 
+    def set_error(self, sentence: str = "") -> None:
+        """As any number field; but while the comma stands and the field has said so, taking an error back leaves the
+        comma's own sentence, which no caller put there."""
+        super().set_error(sentence or (COMMA_SENTENCE if self._comma_told else ""))
+
     def _text_changed(self, text):
         if self._comma_told and "," not in text:
             self._comma_told = False
@@ -143,6 +149,19 @@ class FloatField(_NumberField):
             return None
 
 
+def reading(field, label: str) -> "str | None":
+    """What is wrong with the number ``field`` holds, in a sentence, or None when it reads as a number. A comma's own
+    sentence comes first, typed or told: a box that shows ``6,5`` is not blank. Then, by the row's ``label``, that it is
+    blank, or that what stands in it is no number. What it reads as is all that is read: an error a page put on the field
+    is that page's to take back, and read here it would stand after the field was mended."""
+    text = field.text().strip()
+    if not text:
+        return f"{label} is blank."
+    if field.value_or_none() is not None:
+        return None
+    return COMMA_SENTENCE if "," in text and isinstance(field, FloatField) else f"{label} must be a number; got {text!r}."
+
+
 def number_or_blank(field, key: str):
     """``field.value_or_none()`` -- except that text which is NOT blank and does not parse is refused
     under ``key`` rather than read as blank.
@@ -164,7 +183,8 @@ class IntField(_NumberField):
     commas, as the digits are typed and when a number is set from code; the caret keeps its place among the
     digits, and what is read and what is remembered is the number without them. While it is typed the digits
     are grouped as they stand: none goes that the person did not take out, so a zero in front stays until it
-    is deleted, and is not read."""
+    is deleted, and is not read. A text that is rewritten here is heard twice, the last time as it was typed, so a
+    listener reads the field (``value_or_none``), never the text the signal hands it."""
 
     def __init__(self, value=None, parent=None, *, grouped: bool = False):
         # None is an EMPTY box, not the text "None". The line edit is built empty and the text is set

@@ -50,8 +50,24 @@ class MessageRow(QWidget):
             # puts none of its spacing beside a space, so the space holds the gap as well
             row.addSpacing(design.scaled(design.SIZE["marker"]) + design.scaled(design.GAP["message_marker"]))
         self.sentence = Sentence()
-        self.sentence.set_text(sentence, lead=opening(lead, when, now, times) or None)
         row.addWidget(self.sentence, 1)
+        self.set_sentence(sentence, lead=lead, when=when, now=now, times=times)
+
+    def set_sentence(self, sentence: str, *, lead: str | None = None, when: datetime | None = None,
+                     now: datetime | None = None, times: int = 1) -> None:
+        """Say ``sentence`` in the row as it stands, under the opening its other arguments make. The row keeps the
+        place it has: only its words change."""
+        self.sentence.set_text(sentence, lead=opening(lead, when, now, times) or None)
+
+    def set_kind(self, kind: str) -> None:
+        """Show the marker of ``kind`` in the row as it stands, from the next repaint, which this asks for: an error's
+        edge comes and goes with it. ValueError for what is no marker, and for a row built with none, which holds no
+        place for one."""
+        if kind not in paint.MARKERS or self.marker is None:
+            raise ValueError(f"a row that holds a marker shows a marker: {kind!r} on {self.kind!r}")
+        self.kind = kind
+        self.marker.set_kind(kind)
+        self.update()
 
     @reported()
     def paintEvent(self, _event):

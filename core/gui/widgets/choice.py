@@ -10,7 +10,19 @@ from ..reported import reported
 
 class Choice(QComboBox):
     """A stock drop-down that paints its own chevron. With a border of the sheet's own the style is no longer
-    asked for an arrow, and a sheet could only name an image file for one."""
+    asked for an arrow, and a sheet could only name an image file for one. It is as wide as its longest item, whenever
+    its items change: left to the toolkit that is worked out once, as it is first shown, and an item added later is
+    cut mid-letter where the chevron's box begins."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+
+    @reported(QComboBox.minimumSizeHint)
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        hint.setWidth(self.sizeHint().width())               # the toolkit's own holds no item
+        return hint
 
     @reported()
     def paintEvent(self, event):

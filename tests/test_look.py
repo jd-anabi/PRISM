@@ -40,7 +40,10 @@ from PySide6.QtWidgets import (QApplication, QBoxLayout, QCheckBox, QComboBox, Q
                                QStyleOptionButton, QStyleOptionFocusRect, QVBoxLayout, QWidget)
 
 from core.gui import design, fonts, paint
+from core.gui.widgets import labeled_inputs, page
+from core.gui.widgets.labeled_inputs import COMMA_SENTENCE, FloatField, IntField, reading
 from core.gui.widgets.marker import Marker, painted_icon
+from core.gui.widgets.message_row import MessageRow
 from core.gui.widgets.ruled import Ruled, SectionHead
 from tests._look_helpers import (_BLANK, _arrive, _at, _gone, _image, _moved_on, _screen, _screen_of, _settle,
                                  _the_look, text_size, theme)
@@ -1041,7 +1044,7 @@ def test_the_sheet_keeps_its_rules_and_only_the_named_interim_selectors_break_th
         for banned in ("$", "url(", "font-family", "letter-spacing", ":default", "::indicator", "*"):
             assert banned not in qss, (dark, banned)
         rules = _rules(qss)
-        assert len(rules) == 81, len(rules)
+        assert len(rules) == 83, len(rules)
         first = next(i for i, (selectors, _) in enumerate(rules) if selectors[0] in design.INTERIM_SELECTORS)
         final, interim = rules[:first], rules[first:]
         assert [s for selectors, _ in interim for s in selectors] == list(design.INTERIM_SELECTORS)
@@ -1091,7 +1094,7 @@ def test_the_sheets_lengths_follow_the_text_factor_and_its_line_weights_do_not()
         assert built[("QScrollBar::handle:horizontal",)]["min-width"] == "28px"
 
 
-SHEET_DIGEST = "b997813906fbeeee16f7b8fac2948c409136a7c726dfddfdaff26baa9911dc67"
+SHEET_DIGEST = "4df6f1e344fea78bbe076ed24632a3a62b2028e3514046767dad7d9f92826ceb"
 
 
 def test_every_rule_of_both_sheets_is_the_recorded_one():
@@ -5472,6 +5475,185 @@ def test_a_page_with_nothing_selected_and_no_main_action_shows_no_accent():
                         assert not {accent, tint} & seen, (dark, height, ratio)
             finally:
                 _gone(made)
+
+
+def test_a_row_is_told_its_marker_in_its_place():
+    """The row's marker and its error's edge follow; a row built with none has no place for one; what is no marker is
+    refused."""
+    QApplication.instance() or QApplication([])
+    row = MessageRow("warn", "A sentence.", lead="Attention.")
+    row.resize(300, 40)
+    asked_to_paint, painted = [], row.update
+    row.update = lambda: (asked_to_paint.append(1), painted())[1]
+    row.set_kind("err")
+    assert (row.kind, row.marker.kind, asked_to_paint) == ("err", "err", [1]), "an edge changes with no repaint asked"
+    row.set_sentence("Another.", lead="Error.")
+    assert row.sentence.plain_text() == "Error. Another."
+    with theme(False):
+        assert _at(_screen_of(row, 1.0), 0, 20) == design.hex_colour("err"), "an error's edge did not come"
+        row.set_kind("info")
+        assert _at(_screen_of(row, 1.0), 0, 20) != design.hex_colour("err"), "an error's edge did not go"
+    with pytest.raises(ValueError):
+        row.set_kind("chev_down")
+    bare = MessageRow("", "A sentence.")
+    with pytest.raises(ValueError):
+        bare.set_kind("info")
+    _gone(row)
+    _gone(bare)
+
+
+def test_a_quiet_sentence_greys_with_the_form_it_stands_in():
+    """A quiet sentence names its colours in its text, where the sheet cannot reach them, so a form a run greys would leave
+    it in the second ink beside labels in the greyed one, its bold opening too. Given back, it says what it said. A sentence
+    that names no colour takes the greyed ink from the toolkit, and asks nothing here."""
+    app = QApplication.instance() or QApplication([])
+    with _the_look(False):
+        holder = QWidget()
+        quiet = page.Sentence("Said under a field.", quiet=True)
+        quiet.set_text("Said under a field.", lead="Slots")
+        plain = page.Sentence("Said.")
+        box = QVBoxLayout(holder)
+        box.addWidget(quiet)
+        box.addWidget(plain)
+        before, words = quiet.text(), plain.text()
+        assert design.hex_colour("ink_2") in before and design.hex_colour("disabled_ink") not in before
+        holder.setEnabled(False)
+        app.processEvents()
+        assert design.hex_colour("disabled_ink") in quiet.text() and design.hex_colour("ink_2") not in quiet.text()
+        assert design.hex_colour("ink") not in quiet.text().replace(design.hex_colour("ink_2"), "")
+        assert plain.text() == words
+        holder.setEnabled(True)
+        app.processEvents()
+        assert quiet.text() == before
+        _gone(holder)
+
+
+def test_a_greyed_link_and_greyed_quiet_words_take_the_greyed_ink():
+    """A link keeps the accent and the small, quiet and second book words their second ink by rules that come after the
+    sheet's own greyed rules, so each has its greyed rule of its own, in both themes, and stands after the rule it answers."""
+    for dark in (False, True):
+        rules = _rules(design.build_qss(dark))
+        order = [selectors for selectors, _ in rules]
+        greyed = next(declarations for selectors, declarations in rules if selectors == ['QPushButton[cls="link"]:disabled'])
+        assert greyed == {"color": design.hex_colour("disabled_ink", dark)}, greyed
+        assert order.index(['QPushButton[cls="link"]:disabled']) > order.index(['QPushButton[cls="link"]'])
+        words = ['QLabel[cls="small"]:disabled', 'QLabel[cls="quiet"]:disabled', 'QLabel[cls="book2"]:disabled']
+        declared = next(declarations for selectors, declarations in rules if selectors == words)
+        assert declared == {"color": design.hex_colour("disabled_ink", dark)}, declared
+        assert order.index(words) > order.index(['QLabel[cls="book2"]'])
+
+
+def test_reading_a_field_says_its_own_sentence_first():
+    """A comma's own sentence before anything, told or still being typed, so that a box that shows ``6,5`` is never called
+    blank; then blank, by the row's label; then a half-typed number, which is not blank either; and nothing for a number.
+    An error a page put on the field is not read back: it would stand after the field was mended."""
+    QApplication.instance() or QApplication([])
+    field = FloatField("1.5")
+    assert reading(field, "Learning rate") is None
+    field.setText("")
+    assert reading(field, "Learning rate") == "Learning rate is blank."
+    field.setText("-")
+    assert reading(field, "Learning rate") == "Learning rate must be a number; got '-'."
+    field.setText("6,5")
+    assert reading(field, "Learning rate") == COMMA_SENTENCE, "a comma not told yet"
+    field.editingFinished.emit()
+    assert field.error() == COMMA_SENTENCE and reading(field, "Learning rate") == COMMA_SENTENCE
+    field.setText("1.5")
+    assert field.error() == "" and reading(field, "Learning rate") is None
+    whole = IntField(None)
+    whole.setText("1,5")
+    assert reading(whole, "Batches") == "Batches must be a number; got '1,5'."
+    whole.setText("7")
+    whole.set_error("Batches is blank.")
+    assert reading(whole, "Batches") is None, "a sentence a page put on the field outlived what it said"
+
+
+def test_a_grouped_field_told_none_shows_nothing():
+    QApplication.instance() or QApplication([])
+    field = IntField(5000, grouped=True)
+    field.setText(None)
+    assert (field.text(), field.value_or_none()) == ("", None)
+    ungrouped = IntField(5)
+    ungrouped.setText(None)
+    assert ungrouped.text() == ""
+    assert labeled_inputs._whole(None) is None
+
+
+def test_clearing_a_pages_error_leaves_the_commas_own():
+    """The comma's sentence is the field's: a page that takes its own error back, or asks for no error at all, leaves it
+    while the comma stands; and with the comma gone it goes, a page's sentence set meanwhile staying a page's."""
+    QApplication.instance() or QApplication([])
+    field = FloatField("1,5")
+    field.editingFinished.emit()
+    assert field.error() == COMMA_SENTENCE
+    field.set_error("Learning rate must be above 0.")
+    assert field.error() == "Learning rate must be above 0."
+    field.set_error("")
+    assert field.error() == COMMA_SENTENCE, "a page's clearing took the comma's sentence too"
+    field.set_error("Learning rate must be above 0.")
+    field.setText("1.5")
+    assert field.error() == "Learning rate must be above 0.", "the comma took a page's sentence with it"
+    field.set_error("")
+    assert field.error() == ""
+
+
+def test_a_tip_set_during_an_error_is_kept():
+    """The tip a field had comes back after an error; one a caller gave it during the error is kept in its place; and with
+    the tip taken away before the error, none comes back."""
+    QApplication.instance() or QApplication([])
+    field = FloatField("1.5")
+    field.setToolTip("before")
+    field.set_error("Wrong.")
+    assert field.toolTip() == "Wrong."
+    field.set_error("")
+    assert field.toolTip() == "before"
+    field.set_error("Wrong.")
+    field.setToolTip("set during the error")
+    field.set_error("")
+    assert field.toolTip() == "set during the error"
+    field.setToolTip("")
+    field.set_error("Wrong.")
+    field.set_error("")
+    assert field.toolTip() == ""
+
+
+def test_a_listener_reads_the_field_not_the_signals_text():
+    """A grouped field rewrites what is typed while the key is being handled: the toolkit then says the change twice, the
+    last time with the text as it was typed. Read from the field, each hearing is right."""
+    app = QApplication.instance() or QApplication([])
+    field = IntField(None, grouped=True)
+    handed, read = [], []
+    field.textChanged.connect(handed.append)
+    field.textChanged.connect(lambda _text: read.append(field.value_or_none()))
+    QTest.keyClicks(field, "1234")
+    app.processEvents()
+    assert field.text() == "1,234" and read[-1] == 1234 and set(read) <= {1, 12, 123, 1234}
+    assert handed[-1] == "1234", "the toolkit no longer hands on the text as typed: the note in the field can go"
+    assert len(handed) > 4, "a change that is rewritten was heard once"
+
+
+def test_a_choice_is_as_wide_as_its_longest_item_however_its_items_change():
+    """Left to the toolkit a drop-down works its width out as it is first shown, and an item added later is cut mid-letter
+    where the chevron's box begins. It asks for the room of its longest item at every change of its items, the chevron's
+    among it, and gives it back with the item."""
+    from core.gui.widgets.choice import Choice
+    app = QApplication.instance() or QApplication([])
+    with _the_look(False):
+        holder = QWidget()
+        choice = Choice(holder)
+        choice.addItem("Short")
+        holder.setAttribute(Qt.WA_DontShowOnScreen)
+        holder.show()
+        app.processEvents()
+        short = choice.minimumSizeHint().width()
+        long_item = "A file name long enough to be cut where the chevron's box begins"
+        choice.addItem(long_item)
+        wide = choice.minimumSizeHint().width()
+        assert wide >= choice.fontMetrics().horizontalAdvance(long_item) + design.scaled(design.SIZE["marker"]), wide
+        choice.removeItem(1)
+        assert choice.minimumSizeHint().width() == short
+        holder.hide()
+        _gone(holder)
 
 
 def test_the_book_face_is_reached_only_from_its_places():

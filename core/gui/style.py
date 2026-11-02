@@ -248,6 +248,11 @@ def set_class(widget, **props):
     return widget
 
 
+def access_key(words: str) -> str:
+    """A main button's words with its access key on their first letter: Alt and that letter press it."""
+    return "&" + words.replace("&", "&&")
+
+
 _STYLE = None          # the application's style: the only handle on it once a sheet is set
 _FOLLOWER = None
 _WAITING_ON = None     # the application whose first change of focus is awaited

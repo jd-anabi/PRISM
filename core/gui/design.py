@@ -392,6 +392,7 @@ QLabel[cls="strong"] { font-weight: 600; }
 QLabel[cls="small"]  { font-size: ${px_t_small}px; color: $ink_2; }
 QLabel[cls="quiet"]  { color: $ink_2; }
 QLabel[cls="book2"]  { color: $ink_2; }
+QLabel[cls="small"]:disabled, QLabel[cls="quiet"]:disabled, QLabel[cls="book2"]:disabled { color: $disabled_ink; }
 
 QPushButton { min-height: ${px_btn_in}px; padding: 0px ${px_btn_pad}px; border: 1px solid $field_line;
               border-radius: ${px_radius}px; background: $paper; color: $ink; outline: none; }
@@ -416,6 +417,7 @@ QPushButton[cls="fold"] { min-height: ${px_line_h}px; padding: 0px; border: none
                           text-align: left; font-weight: 600; }
 QPushButton[cls="link"] { min-height: ${px_line_h}px; padding: 0px; border: none; background: transparent;
                           color: $accent; text-decoration: underline; }
+QPushButton[cls="link"]:disabled { color: $disabled_ink; }
 
 QLineEdit, QComboBox {
     min-height: ${px_fld_in}px; padding: 0px ${px_fld_pad}px; border: 1px solid $field_line;

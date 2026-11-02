@@ -3,7 +3,7 @@ import html
 import math
 import re
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QFontMetricsF
 from PySide6.QtWidgets import (QAbstractButton, QBoxLayout, QFrame, QHBoxLayout, QLabel, QLayout, QScrollArea,
                                QVBoxLayout, QWidget)
@@ -96,6 +96,13 @@ class Sentence(QLabel):
         """Write the text again in the colours now in force: a quiet sentence names its colours in its text."""
         self.setText(self._markup())
 
+    @reported()
+    def changeEvent(self, event):
+        """Greyed, or given back: a quiet sentence greys as the form it stands in does, which the sheet cannot reach."""
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.EnabledChange:
+            self.retheme()
+
     def _markup(self) -> str:
         """The one place where a caller's words meet markup: both strings are given their places to break, then
         escaped, and the paragraph keeps its spaces and its line breaks. Nothing is written for no words: an
@@ -103,13 +110,14 @@ class Sentence(QLabel):
         if not self._text and not self._lead:
             return ""
         style = f"line-height:{self._line}px; white-space:pre-wrap"
+        greyed = not self.isEnabled()
         if self._quiet:
-            style += f"; color:{design.hex_colour('ink_2')}"
+            style += f"; color:{design.hex_colour('disabled_ink' if greyed else 'ink_2')}"
         lead = ""
         if self._lead:
             lead_style = f"font-weight:{self._bold}"
             if self._quiet:
-                lead_style += f"; color:{design.hex_colour('ink')}"
+                lead_style += f"; color:{design.hex_colour('disabled_ink' if greyed else 'ink')}"
             lead = f"<span style='{lead_style}'>{html.escape(_breakable(self._lead), quote=False)}</span>"
         body = html.escape(_breakable(self._text), quote=False)
         return f"<p style='{style}'>{lead}{' ' if lead and body else ''}{body}</p>"
