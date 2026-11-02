@@ -157,15 +157,23 @@ class SimulatePanel(BasePanel):
 
     def show_run(self):
         """The run's page above the live view, which stays where it is, both in sight: a past view drawn in their
-        place (from a history file that names this page, which no run of it keeps) gives the column back."""
+        place (from a history file that names this page, which no run of it keeps) gives the column back. No change of
+        the column says that the page came, so the form is told here."""
         self.run_view.how_link.setVisible(False)
         self.run_view.setVisible(True)
         self.results.setCurrentWidget(self.figures)
+        self._fit_the_form()
 
     def show_figures(self):
         """The live view alone again, in sight: the run's page above it goes, and so does a past view in its place."""
         self.run_view.setVisible(False)
         self.results.setCurrentWidget(self.figures)
+        self._fit_the_form()
+
+    def _run_page_beside(self) -> bool:
+        """A past view, in the column's place, or the run's page standing whole among the figures, a video's. A live
+        simulation's compact page asks no width of its own, and leaves the form as it was."""
+        return super()._run_page_beside() or not (self.run_view.isHidden() or self.run_view.compact)
 
     def _save_video(self):
         if not self._record:

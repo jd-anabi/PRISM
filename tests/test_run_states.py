@@ -5311,11 +5311,13 @@ def test_with_no_message_the_figures_stand_where_they_stand_after_the_messages(f
 # What this computer's screen offers the window, and what a screen of 1280 x 720 offers it: at one and a half times the
 # ordinary text size, a window on such a screen is narrower than the table's least size, and the two still share it.
 _LARGE_SCREEN, _SMALL_SCREEN = (3400, 1380), (1240, 660)
-# The pages that keep the form beside the column, by a name for a test and the place the window opens each at.
+# The pages that keep the form beside the run's page, by a name for a test and the place the window opens each at. A
+# video stands its run's page among Live simulation's figures, whole; the other runs stand theirs in the column's stack.
 _FORM_BESIDE_THE_COLUMN = {"prior": ("inference", "prior"), "training": ("inference", "training"),
                            "checks": ("inference", "checks"), "inference": ("inference", "infer"),
                            "narrowing round": ("inference", "narrowing"), "one cell": ("temperature", "one_cell"),
-                           "sweep": ("temperature", "sweep"), "reduction map": ("reduction", None)}
+                           "sweep": ("temperature", "sweep"), "reduction map": ("reduction", None),
+                           "video": ("live", None)}
 _NARROWING = _FORM_BESIDE_THE_COLUMN["narrowing round"]
 # A window's width is tried pixel by pixel over this many pixels above its least size, where the form and the run's
 # page meet, and at every tenth pixel from there to its opening width.
@@ -5323,13 +5325,15 @@ _WHERE_THEY_MEET = 60
 
 
 def _the_two_share_the_width(window, host, why) -> None:
-    """What a person sees of the form and of what its column shows, in the window's own coordinates. The form ends at or
-    left of where the column's page begins, and that page ends inside the window: edges read from the window, for a
-    splitter's own numbers say the two fit where they do not. Then the toolkit is asked what stands at the last pixel of
-    each edge, at the top, the middle and the foot of the page: an edge that reads right says nothing of a neighbour
-    drawn over it or of a parent that cuts it. A widget's visible region would not do: it does not see the form."""
+    """What a person sees of the form and of what stands beside it, the run's page wherever its panel stands it, else
+    what the column shows, in the window's own coordinates. The form ends at or left of where that page begins, and the
+    page ends inside the window: edges read from the window, for a splitter's own numbers say the two fit where they do
+    not. Then the toolkit is asked what stands at the last pixel of each edge, at the top, the middle and the foot of
+    the page: an edge that reads right says nothing of a neighbour drawn over it or of a parent that cuts it. A widget's
+    visible region would not do: it does not see the form."""
     from PySide6.QtCore import QPoint
-    form, page = host.controls_scroll, host.results.currentWidget()
+    form = host.controls_scroll
+    page = host.results.currentWidget() if host.run_view.isHidden() else host.run_view
     form_right = form.mapTo(window, QPoint(form.width(), 0)).x()
     left, top = page.mapTo(window, QPoint(0, 0)).x(), page.mapTo(window, QPoint(0, 0)).y()
     right = left + page.width()
@@ -5372,6 +5376,7 @@ def test_nothing_of_the_run_page_is_hidden_under_the_form_at_any_width(page, fac
     shares it too, the run's page having asked for its width only as it was shown; the page's own contents are read at
     that size; and a page of another place, whose column shows its figures, keeps its form's least width all the while."""
     from core.gui import design
+    from core.gui.panels.simulate_export import export_animation
     from core.gui.run.controller import controller
     from tests._fixtures import qt_app
     from tests._look_helpers import _settle, _the_look, text_size
@@ -5381,14 +5386,15 @@ def test_nothing_of_the_run_page_is_hidden_under_the_form_at_any_width(page, fac
     with text_size(factor), _the_look(False):
         window, host, opening, least = _in_the_look_at(room, tmp_path, place)
         stand_in = StandIn()
-        start_run(host, stand_in, spec=_training(stop_button="Stop the run…", place=place))
+        start_run(host, stand_in, spec=host.run_spec(export_animation) if page == "video"
+                  else _training(stop_button="Stop the run…", place=place))
         widths = sorted({*range(least[0], least[0] + _WHERE_THEY_MEET), *range(least[0], opening[0], 10), opening[0],
                          room[0]})
         for width in widths + widths[::-1]:
             window.resize(width, least[1])
             _settle()
             _the_two_share_the_width(window, host, (page, factor, width))
-        assert host.results.currentWidget() is host.run_view, "the sweep measured something else"
+        assert not host.run_view.isHidden() and not host.run_view.compact, "the sweep measured something else"
         window.go_to("home")
         _settle()
         window.go_to(*place)
@@ -5488,9 +5494,117 @@ def test_the_form_comes_back_with_the_figures_and_a_divider_left_by_hand_stands_
         assert form.width() == 500, (how, "a divider left by hand did not stand where it stood", form.width())
 
 
+@pytest.mark.parametrize("how", ["a finish", "a stop", "a failure", "how the run went"])
+@pytest.mark.parametrize("where", ["back at the opening width", "still at the least width"])
+def test_the_form_comes_back_after_a_video_and_a_divider_left_by_hand_stands_where_it_stood(how, where, tmp_path):
+    """A video's run's page stands whole among Live simulation's figures, so no change of the column says it came, and
+    the form gives way all the same, and has its least width again as the page goes, however it goes: a finish and a
+    stop take it at once, and a failure leaves it standing, sharing the width, until "Back to the form", for it says
+    what went wrong; "How the run went" brings it back, and "Back to the form" takes it again. A divider left at 500 by
+    hand and pushed aside by a window made least stands at 500 again when the window has the room."""
+    from core.gui import design
+    from core.gui.panels.simulate_export import export_animation
+    from core.gui.run.controller import controller
+    from tests._fixtures import qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import StandIn, start_run, turn_until
+    app = qt_app()
+    with text_size(1.0), _the_look(False):
+        window, host, opening, least = _in_the_look_at(_LARGE_SCREEN, tmp_path, ("live", None))
+        form, held, view = host.controls_scroll, controller(), host.run_view
+        host.splitter.setSizes([500, host.splitter.width() - 500 - host.splitter.handleWidth()])
+        _settle()
+        assert (form.width(), form.minimumWidth()) == (500, design.CONTROLS_MIN_W), form.width()
+        stand_in = StandIn(word="Video")
+        start_run(host, stand_in, spec=host.run_spec(export_animation))
+        _settle()
+        assert (form.width(), form.minimumWidth()) == (500, 0), ("the run moved the divider", form.width())
+        window.resize(*least)
+        _settle()
+        _the_two_share_the_width(window, host, "the divider pushed aside")
+        if where == "back at the opening width":
+            window.resize(*opening)
+            _settle()
+            assert form.width() == 500, ("the divider did not come back with the window", form.width())
+        if how == "a finish":
+            stand_in.release()
+        elif how == "a stop":
+            held.request_stop()
+        else:
+            stand_in.fail(RuntimeError("the stand-in failed"))
+        turn_until(app, lambda: not held.is_live())
+        _settle()
+        if how in ("a failure", "how the run went"):
+            assert not view.isHidden() and form.minimumWidth() == 0, (how, "a failed video's page did not stand")
+            size = window.size()
+            window.resize(*least)
+            _settle()
+            _the_two_share_the_width(window, host, (how, "the failure's page"))
+            window.resize(size)
+            _settle()
+            view.back_button.click()
+            _settle()
+        assert view.isHidden() and form.minimumWidth() == design.CONTROLS_MIN_W, (how, form.minimumWidth())
+        if how == "how the run went":
+            view.how_link.click()
+            _settle()
+            assert not view.isHidden() and form.minimumWidth() == 0, "the page came back beside the form's least width"
+            view.back_button.click()
+            _settle()
+            assert view.isHidden() and form.minimumWidth() == design.CONTROLS_MIN_W, form.minimumWidth()
+        window.resize(*opening)
+        _settle()
+        assert form.width() == 500, (how, "a divider left by hand did not stand where it stood", form.width())
+
+
+def test_a_live_simulations_compact_page_leaves_the_form_as_it_was(tmp_path):
+    """A live simulation's page is compact and asks no width of its own, so that the form keeps its least width beside
+    it: the divider cannot be pushed under it while the stream runs. The rule goes by the page's form, not by the panel:
+    a video after a stream gives the width up, and a stream after a video has it back."""
+    from core.gui import design
+    from core.gui.panels.simulate_export import export_animation
+    from core.gui.panels.simulate_runner import run_simulation_stream
+    from core.gui.run.controller import controller
+    from tests._fixtures import qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import StandIn, start_run, turn_until
+    app = qt_app()
+    with text_size(1.0), _the_look(False):
+        window, host, _opening, least = _in_the_look_at(_LARGE_SCREEN, tmp_path, ("live", None))
+        form, held = host.controls_scroll, controller()
+        window.resize(*least)
+        _settle()
+
+        def a_run(fn):
+            stand_in = StandIn()
+            start_run(host, stand_in, spec=host.run_spec(fn))
+            _settle()
+            return stand_in, form.minimumWidth(), host.run_view.compact
+
+        def over(stand_in):
+            stand_in.release()
+            turn_until(app, lambda: not held.is_live())
+            _settle()
+
+        stream, least_width, compact = a_run(run_simulation_stream)
+        assert (least_width, compact, form.width()) == (design.CONTROLS_MIN_W, True, 420), (least_width, form.width())
+        host.splitter.setSizes([100, host.splitter.width() - 100 - host.splitter.handleWidth()])
+        _settle()
+        assert form.width() == design.CONTROLS_MIN_W, "a stream let the divider go under the form's least width"
+        host.splitter.setSizes([420, host.splitter.width() - 420 - host.splitter.handleWidth()])
+        over(stream)
+        video, least_width, compact = a_run(export_animation)
+        assert (least_width, compact) == (0, False), "a video after a stream did not give the width up"
+        _the_two_share_the_width(window, host, "a video after a stream")
+        over(video)
+        stream, least_width, compact = a_run(run_simulation_stream)
+        assert (least_width, compact) == (design.CONTROLS_MIN_W, True), "a stream after a video kept the width given up"
+        over(stream)
+
+
 def test_a_past_view_on_the_live_simulations_page_shares_the_width_too(tmp_path):
-    """A live simulation's run never takes the column, but a past view drawn on its page does, and shares the width as
-    any other: the form gives way while it shows, and has its least width again when it goes."""
+    """A past view drawn on Live simulation's page takes the column as on any page, and shares the width as any other:
+    the form gives way while it shows, and has its least width again when it goes."""
     from core.gui import design
     from core.gui.run import history
     from core.gui.run.controller import controller

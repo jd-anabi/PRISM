@@ -217,14 +217,18 @@ class BasePanel(RunHost, QWidget):
         self.restore_layout()
 
     def _fit_the_form(self, _index: int = 0) -> None:
-        """The form gives up its least width while the column shows a run's page, its own or a past one: a splitter
+        """The form gives up its least width while a run's page, its own or a past one, stands beside it: a splitter
         cannot give two neighbours less than their least widths add up to, and what it cannot give, the second is
         drawn under the first. So the page, which holds a run, keeps its least width, and the form scrolls sideways
-        in what is left. With the figures back the form has its least width again, and a divider left by hand stands
-        where it stood, for the splitter keeps it. Heard at every change of what the column shows, the one thing
-        through which a run's page comes and goes."""
-        beside = self.results.currentWidget() is not self.figures
-        self.controls_scroll.setMinimumWidth(FORM_LEAST_BESIDE_A_RUN if beside else CONTROLS_MIN_W)
+        in what is left. With the page gone the form has its least width again, and a divider left by hand stands
+        where it stood, for the splitter keeps it. Heard at every change of what the column shows; a panel that stands
+        the run's page anywhere else calls this as the page comes and goes."""
+        self.controls_scroll.setMinimumWidth(FORM_LEAST_BESIDE_A_RUN if self._run_page_beside() else CONTROLS_MIN_W)
+
+    def _run_page_beside(self) -> bool:
+        """Whether a run's page stands beside the form: here, whether the column shows anything but the figures. A
+        panel that stands the run's page anywhere else says so."""
+        return self.results.currentWidget() is not self.figures
 
     def own_line(self, text: str, level: str = "info") -> None:
         """A line of the panel's own goes among its lines, under the figures."""
