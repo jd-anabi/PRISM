@@ -3637,6 +3637,27 @@ def test_a_window_restored_off_every_screen_opens_at_its_opening_size_on_the_pri
     assert isinstance(remembered.value("window/geometry"), QByteArray)
 
 
+def test_a_size_remembered_on_the_primary_screen_opens_as_it_ever_did(monkeypatch):
+    """A remembered size that the primary screen's least size holds opens as it was closed, and that least size stands
+    from the moment the window is built; one below it, from a settings file of another computer, is raised to it."""
+    from core.gui import main_window, settings as st
+    qt_app()
+    _opening, least = design.window_sizes(main_window._room_on_screen())
+
+    def opened_from(width, height):
+        placed = build_window()
+        placed.setMinimumSize(1, 1)
+        placed.resize(width, height)
+        remembered = st.settings()
+        remembered.setValue("window/geometry", placed.saveGeometry())
+        remembered.sync()
+        window = build_window()
+        return (window.width(), window.height()), (window.minimumWidth(), window.minimumHeight())
+
+    assert opened_from(least[0] + 20, least[1] + 30) == ((least[0] + 20, least[1] + 30), least)
+    assert opened_from(least[0] - 20, least[1] - 30) == (least, least)
+
+
 def test_effective_temperature_opens_on_one_cell_and_its_names_choose_the_page():
     """Effective temperature opens on One cell, its name marked in the row over the page. A click on Sweep study
     shows that page, Left on the row shows One cell again and Right Sweep study, each said as a move. Opened again
@@ -7112,6 +7133,15 @@ other.move(2600, 10)
 other.show()
 app.processEvents()
 report["opened there"] = state(other)
+other.resize(1350, 840)
+app.processEvents()
+settings.settings().setValue("window/geometry", other.saveGeometry())
+other.hide()
+again = build_window()
+report["closed there, built again"] = [[again.width(), again.height()], [again.minimumWidth(), again.minimumHeight()]]
+again.show()
+app.processEvents()
+report["closed there, opened again"] = {**state(again), "size": [again.width(), again.height()]}
 print(json.dumps(report), file=sys.__stdout__, flush=True)
 '''
 
@@ -7119,9 +7149,10 @@ print(json.dumps(report), file=sys.__stdout__, flush=True)
 def test_a_real_change_of_screen_lays_the_window_out_for_the_screen_it_stands_on(tmp_path):
     """Moved by the toolkit's own route from a large screen to a small one and back, at one and a half times the ordinary
     text size, the window's thresholds and its least size are held to the screen it stands on, and its low form follows;
-    and a window first shown on the second screen, where a remembered place puts it, stands on that screen's room from
-    the start. What is proved here is the toolkit's signal, on a platform of two screens of one scaling: a real display
-    of another scaling is a person's to read."""
+    a window first shown on the second screen, where a remembered place puts it, stands on that screen's room from the
+    start; and one closed there as small as that screen lets it opens again at that size, which the primary screen's
+    least size would have raised. What is proved here is the toolkit's signal, on a platform of two screens of one
+    scaling: a real display of another scaling is a person's to read."""
     import json
     import os
     import subprocess
@@ -7148,6 +7179,9 @@ def test_a_real_change_of_screen_lays_the_window_out_for_the_screen_it_stands_on
     assert report["moved"] == {"screen": "small", **small, "small": False}, report
     assert report["back"] == {"screen": "large", **large, "small": True}, report
     assert report["opened there"] == {"screen": "small", **small, "small": False}, report
+    assert report["closed there, built again"] == [[1350, 840], [1350, 840]], report
+    assert report["closed there, opened again"] == {"screen": "small", **small, "small": False,
+                                                    "size": [1350, 840]}, report
 
 
 def _ring_on(button) -> None:
