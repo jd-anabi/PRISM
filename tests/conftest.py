@@ -67,8 +67,8 @@ def check_plans_kept(folder: Path, held: "list[str] | None", kept: "dict[str, by
     The message names the first five of what changed: the folder itself comes first when it was made or has gone, so
     that a folder empty before or after is not read as nothing; then a plan rewritten under its own name, marked so,
     since it is the one change that loses work; then the paths that came or went. A plan the person saved before the
-    run is
-    in both and does no harm; one saved by hand while the run was going fails the same way, and the message says so.
+    run is in both and does no harm; one saved by hand while the run was going fails the same way, and the message says
+    so.
     Raised rather than asserted, so the check survives a run with assertions switched off."""
     from tests import _settings_folder
     holds = _settings_folder.listing(folder)
@@ -393,9 +393,10 @@ def _layout_room_put_back():
 
 @pytest.fixture(autouse=True)
 def _memory_limit_put_back():
-    """The memory limit and the keep-awake switch are put back as this test found them after every test: the first is
-    the one setting the window assigns on the configuration, and every later run would plan with it; the second is the
-    process's run controller's, and every later run would ask Windows nothing. Each is read where its module is kept."""
+    """After every test the memory limit is put back as this test found it, and the keep-awake switch on, as every test
+    finds it: the first is the one setting the window assigns on the configuration, and every later run would plan with
+    it; the second is the process's run controller's, and every later run would ask Windows nothing. Each is read where
+    its module is kept."""
     import sys
     config = sys.modules.get("core.config")
     found = None if config is None else config.SIM_VRAM_CEILING_GIB

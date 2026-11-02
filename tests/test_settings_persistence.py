@@ -812,7 +812,7 @@ def test_a_limit_remembered_for_another_computer_is_not_applied(monkeypatch):
     assert st.settings().value("computer/unnamed/memory_limit_gib") == "1.5"
 
 
-@pytest.mark.parametrize("written", ("6,5", "abc", "", "0", "-2", "inf", "nan", "1e999", "1e300"))
+@pytest.mark.parametrize("written", ("6,5", "abc", "", "0", "-2", "inf", "nan", "1e999", "1e300", "2e299"))
 def test_a_remembered_limit_that_cannot_be_read_is_no_limit_and_says_so(written, monkeypatch):
     """A remembered limit edited by hand into what is no limit one can set is no limit: nothing is assigned, and
     Settings says so where it says what is in force. The file is written as a person writes it, so that the settings
@@ -860,6 +860,59 @@ def test_a_remembered_limit_of_none_and_no_key_at_all_are_no_limit_read(monkeypa
     monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", 2.5)
     memory_limit.apply_remembered()
     assert config.SIM_VRAM_CEILING_GIB == 2.5, "no limit assigns nothing"
+
+
+def test_a_limit_as_large_as_the_planner_can_read_is_accepted(monkeypatch):
+    """A value is too large when the planner cannot turn it into a count of bytes, and no sooner: what it can is a limit,
+    in the field and in the file, and the planner takes it."""
+    from core.SBI import pipeline
+    from core.gui import memory_limit
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    assert memory_limit.judged("1e299", memory_limit.memory_limit_in_force()) == (1e299, "")
+    memory_limit.set_memory_limit(1e299)
+    assert memory_limit.stored_limit() == (1e299, True)
+    assert pipeline.sim_memory_budget_elements(torch.device("cpu"), torch.float32) > 0
+
+
+def test_put_many_writes_every_pair_and_answers_for_the_file(monkeypatch):
+    """Every pair goes in one write. Pairs that cannot be gone through, or a file that refuses them, answer False and
+    are said in the window's log; nothing is raised into what was being done."""
+    import stat
+    from core.gui import remembered, settings as st
+    said = []
+    monkeypatch.setattr(remembered.log, "warning", lambda *args: said.append(args))
+    assert remembered.put_many([("here/one", "1"), ("here/two", "2")]) is True
+    kept = st.settings()
+    assert (kept.value("here/one"), kept.value("here/two"), said) == ("1", "2", [])
+
+    def pairs():
+        yield "here/three", "3"
+        raise OSError("the pairs ran out")
+
+    assert remembered.put_many(pairs()) is False
+    assert len(said) == 1 and "the pairs ran out" in said[0][-1], said
+    path = Path(st.settings().fileName())
+    os.chmod(path, stat.S_IREAD)
+    try:
+        assert remembered.put_many([("here/four", "4")]) is False
+        assert remembered.put("here/five", "5") is False
+    finally:
+        os.chmod(path, stat.S_IWRITE)
+    assert len(said) == 3, said
+
+
+@pytest.mark.parametrize("constant", ("not-a-number", None, -1.0))
+def test_a_constant_that_is_no_limit_is_read_as_the_planner_reads_it(constant, monkeypatch):
+    """The constant is read here as the planner reads it, and quietly: what is no number, nothing and a negative are no
+    limit, and nothing is raised at a draw."""
+    from core import config
+    from core.SBI import pipeline
+    from core.gui import memory_limit
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", constant)
+    force = memory_limit.memory_limit_in_force()
+    assert (force.gib, force.source, memory_limit.chosen()) == (None, "none", None), constant
+    assert pipeline.vram_ceiling_gib() == 0.0
 
 
 def test_the_free_vram_readout_does_not_use_mem_get_info():

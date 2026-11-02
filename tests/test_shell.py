@@ -2407,6 +2407,8 @@ def test_settings_holds_the_appearance_and_this_computer():
         Qt.AlignRight, design.scaled(120), design.scaled(120), design.scaled(120))
     assert QFont.Tag.fromString("tnum") in box.font().featureTags(), "the digits of the box are not of equal width"
     assert box.accessibleName() == "Limit each batch to, in GiB"
+    assert settings.limit_unit.text() == "GiB"
+    assert settings.awake_box.text() == "Keep this computer awake while a run is live"
 
 
 def _settings_page():
@@ -2454,7 +2456,8 @@ def _each_write(monkeypatch):
     ("1e300", "That is too large. In force, unchanged: 6 GiB."),
     ("2e299", "That is too large. In force, unchanged: 6 GiB."),
     ("0", "The limit must be above 0. To run without a limit, choose 'No limit'."),
-    ("-2", "The limit must be above 0. To run without a limit, choose 'No limit'.")))
+    ("-2", "The limit must be above 0. To run without a limit, choose 'No limit'."),
+    ("-1e300", "The limit must be above 0. To run without a limit, choose 'No limit'.")))
 def test_a_mistyped_limit_is_not_applied_and_says_why(typed, line, monkeypatch):
     """A blank, a comma, what is no number, a value that is not finite, one so large that the planner cannot turn it
     into a count of bytes, a 0 or a negative is not applied when editing ends: the limit stays what it was, nothing is
@@ -2503,8 +2506,10 @@ def test_the_two_options_apply_a_limit_and_take_it_away(monkeypatch):
     page, written = _settings_page(), _each_write(monkeypatch)
     key = f"computer/{memory_limit.computer()}/memory_limit_gib"
     assert (page.no_limit.isChecked(), page.limit_field.isEnabled()) == (True, False)
+    given = _given(monkeypatch)
     page.limited.click()
     assert (written, page.limit_field.isEnabled(), page.limit_field.text()) == ([], True, "")
+    assert (page.limit_field, Qt.OtherFocusReason) in given, "the option left the keyboard where it was"
     QTest.keyClicks(page.limit_field, "6")
     assert (config.SIM_VRAM_CEILING_GIB, written) == (0.0, []), "a keystroke applied the limit"
     QTest.keyClick(page.limit_field, Qt.Key_Return)
@@ -2539,7 +2544,8 @@ def test_the_two_options_apply_a_limit_and_take_it_away(monkeypatch):
     ("6,5", 6.0, "PRISM_VRAM_CEILING_GIB is set to '6,5', which is not a number. PRISM ignores it. In force: 6 GiB.",
      True),
     ("abc", None, "PRISM_VRAM_CEILING_GIB is set to 'abc', which is not a number. PRISM ignores it. In force: no "
-                  "limit.", True)))
+                  "limit.", True),
+    ("   ", 6.0, "In force: 6 GiB.", True)))
 def test_a_number_in_the_environment_takes_precedence_and_says_so(variable, chosen, line, free, monkeypatch):
     """A number in the variable decides: the options and the field are greyed and the line says what decides, and that
     the limit remembered is not in use, with a word for a number that means no limit. A variable that holds no number
@@ -2566,6 +2572,9 @@ def test_the_note_says_what_the_limit_does_and_gives_no_advice():
             "from the free-memory figure Windows gives it, which can count memory other programs are using as "
             "free.") in said
     assert ("Memory limit. The most graphics-card memory one batch of simulations may plan to use.") in said
+    assert ("PRISM asks Windows not to go to sleep from the start of a run until it ends. The screen may still turn off. "
+            "Shutting down or signing out is separate: Windows then shows PRISM's reason and waits for your answer, "
+            "whatever this switch says.") in said
     whole = " ".join(said).lower()
     assert not [word for word in ("idle card", "fits", "minus", "only if", "recommend") if word in whole]
 
@@ -2629,6 +2638,7 @@ def test_a_late_answer_of_the_free_memory_reading_is_dropped(monkeypatch):
     touches nothing of the toolkit: a signal sent on its thread from an object the window's thread is deleting ends the
     process. The timer that looks for the answer goes with the page, and stops with the answer, so that nothing ticks
     once a reading is over."""
+    import ast
     import threading
     import shiboken6
     from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool, QTimer
@@ -2645,7 +2655,11 @@ def test_a_late_answer_of_the_free_memory_reading_is_dropped(monkeypatch):
 
     monkeypatch.setattr(provenance, "_nvidia_smi_free_gib", reader)
     monkeypatch.setattr(sys, "excepthook", lambda *error: raised.append(error))
-    assert "emit" not in code_only(settings_screen._FreeMemoryReading), "a reading sends a signal from its own thread"
+    held = ast.parse(code_only(settings_screen._FreeMemoryReading.run))
+    named = {node.attr for node in ast.walk(held) if isinstance(node, ast.Attribute)}
+    named |= {node.id for node in ast.walk(held) if isinstance(node, ast.Name)}
+    assert named == {"self", "_answer", "append", "provenance", "_nvidia_smi_free_gib"}, "a reading touches the toolkit"
+    assert 0 < settings_screen.READING_LOOK_MS <= 100, "a person waits this long at each press"
     page = _settings_page()
     assert not page.findChild(QTimer).isActive(), "a timer ticks before any press"
     try:
@@ -2722,8 +2736,12 @@ _ENDED = _at(5, 9, 12).isoformat()
       "memory_limit": {"gib": 6.0, "source": "setting", "computer": "LAB-PC"}},
      "The last run on this computer (retrain, last heard 5 Oct 2026, 09:12) ran with a limit of 6 GiB."),
     ({"memory_limit": {"gib": 6.0, "source": "setting", "computer": "LAB-PC"}},
-     "The last run on this computer ran with a limit of 6 GiB.")),
-    ids=("limited", "no limit", "out of memory", "unnamed", "not seen to end", "no name and no end"))
+     "The last run on this computer ran with a limit of 6 GiB."),
+    ({"name": "retrain", "ended": _ENDED, "memory_limit": {"gib": 6.25, "source": "setting", "computer": "LAB-PC"},
+      "health": {"memory_peak": 5.43}},
+     "The last run on this computer (retrain, ended 5 Oct 2026, 09:12) ran with a limit of 6.25 GiB. Its largest batch "
+     "held 5.4 GiB.")),
+    ids=("limited", "no limit", "out of memory", "unnamed", "not seen to end", "no name and no end", "the two figures"))
 def test_the_last_run_sentence_reads_the_newest_run_of_this_computer(fields, sentence, tmp_path, monkeypatch):
     """What the last run on this computer ran with is read as the page is shown, from the newest history file that names
     this computer: a newer file of another computer is passed over, and so are a newer file of the older shape, which
@@ -2875,11 +2893,11 @@ def test_a_settings_page_built_during_a_run_comes_up_locked(tmp_path, monkeypatc
 def test_settings_is_freed_when_the_run_ends(tmp_path, monkeypatch):
     """A Settings built before a run is locked at its start and freed at its end, and what it locked comes back as it
     was: the field open only under its option, the line saying what is in force, the free memory as it last stood, and
-    the options still greyed when a number in the variable decides. A limit that was being typed as the run began is not
-    applied, and neither is a press that reaches the page during the run. A page out of sight reads no history as a run
+    the options still greyed when a number in the variable decides. A limit in the field is not judged during the run,
+    and a press of the reading that came as the run began starts none. A page out of sight reads no history as a run
     ends. The window's one bound method is all the process's controller holds of it, and a window deleted leaves nothing
     behind."""
-    from PySide6.QtCore import QCoreApplication, QEvent, SIGNAL
+    from PySide6.QtCore import QCoreApplication, QEvent, QTimer, SIGNAL
     from core import config
     from core.artifacts import provenance
     from core.gui import memory_limit
@@ -2901,15 +2919,14 @@ def test_settings_is_freed_when_the_run_ends(tmp_path, monkeypatch):
     turn_until(app, lambda: page.read_button.text() == "Read again")
     assert page.free_memory.plain_text() == "Free graphics-card memory: 12.5 GiB, read 8 Oct 2026, 19:02."
     page.limit_field.setText("9")
-    with running() as stand_in:
+    with running():
         assert not page.limit_field.isEnabled()
         page.limit_field.editingFinished.emit()
-        page.read_button.click()
-        page.no_limit.click()
+        page._read_free_memory()
+        assert not page.findChild(QTimer).isActive(), "a press that came during a run started a reading"
         assert (config.SIM_VRAM_CEILING_GIB, written) == (6.0, []), "the limit changed during a run"
         assert page.free_memory.plain_text() == (
             "Free graphics-card memory: 12.5 GiB, read 8 Oct 2026, 19:02. Not read while a run is live.")
-        assert stand_in is not None
     turn_until(app, lambda: not held.is_live())
     assert (page.no_limit.isEnabled(), page.limited.isEnabled(), page.limit_field.isEnabled(),
             page.read_button.isEnabled()) == (True, True, True, True)
@@ -3122,9 +3139,10 @@ _LIMIT_OF_SIX = {"gib": 6.0, "source": "setting", "computer": "LAB-PC"}
      "The last run on this computer ran with a limit of 6 GiB."),
     ({"memory_limit": _LIMIT_OF_SIX, "health": {"memory_peak": 0}}, {"name": "y", "health": {"memory_peak": 5.4}},
      "The last run on this computer ran with a limit of 6 GiB. The last run that measured its batches (y): the largest "
-     "held 5.4 GiB.")),
+     "held 5.4 GiB."),
+    ({"memory_limit": 6.0, "health": "a lot"}, None, "The last run on this computer ran with no limit.")),
     ids=("a limit too long for a float", "a peak too long for a float", "the other run's peak too long for a float",
-         "a limit of nought", "a peak of nought", "a peak of nought and another run's"))
+         "a limit of nought", "a peak of nought", "a peak of nought and another run's", "no shape a reader can use"))
 def test_what_is_no_size_is_left_out_of_the_last_run_sentence(record, measured, sentence):
     """What is no size is said as nothing: no number written from a value that cannot be written, no "held 0 GiB" and no
     "a limit of 0 GiB"."""
@@ -3315,6 +3333,155 @@ def test_a_close_refused_takes_the_keyboard_from_nothing(tmp_path, monkeypatch):
             assert radio.hasFocus(), "a close that was refused took the keyboard"
         forget_asked()
     finally:
+        window.hide()
+
+
+def test_the_last_run_is_read_again_once_a_run_has_ended(tmp_path, monkeypatch):
+    """The usual order of work: Settings opened, a run, Settings opened again. A run that ends with the page in sight is
+    read as it ends, one that ends out of sight at the next show, and told again that no run is live the page reads
+    nothing."""
+    app = qt_app()
+    held, clock = _on_the_runs_clock(tmp_path)
+    reads = _each_reading_of_the_last_run(monkeypatch)
+    window = build_window()
+    try:
+        _shown_off_screen(window)
+        window.go_to("settings")
+        QApplication.processEvents()
+        page = window.part("settings")
+        assert page.last_run.plain_text() == "No run on this computer has been recorded yet."
+        with running():
+            pass
+        turn_until(app, lambda: not held.is_live())
+        QApplication.processEvents()
+        first = page.last_run.plain_text()
+        assert "ended" in first, "a run ended in sight and the page did not read it"
+        count = len(reads)
+        page.set_locked(False)
+        QApplication.processEvents()
+        assert len(reads) == count, "told again that no run is live, the page read the history"
+        window.go_to("home")
+        clock.advance(3600)
+        with running():
+            pass
+        turn_until(app, lambda: not held.is_live())
+        window.go_to("settings")
+        QApplication.processEvents()
+        assert page.last_run.plain_text() != first, "a run ended out of sight and the page shown after it says the one before"
+    finally:
+        window.hide()
+
+
+def test_the_line_of_what_could_not_be_remembered_follows_the_last_write(monkeypatch):
+    """A number that failed is said as "No limit" is, and a good write of either setting takes the line back, whichever
+    failed: the settings library holds what it could not write and writes it with the next, so that both values are in
+    the file by then."""
+    import os
+    import stat
+    from pathlib import Path
+    from core.gui import memory_limit, settings as st
+    monkeypatch.setattr(this_computer, "on_windows", lambda: True)
+    memory_limit.set_memory_limit(4.0)
+    path = Path(st.settings().fileName())
+    page = _settings_page()
+
+    def refused(press):
+        os.chmod(path, stat.S_IREAD)
+        try:
+            press()
+        finally:
+            os.chmod(path, stat.S_IWRITE)
+        assert not page.not_kept.isHidden(), "the page said nothing of a write that failed"
+
+    refused(lambda: _type_the_limit(page.limit_field, "5"))
+    page.no_limit.click()
+    assert page.not_kept.isHidden(), "a good No limit left the line standing"
+    refused(page.awake_box.click)
+    page.limited.click()
+    assert page.not_kept.isHidden(), "a good limit left the switch's line standing"
+    assert b"memory_limit_gib=5" in path.read_bytes() and b"keep_awake=0" in path.read_bytes()
+    refused(lambda: _type_the_limit(page.limit_field, "6"))
+    page.awake_box.click()
+    assert page.not_kept.isHidden(), "a good switch left the limit's line standing"
+    assert b"memory_limit_gib=6" in path.read_bytes() and b"keep_awake=1" in path.read_bytes()
+
+
+def test_a_field_greyed_with_the_keyboard_on_it_applies_nothing(tmp_path, monkeypatch):
+    """A field greyed with the keyboard on it says its editing ended, inside the greying, so what stood in it as a run
+    began is not judged: the page knows the run is live before it greys the field."""
+    from core import config
+    from core.SBI import pipeline
+    from core.gui import memory_limit
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    qt_app()
+    _on_the_runs_clock(tmp_path)
+    memory_limit.set_memory_limit(6.0)
+    window = build_window()
+    try:
+        _shown_off_screen(window)
+        window.go_to("settings")
+        QApplication.processEvents()
+        page = window.part("settings")
+        with _in_front(window):
+            page.limit_field.setFocus(Qt.TabFocusReason)
+            QApplication.processEvents()
+            assert page.limit_field.hasFocus(), "the keyboard is not in the field: the test proves nothing"
+            QTest.keyClick(page.limit_field, Qt.Key_End)
+            QTest.keyClicks(page.limit_field, "9")
+            assert page.limit_field.text() == "69"
+            with running():
+                assert not page.limit_field.isEnabled()
+                assert config.SIM_VRAM_CEILING_GIB == 6.0, "a run's lock applied what the field held"
+    finally:
+        window.hide()
+
+
+def test_a_lock_and_an_unlock_during_a_reading_lose_nothing(tmp_path, monkeypatch):
+    """An answer that lands during a run keeps what the lock says and the button greyed, and the timer stops; a run that
+    begins and ends during a reading leaves the timer looking for its answer and the button free, and a press then
+    starts no second reading."""
+    import threading
+    from PySide6.QtCore import QThreadPool, QTimer
+    from core.artifacts import provenance
+    app = qt_app()
+    held, _clock = _on_the_runs_clock(tmp_path)
+    gate, began = threading.Event(), threading.Event()
+
+    def reader():
+        began.set()
+        gate.wait(10)
+        return 12.5
+
+    monkeypatch.setattr(provenance, "_nvidia_smi_free_gib", reader)
+    window = build_window()
+    page = window.part("settings")
+    try:
+        page.read_button.click()
+        assert began.wait(10)
+        with running():
+            gate.set()
+            turn_until(app, lambda: page.read_button.text() == "Read again")
+            assert page.free_memory.plain_text().endswith("Not read while a run is live."), page.free_memory.plain_text()
+            assert not page.read_button.isEnabled(), "the answer freed the button during a run"
+            assert not page.findChild(QTimer).isActive()
+        turn_until(app, lambda: not held.is_live())
+        gate.clear()
+        began.clear()
+        page.read_button.click()
+        assert began.wait(10)
+        with running():
+            pass
+        turn_until(app, lambda: not held.is_live())
+        assert page.read_button.isEnabled()
+        assert page.findChild(QTimer).isActive(), "a run ended and nothing looks for the reading under way"
+        page.read_button.click()
+        gate.set()
+        turn_until(app, lambda: not page.findChild(QTimer).isActive())
+        assert page.free_memory.plain_text().startswith("Free graphics-card memory: 12.5 GiB")
+        assert not page.free_memory.plain_text().endswith("live.")
+    finally:
+        gate.set()
+        QThreadPool.globalInstance().waitForDone(10000)
         window.hide()
 
 
@@ -4245,9 +4412,8 @@ def test_the_memory_limit_in_force_does_not_wait_for_parameter_inference_to_be_o
     or Settings then changes nothing a run started before it would plan with."""
     from core import config
     from core.SBI import pipeline
-    from core.gui import app as gui_app
     from core.gui import memory_limit
-    from tests._fixtures import code_only, whole_program
+    from tests._fixtures import whole_program
     qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
@@ -4262,8 +4428,33 @@ def test_the_memory_limit_in_force_does_not_wait_for_parameter_inference_to_be_o
             window.go_to("inference")
             window.go_to("settings")
             assert (pipeline.vram_ceiling_gib(), config.SIM_VRAM_CEILING_GIB) == (in_force, 2.5), ceiling
-    start = code_only(gui_app.build_app)
-    assert start.index("memory_limit.apply_remembered()") < start.index("MainWindow("), "the window came first"
+
+
+def test_what_this_computer_remembers_stands_before_the_window(tmp_path, monkeypatch):
+    """The limit and the switch this computer remembers are in force by the moment the window is made, so that nothing
+    the window does as it is built plans with less, or starts a run that asks Windows otherwise."""
+    from core import config
+    from core.SBI import pipeline
+    from core.gui import app as gui_app
+    from core.gui import memory_limit
+    from tests._fixtures import whole_program
+    qt_app()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    memory_limit.set_memory_limit(2.5)
+    memory_limit.set_keep_awake_wish(False)
+    config.SIM_VRAM_CEILING_GIB = 0.0                           # as a launch finds them
+    controller().set_keep_awake(True)
+    seen, real = [], gui_app.MainWindow
+
+    def as_the_window_is_made(*args, **kwargs):
+        seen.append((config.SIM_VRAM_CEILING_GIB, controller().keep_awake_wish()))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(gui_app, "MainWindow", as_the_window_is_made)
+    with whole_program():
+        pass
+    assert seen == [(2.5, False)], "the window came before what this computer remembers"
 
 
 def test_a_store_change_reaches_only_the_built_parts_and_a_part_built_later_lists_the_store_as_it_is(
