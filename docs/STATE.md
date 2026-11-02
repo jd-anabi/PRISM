@@ -1,7 +1,40 @@
 # PRISM — state
 
-**Last updated:** 2026-10-31, early evening (17:07 by the clock; the weekly bar 90 %, resetting on 1 November at 04:00 UTC):
-STAGE 4'S BUILD STANDS WITH TASKS 0 TO 4 COMPLETE. The session was started from the owner's pasted prompt
+**Last updated:** 2026-11-02, morning (09:06 by the clock; the weekly bar 14 %, resetting on 8 November at 04:00 UTC):
+STAGE 4'S BUILD STANDS WITH TASKS 0 TO 6 COMPLETE. The session started on 31 October from
+`docs/superpowers/prompts/2026-10-31-window-redesign-stage-4-build-from-task-4.md` and built Tasks 4, 5 and 6; the owner said "Go"
+after the reset of 1 November.
+
+- **Task 5, Settings' "This computer":** `c78a184`, `78a1578`, fix `970b9fc`, `740b278`. The memory limit moved to Settings and is
+  remembered per computer; the keep-awake switch; Settings locked by a run; the last run's sentence, which goes on when the last
+  run measured no batch, on the owner's yes (176). Gate 2396 passed. Departures 171 to 182.
+- **Task 6, the run host, the firm requirement and the shell's share:** `a409a7f`..`b319363`, `4eefc6b`, fix `20338e8`, `375c47d`,
+  `074822e`. `RunHost`, a mixin the rebuilt pages will share; **the owner's firm requirement now holds**: at the window's least size
+  and every width above it the form gives way to the run page, on the eight pages of today's frame and on a video export, measured
+  at every pixel near the least size, at text 1.0 and 1.5, under the scale factor and on the real platform with hidden windows. The
+  window reads its room again on another screen, and on the screen it opens on; its least size follows the screen; a size closed
+  on a smaller display comes back as closed. Enter presses the button with the ring. A first opening during a run reads nothing
+  until it ends.
+- **The review found the firm requirement's one hole:** a video export stands the run page inside `figures`, so the form covered 30
+  px at 900 wide, and the brief had said that could not happen. One fix round of seventeen rulings, `BasePanel._run_page_beside`.
+  Seat three's other two Important were tests: "only Enter" held by nothing, and a first opening that could not fail on a
+  simulation set.
+- **The gate:** 2474 passed, 9 skipped, 5 deselected, 2488 collected, 28 min 17 s at `074822e`; real-screen 9 passed; re-read clean.
+  `Artifacts/` untouched, with no `fits/`; no `Resources/Plans`; `PRISM.ini` unchanged. No engine file in Tasks 4, 5 or 6.
+- **The font:** the owner said yes on 2 November. `CascadiaMono-Regular.ttf` (575,912 bytes, about 576 KB where they were told
+  about 700) and its licence wait in the ledger's `stage-4/tools/font-files/` for Task 7 (190).
+- **Reading during a run has a written exception now:** a person opening Home or Records (183); the reasoning was read against
+  the engine's manifest refresh and the history's rename.
+- **Measured:** Task 5 about 3.5 M agents' tokens and 4 points; Task 6 about 3.4 M and 7 points. Eight building tasks, the last
+  review and the exit read about 40 to 60 points.
+
+NEXT: Task 7, the page's pieces, in a new chat the owner starts from
+`docs/superpowers/prompts/2026-11-02-window-redesign-stage-4-build-from-task-7.md`. That prompt lists what is carried to each task. It
+was not checked by a reader, to spare the bar. The owner's one question ahead is the greyed button's picture, while Task 8's gate
+runs. The ledger's section "Stage 4 — … (build of …)" is the record.
+
+What follows is the head as the early evening of 31 October left it (17:07 by the clock; the weekly bar 90 %):
+STAGE 4'S BUILD STOOD WITH TASKS 0 TO 4 COMPLETE. The session was started from the owner's pasted prompt
 `docs/superpowers/prompts/2026-10-31-window-redesign-stage-4-build-from-task-4.md`; it opened before the reset, told the owner the bar
 (87 %) and recommended waiting, and the owner said "Start", which covered Task 4 alone.
 
@@ -22,7 +55,7 @@ STAGE 4'S BUILD STANDS WITH TASKS 0 TO 4 COMPLETE. The session was started from 
 - **Measured:** Task 4 about 2.1 M agents' tokens; the bar 87 % to 90 %. Ten building tasks with the last review and the exit read
   about 35 to 40 points.
 
-NEXT: Task 5, Settings' "This computer", in a new chat the owner starts from
+NEXT, as it stood then: Task 5, Settings' "This computer", in a new chat the owner starts from
 `docs/superpowers/prompts/2026-10-31-window-redesign-stage-4-build-from-task-5.md`, after the reset on 1 November at 04:00 UTC
 (21:00 on 31 October, the owner's time). That prompt lists what is carried to each task. It was not checked by a reader, to spare the bar.
 The owner's two questions are ahead: the font's download while Task 6's gate runs, the greyed button's picture while Task
