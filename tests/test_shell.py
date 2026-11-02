@@ -6775,3 +6775,374 @@ def test_the_launcher_for_macos_and_linux_starts_prism_detached():
     assert commands[-4:] == wanted, commands
     assert [line for line in commands if "core.gui" in line or line.startswith(("exec ", "echo "))] == [
         wanted[0], wanted[-1]], commands
+
+
+def _stand_in_step(window, monkeypatch):
+    """A page of the look in the first step's place: a heading's button first in the widget order, two fields under it,
+    the second of which it names for the keyboard to start at. It answers what a step answers."""
+    from PySide6.QtWidgets import QLineEdit, QVBoxLayout, QWidget
+    from core.gui.widgets.page import Page
+
+    class Step(Page):
+        def __init__(self):
+            super().__init__()
+            self.heading_button, self.first_field, self.named = QPushButton("Help"), QLineEdit(), QLineEdit()
+            self.add_fixed(self.heading_button)
+            body = QWidget()
+            column = QVBoxLayout(body)
+            column.addWidget(self.first_field)
+            column.addWidget(self.named)
+            self.add_scrolling(body)
+            self.locked = False
+
+        def first_focus(self):
+            return None if self.locked else self.named
+
+        def refresh_local_gates(self):
+            pass
+
+    inference, step = window.part("inference"), Step()
+    inference.pages.removeWidget(inference.config_panel)
+    inference.pages.insertWidget(0, step)
+    monkeypatch.setattr(inference, "panels", lambda: [step])
+    return step
+
+
+def test_the_step_shown_hears_the_low_window_and_names_where_the_keyboard_starts(monkeypatch):
+    """A step built on the look's page is told when the window is low and when it is not, through its screen, and the
+    keyboard starts on the control it names. Today's steps name none: the keyboard starts at the first setting, as it
+    did, and they offer no low form, which nothing asks of them."""
+    from core.gui.main_window import _first_control
+    app = qt_app()
+    window = build_window()
+    window.setMinimumSize(1, 1)
+    _shown_off_screen(window, 1300, 820)
+    today = window.part("inference")
+    assert today.first_focus() is None and today.pending() == frozenset()
+    window.go_to("inference", "prior")
+    assert window.focusWidget() is window._start_of(today) is _first_control(today), "today's steps moved"
+    window.resize(1300, design.small_below() - 1)
+    app.processEvents()                                      # today's panels offer no low form: nothing raises
+    window.resize(1300, 820)
+    step = _stand_in_step(window, monkeypatch)
+    window.go_to("inference", "model")
+    assert window._start_of(today) is step.named and window.focusWidget() is step.named
+    window.go_to("inference", "prior")
+    assert today.first_focus() is None, "the screen answered for a step not shown"
+    window.go_to("inference", "model")
+    assert not step.is_small()
+    window.resize(1300, design.small_below() - 1)
+    app.processEvents()
+    assert step.is_small(), "the step shown was not told the window is low"
+    window.resize(1300, 820)
+    app.processEvents()
+    assert not step.is_small(), "the step shown was not told the window is high again"
+
+
+def test_a_part_that_comes_up_low_tells_its_steps_at_once(monkeypatch):
+    """A window already low when Parameter inference is first opened tells it so as it is added: a step of the look comes
+    up in the low form."""
+    from core.gui.screens import inference_screen
+    qt_app()
+    told = []
+    monkeypatch.setattr(inference_screen.InferenceScreen, "set_small", lambda self, on: told.append(on))
+    window = build_window()
+    window.setMinimumSize(1, 1)
+    _shown_off_screen(window, 1300, design.small_below() - 1)
+    window.go_to("inference")
+    assert told == [True], told
+
+
+def test_a_page_whose_first_control_is_a_heading_button_starts_the_keyboard_at_its_first_setting(monkeypatch):
+    """A page of the look may put a plain button first, its heading's. Moved to with a key, with Escape in the rail or
+    with the key between the rail and the page, the keyboard lands on the control the page names, and never on that
+    button, nor on the first field when the page names the second. While the page names none, its every setting locked by
+    a run, the keyboard does not land on the button either: it stays on the rail."""
+    app = qt_app()
+    window = build_window()
+    window.setMinimumSize(1, 1)
+    _shown_off_screen(window, 1300, 820)
+    window.go_to("inference", "prior")
+    step = _stand_in_step(window, monkeypatch)
+    rail = window.shell.rail
+    with _in_front(window):
+        window.go_to("inference", "model")
+        assert window.focusWidget() is step.named, "a move took the keyboard elsewhere"
+        rail.take_keyboard()
+        assert rail.isAncestorOf(window.focusWidget())
+        QTest.keyClick(window.focusWidget(), Qt.Key_Escape)
+        assert window.focusWidget() is step.named, "Escape in the rail took the keyboard elsewhere"
+        rail.take_keyboard()
+        window._to_page()
+        assert window.focusWidget() is step.named, "the key between the rail and the page took it elsewhere"
+        step.locked = True
+        step.first_field.setEnabled(False)
+        step.named.setEnabled(False)
+        rail.take_keyboard()
+        held = window.focusWidget()
+        window._to_page()
+        app.processEvents()
+        assert window.focusWidget() is not step.heading_button, "the keyboard landed on the heading's button"
+        assert window.focusWidget() is held
+
+
+def test_a_page_asks_the_window_to_go_somewhere_through_the_screen():
+    """A step asks the window to go to another place through its screen's signal, which is ``go_to``: a step of Parameter
+    inference by its name, and another part with no page."""
+    qt_app()
+    window = build_window()
+    inference = window.part("inference")
+    inference.navigate.emit("inference", "prior")
+    assert window.current_place() == ("inference", "prior")
+    inference.navigate.emit("help", None)
+    assert window.current_place() == ("help", None)
+
+
+def test_the_margin_of_parameter_inference_stands_on_each_old_panel_and_on_no_page_of_the_look(monkeypatch):
+    """The place's margin stands on each old panel, which so stands where it stood, and not on the part: a page of the
+    look brings its own margin, and takes none here, at either text size."""
+    from PySide6.QtCore import QMargins
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.widgets.page import Page
+    from tests._look_helpers import text_size
+    qt_app()
+
+    class Step(Page):
+        def refresh_local_gates(self):
+            pass
+
+    today, step = InferenceScreen.panels, None
+
+    def with_a_step(screen):
+        return [step, *today(screen)]
+
+    monkeypatch.setattr(InferenceScreen, "panels", with_a_step)
+    for factor in (1.0, 1.5):
+        with text_size(factor):
+            step = Step()
+            window = build_window()
+            inference = window.part("inference")
+            margin = design.scaled(12) - 6
+            assert inference.contentsMargins() == QMargins(0, 0, 0, 0), "the part keeps a margin of its own"
+            assert step.contentsMargins() == QMargins(0, 0, 0, 0), "a page of the look was given the margin"
+            assert all(panel.contentsMargins() == QMargins(margin, margin, margin, margin)
+                       for panel in today(inference)), "an old panel lost its margin"
+
+
+def _a_screen_of(width, height):
+    """A stand-in for a screen of that many usable pixels, as the signal of a change of screen hands one."""
+    from PySide6.QtCore import QRect
+    return SimpleNamespace(availableGeometry=lambda: QRect(0, 0, width, height))
+
+
+def test_the_window_reads_the_room_again_when_it_moves_to_another_screen():
+    """Above the ordinary text size the look's two thresholds are held to the screen the window stands on, and move with
+    it, with a margin left free as when the window is built, the low form and the two columns following at once, with no
+    resize: a window on a large screen moved to a low one takes the usual form again, and a page that set its two blocks
+    one above the other sets them side by side. A screen taken away with no other left comes as nothing, and changes
+    nothing. With no screen named the room is the primary screen's, as when the window is built."""
+    from core.gui import main_window
+    from tests._look_helpers import text_size
+    app = qt_app()
+    window = build_window()
+    with text_size(1.5):
+        design.set_room((3400, 1380))
+        window.setMinimumSize(1, 1)
+        _shown_off_screen(window, 1500, 1000)
+        home = window.part("home")
+        assert (design.small_below(), design.two_columns_from(), home.page.is_small()) == (1050, 1410, True)
+        window._screen_moved(_a_screen_of(1200, 900))
+        app.processEvents()
+        assert (design.small_below(), design.two_columns_from()) == (840, 1160), "the room was not read with its margin"
+        assert (window.shell._small, home.page.is_small()) == (False, False), "the pages were not told"
+        window._screen_moved(_a_screen_of(3440, 1440))
+        app.processEvents()
+        assert (design.small_below(), design.two_columns_from(), home.page.is_small()) == (1050, 1410, True)
+        window._screen_moved(None)
+        assert (design.small_below(), design.two_columns_from()) == (1050, 1410)
+        # Two screens of one height, whose only difference is the width from which two columns stand side by side: no
+        # form changes, nothing is resized, and the columns follow all the same.
+        window.resize(1600, 1100)
+        app.processEvents()
+        columns = home.findChild(Columns)
+        assert columns.stacked() and not window.shell._small, "the two blocks should stand one above the other here"
+        window._screen_moved(_a_screen_of(1200, 1440))
+        app.processEvents()
+        assert design.two_columns_from() == 1160 and not columns.stacked(), "the two columns did not follow the screen"
+        window._screen_moved(_a_screen_of(3440, 1440))
+        app.processEvents()
+        assert columns.stacked(), "the two columns did not follow it back"
+    assert main_window._room_on_screen(_a_screen_of(1200, 900)) == (1160, 840)
+    primary = window.screen().availableGeometry()
+    assert main_window._room_on_screen() == (primary.width() - 40, primary.height() - 60), "the built window's room moved"
+
+
+def test_at_the_ordinary_text_size_a_move_to_another_screen_changes_nothing_a_person_sees(monkeypatch):
+    """At the ordinary text size the table's numbers stand whatever the screen, so that moved between screens that can
+    hold the table's least size the window keeps its size, its form and that least size, what it shows is the same to the
+    pixel, and its parts are told no form but the one they were told before."""
+    app = qt_app()
+    window = build_window()
+    window._screen_moved(_a_screen_of(3440, 1440))           # the screen the window stands on, whatever the test's has
+    _shown_off_screen(window, 1300, 820)
+    assert (window.minimumWidth(), window.minimumHeight()) == (900, 600), "the least size is not the table's"
+    window.part("home").grab()
+    app.processEvents()
+    before, told = window.grab().toImage(), []
+    kept = window.shell.set_small
+    monkeypatch.setattr(window.shell, "set_small", lambda on: (told.append(on), kept(on))[1])
+    for width, height in ((1920, 1080), (1000, 700), (3440, 1440)):
+        window._screen_moved(_a_screen_of(width, height))
+        app.processEvents()
+        assert (window.width(), window.height(), window.minimumWidth(), window.minimumHeight()) == (1300, 820, 900, 600), (
+            width, height, window.size(), window.minimumSize())
+        assert (design.small_below(), design.two_columns_from(), window.shell._small) == (700, 940, False), (width, height)
+    assert set(told) == {False}, f"a form was told that was not told before: {told}"
+    assert window.grab().toImage() == before, "a move at the ordinary text size changed what the window shows"
+
+
+def test_the_least_size_follows_the_screen_and_the_window_is_not_resized():
+    """The window's least size is held to the screen it stands on, at every text size, as when it is built, and a move
+    leaves the window the size it was: a window too large for a smaller screen can now be made to fit it, and is not made
+    to. A window made small there and moved back stands below the larger least size, and the toolkit brings it up to
+    that, which is what a least size is. A screen taken away changes nothing."""
+    from tests._look_helpers import text_size
+    qt_app()
+    window = build_window()
+
+    def sizes():
+        return (window.width(), window.height()), (window.minimumWidth(), window.minimumHeight())
+
+    with text_size(1.5):
+        window.setMinimumSize(1, 1)
+        _shown_off_screen(window, 1950, 1230)
+        window._screen_moved(_a_screen_of(3440, 1440))
+        assert sizes() == ((1950, 1230), (1350, 900)), sizes()
+        window._screen_moved(_a_screen_of(1280, 720))
+        assert sizes() == ((1950, 1230), (1240, 660)), "the move resized the window, or left its least size"
+        window._screen_moved(None)
+        assert sizes() == ((1950, 1230), (1240, 660)), sizes()
+        window.resize(1240, 660)
+        QApplication.processEvents()
+        assert sizes() == ((1240, 660), (1240, 660)), "the window cannot be made to fit the smaller screen"
+        window._screen_moved(_a_screen_of(3440, 1440))
+        assert sizes() == ((1350, 900), (1350, 900)), "the larger least size did not bring the window up to it"
+    window._screen_moved(_a_screen_of(800, 500))
+    assert sizes() == ((1350, 900), (760, 440)), "at the ordinary text size the least size was not held to the screen"
+    window._screen_moved(_a_screen_of(3440, 1440))
+    assert sizes() == ((1350, 900), (900, 600)), "the table's least size did not come back"
+
+
+def test_a_change_of_screen_is_heard_once_and_goes_with_the_window(monkeypatch):
+    """The window listens to its native window's change of screen once, from its first show: however often it is hidden
+    and shown again one connection stands, to a method of its own, and it goes with the native window as the window is
+    deleted, so that nothing is left listening. A window first shown on the primary screen has not moved: what it read as
+    it was built stands."""
+    import shiboken6
+    from PySide6.QtCore import QCoreApplication, QEvent, SIGNAL
+    app = qt_app()
+    moved = []
+    monkeypatch.setattr(MainWindow, "_screen_moved", lambda self, screen: moved.append(screen))
+    window = build_window()
+    assert window.windowHandle() is None, "a window not shown has no native window to listen to"
+    _shown_off_screen(window)
+    assert moved == [], "a window first shown on the primary screen was taken to have moved"
+    handle, signal = window.windowHandle(), SIGNAL("screenChanged(QScreen*)")
+    listening = handle.receivers(signal)                 # the toolkit's own listeners among them
+    window.hide()
+    window.show()
+    app.processEvents()
+    assert window.windowHandle() is handle and handle.receivers(signal) == listening, "a second show listened again"
+    handle.screenChanged.disconnect(window._screen_moved)
+    assert handle.receivers(signal) == listening - 1, "the window's own listener is not the one that stands"
+    handle.screenChanged.connect(window._screen_moved)
+    window.hide()
+    window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert not shiboken6.isValid(window) and not shiboken6.isValid(handle), "the native window outlived the window"
+
+
+# The child of the test below: a fresh interpreter, for the platform's screens are read as its application is made. The
+# window is really shown and really moved, on a platform that shows nothing, with two screens of a file in the working
+# folder, which is the first argument; the platform cannot read a path that holds a drive's colon.
+_ON_TWO_SCREENS = r'''
+import json, os, sys
+folder = sys.argv[1]
+root = os.getcwd()
+import matplotlib
+matplotlib.use("Agg")
+from PySide6.QtWidgets import QApplication
+from core.gui import design, fonts, settings, style, theming
+settings.use_ini_file(os.path.join(folder, "prism.ini"))
+os.chdir(folder)
+app = QApplication(["two screens"])
+os.chdir(root)
+design.set_text_scale(1.5)
+design.set_dark(False)
+style.install(app)
+fonts.load_app_font(app)
+appearance = theming.Appearance(app)
+appearance.set_mode("light")
+from tests._fixtures import build_window
+
+
+def state(window):
+    return {"screen": window.windowHandle().screen().name(), "small_below": design.small_below(),
+            "two_columns": design.two_columns_from(), "small": window.shell._small,
+            "least": [window.minimumWidth(), window.minimumHeight()]}
+
+
+window = build_window()
+window.resize(1400, 1000)
+window.show()
+app.processEvents()
+report = {"opened": state(window)}
+window.move(2600, 10)
+app.processEvents()
+report["moved"] = state(window)
+window.move(10, 10)
+app.processEvents()
+report["back"] = state(window)
+window.hide()
+other = build_window()
+other.resize(1400, 1000)
+other.move(2600, 10)
+other.show()
+app.processEvents()
+report["opened there"] = state(other)
+print(json.dumps(report), file=sys.__stdout__, flush=True)
+'''
+
+
+def test_a_real_change_of_screen_lays_the_window_out_for_the_screen_it_stands_on(tmp_path):
+    """Moved by the toolkit's own route from a large screen to a small one and back, at one and a half times the ordinary
+    text size, the window's thresholds and its least size are held to the screen it stands on, and its low form follows;
+    and a window first shown on the second screen, where a remembered place puts it, stands on that screen's room from
+    the start. What is proved here is the toolkit's signal, on a platform of two screens of one scaling: a real display
+    of another scaling is a person's to read."""
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    (tmp_path / "screens.json").write_text(json.dumps({"screens": [
+        {"name": "large", "x": 0, "y": 0, "width": 2560, "height": 1440, "logicalDpi": 96, "logicalBaseDpi": 96,
+         "dpr": 1},
+        {"name": "small", "x": 2560, "y": 0, "width": 1600, "height": 900, "logicalDpi": 96, "logicalBaseDpi": 96,
+         "dpr": 1}]}), encoding="utf-8")
+    (tmp_path / "Artifacts").mkdir()
+    environment = {**os.environ, "QT_QPA_PLATFORM": "offscreen:configfile=screens.json", "CUDA_VISIBLE_DEVICES": "-1",
+                   "KMP_DUPLICATE_LIB_OK": "TRUE", "PRISM_ARTIFACTS": str(tmp_path / "Artifacts")}
+    environment.pop("QT_SCALE_FACTOR", None)
+    environment.pop("PRISM_VRAM_CEILING_GIB", None)
+    child = subprocess.run([sys.executable, "-c", _ON_TWO_SCREENS, str(tmp_path)],
+                           cwd=Path(__file__).resolve().parents[1], env=environment, capture_output=True, text=True,
+                           encoding="utf-8", timeout=120)
+    assert child.returncode == 0, child.stderr[-2000:]
+    report = json.loads(child.stdout.splitlines()[-1])
+    large = {"small_below": 1050, "two_columns": 1410, "least": [1350, 900]}
+    small = {"small_below": 840, "two_columns": 1410, "least": [1350, 840]}
+    assert report["opened"] == {"screen": "large", **large, "small": True}, report
+    assert report["moved"] == {"screen": "small", **small, "small": False}, report
+    assert report["back"] == {"screen": "large", **large, "small": True}, report
+    assert report["opened there"] == {"screen": "small", **small, "small": False}, report

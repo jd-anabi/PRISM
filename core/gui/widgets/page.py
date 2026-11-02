@@ -197,11 +197,16 @@ class Scroller(QScrollArea):
         self._holder.setContentsMargins(room, 0, room + (design.SIZE["scroll_gap"] if scrolls else 0), room)
         self.setFocusPolicy(Qt.TabFocus if scrolls else Qt.NoFocus)
 
-    @reported(QScrollArea.resizeEvent)
-    def resizeEvent(self, event):
-        fit = getattr(self.body, "fit", None)                # asked at every resize: a body need not offer one
+    def fit_body(self) -> None:
+        """Tell the body how wide the page is, when it asks: at every resize, and when the look's width for two columns
+        has changed with no resize."""
+        fit = getattr(self.body, "fit", None)                # asked each time: a body need not offer one
         if fit is not None:                                  # the width it has while the bar and its gap are there
             fit(self.width() - 2 * _ring_room() - design.SIZE["scroll_bar"] - design.SIZE["scroll_gap"])
+
+    @reported(QScrollArea.resizeEvent)
+    def resizeEvent(self, event):
+        self.fit_body()
         super().resizeEvent(event)                           # last: the body is laid out in the form it just took
 
 

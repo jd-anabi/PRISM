@@ -50,6 +50,8 @@ class InferenceScreen(QWidget):
     (``show_page`` is the same) and ``current_step`` (or ``current_page``) names the one shown.
     """
     states_changed = Signal(object)
+    # A page asks the window to go somewhere: a part, and a page of it or None.
+    navigate = Signal(str, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -81,6 +83,24 @@ class InferenceScreen(QWidget):
     def panels(self):
         return [self.config_panel, self.prior_panel, self.posterior_panel,
                 self.validate_panel, self.infer_panel, self.tsnpe_panel]
+
+    def set_small(self, on: bool) -> None:
+        """The low window, or the ordinary one again: told to every step that offers it."""
+        for panel in self.panels():
+            told = getattr(panel, "set_small", None)
+            if callable(told):
+                told(on)
+
+    def first_focus(self):
+        """The control the step shown names for the keyboard to start at; None when it names none, and the keyboard
+        then starts at its first setting."""
+        first = getattr(self.pages.currentWidget(), "first_focus", None)
+        return first() if callable(first) else None
+
+    def pending(self) -> frozenset[str]:
+        """The steps whose page holds a choice not yet applied: none, while no step tells what it holds from what it
+        shows."""
+        return frozenset()
 
     def show_step(self, name: str) -> None:
         """Show the step whose key is ``name``, whether or not it can start; KeyError, naming it, for a key that

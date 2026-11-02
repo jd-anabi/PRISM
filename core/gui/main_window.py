@@ -39,6 +39,7 @@ from .screens.temperature_screen import TemperatureScreen
 from .session import SbiSession
 from .widgets.artifact_picker import StorePicker
 from .widgets.ask import ask
+from .widgets.page import Scroller
 from .widgets.page_names import PageNames
 
 log = logging.getLogger(__name__)
@@ -64,10 +65,10 @@ def _available(widget=None):
     return screen.availableGeometry() if screen is not None else None
 
 
-def _room_on_screen() -> tuple[int, int]:
-    """What the screen can show of a window, (width, height), with a small margin left free. When Qt
-    knows no screen it is Qt's own largest widget size, so nothing is held back."""
-    rect = _available()
+def _room_on_screen(screen=None) -> tuple[int, int]:
+    """What ``screen``, or else the primary screen, can show of a window, (width, height), with a small margin left
+    free. When Qt knows no screen it is Qt's own largest widget size, so nothing is held back."""
+    rect = _available() if screen is None else screen.availableGeometry()
     if rect is None:
         return 16_777_215, 16_777_215
     return rect.width() - 40, rect.height() - 60
@@ -264,6 +265,7 @@ class MainWindow(QMainWindow):
         # Every record of the store in use and the latest runs of its records folder, as Home last read them: read
         # again only after a run has ended, as Home is opened and when the store changes (None: at Home's next reading).
         self._stored = None
+        self._hears_the_screen = False           # whether the native window's changes of screen are heard yet
         self._close_at_end = False               # the close was asked for: the window closes once the run has ended
         self._ends_tries = False                 # ... asked while the run waited to be tried again: it ended the tries
         # From Windows' question to end the session until it is cancelled the close asks nothing.
@@ -326,6 +328,33 @@ class MainWindow(QMainWindow):
         # while an end waits to be seen.
         if controller().status.state != "idle":
             self._on_status(controller().status)
+
+    @reported(QMainWindow.showEvent)
+    def showEvent(self, event):
+        """The first show: the window has a native window now, whose changes of screen it hears from then on. One that
+        opens on another screen than the primary one, where a remembered place put it, has moved already."""
+        super().showEvent(event)
+        handle = self.windowHandle()
+        if handle is not None and not self._hears_the_screen:
+            self._hears_the_screen = True
+            handle.screenChanged.connect(self._screen_moved)
+            from PySide6.QtGui import QGuiApplication
+            if handle.screen() is not QGuiApplication.primaryScreen():
+                self._screen_moved(handle.screen())
+
+    def _screen_moved(self, screen) -> None:
+        """The window stands on ``screen`` now: the look's two layout thresholds and the window's least size are held to
+        what that screen offers, and the pages lay themselves out for it, at every text size, for at the ordinary one the
+        thresholds' table keeps its own numbers. The window is not resized here: only the toolkit brings a window up to a
+        larger least size. A screen taken away with no other left comes as None and is not read."""
+        if screen is None:
+            return
+        room = _room_on_screen(screen)
+        design.set_room(room)
+        self.setMinimumSize(*design.window_sizes(room)[1])
+        self.shell.set_small(self.shell.height() < design.small_below())
+        for scroller in self.findChildren(Scroller):
+            scroller.fit_body()
 
     def set_appearance_mode(self, mode):
         """Apply + persist an appearance mode, and show it on the Settings screen when that is built: one built
@@ -411,11 +440,16 @@ class MainWindow(QMainWindow):
         its panels lives, and, while a run is live, its panels locked as those of the parts built already are."""
         if name in _OWN_INSET:                                   # the place's margin, less what it stands in
             margin = design.scaled(_PLACE_MARGIN) - _OWN_INSET[name]
-            widget.setContentsMargins(margin, margin, margin, margin)
+            # On Parameter inference the margin stands on each old panel and not on the part: a page of the look brings
+            # its own, and would stand that much further in from the rail than Home does.
+            for holder in ([panel for panel in widget.panels() if isinstance(panel, BasePanel)]
+                           if name == "inference" else [widget]):
+                holder.setContentsMargins(margin, margin, margin, margin)
         if name == "home":
             widget.navigate.connect(self.go_to)
             widget.open_run.connect(self._open_run)
         elif name == "inference":
+            widget.navigate.connect(self.go_to)
             # The six steps' states go to the rail and to Home each time they are worked out again.
             widget.states_changed.connect(self._states_changed)
         elif name == "temperature":

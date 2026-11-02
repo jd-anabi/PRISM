@@ -5680,3 +5680,31 @@ def test_nothing_of_the_run_page_is_hidden_at_150_percent_display_scaling(tmp_pa
             assert row["page_on_top"] and row["form_on_top"], (name, "something else stands at an edge", row)
     least = report["frame"][0]
     assert (least["form_right"], least["left"], least["wide"]) == (558, 562, 326), least
+
+
+@pytest.mark.parametrize("factor, screen", [(1.0, (1000, 700)), (1.0, (853, 480)), (1.5, (1280, 720))],
+                         ids=["a screen that holds the table's size", "a screen smaller than it", "text 1.5"])
+def test_nothing_of_the_run_page_is_hidden_after_a_move_to_another_screen(factor, screen, tmp_path):
+    """Moved to another screen with a run live and made as small as that screen lets it, the window still has the form
+    and the run's page sharing its width with neither drawn over the other: the least size follows the screen, and the
+    owner's sentence follows the least size."""
+    from PySide6.QtCore import QRect
+    from core.gui import design
+    from core.gui.run.controller import controller
+    from tests._fixtures import qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import StandIn, start_run, turn_until
+    app = qt_app()
+    with text_size(factor), _the_look(False):
+        window, host, _opening, _least = _in_the_look_at(_LARGE_SCREEN, tmp_path, _NARROWING)
+        stand_in = StandIn()
+        start_run(host, stand_in, spec=_training(stop_button="Stop the run…", place=_NARROWING))
+        window._screen_moved(SimpleNamespace(availableGeometry=lambda: QRect(0, 0, *screen)))
+        least = window.minimumWidth(), window.minimumHeight()
+        assert least == design.window_sizes((screen[0] - 40, screen[1] - 60))[1], least
+        window.resize(*least)
+        _settle()
+        assert (window.width(), window.height()) == least
+        _the_two_share_the_width(window, host, (factor, screen))
+        stand_in.release()
+        turn_until(app, lambda: not controller().is_live())
