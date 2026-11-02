@@ -2373,19 +2373,434 @@ def test_help_shows_the_help_text_that_settings_held():
     assert not hasattr(settings_screen, "help_text"), "the help text is built in two places"
 
 
-def test_settings_keeps_the_appearance_choices_alone():
-    """Settings holds its heading over the appearance choices, Follow Windows, Light and Dark, and nothing else: no
-    help text, no list of models and no button that opens the model builder."""
-    from PySide6.QtWidgets import QAbstractButton, QGroupBox, QLabel, QRadioButton, QTextBrowser
+def test_settings_holds_the_appearance_and_this_computer():
+    """Settings is a page of two headed sections and no boxes, its heading with no sentence under it: "Appearance",
+    with the three choices and the line on the text size, and "This computer"; no help text, no list of models and no
+    button that opens the model builder."""
+    from PySide6.QtGui import QFont
+    from PySide6.QtWidgets import QGroupBox, QPushButton, QRadioButton, QTextBrowser
+    from core.gui.widgets.page import Page, PageHead, Scroller
+    from core.gui.widgets.ruled import SectionHead
     qt_app()
     window = build_window()
     settings = window.part("settings")
-    assert [box.title() for box in settings.findChildren(QGroupBox)] == ["Appearance"]
-    buttons = settings.findChildren(QAbstractButton)
-    assert all(isinstance(button, QRadioButton) for button in buttons)
-    assert [button.text() for button in buttons] == ["Follow Windows", "Light", "Dark"]
+    assert settings.findChildren(QGroupBox) == []
+    assert [head.label.text() for head in settings.findChildren(SectionHead)] == ["Appearance", "This computer"]
+    head, = settings.findChildren(PageHead)
+    assert (head.title.text(), head.sentence.plain_text()) == ("Settings", "")
+    assert len(settings.findChildren(Page)) == len(settings.findChildren(Scroller)) == 1
+    assert [button.text() for button in settings.findChildren(QRadioButton)] == [
+        "Follow Windows", "Light", "Dark", "No limit", "Limit each batch to"]
+    assert [button.text() for button in settings.findChildren(QPushButton)] == ["Read now"]
+    assert "Text size follows the text size set in Windows." in [
+        line.plain_text() for line in settings.findChildren(Sentence)]
     assert settings.findChildren(QTextBrowser) == []
-    assert [label.text() for label in settings.findChildren(QLabel)] == ["Settings"]
+    box = settings.limit_field
+    assert (box.alignment() & Qt.AlignRight, box.width(), box.minimumWidth(), box.maximumWidth()) == (
+        Qt.AlignRight, design.scaled(120), design.scaled(120), design.scaled(120))
+    assert QFont.Tag.fromString("tnum") in box.font().featureTags(), "the digits of the box are not of equal width"
+    assert box.accessibleName() == "Limit each batch to, in GiB"
+
+
+def _settings_page():
+    """Settings alone, its appearance going nowhere."""
+    from core.gui.screens.settings_screen import SettingsScreen
+    return build_part(SettingsScreen, on_mode=lambda _mode: None)
+
+
+def _type_the_limit(field, text):
+    """``text`` typed in the field of the memory limit as a person types it, each key through the field's own rule of
+    what can stand there, then Enter."""
+    field.clear()
+    QTest.keyClicks(field, text)
+    QTest.keyClick(field, Qt.Key_Return)
+
+
+def _each_reading_of_the_last_run(monkeypatch):
+    """Every reading of the run history for the last run on this computer from now on, each as what it was handed."""
+    from core.gui.run import history
+    reads = []
+    for name in ("last_on", "last_measured_on"):
+        monkeypatch.setattr(history, name, lambda *args, read=getattr(history, name): reads.append(args) or read(*args))
+    return reads
+
+
+def _each_write(monkeypatch):
+    """Every value remembered from now on, each as its key and its value."""
+    from core.gui import remembered
+    kept, written = remembered.put, []
+
+    def put(key, value):
+        written.append((key, value))
+        kept(key, value)
+
+    monkeypatch.setattr(remembered, "put", put)
+    return written
+
+
+@pytest.mark.parametrize("typed, line", (
+    ("", "The field is empty. In force, unchanged: 6 GiB. To run without a limit, choose 'No limit'."),
+    ("6,5", "Use a point as the decimal sign. In force, unchanged: 6 GiB."),
+    ("-", "That is not a number. In force, unchanged: 6 GiB."),
+    ("e", "That is not a number. In force, unchanged: 6 GiB."),
+    ("1e999", "That is not a number. In force, unchanged: 6 GiB."),
+    ("1e300", "That is too large. In force, unchanged: 6 GiB."),
+    ("2e299", "That is too large. In force, unchanged: 6 GiB."),
+    ("0", "The limit must be above 0. To run without a limit, choose 'No limit'."),
+    ("-2", "The limit must be above 0. To run without a limit, choose 'No limit'.")))
+def test_a_mistyped_limit_is_not_applied_and_says_why(typed, line, monkeypatch):
+    """A blank, a comma, what is no number, a value that is not finite, one so large that the planner cannot turn it
+    into a count of bytes, a 0 or a negative is not applied when editing ends: the limit stays what it was, nothing is
+    stored, and the line beside the field says why, the box marked. A good
+    number then takes the line back, is applied and stored once, however often editing ends on it."""
+    from core import config
+    from core.SBI import pipeline
+    from core.gui import memory_limit
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    memory_limit.set_memory_limit(6.0)
+    page, written = _settings_page(), _each_write(monkeypatch)
+    field = page.limit_field
+    assert (page.limited.isChecked(), field.text(), page.in_force.plain_text()) == (True, "6", "In force: 6 GiB.")
+    _type_the_limit(field, typed)
+    assert page.limit_line.plain_text() == line
+    assert not page.limit_line.isHidden(), "the line beside the field stayed hidden"
+    assert field.error() == line, "the box is not marked"
+    assert (config.SIM_VRAM_CEILING_GIB, written) == (6.0, []), "a mistyped limit was applied"
+    assert page.in_force.plain_text() == "In force: 6 GiB."
+    _type_the_limit(field, "7.5")
+    QTest.keyClick(field, Qt.Key_Return)
+    field.editingFinished.emit()
+    assert (page.limit_line.plain_text(), page.limit_line.isHidden(), field.error()) == ("", True, "")
+    assert (config.SIM_VRAM_CEILING_GIB, page.in_force.plain_text()) == (7.5, "In force: 7.5 GiB.")
+    assert written == [(f"computer/{memory_limit.computer()}/memory_limit_gib", "7.5")], "stored once for each change"
+
+
+def test_a_mistyped_limit_with_no_limit_in_force_says_so():
+    """With no limit in force the line says so where it would say the limit."""
+    page = _settings_page()
+    page.limited.click()
+    assert (page.limit_field.isEnabled(), page.limit_line.isHidden()) == (True, True), "a press of it is no error"
+    _type_the_limit(page.limit_field, "6,5")
+    assert page.limit_line.plain_text() == "Use a point as the decimal sign. In force, unchanged: no limit."
+    assert page.in_force.plain_text() == "In force: no limit."
+
+
+def test_the_two_options_apply_a_limit_and_take_it_away(monkeypatch):
+    """"No limit" is a choice of its own: pressing it takes the limit away, takes back what was said beside the field
+    and greys the field. Pressing "Limit each batch to" opens the field, and a good number it holds is applied at once;
+    one that is not good is judged at once; a blank one waits for the person to type. A keystroke applies nothing."""
+    from core import config
+    from core.SBI import pipeline
+    from core.gui import memory_limit
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    page, written = _settings_page(), _each_write(monkeypatch)
+    key = f"computer/{memory_limit.computer()}/memory_limit_gib"
+    assert (page.no_limit.isChecked(), page.limit_field.isEnabled()) == (True, False)
+    page.limited.click()
+    assert (written, page.limit_field.isEnabled(), page.limit_field.text()) == ([], True, "")
+    QTest.keyClicks(page.limit_field, "6")
+    assert (config.SIM_VRAM_CEILING_GIB, written) == (0.0, []), "a keystroke applied the limit"
+    QTest.keyClick(page.limit_field, Qt.Key_Return)
+    assert (config.SIM_VRAM_CEILING_GIB, written) == (6.0, [(key, "6")])
+    page.no_limit.click()
+    assert (config.SIM_VRAM_CEILING_GIB, written[-1]) == (0.0, (key, "none"))
+    assert (page.limit_field.isEnabled(), page.limit_field.text()) == (False, "6"), "it keeps what it held, greyed"
+    assert page.in_force.plain_text() == "In force: no limit."
+    page.limit_field.editingFinished.emit()
+    assert config.SIM_VRAM_CEILING_GIB == 0.0, "the field was judged under the other option"
+    page.limited.click()
+    assert (config.SIM_VRAM_CEILING_GIB, written[-1]) == (6.0, (key, "6")), "the number the field held was not applied"
+    page.limit_field.setText("-")
+    QTest.keyClick(page.limit_field, Qt.Key_Return)
+    assert page.limit_line.plain_text() == "That is not a number. In force, unchanged: 6 GiB."
+    page.no_limit.click()
+    assert (page.limit_line.isHidden(), page.limit_field.error()) == (True, ""), "the line outlived its field"
+    page.limited.click()
+    assert (config.SIM_VRAM_CEILING_GIB, page.limit_line.plain_text()) == (
+        0.0, "That is not a number. In force, unchanged: no limit."), "what the field holds is judged as its option is"
+
+
+@pytest.mark.parametrize("variable, chosen, line, free", (
+    ("6.5", 6.0, "Set outside PRISM by PRISM_VRAM_CEILING_GIB = 6.5. It takes precedence; the limit remembered here "
+                 "(6 GiB) is not in use.", False),
+    ("0", 6.0, "Set outside PRISM by PRISM_VRAM_CEILING_GIB = 0, which means no limit. It takes precedence; the limit "
+               "remembered here (6 GiB) is not in use.", False),
+    ("-2", 6.0, "Set outside PRISM by PRISM_VRAM_CEILING_GIB = -2, which means no limit. It takes precedence; the "
+                "limit remembered here (6 GiB) is not in use.", False),
+    ("6.5", None, "Set outside PRISM by PRISM_VRAM_CEILING_GIB = 6.5. It takes precedence; no limit is remembered "
+                  "here.", False),
+    ("6,5", 6.0, "PRISM_VRAM_CEILING_GIB is set to '6,5', which is not a number. PRISM ignores it. In force: 6 GiB.",
+     True),
+    ("abc", None, "PRISM_VRAM_CEILING_GIB is set to 'abc', which is not a number. PRISM ignores it. In force: no "
+                  "limit.", True)))
+def test_a_number_in_the_environment_takes_precedence_and_says_so(variable, chosen, line, free, monkeypatch):
+    """A number in the variable decides: the options and the field are greyed and the line says what decides, and that
+    the limit remembered is not in use, with a word for a number that means no limit. A variable that holds no number
+    is ignored, and the line says that too and what is in force; the options stay free."""
+    from core.SBI import pipeline
+    from core.gui import memory_limit
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    memory_limit.set_memory_limit(chosen)
+    monkeypatch.setenv(pipeline.VRAM_CEILING_ENV, variable)
+    page = _settings_page()
+    assert page.in_force.plain_text() == line
+    assert (page.no_limit.isEnabled(), page.limited.isEnabled(), page.limit_field.isEnabled()) == (
+        free, free, free and chosen is not None)
+    assert (page.limited if chosen is not None else page.no_limit).isChecked(), "the options show the limit remembered"
+
+
+def test_the_note_says_what_the_limit_does_and_gives_no_advice():
+    """The note under the options says what a limit does and what no limit means, in these words, and gives no advice:
+    no figure to set, nothing about an idle card, nothing that fits."""
+    from core.gui.widgets.page import Sentence
+    said = [line.plain_text() for line in _settings_page().findChildren(Sentence)]
+    assert ("A lower limit makes PRISM split a batch into smaller pieces, which takes longer and changes nothing in "
+            "what is simulated. A limit above what PRISM would plan anyway changes nothing. With no limit, PRISM plans "
+            "from the free-memory figure Windows gives it, which can count memory other programs are using as "
+            "free.") in said
+    assert ("Memory limit. The most graphics-card memory one batch of simulations may plan to use.") in said
+    whole = " ".join(said).lower()
+    assert not [word for word in ("idle card", "fits", "minus", "only if", "recommend") if word in whole]
+
+
+def test_free_memory_is_read_only_on_a_press_and_off_the_windows_thread(tmp_path, monkeypatch):
+    """The free memory is read only when its button is pressed, by the program that reads it truly, unchanged, on a
+    thread of its own: never as the page is built or shown, and no card and no program is touched then. A press while a
+    reading is under way starts no second one. The sentence says the figure and the moment by the clock of the runs, and
+    the button offers to read again; a reading that finds no card says so, and offers the same."""
+    import threading
+    from PySide6.QtCore import QThreadPool, QTimer
+    from core.artifacts import provenance
+    app = qt_app()
+    _held, clock = _on_the_runs_clock(tmp_path, _at(6, 12, 4))
+    calls = _card_and_programs(monkeypatch)
+    threads, answers, gate = [], [12.48, None], threading.Event()
+
+    def reader():
+        threads.append(threading.current_thread())
+        gate.wait(10)
+        return answers.pop(0)
+
+    monkeypatch.setattr(provenance, "_nvidia_smi_free_gib", reader)
+    window = build_window()
+    try:
+        _shown_off_screen(window)
+        window.go_to("settings")
+        QApplication.processEvents()
+        page = window.part("settings")
+        assert (threads, calls) == ([], []), "the page read the card as it was built or shown"
+        assert (page.free_memory.plain_text(), page.read_button.text()) == (
+            "Free graphics-card memory: not read yet.", "Read now")
+        page.read_button.click()
+        turn_until(app, lambda: threads)
+        assert threads[0] is not threading.main_thread(), "the program ran on the window's thread"
+        page.read_button.click()
+        gate.set()
+        turn_until(app, lambda: page.read_button.text() == "Read again")
+        assert len(threads) == 1, "a press during a reading started a second one"
+        assert page.free_memory.plain_text() == "Free graphics-card memory: 12.5 GiB, read 6 Oct 2026, 12:04."
+        clock.advance(3600)
+        gate.clear()
+        page.read_button.click()
+        turn_until(app, lambda: len(threads) == 2)
+        gate.set()
+        turn_until(app, lambda: "could not" in page.free_memory.plain_text())
+        assert page.free_memory.plain_text() == "Free graphics-card memory: could not be read."
+        assert (page.read_button.text(), calls) == ("Read again", [])
+        assert not page.findChild(QTimer).isActive(), "the timer ticks on after the answer"
+    finally:
+        gate.set()
+        QThreadPool.globalInstance().waitForDone(10000)
+        window.hide()
+
+
+def test_a_late_answer_of_the_free_memory_reading_is_dropped(monkeypatch):
+    """A reading whose page has gone answers nothing: its thread ends with no error and nothing reaches the page, for it
+    touches nothing of the toolkit: a signal sent on its thread from an object the window's thread is deleting ends the
+    process. The timer that looks for the answer goes with the page, and stops with the answer, so that nothing ticks
+    once a reading is over."""
+    import threading
+    import shiboken6
+    from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool, QTimer
+    from core.artifacts import provenance
+    from core.gui.screens import settings_screen
+    from tests._fixtures import code_only
+    app = qt_app()
+    raised, began, gate = [], threading.Event(), threading.Event()
+
+    def reader():
+        began.set()
+        gate.wait(10)
+        return 12.5
+
+    monkeypatch.setattr(provenance, "_nvidia_smi_free_gib", reader)
+    monkeypatch.setattr(sys, "excepthook", lambda *error: raised.append(error))
+    assert "emit" not in code_only(settings_screen._FreeMemoryReading), "a reading sends a signal from its own thread"
+    page = _settings_page()
+    assert not page.findChild(QTimer).isActive(), "a timer ticks before any press"
+    try:
+        page.read_button.click()
+        assert page.findChild(QTimer).isActive(), "nothing looks for the answer"
+        assert began.wait(10), "the reading did not start"
+        page.deleteLater()
+        QCoreApplication.sendPostedEvents(page, QEvent.DeferredDelete)
+        assert not shiboken6.isValid(page)
+    finally:
+        gate.set()
+    assert QThreadPool.globalInstance().waitForDone(10000), "the reading did not end"
+    app.processEvents()
+    assert raised == [], "an answer that came too late raised"
+
+
+def test_a_setting_that_could_not_be_remembered_says_so(monkeypatch):
+    """A settings file that cannot be written stops nothing: the limit is in force. But it will not be there at the next
+    launch, and the page says so where a person reads it; a change that reaches the file takes that back. The real file
+    is made read-only, as a person or a synchronising program makes it."""
+    import os
+    import stat
+    from pathlib import Path
+    from core import config
+    from core.gui import memory_limit, settings as st
+    memory_limit.set_memory_limit(4.0)
+    path = Path(st.settings().fileName())
+    page = _settings_page()
+    assert page.not_kept.isHidden()
+    os.chmod(path, stat.S_IREAD)
+    try:
+        assert memory_limit.set_memory_limit(5.0) is False, "a write that failed was said to have reached the file"
+        memory_limit.set_memory_limit(4.0)
+        page.no_limit.click()
+        assert (config.SIM_VRAM_CEILING_GIB, page.not_kept.isHidden()) == (0.0, False), "the page said nothing"
+        assert page.not_kept.plain_text() == ("What you just set could not be remembered: the settings file cannot be "
+                                              "written. It holds until PRISM closes.")
+        assert b"memory_limit_gib=4" in path.read_bytes(), "the write reached the file"
+    finally:
+        os.chmod(path, stat.S_IWRITE)
+    page.limited.click()
+    assert (config.SIM_VRAM_CEILING_GIB, page.not_kept.isHidden()) == (4.0, True), "the sentence outlived its trouble"
+
+
+_ENDED = _at(5, 9, 12).isoformat()
+
+
+@pytest.mark.parametrize("fields, sentence", (
+    ({"name": "retrain", "ended": _ENDED, "memory_limit": {"gib": 6.0, "source": "setting", "computer": "LAB-PC"},
+      "health": {"memory_peak": 5.4}},
+     "The last run on this computer (retrain, ended 5 Oct 2026, 09:12) ran with a limit of 6 GiB. Its largest batch "
+     "held 5.4 GiB."),
+    ({"name": "retrain", "ended": _ENDED, "memory_limit": {"gib": None, "source": "none", "computer": "LAB-PC"}},
+     "The last run on this computer (retrain, ended 5 Oct 2026, 09:12) ran with no limit."),
+    ({"name": "retrain", "ended": _ENDED, "memory_limit": {"gib": 6.5, "source": "setting", "computer": "LAB-PC"},
+      "health": {"memory_peak": 5.4, "out_of_memory": True}},
+     "The last run on this computer (retrain, ended 5 Oct 2026, 09:12) ran with a limit of 6.5 GiB. Its largest batch "
+     "held 5.4 GiB. It ended for lack of graphics-card memory."),
+    ({"name": "", "ended": _ENDED, "memory_limit": {"gib": 6.0, "source": "environment", "computer": "LAB-PC"},
+      "health": {"memory_peak": None, "out_of_memory": False}},
+     "The last run on this computer (ended 5 Oct 2026, 09:12) ran with a limit of 6 GiB."),
+    ({"name": "retrain", "last_heard": _ENDED, "outcome": "not seen to end",
+      "memory_limit": {"gib": 6.0, "source": "setting", "computer": "LAB-PC"}},
+     "The last run on this computer (retrain, last heard 5 Oct 2026, 09:12) ran with a limit of 6 GiB."),
+    ({"memory_limit": {"gib": 6.0, "source": "setting", "computer": "LAB-PC"}},
+     "The last run on this computer ran with a limit of 6 GiB.")),
+    ids=("limited", "no limit", "out of memory", "unnamed", "not seen to end", "no name and no end"))
+def test_the_last_run_sentence_reads_the_newest_run_of_this_computer(fields, sentence, tmp_path, monkeypatch):
+    """What the last run on this computer ran with is read as the page is shown, from the newest history file that names
+    this computer: a newer file of another computer is passed over, and so are a newer file of the older shape, which
+    names no computer, and a newer one that is torn. An older run of this computer is not it. What the file does not
+    hold is left out of the sentence, with no number invented. Read once until a run has ended."""
+    import socket
+    from tests._fixtures import write_history
+    _on_the_runs_clock(tmp_path, _at(20, 12, 0))
+    monkeypatch.setattr(socket, "gethostname", lambda: "LAB-PC")
+    folder = tmp_path / "runs"
+    limit = {"gib": 2.0, "source": "setting", "computer": "LAB-PC"}
+    write_history(folder, id="20261001T090000-training", word="Training", started=_at(1, 9, 0), name="older",
+                  ended=_at(1, 12, 0), memory_limit=limit)
+    write_history(folder, id="20261003T090000-training", word="Training", started=_at(3, 9, 0), **fields)
+    write_history(folder, id="20261004T090000-training", word="Training", started=_at(4, 9, 0), name="elsewhere",
+                  ended=_at(4, 12, 0), memory_limit={"gib": 9.0, "source": "setting", "computer": "OTHER-PC"})
+    write_history(folder, id="20261006T090000-training", word="Training", started=_at(6, 9, 0), name="older shape",
+                  ended=_at(6, 12, 0), memory_limit=6.0)
+    write_history(folder, id="20261007T090000-training", word="Training", started=_at(7, 9, 0), name="none at all",
+                  ended=_at(7, 12, 0), memory_limit=None)
+    (folder / "20261008T090000-training.json").write_bytes(b'{"id": "20261008T090000-training", "star')
+    reads = _each_reading_of_the_last_run(monkeypatch)
+    window = build_window()
+    try:
+        page = window.part("settings")
+        assert (reads, page.last_run.plain_text()) == ([], ""), "the page read the history as it was built"
+        _shown_off_screen(window)
+        window.go_to("settings")
+        QApplication.processEvents()
+        assert page.last_run.plain_text() == sentence
+        window.go_to("home")
+        window.go_to("settings")
+        QApplication.processEvents()
+        assert reads == [(folder, "LAB-PC")] * 2, "the history was read again though no run has ended"
+    finally:
+        window.hide()
+
+
+def test_no_run_of_this_computer_is_said_for_older_files_and_for_none(tmp_path, monkeypatch):
+    """A history with only files of the older shape and of another computer holds no run of this computer, and neither
+    does a computer with no name, whose runs name none: no file is taken for its own."""
+    import socket
+    from core.gui.run import ends, history
+    from tests._fixtures import write_history
+    monkeypatch.setattr(socket, "gethostname", lambda: "LAB-PC")
+    folder = tmp_path / "runs"
+    now = _at(20, 12, 0)
+    assert history.last_on(folder, "LAB-PC") is None, "no folder of runs yet"
+    assert ends.last_run_sentence(None, now) == "No run on this computer has been recorded yet."
+    write_history(folder, id="20261006T090000-training", word="Training", started=_at(6, 9, 0), memory_limit=6.0)
+    write_history(folder, id="20261007T090000-training", word="Training", started=_at(7, 9, 0),
+                  memory_limit={"gib": 6.0, "source": "setting", "computer": "OTHER-PC"})
+    write_history(folder, id="20261008T090000-training", word="Training", started=_at(8, 9, 0),
+                  health={"memory_peak": 5.0}, memory_limit={"gib": 6.0, "source": "setting", "computer": ""})
+    assert history.last_on(folder, "LAB-PC") is None
+    assert history.last_on(folder, "") is None, "a computer with no name took a file that names none for its own"
+    assert history.last_measured_on(folder, "") is None, "the same, of a run that measured"
+
+
+def test_the_last_run_that_measured_its_batches_is_said_when_the_last_did_not(tmp_path, monkeypatch):
+    """An inference after a training measures no batch, and what the training measured is what a person setting the
+    limit wants: the page says it, with which run it was, the newest of this computer that measured, not an older one
+    and not another computer's. A last run that measured its own says only that, and the sentence that one ended for
+    lack of memory stays with the run it is said of."""
+    import socket
+    from core.gui.run import ends
+    from tests._fixtures import write_history
+    _on_the_runs_clock(tmp_path, _at(20, 12, 0))
+    monkeypatch.setattr(socket, "gethostname", lambda: "LAB-PC")
+    folder, now = tmp_path / "runs", _at(20, 12, 0)
+    limit = {"gib": 6.0, "source": "setting", "computer": "LAB-PC"}
+    training = {"name": "retrain", "ended": _ENDED, "memory_limit": limit, "health": {"memory_peak": 5.4}}
+    write_history(folder, id="20261001T090000-training", word="Training", started=_at(1, 9, 0), name="older",
+                  ended=_at(1, 12, 0), memory_limit=limit, health={"memory_peak": 1.0})
+    write_history(folder, id="20261005T080000-training", word="Training", started=_at(5, 8, 0), **training)
+    write_history(folder, id="20261005T100000-training", word="Training", started=_at(5, 10, 0), name="elsewhere",
+                  ended=_at(5, 11, 0), health={"memory_peak": 9.0},
+                  memory_limit={"gib": 9.0, "source": "setting", "computer": "OTHER-PC"})
+    write_history(folder, id="20261006T080000-inference", word="Inference", started=_at(6, 8, 0), name="cell_3",
+                  ended=_at(6, 9, 0), memory_limit=limit)
+    window = build_window()
+    try:
+        _shown_off_screen(window)
+        window.go_to("settings")
+        QApplication.processEvents()
+        assert window.part("settings").last_run.plain_text() == (
+            "The last run on this computer (cell_3, ended 6 Oct 2026, 09:00) ran with a limit of 6 GiB. The last run "
+            "that measured its batches (retrain, ended 5 Oct 2026, 09:12): the largest held 5.4 GiB.")
+    finally:
+        window.hide()
+    assert ends.last_run_sentence(training, now, training) == (
+        "The last run on this computer (retrain, ended 5 Oct 2026, 09:12) ran with a limit of 6 GiB. Its largest batch "
+        "held 5.4 GiB.")
+    failed = {"name": "cell_4", "memory_limit": limit, "health": {"out_of_memory": True}}
+    assert ends.last_run_sentence(failed, now, training) == (
+        "The last run on this computer (cell_4) ran with a limit of 6 GiB. It ended for lack of graphics-card memory. "
+        "The last run that measured its batches (retrain, ended 5 Oct 2026, 09:12): the largest held 5.4 GiB.")
+    assert ends.last_run_sentence(failed, now, None).endswith("It ended for lack of graphics-card memory.")
 
 
 def test_your_own_models_lists_the_models_and_opens_the_builder_and_back(monkeypatch):
@@ -2596,12 +3011,12 @@ def _margins(window, part):
 
 
 def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windows_edges():
-    """Every place but Home stands its first frame or its first line twelve pixels in from the rail, from the
-    window's right edge, from its top and from its bottom, at the ordinary text size, and as much more as a larger
+    """Every place but Home and Settings stands its first frame or its first line twelve pixels in from the rail, from
+    the window's right edge, from its top and from its bottom, at the ordinary text size, and as much more as a larger
     text size scales it, opened first in the usual layout and in the small one: a step and a panel by the frame
     their own layout holds, Effective temperature's row of page names too, lined up with the frame under it, and
-    every other place by what its own layout holds, the list of Your own models by its group too. Home keeps the
-    look's page margin, and the window gives it none."""
+    every other place by what its own layout holds, the list of Your own models by its group too. Home and Settings
+    are pages of the look, which keep its page margin and stand alike, and the window gives them none."""
     from PySide6.QtCore import QMargins
     from PySide6.QtWidgets import QGroupBox
     from tests._look_helpers import text_size
@@ -2617,13 +3032,16 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
                     for place in keys.PARTS[1:]:
                         window.go_to(place.key)
                         QApplication.processEvents()
-                        assert _margins(window, place.key) == (design.scaled(12),) * 4, (factor, low, place.key)
+                        if place.key != "settings":
+                            assert _margins(window, place.key) == (design.scaled(12),) * 4, (factor, low, place.key)
                     listed = window.part("models")
                     group, = [box for box in listed.findChildren(QGroupBox) if box.title() == "User-defined models"]
                     at = group.mapTo(listed, QPoint(0, 0))
                     assert (at.x(), at.y(), listed.width() - at.x() - group.width()) == (design.scaled(12),) * 3, (
                         factor, low)
-                    assert window.part("home").contentsMargins() == QMargins(0, 0, 0, 0)
+                    settings, home = window.part("settings"), window.part("home")
+                    assert home.contentsMargins() == settings.contentsMargins() == QMargins(0, 0, 0, 0)
+                    assert settings.page.box.contentsMargins() == home.page.box.contentsMargins()
                 finally:
                     window.hide()
 
@@ -2692,7 +3110,7 @@ class _CannotBeBuilt(Exception):
 # What the first opening of a part asks of the card or starts, by name and how often: Parameter inference's six
 # steps are built together, four of them read the card as they are built, and their gates read it again. The list
 # may only shrink: a page that reads the card reads it at a moment of its own, never as it is built.
-_READ_AT_FIRST_OPENING = {"inference": {"the program nvidia-smi": 1, "the device check": 3, "the card's free memory": 4,
+_READ_AT_FIRST_OPENING = {"inference": {"the device check": 3, "the card's free memory": 4,
                                         "the card's memory held": 4, "the card's memory in use": 4}}
 
 
@@ -3306,27 +3724,31 @@ def test_a_part_never_opened_keeps_what_it_remembered_when_the_window_closes(tmp
     assert [key for key in after.allKeys() if key.startswith("simulate/")], "the part opened wrote nothing"
 
 
-def test_the_memory_limit_in_force_does_not_wait_for_parameter_inference_to_be_opened(monkeypatch):
-    """The memory limit a run's planner reads -- the environment's when the variable is set, else the
-    configuration's ceiling -- is the same before Parameter inference is first opened as once it has been, with
-    the variable set and unset: opening the part, whose field writes the ceiling it shows, changes nothing a run
-    started before it would plan with."""
+def test_the_memory_limit_in_force_does_not_wait_for_parameter_inference_to_be_opened(tmp_path, monkeypatch):
+    """The limit remembered for this computer reaches the planner as the program starts, before the window is built
+    and with no part but Home built, and the variable of the environment wins over it. Opening Parameter inference
+    or Settings then changes nothing a run started before it would plan with."""
     from core import config
     from core.SBI import pipeline
+    from core.gui import app as gui_app
+    from core.gui import memory_limit
+    from tests._fixtures import code_only, whole_program
     qt_app()
-    monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", config.SIM_VRAM_CEILING_GIB)    # put back at the end
-    for ceiling in (None, "6"):
-        if ceiling is None:
-            monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
-        else:
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    memory_limit.set_memory_limit(2.5)
+    for ceiling, in_force in ((None, 2.5), ("6", 6.0)):
+        config.SIM_VRAM_CEILING_GIB = 0.0                       # as a launch finds it
+        if ceiling is not None:
             monkeypatch.setenv(pipeline.VRAM_CEILING_ENV, ceiling)
-        window = build_window()
-        before = pipeline.vram_ceiling_gib()
-        assert "inference" not in window.built_parts(), ceiling
-        window.go_to("inference")
-        shown = window.part("inference").config_panel.vram_ceiling.value()
-        assert pipeline.vram_ceiling_gib() == before == shown, (ceiling, before, shown)
-    assert before == 6.0
+        with whole_program() as (_app, window):
+            assert window.built_parts() == ("home",), ceiling
+            assert (pipeline.vram_ceiling_gib(), config.SIM_VRAM_CEILING_GIB) == (in_force, 2.5), ceiling
+            window.go_to("inference")
+            window.go_to("settings")
+            assert (pipeline.vram_ceiling_gib(), config.SIM_VRAM_CEILING_GIB) == (in_force, 2.5), ceiling
+    start = code_only(gui_app.build_app)
+    assert start.index("memory_limit.apply_remembered()") < start.index("MainWindow("), "the window came first"
 
 
 def test_a_store_change_reaches_only_the_built_parts_and_a_part_built_later_lists_the_store_as_it_is(

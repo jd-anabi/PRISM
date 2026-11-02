@@ -684,70 +684,179 @@ def test_long_diagnostics_are_readable_without_horizontal_scrolling():
     assert build_part(CrossValPanel).cell_values.wordWrap(), \
         "the crossval cell-values label does not wrap, so a long error widens the whole column"
 
-def test_the_vram_ceiling_is_on_config_live_and_NOT_persisted():
-    """The VRAM ceiling is a HARDWARE knob, and it is the one field on the Config tab that is
-    deliberately forgotten between sessions.
+def test_the_memory_limit_is_remembered_per_computer_and_still_read_live(monkeypatch):
+    """The memory limit is set in Settings and remembered for this computer, as text, when a change of it is accepted,
+    and it comes back at the next launch: it belongs to the card, and a limit forgotten at every launch let a
+    full-size generation die at batch 237.
 
-    NOT PERSISTED, because stale QSettings have already cost this project a ~5-day run: the
-    2026-08-19 retrain trained on the RETIRED chi band because a saved value silently won over
-    config.py. A ceiling fails the same way but far more quietly -- a forgotten 2 GiB does not
-    error, it just makes every future run split from batch 0 and take several times longer, with
-    nothing in the log to explain it. Starting each session at config.py's 0.0 keeps the throttle a
-    decision somebody just made.
-
-    A PLAIN ASSIGNMENT IS ENOUGH, unlike every other knob the GUI exposes. The sweep and flow fields
-    had to become ARGUMENTS threaded into build_prior/build_posterior, because orchestrator does
-    `from .config import ...` and binds them at import, so writing to the constant is a silent no-op
-    (an imported name is a snapshot). pipeline.vram_ceiling_gib() does a getattr on the module every time the planner
-    asks, so this one genuinely takes effect -- and this test would catch it if that ever changed.
-    """
-    from core.gui.panels import inference_tabs as it
+    A PLAIN ASSIGNMENT IS ENOUGH, unlike every other knob the window offers. The sweep and flow fields had to become
+    ARGUMENTS threaded into build_prior/build_posterior, because orchestrator does `from .config import ...` and binds
+    them at import, so writing to the constant is a silent no-op (an imported name is a snapshot).
+    pipeline.vram_ceiling_gib() reads the module each time the planner asks, so this one takes effect, with no plumbing,
+    and this test would catch it if that ever changed."""
+    import socket
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
     from core import config as _cfg
     from core.SBI import pipeline as _pipe
+    from core.gui import memory_limit, settings as st
+    from core.gui.screens.settings_screen import SettingsScreen
 
-    saved = _cfg.SIM_VRAM_CEILING_GIB
-    saved_env = os.environ.pop(_pipe.VRAM_CEILING_ENV, None)
-    try:
-        panel = build_part(it.ConfigPanel, screen=None)
-        assert hasattr(panel, "vram_ceiling"), "the Config tab must carry the VRAM ceiling field"
-        assert panel.vram_ceiling.value() == 0.0, "it must default to OFF"
+    monkeypatch.delenv(_pipe.VRAM_CEILING_ENV, raising=False)
+    monkeypatch.setattr(socket, "gethostname", lambda: "LAB-PC")
+    assert _cfg.SIM_VRAM_CEILING_GIB == 0.0, "it must default to no limit"
+    screen = build_part(SettingsScreen, on_mode=lambda _mode: None)
+    assert (screen.no_limit.isChecked(), screen.limit_field.text()) == (True, "")
 
-        # Live: typing must reach the planner with no plumbing in between.
-        panel.vram_ceiling.setText("6.5")
-        assert _cfg.SIM_VRAM_CEILING_GIB == 6.5, "the field must assign the config constant"
-        assert _pipe.vram_ceiling_gib() == 6.5, "and the planner must read it live"
-        # 2 GiB, not 6.5: the budget is a min() and the CPU branch of memory_budget_elements caps at
-        # 4 GiB, so a ceiling above that would not bind and the assertion would prove nothing.
-        panel.vram_ceiling.setText("2")
-        dev, dt = torch.device("cpu"), torch.float32
-        saved_cap = _pipe._BUDGET_CAP_ELEMENTS
-        try:
-            _pipe._BUDGET_CAP_ELEMENTS = None       # the other term in the same min()
-            assert _pipe.sim_memory_budget_elements(dev, dt) == (2 * 2 ** 30) // 4, \
-                "the ceiling must bind the budget the planner actually uses"
-        finally:
-            _pipe._BUDGET_CAP_ELEMENTS = saved_cap
+    screen.limited.click()
+    QTest.keyClicks(screen.limit_field, "6")
+    assert _cfg.SIM_VRAM_CEILING_GIB == 0.0, "judged when editing ends, never on a keystroke"
+    QTest.keyClick(screen.limit_field, Qt.Key_Return)
+    assert _cfg.SIM_VRAM_CEILING_GIB == 6.0, "the field must assign the config constant"
+    assert st.settings().value("computer/LAB-PC/memory_limit_gib") == "6"
+    assert _pipe.vram_ceiling_gib() == 6.0, "and the planner must read it live"
+    # 2 GiB, not 6: the budget is a min() and the CPU branch of memory_budget_elements caps at 4 GiB, so a ceiling
+    # above that would not bind and the assertion would prove nothing.
+    memory_limit.set_memory_limit(2.0)
+    saved_cap = _pipe._BUDGET_CAP_ELEMENTS
+    monkeypatch.setattr(_pipe, "_BUDGET_CAP_ELEMENTS", None)        # the other term in the same min()
+    assert _pipe.sim_memory_budget_elements(torch.device("cpu"), torch.float32) == (2 * 2 ** 30) // 4, (
+        "the ceiling must bind the budget the planner actually uses")
+    monkeypatch.setattr(_pipe, "_BUDGET_CAP_ELEMENTS", saved_cap)
 
-        # Not persisted: neither direction may mention it.
-        src_save = code_only(it.ConfigPanel.save_settings)
-        src_restore = code_only(it.ConfigPanel.restore_settings)
-        for what, src in (("save_settings", src_save), ("restore_settings", src_restore)):
-            assert "vram" not in src.lower(), (
-                f"{what} must NOT touch the VRAM ceiling -- a stale ceiling throttles every future "
-                f"run silently, which is the failure mode the 2026-08-19 band trap already cost us")
+    memory_limit.set_memory_limit(6.0)
+    _cfg.SIM_VRAM_CEILING_GIB = 0.0                                 # as the next launch finds it
+    memory_limit.apply_remembered()
+    assert _cfg.SIM_VRAM_CEILING_GIB == 6.0, "the remembered limit did not come back"
+    screen.no_limit.click()
+    assert (_cfg.SIM_VRAM_CEILING_GIB, st.settings().value("computer/LAB-PC/memory_limit_gib")) == (0.0, "none")
+    memory_limit.apply_remembered()
+    assert _cfg.SIM_VRAM_CEILING_GIB == 0.0, "no limit is a choice remembered too"
 
-        # And the env override must ANNOUNCE that it wins, rather than leaving a dead field.
-        os.environ[_pipe.VRAM_CEILING_ENV] = "2.0"
-        panel.vram_ceiling.setText("9")
-        assert _pipe.vram_ceiling_gib() == 2.0, "the env override wins"
-        assert _pipe.VRAM_CEILING_ENV in panel.vram_note.text(), (
-            "a field that silently does nothing is worse than no field -- the note must say the "
-            "environment is overriding it")
-    finally:
-        os.environ.pop(_pipe.VRAM_CEILING_ENV, None)
-        if saved_env is not None:
-            os.environ[_pipe.VRAM_CEILING_ENV] = saved_env
-        _cfg.SIM_VRAM_CEILING_GIB = saved
+
+@pytest.mark.parametrize("constant", (0.0, 4.0))
+@pytest.mark.parametrize("raw, a_number", ((None, False), ("", False), (" ", False), ("6", True), ("6.5", True),
+                                           ("6,5", False), ("abc", False), ("0", True), ("-2", True), ("nan", True),
+                                           ("inf", True), ("1e999", True)))
+def test_the_limit_in_force_is_the_planners_own_answer_over_a_table_of_texts(constant, raw, a_number, monkeypatch):
+    """What the window says is in force is what the planner will plan with, whatever the variable of the environment
+    holds, and it says where that limit was set by the planner's own test of the variable: a number there counts, one
+    the planner reads as no limit among them, and anything else is passed over. Reading it logs nothing, though it is
+    read at every draw of a page and the planner logs a warning at each call for a variable that is no number."""
+    from core import config
+    from core.SBI import pipeline
+    from core.gui import memory_limit
+    if raw is None:
+        monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    else:
+        monkeypatch.setenv(pipeline.VRAM_CEILING_ENV, raw)
+    monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", constant)
+    said = []
+    monkeypatch.setattr(pipeline.log, "warning", lambda *args, **kwargs: said.append(args))
+    force = memory_limit.memory_limit_in_force()
+    assert said == [], "reading the limit logged"
+    planner = pipeline.vram_ceiling_gib()
+    assert len(said) == (raw in ("6,5", "abc")), "the planner's own warning is what the reading must not repeat"
+    assert force.gib == (planner if planner > 0 else None), (raw, constant)
+    assert force.source == ("environment" if a_number else "setting" if constant > 0 else "none"), (raw, constant)
+    assert force.raw == (raw or "")
+
+
+def test_one_module_of_the_window_assigns_the_memory_limit():
+    """The memory limit is the one setting a run reads from the configuration while it runs, and the window writes it
+    in one place: no other file under the window's folder assigns the constant, imports it by name or names it in a
+    string."""
+    import ast
+    gui = Path(__file__).resolve().parents[1] / "core" / "gui"
+    found = []
+    for path in sorted(gui.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            assigned = (isinstance(node, ast.Attribute) and node.attr == "SIM_VRAM_CEILING_GIB"
+                        and isinstance(node.ctx, ast.Store))
+            named = isinstance(node, ast.Constant) and node.value == "SIM_VRAM_CEILING_GIB"
+            imported = isinstance(node, ast.alias) and node.name == "SIM_VRAM_CEILING_GIB"
+            if assigned or named or imported:
+                found.append(path.relative_to(gui).as_posix())
+    assert sorted(set(found)) == ["memory_limit.py"], found
+
+
+def test_a_limit_remembered_for_another_computer_is_not_applied(monkeypatch):
+    """A settings file carried to another computer applies no limit there: the key holds the name of the computer it
+    was set on. A computer with no name to give keeps its limit under a key of its own, and that key is no other
+    computer's."""
+    import socket
+    from core import config
+    from core.gui import memory_limit, settings as st
+
+    def no_name():
+        raise OSError("this computer has no name")
+
+    written = st.settings()
+    written.setValue("computer/OTHER-PC/memory_limit_gib", "6")
+    written.setValue("computer/unnamed/memory_limit_gib", "3")
+    written.sync()
+    monkeypatch.setattr(socket, "gethostname", lambda: "LAB-PC")
+    monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", 0.0)
+    assert memory_limit.stored_limit() == (None, True)
+    memory_limit.apply_remembered()
+    assert config.SIM_VRAM_CEILING_GIB == 0.0, "the limit of another computer was applied"
+    memory_limit.set_memory_limit(2.5)
+    assert memory_limit.stored_limit() == (2.5, True)
+    kept = st.settings()
+    assert (kept.value("computer/LAB-PC/memory_limit_gib"), kept.value("computer/OTHER-PC/memory_limit_gib"),
+            kept.value("computer/unnamed/memory_limit_gib")) == ("2.5", "6", "3"), "the limit went under another key"
+    monkeypatch.setattr(socket, "gethostname", no_name)
+    assert memory_limit.computer() == ""
+    assert memory_limit.stored_limit() == (3.0, True), "a computer with no name reads the key of no name"
+    memory_limit.set_memory_limit(1.5)
+    assert st.settings().value("computer/unnamed/memory_limit_gib") == "1.5"
+
+
+@pytest.mark.parametrize("written", ("6,5", "abc", "", "0", "-2", "inf", "nan", "1e999", "1e300"))
+def test_a_remembered_limit_that_cannot_be_read_is_no_limit_and_says_so(written, monkeypatch):
+    """A remembered limit edited by hand into what is no limit one can set is no limit: nothing is assigned, and
+    Settings says so where it says what is in force. The file is written as a person writes it, so that the settings
+    library reads the value as it reads such a line. Nothing is rewritten by reading it."""
+    import socket
+    from core import config
+    from core.SBI import pipeline
+    from core.gui import memory_limit, settings as st
+    from core.gui.screens.settings_screen import SettingsScreen
+    monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)
+    monkeypatch.setattr(socket, "gethostname", lambda: "LAB-PC")
+    path = Path(st.settings().fileName())
+    held = f"[computer]\nLAB-PC\\memory_limit_gib={written}\n".encode("utf-8")
+    path.write_bytes(held)
+    assert memory_limit.stored_limit() == (None, False)
+    monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", 2.5)
+    memory_limit.apply_remembered()
+    assert config.SIM_VRAM_CEILING_GIB == 2.5, "nothing is assigned"
+    screen = build_part(SettingsScreen, on_mode=lambda _mode: None)
+    assert screen.in_force.plain_text() == "In force: 2.5 GiB.", "the line says what is in force, whatever is held"
+    monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", 0.0)
+    screen = build_part(SettingsScreen, on_mode=lambda _mode: None)
+    assert screen.in_force.plain_text() == "The remembered limit could not be read; no limit is in force."
+    assert screen.no_limit.isChecked(), "no limit is what is in force"
+    assert path.read_bytes() == held, "reading the limit wrote the file"
+    memory_limit.set_memory_limit(6.0)
+    assert memory_limit.stored_limit() == (6.0, True), "a new limit puts the file right"
+
+
+def test_a_remembered_limit_of_none_and_no_key_at_all_are_no_limit_read(monkeypatch):
+    """No key, and the word for no limit, are both no limit and neither is a limit that could not be read. Neither
+    assigns anything as the program starts."""
+    from core import config
+    from core.gui import memory_limit, settings as st
+    assert memory_limit.stored_limit() == (None, True)
+    monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", 2.5)
+    memory_limit.set_memory_limit(None)
+    assert config.SIM_VRAM_CEILING_GIB == 0.0
+    assert st.settings().value(f"computer/{memory_limit.computer()}/memory_limit_gib") == "none"
+    assert memory_limit.stored_limit() == (None, True)
+    monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", 2.5)
+    memory_limit.apply_remembered()
+    assert config.SIM_VRAM_CEILING_GIB == 2.5, "no limit assigns nothing"
+
 
 def test_the_free_vram_readout_does_not_use_mem_get_info():
     """⚠ The readout beside the ceiling must come from nvidia-smi, never torch.cuda.mem_get_info.

@@ -10,8 +10,9 @@ Moved out of ``tests/test_artifact_store.py`` so ``tests/test_user_sbi.py``,
 module (which pytest would then also collect a second time under a different name).
 
 It also holds what the GUI suites used to copy per file -- ``qt_app``, ``pump``, ``code_only``,
-``PaneCapture``, the stubs ``budget_cfg``, ``prior_stub``, ``forced_cfg`` and ``spont_cfg`` and the
-record writers ``write_simulation_set`` and ``write_history`` -- and re-exports the two records
+``PaneCapture``, ``page_lines``, ``card_and_programs``, the stubs ``budget_cfg``, ``prior_stub``,
+``forced_cfg`` and ``spont_cfg`` and the record writers ``write_simulation_set`` and
+``write_history`` -- and re-exports the two records
 tests/conftest.py's session guards append to, the
 dialogs in ``SHOWN`` and the file choosers in ``CHOOSER_CALLS``, with their helpers: they live in
 tests/_dialogs.py, whose import loads neither torch nor the program. ONE import spelling for each of
@@ -1099,6 +1100,8 @@ def process_state(app) -> dict:
         "error hook": sys.excepthook,
         "figure settings": {key: repr(value) for key, value in matplotlib.rcParams.items()},
         "quiet segment bar": config.QUIET_SEGMENT_BAR,
+        # The memory limit remembered for this computer, which the whole program puts in force as it starts.
+        "memory limit": config.SIM_VRAM_CEILING_GIB,
         "root log handler": logging_root.installed(),
         "default store": default_store(),
         # The lock this process holds as the one PRISM, and the names its local servers listen under: either, left
@@ -1180,7 +1183,8 @@ def whole_program(*, held_by_another: bool = False):
              "font": QFont(app.font()), "icon": app.windowIcon(),
              "names": (app.organizationName(), app.applicationName()),
              "appearance": theming.active_appearance(), "hook": sys.excepthook,
-             "quiet": config.QUIET_SEGMENT_BAR, "handler": logging_root.installed(),
+             "quiet": config.QUIET_SEGMENT_BAR, "limit": config.SIM_VRAM_CEILING_GIB,
+             "handler": logging_root.installed(),
              "store": default_store(), "factor": design.text_scale(), "dark": design.is_dark(),
              "room": design._room, "bound": entry._bound is not None}
     with matplotlib.rc_context():                     # the figure settings, exactly as found
@@ -1197,13 +1201,15 @@ def whole_program(*, held_by_another: bool = False):
             sys.excepthook = found["hook"]            # first: a slip below must not open a box
             if not found["bound"]:
                 entry.unbind_streams()                # then the streams, so that what follows writes where it did
-            # Then the five that cannot fail, so that a slip in the toolkit's lines below cannot
-            # leave a temporary folder as the process's store, a handler on the root logger, or a
-            # text factor or a room that sizes every later test's widgets.
+            # Then the six that cannot fail, so that a slip in the toolkit's lines below cannot
+            # leave a temporary folder as the process's store, a handler on the root logger, a limit
+            # every later run would plan with, or a text factor or a room that sizes every later
+            # test's widgets.
             set_default_store(found["store"])
             if not found["handler"]:
                 logging_root.remove()
             config.QUIET_SEGMENT_BAR = found["quiet"]
+            config.SIM_VRAM_CEILING_GIB = found["limit"]
             design.set_text_scale(found["factor"])
             design.set_room(found["room"])
             # The process's run controller as the next test must find it: a run that ended in the block

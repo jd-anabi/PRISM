@@ -13,7 +13,7 @@ tested with no window.
 from datetime import datetime
 
 from ..texts import date_text, duration_text, number_text
-from .model import OUTCOMES, RunStatus
+from .model import OUTCOMES, RunStatus, _gib
 from .questions import TRAINING_WORDS, what_a_stop_keeps
 from .retry import NO_MESSAGE, OUT_OF_MEMORY, WAITING_LINE, WAITING_TITLE
 
@@ -30,6 +30,9 @@ LOCKED_TEXT = "Settings are locked."
 #: What a stopped run kept when PRISM closed before the run's end was written, and what a run that was not seen to
 #: end kept.
 SAVED_BY_THEN_TEXT = "What it had saved by then is kept."
+#: What Settings says of this computer's last run when the history holds none, and of one that ran out of memory.
+NO_LAST_RUN_TEXT = "No run on this computer has been recorded yet."
+ENDED_FOR_LACK_TEXT = "It ended for lack of graphics-card memory."
 #: How a run ended, as Home's "Last runs" marks it and says it in a word, by the outcome its history holds; a run
 #: still running is said so.
 HOW = {"finished": ("done", "Finished"), "stopped": ("half", "Stopped"), "failed": ("err", "Failed"),
@@ -87,6 +90,38 @@ def words(record: dict, now: datetime, *, too_late: bool = False) -> tuple[str, 
     at = _last_heard_at(record, word)
     kept = SAVED_BY_THEN_TEXT if word in TRAINING_WORDS else ""
     return f"PRISM closed while this {word.lower()} was running; last heard {when}{at}.", kept
+
+
+def last_run_sentence(record: dict | None, now: datetime, measured: dict | None = None) -> str:
+    """What the history ``record`` says of the last run on this computer, for Settings and "Before you start": its name
+    and when it ended, or was last heard, the limit it ran with and, when it measured one, its largest batch, and that
+    it ended for lack of memory when it did; for no record, that none has been recorded. ``now`` is the moment the date
+    is written against. What a file does not hold is left out. When the run measured no batch, ``measured``, the last
+    run that did, says what it measured: a run that only reads a record, or draws from a posterior, says none."""
+    if record is None:
+        return NO_LAST_RUN_TEXT
+    about = _which_run(record, now)
+    limit = record.get("memory_limit") if isinstance(record.get("memory_limit"), dict) else {}
+    gib, health = limit.get("gib"), record.get("health") if isinstance(record.get("health"), dict) else {}
+    said = [f"The last run on this computer{f' ({about})' if about else ''} ran with "
+            f"{f'a limit of {gib:g} GiB' if _size(gib) else 'no limit'}."]
+    if _size(health.get("memory_peak")):
+        said.append(f"Its largest batch held {_gib(health['memory_peak'])} GiB.")
+    if health.get("out_of_memory"):
+        said.append(ENDED_FOR_LACK_TEXT)
+    other = None if measured is None else (measured.get("health") or {}).get("memory_peak")
+    if _size(other) and not _size(health.get("memory_peak")):
+        said.append(f"The last run that measured its batches ({_which_run(measured, now)}): the largest held "
+                    f"{_gib(other)} GiB.")
+    return " ".join(said)
+
+
+def _which_run(record: dict, now: datetime) -> str:
+    """A run's name and when it ended or was last heard, as far as its file holds them."""
+    ended, heard = _moment(record.get("ended")), _moment(record.get("last_heard"))
+    when = (f"ended {date_text(ended, now)}" if ended is not None
+            else f"last heard {date_text(heard, now)}" if heard is not None else "")
+    return ", ".join(part for part in (str(record.get("name") or ""), when) if part)
 
 
 def status_of(record: dict, now: datetime) -> RunStatus:
@@ -279,6 +314,11 @@ def _counted(count: int, unit: str) -> str:
 def _count(value) -> bool:
     """Whether ``value`` is a whole number above nought, as a count the history holds is."""
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _size(value) -> bool:
+    """Whether ``value`` is a size above nought, as a size the history holds is."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value < float("inf")
 
 
 def _moment(value) -> datetime | None:

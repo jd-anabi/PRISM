@@ -108,15 +108,14 @@ _PANEL_PARTS = {ReductionPanel: "reduction", FdtPanel: "temperature", CrossValPa
                 ConfigPanel: "inference", PriorPanel: "inference", PosteriorPanel: "inference",
                 ValidatePanel: "inference", InferPanel: "inference", TSNPEPanel: "inference", SimulatePanel: "live"}
 
-# Every place but Home stands the same distance in from the rail, from the window's right edge, from its top and
-# from its bottom, to its first frame or its first line: this many pixels at the ordinary text size, scaled with
-# it. Home keeps the look's own page margin, and so does a part's error page.
+# Every place but Home and Settings stands the same distance in from the rail, from the window's right edge, from
+# its top and from its bottom, to its first frame or its first line: this many pixels at the ordinary text size,
+# scaled with it. Home and Settings keep the look's own page margin, and so does a part's error page.
 _PLACE_MARGIN = 12
 # how far in a part's own first frame or first line stands already, at every text size: a panel's frame 6, the
 # toolkit's own margin round a layout that sets none 9, a frame at the part's very edge 0. The window gives each
 # part the rest of the place's margin.
-_OWN_INSET = {"inference": 6, "temperature": 6, "live": 6, "reduction": 6, "records": 9, "models": 0, "settings": 0,
-              "help": 9}
+_OWN_INSET = {"inference": 6, "temperature": 6, "live": 6, "reduction": 6, "records": 9, "models": 0, "help": 9}
 
 
 def _is_a_button(widget: QWidget) -> bool:

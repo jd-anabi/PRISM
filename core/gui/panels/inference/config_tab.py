@@ -1,12 +1,8 @@
-import os
-
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QLabel, QLineEdit, QMessageBox,
-                               QPushButton, QVBoxLayout)
+from PySide6.QtWidgets import QCheckBox, QComboBox, QGroupBox, QLabel, QLineEdit, QMessageBox, QPushButton
 
 from core import cli, config, registry
 from core.Helpers import file_manager
 from core.refusals import Refusal, require_at_least, require_finite
-from core.SBI import pipeline
 from core.config import CHI_K_MAX, VALID_LABELS, VALID_MODELS
 
 from ... import icons, settings
@@ -17,7 +13,7 @@ from ...widgets.help_badge import add_help_row, with_badge
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
 from ...widgets.source_toggle import SourceToggle
 from .rows import _ChiRangeRow
-from .base import _StagePanel, _TrainingBudgetMixin, _nvidia_smi_free_gib
+from .base import _StagePanel, _TrainingBudgetMixin
 from .help_text import HELP
 
 
@@ -100,69 +96,12 @@ class ConfigPanel(_StagePanel):
         form.addRow("", self.session_line)
         self.controls_layout.addWidget(box)
 
-        # -- hardware: not a science knob. It changes how a batch is PLANNED, never what is trained,
-        # which is exactly why it is kept out of the checkpoint identity (a memory knob in the
-        # digest would rename the checkpoint directory and silently restart a resumable multi-day
-        # run). It lives on Config rather than Prior/Posterior because it applies to every stage
-        # that simulates.
-        hw = QGroupBox("Hardware")
-        hv = QVBoxLayout(hw)
-        hform = make_form()
-        self.vram_ceiling = FloatField(str(pipeline.vram_ceiling_gib()))
-        add_help_row(hform, "VRAM ceiling per batch (GiB, 0 = off)", self.vram_ceiling,
-                     HELP["vram_ceiling"])
-        hv.addLayout(hform)
-        self.vram_note = _TrainingBudgetMixin._derived_label()
-        hv.addWidget(self.vram_note)
-        self.vram_ceiling.textChanged.connect(lambda _t: self._apply_vram_ceiling())
-        self.controls_layout.addWidget(hw)
-        self._apply_vram_ceiling()
-
         self.restore_settings(settings.settings())
         self._sync_chi_enabled()
         # LAST: refresh_gates draws this on every stage afterwards, but the first paint happens
         # before InferenceScreen.__init__ reaches its own refresh_gates() call, and an empty label
         # on launch reads as a missing feature rather than an empty session.
         self._sync_session_line()
-
-    def _apply_vram_ceiling(self):
-        """Push the field into ``config.SIM_VRAM_CEILING_GIB`` and say what will ACTUALLY take effect.
-
-        ASSIGNING THE CONSTANT IS ENOUGH HERE, and that is not true of the sweep and flow knobs
-        beside it. Those had to become ARGUMENTS because `orchestrator` does `from .config import ...`
-        and binds them at import, so assigning to the constant is a silent no-op. This one
-        is read LIVE -- `pipeline.vram_ceiling_gib()` does a `getattr` on the module every time the
-        planner asks -- so a plain assignment reaches every stage that simulates, with no plumbing.
-
-        NOT PERSISTED, ON PURPOSE, like every science knob on this tab: the chi probe count, slots
-        and lock-in ceiling open at config.py on every launch too. Stale QSettings have already cost
-        this project a ~5-day run (the 2026-08-19 retrain trained on the retired band because a
-        saved value silently won over config.py). A ceiling fails the same way but more quietly: a
-        forgotten 2 GiB would not error, it would just make every future run split from batch 0 and
-        take several times longer, with nothing in the log to explain it. Starting each session from
-        config.py's 0.0 means the throttle is always a decision someone just made.
-
-        The env override still wins if it is set -- said out loud here rather than left to puzzle
-        over, because a field that silently does nothing is worse than no field.
-        """
-        config.SIM_VRAM_CEILING_GIB = max(0.0, self.vram_ceiling.value())
-        effective = pipeline.vram_ceiling_gib()
-        env = os.environ.get(pipeline.VRAM_CEILING_ENV)
-        free = _nvidia_smi_free_gib()
-        free_txt = (f"nvidia-smi reports {free:.2f} GiB free"
-                    if free is not None else "free VRAM unreadable (no nvidia-smi)")
-        if env is not None and env.strip():
-            self.vram_note.setText(
-                f"⚠ {pipeline.VRAM_CEILING_ENV}={env} is set and OVERRIDES this field — "
-                f"planning to {effective:.2f} GiB. {free_txt}.")
-        elif effective <= 0:
-            self.vram_note.setText(
-                f"Off: batches are planned from the free-memory reading and the learned cap alone. "
-                f"{free_txt} — set a ceiling near that, minus ~1 GiB, only if you need the desktop.")
-        else:
-            self.vram_note.setText(
-                f"Batches will be planned to fit {effective:.2f} GiB. {free_txt}. Above the real "
-                f"free figure this does nothing; below it, expect more splitting and more wall-clock.")
 
     def _sync_chi_enabled(self):
         """The three χ knobs are meaningless unless χ-mode is on. The rotation is available in ALL

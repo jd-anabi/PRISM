@@ -313,6 +313,29 @@ def duration(folder: Path, word: str) -> tuple[float, str] | None:
     return None
 
 
+def last_on(folder: Path, computer: str) -> dict | None:
+    """The newest run in ``folder`` whose memory limit names the computer ``computer``, or None. A file that names no
+    computer, as one written before runs named theirs, is passed over, and every file is when ``computer`` is ""."""
+    if not computer:
+        return None
+    for record in reversed(_records(folder)):
+        limit = record.get("memory_limit")
+        if isinstance(limit, dict) and limit.get("computer") == computer:
+            return record
+    return None
+
+
+def last_measured_on(folder: Path, computer: str) -> dict | None:
+    """The newest run in ``folder`` of the computer ``computer`` that measured its batches, or None."""
+    if not computer:
+        return None
+    for record in reversed(_records(folder)):
+        limit, health = record.get("memory_limit"), record.get("health") or {}
+        if isinstance(limit, dict) and limit.get("computer") == computer and health.get("memory_peak"):
+            return record
+    return None
+
+
 def runs_for(folder: Path, simulation_set: str) -> list[dict]:
     """The runs that wrote to the simulation set whose folder is ``simulation_set``, oldest first."""
     return [record for record in _records(folder)

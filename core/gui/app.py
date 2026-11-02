@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication
 
 from core import config, logging_root, registry
 
-from . import app_icon, design, fonts, mpl_theme, one_instance, settings, style, theming, this_computer
+from . import app_icon, design, fonts, memory_limit, mpl_theme, one_instance, settings, style, theming, this_computer
 from .main_window import MainWindow
 from .screens.shell import NO_MESSAGE, as_sentence
 from .widgets.ask import Ask, ask
@@ -211,6 +211,7 @@ def build_app(argv=None, *, app=None, claimed=None):
     # window's construction does not pass through it. tests/_fixtures.whole_program takes both off.
     style.install(app)
     qs = settings.settings()
+    memory_limit.apply_remembered()                      # this computer's limit, before anything can plan a batch
     fonts.load_app_font(app)                             # the lettering face, before any widget
     appearance = theming.Appearance(app)
     # The first apply: the palette, the first style sheet and, after both, the class fonts, which the style and

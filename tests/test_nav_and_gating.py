@@ -211,10 +211,10 @@ def test_dispatch_watches_every_directory_it_is_given(tmp_path):
 # ── PRISM navigation redesign ────────────────────────────────────────────────────────────────────
 def test_the_window_offers_three_appearance_choices_and_no_ticks():
     """The one place that offers the appearance, the Settings screen, shows Follow Windows, Light and
-    Dark and nothing else: no time-of-day mode, no accent tick, no font tick and no note under it, and
-    the window holds no menu of its own. A settings file an older build left opens on Follow Windows
+    Dark in its section and nothing else there: no time-of-day mode, no accent tick, no font tick and no note
+    under it, and the window holds no menu of its own. A settings file an older build left opens on Follow Windows
     with nothing rewritten; the next choice rewrites the mode and leaves the two old keys alone."""
-    from PySide6.QtWidgets import QCheckBox, QLabel, QMenu, QRadioButton
+    from PySide6.QtWidgets import QAbstractButton, QLabel, QMenu
     from core.gui import settings as st
     from core.gui.screens.settings_screen import SettingsScreen
 
@@ -227,10 +227,11 @@ def test_the_window_offers_three_appearance_choices_and_no_ticks():
     window = build_window()
     three = ["Follow Windows", "Light", "Dark"]
     assert window.findChildren(QMenu) == [], "the window holds a menu"
-    radios = window.part("settings").findChildren(QRadioButton)
+    settings = window.part("settings")
+    radios = list(settings._radios.values())
     assert [r.text() for r in radios] == three
-    assert window.part("settings").findChildren(QCheckBox) == []
-    assert not [w for w in window.part("settings").findChildren(QLabel) if "Font changes" in w.text()]
+    assert settings.appearance.findChildren(QAbstractButton) == radios, "a tick among the appearance section"
+    assert not [w for w in settings.findChildren(QLabel) if "Font changes" in w.text()]
     for gone in ("on_system_accent", "system_accent", "on_force_inter", "force_inter"):
         assert gone not in inspect.signature(SettingsScreen.__init__).parameters, gone
     for gone in ("_set_system_accent", "_set_force_inter"):

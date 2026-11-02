@@ -58,8 +58,6 @@ here draws: a figure a run hands over goes to its page's stack of pictures as th
 import json
 import logging
 import math
-import os
-import socket
 import statistics
 import threading
 import weakref
@@ -72,7 +70,7 @@ from PySide6.QtCore import QObject, QThreadPool, QTimer, Signal
 
 from core.refusals import Refusal
 
-from .. import this_computer
+from .. import memory_limit, this_computer
 from ..streams import CancelToken
 from ..worker import Worker
 from . import ends, history, questions, retry
@@ -87,10 +85,6 @@ TICK_MS = 1000
 
 #: Said among a page's own lines when it asks for a run while one is live.
 LIVE_TEXT = "A run is live. Only one runs at a time."
-#: The run's line on the memory limit in force for each batch of simulations, filled with the limit and where it
-#: was set; and the line when there is none.
-LIMIT_TEXT = "Memory limit: {} GiB for each batch of simulations ({})."
-NO_LIMIT_TEXT = "No memory limit is set on this computer."
 #: Said in the run's full text when its history file cannot be written; filled with the error's kind and message.
 HISTORY_BROKEN_TEXT = ("The run's history file could not be written ({}); the run goes on, and the file is tried "
                        "again at the run's next change.")
@@ -105,32 +99,6 @@ PAST_UNDRAWN_TEXT = "The page of a run could not be drawn from its history file 
 def _local_now() -> datetime:
     """The computer's clock, as local time with its zone."""
     return datetime.now().astimezone()
-
-
-def _memory_limit() -> tuple[float | None, str, str]:
-    """The memory limit in force for each batch of simulations, in GiB (None when there is none), the run's line
-    that says it and where it was set (by the variable of the environment, or in the window's step 1), and that
-    source as the run's history keeps it: "environment" for a number in the variable, 0 among them, which is no limit;
-    else "setting" for a limit and "none" for none."""
-    from core.SBI import pipeline
-    gib = pipeline.vram_ceiling_gib()
-    try:
-        float(os.environ.get(pipeline.VRAM_CEILING_ENV, ""))
-        by_variable = True
-    except ValueError:                           # blank, or no number: the planner passes over it as well
-        by_variable = False
-    if gib <= 0:
-        return None, NO_LIMIT_TEXT, "environment" if by_variable else "none"
-    source = f"set by {pipeline.VRAM_CEILING_ENV}" if by_variable else "set in step 1, Model and options"
-    return gib, LIMIT_TEXT.format(f"{gib:g}", source), "environment" if by_variable else "setting"
-
-
-def _computer() -> str:
-    """This computer's name; "" when it cannot say: a run goes on without it."""
-    try:
-        return socket.gethostname()
-    except (OSError, ValueError):
-        return ""
 
 
 def _out_of_memory():
@@ -385,11 +353,12 @@ class RunController(QObject):
         from ..panels.base_panel import BasePanel
         from ..plot_watcher import NewPngWatcher
         clock = self._clock or _local_now
-        gib, limit_text, limit_source = _memory_limit()
+        force = memory_limit.memory_limit_in_force()
+        limit_text = memory_limit.limit_words(force)
         spec = spec.with_call(fn, args, kwargs)
         spec = replace(spec, plan=history.plain(spec.plan), settings=history.plain(spec.settings),
-                       facts={**spec.facts, "memory_limit": gib, "memory_source": limit_source,
-                              "computer": _computer()})
+                       facts={**spec.facts, "memory_limit": force.gib, "memory_source": force.source,
+                              "computer": memory_limit.computer()})
         store = default_store()
         folder = self._folder if self._folder is not None else history.runs_folder()
         run = _Run(spec, host, store, folder)

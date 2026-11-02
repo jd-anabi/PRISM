@@ -1,56 +1,157 @@
-"""The Settings screen, reached from the rail's row Settings.
+"""The Settings page, the rail's row Settings: two sections, the appearance and what belongs to this computer.
 
-An Appearance chooser (Follow Windows / Light / Dark) that calls back to MainWindow to apply and persist the
-mode. The list of the user-defined models stands under Your own models, and the help text under Help.
+"Appearance" is a chooser (Follow Windows / Light / Dark) that calls back to MainWindow to apply and persist the mode.
+"This computer" is the memory limit, remembered for this computer (``core/gui/memory_limit.py``), checked when editing
+ends and never on a keystroke; a limit that is not applied says why beside the field and changes nothing. The free
+memory of the graphics card is read only when its button is pressed, on a thread of its own: never when the page is
+built or shown. What the last run on this computer ran with is read from the run history when the page is shown.
 """
-from PySide6.QtWidgets import QButtonGroup, QGroupBox, QLabel, QRadioButton, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtCore import QRunnable, Qt, QThreadPool, QTimer
+from PySide6.QtWidgets import (QButtonGroup, QHBoxLayout, QLabel, QPushButton, QRadioButton, QVBoxLayout, QWidget)
 
+from core.artifacts import provenance
+
+from .. import design, fonts, memory_limit, texts
+from ..reported import reported
+from ..run import ends, history
+from ..run.controller import controller
 from ..theming import MODE_LABELS
+from ..widgets.labeled_inputs import FloatField
+from ..widgets.page import Page, PageHead, Sentence
+from ..widgets.ruled import SectionHead
+
+_TEXT_SIZE = "Text size follows the text size set in Windows."
+_LIMIT_NAME = "Memory limit"
+_LIMIT_SENTENCE = "The most graphics-card memory one batch of simulations may plan to use."
+_LIMIT_NOTE = ("A lower limit makes PRISM split a batch into smaller pieces, which takes longer and changes nothing in "
+               "what is simulated. A limit above what PRISM would plan anyway changes nothing. With no limit, PRISM "
+               "plans from the free-memory figure Windows gives it, which can count memory other programs are using as "
+               "free.")
+_FREE_NOT_READ = "Free graphics-card memory: not read yet."
+_FREE_READ = "Free graphics-card memory: {:.1f} GiB, read {}."
+_FREE_UNREADABLE = "Free graphics-card memory: could not be read."
+_READ_NOW, _READ_AGAIN = "Read now", "Read again"
+#: How often, in milliseconds, a page looks for the answer of a reading under way; the program takes about 50 ms here.
+READING_LOOK_MS = 50
+_NOT_KEPT = ("What you just set could not be remembered: the settings file cannot be written. It holds until PRISM "
+             "closes.")
+
+
+class _FreeMemoryReading(QRunnable):
+    """One reading of the free memory, off the window's thread: the program it starts can take two seconds. It leaves
+    its answer in the list it is handed and touches nothing of the toolkit: a signal sent on this thread from an object
+    the window's thread is deleting ends the process, and the page is deleted as the window goes, a reading or none."""
+
+    def __init__(self, answer: list) -> None:
+        super().__init__()
+        self._answer = answer
+
+    def run(self) -> None:
+        self._answer.append(provenance._nvidia_smi_free_gib())
 
 
 class SettingsScreen(QWidget):
-    """Settings: the appearance mode.
-
-    Drives the one appearance callback it is constructed with; persistence of the chosen mode is that
-    callback's job (app-level QSettings), not this widget's.
-    """
+    """Settings. Drives the one appearance callback it is constructed with; persistence of the chosen mode is that
+    callback's job (app-level QSettings), not this widget's. Building it reads the environment, the limit chosen and
+    the settings file, and neither the card nor the run history."""
 
     def __init__(self, on_mode, current_mode="system", parent=None):
         """``on_mode(mode)`` is called when the user picks an appearance; ``current_mode`` pre-selects."""
         super().__init__(parent)
         self._on_mode = on_mode
+        self._last_run_read = False          # the last run's sentence stands as read
+        self._answer = None                  # where a reading under way leaves its answer; None: none is
+        self._looking = QTimer(self)         # started by a press, stopped by the answer: nothing ticks before it
+        self._looking.setInterval(READING_LOOK_MS)
+        self._looking.timeout.connect(self._free_memory_read)
 
-        heading = QLabel("Settings")
-        heading.setProperty("type", "heading")     # Fluent type ramp (global QSS)
+        self.page = Page()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self.page)
+        self.page.add_fixed(PageHead("Settings"))
+        self.page.add_gap(design.scaled(design.GAP["head_to_body"]), design.scaled(design.GAP["head_to_body_small"]))
 
-        appearance = QGroupBox("Appearance")
-        av = QVBoxLayout(appearance)
+        self.appearance = QWidget()
+        lines = self._lines(self.appearance)
         self._group = QButtonGroup(self)
         self._radios = {}
         for mode, label in MODE_LABELS:
             rb = QRadioButton(label)
             self._group.addButton(rb)
             self._radios[mode] = rb
-            av.addWidget(rb)
+            lines.addWidget(rb)
+        lines.addWidget(Sentence(_TEXT_SIZE, quiet=True))
         # Select the current mode BEFORE connecting, so construction never fires on_mode (which would
         # re-enter MainWindow before it has finished wiring this screen).
         self._radios.get(current_mode, self._radios["system"]).setChecked(True)
         for mode, rb in self._radios.items():
             rb.toggled.connect(lambda checked, m=mode: checked and self._on_mode(m))
 
-        inner = QWidget()
-        iv = QVBoxLayout(inner)
-        iv.addWidget(heading)
-        iv.addWidget(appearance)
-        iv.addStretch(1)
+        computer = QWidget()
+        lines = self._lines(computer)
+        name = Sentence()
+        name.set_text(_LIMIT_SENTENCE, lead=f"{_LIMIT_NAME}.")
+        lines.addWidget(name)
+        self.no_limit = QRadioButton("No limit")
+        self.limited = QRadioButton("Limit each batch to")
+        self._options = QButtonGroup(self)
+        self._options.addButton(self.no_limit)
+        self._options.addButton(self.limited)
+        self.limit_field = FloatField(None)
+        self.limit_field.setAlignment(Qt.AlignRight)
+        self.limit_field.setFont(fonts.inter("body", tabular=True))
+        self.limit_field.setFixedWidth(design.scaled(design.SIZE["number_w"]))
+        self.limit_field.setAccessibleName("Limit each batch to, in GiB")
+        self.limit_unit = QLabel("GiB")
+        lines.addWidget(self.no_limit)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(design.scaled(design.GAP["marker_text"]))
+        row.addWidget(self.limited)
+        row.addWidget(self.limit_field)
+        row.addWidget(self.limit_unit)
+        row.addStretch(1)
+        lines.addLayout(row)
+        self.limit_line = Sentence()
+        self.limit_line.setVisible(False)
+        lines.addWidget(self.limit_line)
+        self.in_force = Sentence()
+        lines.addWidget(self.in_force)
+        lines.addWidget(Sentence(_LIMIT_NOTE, quiet=True))
+        self.free_memory = Sentence(_FREE_NOT_READ)
+        self.read_button = QPushButton(_READ_NOW)
+        lines.addWidget(self.free_memory)
+        lines.addWidget(self.read_button, 0, Qt.AlignLeft)
+        self.last_run = Sentence()
+        lines.addWidget(self.last_run)
+        self.not_kept = Sentence(_NOT_KEPT)
+        lines.addWidget(self.not_kept)
+        self.not_kept.setVisible(False)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(inner)
+        chosen = memory_limit.chosen()
+        (self.no_limit if chosen is None else self.limited).setChecked(True)
+        if chosen is not None:
+            self.limit_field.setText(f"{chosen:g}")
+        self.no_limit.clicked.connect(self._no_limit_pressed)
+        self.limited.clicked.connect(self._limited_pressed)
+        self.limit_field.editingFinished.connect(self._judge)
+        self.read_button.clicked.connect(self._read_free_memory)
+        self._show_limit()
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(scroll)
+        body = QWidget()
+        column = self._lines(body, design.scaled(design.GAP["block"]))
+        for part in (SectionHead("Appearance"), self.appearance, SectionHead("This computer"), computer):
+            column.addWidget(part)
+        self.page.add_scrolling(body)
+
+    @staticmethod
+    def _lines(block: QWidget, gap: int | None = None) -> QVBoxLayout:
+        """A column of lines for ``block``, at the look's gap between rows unless another is handed in."""
+        lines = QVBoxLayout(block)
+        lines.setContentsMargins(0, 0, 0, 0)
+        lines.setSpacing(design.scaled(design.SIZE["row_gap"]) if gap is None else gap)
+        return lines
 
     def set_mode(self, mode: str) -> None:
         """Reflect a mode change made elsewhere (without re-firing ``on_mode``)."""
@@ -59,3 +160,91 @@ class SettingsScreen(QWidget):
             rb.blockSignals(True)
             rb.setChecked(True)
             rb.blockSignals(False)
+
+    def set_small(self, on: bool) -> None:
+        """The low window, or the ordinary one again."""
+        self.page.set_small(on)
+
+    @reported(QWidget.showEvent)
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._read_last_run()
+
+    # ── the memory limit ──
+    def _show_limit(self) -> None:
+        """The line under the options, and what can be changed: nothing while a number in the variable decides."""
+        force = memory_limit.memory_limit_in_force()
+        gib, read = memory_limit.stored_limit()
+        self.in_force.set_text(memory_limit.limit_line(force, gib, read))
+        free = force.source != "environment"
+        self.no_limit.setEnabled(free)
+        self.limited.setEnabled(free)
+        self.limit_field.setEnabled(free and self.limited.isChecked())
+        self.limit_unit.setEnabled(self.limit_field.isEnabled())
+
+    def _say_why(self, sentence: str) -> None:
+        """The line beside the field: why what it holds is not applied; "" takes it back."""
+        self.limit_line.set_text(sentence)
+        self.limit_line.setVisible(bool(sentence))
+        self.limit_field.set_error(sentence)
+
+    def _apply(self, gib: float | None) -> None:
+        """``gib`` is accepted: the limit, stored once for each change, and what the page says of it."""
+        if gib != memory_limit.chosen():
+            self.not_kept.setVisible(not memory_limit.set_memory_limit(gib))
+        self._say_why("")
+        self._show_limit()
+
+    def _no_limit_pressed(self) -> None:
+        self._apply(None)
+
+    def _limited_pressed(self) -> None:
+        """"Limit each batch to": the field is opened, and a number it holds is judged at once."""
+        self._show_limit()
+        if self.limit_field.text().strip():
+            self._judge()
+        else:
+            self.limit_field.setFocus(Qt.OtherFocusReason)
+
+    def _judge(self) -> None:
+        """Editing ended in the field, or its option was pressed: the text is applied, or the line says why not."""
+        if not self.limited.isChecked():
+            return
+        gib, why = memory_limit.judged(self.limit_field.text(), memory_limit.memory_limit_in_force())
+        if why:
+            self._say_why(why)
+        else:
+            self._apply(gib)
+
+    # ── the free memory ──
+    def _read_free_memory(self) -> None:
+        """A press of the button: one reading off the window's thread. A press while one is under way does nothing."""
+        if self._answer is not None:
+            return
+        self._answer = []
+        QThreadPool.globalInstance().start(_FreeMemoryReading(self._answer))
+        self._looking.start()
+
+    def _free_memory_read(self) -> None:
+        """The page's timer: the answer, once it is there."""
+        if not self._answer:
+            return
+        self._looking.stop()
+        gib, self._answer = self._answer[0], None
+        self.read_button.setText(_READ_AGAIN)
+        self.free_memory.set_text(_FREE_UNREADABLE if gib is None
+                                  else _FREE_READ.format(gib, texts.date_text(controller().now())))
+
+    # ── the last run ──
+    def _read_last_run(self) -> None:
+        """The last run on this computer, read from the run history, once until a run has ended."""
+        if self._last_run_read:
+            return
+        self._last_run_read = True
+        held = controller()
+        try:
+            record = history.last_on(held.folder(), memory_limit.computer())
+            measured = history.last_measured_on(held.folder(), memory_limit.computer())
+        except (OSError, ValueError):        # a folder of runs that cannot be read holds no run that can be said
+            record = measured = None
+        self.last_run.set_text(ends.last_run_sentence(record, held.now(), measured))

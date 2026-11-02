@@ -30,7 +30,7 @@ PARTS: tuple[Place, ...] = (
           "The analytical map from the Nadrowski model to the Hopf normal form."),
     Place("records", "Records", ("Ctrl+6",), "Everything PRISM has written, and what each record was made from."),
     Place("models", "Your own models", ("Ctrl+7",), "Define a model of your own."),
-    Place("settings", "Settings", ("Ctrl+8",), "The appearance."),
+    Place("settings", "Settings", ("Ctrl+8",), "Appearance, and this computer."),
     Place("help", "Help", ("Ctrl+9", "F1"), "What each part's settings mean, and the keys."),
 )
 

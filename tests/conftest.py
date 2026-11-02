@@ -64,9 +64,10 @@ def _no_sbi_logs():
 def check_plans_kept(folder: Path, held: "list[str] | None", kept: "dict[str, bytes]") -> None:
     """Fail, by raising, when ``folder``, where the plans a person saves are kept, does not hold what it held at the
     start of the run: ``held`` is its listing then (tests/_settings_folder.listing) and ``kept`` its files' bytes then.
-    The message names the first five of what changed: a plan rewritten under its own name comes first, marked so, since
-    it is the one change that loses work; then the paths that came or went; and the folder itself when it was made or
-    has gone, so that a folder empty before or after is not read as nothing. A plan the person saved before the run is
+    The message names the first five of what changed: the folder itself comes first when it was made or has gone, so
+    that a folder empty before or after is not read as nothing; then a plan rewritten under its own name, marked so,
+    since it is the one change that loses work; then the paths that came or went. A plan the person saved before the
+    run is
     in both and does no harm; one saved by hand while the run was going fails the same way, and the message says so.
     Raised rather than asserted, so the check survives a run with assertions switched off."""
     from tests import _settings_folder
@@ -391,13 +392,28 @@ def _layout_room_put_back():
 
 
 @pytest.fixture(autouse=True)
-def _built_widgets_let_go(_isolated_settings, _drawing_code_raises_nothing, _layout_room_put_back, windows_asked):
+def _memory_limit_put_back():
+    """The memory limit is put back as this test found it after every test: it is the one setting the window assigns
+    on the configuration, a test that sets it through the window leaves it there, and every later run would plan with
+    it. The configuration is read where its module is kept."""
+    import sys
+    config = sys.modules.get("core.config")
+    found = None if config is None else config.SIM_VRAM_CEILING_GIB
+    yield
+    config = sys.modules.get("core.config")
+    if config is not None:
+        config.SIM_VRAM_CEILING_GIB = 0.0 if found is None else found
+
+
+@pytest.fixture(autouse=True)
+def _built_widgets_let_go(_isolated_settings, _drawing_code_raises_nothing, _layout_room_put_back,
+                          _memory_limit_put_back, windows_asked):
     """Every window, part, inference screen and bare run host the builders of tests/_fixtures.py made during
     a test is deleted when the test ends (tests/_built.py), so that none outlives it. Left alive, each would
     be dressed again by every later change of sheet, style or font on the one application, and an error of
     one of its guarded methods would be charged to whichever later test made that change. Each goes by its
     own deferred delete, the newest first, and is never closed, because closing a window writes settings.
-    The four fixtures it names are set up before it and torn down after it, so the widgets go while this
+    The five fixtures it names are set up before it and torn down after it, so the widgets go while this
     test's own settings file and its room are in force and before the drawing record is read, and a run this
     ends lets go of what it asked of Windows before the guard of those requests reads its record. What a
     fixture of wider scope built was made before this test was set up, so it is left alone. A test that ends

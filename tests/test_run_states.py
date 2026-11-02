@@ -2070,8 +2070,8 @@ def test_a_text_file_that_breaks_at_its_head_is_said_and_the_run_goes_on(tmp_pat
 
 def test_the_head_says_the_memory_limit_in_force_and_where_it_was_set(tmp_path, monkeypatch):
     """The run's head names the memory limit in force for each batch of simulations, read once at its start, and
-    where it was set: by the variable of the environment, which wins, or in step 1 of the window, which a variable
-    that is not a number leaves in force; or says that none is set. The limit is the page's fact the health table
+    where it was set: by the variable of the environment, which wins, or in Settings, which a variable that is not a
+    number leaves in force; or says that none is set. The limit is the page's fact the health table
     reads, and where it was set the fact the run's history reads."""
     from core import config
     from tests._fixtures import build_run_host, qt_app
@@ -2081,9 +2081,9 @@ def test_the_head_says_the_memory_limit_in_force_and_where_it_was_set(tmp_path, 
     for variable, setting, said, limit, source in (
             ("6", 2.5, "Memory limit: 6 GiB for each batch of simulations (set by PRISM_VRAM_CEILING_GIB).", 6.0,
              "environment"),
-            (None, 2.5, "Memory limit: 2.5 GiB for each batch of simulations (set in step 1, Model and options).",
+            (None, 2.5, "Memory limit: 2.5 GiB for each batch of simulations (set in Settings, This computer).",
              2.5, "setting"),
-            ("abc", 2.5, "Memory limit: 2.5 GiB for each batch of simulations (set in step 1, Model and options).",
+            ("abc", 2.5, "Memory limit: 2.5 GiB for each batch of simulations (set in Settings, This computer).",
              2.5, "setting"),
             (None, 0.0, "No memory limit is set on this computer.", None, "none")):
         if variable is None:

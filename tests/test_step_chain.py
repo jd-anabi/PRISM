@@ -398,7 +398,7 @@ def test_the_parts_and_steps_are_the_rails_in_order():
         "The analytical map from the Nadrowski model to the Hopf normal form.",
         "Everything PRISM has written, and what each record was made from.",
         "Define a model of your own.",
-        "The appearance.",
+        "Appearance, and this computer.",
         "What each part's settings mean, and the keys.",
     ]
     assert [s.key for s in keys.STEPS] == ["model", "prior", "training", "checks", "infer", "narrowing"]
