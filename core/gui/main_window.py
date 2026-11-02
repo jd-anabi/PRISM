@@ -880,6 +880,22 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.ActivationChange and self.isActiveWindow():
             self._seen()
 
+    @reported(QMainWindow.keyPressEvent)
+    def keyPressEvent(self, event):
+        """Enter presses the button that shows the ring. A push button here takes no Enter of its own, so the key comes
+        up to the window, which hears only what nothing below it took. A key held down presses nothing: a start pressed
+        with Enter leaves the keyboard on the stop button, where the key's repeats would land. With a modifier but the
+        keypad's, in a field, on a tick box or a radio button, or on a button the keyboard did not bring the ring to, it
+        does what it did: nothing."""
+        widget, follower = self.focusWidget(), style.current_follower()
+        if (event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.isAutoRepeat()
+                and not (event.modifiers() & ~Qt.KeypadModifier)
+                and isinstance(widget, QPushButton) and widget.isEnabled()
+                and (follower is None or follower.target() is widget)):
+            widget.click()
+            return
+        super().keyPressEvent(event)
+
     def _close_at_the_end(self) -> None:
         """The close that waited for the run, the run having ended: carried out now, or, while a box or a question
         is open (one a person opened meanwhile), once it has been answered, looked at again every

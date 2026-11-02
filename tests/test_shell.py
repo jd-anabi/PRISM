@@ -4890,8 +4890,10 @@ def test_after_a_move_the_keyboard_is_on_the_pages_first_setting_never_on_a_butt
                     assert held is named, f"{place}: the keyboard is on a button the place does not name"
                 forget_asked()
                 QTest.keyClick(held, Qt.Key_Return)
-                assert (started, raised, all_asked(), window.current_place()) == ([], [], [], place), (
-                    f"{place}: Enter started a run, raised, asked something or moved: {started} {raised}")
+                # Enter presses a button the place names, which moves and starts nothing; on a setting it does nothing.
+                assert (started, raised, all_asked()) == ([], [], []), (
+                    f"{place}: Enter started a run, raised or asked something: {started} {raised}")
+                assert isinstance(held, QPushButton) or window.current_place() == place, f"{place}: Enter moved"
                 if isinstance(held, QAbstractButton) and held is named:
                     held.click()
                     assert (started, raised, all_asked()) == ([], [], []), (
@@ -7146,3 +7148,180 @@ def test_a_real_change_of_screen_lays_the_window_out_for_the_screen_it_stands_on
     assert report["moved"] == {"screen": "small", **small, "small": False}, report
     assert report["back"] == {"screen": "large", **large, "small": True}, report
     assert report["opened there"] == {"screen": "small", **small, "small": False}, report
+
+
+def _ring_on(button) -> None:
+    """The keyboard on ``button``, as a Tab brings it: the ring shows there."""
+    from core.gui import style
+    from tests._look_helpers import _arrive
+    button.setFocus(Qt.TabFocusReason)
+    _arrive(button, Qt.TabFocusReason)
+    assert style.current_follower().target() is button, "the ring is not on the button"
+
+
+def _a_repeat(widget, key=Qt.Key_Return) -> None:
+    """One repeat of ``key`` held down, sent where a person's key goes."""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+    QApplication.sendEvent(widget, QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier, "\r", True))
+
+
+@contextlib.contextmanager
+def _the_whole_window(tmp_path, monkeypatch):
+    """The whole program, its ring in force, its window shown off the screen and in front, on the test's own runs."""
+    from tests._fixtures import whole_program
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    with whole_program() as (_app, window):
+        _on_the_runs_clock(tmp_path)
+        _shown_off_screen(window)
+        with _in_front(window):
+            yield window
+        window.hide()
+
+
+def _button_in(panel):
+    """A push button deep in ``panel``, under its scrolling form, splitter and stacks, and the list of its presses."""
+    pressed, button = [], QPushButton("Deep in the page")
+    panel.controls_layout.addWidget(button)
+    button.clicked.connect(lambda: pressed.append(1))
+    QApplication.processEvents()
+    return button, pressed
+
+
+def test_enter_presses_the_button_that_shows_the_ring(tmp_path, monkeypatch):
+    """Enter, of either key, presses a push button once where the keyboard has brought the ring to it, deep in a page as
+    on Home, whose main button is such a button; and on the stop button of a live run it asks that button's question, as
+    Space does, the safe answer first."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._fixtures import all_asked, forget_asked
+    with _the_whole_window(tmp_path, monkeypatch) as window:
+        panel = window.panel(ReductionPanel)
+        window.go_to("reduction")
+        button, pressed = _button_in(panel)
+        _ring_on(button)
+        QTest.keyClick(button, Qt.Key_Return)
+        assert pressed == [1], "Enter did not press the ringed button once"
+        QTest.keyClick(button, Qt.Key_Enter, Qt.KeypadModifier)
+        assert pressed == [1, 1], "the keypad's Enter did not press it"
+        window.go_to("home")
+        main = window.part("home").first_focus()
+        assert isinstance(main, QPushButton)
+        _ring_on(main)
+        QTest.keyClick(main, Qt.Key_Return)
+        assert window.current_place() != ("home", None), "Enter did not press Home's main button"
+        stand_in = StandIn()
+        window.go_to("reduction")
+        with running(panel, stand_in, spec=_training_spec(place=("reduction", None))):
+            stop = panel.run_view.stop_button
+            _ring_on(stop)
+            forget_asked()
+            QTest.keyClick(stop, Qt.Key_Return)
+            by_enter = [box.sentence for box in all_asked()]
+            assert len(by_enter) == 1, "Enter on the stop button did not ask its question"
+            forget_asked()
+            QTest.keyClick(stop, Qt.Key_Space)
+            assert [box.sentence for box in all_asked()] == by_enter, "Enter and Space differ on the stop button"
+            assert controller().is_live() and not controller().status.stop_requested
+
+
+def test_a_held_enter_cannot_land_on_the_stop_button(tmp_path, monkeypatch):
+    """A start pressed with Enter leaves the keyboard on the run's stop button, where the key's repeats land: they press
+    nothing and ask nothing, so a run cannot be stopped by the key that started it, and the start is pressed once however
+    long the key is held. A repeat on the button itself presses nothing either. The key let go and pressed again is a new
+    press, and asks the stop's question, with the safe answer first."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._fixtures import all_asked, forget_asked
+    with _the_whole_window(tmp_path, monkeypatch) as window:
+        panel = window.panel(ReductionPanel)
+        window.go_to("reduction")
+        stand_in = StandIn()
+        button, pressed = _button_in(panel)
+        _ring_on(button)
+        _a_repeat(button)
+        assert pressed == [], "a repeat pressed the button"
+        button.clicked.connect(lambda: start_run(panel, stand_in, spec=_training_spec(place=("reduction", None))))
+        forget_asked()
+        QTest.keyClick(button, Qt.Key_Return)
+        assert pressed == [1] and controller().is_live(), "Enter did not start the run"
+        stop = panel.run_view.stop_button
+        assert window.focusWidget() is stop, "the keyboard did not go to the stop button"
+        for _ in range(5):
+            _a_repeat(window.focusWidget())
+        QApplication.processEvents()
+        assert all_asked() == [] and pressed == [1], "a held Enter landed on the stop button"
+        assert not controller().status.stop_requested
+        QTest.keyClick(window.focusWidget(), Qt.Key_Return)
+        assert len(all_asked()) == 1, "the key pressed again asked nothing"
+        stand_in.release()
+        turn_until(QApplication.instance(), lambda: not controller().is_live())
+
+
+@pytest.mark.parametrize("control", ["with Ctrl", "with Shift", "a number field", "a line of text", "a closed list",
+                                     "a tick box", "a radio button", "a button clicked with the mouse", "a greyed button",
+                                     "a scrolling area"])
+def test_enter_with_a_modifier_in_a_field_or_on_a_tick_box_presses_nothing(control, tmp_path, monkeypatch):
+    """Enter presses nothing where no button shows the ring: with a modifier but the keypad's; in a field, on a closed
+    list, on a tick box or a radio button, whose state it leaves as it was (Space answers those); on a button the mouse
+    gave the keyboard, which wears no ring; on a greyed button; on a scrolling area."""
+    from PySide6.QtWidgets import QCheckBox, QComboBox, QLineEdit, QRadioButton, QScrollArea
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.widgets.labeled_inputs import IntField
+    from tests._look_helpers import _arrive
+    with _the_whole_window(tmp_path, monkeypatch) as window:
+        panel = window.panel(ReductionPanel)
+        window.go_to("reduction")
+        button, pressed = _button_in(panel)
+        modifiers = {"with Ctrl": Qt.ControlModifier, "with Shift": Qt.ShiftModifier}.get(control, Qt.NoModifier)
+        made = {"a number field": IntField("5"), "a line of text": QLineEdit("5"), "a closed list": QComboBox(),
+                "a tick box": QCheckBox("Tick"), "a radio button": QRadioButton("One")}.get(control)
+        target = button
+        if made is not None:
+            target = made
+            panel.controls_layout.addWidget(made)
+            QApplication.processEvents()
+            _arrive(target, Qt.TabFocusReason)
+            target.setFocus(Qt.TabFocusReason)
+        elif control == "a button clicked with the mouse":
+            button.setFocus(Qt.MouseFocusReason)
+            _arrive(button, Qt.MouseFocusReason)
+        elif control == "a greyed button":
+            _ring_on(button)
+            button.setEnabled(False)
+            target = window.focusWidget() or window
+        elif control == "a scrolling area":
+            target = panel.findChild(QScrollArea)
+            target.setFocus(Qt.TabFocusReason)
+        else:
+            _ring_on(button)
+        checked = target.isChecked() if made is not None and hasattr(made, "isChecked") else None
+        place = window.current_place()
+        QTest.keyClick(target, Qt.Key_Return, modifiers)
+        assert pressed == [], f"Enter pressed the button: {control}"
+        assert window.current_place() == place
+        if checked is not None:
+            assert target.isChecked() == checked, "Enter changed a tick"
+
+
+def test_a_question_keeps_its_own_enter(tmp_path, monkeypatch):
+    """A question is a window of its own and the window's handler does not hear it: with the keyboard on its other answer,
+    Enter gives the safe answer, as it always has, whatever the ring shows, and a repeat of the key does too."""
+    from PySide6.QtWidgets import QDialog
+    from core.gui.widgets.ask import Ask
+    from tests._look_helpers import _gone
+    with _the_whole_window(tmp_path, monkeypatch) as window:
+        heard = []
+        monkeypatch.setattr(MainWindow, "keyPressEvent", lambda self, event: heard.append(event.key()))
+        question = Ask(window, "Stop?", "Stop it?", "Keep it", "Stop it")
+        question.setAttribute(Qt.WA_DontShowOnScreen, True)
+        question.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        answers = []
+        question.finished.connect(answers.append)
+        question.show()
+        QApplication.processEvents()
+        question.other_button.setFocus(Qt.TabFocusReason)
+        QTest.keyClick(question.other_button, Qt.Key_Return)
+        QApplication.processEvents()
+        assert answers == [QDialog.Rejected], "Enter on the other answer did not give the safe one"
+        assert heard == [], "the window heard a key of its question"
+        question.close()
+        _gone(question)
