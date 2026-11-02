@@ -1321,10 +1321,10 @@ def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
 
     Two legs, because "the same box" and "the same code" are different claims. The first compares the
     two boxes field by field through the dialog record. The second pins the DELEGATION: a
-    copy-pasted twin in base_panel.py would pass the first leg today and rot the first time either
+    copy-pasted twin in run_host.py would pass the first leg today and rot the first time either
     copy is edited."""
     from PySide6.QtWidgets import QWidget
-    from core.gui.panels import base_panel as bp
+    from core.gui.panels import run_host as bp
     from core.gui.widgets.refusal_box import show_refusal
     from core.refusals import Refusal
     from tests._fixtures import PaneCapture, all_asked, forget_asked, qt_app

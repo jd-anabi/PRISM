@@ -1810,7 +1810,7 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         forwards += [(path.relative_to(REPO).as_posix(), None, ast.unparse(call.args[0]))
                      for key, call in calls.items() if key not in in_a_class]     # outside every class: no run_spec
     assert found == _DISPATCHES, sorted(found ^ _DISPATCHES)
-    assert forwards == [("core/gui/panels/base_panel.py", "BasePanel", "fn"),
+    assert forwards == [("core/gui/panels/run_host.py", "RunHost", "fn"),
                         ("core/gui/run/controller.py", "RunController", "spec.fn")], forwards
 
     window = build_window()

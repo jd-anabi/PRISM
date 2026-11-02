@@ -97,7 +97,7 @@ class WorkerSignals(QObject):
     log_batch = Signal(object)      # list[(text, level)]: one pump tick of pipeline output
     rows = Signal(object)           # tuple[vt.RowState]: ALL live progress rows (a full snapshot)
     figure = Signal(str, object, object)  # (title, png_bytes, fig_pickle | None) -- see base_panel._png_fig_sink
-    chunk = Signal(object)          # one streamed numpy chunk (worker thread -> GUI) -- see base_panel.dispatch(provide_stream=)
+    chunk = Signal(object)          # one streamed numpy chunk (worker thread -> GUI) -- see RunHost.dispatch(provide_stream=)
     result = Signal(object)         # the callable's return value
     error = Signal(object, str, bool, object)  # (exception, traceback, cancel_noted, kept training) --
                                         # the run's page says it, a refusal before anything was spent the

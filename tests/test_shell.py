@@ -3439,15 +3439,16 @@ def test_a_field_greyed_with_the_keyboard_on_it_applies_nothing(tmp_path, monkey
 def test_a_lock_and_an_unlock_during_a_reading_lose_nothing(tmp_path, monkeypatch):
     """An answer that lands during a run keeps what the lock says and the button greyed, and the timer stops; a run that
     begins and ends during a reading leaves the timer looking for its answer and the button free, and a press then
-    starts no second reading."""
+    starts no second reading: the two presses that find no reading under way are the only two the program hears."""
     import threading
     from PySide6.QtCore import QThreadPool, QTimer
     from core.artifacts import provenance
     app = qt_app()
     held, _clock = _on_the_runs_clock(tmp_path)
-    gate, began = threading.Event(), threading.Event()
+    gate, began, readings = threading.Event(), threading.Event(), []
 
     def reader():
+        readings.append(1)
         began.set()
         gate.wait(10)
         return 12.5
@@ -3479,6 +3480,8 @@ def test_a_lock_and_an_unlock_during_a_reading_lose_nothing(tmp_path, monkeypatc
         turn_until(app, lambda: not page.findChild(QTimer).isActive())
         assert page.free_memory.plain_text().startswith("Free graphics-card memory: 12.5 GiB")
         assert not page.free_memory.plain_text().endswith("live.")
+        QThreadPool.globalInstance().waitForDone(10000)      # a second reading queued would have run by now
+        assert len(readings) == 2, "a press during a reading started a second one"
     finally:
         gate.set()
         QThreadPool.globalInstance().waitForDone(10000)

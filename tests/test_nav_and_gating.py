@@ -4697,11 +4697,10 @@ def test_the_store_picker_offers_finished_rows_only_and_honours_a_row_filter(mon
 
 # ── the panel/tab counts, stale since the TSNPE tab arrived ──────────────────────────────────────
 def test_the_panel_docstrings_no_longer_count_nine_panels_or_five_tabs():
-    """Four sentences in base_panel.py and one in inference/base.py counted nine panels and five
-    inference tabs, both stale from before the TSNPE tab: there are TEN BasePanel subclasses (the four
-    section panels plus six inference tabs) and NINE save_settings overrides (ValidatePanel is the one
-    subclass that does not override it). The Artifacts screen is not a panel at all -- it is a plain
-    QWidget, so a run elsewhere cannot grey it out.
+    """Sentences in base_panel.py once counted the panels and the inference tabs, and went stale each
+    time one was added, as a count does: the panels go one by one now, as their pages are rebuilt, so no
+    count of them stands in that file at all, of nine or of ten. inference/base.py still names the six
+    tabs, which are the six steps.
 
     Phrases, not a subclass count: the suites own throwaway BasePanel subclasses persist for the life
     of the process, so counting __subclasses__() would assert on test order.
@@ -4716,14 +4715,11 @@ def test_the_panel_docstrings_no_longer_count_nine_panels_or_five_tabs():
 
     bp_src = " ".join(inspect.getsource(bp).split())
     inf_src = " ".join(inspect.getsource(inf_base).split())
-    for phrase in ("Nine of these", "8 of the 9", "all nine differ", "nine independent splitters"):
+    for phrase in ("Nine of these", "8 of the 9", "all nine differ", "nine independent splitters",
+                   "Ten of these", "9 of the 10", "all ten differ", "ten independent splitters"):
         assert phrase not in bp_src, f"base_panel.py still says {phrase!r}"
     assert "the five inference tabs" not in inf_src
     assert "the five inference tabs" not in bp_src
-
-    assert "Ten of these exist" in bp_src
-    assert "9 of the 10" in bp_src
-    assert "all ten differ" in bp_src
     assert "the six inference tabs" in inf_src
 
 

@@ -243,7 +243,8 @@ class SettingsScreen(QWidget):
         self.limit_field.set_error(sentence)
 
     def _apply(self, gib: float | None) -> None:
-        """``gib`` is accepted: the limit, stored once for each change, and what the page says of it."""
+        """``gib`` is accepted: the limit, stored when it differs from what is remembered and again, the same value,
+        while the line of what was not remembered stands, and what the page says of it."""
         if gib != memory_limit.chosen() or not self.not_kept.isHidden():
             self._say_kept(memory_limit.set_memory_limit(gib))
         self._say_why("")
