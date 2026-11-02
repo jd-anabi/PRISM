@@ -6,8 +6,8 @@ equal width. Those are on where numbers stand under one another, in lists and ta
 and for a caller that asks for them. They are not on everywhere, because in the bundled files the same
 feature also widens the hyphen and the asterisk to a digit's width (the brackets and other marks change
 by a little), and a compound word then reads as if it were spaced. Sizes come from the look's table,
-scaled by the text factor. The two bundled Inter files are handed to the toolkit the first time a font
-is asked for, so a painted device has its face in a test as well, where no application font is loaded.
+scaled by the text factor. The two bundled Inter files and the console face's are handed to the toolkit the first
+time a font is asked for, so a painted device has its face in a test as well, where no application font is loaded.
 """
 import logging
 from pathlib import Path
@@ -21,11 +21,12 @@ log = logging.getLogger(__name__)
 
 _FONT_DIR = Path(__file__).resolve().parent / "assets" / "fonts"
 _FILES = ("Inter-Regular.ttf", "Inter-SemiBold.ttf")      # the two weights the look uses: 400 and 600
+_CONSOLE_FILE = "CascadiaMono-Regular.ttf"                # the one weight console text uses; no figure names its face
 # The widget classes the toolkit keeps a font of their own for: the application's font does not reach them.
 _CLASSES = ("QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu", "QMenuBar", "QTipLabel", "QStatusBar")
 _IN_COLUMNS = ("QAbstractItemView", "QHeaderView")       # of those, the ones whose numbers stand under one another
 
-_registered = False               # the two files are with the toolkit
+_registered = False               # the bundled files are with the toolkit
 _inter: dict = {}                 # (kind, weight, pixel size, equal digits) -> the font, built once
 _book_face: str | None = None     # the face a sentence is set in on this computer, once looked up
 _with_matplotlib: bool | None = None      # None until tried; then whether both files went in
@@ -39,17 +40,20 @@ def _toolkit_is_up() -> bool:
 
 
 def register_fonts() -> None:
-    """Hand the two bundled files to the toolkit, once per process. Before the application exists this
+    """Hand the bundled files to the toolkit, once per process. Before the application exists this
     does nothing and remembers nothing, so the first call after it does the work. A file that will not
     load is not an error: the program still starts, in whatever face the toolkit finds, and a warning
     names the file."""
     global _registered
     if _registered or not _toolkit_is_up():
         return
-    for name in _FILES:
+    for name in (*_FILES, _CONSOLE_FILE):
         if QFontDatabase.addApplicationFont(str(_FONT_DIR / name)) < 0:      # the toolkit's answer for a refusal
             log.warning("The lettering file %s did not load; the window is set in whatever face the toolkit finds.",
                         name)
+    # Where the system offers no face of its own, a font that names none takes the first family by its name, which would
+    # be the console's. A family the computer does hold stands before this.
+    QFont.insertSubstitution(QGuiApplication.font().family(), design.LETTERING)
     _registered = True
 
 
@@ -106,7 +110,9 @@ def book(bold: bool = False) -> QFont:
 
 def fixed() -> QFont:
     """The fixed-width font for text quoted from the console, at the body's size: the look's faces in
-    their order, then the system's own fixed-width face. Nothing is registered and nothing is kept."""
+    their order, the first of them carried with the program, then the system's own fixed-width face. Nothing is
+    kept."""
+    register_fonts()                                        # on every call: the application may exist by now
     families = list(design.FIXED_FACES)
     if _toolkit_is_up():
         families.append(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family())

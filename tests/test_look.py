@@ -850,6 +850,53 @@ def test_console_text_alone_is_set_in_the_fixed_width_face():
     assert font.pixelSize() == 14
 
 
+def test_the_console_face_is_carried_with_the_program():
+    """The console's face stands beside the lettering's with its licence, as the same file on every computer: on one that
+    holds no such face of its own, as the platform with no fonts holds none, the font database reads it, and text quoted
+    from the console is set in it, each letter as wide as the next. The licence is read as words, for the repository keeps
+    a text file with one line ending and a checkout may write it with another. The figure library is not handed it."""
+    QApplication.instance() or QApplication([])
+    fonts.register_fonts()
+    assert fonts._FILES == ("Inter-Regular.ttf", "Inter-SemiBold.ttf"), "the figure library is handed these and no other"
+    folder = Path(fonts.__file__).parent / "assets" / "fonts"
+    held = (folder / "CascadiaMono-Regular.ttf").read_bytes()
+    assert len(held) == 575_912 and hashlib.sha256(held).hexdigest().startswith("06520d03")
+    licence = (folder / "OFL-CascadiaMono.txt").read_text(encoding="utf-8")
+    assert licence.startswith("Copyright (c) 2019 - Present, Microsoft Corporation,")
+    assert "This Font Software is licensed under the SIL Open Font License, Version 1.1." in licence
+    assert "Cascadia Mono" in QFontDatabase.families()
+    console = QFontInfo(fonts.fixed())
+    assert (console.family(), console.fixedPitch(), console.pixelSize()) == ("Cascadia Mono", True, 14)
+    metrics = QFontMetricsF(fonts.fixed())
+    assert metrics.horizontalAdvance("i" * 80) == metrics.horizontalAdvance("W" * 80)
+
+
+def test_a_font_that_names_no_face_stays_in_the_lettering_face_where_the_system_offers_none():
+    """On the platform with no fonts of its own a font that names no family takes the first the database holds, by its
+    name, and the console's stands before the lettering's: every control the application's font has not reached yet would
+    stand a third wider. Where the system offers a face, as Windows does, that face stands."""
+    app = QApplication.instance() or QApplication([])
+    fonts.register_fonts()
+    assert QFontInfo(QFont()).family() == QFontInfo(app.font()).family()
+    if QGuiApplication.platformName() == "offscreen":
+        assert QFontInfo(QFont()).family() == design.LETTERING
+
+
+def test_fixed_asks_for_the_bundled_files_itself():
+    """A fixed-width font asked for before any other font has its face all the same: a fresh interpreter, an application,
+    and the first font asked for is the console's."""
+    code = textwrap.dedent('''
+        from PySide6.QtGui import QFontInfo
+        from PySide6.QtWidgets import QApplication
+        app = QApplication([])
+        from core.gui import fonts
+        assert QFontInfo(fonts.fixed()).family() == "Cascadia Mono", QFontInfo(fonts.fixed()).family()
+    ''')
+    done = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=dict(os.environ, QT_QPA_PLATFORM="offscreen"),
+                          capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
 def test_the_class_fonts_are_inter_again_after_a_change_of_style():
     app = QApplication.instance() or QApplication([])
     found = app.font()
@@ -911,7 +958,7 @@ def test_a_lettering_file_that_does_not_load_is_named_in_a_warning(monkeypatch, 
     QApplication.instance() or QApplication([])
     answers = dict(zip(fonts._FILES, (-1, 0)))
     monkeypatch.setattr(fonts, "QFontDatabase",
-                        SimpleNamespace(addApplicationFont=lambda path: answers[Path(path).name]))
+                        SimpleNamespace(addApplicationFont=lambda path: answers.get(Path(path).name, 0)))
     monkeypatch.setattr(fonts, "_registered", False)
     monkeypatch.setattr(fonts, "_FONT_DIR", tmp_path)
     monkeypatch.setattr(fonts, "_with_matplotlib", None)
@@ -921,6 +968,19 @@ def test_a_lettering_file_that_does_not_load_is_named_in_a_warning(monkeypatch, 
     said = [record.getMessage().split(";")[0] for record in caplog.records if record.name == "core.gui.fonts"]
     assert (reached, said) == (False, ["The lettering file Inter-Regular.ttf did not load",
                                        "The lettering files did not reach the figure library"])
+
+
+def test_a_console_file_that_does_not_load_is_named_and_the_next_face_stands(monkeypatch, caplog):
+    """The console's file refused, the program still starts: a warning names it, and console text falls to the next face
+    of the look's list."""
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(fonts, "QFontDatabase",
+                        SimpleNamespace(addApplicationFont=lambda path: -1 if "Cascadia" in str(path) else 0))
+    monkeypatch.setattr(fonts, "_registered", False)
+    caplog.set_level("WARNING", logger="core.gui.fonts")
+    fonts.register_fonts()
+    assert [record.getMessage().split(";")[0] for record in caplog.records] == [
+        "The lettering file CascadiaMono-Regular.ttf did not load"]
 
 
 def test_the_font_factories_can_be_called_before_the_application_exists():
@@ -965,9 +1025,7 @@ def test_the_three_faces_resolve_on_a_real_windows_display():
     assert QFontInfo(fonts.book()).family() == wanted
     assert fonts.book().pixelSize() == 16 and fonts.book(bold=True).bold()
     console = QFontInfo(fonts.fixed())
-    assert console.fixedPitch() and console.pixelSize() == 14
-    assert console.family() in (*design.FIXED_FACES,
-                                QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family())
+    assert (console.family(), console.fixedPitch(), console.pixelSize()) == (design.FIXED_FACES[0], True, 14)
     with font_and_style_put_back(app) as style:
         fonts.load_app_font(app)
         assert not app.font().isFeatureSet(_tabular())
