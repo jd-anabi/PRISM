@@ -7433,18 +7433,21 @@ def test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end(tmp_pat
 
 
 def test_no_module_of_the_window_binds_at_its_import_a_reading_the_tests_count():
-    """The readings a run's tests count are stood in for on the modules that define them, so a module of the window that
-    took one by name at its own import, ``from .history import latest`` at its head, would read past the count unseen.
-    None does: such a reading is imported where it is called, or reached through its module."""
+    """The readings a run's tests count are stood in for on the modules that define them, the card's and the programs'
+    among them, so a module of the window that took one by name at its own import, ``from .history import latest`` or
+    ``from core.config import detect_device`` at its head, would read past the count unseen. None does: such a reading is
+    imported where it is called, where the name is looked up then and finds the stand-in, or reached through its
+    module. That is why only what stands at a module's head is walked."""
     import ast
     from pathlib import Path
-    from tests._fixtures import COUNTED_READINGS
+    from tests._fixtures import CARD_READINGS, COUNTED_READINGS
     gui = Path(__file__).resolve().parents[1] / "core" / "gui"
+    bound = {**COUNTED_READINGS, **CARD_READINGS}
     found = []
     for path in sorted(gui.rglob("*.py")):
         for node in ast.parse(path.read_text(encoding="utf-8")).body:
             if isinstance(node, ast.ImportFrom):
-                counted = COUNTED_READINGS.get((node.module or "").rpartition(".")[2], ())
+                counted = bound.get((node.module or "").rpartition(".")[2], ())
                 found += [f"{path.relative_to(gui)}: {alias.name}" for alias in node.names if alias.name in counted]
     assert found == [], found
 

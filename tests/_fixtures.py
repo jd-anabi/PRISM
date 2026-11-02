@@ -980,6 +980,9 @@ def card_and_programs(monkeypatch) -> list:
 COUNTED_READINGS = {"orchestrator": ("training_preview", "training_reading", "matching_fits"),
                     "fit_state": ("kept_fits",), "training_checkpoint": ("checkpoints_using_prior", "peek"),
                     "history": ("read", "latest", "newest_unseen", "last_on", "last_measured_on", "duration")}
+# What ``card_and_programs`` stands in for by a name a module of the window could bind at its own import.
+CARD_READINGS = {"config": ("detect_device",), "cuda": ("is_available", "mem_get_info", "memory_reserved", "memory_allocated"),
+                 "subprocess": ("run", "Popen"), "os": ("system",)}
 
 
 def readings_of_a_run(monkeypatch) -> list:

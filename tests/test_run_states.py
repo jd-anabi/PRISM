@@ -5333,15 +5333,21 @@ def _the_two_share_the_width(window, host, why) -> None:
     the page: an edge that reads right says nothing of a neighbour drawn over it or of a parent that cuts it. A widget's
     visible region would not do: it does not see the form."""
     from PySide6.QtCore import QPoint
-    form = host.controls_scroll
-    page = host.results.currentWidget() if host.run_view.isHidden() else host.run_view
-    form_right = form.mapTo(window, QPoint(form.width(), 0)).x()
+    form, shown = getattr(host, "controls_scroll", None), host.results.currentWidget()
+    # A page that stands the run's page inside what the column shows has it measured there, unless it is hidden; a past
+    # view over those figures hides it from sight and from nothing else, so that what the column shows is what is read.
+    page = host.run_view if shown.isAncestorOf(host.run_view) and not host.run_view.isHidden() else shown
+    assert page.isVisible(), (why, "nothing stands to be measured")
     left, top = page.mapTo(window, QPoint(0, 0)).x(), page.mapTo(window, QPoint(0, 0)).y()
     right = left + page.width()
-    assert form_right <= left, (why, "the form is drawn over the run's page", form_right, left)
     assert right <= window.width(), (why, "the run's page is cut at the window's edge", right, window.width())
+    edges = [(page, left), (page, right - 1)]
+    if form is not None:
+        form_right = form.mapTo(window, QPoint(form.width(), 0)).x()
+        assert form_right <= left, (why, "the form is drawn over the run's page", form_right, left)
+        edges.append((form, form_right - 1))
     for height in (2, page.height() // 2, page.height() - 3):
-        for widget, x in ((page, left), (page, right - 1), (form, form_right - 1)):
+        for widget, x in edges:
             found = window.childAt(QPoint(x, top + height))
             assert found is widget or (found is not None and widget.isAncestorOf(found)), (
                 why, "something else stands at an edge of", type(widget).__name__, x, top + height, found)
@@ -5590,6 +5596,7 @@ def test_a_live_simulations_compact_page_leaves_the_form_as_it_was(tmp_path):
 
         stream, least_width, compact = a_run(run_simulation_stream)
         assert (least_width, compact, form.width()) == (design.CONTROLS_MIN_W, True, 420), (least_width, form.width())
+        _the_two_share_the_width(window, host, "a stream's compact page")
         host.splitter.setSizes([100, host.splitter.width() - 100 - host.splitter.handleWidth()])
         _settle()
         assert form.width() == design.CONTROLS_MIN_W, "a stream let the divider go under the form's least width"

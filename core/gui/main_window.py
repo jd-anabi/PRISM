@@ -320,9 +320,9 @@ class MainWindow(QMainWindow):
             # CHECK the return value, and then check the RESULT. restoreGeometry returns False for an
             # unusable blob, and even on success it will happily restore a window onto a monitor that
             # is no longer attached -- geometry saved on an external display came back off-screen with
-            # no way to reach it. A size closed on a smaller screen is under the least size this screen's would be, and
-            # would be raised to it, so the size is restored first, and the least size is then that of the screen it
-            # stands on.
+            # no way to reach it. A size closed on a smaller screen is under the least size the primary screen gave
+            # above, and would be raised to it, so the size is restored first, and the least size is then that of the
+            # screen it stands on.
             self.setMinimumSize(1, 1)
             if not self.restoreGeometry(geom) or not _on_a_visible_screen(self):
                 self.resize(*opening)
