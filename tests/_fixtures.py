@@ -1017,19 +1017,55 @@ def build_inference(*, session=None, cfg=None):
     return screen
 
 
-def build_run_host(cls=None):
+def build_run_host(cls=None, *, on_a_page=False):
     """A bare run host: a panel with the shared run machinery and no controls of its own. With no
     argument it is an instance of a new subclass of ``BasePanel`` made at this call, whose runs are any
     call it is handed, described alike: a run with no place in the window, which keeps no file and
     leaves nothing to acknowledge; with a class, an instance of that class. The made class is always
     named ``P``: a panel stores its layout under its class's name, and one test saves the layout with
-    one host and restores it with a second, so two hosts must share that name. It is let go when the
-    test that built it ends."""
+    one host and restores it with a second, so two hosts must share that name. With ``on_a_page`` it
+    is no panel but a page of the look, on the same mixin, its column a stack it hands the page; it
+    keeps what it is told: ``lines``, its own lines as ``(level, text)``; ``seams``, "leaving" as the
+    run's page takes the figures and the figures as they come back; ``gates``, how often its gates
+    were run. It is let go when the test that built it ends."""
     qt_app()
     from core.gui.panels.base_panel import BasePanel
     from core.gui.run.model import RunSpec
     if cls is not None:
         return _built.keep(cls())
+    if on_a_page:
+        from PySide6.QtWidgets import QStackedWidget, QWidget
+        from core.gui.panels.run_host import RunHost
+        from core.gui.run.view import RunView
+        from core.gui.widgets.figure_stack import FigureStack
+        from core.gui.widgets.page import Page
+
+        class Host(RunHost, Page):
+            def __init__(self):
+                super().__init__()
+                self._enrol()
+                self.controls, self.figures, self.figure_stack = QWidget(self), QWidget(), FigureStack()
+                self.run_view, self.results = RunView(), QStackedWidget()
+                self.run_view.back.connect(self._back_to_the_form)
+                self.run_view.how_link.clicked.connect(self.show_run)
+                self.results.addWidget(self.figures)
+                self.results.addWidget(self.run_view)
+                self.add_stack(self.results)
+                self.lines, self.seams, self.gates = [], [], 0
+
+            def refresh_local_gates(self):
+                self.gates += 1
+
+            def own_line(self, text, level="info"):
+                self.lines.append((level, text))
+
+            def _figures_leaving(self):
+                self.seams.append("leaving")
+
+            def _figures_back(self, stack):
+                self.seams.append(stack)
+
+        return _built.keep(Host())
 
     class P(BasePanel):
         def run_spec(self, fn, *args, **kwargs):

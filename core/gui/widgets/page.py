@@ -293,6 +293,13 @@ class Page(QWidget):
         _tell(body, self._small)
         return scroller
 
+    def add_stack(self, stack: QWidget) -> None:
+        """Add ``stack`` to take the room the other parts leave, as the middle does, for a page whose middle gives way
+        to something else: it is told the form the page is in now, and every later change of form."""
+        self.box.addWidget(stack, 1)
+        self._told.append(stack)
+        _tell(stack, self._small)
+
     def set_small(self, small: bool) -> None:
         """The low window, or the ordinary one again: the padding and the spaces take their other size, and
         every part handed in that offers ``set_small`` is told, and every such widget inside a layout handed

@@ -18,6 +18,9 @@ from .run_host import CANCEL_NOTED_TEXT, RunHost                  # noqa: F401 -
 # Said, as one warning of the run, when a figure the run handed over could not be shown, filled with the figure's
 # title and the error's kind and message.
 FIGURE_NOT_SHOWN_TEXT = "The figure '{}' could not be shown ({}). The record is not affected."
+# How narrow the form may stand while a run's page, and not the figures, shares the width with it: the run's page keeps
+# its own least width, and the form takes what is left. Nought, so that this number has nothing to keep in step with.
+FORM_LEAST_BESIDE_A_RUN = 0
 
 
 class FigureNotShown(UserWarning):
@@ -185,7 +188,8 @@ class BasePanel(RunHost, QWidget):
         self.results = QStackedWidget()
         self.results.addWidget(self.figures)
         self.results.addWidget(self.run_view)
-        self._split_sizes = None             # the figures' and the lines' heights, kept while the run's page holds them
+        self.results.currentChanged.connect(self._fit_the_form)
+        self._split_sizes = None            # the figures' and the lines' heights, kept while the run's page holds them
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.controls_scroll)
@@ -211,6 +215,16 @@ class BasePanel(RunHost, QWidget):
         self.results_split.splitterMoved.connect(lambda *_: self._layout_save_timer.start())
 
         self.restore_layout()
+
+    def _fit_the_form(self, _index: int = 0) -> None:
+        """The form gives up its least width while the column shows a run's page, its own or a past one: a splitter
+        cannot give two neighbours less than their least widths add up to, and what it cannot give, the second is
+        drawn under the first. So the page, which holds a run, keeps its least width, and the form scrolls sideways
+        in what is left. With the figures back the form has its least width again, and a divider left by hand stands
+        where it stood, for the splitter keeps it. Heard at every change of what the column shows, the one thing
+        through which a run's page comes and goes."""
+        beside = self.results.currentWidget() is not self.figures
+        self.controls_scroll.setMinimumWidth(FORM_LEAST_BESIDE_A_RUN if beside else CONTROLS_MIN_W)
 
     def own_line(self, text: str, level: str = "info") -> None:
         """A line of the panel's own goes among its lines, under the figures."""

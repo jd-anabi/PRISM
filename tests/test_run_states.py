@@ -5306,3 +5306,377 @@ def test_with_no_message_the_figures_stand_where_they_stand_after_the_messages(f
         assert top(view.figures) == bottom(view.messages), (top(view.figures), bottom(view.messages))
         stand_in.release()
         turn_until(app, lambda: not held.is_live())
+
+
+# What this computer's screen offers the window, and what a screen of 1280 x 720 offers it: at one and a half times the
+# ordinary text size, a window on such a screen is narrower than the table's least size, and the two still share it.
+_LARGE_SCREEN, _SMALL_SCREEN = (3400, 1380), (1240, 660)
+# The pages that keep the form beside the column, by a name for a test and the place the window opens each at.
+_FORM_BESIDE_THE_COLUMN = {"prior": ("inference", "prior"), "training": ("inference", "training"),
+                           "checks": ("inference", "checks"), "inference": ("inference", "infer"),
+                           "narrowing round": ("inference", "narrowing"), "one cell": ("temperature", "one_cell"),
+                           "sweep": ("temperature", "sweep"), "reduction map": ("reduction", None)}
+_NARROWING = _FORM_BESIDE_THE_COLUMN["narrowing round"]
+# A window's width is tried pixel by pixel over this many pixels above its least size, where the form and the run's
+# page meet, and at every tenth pixel from there to its opening width.
+_WHERE_THEY_MEET = 60
+
+
+def _the_two_share_the_width(window, host, why) -> None:
+    """What a person sees of the form and of what its column shows, in the window's own coordinates. The form ends at or
+    left of where the column's page begins, and that page ends inside the window: edges read from the window, for a
+    splitter's own numbers say the two fit where they do not. Then the toolkit is asked what stands at the last pixel of
+    each edge, at the top, the middle and the foot of the page: an edge that reads right says nothing of a neighbour
+    drawn over it or of a parent that cuts it. A widget's visible region would not do: it does not see the form."""
+    from PySide6.QtCore import QPoint
+    form, page = host.controls_scroll, host.results.currentWidget()
+    form_right = form.mapTo(window, QPoint(form.width(), 0)).x()
+    left, top = page.mapTo(window, QPoint(0, 0)).x(), page.mapTo(window, QPoint(0, 0)).y()
+    right = left + page.width()
+    assert form_right <= left, (why, "the form is drawn over the run's page", form_right, left)
+    assert right <= window.width(), (why, "the run's page is cut at the window's edge", right, window.width())
+    for height in (2, page.height() // 2, page.height() - 3):
+        for widget, x in ((page, left), (page, right - 1), (form, form_right - 1)):
+            found = window.childAt(QPoint(x, top + height))
+            assert found is widget or (found is not None and widget.isAncestorOf(found)), (
+                why, "something else stands at an edge of", type(widget).__name__, x, top + height, found)
+
+
+def _in_the_look_at(room, tmp_path, place):
+    """A whole window at the text factor in force, on a screen that offers ``room``, shown off the screen at its opening
+    size at ``place``, and what the window holds there: (window, panel, opening, least)."""
+    from core.gui import design
+    from tests._fixtures import build_window
+    from tests._runs import Clock
+    from tests._window_helpers import shown_off_screen
+    _controller_on(tmp_path, Clock(_at(9, 18, 0)))
+    window = build_window()
+    design.set_room(room)                                  # the window sets it from the screen it is built on
+    window.setMinimumSize(1, 1)
+    opening, least = design.window_sizes(room)
+    shown_off_screen(window, *opening)
+    window.go_to(*place)
+    host = next(panel for panel, at in window._places.items() if at == place)
+    return window, host, opening, least
+
+
+@pytest.mark.parametrize("page, factor, room", [
+    *((page, factor, _LARGE_SCREEN) for factor in (1.0, 1.5) for page in _FORM_BESIDE_THE_COLUMN),
+    ("narrowing round", 1.5, _SMALL_SCREEN)], ids=lambda value: str(value) if not isinstance(value, tuple) else (
+        "large screen" if value == _LARGE_SCREEN else "small screen"))
+def test_nothing_of_the_run_page_is_hidden_under_the_form_at_any_width(page, factor, room, tmp_path):
+    """At the window's least size, and at every width above it, nothing of the run's page is hidden under the form: the
+    form and the run's page share the width with neither drawn over the other. A window of the text size at hand is
+    made as narrow as a window of that size can be and from there as wide as the screen, then narrow again, a run live:
+    pixel by pixel where the two meet, every tenth pixel above that. A page left and come back to at the least size
+    shares it too, the run's page having asked for its width only as it was shown; the page's own contents are read at
+    that size; and a page of another place, whose column shows its figures, keeps its form's least width all the while."""
+    from core.gui import design
+    from core.gui.run.controller import controller
+    from tests._fixtures import qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import StandIn, start_run, turn_until
+    app = qt_app()
+    place = _FORM_BESIDE_THE_COLUMN[page]
+    with text_size(factor), _the_look(False):
+        window, host, opening, least = _in_the_look_at(room, tmp_path, place)
+        stand_in = StandIn()
+        start_run(host, stand_in, spec=_training(stop_button="Stop the run…", place=place))
+        widths = sorted({*range(least[0], least[0] + _WHERE_THEY_MEET), *range(least[0], opening[0], 10), opening[0],
+                         room[0]})
+        for width in widths + widths[::-1]:
+            window.resize(width, least[1])
+            _settle()
+            _the_two_share_the_width(window, host, (page, factor, width))
+        assert host.results.currentWidget() is host.run_view, "the sweep measured something else"
+        window.go_to("home")
+        _settle()
+        window.go_to(*place)
+        _settle()
+        _the_two_share_the_width(window, host, (page, factor, "left and come back to"))
+        _in_its_column(host.run_view, host.results, (page, factor))
+        window.go_to("inference", "model")
+        other = window.part("inference").config_panel
+        assert other.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W, "a page with no run gave up its width"
+        stand_in.release()
+        turn_until(app, lambda: not controller().is_live())
+        assert host.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W
+
+
+def _end_and_give_back(how, app, window, host, held, stand_in, past) -> None:
+    """The run in ``stand_in`` ended, and the figures given back to its page ``host``, the way ``how`` says, each by the
+    steps a person takes; ``past`` is the run a past view draws. A run's page that comes back after a finish shares the
+    window's width too."""
+    from core.gui import design
+    from tests._look_helpers import _settle
+    from tests._runs import turn_until
+
+    def over(then):
+        turn_until(app, lambda: not held.is_live())
+        _settle()
+        assert host.results.currentWidget() is then, (how, "the run's end left the column showing something else")
+
+    if how in ("a stop", "a saved record's figures"):
+        held.request_stop()
+        over(host.run_view)
+    elif how == "a failure":
+        stand_in.fail(RuntimeError("the stand-in failed"))
+        over(host.run_view)
+    else:
+        stand_in.release()
+        over(host.figures)
+    if how in ("how the run went", "the past view"):
+        if how == "how the run went":
+            host.run_view.how_link.click()
+        else:
+            assert held.show_past(past, host), "the past view was not shown"
+        _settle()
+        size = window.size()
+        window.resize(design.scaled(900), design.scaled(600))
+        _settle()
+        assert host.results.currentWidget() is not host.figures, (how, "the run's page did not come back")
+        _the_two_share_the_width(window, host, how)
+        window.resize(size)
+        _settle()
+    if how == "a saved record's figures":
+        host._to_the_figures()
+    elif how != "a finish":
+        host.results.currentWidget().back_button.click()
+
+
+@pytest.mark.parametrize("how", ["a finish", "a stop", "a failure", "how the run went", "the past view",
+                                 "a saved record's figures"])
+@pytest.mark.parametrize("where", ["back at the opening width", "still at the least width"])
+def test_the_form_comes_back_with_the_figures_and_a_divider_left_by_hand_stands_where_it_stood(how, where, tmp_path):
+    """While the column shows a run's page the form has no least width of its own, and it has one again as soon as the
+    figures come back, however they come back. A divider left at 500 by hand, pushed aside by a window made least
+    during the run, stands at 500 again when the window has the room, whether that came before the figures or after:
+    what gives the width back changes the form's least width, and never the divider."""
+    from core.gui import design
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from tests._fixtures import qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import StandIn, start_run
+    app = qt_app()
+    past = "20261001T090000-narrowing-round"
+    with text_size(1.0), _the_look(False):
+        window, host, opening, least = _in_the_look_at(_LARGE_SCREEN, tmp_path, _NARROWING)
+        history.write(tmp_path / "runs", {"id": past, "word": "Narrowing round", "started": _at(1, 9, 0),
+                                          "ended": _at(1, 9, 30), "outcome": "finished", "place": list(_NARROWING)})
+        form, held = host.controls_scroll, controller()
+        host.splitter.setSizes([500, host.splitter.width() - 500 - host.splitter.handleWidth()])
+        _settle()
+        assert (form.width(), form.minimumWidth()) == (500, design.CONTROLS_MIN_W), form.width()
+        stand_in = StandIn()
+        start_run(host, stand_in, spec=_training(stop_button="Stop the run…", place=_NARROWING))
+        _settle()
+        assert (form.width(), form.minimumWidth()) == (500, 0), ("the run moved the divider", form.width())
+        window.resize(*least)
+        _settle()
+        _the_two_share_the_width(window, host, "the divider pushed aside")
+        if where == "back at the opening width":
+            window.resize(*opening)
+            _settle()
+            assert form.width() == 500, ("the divider did not come back with the window", form.width())
+        _end_and_give_back(how, app, window, host, held, stand_in, past)
+        _settle()
+        assert host.results.currentWidget() is host.figures and form.minimumWidth() == design.CONTROLS_MIN_W, (
+            how, "the figures came back and the form did not", form.minimumWidth())
+        window.resize(*opening)
+        _settle()
+        assert form.width() == 500, (how, "a divider left by hand did not stand where it stood", form.width())
+
+
+def test_a_past_view_on_the_live_simulations_page_shares_the_width_too(tmp_path):
+    """A live simulation's run never takes the column, but a past view drawn on its page does, and shares the width as
+    any other: the form gives way while it shows, and has its least width again when it goes."""
+    from core.gui import design
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from tests._look_helpers import _settle, _the_look, text_size
+    run = "20261001T090000-live-simulation"
+    with text_size(1.0), _the_look(False):
+        window, host, _opening, least = _in_the_look_at(_LARGE_SCREEN, tmp_path, ("live", None))
+        history.write(tmp_path / "runs", {"id": run, "word": "Live simulation", "started": _at(1, 9, 0),
+                                          "ended": _at(1, 9, 30), "outcome": "finished", "place": ["live", None]})
+        window.resize(*least)
+        assert controller().show_past(run, host)
+        _settle()
+        assert host.results.currentWidget() is host.past_view
+        _the_two_share_the_width(window, host, "the live simulation's past view")
+        host.past_view.back_button.click()
+        _settle()
+        assert host.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W
+
+
+def test_a_start_taken_back_gives_the_form_its_least_width_again(tmp_path):
+    """A start that fails after its page has taken the column gives the column back, and the form its least width."""
+    from core.gui import design
+    from core.gui.run.controller import controller
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import StandIn, start_run
+    with text_size(1.0), _the_look(False):
+        _window, host, _opening, _least = _in_the_look_at(_LARGE_SCREEN, tmp_path, _NARROWING)
+        with pytest.raises(TypeError):
+            start_run(host, StandIn(), spec=_training(stop_button="Stop the run…", place=_NARROWING), watch_dir=5)
+        _settle()
+        assert not controller().is_live()
+        assert (host.results.currentWidget() is host.figures,
+                host.controls_scroll.minimumWidth()) == (True, design.CONTROLS_MIN_W)
+
+
+def test_a_page_of_the_look_hosts_a_run_through_the_same_mixin(tmp_path):
+    """What hosts a run is a mixin that stands first in a page's bases, declares no signal and has no constructor, so a
+    page that is no panel takes it as a panel does: a page of the look, its column a stack it hands the page, joins the
+    set of pages every run locks, is locked and given back by a real run with the figures going and coming through its
+    own two seams, says its own lines, and leaves the set as it goes. The set is one, read through either class."""
+    import shiboken6
+    from PySide6.QtCore import QCoreApplication, QEvent, Signal
+    from PySide6.QtWidgets import QWidget
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.run_host import RunHost
+    from core.gui.run.controller import LIVE_TEXT
+    from core.gui.widgets.page import Page
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    assert BasePanel.__mro__[:2] == (BasePanel, RunHost) and BasePanel._instances is RunHost._instances
+    assert "__init__" not in vars(RunHost) and RunHost.__bases__ == (object,)
+    assert not any(isinstance(value, Signal) for value in vars(RunHost).values())
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(9, 18, 0)))
+    host = build_run_host(on_a_page=True)
+    assert host in BasePanel._instances
+    told = []
+    host.results.set_small = told.append
+    host.set_small(True)
+    host.set_small(False)
+    assert told == [True, False], "the stack handed to the page was not told its form"
+    assert host.box.stretch(host.box.indexOf(host.results)) == 1, "the stack does not take the room"
+    low, later = Page(), QWidget()
+    low.set_small(True)
+    later.set_small = told.append
+    low.add_stack(later)
+    assert told[-1] is True, "a stack handed to a low page was not told at once"
+    low.deleteLater()
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=RunSpec("Run", None, stop_button="Stop the run…", keeps_files=False))
+    assert (host.results.currentWidget() is host.run_view, host.controls.isEnabled(), host.seams) == (
+        True, False, ["leaving"]), host.seams
+    assert host.is_running() and host.dispatch(StandIn()) is False
+    assert host.lines == [("warning", LIVE_TEXT)], host.lines
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live())
+    assert (host.results.currentWidget() is host.figures, host.controls.isEnabled(), host.seams) == (
+        True, True, ["leaving", host.figure_stack]), host.seams
+    assert host.gates == 1
+    host.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert not shiboken6.isValid(host) and all(shiboken6.isValid(panel) for panel in BasePanel._instances)
+
+
+# The child of the test below: a fresh interpreter, for the scaling must be in force before the application exists. It
+# dresses the application as the program does, and prints as one line of JSON what the parent asserts. Its first
+# argument is a folder of its own.
+_AT_A_DISPLAY_SCALING = r'''
+import json, os, sys
+from pathlib import Path
+folder = Path(sys.argv[1])
+import matplotlib
+matplotlib.use("Agg")
+from PySide6.QtCore import QPoint, QThreadPool
+from PySide6.QtWidgets import QApplication
+from core.gui import design, fonts, settings, style, theming
+settings.use_ini_file(str(folder / "prism.ini"))
+app = QApplication(["scaled"])
+design.set_dark(False)
+style.install(app)
+fonts.load_app_font(app)
+appearance = theming.Appearance(app)
+appearance.set_mode("light")
+from core.gui.run.controller import controller
+from core.gui.run.model import RunSpec
+from tests._fixtures import build_run_host, build_window
+from tests._runs import StandIn, turn_until
+from tests._window_helpers import shown_off_screen
+
+held = controller()
+held.use_folder(folder / "runs")
+window = build_window()
+design.set_room((3400, 1380))
+window.setMinimumSize(1, 1)
+shown_off_screen(window, 1300, 820)
+window.go_to("inference", "narrowing")
+frame = window.part("inference").tsnpe_panel
+rebuilt = build_run_host(on_a_page=True)
+window.shell.add_part("rebuilt", rebuilt)
+
+
+def settle():
+    for _ in range(4):
+        QApplication.sendPostedEvents()
+        QApplication.processEvents()
+
+
+def on(widget, x, y):
+    found = window.childAt(QPoint(x, y))
+    return found is widget or (found is not None and widget.isAncestorOf(found))
+
+
+def measured(host, form):
+    rows = []
+    for width in (900, 901, 910, 920, 930, 934, 940, 1000, 1300):
+        window.resize(width, 600)
+        settle()
+        page = host.results.currentWidget()
+        at = page.mapTo(window, QPoint(0, page.height() // 2))
+        left, right, ends = at.x(), at.x() + page.width(), 0 if form is None else form.mapTo(window, QPoint(form.width(), 0)).x()
+        rows.append({"width": width, "window": window.width(), "left": left, "right": right, "wide": page.width(),
+                     "form_right": ends, "page_on_top": on(page, left, at.y()) and on(page, right - 1, at.y()),
+                     "form_on_top": form is None or on(form, ends - 1, at.y())})
+    return rows
+
+
+report = {"ratio": window.devicePixelRatioF()}
+for name, host, form in (("frame", frame, frame.controls_scroll), ("rebuilt", rebuilt, None)):
+    if host is rebuilt:
+        window.shell.show_part("rebuilt")
+    stand_in = StandIn()
+    spec = RunSpec("Run", None, stop_button="Stop the run…", keeps_files=False)
+    host.run_spec = lambda fn, *a, **k: spec
+    assert host.dispatch(stand_in), "the run was not started"
+    del host.run_spec
+    turn_until(app, stand_in.started.is_set, 30)
+    report[name] = measured(host, form)
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live(), 30)
+print(json.dumps(report), file=sys.__stdout__, flush=True)
+QThreadPool.globalInstance().waitForDone(10000)
+'''
+
+
+def test_nothing_of_the_run_page_is_hidden_at_150_percent_display_scaling(tmp_path):
+    """The same measure at one and a half times the display's scaling, in a process of its own, for a process has one
+    scaling, set before its application exists: on today's frame, and on a page whose stack takes the form's place. The
+    window is told the width in its own pixels, which the scaling does not change."""
+    import json
+    import os
+    import subprocess
+    import sys
+    environment = {**os.environ, "QT_SCALE_FACTOR": "1.5", "QT_QPA_PLATFORM": "offscreen", "CUDA_VISIBLE_DEVICES": "-1",
+                   "KMP_DUPLICATE_LIB_OK": "TRUE", "PRISM_ARTIFACTS": str(tmp_path / "Artifacts")}
+    environment.pop("PRISM_VRAM_CEILING_GIB", None)
+    (tmp_path / "Artifacts").mkdir()
+    child = subprocess.run([sys.executable, "-c", _AT_A_DISPLAY_SCALING, str(tmp_path)], cwd=REPO, env=environment,
+                           capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert child.returncode == 0, child.stderr[-2000:]
+    report = json.loads(child.stdout.splitlines()[-1])
+    assert report["ratio"] == 1.5, "the scaling was not in force"
+    for name in ("frame", "rebuilt"):
+        for row in report[name]:
+            assert row["window"] == row["width"], (name, row)
+            assert row["form_right"] <= row["left"], (name, "the form is drawn over the run's page", row)
+            assert row["right"] <= row["window"], (name, "the run's page is cut", row)
+            assert row["page_on_top"] and row["form_on_top"], (name, "something else stands at an edge", row)
+    least = report["frame"][0]
+    assert (least["form_right"], least["left"], least["wide"]) == (558, 562, 326), least
