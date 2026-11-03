@@ -12,8 +12,8 @@ A page says what it supplies by answering ``main_words``, ``main_pressed``, ``no
 ``facts_from_form`` and ``in_use_words``; it hands the keyboard its first setting through ``first_focus``; and it says
 ``reads_the_disk`` when it has nothing saved to read. A page whose rows pick what its step holds names them in
 ``selection_rows``: under each that differs from what the step holds the page says "Changed, not applied" and what is in
-use, wherever it says nothing of its own there, counts them in "In use", and tells the rail as soon as there come to be
-some, or none.
+use, wherever it says nothing of its own there, counts them in "In use" and on the fold's button those the fold holds,
+and tells the rail as soon as there come to be some, or none.
 
 A refusal is told in the shared question and stands on the page after it. On a row it marks the field, under which its
 sentence stands until the field is edited; with no row it is the first of the facts. Either stops the start until the
@@ -293,21 +293,22 @@ class StepPage(RunHost, QWidget):
     def _say_changed(self) -> None:
         """Under each selection row that shows something other than what the step holds, "Changed, not applied" and what
         is in use, unless the page says something of its own there that stops the start; the line goes when the choice is
-        put back or applied. How many there are stands in "In use"."""
-        changed = 0
+        put back or applied. How many there are stands in "In use", and the fold counts those it holds."""
+        changed = []
         for selection in self.selection_rows():
             row = self.form.rows.get(selection.key)
             if row is None:
                 continue
             said = self._said_changed.pop(selection.key, None)
             if selection.changed():
-                changed += 1
+                changed.append(row)
                 if not row.in_error():
                     self._said_changed[selection.key] = selection.line()
                     row.set_line("warn", self._said_changed[selection.key])
             elif said is not None and row.line.kind == "warn" and row.line.words == said:
                 row.set_line("", "")
-        self.in_use.set_pending(changed)
+        self.in_use.set_pending(len(changed))
+        self.form.fold.set_changed(changed)
 
     def _tell_the_rail(self) -> None:
         """Work the steps' states out again when a choice has come to differ from what the step holds, or no longer

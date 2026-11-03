@@ -179,6 +179,29 @@ def test_typed_units_are_changed_until_applied_and_read_in_their_words():
     assert _line(page, "units") == ("warn", "Changed, not applied. In use: Hz nm pN s, typed here.")
 
 
+def test_the_fold_counts_the_choices_changed_in_it_and_stays_as_it_was_left():
+    """A choice of the fold that differs from what is held is counted on the fold's button, beside the settings not
+    usual, so that a shut fold says what "In use" counts below it; a choice changed among the main settings is not. The
+    fold opens for no change: shut, it stays shut, and opened, it stays open."""
+    _screen, page = _first_step()
+    fold, rows = page.form.fold, page.form.rows
+    _pick(page.kind_choice, True)
+    _pick(page.rot_choice, False)
+    _apply(page)
+    assert fold.button.text() == "Rarely changed (5 settings, 1 not usual)"
+    rows["chi_n_freqs"].widget.setText("5")
+    assert fold.button.text() == "Rarely changed (5 settings, 2 not usual, 1 changed)"
+    _pick(page.rot_choice, True)
+    rows["chi_n_freqs"].widget.setText("6")
+    assert fold.button.text() == "Rarely changed (5 settings, 1 changed)" and not fold.is_open()
+    _pick(page.model_combo, "HOPF")
+    assert fold.button.text() == "Rarely changed (5 settings, 1 changed)"
+    assert page.in_use.pending.sentence.plain_text() == "Attention. 2 choices below are changed and not applied."
+    fold.set_open(True)
+    _pick(page.rot_choice, False)
+    assert fold.button.text() == "Rarely changed (5 settings, 1 not usual)" and fold.is_open()
+
+
 def test_a_model_chosen_reads_its_units_file_again_and_a_drawing_does_not(monkeypatch):
     """The units file is read as its model is chosen, so a file written since says its new units; drawing the page,
     whatever it says of the units, reads it no more."""
@@ -468,6 +491,17 @@ def test_typed_units_are_judged_as_they_are_typed(tmp_path):
     assert _line(page, "units") == ("err", "The units were refused.")
     page.units_text.setText("nm ms pN Hz")
     assert _line(page, "units") == ("", "")
+
+
+def test_typed_units_in_error_outline_their_box():
+    """The box of typed units is outlined while what it holds is in error, as every field in error is, and no longer
+    once it is mended: a box a row hears as its own field takes the row's outline."""
+    _screen, page = _first_step()
+    _pick(page.units_choice, "typed")
+    page.units_text.setText("nm ms pN kHzz")
+    assert page.units_text.property("state") == "error"
+    page.units_text.setText("nm ms pN kHz")
+    assert page.units_text.property("state") == ""
 
 
 def test_a_refusal_whose_cure_is_in_another_field_stops_the_press_only_until_the_page_reads_again(tmp_path):

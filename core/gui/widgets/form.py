@@ -35,6 +35,8 @@ from .ruled import Ruled, SectionHead
 
 FOLD_WORDS = "Rarely changed ({count})"
 FOLD_NOT_USUAL = "Rarely changed ({count}, {m} not usual)"
+FOLD_CHANGED = "Rarely changed ({count}, {n} changed)"
+FOLD_NOT_USUAL_CHANGED = "Rarely changed ({count}, {m} not usual, {n} changed)"
 MAIN_HEAD = "Main settings"
 #: How long after the last keystroke a name is checked, in milliseconds.
 READ_AFTER_MS = 300
@@ -204,6 +206,7 @@ class Row:
         self.unit.setVisible(bool(unit))
         self.line = _Line()
         self.under: list = []
+        self._heard: list = []
         self._parts = [self.label, self.origin]
         self._in_sight: list = []
         if widget is not None:
@@ -247,8 +250,10 @@ class Row:
             self._on_edit()
 
     def hear(self, widget: QWidget) -> None:
-        """Hear ``widget``'s edits as the field's own: a field under the row that the row's value stands on."""
+        """Hear ``widget``'s edits as the field's own: a field under the row that the row's value stands on. A box of
+        text so heard is outlined with the row in error."""
         self._listen(widget)
+        self._heard.append(widget)
 
     # ── what a page reads and sets ──
     def label_text(self) -> str:
@@ -341,6 +346,9 @@ class Row:
                 kind, sentence = "err", number.error()
         elif isinstance(self.widget, QLineEdit):
             style.set_class(self.widget, state="error" if kind == "err" else "")
+        for heard in self._heard:
+            if isinstance(heard, QLineEdit):
+                style.set_class(heard, state="error" if kind == "err" else "")
         self._say(kind, sentence)
 
     def mark(self, sentence: str) -> None:
@@ -465,6 +473,7 @@ class Fold(Ruled):
         super().__init__(top=design.SIZE["hair"], bottom=design.SIZE["hair"], colour="rule_light",
                          gap_top=design.scaled(above), gap_bottom=design.scaled(below))
         self._rows: list = []
+        self._changed_rows: tuple = ()
         self._open = False
         self.button = style.set_class(QPushButton(), cls="fold")
         self.button.setIcon(painted_icon("chev_right"))
@@ -512,13 +521,22 @@ class Fold(Ruled):
         """The button, then what the fold holds, in the order the Tab key takes them."""
         return [self.button, *(stop for row in self._rows for stop in row.stops())]
 
+    def set_changed(self, rows) -> None:
+        """The rows of the form whose choice differs from what the step holds: those the fold holds are counted on its
+        button. The fold opens for none of them, so one a person shut stays shut."""
+        self._changed_rows = tuple(rows)
+        self.judge()
+
     def judge(self) -> None:
-        """What the button and the line of values say of the rows that stand on the page, those not usual first; a field
-        in error opens the fold."""
+        """What the button and the line of values say of the rows that stand on the page, those not usual first, and how
+        many of them are changed and not applied; a field in error opens the fold."""
         rows = [row for row in self._rows if row.is_shown() and row.widget is not None]
         apart = [row for row in rows if not row.at_usual()]
+        changed = len([row for row in rows if row in self._changed_rows])
         count = "1 setting" if len(rows) == 1 else f"{len(rows)} settings"
-        self.button.setText(FOLD_NOT_USUAL.format(count=count, m=len(apart)) if apart else FOLD_WORDS.format(count=count))
+        words = FOLD_NOT_USUAL_CHANGED if apart and changed else FOLD_NOT_USUAL if apart else (
+            FOLD_CHANGED if changed else FOLD_WORDS)
+        self.button.setText(words.format(count=count, m=len(apart), n=changed))
         said = apart + [row for row in rows if row not in apart]
         self.summary.setText("; ".join(f"{row.label_text()} {row.words()}" for row in said))
         self.setVisible(any(row.is_shown() for row in self._rows))
