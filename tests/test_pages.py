@@ -1887,8 +1887,8 @@ def test_the_tab_key_walks_a_step_in_the_order_it_is_read(size, tmp_path):
     scrolls while it scrolls, the foot, then the rail, with an "Information." among the facts, so that the low window keeps
     its link. A row added after the page was built takes its place all the same, a greyed field is passed over for its
     box, and no help mark is a stop. No stop comes before the page's first setting but the heading's own. That each stop
-    stands whole in view is held by the test of both laps, at both text sizes: at this size the toolkit's own scroll on
-    the Tab key keeps a stop in view, so a check here would see no fault of the page's."""
+    stands whole in view is held by the test of both laps, at both text sizes: at its text size the toolkit's own scroll
+    on the Tab key keeps a stop in view, so a check here would see no fault of the page's."""
     window, page, _clock = _a_page(tmp_path, size=size)
     form, foot = page.form, page.foot
     form.fold.set_open(True)
@@ -2021,9 +2021,10 @@ def test_the_keyboard_outside_the_body_scrolls_nothing(tmp_path):
 
 def test_a_window_that_goes_to_the_back_and_comes_to_the_front_stays_as_it_was_scrolled(tmp_path):
     """A window that goes to the back takes the keyboard from its control to nowhere; brought to the front again it hands
-    it back from nowhere; a box or a figure's window that closes hands it back from nowhere or from that window. None of
-    them moved the keyboard on the page: a person who scrolled away from the control with the wheel finds the page where
-    they left it."""
+    it back from nowhere; a box or a figure's window that opens takes it from the control, and one that closes hands it
+    back from nowhere or from that window; and a move between two controls of such a window stays in it. None of them
+    moved the keyboard on the page: a person who scrolled away from the control with the wheel finds the page where they
+    left it."""
     window, page, _clock = _a_page(tmp_path, size=(900, 600))
     page.form.fold.set_open(True)
     page.said = _facts(9, "warn")
@@ -2038,7 +2039,9 @@ def test_a_window_that_goes_to_the_back_and_comes_to_the_front_stays_as_it_was_s
         place = bar.value()
         assert place > 0 and not _in_view(page, field), "the field stands in view, so this says nothing"
         elsewhere = build_part(QPushButton)
-        for before, now in ((field, None), (None, field), (elsewhere, field)):
+        other = build_part(QWidget)
+        one, two = QPushButton(other), QPushButton(other)
+        for before, now in ((field, None), (None, field), (elsewhere, field), (field, elsewhere), (one, two)):
             page._focus_moved(before, now)
             _settle()
             assert bar.value() == place, (before, now)
