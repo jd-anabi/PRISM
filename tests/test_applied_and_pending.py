@@ -179,6 +179,43 @@ def test_typed_units_are_changed_until_applied_and_read_in_their_words():
     assert _line(page, "units") == ("warn", "Changed, not applied. In use: Hz nm pN s, typed here.")
 
 
+def test_a_model_chosen_reads_its_units_file_again_and_a_drawing_does_not(monkeypatch):
+    """The units file is read as its model is chosen, so a file written since says its new units; drawing the page,
+    whatever it says of the units, reads it no more."""
+    from core.Helpers import file_manager
+    declared, reads = ["kHz ms nm pN"], []
+    monkeypatch.setattr(file_manager, "parse_units_file", lambda path: (reads.append(path), declared[0].split())[1])
+    _screen, page = _first_step()
+    _pick(page.model_combo, "HOPF")
+    _apply(page)
+    read = len(reads)
+    page.redraw()
+    page.refresh_local_gates()
+    page.read_facts()
+    assert len(reads) == read, "a drawing read the units file again"
+    declared[0] = "s pN nm ms"
+    _pick(page.model_combo, "NADROWSKI")
+    _pick(page.model_combo, "HOPF")
+    assert page.units_line.plain_text() == "ms nm pN s, from Units/hopf/units.txt"
+    assert page.units_text.text() == "ms nm pN s"
+
+
+def test_a_held_model_whose_units_file_cannot_be_read_is_named_by_its_file(monkeypatch):
+    """Units held from a units file that gave no words are named by the file in words, never by nothing."""
+    from core import cli
+    from core.refusals import Refusal
+
+    def missing(model):
+        raise Refusal(f"Missing units file for model '{model}'", field="units")
+
+    monkeypatch.setattr(cli, "resolve_units_file", missing)
+    _screen, page = _first_step()
+    _apply(page)
+    _pick(page.units_choice, "typed")
+    page.units_text.setText("nm ms pN kHz")
+    assert _line(page, "units") == ("warn", "Changed, not applied. In use: the model's units file.")
+
+
 def test_nothing_reads_changed_while_nothing_is_in_use():
     """Before anything is applied every row may differ from the usual and none reads changed: there is nothing to differ
     from."""
@@ -403,6 +440,18 @@ def test_a_rule_broken_in_a_field_off_the_page_stops_nothing():
     assert page.foot.main_button.isEnabled() and page.problems() == {}
     _apply(page)
     assert screen.session.draft.chi_n_freqs is None
+
+
+def test_a_change_of_kind_judges_the_driven_settings_at_once():
+    """A comma left in a setting of the frequency response while the other kind was chosen greys the button the moment
+    the frequency response is chosen, with no reading after it: the settings stand before the page judges them."""
+    _screen, page = _first_step()
+    page.form.rows["chi_max_cycles"].widget.setText("20,5")
+    assert page.foot.main_button.isEnabled()
+    _pick(page.kind_choice, True)
+    assert _line(page, "chi_max_cycles") == ("err", "Use a point as the decimal sign.")
+    assert not page.foot.main_button.isEnabled()
+    assert page.foot.reason.text() == "Cannot start yet: a setting cannot be used."
 
 
 def test_typed_units_are_judged_as_they_are_typed(tmp_path):

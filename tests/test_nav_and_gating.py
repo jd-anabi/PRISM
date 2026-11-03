@@ -5145,18 +5145,34 @@ def test_a_saved_model_reaches_the_rebuilt_list(monkeypatch):
     assert page.units_line.plain_text() == "kHz ms nm pN, from Units/nadrowski/units.txt"
 
 
-def test_the_typed_units_follow_the_model():
-    """The box of typed units is filled from the units file of the model chosen, whenever the model changes, typed or not:
-    typed units never declare another model's units."""
-    from tests._fixtures import qt_app
+def test_typed_units_stand_through_a_change_of_model():
+    """While the units come from the model's file, the box of typed units follows the model chosen, so that typing them
+    starts from the file in use. Once they are typed here no change of model writes over them: not a model chosen and
+    chosen back, nor the list's fall to Nadrowski when a model of your own is deleted."""
+    from core import registry
+    from tests._fixtures import build_window, qt_app
     qt_app()
     page = build_inference().config_panel
-    page.units_choice.setCurrentIndex(page.units_choice.findData("typed"))
-    page.units_text.setText("nm s")
     page.model_combo.setCurrentText("BP")
     assert page.units_text.text() == "ms nm"
-    page.model_combo.setCurrentText("HOPF")
+    page.model_combo.setCurrentText("NADROWSKI")
     assert page.units_text.text() == "kHz ms nm pN"
+    page.units_choice.setCurrentIndex(page.units_choice.findData("typed"))
+    page.units_text.setText("nm ms pN Hz")
+    page.model_combo.setCurrentText("HOPF")
+    page.model_combo.setCurrentText("NADROWSKI")
+    assert page.units_text.text() == "nm ms pN Hz"
+    registry.register(registry.ModelSpec("UMTESTTYPED", ["a"], is_user_model=True, n_vars=1))
+    try:
+        window = build_window()
+        own = window.part("inference").config_panel
+        own.model_combo.setCurrentText("UMTESTTYPED")
+        own.units_choice.setCurrentIndex(own.units_choice.findData("typed"))
+        own.units_text.setText("nm ms pN Hz")
+    finally:
+        registry.unregister("UMTESTTYPED")
+    window._on_user_models_changed()
+    assert own.model_combo.currentText() == "NADROWSKI" and own.units_text.text() == "nm ms pN Hz"
 
 
 def test_the_units_line_is_sorted_and_names_the_file(monkeypatch):

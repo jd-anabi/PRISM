@@ -55,6 +55,8 @@ MEASURED = "fixed by measurement"
 KEPT = "kept from last time"
 UNITS_FROM = "{}, from {}"
 NO_UNITS_FILE = "This model has no units file: {}"
+#: Units held from a units file that gave no words, as a line under the row names them.
+THE_UNITS_FILE = "the model's units file"
 TYPED_HERE = "typed here"
 FORCING_TEXT = "This model has external forcing, so parameter inference cannot use it."
 NO_PARAMETERS_TEXT = "This model has no free parameters to infer, so parameter inference cannot use it."
@@ -120,6 +122,8 @@ class ConfigPanel(StepPage):
         self.model_combo.setCurrentText("NADROWSKI")
         self.model_combo.currentIndexChanged.connect(self._model_chosen)
         self.kind_choice = _choice(KINDS)
+        # Heard before its row hears it: the settings of a kind stand before the page judges them.
+        self.kind_choice.currentIndexChanged.connect(self._kind_chosen)
         self.rot_choice = _choice(ROTATIONS)
         self.rot_choice.setCurrentIndex(self.rot_choice.findData(bool(config.REPARAM_ROTATE)))
         self.units_choice = _choice(UNIT_SOURCES)
@@ -147,7 +151,6 @@ class ConfigPanel(StepPage):
         units.add_under(self.units_text)
         units.hear(self.units_text)
         self.typed_note = form.add_sentence(TYPED_TEXT, under="units")
-        self.kind_choice.currentIndexChanged.connect(self._kind_chosen)
         self.units_choice.currentIndexChanged.connect(self._units_chosen)
         self.restore_settings(settings.settings())
         self._kind_chosen()
@@ -170,8 +173,8 @@ class ConfigPanel(StepPage):
         return tuple(self.units_text.text().split()) if self._typed() else None
 
     def _units_of(self, model) -> tuple:
-        """The model's units file as the units line says it, read once for each model: its words, its path from the
-        resources folder, and why it could not be read."""
+        """The model's units file as the units line says it, read once each time the model is chosen, never as the page
+        is drawn: its words, its path from the resources folder, and why it could not be read."""
         if model not in self._units_read:
             try:
                 path = cli.resolve_units_file(model)
@@ -296,7 +299,7 @@ class ConfigPanel(StepPage):
                 SelectionRow("reparam_rotate", rotation, self.rot_choice.currentData,
                              lambda value: _words_of(ROTATIONS, value)),
                 SelectionRow("units", held("units_override"), self._units_override,
-                             lambda value: self._units_said(value, model)))
+                             lambda value: self._units_said(value, model) or THE_UNITS_FILE))
 
     def plan_fields(self) -> dict:
         return {key: self.form.rows[key] for key in ("chi_mode", "chi_n_freqs", "chi_k_pad", "chi_max_cycles",
@@ -337,12 +340,15 @@ class ConfigPanel(StepPage):
         self._on_model_changed(self.model_combo.currentText())
 
     def _on_model_changed(self, model: str) -> None:
-        """A model chosen, by a person or by the list read again: its units line, and the box of typed units filled from
-        its units file, so that switching to typed units starts from what the file declares."""
+        """A model chosen, by a person or by the list read again: its units file read again, so that a file written since
+        says its units; its units line; and, while the units come from that file, the box of typed units filled from it,
+        so that typing them starts from the file in use. Units typed here are never written over."""
         self.form.rows["model"].kept = False
+        self._units_read.pop(model, None)
         words, where, trouble = self._units_of(model)
         self.units_line.set_text(UNITS_FROM.format(words, where) if words else NO_UNITS_FILE.format(trouble))
-        self.units_text.setText(words)
+        if not self._typed():
+            self.units_text.setText(words)
         self._edited()
 
     def _kind_chosen(self, _index: int = 0) -> None:
