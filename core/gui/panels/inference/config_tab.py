@@ -23,7 +23,7 @@ from core.config import CHI_K_MAX, CHI_MIN_CYCLES, VALID_LABELS, VALID_MODELS
 from core.Helpers import file_manager
 from core.refusals import Refusal, default_clause
 
-from ... import chain, keys, settings
+from ... import chain, keys, settings, style
 from ...remembered import KIND_KEY, MODEL_KEY
 from ...session import ConfigDraft
 from ...step_facts import NOT_HELD, Fact, SelectionRow, held_value, model_facts, model_in_use, units_words
@@ -361,7 +361,10 @@ class ConfigPanel(StepPage):
     # ── applying ──
     def _build_config(self) -> None:
         """Apply: read the fields through the rules, ask before letting go of what the session holds, and hold the new
-        draft. A refusal and a kept session change nothing."""
+        draft. A refusal and a kept session change nothing. The button greys as it applies: pressed by the keyboard,
+        which the ring on it says before the question can take the keyboard, it hands the keyboard on to the next step."""
+        follower = style.current_follower()
+        by_keyboard = follower is not None and follower.target() is self.foot.main_button
         model = self.model_combo.currentText()
         if self._unusable(model):
             return                                   # the main button is greyed, with its reason, for this model
@@ -378,10 +381,9 @@ class ConfigPanel(StepPage):
         held = self._screen.session_contents()
         if held and not ask(self, QUESTION, QUESTION_TEXT.format("; ".join(held)), KEEP, APPLY_ANSWER):
             return
-        pressed = self.foot.main_button.hasFocus()
         self._screen.new_draft(draft)
-        if pressed and not self.next_button.isHidden():
-            self.next_button.setFocus(Qt.TabFocusReason)          # the button greys as it applies: on to the next step
+        if by_keyboard and not self.next_button.isHidden():
+            self.next_button.setFocus(Qt.TabFocusReason)
 
     # ── what is remembered ──
     def restore_settings(self, qs) -> None:

@@ -3,6 +3,7 @@ them, the question asked before what a session holds is let go, the one table of
 of what was applied. Read on the first step, Model and options, on sessions of stand-ins and of the window's own; and
 the scan that keeps the shared question the only one a rebuilt page asks."""
 import ast
+import contextlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -590,23 +591,75 @@ def test_a_model_of_your_own_says_its_checks_are_not_tuned(monkeypatch):
     assert page.foot.facts.rows() == []
 
 
-def test_an_apply_by_the_keyboard_hands_it_to_the_next_step(tmp_path):
-    """The main button greys as it applies, and the keyboard goes on to the way to the next step, not to the rail, where
-    the toolkit would hand it from a greyed button. A press by the mouse moves no keyboard."""
+@contextlib.contextmanager
+def _first_step_with_the_ring(tmp_path, monkeypatch):
+    """The first step in the whole program, whose ring follows the keyboard as it does for a person, in sight off the
+    screen and in front, on the test's own clock: (window, screen, page)."""
+    from tests._fixtures import whole_program
+    from tests._look_helpers import _settle
+    from tests._runs import Clock, at, controller_on
+    from tests._window_helpers import in_front, shown_off_screen
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    with whole_program() as (_app, window):
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        shown_off_screen(window, 1300, 820)
+        window.go_to("inference", "model")
+        _settle()
+        screen = window.part("inference")
+        with in_front(window):
+            yield window, screen, screen.config_panel
+        window.hide()
+
+
+def test_only_a_press_by_the_keyboard_hands_it_on_to_the_next_step(tmp_path, monkeypatch):
+    """The main button greys as it applies. Pressed by the keyboard, Enter or Space with the ring on it, the keyboard goes
+    on to the way to the next step, ring and all, and not where the toolkit hands it from a greyed button; so it does with
+    records held, the question answered, though the question held the keyboard while it stood. The access key presses
+    the button without giving it the keyboard, which stays where it was. A press by the mouse gives the button the
+    keyboard with no ring, and the page hands it nowhere."""
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
+    from core.gui import style
     from tests._look_helpers import _arrive, _settle
-    from tests._window_helpers import in_front
-    window, screen, page = _shown_first_step(tmp_path)
-    with in_front(window):
-        page.foot.main_button.setFocus(Qt.TabFocusReason)
-        _arrive(page.foot.main_button, Qt.TabFocusReason)
-        QTest.keyClick(page.foot.main_button, Qt.Key_Return)
+    from tests._runs import turn_until
+    with _first_step_with_the_ring(tmp_path, monkeypatch) as (_window, screen, page):
+        button, follower = page.foot.main_button, style.current_follower()
+
+        def ring_on(widget):
+            widget.setFocus(Qt.TabFocusReason)
+            _arrive(widget, Qt.TabFocusReason)
+            assert follower.target() is widget, "the ring is not where the keyboard was brought"
+
+        def one_more_change():
+            _pick(page.rot_choice, not page.rot_choice.currentData())
+            assert button.isEnabled()
+
+        for key in (Qt.Key_Return, Qt.Key_Space):
+            ring_on(button)
+            QTest.keyClick(button, key)
+            _settle()
+            assert screen.session.draft.reparam_rotate == page.rot_choice.currentData(), key
+            assert QApplication.focusWidget() is page.next_button and follower.target() is page.next_button, key
+            one_more_change()
+        ring_on(page.model_combo)
+        QTest.keyClick(page.model_combo, Qt.Key_A, Qt.AltModifier)
+        turn_until(QApplication.instance(), lambda: screen.session.draft.reparam_rotate == page.rot_choice.currentData())
         _settle()
-        assert screen.session.draft is not None and QApplication.focusWidget() is page.next_button
-        _pick(page.rot_choice, False)
-        page.form.rows["model"].widget.setFocus(Qt.TabFocusReason)
-        page.foot.main_button.click()
+        assert QApplication.focusWidget() is page.model_combo and follower.target() is page.model_combo
+        one_more_change()
+        ring_on(page.model_combo)
+        QTest.mouseClick(button, Qt.LeftButton)
         _settle()
-        assert screen.session.draft.reparam_rotate is False and QApplication.focusWidget() is page.model_combo
+        assert screen.session.draft.reparam_rotate == page.rot_choice.currentData()
+        assert QApplication.focusWidget() is not page.next_button and follower.target() is None
+        one_more_change()
+        screen.session = SbiSession(draft=screen.session.draft, cfg=object(),
+                                    inf_prior=SimpleNamespace(kind="prior", name="retrain_prior"))
+        screen.refresh_gates()
+        ring_on(button)
+        choose(monkeypatch, words="Apply and start a new session", during=button.clearFocus)
+        QTest.keyClick(button, Qt.Key_Return)
+        _settle()
+        assert asked().title == "Start a new session?" and screen.session.inf_prior is None
+        assert QApplication.focusWidget() is page.next_button and follower.target() is page.next_button
