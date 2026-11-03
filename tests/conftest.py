@@ -348,6 +348,34 @@ def _streams_put_back():
         pytest.fail("the test ended with the standard streams bound to a window's log, now put back")
 
 
+@pytest.fixture(autouse=True)
+def _application_font_put_back():
+    """A test that sets the application's font and leaves it set FAILS here, once the font it began with is in force
+    again: left set, every later test of the process would draw in it, and the program's fonts registered again by a
+    later test would take its family for the toolkit's own. A test that began with no application is held to the font
+    the toolkit gives a new one. The toolkit is read where its module is kept, so that this check loads nothing."""
+    import sys
+
+    def held():
+        widgets = sys.modules.get("PySide6.QtWidgets")
+        return None if widgets is None else widgets.QApplication.instance()
+
+    app = held()
+    began = None if app is None else app.font().toString()
+    yield
+    app = held()
+    if app is None:
+        return
+    from PySide6.QtGui import QFont, QFontDatabase
+    if began is None:
+        began = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).toString()
+    if app.font().toString() != began:
+        kept = QFont()
+        kept.fromString(began)
+        app.setFont(kept)
+        pytest.fail("the test ended with the application's font set, now put back")
+
+
 def check_drawing_code_raised_nothing(errors, counts) -> None:
     """Fail when ``errors`` -- core.gui.reported.ERRORS as a test left it -- holds anything, naming
     each method, what it raised the first time and, from ``counts`` (that module's COUNTS), how

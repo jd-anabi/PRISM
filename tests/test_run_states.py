@@ -2873,6 +2873,42 @@ def _guards(request):
                 if getattr(plugin, "__file__", None) and Path(plugin.__file__).resolve() == here)
 
 
+def test_a_test_that_leaves_the_applications_font_set_fails(request):
+    """No test leaves the application's font other than it found it: left set, every later test would draw in it, and the
+    program's fonts registered again later would take its family for the toolkit's own, as a whole run once found. The
+    session's check is driven here as the test runner drives it: a test that changes nothing passes; one that sets the
+    font and puts it back passes; one that leaves it set fails, named, with the font it began with in force again."""
+    from PySide6.QtGui import QFont
+    from tests._fixtures import qt_app
+    app = qt_app()
+    began = app.font().toString()
+    around_a_test = _guards(request)._application_font_put_back.__wrapped__   # the function the fixture was made from
+    test = around_a_test()
+    next(test)
+    with pytest.raises(StopIteration):
+        next(test)
+    test = around_a_test()
+    next(test)
+    app.setFont(QFont("Courier New", 21))
+    app.setFont(_font(began))
+    with pytest.raises(StopIteration):
+        next(test)
+    test = around_a_test()
+    next(test)
+    app.setFont(QFont("Courier New", 21))
+    with pytest.raises(pytest.fail.Exception, match="the test ended with the application's font set, now put back"):
+        next(test)
+    assert app.font().toString() == began, "the font the test began with is not in force again"
+
+
+def _font(words: str):
+    """A font as its words say it."""
+    from PySide6.QtGui import QFont
+    font = QFont()
+    font.fromString(words)
+    return font
+
+
 def test_a_test_that_ends_with_a_windows_request_standing_fails(request):
     """No test leaves the computer kept awake or a reason against ending the session registered, and no test that is
     not marked for the real screen reaches Windows. In every such test the session's guard stands in for the calls of
