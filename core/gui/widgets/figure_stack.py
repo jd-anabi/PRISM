@@ -227,6 +227,13 @@ class FigureStack(QTabWidget):
                 self.setCurrentWidget(back)
             self._before = None
 
+    def stops(self) -> list:
+        """What the Tab key stops at here, as it is read: the tabs, which the stack hands its own turn to, then each figure's
+        "Pop out" and what scrolls it. Those of a figure not in sight are passed over as the keyboard walks."""
+        figures = [self.widget(index) for index in range(self.count())]
+        return [self, self.tabBar(), *(stop for figure in figures for kind in (QPushButton, QScrollArea)
+                                       for stop in figure.findChildren(kind))]
+
     def _numbered(self, number):
         """The open tab that carries ``number``; None for none (a closed tab's number, or no number)."""
         for index in range(self.count()):

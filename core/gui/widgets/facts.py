@@ -12,7 +12,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from .. import design, style
-from ..reported import reported
 from ..step_facts import LEADS, Fact
 from .message_row import MessageRow
 from .page import Scroller, _ring_room
@@ -25,6 +24,8 @@ SHOW_ALL = "Show all {}"
 SHOW_FEWER = "Show fewer"
 #: The most height the facts take, in pixels at the ordinary text size.
 FACTS_CAP = 200
+#: The height a page's form keeps however far the foot grows: what a part that scrolls keeps of its own.
+FORM_LEAST = 56
 #: The markers of the facts a low window keeps in sight.
 NEEDS_ATTENTION = ("err", "lock", "warn")
 
@@ -38,6 +39,7 @@ class Facts(QWidget):
         self._facts: tuple[Fact, ...] = ()
         self._rows: list[MessageRow] = []
         self._small = self._all = False
+        self._room: int | None = None        # the height the page has for them; none until it says
         body = QWidget()
         self._box = QVBoxLayout(body)
         self._box.setContentsMargins(0, 0, 0, 0)
@@ -84,6 +86,12 @@ class Facts(QWidget):
         self._all = on
         self._arrange()
 
+    def hold_to(self, room: int) -> None:
+        """Take no more than ``room``: large text on a small screen has less than the look's height to give, and what
+        stands past it would be out of reach."""
+        self._room = room
+        self._fit()
+
     def opened(self) -> bool:
         return self._small and self._all
 
@@ -113,16 +121,12 @@ class Facts(QWidget):
         gap = self._box.spacing()
         need = sum(row.heightForWidth(width) if row.hasHeightForWidth() else row.sizeHint().height() for row in shown)
         need += gap * (len(shown) - 1) + room
-        self.scroller.setFixedHeight(min(need, design.scaled(FACTS_CAP)))
-
-    @reported(QWidget.resizeEvent)
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._fit()
+        most = design.scaled(FACTS_CAP) if self._room is None else max(1, min(design.scaled(FACTS_CAP), self._room))
+        self.scroller.setFixedHeight(min(need, most))
 
 
 class Foot(QWidget):
-    """Region 4 of a page. ``main_button`` is the page's one main button, ``check_again`` reads the facts again, ``reason``
+    """The foot of a page. ``main_button`` is the page's one main button, ``check_again`` reads the facts again, ``reason``
     says why the button is greyed, ``go_to_run`` is said when "Go to the run" is pressed."""
 
     go_to_run = Signal()
@@ -178,6 +182,11 @@ class Foot(QWidget):
         link.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         return link
 
+    def hold_to(self, height: int) -> None:
+        """``height`` is what the page has for its form and this foot: the facts keep to what the rest leaves them."""
+        around = self.sizeHint().height() - (0 if self.facts.isHidden() else self.facts.scroller.height())
+        self.facts.hold_to(height - around - FORM_LEAST)
+
     def stops(self) -> list:
         """What the Tab key stops at in the foot, after the facts, in its order."""
         return [self.more, self.run_link, self.check_again, self.main_button]
@@ -190,6 +199,12 @@ class Foot(QWidget):
     def set_reading(self, words: str) -> None:
         """Say when the saved records were read, at the right of the heading."""
         self.reading.setText(words)
+
+    def set_reads(self, on: bool) -> None:
+        """Whether the page has anything saved to read: with nothing, no line says when it was read, and nothing offers to
+        read it again."""
+        self.reading.setVisible(on)
+        self.check_again.setVisible(on)
 
     def set_main_words(self, words: str) -> None:
         """Name the main button for its outcome, with its access key."""

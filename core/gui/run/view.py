@@ -929,6 +929,13 @@ class RunView(QWidget):
             self.notice.setText(questions.STAYED_OPEN_TEXT)
         self._draw()
 
+    def stops(self) -> list:
+        """What the Tab key stops at on this page before its figures, as it is read: the buttons at its head, what its end
+        offers, and what scrolls."""
+        return [self.text_button, self.stop_button, self.withdraw_button, self.keep_open_button, self.stop_trying_button,
+                self.back_button, self.keep_button, self.discard_button, self.full_error_button, self.full_error,
+                self.continue_button, self.resume_button, self.body]
+
     def say(self, text: str) -> None:
         """Say ``text`` on the page, under its sentence, in place of what it said before ("" says nothing)."""
         self.notice.setText(text)

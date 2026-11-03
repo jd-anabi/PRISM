@@ -8,37 +8,63 @@ import re
 
 import pytest
 import shiboken6
-from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtWidgets import QLabel, QLineEdit, QPushButton, QWidget
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt
+from PySide6.QtGui import QFont, QFontInfo
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QPushButton, QScrollArea, QWidget
 
-from core.gui import design, fields, style
+from core.gui import design, fields, fonts, style
 from core.gui.run.controller import LIVE_TEXT, NOT_READ_YET_TEXT, controller
-from core.gui.step_facts import (LEADS, Fact, about_words, ordered, origin_words, reading_words, reason_beside)
+from core.gui.step_facts import (LEADS, REFUSED_BLOCKS, Fact, about_words, ordered, origin_words, reading_words,
+                                  reason_beside, refused_facts)
 from core.gui.widgets.choice import Choice
 from core.gui.widgets.facts import FACTS_CAP, Facts, Foot
 from core.gui.widgets.form import FOLD_NOT_USUAL, FOLD_WORDS, NAME_FREE_TEXT, Form, NameAndNote, TickedField
 from core.gui.widgets.in_use import InUse
 from core.gui.widgets.labeled_inputs import COMMA_SENTENCE, FloatField, IntField
+from core.gui.widgets.message_row import MessageRow
 from tests._dialogs import all_asked, asked
-from tests._fixtures import (TWO_LINES, build_part, build_run_host, build_step_page, build_window, pump, qt_app,
+from tests._fixtures import (TWO_LINES, build_part, build_run_host, build_step_page, build_window, qt_app,
                              readings_of_a_run)
 from tests._look_helpers import _gone, _settle, _the_look, text_size
 from tests._runs import Clock, StandIn, at, controller_on, start_run, turn_until
 from tests._window_helpers import in_front, shown_off_screen
 
 BLOCKS = "the name cannot be used"
+#: A record's name of the length the store lets stand, which no line of an origin holds at the window's least width.
+LONG_NAME = "retrain_narrowing_round_of_the_second_of_november"
 
 
-def _a_page(tmp_path, *, clock=None, shown=True, size=(1300, 820)):
-    """The stand-in page in a whole window on the test's own clock, in sight at ``size`` when ``shown``, with what is read
-    as it comes into sight forgotten: (window, page, the clock)."""
-    qt_app()
+@pytest.fixture(autouse=True)
+def _the_programs_font_put_back():
+    """``_a_page`` stands a page in the program's own font: a part measured in another is measured in vain. What a test
+    finds of the fonts, the next test finds too: the application's, each class's, and what a font that names no face is."""
+    app = qt_app()
+    fonts.register_fonts()                   # once per process: the first test to ask for a font is no fault of its
+    kept = QFont(app.font())
+
+    def held():
+        return (app.font().toString(), tuple(QApplication.font(name).toString() for name in fonts._CLASSES),
+                QFontInfo(QFont()).family())
+
+    found = held()
+    yield
+    app.setFont(kept)
+    assert held() == found, "the program's font stayed after the test"
+
+
+def _a_page(tmp_path, *, clock=None, shown=True, size=(1300, 820), programs_font=True, cls=None):
+    """The stand-in page, or ``cls``, in a whole window on the test's own clock, in the program's own font at the text size
+    in force, in sight at ``size`` when ``shown``, with what is read as it comes into sight forgotten: (window, page, the
+    clock)."""
+    app = qt_app()
+    if programs_font:
+        fonts.load_app_font(app)
     clock = clock or Clock(at(8, 12, 4))
     controller_on(tmp_path, clock)
     window = build_window()
     design.set_room((3400, 1380))
     window.setMinimumSize(1, 1)
-    page = build_step_page(window=window)
+    page = build_step_page(cls, window=window)
     if shown:
         shown_off_screen(window, *size)
         window.go_to("inference", "training")
@@ -59,6 +85,25 @@ def _start(page, stand_in, **kwargs) -> None:
 def _edge_of(widget, window) -> QRect:
     """``widget`` in the window's own coordinates."""
     return QRect(widget.mapTo(window, QPoint(0, 0)), widget.size())
+
+
+def _in_view(page, widget) -> bool:
+    """Whether the whole of ``widget``, in the page's body, lies in the viewport, with the room over and under it for its
+    focus ring."""
+    port = page.scroller.viewport()
+    room = design.SIZE["focus_ring"] + design.SIZE["focus_gap"]
+    return port.rect().contains(_edge_of(widget, port).adjusted(0, -room, 0, room))
+
+
+def _walked(window, count) -> list:
+    """From the control that holds the keyboard, what it stands on over ``count`` stops, with real keys."""
+    from PySide6.QtTest import QTest
+    walked = []
+    for _ in range(count):
+        walked.append(QApplication.focusWidget())
+        QTest.keyClick(walked[-1], Qt.Key_Tab)
+        _settle()
+    return walked
 
 
 def _the_form():
@@ -137,6 +182,12 @@ def test_each_field_has_exactly_one_origin_over_every_combination():
         assert words == want, (held, at_source, at_usual, kept, source)
         seen.add(words)
     assert seen == {"usual", "changed from the usual", "kept from last time", *(w for s in SOURCES.values() for w in s[1:])}
+    assert origin_words(held=True, at_source=True, at_usual=False, kept=False) == "from plan", "a source with no name"
+
+
+def test_a_refusal_among_the_facts_is_an_error_with_the_words_every_refusal_has():
+    assert refused_facts(("One.", "Two.")) == (Fact("err", "One.", REFUSED_BLOCKS), Fact("err", "Two.", REFUSED_BLOCKS))
+    assert refused_facts(()) == () and REFUSED_BLOCKS == "the last start was refused"
 
 
 @pytest.mark.parametrize("seconds, words", [
@@ -415,7 +466,8 @@ def test_the_fold_counts_its_settings_and_those_not_usual():
 
 def test_not_usual_is_judged_as_the_field_reads_never_as_it_is_typed():
     """A number written another way is the same number; a blank box is not the usual value, and neither is a comma, whatever
-    the digits; a box that stands for "No limit" is the usual value of a row whose usual value is none."""
+    the digits; the tick for "No limit" is the usual value of a row whose usual value is none, and the box under it, left
+    blank with the tick off, is not."""
     form, rate, _size, limit = _a_fold()
     assert (limit.at_usual(), form.fold.button.text()) == (True, "Rarely changed (3 settings)")
     for typed, usual in (("5e-4", True), ("0.00050", True), ("", False), ("0,0005", False), ("0.0006", False)):
@@ -423,6 +475,8 @@ def test_not_usual_is_judged_as_the_field_reads_never_as_it_is_typed():
         assert rate.at_usual() is usual, typed
     rate.widget.setText("0.0005")
     limit.widget.ticked_box.setChecked(False)
+    assert not limit.at_usual() and limit.value() is None, "a blank box was read as the tick it reads alike"
+    assert form.fold.button.text().endswith("1 not usual)") and form.fold.summary.text().startswith("Epoch limit blank")
     limit.widget.field.setText("300")
     assert not limit.at_usual() and form.fold.button.text().endswith("1 not usual)")
     whole = _the_form()
@@ -503,8 +557,46 @@ def test_a_value_that_is_only_shown_is_no_setting_of_the_fold():
     alone = _the_form()
     alone.add_text("chi_f0", "Shown.", "fixed by measurement", folded=True)
     alone.add_text("chi_freq_bounds", "Shown too.", "fixed by measurement", folded=True)
-    alone.fold.judge()
     assert not alone.fold.isHidden() and alone.fold.button.text() == "Rarely changed (0 settings)"
+
+
+@pytest.mark.parametrize("key", ["num_runs", "chi_f0"], ids=["a setting", "a value only shown"])
+@pytest.mark.parametrize("name", [LONG_NAME, "x" * 60, "a.very.long.name.of.a.record.set.apart.by.full.stops.alone"],
+                         ids=["underscores", "one word", "full stops"])
+def test_a_long_origin_wraps_and_stays_on_the_page(name, key, tmp_path):
+    """No record's name is too long for its row: the origin takes the lines it needs, a word with no place to break among
+    them, at the window's least size, and its words are all still there."""
+    from core.gui.widgets.form import _BREAK
+    window, page, _clock = _a_page(tmp_path, size=(900, 600))
+    row = page.form.rows[key]
+    row.set_origin("from record " + name)
+    _settle()
+    port = page.scroller.viewport()
+    assert _edge_of(row.origin, port).right() < port.width() and page.scroller.widget().width() <= port.width()
+    assert row.origin.text().replace(_BREAK, "") == "from record " + name
+    assert row.origin.height() > row.origin.fontMetrics().height() * 1.5, "it stood on one line, so this says nothing"
+    row.set_origin("usual")
+    assert row.origin.text() == "usual"
+
+
+def test_a_row_off_the_page_reads_as_nothing_wrong():
+    """A blank field a model does not use is no fault: a page need not remember to ask whether the row stands."""
+    form = _the_form()
+    row = form.add("chi_n_freqs", IntField(None))
+    assert row.reading() == "χ probes per observation is blank."
+    row.set_shown(False)
+    assert row.reading() is None
+
+
+def test_the_first_control_of_a_form_is_the_first_a_person_reads():
+    """Whichever was added first: the main settings, the fold, the block for this run."""
+    form = _the_form()
+    form.add_name(build_part(NameAndNote, kind="prior", required=True))
+    folded = IntField(1)
+    form.add("n_cal", folded, usual=1, folded=True)
+    field = IntField(1)
+    form.add("num_runs", field)
+    assert form.first_control() is field
 
 
 def test_a_page_with_nothing_rarely_changed_shows_no_fold():
@@ -631,7 +723,8 @@ def test_a_taken_name_outlines_the_field_and_blocks_with_the_engines_sentence():
 
 
 def test_a_real_store_says_why_a_name_cannot_be_used(tmp_path):
-    """The store's three causes, each in its own sentence, through the real call."""
+    """A name that is no legal name and one shaped like an id, each in its own sentence, through the real call; a taken
+    name has its own test."""
     from core.artifacts import ArtifactStore
     qt_app()
     names = build_part(NameAndNote, kind="prior", required=True, store=ArtifactStore(tmp_path))
@@ -639,6 +732,19 @@ def test_a_real_store_says_why_a_name_cannot_be_used(tmp_path):
         names.name.setText(typed)
         names.check_now()
         assert words in names.name_fact().sentence and names.name_fact().blocks == BLOCKS
+
+
+def test_a_store_that_cannot_be_read_says_nothing_of_the_name():
+    """The stage reads the store again at its entry, so a failed reading here calls the name neither free nor taken."""
+    names, store = _names()
+
+    def unreadable(_kind, _name):
+        raise OSError("the disk went away")
+
+    store.assert_name_free = unreadable
+    names.name.setText("a")
+    names.check_now()
+    assert names.name_fact() is None and names.rows["name"].line.isHidden()
 
 
 def test_a_required_name_left_blank_blocks_with_its_own_words():
@@ -652,7 +758,8 @@ def test_a_required_name_left_blank_blocks_with_its_own_words():
 
 
 def test_a_note_is_judged_at_every_keystroke_and_reads_no_disk():
-    """Two hundred characters pass, 201 do not, and a second line does not; each says so at once, and nothing is read."""
+    """Two hundred characters pass and 201 do not; a line edit takes a pasted line break out, so the rule's second cause
+    is never met here. Each says so at once, and nothing is read."""
     names, store = _names()
     names.note.setText("x" * 200)
     assert names.note_fact() is None and names.note_value() == "x" * 200
@@ -744,15 +851,13 @@ def test_a_page_deleted_before_a_run_ends_reads_no_name_at_its_end(tmp_path):
 
 
 def test_a_page_deleted_while_its_reading_waits_reads_nothing(tmp_path):
-    """The timer goes with its page; what the page was to read is not read."""
+    """The timer goes with its page, so there is nothing to fire."""
     window, page, _clock = _a_page(tmp_path)
-    readings = []
-    page.read_disk = lambda: readings.append(1)
     page.read_soon()
-    assert page.read_timer.isActive()
+    timer = page.read_timer
+    assert timer.isActive()
     _gone(window)
-    pump(qt_app(), 0.35)
-    assert readings == []
+    assert not shiboken6.isValid(timer)
 
 
 def _facts(count, kind="info"):
@@ -780,6 +885,9 @@ def test_a_facts_row_is_kept_across_a_reading():
     assert (one.kind, two.kind) == ("info", "warn"), "two rows swapped kept each other's markers"
     facts.set_facts((Fact("info", "Two."),))
     assert facts.rows() == [one]
+    for row in facts.findChildren(MessageRow):
+        QApplication.sendPostedEvents(row, QEvent.Type.DeferredDelete)
+    assert facts.findChildren(MessageRow) == [one], "a row that went stands hidden in the region"
     facts.set_facts(())
     assert facts.rows() == [] and facts.isHidden()
 
@@ -971,11 +1079,12 @@ def test_show_all_stays_open_through_a_reading_a_move_and_a_run(tmp_path):
 @pytest.mark.parametrize("size", [(900, 600), (1000, 699), (1000, 700), (1000, 820)], ids=str)
 def test_the_foot_stays_over_nothing_at_the_smallest_window(factor, count, size, tmp_path):
     """At the window's least size and at the sizes on each side of the low form, with the fold open, a field in error and
-    the facts of two lines each: the facts stand under their heading, no higher than the look's height, over nothing; the
-    reason and the two buttons meet nothing and stand inside the window; and the form keeps at least the room of a
-    scrolling part. Read in the window's own coordinates, and asked of the toolkit at each edge, for a part drawn over
-    another or cut by a parent reads right by its edges alone. The facts open in the same region, and their growing
-    moves nothing out of the window."""
+    the facts of two lines each and a record's long name for an origin: the facts stand under their heading, no higher than
+    the look's height, over nothing; the reason and the two buttons meet nothing and stand inside the window; the form
+    keeps at least the room of a scrolling part, and is no wider than what shows it, which has no bar to reach the rest.
+    Read in the window's own coordinates, and asked of the toolkit at each edge, for a part drawn over another or cut by a
+    parent reads right by its edges alone. The facts open in the same region, and their growing moves nothing out of the
+    window."""
     with text_size(factor), _the_look(False):
         window, page, _clock = _a_page(tmp_path, shown=False)
         wide, high = design.scaled(size[0]), design.scaled(size[1])
@@ -984,6 +1093,7 @@ def test_the_foot_stays_over_nothing_at_the_smallest_window(factor, count, size,
         page.form.rows["learning_rate"].set_line("err", "Learning rate must be above 0.")
         page.names.name.setText("a name that is far too long " * 3)
         page.names.check_now()
+        page.form.rows["num_runs"].set_origin("from record " + LONG_NAME)
         page.said = tuple(Fact("warn" if at % 2 else "info", f"{TWO_LINES} ({at})") for at in range(count))
         page.redraw()
         _settle()
@@ -1010,6 +1120,7 @@ def test_the_foot_stays_over_nothing_at_the_smallest_window(factor, count, size,
                     assert found is part or (found is not None and part.isAncestorOf(found)), (why, name, corner, found)
             assert page.scroller.height() >= 56, (why, page.scroller.height())
             assert page.scroller.geometry().bottom() < page.scroller.parentWidget().height(), why
+            assert page.scroller.widget().width() <= page.scroller.viewport().width(), (why, "the form runs off the page")
             if count:
                 last = foot.facts.rows()[0] if foot.facts.isHidden() else [
                     row for row in foot.facts.rows() if not row.isHidden()][-1]
@@ -1022,6 +1133,30 @@ def test_the_foot_stays_over_nothing_at_the_smallest_window(factor, count, size,
             measured((factor, count, size, "all shown"))
             foot.more.click()
             _settle()
+
+
+@pytest.mark.parametrize("factor", [1.5, 2.0, 2.25])
+def test_large_text_on_a_small_screen_keeps_every_fact_in_reach(factor, tmp_path):
+    """A screen of 1366 x 728 cannot give the look's height at large text. The facts keep to what there is, so that the last
+    of them can be scrolled to, the form keeps the room of a scrolling part, and the button stays in the window."""
+    with text_size(factor), _the_look(False):
+        window, page, _clock = _a_page(tmp_path, shown=False)
+        room = (1366, 728)
+        design.set_room(room)
+        _opening, least = design.window_sizes(room)
+        shown_off_screen(window, *least)
+        window.go_to("inference", "training")
+        page.said = _facts(9, "warn")
+        page.redraw()
+        _settle()
+        foot, facts = page.foot, page.foot.facts
+        assert facts.scroller.height() == facts.height(), "the region cuts its own scroller"
+        assert page.scroller.height() >= 56 and QRect(0, 0, *least).contains(_edge_of(foot.main_button, window))
+        bar = facts.scroller.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        _settle()
+        last = _edge_of(facts.rows()[-1], facts.scroller.viewport())
+        assert last.bottom() < facts.scroller.viewport().height(), "the last fact is out of reach"
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])
@@ -1040,7 +1175,7 @@ def test_a_long_reason_wraps_beside_the_buttons_and_pushes_nothing_out(factor, t
         reason, main = _edge_of(foot.reason, window), _edge_of(foot.main_button, window)
         assert foot.reason.text() == "Cannot start yet: a saved simulation set would be continued, and 2 more above."
         assert foot.reason.heightForWidth(reason.width()) <= reason.height(), "the reason was cut"
-        assert factor != 1.0 or foot.reason.heightForWidth(reason.width()) > foot.reason.fontMetrics().height() * 1.5, (
+        assert foot.reason.heightForWidth(reason.width()) > foot.reason.fontMetrics().height() * 1.5, (
             "the reason stood on one line, so this says nothing")
         assert not reason.intersects(main) and QRect(0, 0, wide, high).contains(main)
         assert foot.main_button.width() >= foot.main_button.sizeHint().width(), "the reason squeezed the main button"
@@ -1071,6 +1206,19 @@ def test_a_facts_region_that_grows_after_a_reading_keeps_clear_of_the_buttons(tm
     page.redraw()
     _settle()
     assert page.scroller.height() == room
+
+
+def test_facts_that_come_take_the_height_of_the_width_they_stand_at(tmp_path):
+    """A region with nothing in it stands hidden, and keeps no width: the first rows are measured again once it has one, so
+    that two lines at a wide window take the height of two lines."""
+    window, page, _clock = _a_page(tmp_path, size=(1900, 820))
+    foot = page.foot
+    page.said = _facts(1, "info")
+    page.redraw()
+    _settle()
+    row = foot.facts.rows()[0]
+    assert foot.facts.scroller.verticalScrollBar().maximum() == 0
+    assert foot.facts.height() == row.heightForWidth(row.width()) + 4, (foot.facts.height(), row.width())
 
 
 def test_rows_of_one_line_take_what_they_need_and_no_more(tmp_path):
@@ -1150,6 +1298,7 @@ def test_a_page_is_built_with_no_reading_and_no_running_timer(page_class, tmp_pa
     window.part("inference")
     calls = readings_of_a_run(monkeypatch)
     page = build_step_page(page_class, window=window)
+    _settle()                                # what a constructor left for the loop's next turn counts too
     assert page.stale, "a page starts with its reading owed"
     assert getattr(page, "readings", 0) == 0
     assert not [timer for timer in page.findChildren(QTimer) if timer.isActive()], "a timer runs on a page just built"
@@ -1253,8 +1402,8 @@ def test_no_reading_happens_between_a_runs_start_and_its_end(left_for, tmp_path,
     readings = page.readings = 0
     page.form.rows["num_runs"].widget.setText("7")
     stand_in = StandIn(word="Reduction")
-    start_run(runner, stand_in)
     calls = readings_of_a_run(monkeypatch)
+    start_run(runner, stand_in)
     if left_for == "the first opening":
         page.stale = True
         window.go_to("inference", "training")
@@ -1271,7 +1420,7 @@ def test_no_reading_happens_between_a_runs_start_and_its_end(left_for, tmp_path,
     page.refresh_local_gates()
     page.redraw()
     assert (page.readings, page.pressed) == (readings, 0), "a page read during a run"
-    assert [call for call in calls if call != "the device check"] == []
+    assert calls == []
     stand_in.release()
     turn_until(app, lambda: not controller().is_live())
     assert page.readings == readings + 1, "the run's end did not read once"
@@ -1334,6 +1483,30 @@ def test_a_start_taken_back_reads_as_a_runs_end(tmp_path):
     assert page.readings == 1
 
 
+def test_a_start_taken_back_at_its_first_drawing_leaves_no_word_of_a_run(tmp_path, monkeypatch):
+    """A first drawing that raises comes before the status is said, so the page never heard a run was live, and it was
+    given back while the run was still called live: the status that follows draws it again."""
+    from core.gui.run.controller import RunController
+    window, page, _clock = _a_page(tmp_path)
+
+    def broken(_self):
+        raise TypeError("the first drawing failed")
+
+    monkeypatch.setattr(RunController, "_draw", broken)
+    with pytest.raises(TypeError):
+        _start(page, StandIn())
+    assert not controller().is_live() and page.foot.reason.text() == "" and page.foot.main_button.isEnabled()
+    assert page.foot.reading.text().startswith("The saved records were read"), page.foot.reading.text()
+    assert not page.read_timer.isActive() and page.readings == 0, "no run ran, so nothing is owed"
+
+
+def test_a_status_that_changes_nothing_reads_nothing(tmp_path):
+    window, page, _clock = _a_page(tmp_path)
+    held = controller()
+    held.status_changed.emit(held.status)
+    assert page.readings == 0 and not page.read_timer.isActive()
+
+
 def test_a_press_is_the_reading_that_counts(tmp_path):
     """The press reads, the name among it, and goes on; when that reading finds what blocks, the button greys with its reason
     and the page's own press is not made."""
@@ -1367,18 +1540,20 @@ def test_a_second_press_starts_no_second_run(tmp_path):
 
 
 def test_a_page_deleted_with_its_window_leaves_no_connection_on_the_controller(tmp_path):
-    """The two signals of the process's controller hear a page through methods of its own, so that a page deleted leaves
-    nothing behind: the count of what hears them is what it was, and a run after that reads nothing of it."""
+    """The two signals of the process's controller and the application's change of focus hear a page through methods of its
+    own, so that a page deleted leaves nothing behind: the count of what hears them is what it was, and a run after that
+    reads nothing of it."""
     app = qt_app()
     held = controller()
 
     def hearing():
-        return held.receivers("2status_changed(PyObject)"), held.receivers("2run_ended(PyObject)")
+        return (held.receivers("2status_changed(PyObject)"), held.receivers("2run_ended(PyObject)"),
+                app.receivers("2focusChanged(QWidget*,QWidget*)"))
 
     before = hearing()
     window, page, _clock = _a_page(tmp_path)
     during = hearing()
-    assert during[0] > before[0] and during[1] > before[1], (before, during)
+    assert all(now > then for now, then in zip(during, before)), (before, during)
     _gone(window)
     assert hearing() == before
     held.status_changed.emit(held.status)
@@ -1386,6 +1561,47 @@ def test_a_page_deleted_with_its_window_leaves_no_connection_on_the_controller(t
 
 
 # ── the page, and a run on it ──
+def test_a_page_with_nothing_saved_to_read_says_no_reading_and_offers_no_second_one(tmp_path):
+    """Asked at every drawing, so that a page whose answer changes shows and hides the two at its next one, and a hidden
+    "Check again" is no stop of the walk."""
+    from tests._fixtures import _the_stand_in_page
+
+    class Quiet(_the_stand_in_page()):
+        has_a_file = False
+
+        @property
+        def reads_the_disk(self):
+            return self.has_a_file
+
+    fonts.load_app_font(qt_app())
+    controller_on(tmp_path, Clock(at(8, 12, 4)))
+    window = build_window()
+    design.set_room((3400, 1380))
+    window.setMinimumSize(1, 1)
+    page = build_step_page(Quiet, window=window)
+    shown_off_screen(window, 1300, 820)
+    window.go_to("inference", "training")
+    _settle()
+    foot = page.foot
+    assert foot.reading.isHidden() and foot.check_again.isHidden() and not foot.main_button.isHidden()
+    page.names.name.setText("retrain_3")
+    page.names.check_now()
+    with in_front(window):
+        page.names.note.setFocus(Qt.TabFocusReason)
+        assert _walked(window, 2) == [page.names.note, foot.main_button], "a hidden button was a stop"
+    page.has_a_file = True
+    page.redraw()
+    assert not foot.reading.isHidden() and not foot.check_again.isHidden()
+    page.has_a_file = False
+    page.redraw()
+    assert foot.reading.isHidden() and foot.check_again.isHidden()
+
+
+def test_a_page_reads_as_the_default(tmp_path):
+    window, page, _clock = _a_page(tmp_path)
+    assert page.reads_the_disk is True and not page.foot.check_again.isHidden() and not page.foot.reading.isHidden()
+
+
 def test_the_page_stands_heading_in_use_form_and_foot_in_that_order(tmp_path):
     window, page, _clock = _a_page(tmp_path)
     tops = [_edge_of(part, window).top() for part in (page.head, page.in_use, page.form, page.foot)]
@@ -1514,6 +1730,21 @@ def test_a_stop_and_a_failure_keep_the_run_page_until_back_to_the_form(how, tmp_
     page.run_view.back_button.click()
     _settle()
     assert page.results.currentWidget() is page.figures and page.run_view.how_link.isVisibleTo(page.figures)
+
+
+@pytest.mark.parametrize("width", (1300, 900))
+def test_a_past_view_stands_at_the_edges_of_the_heading_and_the_form(tmp_path, width):
+    """A past run takes the same place as the run's page, so it stands at the same edges: both are made in one place."""
+    from core.gui.run import history
+    window, page, _clock = _a_page(tmp_path, size=(width, 820))
+    form = _edge_of(page.foot.main_button, window).right()
+    run = "20261001T090000-training"
+    history.write(tmp_path / "runs", {"id": run, "word": "Training", "started": at(1, 9, 0), "ended": at(1, 9, 30),
+                                      "outcome": "finished", "place": ["inference", "training"]})
+    assert controller().show_past(run, page)
+    _settle()
+    title, back = _edge_of(page.past_view.title, window), _edge_of(page.past_view.back_button, window)
+    assert title.left() == _edge_of(page.head, window).left() and back.right() == form
 
 
 def test_a_past_view_stands_in_the_stack_and_gives_the_column_back(tmp_path):
@@ -1653,15 +1884,14 @@ def test_enter_presses_each_new_button_with_the_ring_and_nothing_in_a_field(tmp_
 @pytest.mark.parametrize("size", [(900, 600), (1300, 820)], ids=str)
 def test_the_tab_key_walks_a_step_in_the_order_it_is_read(size, tmp_path):
     """With real keys: the heading's buttons, the main settings, the fold and what it holds, the block for the run, what
-    scrolls while it scrolls, the foot, then the rail. A row added after the page was built takes its place all the same, a
-    greyed field is passed over for its box, and no help mark is a stop. No stop comes before the page's first setting but
-    the heading's own."""
-    from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication
+    scrolls while it scrolls, the foot, then the rail, with an "Information." among the facts, so that the low window keeps
+    its link. A row added after the page was built takes its place all the same, a greyed field is passed over for its
+    box, and no help mark is a stop. No stop comes before the page's first setting but the heading's own. Each stop in the
+    body stands whole in view."""
     window, page, _clock = _a_page(tmp_path, size=size)
     form, foot = page.form, page.foot
     form.fold.set_open(True)
-    page.said = _facts(9, "warn")
+    page.said = (*_facts(8, "warn"), Fact("info", "Read this too."))
     page.redraw()
     _settle()
     rows = form.rows
@@ -1671,15 +1901,317 @@ def test_the_tab_key_walks_a_step_in_the_order_it_is_read(size, tmp_path):
     if page.scroller.verticalScrollBar().maximum() > 0:
         expected.append(page.scroller)
     expected += [foot.facts.scroller, *([] if foot.more.isHidden() else [foot.more]), foot.check_again, foot.main_button]
+    assert size[1] > 600 or not foot.more.isHidden(), "the low window lost its link"
     with in_front(window):
         page.help_button.setFocus(Qt.TabFocusReason)
-        walked = []
-        for _ in expected:
-            walked.append(QApplication.focusWidget())
-            QTest.keyClick(walked[-1], Qt.Key_Tab)
-            _settle()
+        walked = _walked(window, len(expected))
         assert walked == expected, [type(widget).__name__ for widget in walked]
         assert QApplication.focusWidget() is window.shell.rail.row("training"), "the walk did not go on to the rail"
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_keyboard_lands_in_view_on_both_laps(factor, tmp_path):
+    """Every control of the body the Tab key stops at stands whole in the viewport, at the window's least size and both text
+    sizes, on the lap that starts at the top and on the next, which comes back into the body from outside it: the toolkit
+    brings a stop into view only when the keyboard leaves another inside the same area, and then only as far as a text
+    box's caret."""
+    from PySide6.QtTest import QTest
+    with text_size(factor), _the_look(False):
+        window, page, _clock = _a_page(tmp_path, shown=False)
+        shown_off_screen(window, design.scaled(900), design.scaled(600))
+        window.go_to("inference", "training")
+        page.form.fold.set_open(True)
+        page.said = _facts(9, "warn")
+        page.redraw()
+        _settle()
+        first, body = page.form.rows["num_runs"].widget, page.scroller.body
+        assert page.scroller.verticalScrollBar().maximum() > 0, "nothing scrolls, so this says nothing"
+        with in_front(window):
+            page.help_button.setFocus(Qt.TabFocusReason)
+            laps, stops, out = 0, 0, []
+            for _ in range(80):
+                QTest.keyClick(QApplication.focusWidget(), Qt.Key_Tab)
+                _settle()
+                found = QApplication.focusWidget()
+                laps += found is first
+                if laps == 3:
+                    break
+                if body.isAncestorOf(found):
+                    stops += 1
+                    if not _in_view(page, found):
+                        out.append(type(found).__name__)
+            assert laps == 3 and stops == 16 and out == [], (laps, stops, out)
+
+
+def test_a_tall_part_shows_its_top(tmp_path):
+    """A control higher than the viewport cannot stand whole in it, so it stands with its top in view."""
+    window, page, _clock = _a_page(tmp_path, size=(900, 600))
+    tall = page.form.rows["chi_mode"].widget
+    tall.setFixedHeight(page.scroller.viewport().height() * 2)
+    _settle()
+    page.scroller.verticalScrollBar().setValue(0)
+    page.scroller.bring_into_view(tall)
+    assert _edge_of(tall, page.scroller.viewport()).top() >= 0
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_how_the_run_went_takes_the_keyboard_in_view(factor, tmp_path):
+    """A hand-over is a change of focus like any other: a run started from a form scrolled to its foot, by the keyboard,
+    ends with the keyboard on "How the run went", at the top of the body."""
+    app = qt_app()
+    with text_size(factor), _the_look(False):
+        window, page, _clock = _a_page(tmp_path, shown=False)
+        shown_off_screen(window, design.scaled(900), design.scaled(600))
+        window.go_to("inference", "training")
+        page.form.fold.set_open(True)
+        page.said = _facts(9, "warn")
+        page.redraw()
+        _settle()
+        bar = page.scroller.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        stand_in = StandIn()
+        page.main_pressed = lambda: _start(page, stand_in)
+        with in_front(window):
+            page.foot.main_button.setFocus(Qt.TabFocusReason)
+            page.foot.main_button.click()
+            assert QApplication.focusWidget() is page.run_view.stop_button
+            stand_in.release()
+            turn_until(app, lambda: not controller().is_live())
+            _settle()
+            assert QApplication.focusWidget() is page.run_view.how_link and bar.value() < bar.maximum()
+            assert _in_view(page, page.run_view.how_link)
+
+
+def test_the_keyboard_scrolls_no_page_out_of_sight(tmp_path):
+    """The change of focus is heard from the whole program, and a page not in sight stays as it was scrolled."""
+    window, page, _clock = _a_page(tmp_path, size=(900, 600))
+    page.form.fold.set_open(True)
+    page.said = _facts(9, "warn")
+    page.redraw()
+    _settle()
+    bar = page.scroller.verticalScrollBar()
+    bar.setValue(bar.maximum())
+    place = bar.value()
+    window.go_to("inference", "prior")
+    _settle()
+    with in_front(window):
+        page.form.rows["num_runs"].widget.setFocus(Qt.OtherFocusReason)
+        _settle()
+        assert bar.value() == place
+
+
+def test_the_keyboard_outside_the_body_scrolls_nothing(tmp_path):
+    """The heading and the foot stand outside what scrolls, so a control there needs no bringing into view."""
+    window, page, _clock = _a_page(tmp_path, size=(900, 600))
+    page.form.fold.set_open(True)
+    page.said = _facts(9, "warn")
+    page.redraw()
+    _settle()
+    bar = page.scroller.verticalScrollBar()
+    with in_front(window):
+        for place, control in ((bar.maximum(), page.help_button), (bar.maximum() // 2, page.foot.main_button)):
+            page.form.rows["learning_rate"].widget.setFocus(Qt.TabFocusReason)
+            _settle()
+            bar.setValue(place)
+            control.setFocus(Qt.TabFocusReason)
+            _settle()
+            assert bar.value() == place, type(control).__name__
+
+
+def test_a_window_that_comes_back_to_the_front_stays_as_it_was_scrolled(tmp_path):
+    """A window given the keyboard again hands it to the control that held it, from nowhere: a person who scrolled away
+    from that control with the wheel finds the page where they left it."""
+    window, page, _clock = _a_page(tmp_path, size=(900, 600))
+    page.form.fold.set_open(True)
+    page.said = _facts(9, "warn")
+    page.redraw()
+    _settle()
+    field = page.form.rows["num_runs"].widget
+    bar = page.scroller.verticalScrollBar()
+    with in_front(window):
+        field.setFocus(Qt.TabFocusReason)
+        bar.setValue(bar.maximum())
+        _settle()
+        place = bar.value()
+        assert place > 0 and not _in_view(page, field), "the field stands in view, so this says nothing"
+        page._focus_moved(None, field)
+        _settle()
+        assert bar.value() == place
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_a_refusal_of_the_field_that_holds_the_keyboard_brings_it_into_view(factor, tmp_path):
+    """The keyboard does not move, so no change of focus is heard: the refusal asks for itself."""
+    from core.refusals import Refusal
+    with text_size(factor), _the_look(False):
+        window, page, _clock = _a_page(tmp_path, shown=False)
+        shown_off_screen(window, design.scaled(900), design.scaled(600))
+        window.go_to("inference", "training")
+        page.form.fold.set_open(True)
+        page.said = _facts(9, "warn")
+        page.redraw()
+        _settle()
+        field = page.form.rows["num_runs"].widget
+        bar = page.scroller.verticalScrollBar()
+        with in_front(window):
+            field.setFocus(Qt.TabFocusReason)
+            _settle()
+            bar.setValue(bar.maximum())
+            _settle()
+            assert not _in_view(page, field), "the field stands in view, so this says nothing"
+            page._refusal(Refusal("No.", field="num_runs"))
+            _settle()
+            assert _in_view(page, field)
+
+
+@pytest.mark.parametrize("programs_font", [True, False], ids=["the program's font", "the toolkit's"])
+def test_a_refusal_that_grows_the_foot_leaves_its_field_in_view(programs_font, tmp_path):
+    """The refusal adds a fact, so the foot grows and the viewport shrinks in the same turn as the keyboard moves: the last
+    field of the form still stands whole in what is left, whichever turn the layouts settle in, which the font decides."""
+    from core.refusals import Refusal
+    window, page, _clock = _a_page(tmp_path, size=(900, 600), programs_font=programs_font)
+    page.form.fold.set_open(True)
+    _settle()
+    before = page.scroller.viewport().height()
+    note = page.form.rows["note"]
+    with in_front(window):
+        page.help_button.setFocus(Qt.TabFocusReason)
+        page._refusal(Refusal("A sentence that takes two lines and more at this width, for the foot has to grow by "
+                              "something a person could read; it says why the note cannot be used, and what to do.",
+                              field="note"))
+        _settle()
+        assert page.scroller.viewport().height() < before, "the foot did not grow, so this says nothing"
+        assert QApplication.focusWidget() is note.widget and _in_view(page, note.widget)
+
+
+def test_a_move_to_a_step_brings_no_other_step_into_sight(tmp_path):
+    """Going to one step from another part of the window reads that step, and not the one last shown there, which a person
+    never sees."""
+    window, page, _clock = _a_page(tmp_path)
+    window.go_to("home")
+    _settle()
+    page.stale = True
+    window.go_to("inference", "prior")
+    _settle()
+    assert page.readings == 0 and page.stale, "a step nobody sees came into sight on the way"
+
+
+def test_the_walk_takes_the_figures_where_they_are_read(tmp_path):
+    """After a run with a figure: "How the run went", the figure's tab, its "Pop out" and what scrolls it, the next step's
+    button, then the form, and from the foot to the rail. The figure came after the first show, so it joins the order as
+    it comes."""
+    from PySide6.QtTest import QTest
+    app = qt_app()
+    window, page, _clock = _a_page(tmp_path)
+    stand_in = StandIn()
+    _start(page, stand_in, provide_fig_sink=True)
+    stand_in.figure("A figure")
+    turn_until(app, lambda: page.figure_stack.count() == 1)
+    stand_in.release()
+    turn_until(app, lambda: not controller().is_live())
+    page.set_next("Go to Checks", "checks")
+    _settle()
+    figure = page.figure_stack.widget(0)
+    expected = [page.help_button, page.head_button, page.run_view.how_link, page.figure_stack.tabBar(), figure._pop,
+                figure.findChildren(QScrollArea)[0], page.next_button, page.form.rows["num_runs"].widget]
+    with in_front(window):
+        page.help_button.setFocus(Qt.TabFocusReason)
+        walked = _walked(window, len(expected))
+        assert walked == expected, [type(widget).__name__ for widget in walked]
+        page.foot.main_button.setFocus(Qt.TabFocusReason)
+        QTest.keyClick(page.foot.main_button, Qt.Key_Tab)
+        _settle()
+        assert QApplication.focusWidget() is window.shell.rail.row("training"), "the walk did not go on to the rail"
+
+
+def test_the_walk_on_a_runs_page_reaches_every_button_and_the_figure_and_goes_on(tmp_path):
+    """The heading's buttons, the run's own, the figure's, then the rail: nothing of the page falls out of the order, and
+    the keyboard does not go round the figure for ever."""
+    app = qt_app()
+    window, page, _clock = _a_page(tmp_path)
+    stand_in = StandIn()
+    _start(page, stand_in, provide_fig_sink=True)
+    stand_in.figure("A figure")
+    turn_until(app, lambda: page.figure_stack.count() == 1)
+    _settle()
+    figure = page.figure_stack.widget(0)
+    expected = [page.help_button, page.head_button, page.run_view.text_button, page.run_view.stop_button,
+                page.figure_stack.tabBar(), figure._pop, figure.findChildren(QScrollArea)[0], window.shell.rail.row("training")]
+    with in_front(window):
+        page.help_button.setFocus(Qt.TabFocusReason)
+        walked = _walked(window, len(expected))
+    assert walked == expected, [type(widget).__name__ for widget in walked]
+    stand_in.release()
+    turn_until(app, lambda: not controller().is_live())
+
+
+def test_the_walk_during_a_run_on_another_page_reaches_the_way_to_it(tmp_path):
+    """While a run locks the form the keyboard goes from the heading to the facts, the link that shows the rest, "Go to the
+    run" and the rail: the two buttons are greyed."""
+    app = qt_app()
+    window, page, _clock = _a_page(tmp_path, size=(900, 600))
+    foot = page.foot
+    page.said = (*_facts(8, "warn"), Fact("info", "Read this too."))
+    page.redraw()
+    _settle()
+    stand_in = StandIn(word="Reduction")
+    start_run(window.part("reduction"), stand_in)
+    window.go_to("inference", "training")
+    _settle()
+    expected = [page.help_button, page.head_button, page.scroller, foot.facts.scroller, foot.more, foot.run_link]
+    with in_front(window):
+        page.help_button.setFocus(Qt.TabFocusReason)
+        walked = _walked(window, len(expected))
+        assert walked == expected, [type(widget).__name__ for widget in walked]
+        assert QApplication.focusWidget() is window.shell.rail.row("training")
+    stand_in.release()
+    turn_until(app, lambda: not controller().is_live())
+
+
+def test_a_row_added_after_the_first_show_takes_its_place_in_the_walk(tmp_path):
+    window, page, _clock = _a_page(tmp_path)
+    late = IntField(1)
+    page.form.add("n_cal", late, usual=1)
+    _settle()
+    with in_front(window):
+        page.help_button.setFocus(Qt.TabFocusReason)
+        walked = _walked(window, 5)
+    assert walked[2:5] == [page.form.rows["num_runs"].widget, page.kind_choice, late]
+
+
+def test_a_control_that_makes_its_fields_again_says_so_and_they_take_their_place(tmp_path):
+    """A grid of fields, made again after the first show, as the bounds' is when the file changes: the page cannot hear its
+    children come, so it says so by ``order_the_keys``, and the fields stand where the grid stands."""
+    from PySide6.QtWidgets import QVBoxLayout
+
+    class Grid(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.setLayout(QVBoxLayout())
+            self.fields = []
+
+        def load(self, count):
+            for field in self.fields:
+                self.layout().removeWidget(field)
+                field.deleteLater()
+            self.fields = [QLineEdit() for _ in range(count)]
+            for field in self.fields:
+                self.layout().addWidget(field)
+
+    window, page, _clock = _a_page(tmp_path)
+    grid = Grid()
+    grid.load(1)
+    page.form.add("n_cal", grid, label="Bounds")
+    _settle()
+    gone = grid.fields
+    grid.load(3)
+    QApplication.sendPostedEvents(gone[0], QEvent.Type.DeferredDelete)
+    _settle()
+    page.order_the_keys()
+    with in_front(window):
+        page.help_button.setFocus(Qt.TabFocusReason)
+        walked = _walked(window, 7)
+    assert walked[4:7] == grid.fields, [type(widget).__name__ for widget in walked]
 
 
 def test_access_keys_stand_only_on_the_main_button_and_the_heading(tmp_path):
@@ -1696,7 +2228,6 @@ def test_a_refusal_marks_its_row_and_gives_it_the_keyboard(tmp_path):
     """Refused at the press or by the stage: the shared question, telling, with where to fix it said from this page; when
     it closes the row keeps the engine's sentence under the field and takes the keyboard, and the first edit takes the
     sentence away. A folded row opens its fold for it."""
-    from PySide6.QtWidgets import QApplication
     from core.refusals import Refusal
     window, page, _clock = _a_page(tmp_path)
     field = page.form.rows["num_runs"].widget
@@ -1750,9 +2281,157 @@ def test_a_refusal_with_no_row_stands_at_the_head_of_the_facts_until_they_are_re
     page.form.rows["learning_rate"].set_shown(False)
     page._refusal(Refusal("No.", field="learning_rate"))
     assert page.foot.facts.rows()[0].kind == "err" and not page.form.fold.is_open()
+    page.foot.check_again.click()
+    page._refusal(Refusal("Fixed by measurement.", field="chi_f0"))
+    assert page.foot.facts.rows()[0].sentence.plain_text().startswith("Error. Fixed by measurement.")
+    assert page.form.rows["chi_f0"].line.isHidden(), "a sentence stood under a value nothing can edit"
 
 
-def test_a_refusal_before_anything_is_spent_comes_back_to_the_page_and_stands(tmp_path):
+def test_a_refusals_sentence_stands_through_a_pages_own_lines_until_its_field_is_edited(tmp_path):
+    """"Batches" has a live rule, said under it at every drawing, as every ruled row of a page has: it says nothing over a
+    refusal's sentence, at an edit of another field or at a drawing, and the first edit of the field takes the sentence away
+    and the rule's line comes at that same drawing. A page's line with words waits as an empty one does."""
+    from core.refusals import Refusal
+    window, page, _clock = _a_page(tmp_path)
+    row = page.form.rows["num_runs"]
+    sentence = "The number of simulation batches must be at least 1; got 0."
+    page._refusal(Refusal(sentence, field="num_runs"))
+    for moved in (lambda: page.kind_choice.setCurrentIndex(1), page.redraw, lambda: row.set_line("warn", "A line.")):
+        moved()
+        assert (row.line.label.text(), row.line.isHidden(), row.in_error()) == (sentence, False, True)
+    row.widget.setText("")
+    assert row.line.label.text() == "Batches is blank." and row.in_error()
+    row.widget.setText("6")
+    assert row.line.isHidden() and not row.in_error()
+
+
+def test_a_marked_row_stops_the_start_until_its_field_is_edited(tmp_path):
+    """A row in error never stands beside a lit button: the refusal is an "Error." among the facts, in the words of a
+    refusal with no row, and the first edit of the field ends it."""
+    from core.refusals import Refusal
+    window, page, _clock = _a_page(tmp_path)
+    foot, row = page.foot, page.form.rows["num_runs"]
+    assert foot.main_button.isEnabled()
+    page._refusal(Refusal("Too many.", field="num_runs"))
+    assert not foot.main_button.isEnabled() and foot.reason.text() == "Cannot start yet: the last start was refused."
+    assert [(fact.kind, fact.sentence.plain_text()) for fact in foot.facts.rows()] == [("err", "Error. Too many.")]
+    row.widget.setText("")
+    assert [(fact.kind, fact.sentence.plain_text()) for fact in foot.facts.rows()] == [("err", "Error. Batches is blank.")]
+    assert foot.reason.text() == "Cannot start yet: a setting is not a number.", "the refusal outlived its mark"
+    row.widget.setText("6")
+    assert foot.main_button.isEnabled() and foot.reason.text() == "" and foot.facts.rows() == []
+
+
+def _a_page_with_nothing_to_read():
+    """The stand-in page as a step with nothing saved to read: no "read at" line, no "Check again"."""
+    from tests._fixtures import _the_stand_in_page
+
+    class Quiet(_the_stand_in_page()):
+        reads_the_disk = False
+
+    return Quiet
+
+
+@pytest.mark.parametrize("how", ["an edit of another field", "an edit on a page with nothing to read", "Check again",
+                                 "a change of the store", "the next show"])
+def test_a_reading_ends_what_a_refusal_stops_and_its_sentence_stands(how, tmp_path):
+    """What cures a refusal may stand in another field, or on another page, and a person who mended it there must not have
+    to touch the field that was named. So the facts read again end what a refusal stops, as they end one with no row, and the
+    press asks the engine again; on a page with nothing saved to read, and so no "Check again", the edit asks for that
+    reading itself. The sentence stands under its field until the field is edited, no longer an error, for a marker never
+    disagrees with the button; a rule's empty line still leaves it, and a line with words takes its place."""
+    from core.refusals import Refusal
+    quiet = how == "an edit on a page with nothing to read"
+    window, page, _clock = _a_page(tmp_path, cls=_a_page_with_nothing_to_read() if quiet else None)
+    foot, row = page.foot, page.form.rows["num_runs"]
+    assert foot.check_again.isHidden() is quiet
+    page._refusal(Refusal("Must be at most the number of slots, 8; got 9.", field="num_runs"))
+    assert not foot.main_button.isEnabled()
+    if how.startswith("an edit"):
+        page.kind_choice.setCurrentIndex(1)
+        assert not foot.main_button.isEnabled(), "the edit alone is no reading"
+        assert page.read_timer.isActive(), "the edit asked for no reading"
+        page.read_timer.timeout.emit()
+    elif how == "Check again":
+        foot.check_again.click()
+    elif how == "a change of the store":
+        window.part("inference").stale_store()
+    else:
+        window.go_to("inference", "prior")
+        _settle()
+        page.stale = True
+        window.go_to("inference", "training")
+        _settle()
+    assert foot.main_button.isEnabled() and foot.reason.text() == "" and foot.facts.rows() == []
+    assert (row.line.label.text(), row.line.kind, row.in_error()) == (
+        "Must be at most the number of slots, 8; got 9.", "warn", False)
+    assert row.widget.error() == "" and row.widget.property("state") == "", "still outlined beside a lit button"
+    page.redraw()
+    assert row.line.label.text() == "Must be at most the number of slots, 8; got 9.", "a rule's empty line took it"
+    row.set_line("warn", "A later line.")
+    assert row.line.label.text() == "A later line."
+    page.redraw()
+    assert row.line.isHidden(), "the sentence came back, or the line stood after the mark had gone"
+
+
+def test_a_pressed_start_refused_again_marks_its_row_again(tmp_path):
+    """After a reading the button is lit, and a press that the engine refuses again is a refusal like the first."""
+    from core.refusals import Refusal
+    window, page, _clock = _a_page(tmp_path)
+    foot = page.foot
+    refusal = Refusal("Too many.", field="num_runs")
+    page.main_pressed = lambda: page._refusal(refusal)
+    page._refusal(refusal)
+    foot.check_again.click()
+    assert foot.main_button.isEnabled()
+    foot.main_button.click()
+    assert not foot.main_button.isEnabled() and page.form.rows["num_runs"].in_error()
+
+
+def test_a_name_the_stage_refused_is_read_again_with_the_facts(tmp_path):
+    """A stage may refuse a name the page last read as free. The next reading says what the store says now: the sentence
+    gives way to it, and a name that is free again starts."""
+    from core.refusals import Refusal
+    window, page, _clock = _a_page(tmp_path)
+    store = _Store(taken=("retrain_3",))
+    page.names._store = store
+    row = page.form.rows["name"]
+    page._refusal(Refusal("The name was taken while the run was going.", field="name"))
+    assert row.line.label.text() == "The name was taken while the run was going."
+    page.foot.check_again.click()
+    assert row.line.kind == "err" and page.foot.reason.text() == "Cannot start yet: the name cannot be used."
+    store.taken = ()
+    page.foot.check_again.click()
+    assert (row.line.kind, row.line.label.text()) == ("fine", NAME_FREE_TEXT) and page.foot.main_button.isEnabled()
+
+
+def test_a_marked_row_hidden_afterwards_stops_nothing(tmp_path):
+    from core.refusals import Refusal
+    window, page, _clock = _a_page(tmp_path)
+    row = page.form.rows["max_num_epochs"]
+    page._refusal(Refusal("No.", field="max_num_epochs"))
+    assert not page.foot.main_button.isEnabled()
+    row.set_shown(False)
+    page.redraw()
+    assert page.foot.main_button.isEnabled() and page.foot.facts.rows() == []
+
+
+def test_a_refusal_on_a_page_not_in_sight_marks_its_row_and_leaves_the_keyboard(tmp_path):
+    """The keys stay with what a person is doing; the mark waits for them on the page."""
+    from core.refusals import Refusal
+    window, page, _clock = _a_page(tmp_path)
+    with in_front(window):
+        window.go_to("inference", "prior")
+        _settle()
+        held = QApplication.focusWidget()
+        page._refusal(Refusal("No.", field="num_runs"))
+        _settle()
+        assert QApplication.focusWidget() is held
+    assert page.form.rows["num_runs"].line.label.text() == "No."
+
+
+@pytest.mark.parametrize("key", ["new_run", "num_runs"], ids=["no row", "a row"])
+def test_a_refusal_before_anything_is_spent_comes_back_to_the_page_and_stands(key, tmp_path):
     """The stage refuses at its entry: the column comes back, the run is no run, and the page says the refusal as it says
     one at its button. The reading of the run's end comes first, so that it does not take the refusal away."""
     from core.refusals import Refusal
@@ -1760,12 +2439,12 @@ def test_a_refusal_before_anything_is_spent_comes_back_to_the_page_and_stands(tm
     window, page, _clock = _a_page(tmp_path)
     stand_in = StandIn()
     _start(page, stand_in)
-    stand_in.fail(Refusal("The name is taken.", field="new_run"))
+    stand_in.fail(Refusal("The name is taken.", field=key))
     turn_until(app, lambda: not controller().is_live())
     _settle()
     assert asked().title == "Check your inputs"
     assert page.results.currentWidget() is page.figures
-    assert page.foot.facts.rows()[0].kind == "err"
+    assert page.foot.facts.rows()[0].kind == "err" and not page.foot.main_button.isEnabled()
     assert not page.read_timer.isActive(), "a reading waits that would take the refusal away"
 
 
@@ -1819,9 +2498,7 @@ def test_a_training_tried_again_keeps_the_run_page_and_the_lock_until_it_ends(tm
 
 def test_a_training_continued_from_its_page_starts_on_that_page_and_empties_its_figures(tmp_path):
     """"Continue from batch N" on a failed training's page is the page's next run: the page is locked and takes the run again,
-    with the page's session the one the call was made in, and the figures of the failed try go. Its end reads once, and a
-    continue the session no longer allows starts nothing and says why."""
-    from core.gui.run import retry
+    with the page's session the one the call was made in, and the figures of the failed try go. Its end reads once."""
     from tests._runs import to_the_simulation
     app = qt_app()
     window, page, _clock = _a_page(tmp_path)
@@ -1844,12 +2521,84 @@ def test_a_training_continued_from_its_page_starts_on_that_page_and_empties_its_
     turn_until(app, lambda: not held.is_live())
     _settle()
     assert page.results.currentWidget() is page.figures and page.readings == 2
-    assert retry.made_in(spec, page.session), "a call with no arguments has nothing to compare"
+
+
+def test_a_continue_the_session_no_longer_allows_starts_nothing_and_says_why(tmp_path):
+    """The page's session is what the call is held against: once it holds another configuration the offer is no offer."""
+    from core.gui.run import retry
+    from tests._runs import to_the_simulation
+    app = qt_app()
+    window, page, _clock = _a_page(tmp_path)
+    text, folder, spec = _a_training(tmp_path, page)
+    held, view = controller(), page.run_view
+    session = page.session
+    session.cfg, session.inf_prior = object(), object()
+    stand_in = StandIn()
+    page.run_spec = lambda fn, *args, **kw: spec
+    assert page.dispatch(stand_in, session.cfg, session.inf_prior, name="retrain_3", num_runs=10_000)
+    del page.run_spec
+    to_the_simulation(app, stand_in, text, held, folder, 236)
+    stand_in.fail(OSError(28, "No space left on device"))
+    turn_until(app, lambda: not held.is_live())
+    _settle()
+    assert view.continue_button.isVisibleTo(view)
+    session.cfg = object()
+    view.continue_button.click()
+    _settle()
+    live = held.is_live()
+    if live:
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())
+    assert not live and len(stand_in.calls) == 1, "a continue started in a session that has moved on"
+    assert view.notice.text() == retry.CHANGED_TEXT
+
+
+def test_a_run_with_no_figure_leaves_no_empty_frame(tmp_path):
+    app = qt_app()
+    window, page, _clock = _a_page(tmp_path)
+    stand_in = StandIn()
+    _start(page, stand_in)
+    stand_in.release()
+    turn_until(app, lambda: not controller().is_live())
+    _settle()
+    assert page.figure_stack.isHidden(), "an empty frame stands in the body after a run"
+
+
+def test_what_is_in_use_follows_a_runs_end(tmp_path):
+    app = qt_app()
+    window, page, _clock = _a_page(tmp_path)
+    stand_in = StandIn()
+    _start(page, stand_in)
+    page.held = ("retrain_prior", "Built on master.txt.")
+    stand_in.release()
+    turn_until(app, lambda: not controller().is_live())
+    _settle()
+    assert page.in_use.line_text() == "In use: retrain_prior"
+
+
+@pytest.mark.parametrize("how", ["a stop", "a failure"])
+def test_a_stop_and_a_failure_give_the_page_back_whole(how, tmp_path):
+    """The foot's two buttons and the way to the run, at the run's end; the figures in their place, at "Back to the form"."""
+    app = qt_app()
+    window, page, _clock = _a_page(tmp_path)
+    foot = page.foot
+    stand_in = StandIn()
+    _start(page, stand_in)
+    if how == "a stop":
+        controller().request_stop()
+    else:
+        stand_in.fail(RuntimeError("the stand-in failed"))
+    turn_until(app, lambda: not controller().is_live())
+    _settle()
+    assert foot.main_button.isEnabled() and foot.check_again.isEnabled() and foot.run_link.isHidden()
+    page.run_view.back_button.click()
+    _settle()
+    assert page.scroller.isAncestorOf(page.figure_stack), "the figures did not come back to their place"
 
 
 def test_a_training_resumed_from_its_page_starts_on_that_page(tmp_path):
-    """"Resume the training" after a stop that kept it: the page's next run, and a refusal made before anything was spent
-    is said on the run's page, in the words of the page it stands on."""
+    """"Resume the training" after a stop that kept it: the page's next run, which empties the figures of the try it comes
+    from, and a refusal made before anything was spent is said on the run's page, in the words of the page it stands on."""
     from core.refusals import Refusal
     from tests._dialogs import choose
     from tests._fixtures import build_fit_record
@@ -1864,6 +2613,7 @@ def test_a_training_resumed_from_its_page_starts_on_that_page(tmp_path):
     stand_in = StandIn()
     stand_in.kept_fit = note(kept, 3)
     _start(page, stand_in, spec=spec, name="retrain_3")
+    page.figure_stack.add_figure("A figure", b"")
     to_the_fit(app, stand_in, text, clock, folder, [(1, 0), (2, 1), (3, 2)])
     with pytest.MonkeyPatch.context() as patch:
         choose(patch, words="Stop training")
@@ -1874,6 +2624,7 @@ def test_a_training_resumed_from_its_page_starts_on_that_page(tmp_path):
     view.resume_button.click()
     turn_until(app, lambda: len(stand_in.calls) == 2)
     assert stand_in.calls[1][1]["resume_fit"] == kept and not page.form.isEnabled()
+    assert page.figure_stack.count() == 0, "the figures of the stopped try stayed through a resume"
     stand_in.fail(Refusal("The name is taken.", field="name"))
     turn_until(app, lambda: not held.is_live())
     _settle()
@@ -1908,7 +2659,6 @@ def test_a_refusal_on_the_run_page_of_a_rebuilt_page_says_what_the_page_says(tmp
     """A failure with a refusal after something was spent stands on the run's page, in the words of the page it stands on;
     an old page keeps the table's own."""
     from core.refusals import Refusal
-    from tests._runs import training_spec
     app = qt_app()
     window, page, _clock = _a_page(tmp_path)
     stand_in = StandIn()
@@ -1930,10 +2680,38 @@ def test_a_refusal_on_the_run_page_of_a_rebuilt_page_says_what_the_page_says(tmp
     assert panel.run_view.failure_message.text().endswith(
         "Set it in the 'Batches' box in step 3, Training, or step 6, Narrowing round.")
     panel.run_view.back_button.click()
-    assert training_spec is not None
 
 
 # ── the fields ──
+def test_the_process_state_reads_what_the_fonts_add():
+    """What the bundled files add to the process cannot be taken back, and it is read as the rest of what a start sets is, so
+    that a test that added more, or took this away, is seen; the reading itself registers them, once, so that the first
+    test to ask for a font is told from no other."""
+    from tests._fixtures import process_state
+    state = process_state(qt_app())
+    assert state["fonts with the toolkit"] is True
+    assert list(state["font substitutions"].values()) == [(design.LETTERING.lower(),)]
+
+
+def test_a_pages_clearing_leaves_the_commas_own_under_a_row():
+    """The comma's sentence is the field's: a page's live check that finds nothing to say leaves it under the row while the
+    comma stands; and with the comma gone it goes, a page's sentence set meanwhile staying a page's. The field itself takes
+    an error back whatever it was, as every page of the window that is no form asks of it."""
+    form = _the_form()
+    row = form.add("learning_rate", FloatField("1,5"))
+    row.widget.editingFinished.emit()
+    assert row.line.label.text() == COMMA_SENTENCE and row.in_error()
+    row.set_line("err", "Learning rate must be above 0.")
+    assert row.line.label.text() == row.widget.error() == "Learning rate must be above 0."
+    row.set_line("", "")
+    assert row.line.label.text() == row.widget.error() == COMMA_SENTENCE, "a page's clearing took the comma's sentence too"
+    row.set_line("err", "Learning rate must be above 0.")
+    row.widget.setText("1.5")
+    assert row.widget.error() == "Learning rate must be above 0.", "the comma took a page's sentence with it"
+    row.set_line("", "")
+    assert row.widget.error() == "" and row.line.isHidden()
+
+
 def test_a_rule_that_says_its_sentence_under_a_field_as_it_draws_lets_it_go_when_the_field_is_mended():
     """A page's facts are worked out at every edit, and say their sentence under the field as they go: that is no edit, and
     the sentence read back is no reading of the field, or the page would loop, and a mended field stay in error."""

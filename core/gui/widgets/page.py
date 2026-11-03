@@ -3,7 +3,7 @@ import html
 import math
 import re
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QFontMetricsF
 from PySide6.QtWidgets import (QAbstractButton, QBoxLayout, QFrame, QHBoxLayout, QLabel, QLayout, QScrollArea,
                                QVBoxLayout, QWidget)
@@ -204,6 +204,18 @@ class Scroller(QScrollArea):
         room = _ring_room()
         self._holder.setContentsMargins(room, 0, room + (design.SIZE["scroll_gap"] if scrolls else 0), room)
         self.setFocusPolicy(Qt.TabFocus if scrolls else Qt.NoFocus)
+
+    def bring_into_view(self, part: QWidget) -> None:
+        """Scroll until the whole of ``part``, inside the body, stands in the viewport with its focus ring; the toolkit's
+        own asks a text box where its caret stands. One too high for the viewport shows its top."""
+        room = _ring_room()
+        top = part.mapTo(self.body, QPoint(0, 0)).y() + self.body.y() - room
+        bottom = top + part.height() + 2 * room
+        bar = self.verticalScrollBar()
+        if bottom > bar.value() + self.viewport().height():
+            bar.setValue(bottom - self.viewport().height())
+        if top < bar.value():
+            bar.setValue(top)
 
     def fit_body(self) -> None:
         """Tell the body how wide the page is, when it asks: at every resize, and when the look's width for two columns

@@ -9,18 +9,25 @@ while a run is live, which the line beside "Before you start" says. A page that 
 itself stale, and reads as it is shown. A constructor reads none of this and starts no timer.
 
 A page says what it supplies by answering ``main_words``, ``main_pressed``, ``nothing_to_apply``, ``read_disk``,
-``facts_from_form`` and ``in_use_words``; it hands the keyboard its first setting through ``first_focus``.
+``facts_from_form`` and ``in_use_words``; it hands the keyboard its first setting through ``first_focus``; and it says
+``reads_the_disk`` when it has nothing saved to read.
+
+A refusal is told in the shared question and stands on the page after it. On a row it marks the field, under which its
+sentence stands until the field is edited; with no row it is the first of the facts. Either stops the start until the
+facts are next read, since what cures it may stand somewhere else, and the press asks the engine again.
+
+Wherever the keyboard lands in the body, by the Tab key or handed over, the control comes whole into view.
 """
 from datetime import datetime
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtWidgets import QHBoxLayout, QPushButton, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from ... import design, fields, style
 from ...reported import reported
 from ...run.controller import controller
 from ...run.view import RunView
-from ...step_facts import Fact, ordered, reading_words, reason_beside
+from ...step_facts import Fact, ordered, reading_words, reason_beside, refused_facts
 from ...widgets.ask import ask
 from ...widgets.facts import Foot
 from ...widgets.figure_stack import FigureStack
@@ -33,8 +40,6 @@ from ..run_host import RunHost
 HELP_TEXT = "Help"
 REFUSAL_TITLE = "Check your inputs"
 OK_TEXT = "OK"
-#: The words beside the button of a refusal with no row on this page.
-REFUSED_BLOCKS = "the last start was refused"
 #: How a page's own line is marked. An "Error." blocks, and a line of the page's own stops nothing.
 _LINE_KINDS = {"info": "info", "warning": "warn", "error": "warn"}
 
@@ -49,10 +54,27 @@ class _Body(QWidget):
             self.form.fit(width)
 
 
+class _Column(QWidget):
+    """What a run's page takes the place of, the form over the foot: it tells the foot the height the two share."""
+
+    def __init__(self, foot: Foot) -> None:
+        super().__init__()
+        self._foot = foot
+
+    @reported(QWidget.resizeEvent)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._foot.hold_to(event.size().height())
+
+
 class StepPage(RunHost, QWidget):
-    """Regions 1 to 4 of a step, on the look's ``Page``, over a stack that holds them and the run's page. ``head``,
-    ``in_use``, ``form`` and ``foot`` are the four regions; ``controls``, what a run locks, is the form; the stale flag says
-    a reading is owed."""
+    """The four regions of a step, on the look's ``Page``, over a stack that holds them and the run's page. ``head``,
+    ``in_use``, ``form`` and ``foot`` are the regions; ``controls``, what a run locks, is the form; the stale flag says a
+    reading is owed."""
+
+    #: Whether the page has anything saved to read, asked at every drawing: a page answers False, or a property of its own
+    #: when what it holds decides that, and its foot leaves out the line of when it read and "Check again".
+    reads_the_disk = True
 
     def __init__(self, screen, title: str, sentence: str, *, step: str, parent=None):
         super().__init__(parent)
@@ -82,7 +104,8 @@ class StepPage(RunHost, QWidget):
         self.figure_stack = FigureStack()
         self.figure_stack.setVisible(False)
         self.figure_stack.tabs_changed.connect(self._fit_figures)
-        self.run_view = RunView()
+        self.figure_stack.tabs_changed.connect(self._a_stop_joined)
+        self.run_view = self._new_run_page()
         self.run_view.setObjectName("run")
         self.run_view.back.connect(self._back_to_the_form)
         self.run_view.how_link.clicked.connect(self.show_run)
@@ -96,6 +119,7 @@ class StepPage(RunHost, QWidget):
         self._next_step = None
         self.form = self.controls = Form()
         self.form.edited.connect(self._edited)
+        self.form.joined.connect(self._a_stop_joined)
         body = _Body()
         body.form = self.form
         self._body = QVBoxLayout(body)
@@ -110,7 +134,7 @@ class StepPage(RunHost, QWidget):
         self.foot = Foot()
         self.foot.main_button.clicked.connect(self._main_clicked)
         self.foot.check_again.clicked.connect(self.read_facts)
-        self.figures = QWidget()
+        self.figures = _Column(self.foot)
         self.figures.setObjectName("figures")
         column = QVBoxLayout(self.figures)
         column.setContentsMargins(0, 0, 0, 0)
@@ -123,7 +147,6 @@ class StepPage(RunHost, QWidget):
         column.addLayout(inset)
         self.results = QStackedWidget()
         self.results.addWidget(self.figures)
-        self.run_view.setContentsMargins(room, 0, room, 0)   # and the run's page, which takes the same place, brings it too
         self.results.addWidget(self.run_view)
         self.page.add_stack(self.results)
 
@@ -137,6 +160,7 @@ class StepPage(RunHost, QWidget):
         held = controller()
         held.status_changed.connect(self._status_heard)
         held.run_ended.connect(self._run_ended)
+        QApplication.instance().focusChanged.connect(self._focus_moved)
         self.foot.set_live(self._live)
 
     @property
@@ -146,6 +170,14 @@ class StepPage(RunHost, QWidget):
     def now(self) -> datetime:
         """The moment now, on the clock the runs are read from."""
         return controller().now()
+
+    def _new_run_page(self) -> RunView:
+        """A run's page takes the place of the form, so it brings the room for a focus ring as every part of a page does,
+        and stands at the heading's edges."""
+        view = super()._new_run_page()
+        room = _ring_room()
+        view.setContentsMargins(room, 0, room, 0)
+        return view
 
     # ── what a page answers ──
     def main_words(self) -> str:
@@ -193,12 +225,15 @@ class StepPage(RunHost, QWidget):
         return self.form.first_control() if self.form.isEnabled() else None
 
     def order_the_keys(self) -> None:
-        """The Tab key's order, as the page is read: the heading's buttons, what stands over the form, the form, then what
-        scrolls while it scrolls, and the foot. Widgets take their turn as they come to the window, and a page adds its
-        rows after this page is built, so the order is set here, once they stand, as a page first comes into sight. A part
-        that is a stop only at times has its place all the same."""
-        stops = [*self.head.findChildren(QPushButton), self.run_view.how_link, self.figure_stack, self.next_button,
-                 *self.form.stops(), self.scroller, self.foot.facts.scroller, *self.foot.stops()]
+        """The Tab key's order, as the page is read: the heading's buttons, the run's page, which stands in place of what
+        comes next, what stands over the form, the form, then what scrolls while it scrolls, and the foot. Figures stand on
+        the run's page or over the form, so they follow both. Widgets take their turn as they come to the window, and a page adds its
+        rows after this page is built, so the order is set here, once they stand, as a page first comes into sight, and
+        again as a row joins the form or a figure joins the stack. A part that is a stop only at times has its place all the
+        same. A control that makes its own fields again after that, as a grid does, calls this when it has."""
+        stops = [*self.head.findChildren(QPushButton), *self.run_view.stops(), self.run_view.how_link,
+                 *self.figure_stack.stops(), self.next_button, *self.form.stops(), self.scroller, self.foot.facts.scroller,
+                 *self.foot.stops()]
         policies = [(stop, stop.focusPolicy()) for stop in stops]
         for stop, policy in policies:
             stop.setFocusPolicy(policy | Qt.TabFocus)
@@ -206,6 +241,11 @@ class StepPage(RunHost, QWidget):
             QWidget.setTabOrder(before, after)
         for stop, policy in policies:
             stop.setFocusPolicy(policy)
+
+    def _a_stop_joined(self) -> None:
+        """A row or a figure joined the page: it takes its place in the order, once there is one."""
+        if self._keys_ordered:
+            self.order_the_keys()
 
     def set_small(self, on: bool) -> None:
         """The low window, or the ordinary one again: the page, and the foot, which stands inside its stack."""
@@ -234,8 +274,10 @@ class StepPage(RunHost, QWidget):
     def redraw(self) -> None:
         """"Before you start" and the main button as the form and the session stand: reads nothing."""
         live = controller().is_live()
-        facts = ordered(((self._head_fact,) if self._head_fact is not None else ()) + tuple(self.facts_from_form()))
+        facts = ordered(((self._head_fact,) if self._head_fact is not None else ()) + refused_facts(self.form.refused())
+                        + tuple(self.facts_from_form()))
         nothing = self.nothing_to_apply()
+        self.foot.set_reads(self.reads_the_disk)
         self.foot.set_main_words(self.main_words())
         self.foot.set_facts(facts)
         self.foot.set_main_enabled(not nothing and not any(fact.blocks for fact in facts),
@@ -252,6 +294,7 @@ class StepPage(RunHost, QWidget):
         reads."""
         self.read_timer.stop()
         if not controller().is_live():
+            self.form.ease()
             self.read_disk()
             if self.names is not None:
                 self.names.check_now()
@@ -290,12 +333,13 @@ class StepPage(RunHost, QWidget):
 
     def _status_heard(self, status) -> None:
         """A run began or ended, or a start was taken back, which says no ``run_ended``. What follows from it is drawn
-        again; a change to no run live reads, once the end of the run has had its say."""
-        if status.live == self._live:
-            return
+        again, and on any status of no run live: a start taken back at its first drawing never said it was live, and left
+        the page drawn as if it were. A change to no run live reads, once the end of the run has had its say."""
+        changed = status.live != self._live
         self._live = status.live
-        self.redraw()
-        if not status.live:
+        if changed or not status.live:
+            self.redraw()
+        if changed and not status.live:
             self.read_soon()
 
     def _run_ended(self, _status) -> None:
@@ -321,6 +365,21 @@ class StepPage(RunHost, QWidget):
         if not self.foot.main_button.isEnabled():
             return
         self.main_pressed()
+
+    @reported()
+    def _focus_moved(self, before, _now) -> None:
+        """The keyboard moved, in any window. It is brought into view once what moved it has been laid out; a window that
+        only came to the front, whose keyboard comes from nowhere, stays as it was scrolled."""
+        if before is not None:
+            QTimer.singleShot(0, self, self._keyboard_into_view)
+
+    def _keyboard_into_view(self) -> None:
+        """The control that holds the keyboard in this window, whole, in the viewport, on a page in sight, if it stands in
+        the body."""
+        held = self.window().focusWidget()
+        if held is not None and self.isVisible() and self.scroller.body.isAncestorOf(held):
+            QApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)   # a fold, or the foot, may be growing yet
+            self.scroller.bring_into_view(held)
 
     # ── what a run asks of its host ──
     def own_line(self, text: str, level: str = "info") -> None:
@@ -361,16 +420,12 @@ class StepPage(RunHost, QWidget):
         fix = fields.fix_sentence(exc.field, here=self.step)
         ask(self, REFUSAL_TITLE, exc.message, OK_TEXT, beneath=fix or None)
         row = self.form.rows.get(exc.field)
-        if row is None or not row.is_shown():
-            self.say_at_the_head(Fact("err", f"{exc.message} {fix}".rstrip(), REFUSED_BLOCKS))
+        if row is None or row.widget is None or not row.is_shown():
+            self.say_at_the_head(refused_facts((f"{exc.message} {fix}".rstrip(),))[0])
             return
         row.mark(exc.message)
+        self.redraw()
         target = row.focus_target()
-        if target is not None:
+        if target is not None and self.isVisible():
             target.setFocus(Qt.OtherFocusReason)
-            QTimer.singleShot(0, self, lambda: self._into_sight(target))
-
-    def _into_sight(self, target: QWidget) -> None:
-        """``target``, inside what scrolls, made visible there while it is in sight on the page."""
-        if target.isVisibleTo(self):
-            self.scroller.ensureWidgetVisible(target)
+            QTimer.singleShot(0, self, self._keyboard_into_view)  # it may hold the keyboard already, with no move to hear

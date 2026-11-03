@@ -989,7 +989,9 @@ def card_and_programs(monkeypatch) -> list:
 COUNTED_READINGS = {"orchestrator": ("training_preview", "training_reading", "matching_fits"),
                     "fit_state": ("kept_fits",), "training_checkpoint": ("checkpoints_using_prior", "peek"),
                     "history": ("read", "latest", "newest_unseen", "last_on", "last_measured_on", "duration")}
-# What ``card_and_programs`` stands in for by a name a module of the window could bind at its own import.
+# What ``card_and_programs`` answers with a stand-in of its own, and the ways it names to start a program: a module of the
+# window that bound one of these at its own import would be read past. The other public functions of the card's package
+# it passes through are not listed here.
 CARD_READINGS = {"config": ("detect_device",), "cuda": ("is_available", "mem_get_info", "memory_reserved", "memory_allocated"),
                  "subprocess": ("run", "Popen"), "os": ("system",)}
 
@@ -999,21 +1001,26 @@ def readings_of_a_run(monkeypatch) -> list:
     the list handed back: the card's and the programs' of ``card_and_programs``; the preview and the reading of a
     training; the kept trainings; a simulation set's files, whoever reads them, by the one call that loads one, and
     ``peek``, which finds no file and loads nothing in a store with no set; the run history's readers, ``read``
-    among them, which every history file goes through, whichever reader asks; and the check of a record's name, which
-    reads every record of its kind. Each is passed through to the real call. Home, whose "Last runs" lists the live run,
-    reads the history at every opening, so a test that opens Home during a run finds ``latest`` and ``read`` here."""
+    among them, which every history file goes through, whichever reader asks; the check of a record's name, which reads
+    every record of its kind; a list of the kept trainings or of the simulation sets, which reads every manifest of what
+    a run may be writing; and the epochs a run is expected to take, which reads the store's posteriors, counted only while
+    a run is live, for a run's own start asks it just before. Each is passed through to the real call. Home, whose "Last
+    runs" lists the live run, reads the history at every opening, so a test that opens Home during a run finds ``latest``
+    and ``read`` here, and says so."""
     import torch
     from core import orchestrator
     from core.artifacts import ArtifactStore
     from core.SBI import fit_state, training_checkpoint
     from core.gui.run import history
+    from core.gui.run.controller import RunController
     calls = card_and_programs(monkeypatch)
 
-    def counted(space, name, words):
+    def counted(space, name, words, when=lambda *_args, **_kwargs: True):
         real = getattr(space, name)
 
         def stand_in(*args, **kwargs):
-            calls.append(words)
+            if when(*args, **kwargs):
+                calls.append(words)
             return real(*args, **kwargs)
 
         monkeypatch.setattr(space, name, stand_in)
@@ -1025,6 +1032,8 @@ def readings_of_a_run(monkeypatch) -> list:
             counted(spaces[home], name, name)
     counted(torch, "load", "a simulation set's file")
     counted(ArtifactStore, "assert_name_free", "assert_name_free")
+    counted(ArtifactStore, "list", "a list of what a run writes", lambda _store, kind: kind in ("fit", "simulation"))
+    counted(RunController, "expected_epochs", "expected_epochs", lambda held, _spec: held.is_live())
     return calls
 
 
@@ -1098,11 +1107,13 @@ TWO_LINES = ("The saved set for these settings holds 4,812 of 5,000 batches, so 
 def _the_stand_in_page():
     """The class of the page ``build_step_page`` makes when it is handed none: a step as awkward as a real one. Its form
     holds a grouped number, a float, a list and a ticked field among the main settings and in the fold, the name and the
-    note of a required record, and a value that is only shown; its main button has the longest words a real one has. It
+    note of a required record, and a value that is only shown; its main button has the longest words a real one has; and
+    one rule read live on "Batches", said under the field at every drawing, as every ruled row of a real page is. It
     keeps what it is told: ``readings``, how often its disk was read; ``pressed``, how often its button got through;
     ``said``, the facts it hands the foot; ``in_use``'s words in ``held``."""
     from PySide6.QtWidgets import QPushButton
     from core.gui.panels.inference.step_page import StepPage
+    from core.gui.step_facts import Fact
     from core.gui.widgets.choice import Choice
     from core.gui.widgets.form import NameAndNote, TickedField
     from core.gui.widgets.labeled_inputs import FloatField, IntField
@@ -1144,7 +1155,11 @@ def _the_stand_in_page():
             self.readings += 1
 
         def facts_from_form(self):
-            return (*(fact for fact in (self.names.name_fact(), self.names.note_fact()) if fact), *self.said)
+            row = self.form.rows["num_runs"]
+            words = row.reading()
+            row.set_line("err" if words else "", words or "")
+            ruled = Fact("err", words, "a setting is not a number") if words else None
+            return (*(fact for fact in (ruled, self.names.name_fact(), self.names.note_fact()) if fact), *self.said)
 
         def in_use_words(self):
             return self.held
@@ -1181,16 +1196,18 @@ def process_state(app) -> dict:
     import sys
     import matplotlib
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtGui import QColor, QFont, QPalette
     from PySide6.QtNetwork import QLocalServer
     from PySide6.QtWidgets import QApplication
     from core import config, logging_root
     from core.artifacts import default_store
     from core.gui import __main__ as entry
-    from core.gui import design, one_instance, theming, this_computer
+    from core.gui import design, fonts, one_instance, theming, this_computer
     from core.gui import style as small_style
     from core.gui.run.controller import controller
     gc.collect()
+    fonts.register_fonts()               # once per process and never undone, so that the first reading of a run of the
+                                         # suite does not differ from the next by what the first test to ask for a font did
     palette = app.palette()
     style = app.style()
     return {
@@ -1212,6 +1229,9 @@ def process_state(app) -> dict:
                          for role in QPalette.ColorRole if role != QPalette.NColorRoles),
         "palette set by hand": app.testAttribute(Qt.AA_SetPalette),
         "font": app.font().toString(),
+        "fonts with the toolkit": fonts._registered,
+        # What a font with no face of the computer's stands for, which the bundled files add once.
+        "font substitutions": {family: tuple(QFont.substitutes(family)) for family in QFont.substitutions()},
         "text factor": design.text_scale(),
         # The room the screen offers the window, which the look's two layout thresholds are held to: every
         # window hands it over as it sizes itself.

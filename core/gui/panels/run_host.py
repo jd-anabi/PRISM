@@ -51,6 +51,11 @@ class RunHost:
         held, enrolled = weakref.ref(self), RunHost._instances
         self.destroyed.connect(lambda *_: enrolled.discard(held()) if held() is not None else None)
 
+    def _new_run_page(self) -> RunView:
+        """A run's page for this page's stack, the run's own and the past view alike: made here, so that what a page does
+        to one it does to both."""
+        return RunView()
+
     def own_line(self, text: str, level: str = "info") -> None:
         """Say a line of the page's own, outside a run: where a page says one is the page's to answer."""
         raise NotImplementedError(f"{type(self).__name__} has no place for a line of its own")
@@ -120,7 +125,7 @@ class RunHost:
         it is asked for, beside the run's page and never in its place, so that the run's page keeps its own run, its
         offer, its question and its failure; and holding no figures, since this page's are no past run's."""
         if self._past_view is None:
-            self._past_view = RunView()
+            self._past_view = self._new_run_page()
             self._past_view.setObjectName("past")
             self._past_view.back.connect(self._back_from_the_past)
             self.results.addWidget(self._past_view)

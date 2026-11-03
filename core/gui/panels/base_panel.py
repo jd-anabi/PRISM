@@ -10,7 +10,6 @@ from PySide6.QtCore import Qt
 from .. import design
 from ..design import CONTROLS_MIN_W, DEFAULT_RESULTS_SPLIT, DEFAULT_SPLIT
 from ..reported import reported
-from ..run.view import RunView
 from ..widgets.figure_stack import FigureStack
 from ..widgets.log_pane import LogPane
 from .run_host import CANCEL_NOTED_TEXT, RunHost                  # noqa: F401 -- the words are said from here too
@@ -173,7 +172,7 @@ class BasePanel(RunHost, QWidget):
         # of the page has ended, and the run's page, which takes their place while it shows and holds the
         # figures under its messages; a third, the past view, joins them the first time a run that is over is
         # drawn here (``past_view``). The form stays at the left, locked while a run is live.
-        self.run_view = RunView()
+        self.run_view = self._new_run_page()
         self.run_view.setObjectName("run")
         self.run_view.back.connect(self._back_to_the_form)
         self.run_view.how_link.clicked.connect(self.show_run)

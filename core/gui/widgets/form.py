@@ -13,6 +13,8 @@ The name is checked 300 ms after the last keystroke and again at the press, sinc
 records of its kind; never while a run is live, so that an edit waiting as a run starts is read when it ends. The note
 is checked at every keystroke and reads nothing.
 """
+import re
+
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
                                QVBoxLayout, QWidget)
@@ -28,7 +30,7 @@ from . import labeled_inputs
 from .help_badge import HelpBadge
 from .labeled_inputs import _NumberField
 from .marker import Marker, painted_icon
-from .page import Columns, Sentence
+from .page import _BREAK, _BREAK_AFTER, Columns, Sentence
 from .ruled import Ruled, SectionHead
 
 FOLD_WORDS = "Rarely changed ({count})"
@@ -43,6 +45,18 @@ NEEDS_A_NAME = "a name is needed"
 NOTE_BLOCKS = "the note cannot be used"
 #: What a row of a kind the form does not know says of a field that reads as nothing.
 BLANK_WORDS = "blank"
+#: A word this long in an origin, a record's name, may break: no origin column at the window's least width is narrower.
+_LONG_WORD = re.compile(r"\S{17,}")
+_PIECE = re.compile(rf"[^\s{_BREAK}]{{16}}(?=[^\s{_BREAK}])")
+
+
+def _may_wrap(words: str) -> str:
+    """``words`` with places to break inside a long word: after a slash, an underscore or a full stop, and in what is still
+    too long between them."""
+    def broken(word) -> str:
+        return _PIECE.sub(lambda piece: piece.group() + _BREAK, _BREAK_AFTER.sub(_BREAK, word.group()))
+
+    return _LONG_WORD.sub(broken, words)
 
 
 def _column(*parts) -> QVBoxLayout:
@@ -78,7 +92,7 @@ class TickedField(QWidget):
 
     def __init__(self, field: QWidget, words: str, ticked: object) -> None:
         super().__init__()
-        self.field, self._ticked = field, ticked
+        self.field, self.stands_for = field, ticked
         self.ticked_box = QCheckBox(words)
         self._row = QHBoxLayout(self)
         self._row.setContentsMargins(0, 0, 0, 0)
@@ -104,12 +118,12 @@ class TickedField(QWidget):
 
     def value_or_none(self):
         """The value the box stands for while it is ticked, else what the field reads as."""
-        return self._ticked if self.is_ticked() else self.field.value_or_none()
+        return self.stands_for if self.is_ticked() else self.field.value_or_none()
 
     def set_value(self, value) -> None:
         """Set the value: the box ticked for the value it stands for, else the field told ``value``."""
-        self.ticked_box.setChecked(value == self._ticked)
-        if value != self._ticked:
+        self.ticked_box.setChecked(value == self.stands_for)
+        if value != self.stands_for:
             self.field.setText("" if value is None else str(value))
 
     def words(self) -> str:
@@ -175,13 +189,14 @@ class Row:
         self.key, self.widget = key, widget
         self._label, self._usual, self._unit = label, usual, unit
         self._on_edit, self._on_mark = edited, marked
-        self._shown, self._marked = True, False
+        self._shown, self._marked, self._blocks = True, False, False
         self.label = QLabel(labels.pretty_gui(label))
         self.label.setWordWrap(True)
         self.label.setMinimumHeight(design.scaled(design.SIZE["field_h"]))
         self.badge = HelpBadge(help_text) if help_text else None
         self.origin = style.set_class(QLabel(), cls="small")
         self.origin.setTextFormat(Qt.PlainText)
+        self.origin.setWordWrap(True)
         self.unit = QLabel(unit)
         self.unit.setTextFormat(Qt.PlainText)
         self.unit.setVisible(bool(unit))
@@ -223,7 +238,8 @@ class Row:
     def _edited(self) -> None:
         """A refusal's sentence stands under the field until the field is edited."""
         if self._marked:
-            self.set_line("", "")
+            self._marked = self._blocks = False
+            self._set_line("", "")
         if self._on_edit is not None:
             self._on_edit()
 
@@ -272,7 +288,11 @@ class Row:
 
     def at_usual(self) -> bool:
         """Whether the field reads as its built-in value: as it reads, never as it is typed, so that "1e-3" is 0.001 and
-        a box that reads as nothing is not a number's usual value."""
+        a box that reads as nothing is not a number's usual value. A blank box and a tick that stands for nothing both read
+        None, so a ticked field's tick is compared first."""
+        widget = self.widget
+        if isinstance(widget, TickedField) and widget.is_ticked() != (self._usual == widget.stands_for):
+            return False
         return self.value() == self._usual
 
     def words(self) -> str:
@@ -291,14 +311,21 @@ class Row:
         return f"{said} {self._unit}".rstrip() if said else BLANK_WORDS
 
     def set_origin(self, text: str) -> None:
-        """Say where the value came from."""
-        self.origin.setText(text)
+        """Say where the value came from, on as many lines as it takes: a record's name has no end."""
+        self.origin.setText(_may_wrap(text))
 
     def set_line(self, kind: str, sentence: str) -> None:
         """Say ``sentence`` under the field with the marker of ``kind``; an empty one says nothing. In error the field
         is outlined too, and a number field says the sentence as its tool tip. What the field says of itself, a comma's
-        sentence, stands while the field holds it: it is no page's to take away."""
+        sentence, stands while the field holds it: it is no page's to take away. Nor is a refusal's sentence, while it stops
+        the start: a page says its lines as it draws, at every edit, and its line comes at the first drawing after the field
+        is edited. Once the facts have been read again a line with words takes its place, and an empty one still leaves it."""
+        if self._marked and (self._blocks or not sentence):
+            return
         self._marked = False
+        self._set_line(kind, sentence)
+
+    def _set_line(self, kind: str, sentence: str) -> None:
         number = None if self.widget is None else _number_of(self.widget)
         if number is not None:
             number.set_error((sentence if kind == "err" else "") or number.own_error())
@@ -309,18 +336,30 @@ class Row:
         self._say(kind, sentence)
 
     def mark(self, sentence: str) -> None:
-        """A refusal of this row: its sentence under the field until the field is edited."""
-        self.set_line("err", sentence)
-        self._marked = True
+        """A refusal of this row: its sentence under the field, stopping the start, until the field is edited."""
+        self._set_line("err", sentence)
+        self._marked = self._blocks = True
+
+    def refused(self) -> str:
+        """The sentence of the refusal that stops the start here, "" for none: a row off the page stops nothing."""
+        return self.line.words if self._blocks and self._shown else ""
+
+    def ease(self) -> None:
+        """The facts were read again since the refusal: it stops the start no longer, since what cures it may stand in
+        another field, or on another page, and the press asks the engine again. Its sentence stands until the field is
+        edited, no longer as an error, for a marker never disagrees with the button."""
+        if self._blocks:
+            self._blocks = False
+            self._set_line("warn", self.line.words)
 
     def in_error(self) -> bool:
         """Whether the row stands on the page in error."""
         return self._shown and self.line.kind == "err"
 
     def reading(self) -> "str | None":
-        """What is wrong with the number the field holds, in a sentence, or None."""
+        """What is wrong with the number the field holds, in a sentence, or None; a row off the page holds nothing wrong."""
         number = None if self.widget is None else _number_of(self.widget)
-        if number is None or (isinstance(self.widget, TickedField) and self.widget.is_ticked()):
+        if number is None or not self._shown or (isinstance(self.widget, TickedField) and self.widget.is_ticked()):
             return None
         return labeled_inputs.reading(number, self._label)
 
@@ -440,6 +479,9 @@ class Fold(Ruled):
 
     def is_open(self) -> bool:
         return self._open
+
+    def rows(self) -> list:
+        return list(self._rows)
 
     def _in_error(self) -> bool:
         return any(row.in_error() for row in self._rows)
@@ -585,10 +627,11 @@ class NameAndNote(QWidget):
 
 
 class Form(QWidget):
-    """Region 3 of a page: "Main settings" with the fold under them, and beside them, while the page is wide enough, the
+    """The form of a page: "Main settings" with the fold under them, and beside them, while the page is wide enough, the
     block for this run. ``rows`` holds main, folded and block rows alike, by field key. ``edited`` says a field changed."""
 
     edited = Signal()
+    joined = Signal()                        # a row joined the form
 
     def __init__(self) -> None:
         super().__init__()
@@ -633,6 +676,7 @@ class Form(QWidget):
         self._place(row, folded=folded, side=side)
         self.rows[field_key] = row
         self.fold.judge()
+        self.joined.emit()
         return row
 
     def add_text(self, field_key: str, text: str, origin: str, *, folded: bool = False, side: bool = False) -> Row:
@@ -641,6 +685,7 @@ class Form(QWidget):
         row.set_origin(origin)
         self._place(row, folded=folded, side=side)
         self.rows[field_key] = row
+        self.fold.judge()
         return row
 
     def add_sentence(self, sentence: str, *, under: str, quiet: bool = True) -> Sentence:
@@ -674,14 +719,27 @@ class Form(QWidget):
         self.columns.fit(width)
 
     def stops(self) -> list:
-        """Every control of the form the Tab key stops at, in the order the page is read: the main settings, the fold, the
-        block for this run."""
+        """Every control of the form the Tab key stops at, in the order the page is read: the fold's own button before
+        what it holds."""
         return [*(stop for row in self._main_rows for stop in row.stops()), *self.fold.stops(),
                 *(stop for row in self._side_rows for stop in row.stops())]
 
+    def refused(self) -> tuple:
+        """The sentences of the refusals that stop the start, in the order the page reads."""
+        return tuple(sentence for sentence in (row.refused() for row in self._in_order()) if sentence)
+
+    def ease(self) -> None:
+        """The facts were read again: no refusal stops the start any longer."""
+        for row in self.rows.values():
+            row.ease()
+
+    def _in_order(self) -> list:
+        """The rows in the order the page reads: the main settings, the fold, the block for this run."""
+        return [*self._main_rows, *self.fold.rows(), *self._side_rows]
+
     def first_control(self) -> "QWidget | None":
         """The first setting that can take the keyboard, in the order the page reads, or None."""
-        for row in self.rows.values():
+        for row in self._in_order():
             target = row.focus_target()
             if target is not None and row.is_shown() and target.isVisibleTo(self):
                 return target

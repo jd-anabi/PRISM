@@ -24,6 +24,8 @@ NOT_READ_YET_TEXT = "A run is live. Not read yet; read when it ends."
 READ_TEXT = "The saved records were read at {}."
 READ_LIVE_TEXT = "A run is live. Read at {}; read again when it ends."
 NOTHING_TO_APPLY_TEXT = "Nothing to apply: these choices are in use."
+#: The words beside the button of a start the engine refused.
+REFUSED_BLOCKS = "the last start was refused"
 ONE_BLOCKS_TEXT = "Cannot start yet: {}."
 SEVERAL_BLOCK_TEXT = "Cannot start yet: {}, and {} more above."
 
@@ -42,6 +44,12 @@ class Fact:
         if (self.kind in BLOCKING) != bool(self.blocks.strip()):
             raise ValueError(f"a {self.kind!r} fact {'must hold' if self.kind in BLOCKING else 'holds no'} words beside "
                              f"the button: {self.blocks!r}")
+
+
+def refused_facts(sentences: Iterable[str]) -> tuple[Fact, ...]:
+    """What a refusal says among the facts, each of ``sentences`` the engine's own: an "Error." that stops the start, as
+    the mark under its field does, for a marker never disagrees with the button."""
+    return tuple(Fact("err", sentence, REFUSED_BLOCKS) for sentence in sentences)
 
 
 def ordered(facts: Iterable[Fact]) -> tuple[Fact, ...]:

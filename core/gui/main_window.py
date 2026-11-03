@@ -707,10 +707,10 @@ class MainWindow(QMainWindow):
                 home.refresh()                       # in sight already: read now (nothing while the window is hidden)
             else:
                 home.mark_stale()                    # read as it is shown
-        self.shell.show_part(part)
         show = getattr(widget, "show_page", None)
         if page is not None and callable(show):
-            show(page)
+            show(page)                               # first: the page last shown would come into sight, and read
+        self.shell.show_part(part)
         now, shown = self.current_place()
         self.shell.rail.set_place(now, shown if now == "inference" else None)
         if keyboard is not None:
