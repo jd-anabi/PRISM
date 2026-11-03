@@ -874,10 +874,9 @@ def test_the_console_face_is_carried_with_the_program():
 def test_a_font_that_names_no_face_stays_in_the_lettering_face_where_the_system_offers_none():
     """On the platform with no fonts of its own a font that names no family takes the first the database holds, by its
     name, and the console's stands before the lettering's: every control the application's font has not reached yet would
-    stand a third wider. Where the system offers a face, as Windows does, that face stands."""
-    app = QApplication.instance() or QApplication([])
+    stand a third wider. What a real display does is read on one."""
+    QApplication.instance() or QApplication([])
     fonts.register_fonts()
-    assert QFontInfo(QFont()).family() == QFontInfo(app.font()).family()
     if QGuiApplication.platformName() == "offscreen":
         assert QFontInfo(QFont()).family() == design.LETTERING
 
@@ -970,17 +969,18 @@ def test_a_lettering_file_that_does_not_load_is_named_in_a_warning(monkeypatch, 
                                        "The lettering files did not reach the figure library"])
 
 
-def test_a_console_file_that_does_not_load_is_named_and_the_next_face_stands(monkeypatch, caplog):
-    """The console's file refused, the program still starts: a warning names it, and console text falls to the next face
-    of the look's list."""
+def test_a_console_file_that_does_not_load_is_named(monkeypatch, caplog):
+    """The console's file refused, the program still starts, and a warning names it and says what is true of it: the window
+    keeps its lettering, and only console text goes to another face."""
     QApplication.instance() or QApplication([])
     monkeypatch.setattr(fonts, "QFontDatabase",
                         SimpleNamespace(addApplicationFont=lambda path: -1 if "Cascadia" in str(path) else 0))
     monkeypatch.setattr(fonts, "_registered", False)
     caplog.set_level("WARNING", logger="core.gui.fonts")
     fonts.register_fonts()
-    assert [record.getMessage().split(";")[0] for record in caplog.records] == [
-        "The lettering file CascadiaMono-Regular.ttf did not load"]
+    assert [record.getMessage() for record in caplog.records] == [
+        "The console file CascadiaMono-Regular.ttf did not load; console text is set in the next fixed-width face the "
+        "computer holds."]
 
 
 def test_the_font_factories_can_be_called_before_the_application_exists():
@@ -1026,6 +1026,9 @@ def test_the_three_faces_resolve_on_a_real_windows_display():
     assert fonts.book().pixelSize() == 16 and fonts.book(bold=True).bold()
     console = QFontInfo(fonts.fixed())
     assert (console.family(), console.fixedPitch(), console.pixelSize()) == (design.FIXED_FACES[0], True, 14)
+    # The system's own face stands before what the bundled files say it stands for.
+    system = QGuiApplication.font().family()
+    assert system != design.LETTERING and QFontInfo(QFont(system)).family() == system
     with font_and_style_put_back(app) as style:
         fonts.load_app_font(app)
         assert not app.font().isFeatureSet(_tabular())

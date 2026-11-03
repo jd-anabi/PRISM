@@ -42,15 +42,18 @@ def _toolkit_is_up() -> bool:
 def register_fonts() -> None:
     """Hand the bundled files to the toolkit, once per process. Before the application exists this
     does nothing and remembers nothing, so the first call after it does the work. A file that will not
-    load is not an error: the program still starts, in whatever face the toolkit finds, and a warning
-    names the file."""
+    load is not an error: the program still starts, in whatever face the toolkit finds or, for the console's,
+    with console text in the next face it finds, and a warning names the file."""
     global _registered
     if _registered or not _toolkit_is_up():
         return
-    for name in (*_FILES, _CONSOLE_FILE):
+    for name in _FILES:
         if QFontDatabase.addApplicationFont(str(_FONT_DIR / name)) < 0:      # the toolkit's answer for a refusal
             log.warning("The lettering file %s did not load; the window is set in whatever face the toolkit finds.",
                         name)
+    if QFontDatabase.addApplicationFont(str(_FONT_DIR / _CONSOLE_FILE)) < 0:
+        log.warning("The console file %s did not load; console text is set in the next fixed-width face the computer "
+                    "holds.", _CONSOLE_FILE)
     # Where the system offers no face of its own, a font that names none takes the first family by its name, which would
     # be the console's. A family the computer does hold stands before this.
     QFont.insertSubstitution(QGuiApplication.font().family(), design.LETTERING)
