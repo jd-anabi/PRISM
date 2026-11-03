@@ -1443,18 +1443,36 @@ def test_a_store_change_during_a_build_reads_nothing_until_it_ends(tmp_path, mon
 
 
 def test_a_load_by_code_reads_first_and_asks_nothing(tmp_path, monkeypatch):
-    """A caller that asked its own question loads a saved prior through the page as its button does, the facts read
-    first and no question asked: True when the load started, False when the facts block it, with nothing started. A
-    load leaves the name and the note as typed for a build, and says nothing of a name."""
-    from core.artifacts import default_store
+    """A caller that asked its own question loads a saved prior through the page as its button does, the lists and the
+    facts read first and no question asked: True when the load started; False, with nothing started, when the facts
+    block it, as for a prior made for another model and for one that cannot be read, each selected and said. A prior
+    saved by another program since the page last read its lists is found. A load leaves the name and the note as typed
+    for a build, and says nothing of a name."""
+    from core.artifacts import ArtifactStore, default_store
     from core.gui.run.controller import controller
     from tests._fixtures import _nad_cfg, _prior_artifact
     from tests._runs import turn_until
     app = qt_app()
     with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
-        other_model = _prior_artifact(default_store(), _nad_cfg(), name="of_hopf", model="HOPF").id
-        two = _prior_artifact(default_store(), _nad_cfg(), name="other").id
-        assert page.load_record(other_model) is False and stand_in.calls == [], "a prior of another model was loaded"
+        store = default_store()
+        other_model = _prior_artifact(store, _nad_cfg(), name="of_hopf", model="HOPF").id
+        unreadable = _prior_artifact(store, _nad_cfg(), name="unreadable").id
+        kept_get = ArtifactStore.get
+
+        def get(held, kind, key, *args, **kwargs):
+            if key == unreadable:
+                raise OSError("prior.pt cannot be read")
+            return kept_get(held, kind, key, *args, **kwargs)
+
+        monkeypatch.setattr(ArtifactStore, "get", get)
+        blocks = ((other_model, "Error. This prior was made for the model Hopf."),
+                  (unreadable, "Error. The prior cannot be read: OSError: prior.pt cannot be read"))
+        for ref, said in blocks:
+            assert page.load_record(ref) is False and stand_in.calls == [], ref
+            assert page.prior_picker.key() == ref, "the load was refused before the facts were read"
+            facts = [row.sentence.plain_text() for row in page.foot.facts.rows()]
+            assert facts[0] == said and not page.foot.main_button.isEnabled(), facts
+        two = _prior_artifact(store, _nad_cfg(), name="other").id          # saved since the page last read its lists
         forget_asked()
         assert page.load_record(two) is True and all_asked() == []
         assert stand_in.started.wait(5) and stand_in.calls[-1][0][1:] == (two, False)

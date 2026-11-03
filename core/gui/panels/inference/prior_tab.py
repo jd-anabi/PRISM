@@ -739,10 +739,12 @@ class PriorPanel(StepPage):
 
     def load_record(self, ref: str) -> bool:
         """Load the saved prior ``ref`` as "Load this prior" does, with the bounds file selected, for a caller that asked
-        its own question first: the saved view shown, ``ref`` selected, the facts read, and the load started unless they
-        block it. True when its run was started."""
+        its own question first: the saved view shown and read, so that the list holds a record saved since by another
+        program, ``ref`` selected, the facts read, and the load started unless they block it. True when its run was
+        started."""
         self._by_keyboard = False                # no key pressed this load
         self.show_view("saved")
+        self.read_facts()
         self.prior_picker.restore_key(ref)
         self.read_facts()
         if self.prior_picker.key() != ref or not self.foot.main_button.isEnabled() or self._candidate is None:
