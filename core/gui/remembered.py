@@ -17,6 +17,9 @@ log = logging.getLogger(__name__)
 #: The model and the kind of observation the first step applied last, put back as choices at the next launch.
 MODEL_KEY = "inference_config/model"
 KIND_KEY = "inference_config/chi_mode"
+#: The bounds file and the prior of the prior that came into use last, put back as choices at the next launch.
+BOUNDS_KEY = "inference_prior/bounds"
+PRIOR_KEY = "inference_prior/prior"
 #: The window's log, when the settings file could not be written: the file, and why.
 NOT_WRITTEN_TEXT = "The settings file %s could not be written (%s): what was set holds until PRISM is closed."
 

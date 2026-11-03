@@ -1,6 +1,7 @@
 """What a step says before it starts, as values: a fact and the order facts stand in, the reason beside the main
 button, the line that says when the saved records were read, where a field's value came from, and how long something
-takes, in a person's words; a row that picks what a step holds, and what the first step holds and says.
+takes, in a person's words; a row that picks what a step holds; what the first step holds and says, and what the
+second does.
 
 A fact is a marker with its lead word, one or two plain sentences, and, for what stops the start, the few words that go
 beside the button. Every "Error." and every "Blocked." blocks and nothing else does, and a fact that says otherwise is
@@ -206,3 +207,188 @@ def model_facts(*, usable_reason: str, field_facts: Sequence[Fact], plan_lines: 
     its fields; then what the plan in use says. Those that block come first."""
     lead = (Fact("err", usable_reason, UNUSABLE_BLOCKS),) if usable_reason else ()
     return ordered((*lead, *field_facts, *plan_lines))
+
+
+# ── the second step, Prior ──
+#: The longest a prior's build is believed to have taken: two times of a run further apart than this, or a length
+#: below nothing, come from a clock that was set wrong, and say nothing of how long a build takes.
+LONGEST_BUILD_S = 7 * 24 * 3600
+BUILD_WORDS = "Build a new prior"
+LOAD_WORDS = "Load this prior"
+NEEDS_A_MODEL = "Needs a model: apply one in step 1, Model and options."
+NEEDS_A_MODEL_BLOCKS = "needs a model"
+NO_BOUNDS_TEXT = "Choose a bounds file."
+NO_BOUNDS_BLOCKS = "no bounds file is chosen"
+BOUNDS_BLOCKS = "the bounds file cannot be read"
+NO_PRIOR_TEXT = "Choose a saved prior."
+NO_PRIOR_BLOCKS = "no saved prior is chosen"
+NONE_SAVED_TEXT = "No prior is saved yet: build one with 'Build a new prior instead…'."
+NONE_SAVED_BLOCKS = "no prior is saved yet"
+PRIOR_BLOCKS = "the prior cannot be read"
+OTHER_MODEL_TEXT = "This prior was made for the model {}."
+OTHER_MODEL_BLOCKS = "this prior is for another model"
+TYPED_BY_HAND = "limits typed by hand"
+SAME_FILE_TEXT = "Built on {}, the bounds file selected."
+OTHER_FILE_TEXT = "Built on {}; the bounds file selected is {}."
+CHECK_PASSES_TEXT = ("PRISM's own check compares only the model's parameters and their limits, which these two files "
+                     "share, so the load goes through.")
+CHECK_REFUSES_TEXT = ("PRISM's own check compares only the model's parameters and their limits, which differ between "
+                      "these two files, so PRISM will refuse the load.")
+EDITED_TEXT = "Built on {} as it was then; the file has been edited since."
+EDITED_REFUSES_TEXT = "Its parameters or their limits have changed with it, so PRISM will refuse the load."
+TYPED_TEXT = "Built on limits typed by hand."
+TYPED_REFUSES_TEXT = ("The bounds file selected differs from them in the model's parameters or their limits, so PRISM "
+                      "will refuse the load.")
+NO_SETS_TEXT = "No saved simulation set was made with this prior."
+ONE_SET_TEXT = "1 saved simulation set was made with this prior; it holds {:,} batches."
+SETS_TEXT = "{} saved simulation sets were made with this prior; the largest holds {:,} batches."
+COST_TEXT = "Tests {:,} candidates ({:,} rounds of {:,}){}, then walks outward until {:,} stable sets are collected."
+STEPS_TEXT = ", each integrated over {:,} steps"
+NEVER_BUILT_TEXT = "No prior has been built on this computer yet, so the time is not known."
+NO_LENGTH_TEXT = "The last build on this computer has no length that can be read, so the time is not known."
+TOOK_TEXT = "{}: the last build on this computer took {}."
+ONE_OTHER_TEXT = ("A new prior cannot continue a saved simulation set: the saved set for this model was made with another "
+                  "prior.")
+OTHERS_TEXT = ("A new prior cannot continue a saved simulation set: the {} saved sets for this model were made with other "
+               "priors.")
+#: How a posterior trained on a bounds file reads, by the kind of observation a configuration made from it has.
+READS = {"chi": "a frequency response", "forced": "a spontaneous recording and one driven recording",
+         "spontaneous": "a spontaneous recording only"}
+PARAMETERS_TEXT = "{} parameters: {} of the model ({}) and {} {} ({})."
+FORCING_TEXT = "It has a forcing section."
+NO_FORCING_TEXT = "It has no forcing section."
+READS_TEXT = "With the kind of observation applied in step 1, a posterior trained on it reads: {}."
+SAVED_PRIOR_TEXT = "Made {}, for {}: {} parameters, built on {}."
+PRIOR_IN_USE_TEXT = "Built on {}, {} parameters. Saved as a record."
+NOTHING_HELD_TEXT = "Choose a bounds file, then load a saved prior or build a new one."
+
+
+def length_words(seconds: float) -> str:
+    """A length a run took, to the second, as a clock says it: "45 s", "1 min 32 s", "12 min", "1 h 5 min"."""
+    whole = max(0, math.floor(seconds + 0.5))
+    hours, rest = divmod(whole, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours} h {minutes} min" if minutes else f"{hours} h"
+    if minutes:
+        return f"{minutes} min {secs} s" if secs else f"{minutes} min"
+    return f"{secs} s"
+
+
+def build_length(took) -> "float | None":
+    """How long the last build took, in seconds, from ``took``, the run history's answer (its length and its name, or
+    None for no build): None for none, and for a length a clock set wrong gave, below nothing or past the longest a build
+    is believed to take."""
+    try:
+        seconds = float(took[0])
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    return seconds if math.isfinite(seconds) and 0 < seconds <= LONGEST_BUILD_S else None
+
+
+def build_words(took) -> str:
+    """The build's main button, named for its outcome, with how long the last build took when that can be read: "Build
+    a new prior (about a minute and a half)"."""
+    seconds = build_length(took)
+    return f"{BUILD_WORDS} ({about_words(seconds)})" if seconds is not None else BUILD_WORDS
+
+
+def bounds_words(params: Sequence[str], scales: Sequence[str], forcing: bool, mode: str) -> str:
+    """What a bounds file is, under its list: its parameters, the model's and the scales, named in the file's order;
+    whether it has a forcing section; and how a posterior trained on it reads, by ``mode``, the kind of observation of a
+    configuration made from it."""
+    scale = "scale" if len(scales) == 1 else "scales"
+    return " ".join((PARAMETERS_TEXT.format(len(params) + len(scales), len(params), ", ".join(params), len(scales),
+                                            scale, ", ".join(scales)),
+                     FORCING_TEXT if forcing else NO_FORCING_TEXT, READS_TEXT.format(READS.get(mode, mode))))
+
+
+def saved_prior_words(made: str, model: str, parameters: int, built_on: "str | None") -> str:
+    """A saved prior, under its list: when it was made, its model by its name, how many parameters it was made for and
+    the bounds file it was built on."""
+    return SAVED_PRIOR_TEXT.format(made, model_label(model), parameters, TYPED_BY_HAND if built_on is None else built_on)
+
+
+def prior_in_use(label: str, built_on: "str | None", parameters: int) -> tuple[str, str]:
+    """What the second step holds, as "In use" says it: the prior's label, and the bounds file its record was built on,
+    with how many parameters it holds; ``("", "")`` while it holds none."""
+    if not label:
+        return "", ""
+    return label, PRIOR_IN_USE_TEXT.format(TYPED_BY_HAND if built_on is None else built_on, parameters)
+
+
+def _bounds_fact(built_on: "str | None", selected: str, edited: bool, same_box: bool) -> Fact:
+    """The bounds file a saved prior was built on, against the one selected: said, never blocking, for the engine is
+    the one that refuses a load."""
+    if built_on is None:
+        return Fact("info", TYPED_TEXT) if same_box else Fact("warn", f"{TYPED_TEXT} {TYPED_REFUSES_TEXT}")
+    if built_on != selected:
+        return Fact("warn", f"{OTHER_FILE_TEXT.format(built_on, selected)} "
+                            f"{CHECK_PASSES_TEXT if same_box else CHECK_REFUSES_TEXT}")
+    if edited:
+        return Fact("warn", EDITED_TEXT.format(built_on) + ("" if same_box else f" {EDITED_REFUSES_TEXT}"))
+    return Fact("fine", SAME_FILE_TEXT.format(built_on))
+
+
+def _sets_fact(batches: Sequence[int]) -> Fact:
+    """The simulation sets made with a saved prior, by the batches each holds."""
+    if not batches:
+        return Fact("info", NO_SETS_TEXT)
+    if len(batches) == 1:
+        return Fact("info", ONE_SET_TEXT.format(batches[0]))
+    return Fact("info", SETS_TEXT.format(len(batches), max(batches)))
+
+
+def _length_fact(took) -> Fact:
+    """How long a build takes: what the last build on this computer took."""
+    if took is None:
+        return Fact("info", NEVER_BUILT_TEXT)
+    seconds = build_length(took)
+    if seconds is None:
+        return Fact("info", NO_LENGTH_TEXT)
+    said = about_words(seconds)
+    return Fact("info", TOOK_TEXT.format(said[:1].upper() + said[1:], length_words(seconds)))
+
+
+def prior_facts(*, view: str, needs: bool = False, bounds_error: str = "", bounds_blocks: str = BOUNDS_BLOCKS,
+                prior_error: str = "", prior_blocks: str = PRIOR_BLOCKS, record_model: "str | None" = None,
+                model: "str | None" = None, built_on: "str | None" = None, selected: str = "", edited: bool = False,
+                same_box: bool = True, sets_of_prior: "Sequence[int] | None" = None, rounds: "int | None" = None,
+                batch: "int | None" = None, stable: "int | None" = None, steps: "int | None" = None, took=None,
+                sets_for_model: int = 0, attention: Sequence[str] = (), name_facts: Sequence[Fact] = (),
+                field_facts: Sequence[Fact] = (), plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
+    """The facts of the second step, in the order of its table, those that block first. ``view`` is "saved" or
+    "build". ``needs``: no model is applied, so nothing can be made. ``bounds_error`` and ``prior_error`` say why the
+    bounds file or the saved prior chosen cannot be used, each with the words beside the button. A saved prior:
+    ``record_model``, the model its record was made for, against ``model``, the one applied; ``built_on``, the bounds
+    file it was built on (None for limits typed by hand), against ``selected``, with ``edited`` (the same file, edited
+    since) and ``same_box`` (its parameters and their limits are the selected file's); ``sets_of_prior``, the batches of
+    each saved simulation set made with it, None for not read. A build: ``rounds``, ``batch`` and ``stable`` give what it
+    costs, ``steps`` the steps each candidate is integrated over when they are known, any of the three None leaves the
+    cost out; ``took``, the run history's last build, how long it takes; ``sets_for_model``, the saved simulation sets of
+    the model, which a new prior cannot continue. Then ``attention``, what the configuration in use asks a person to
+    know; the name's and the fields' facts; and what the plan in use says."""
+    facts = [Fact("lock", NEEDS_A_MODEL, NEEDS_A_MODEL_BLOCKS)] if needs else []
+    if bounds_error:
+        facts.append(Fact("err", bounds_error, bounds_blocks))
+    if view == "saved":
+        if prior_error:
+            facts.append(Fact("err", prior_error, prior_blocks))
+        elif record_model is not None and model is not None and record_model != model:
+            facts.append(Fact("err", OTHER_MODEL_TEXT.format(model_label(record_model)), OTHER_MODEL_BLOCKS))
+        else:
+            if record_model is not None and not bounds_error:
+                facts.append(_bounds_fact(built_on, selected, edited, same_box))
+            if sets_of_prior is not None:
+                facts.append(_sets_fact(sets_of_prior))
+    else:
+        if None not in (rounds, batch, stable):
+            facts.append(Fact("info", COST_TEXT.format(rounds * batch, rounds, batch,
+                                                       STEPS_TEXT.format(steps) if steps else "", stable)))
+        facts.append(_length_fact(took))
+        if sets_for_model == 1:
+            facts.append(Fact("info", ONE_OTHER_TEXT))
+        elif sets_for_model > 1:
+            facts.append(Fact("info", OTHERS_TEXT.format(sets_for_model)))
+    facts += [Fact("warn", sentence) for sentence in attention]
+    return ordered((*facts, *name_facts, *field_facts, *plan_lines))

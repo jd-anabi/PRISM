@@ -829,7 +829,7 @@ def test_each_store_kind_has_one_word():
 
 
 # the main button of each step's page, by the step; a rebuilt page's is its foot's
-_MAIN = {"model": "foot.main_button", "prior": "btn_prior", "training": "btn_post", "checks": "btn_validate",
+_MAIN = {"model": "foot.main_button", "prior": "foot.main_button", "training": "btn_post", "checks": "btn_validate",
          "infer": "btn_infer", "narrowing": "btn_round"}
 
 
@@ -857,8 +857,9 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
     exactly when the step cannot start, but that a rebuilt page may grey it for a reason of its own, which it says
     beside it. On a step
     that cannot start, each button that can be pressed is pressed, with every question answered by the guard and
-    every file chooser cancelled, and the session built again before each press: no run is started, nothing is
-    raised, no drawing error is caught and nothing is shown but a question or a notice."""
+    every file chooser cancelled, and the session built again before each press, while it can still be pressed: a
+    press may show another view of its page. No run is started, nothing is raised, no drawing error is caught and
+    nothing is shown but a question or a notice."""
     from core.gui import reported
     from core.gui.run.controller import RunController
     from core.gui.session import SbiSession
@@ -913,10 +914,11 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
             assert panel.isEnabled() and inference.pages.isEnabled(), (session, step.key)
             if state.can_start:
                 continue
-            for number in range(len(_pressable(panel))):
+            for button in _pressable(panel):
                 hold(session)
                 window.go_to("inference", step.key)
-                button = _pressable(panel)[number]
+                if button not in _pressable(panel):
+                    continue                     # a press before it showed another view of the page
                 forget_asked()
                 button.click()
                 asked = [(box.kind, box.title) for box in all_asked()]

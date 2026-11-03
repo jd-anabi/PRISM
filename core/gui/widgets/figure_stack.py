@@ -196,6 +196,13 @@ class FigureStack(QTabWidget):
         if self._run is not None and self._run[1] is None:
             self._run[1] = self._added
 
+    def keep_only_the_run(self) -> None:
+        """Close every tab that is no figure of the page's last run: a page whose run has returned its record shows that
+        record's figures alone."""
+        for index in reversed(range(self.count())):
+            if not self._of_the_run(self.widget(index)):
+                self._close_tab(index)
+
     def only_the_run(self, on: bool) -> None:
         """While the run's page holds the stack (``on``), only the figures its last run made are in sight, the newest
         of them in front unless one of them was in front already; off, every tab is in sight again where it stands, in

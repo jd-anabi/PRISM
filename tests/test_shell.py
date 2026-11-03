@@ -1204,9 +1204,9 @@ def test_the_narrowing_round_reads_an_observation_written_after_the_window_opene
 
 
 def test_a_step_names_a_held_record_by_the_name_its_save_box_gave_it(monkeypatch):
-    """Naming the held prior, or the held posterior, in its Save box renames the record, and the step's row in
-    the rail then names it by its new name."""
-    from core.gui.panels.inference import posterior_tab, prior_tab
+    """Naming the held posterior in its Save box renames the record, and the step's row in the rail then names it by
+    its new name. A prior is named before it is built, on its own page."""
+    from core.gui.panels.inference import posterior_tab
     from core.gui.session import SbiSession
     qt_app()
     window = build_window()
@@ -1217,12 +1217,8 @@ def test_a_step_names_a_held_record_by_the_name_its_save_box_gave_it(monkeypatch
     inference.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"), cfg=object(), inf_prior=held["prior"],
                                    posterior=held["posterior"])
     inference.refresh_gates()
-    assert rail.row("prior").accessibleName().startswith("Step 2, Prior. Done: Unnamed prior, ")
-    for module in (prior_tab, posterior_tab):
-        monkeypatch.setattr(module, "default_store", lambda: SimpleNamespace(rename=lambda kind, ref, name: made))
-    inference.prior_panel.prior_name.setText("retrain_prior")
-    inference.prior_panel._save_prior()
-    assert rail.row("prior").accessibleName() == "Step 2, Prior. Done: retrain_prior"
+    assert rail.row("training").accessibleName().startswith("Step 3, Training. Done: Unnamed posterior, ")
+    monkeypatch.setattr(posterior_tab, "default_store", lambda: SimpleNamespace(rename=lambda kind, ref, name: made))
     inference.posterior_panel.post_name.setText("retrain")
     inference.posterior_panel._save_posterior()
     assert rail.row("training").accessibleName() == "Step 3, Training. Done: retrain"
@@ -3749,7 +3745,7 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
                     _shown_off_screen(window, 1300, design.small_below() - 1 if low else 820)
                     assert window.shell._small == low, (factor, low)
                     for place in keys.PARTS[1:]:
-                        window.go_to(place.key, "prior" if place.key == "inference" else None)
+                        window.go_to(place.key, "training" if place.key == "inference" else None)
                         QApplication.processEvents()
                         if place.key != "settings":
                             assert _margins(window, place.key) == (design.scaled(12),) * 4, (factor, low, place.key)
@@ -3834,7 +3830,7 @@ class _CannotBeBuilt(Exception):
 # What the first opening of a part asks of the card or starts, by name and how often: Parameter inference's six
 # steps are built together, four of them read the card as they are built, and their gates read it again. The list
 # may only shrink: a page that reads the card reads it at a moment of its own, never as it is built.
-_READ_AT_FIRST_OPENING = {"inference": {"the device check": 3, "the card's free memory": 4,
+_READ_AT_FIRST_OPENING = {"inference": {"the device check": 2, "the card's free memory": 4,
                                         "the card's memory held": 4, "the card's memory in use": 4}}
 
 
@@ -4436,8 +4432,8 @@ def test_a_part_never_opened_keeps_what_it_remembered_when_the_window_closes(tmp
                        for panel in every._all_panels() if isinstance(panel, BasePanel)
                        for splitter in ("splitter", "results")})
     groups = {key.split("/")[0] for key in remembered}
-    assert groups == {"artifacts", "crossval", "fdt", "inference_infer", "inference_posterior", "inference_prior",
-                      "inference_tsnpe", "layout", "reduction"}, groups
+    assert groups == {"artifacts", "crossval", "fdt", "inference_infer", "inference_posterior", "inference_tsnpe",
+                      "layout", "reduction"}, groups
     st.use_ini_file(str(tmp_path / "kept.ini"))
     kept = st.settings()
     for key, value in remembered.items():
@@ -6868,7 +6864,7 @@ def test_the_step_shown_hears_the_low_window_and_names_where_the_keyboard_starts
     _shown_off_screen(window, 1300, 820)
     today = window.part("inference")
     assert today.first_focus() is today.config_panel.model_combo and today.pending() == frozenset()
-    window.go_to("inference", "prior")
+    window.go_to("inference", "training")
     assert today.first_focus() is None
     assert window.focusWidget() is window._start_of(today) is _first_control(today), "today's steps moved"
     window.resize(1300, design.small_below() - 1)
@@ -6877,7 +6873,7 @@ def test_the_step_shown_hears_the_low_window_and_names_where_the_keyboard_starts
     step = _stand_in_step(window, monkeypatch)
     window.go_to("inference", "model")
     assert window._start_of(today) is step.named and window.focusWidget() is step.named
-    window.go_to("inference", "prior")
+    window.go_to("inference", "training")
     assert today.first_focus() is None, "the screen answered for a step not shown"
     window.go_to("inference", "model")
     assert not step.is_small()
@@ -7395,10 +7391,9 @@ def test_a_question_keeps_its_own_enter(tmp_path, monkeypatch):
             _gone(question)
 
 
-# What a first opening during a run still reads of what it may not read then, by name and how often: one look at the
-# card, by the Prior page as it is built, whose rebuilt page reads nothing. The list may only shrink: the test below holds
-# it exactly, and holds it to its ceiling, so that to grow it is to change two lines that say it must not.
-_READ_DURING_A_RUN = {"the device check": 1}
+# What a first opening during a run still reads of what it may not read then, by name and how often: nothing. The test
+# below holds it exactly, and holds it empty, so that to grow it is to change two lines that say it must not.
+_READ_DURING_A_RUN = {}
 
 
 def _a_store_that_holds_a_set(tmp_path, monkeypatch) -> None:
@@ -7426,8 +7421,7 @@ def test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end(tmp_pat
     window = build_window()
     runner = window.panel(ReductionPanel)
     _shown_off_screen(window)
-    assert set(_READ_DURING_A_RUN) <= {"the device check"} and sum(_READ_DURING_A_RUN.values()) <= 1, (
-        "the list of what a first opening reads during a run grew")
+    assert _READ_DURING_A_RUN == {}, "the list of what a first opening reads during a run grew"
     assert NOT_READ_YET_TEXT == "A run is live. Not read yet; read when it ends."
     with running(runner):
         calls = readings_of_a_run(monkeypatch)

@@ -80,13 +80,13 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "num_posterior_samples": None,
     "n_samples": None,
     # the prior sweep
-    "num_iterations": ("prior", "Global rounds"),
-    "sweep_batch": ("prior", "Candidates per round (0 = auto)"),
-    "max_sets": ("prior", "Max accepted sets"),
+    "num_iterations": ("prior", "Sweep rounds"),
+    "sweep_batch": ("prior", "Candidates per round"),
+    "max_sets": ("prior", "Stable sets to collect"),
     "walk_step": ("prior", "Random-walk step"),
-    "stability_units": ("prior", "Stability duration (ND units)"),
-    "min_cluster_size": ("prior", "Min cluster size"),
-    "min_samples": ("prior", "Min samples"),
+    "stability_units": ("prior", "Stability test length"),
+    "min_cluster_size": ("prior", "Smallest cluster"),
+    "min_samples": ("prior", "Cluster density"),
     # the flow and the Fisher rotation
     "hidden_features": ("training", "Hidden features"),
     "num_transforms": ("training", "Transforms"),
@@ -99,12 +99,12 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # consents and names
     "accept_truncated": f"Confirm the load in the dialog {_in('training')}.",
     "accept_other_observation": f"Tick 'Run on a different observation' {_in('infer')}.",
-    # A name and a note are typed in several boxes, and each sentence lists them all: the Save box
-    # beside the Save button of steps 2 and 3 names the prior or the posterior held, and a run's record
-    # and a comparison's are named in boxes of their own on the same two pages, so a taken comparison
+    # A name and a note are typed in several boxes, and each sentence lists them all: 'Name' on step 2 names the
+    # prior a build makes, the Save box beside the Save button of step 3 the posterior held, and a run's record and a
+    # comparison's are named in boxes of their own on the two pages of Effective temperature, so a taken comparison
     # name is sent to the 'Comparison name' box, not the run's.
-    "name": (f"Choose another name in the Save box {_in(('prior', 'training'))}, or in the 'Record name' or "
-             f"'Comparison name' box {_in(('temperature/one_cell', 'temperature/sweep'))}."),
+    "name": (f"Choose another name in 'Name' {_in('prior')}, in the Save box {_in('training')}, or in the "
+             f"'Record name' or 'Comparison name' box {_in(('temperature/one_cell', 'temperature/sweep'))}."),
     # Records. Sentences, not (place, label), although Records is a place: the list is not a box, and
     # the Note box sits in its action row, not in a form row the read-back pin reads.
     "artifact": f"Select an artifact in the list {_in('records')}.",
@@ -125,12 +125,12 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # alone. ``units`` is NOT widened -- one units control exists in the whole application (the
     # choice of step 1); everywhere else the units file is resolved from the model and there is no
     # control to name.
-    "bounds": ("prior", "Bounds"),
+    "bounds": ("prior", "Bounds file"),
     "cell": (("infer", "temperature/one_cell", "temperature/sweep", "live", "reduction"), "Cell"),
     "units": ("model", "Units"),
     "model": (("model", "temperature/one_cell", "live"), "Model"),
     "device": None,
-    "prior": ("prior", "Prior"),
+    "prior": ("prior", "Saved prior"),
     "posterior": ("training", "Posterior"),
     # recordings and the drive
     "recording_spont": (f"Select the passive recording {_in('infer')} (the 'Spontaneous' box, or the "

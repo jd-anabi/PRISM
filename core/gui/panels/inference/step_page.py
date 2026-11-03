@@ -17,18 +17,25 @@ and tells the rail as soon as there come to be some, or none.
 
 A refusal is told in the shared question and stands on the page after it. On a row it marks the field, under which its
 sentence stands until the field is edited; with no row it is the first of the facts. Either stops the start until the
-facts are next read, since what cures it may stand somewhere else, and the press asks the engine again.
+facts are next read, since what cures it may stand somewhere else, and the press asks the engine again. A failure that
+no run's page shows, a load's, is told in the shared question too, with the error's detail behind its button, and
+stands as the page's own line until the page's next run starts.
 
-Wherever the keyboard lands in the body, by the Tab key or handed over, the control comes whole into view.
+Wherever the keyboard lands in the body, by the Tab key or handed over, the control comes whole into view. A load
+pressed by the keyboard, which no run's page takes the keyboard for, hands it on to the next step once its record has
+come back, and back to the main button once its failure has been told.
 """
 from datetime import datetime
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
+from core.refusals import Refusal
+
 from ... import design, fields, style
 from ...reported import reported
 from ...run.controller import controller
+from ...run.retry import NOTED_TEXT
 from ...run.view import RunView
 from ...step_facts import Fact, ordered, reading_words, reason_beside, refused_facts
 from ...widgets.ask import ask
@@ -42,6 +49,7 @@ from ..run_host import RunHost
 
 HELP_TEXT = "Help"
 REFUSAL_TITLE = "Check your inputs"
+ERROR_TITLE = "Error"
 OK_TEXT = "OK"
 #: How a page's own line is marked. An "Error." blocks, and a line of the page's own stops nothing.
 _LINE_KINDS = {"info": "info", "warning": "warn", "error": "warn"}
@@ -88,6 +96,8 @@ class StepPage(RunHost, QWidget):
         self._read_at: datetime | None = None
         self._head_fact: Fact | None = None
         self._live = controller().is_live()
+        self._by_keyboard = False            # the last press was made by the keyboard, until its run is over
+        self._hand_back = False              # a load pressed by the keyboard failed: its question gives the keyboard back
         self.names = None                    # the name and note of the record a run makes, when the page holds them
         self._said_changed: dict = {}        # what this page said under each selection row, by its field key
         box = QVBoxLayout(self)
@@ -395,7 +405,10 @@ class StepPage(RunHost, QWidget):
 
     def _main_clicked(self) -> None:
         """The press: the reading that counts, then the page's own, unless that reading found something that blocks,
-        which greys the button and says so beside it."""
+        which greys the button and says so beside it. A press is by the keyboard when the ring stands on the button as it
+        is pressed, which is the window's own test for Enter."""
+        follower = style.current_follower()
+        self._by_keyboard = follower is not None and follower.target() is self.foot.main_button
         self.read_facts()
         if not self.foot.main_button.isEnabled():
             return
@@ -439,11 +452,31 @@ class StepPage(RunHost, QWidget):
             self.figure_stack.setVisible(self.figure_stack.count() > 0)
 
     def _run_began(self, spec) -> None:
-        """A run of this page's own empties its figures and takes its column, unless it only loads a record."""
-        if not spec.loads_only:
+        """A run of this page's own takes away the page's own line, and empties its figures and takes its column. A run
+        that only loads a record keeps them while it runs: the figures it adds are its own."""
+        self.in_use.say(None)
+        self._hand_back = False
+        if spec.loads_only:
+            self.figure_stack.run_begins()
+        else:
             self.figure_stack.clear_all()
-            self.in_use.say(None)
         super()._run_began(spec)
+
+    def _run_over(self, status) -> None:
+        """A run of this page's own has ended. One that only loaded a record and returned it leaves its own figures
+        alone, as a run that takes the column does; one that failed leaves what stood. Pressed by the keyboard, a load
+        that returned its record hands the keyboard on to the next step, and one that failed has it given back to the
+        main button once its failure is told."""
+        by_keyboard, self._by_keyboard = self._by_keyboard, False
+        if status.loading:
+            self.figure_stack.run_ends()
+            finished = status.outcome == "finished"
+            if finished:
+                self.figure_stack.keep_only_the_run()
+            if by_keyboard and finished and not self.next_button.isHidden():
+                self.next_button.setFocus(Qt.TabFocusReason)
+            self._hand_back = by_keyboard and not finished
+        super()._run_over(status)
 
     def set_controls_enabled(self, enabled: bool) -> None:
         """A run locks the form and the foot's two buttons; the facts stay readable."""
@@ -451,6 +484,24 @@ class StepPage(RunHost, QWidget):
         self.foot.set_live(not enabled)
         if enabled:
             self.refresh_local_gates()
+
+    def _on_error(self, exc_or_message, tb: str, cancel_noted: bool = False, kept_fit=None) -> None:
+        """A failure no run's page shows, a load's: told in the shared question, the error's type and its trace behind
+        its button, and said after it as the page's own line; a refusal is shown as every refusal is."""
+        if isinstance(exc_or_message, Refusal):
+            self._refusal(exc_or_message)
+            return
+        words = str(exc_or_message).strip()
+        kind = type(exc_or_message).__name__ if isinstance(exc_or_message, BaseException) else ""
+        message = words or kind
+        head = f"{kind}: {words}" if kind and words else kind
+        detail = "\n\n".join(part for part in (head, (tb or "").strip()) if part)
+        ask(self, ERROR_TITLE, message, OK_TEXT, marker="err", beneath=NOTED_TEXT if cancel_noted else None,
+            detail=detail or None)
+        self.own_line(message, "error")
+        back, self._hand_back = self._hand_back, False
+        if back and self.foot.main_button.isEnabled():
+            self.foot.main_button.setFocus(Qt.TabFocusReason)
 
     def _refusal(self, exc) -> None:
         """A refusal is told in the shared question, with where to fix it. When it closes, the row of the refused field

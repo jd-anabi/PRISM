@@ -16,7 +16,7 @@ from tests._dialogs import all_asked, asked, choose, forget_asked
 from tests._fixtures import build_inference, build_window, qt_app
 
 #: The pages of Parameter inference built on the step page, by their files beside it.
-REBUILT = ("config_tab.py",)
+REBUILT = ("config_tab.py", "prior_tab.py")
 
 
 def _first_step(session=None):
@@ -832,3 +832,472 @@ def test_only_a_press_by_the_keyboard_hands_it_on_to_the_next_step(tmp_path, mon
         _settle()
         assert asked().title == "Start a new session?" and screen.session.inf_prior is None
         assert QApplication.focusWidget() is page.next_button and follower.target() is page.next_button
+
+
+# ── the second step: a prior comes into use when its run returns ──
+def _held_records():
+    """A configuration, a prior, a posterior and an observation, as stand-ins that say what a page reads of each."""
+    from core.config import BOUNDS_PATH
+    cfg = SimpleNamespace(model="NADROWSKI", sources={"bounds": str(BOUNDS_PATH / "nadrowski" / "master.txt")},
+                          params_dict={},
+                          rescale_params={}, force_params_dict={}, observation_mode="spontaneous",
+                          check_unit_consistency=lambda: [])
+    prior = SimpleNamespace(kind="prior", id="p_old", name="old_prior",
+                            manifest=SimpleNamespace(created="2026-10-01T22:29:00+00:00",
+                                                     inputs={"bounds": {"path": "Bounds/nadrowski/master.txt"}},
+                                                     config={"param_keys": ["k", "x_scale"]}))
+    posterior = SimpleNamespace(kind="posterior", id="post_old", name="retrain")
+    observation = SimpleNamespace(kind="observation", id="obs_old", name="cell_a")
+    return cfg, prior, posterior, observation
+
+
+@contextlib.contextmanager
+def _second_step(tmp_path, monkeypatch, *, held=True):
+    """The second step in a whole window in sight, off the screen, on the test's own clock, its store the test's own:
+    the first step applied, Nadrowski with the bounds file's kind; with ``held``, a configuration, a prior, a posterior
+    and an observation held; the master bounds file selected, the build shown, a name and a note typed, and the
+    stage's build a stand-in run: (window, screen, page, the stand-in run)."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore, use_store
+    from tests._runs import StandIn
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        window, screen, first = _shown_first_step(tmp_path)
+        _apply(first)
+        if held:
+            cfg, prior, posterior, observation = _held_records()
+            screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior, posterior=posterior,
+                                        observation=observation)
+            screen.refresh_gates()
+        window.go_to("inference", "prior")
+        page = screen.prior_panel
+        page.show_view("build")
+        page.bounds_picker.restore_key("master.txt")
+        page.names.name.setText("retrain_2")
+        page.names.note.setText("a second try")
+        page.read_facts()
+        stand_in = StandIn(word="Prior build")
+        monkeypatch.setattr(orchestrator, "build_prior", stand_in)
+        yield window, screen, page, stand_in
+
+
+def _press_and_end(page, stand_in, end, monkeypatch):
+    """Press the build, and end its run as ``end`` names: refused at the stage's entry, failed, stopped, or taken back
+    as it starts."""
+    from core.gui.run.controller import RunController, controller
+    from core.refusals import Refusal
+    from tests._runs import turn_until
+    app = qt_app()
+    if end == "withdrawn":
+        def broken(_self):
+            raise TypeError("the first drawing failed")
+        monkeypatch.setattr(RunController, "_draw", broken)
+        with pytest.raises(TypeError):
+            page._main_clicked()
+        return
+    page._main_clicked()
+    assert controller().is_live() and stand_in.started.wait(5)
+    if end == "refused before the spend":
+        stand_in.fail(Refusal("A prior named 'retrain_2' was made meanwhile.", field="name"))
+    elif end == "failed":
+        stand_in.fail(RuntimeError("the sweep found no stable set"))
+    else:
+        controller().request_stop()
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+
+
+@pytest.mark.parametrize("end", ["refused before the spend", "failed", "stopped", "withdrawn"])
+def test_a_build_that_ends_any_way_but_well_leaves_what_was_held(end, tmp_path, monkeypatch):
+    """A build that is refused at the stage's entry, fails, is stopped or is taken back as it starts writes no slot: the
+    configuration, the prior, the posterior and the observation held are the very objects they were, the name and the
+    note stand as typed, and the rail and "In use" say what they said."""
+    choose(monkeypatch, words="Build and release the posterior")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        session = screen.session
+        held = (session.cfg, session.inf_prior, session.posterior, session.observation)
+        said = (screen.step_states(), page.in_use.line_text(), page.in_use.sentence.plain_text(),
+                window.shell.rail.row("prior").accessibleName())
+        _press_and_end(page, stand_in, end, monkeypatch)
+        assert screen.session is session
+        assert all(now is then for now, then in zip((session.cfg, session.inf_prior, session.posterior,
+                                                     session.observation), held)), end
+        assert (page.names.name.text(), page.names.note.text()) == ("retrain_2", "a second try"), end
+        assert (screen.step_states(), page.in_use.line_text(), page.in_use.sentence.plain_text(),
+                window.shell.rail.row("prior").accessibleName()) == said, end
+
+
+def test_a_prior_comes_into_use_only_when_its_run_returns(tmp_path, monkeypatch):
+    """The press holds nothing new. The prior the run returns comes into use with the very configuration the press
+    handed the run, while the run is still live: what depended on the prior held goes with it, the states are said once,
+    on the window's thread, and a training continued with the session is one made with what it holds. At the run's end
+    the saved list is read again and moved to the new prior, the name and the note are emptied, and the way to Training
+    stands."""
+    import threading
+    from core.gui.run import retry
+    from core.gui.run.controller import controller
+    from core.gui.run.model import RunSpec
+    from tests._runs import turn_until
+    app = qt_app()
+    choose(monkeypatch, words="Build and release the posterior")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        session = screen.session
+        old_cfg, old_prior = session.cfg, session.inf_prior
+        candidate = page._candidate
+        assert candidate is not None and candidate is not old_cfg
+        heard, threads = [], []
+        screen.states_changed.connect(lambda states: (heard.append(states), threads.append(threading.current_thread())))
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        args, kwargs = stand_in.calls[-1]
+        assert args[0] is candidate and args[1:] == (None, True)
+        assert session.cfg is old_cfg and session.inf_prior is old_prior
+        assert not page.switch_button.isEnabled(), "the way to the other view stood open during the run"
+        made = SimpleNamespace(kind="prior", id="p_new", name="retrain_2",
+                               manifest=SimpleNamespace(created="2026-10-08T12:04:00+00:00",
+                                                        inputs={"bounds": {"path": "Bounds/nadrowski/master.txt"}},
+                                                        config={"param_keys": ["k"] * 13}))
+        taken = []
+
+        def take(cfg, loaded, kept=screen.take_prior):
+            said = len(heard)
+            kept(cfg, loaded)
+            taken.append((controller().is_live(), threading.current_thread(), len(heard) - said))
+
+        monkeypatch.setattr(screen, "take_prior", take)
+        stand_in.release(made)
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert taken == [(True, threading.main_thread(), 1)], "the prior was taken after its run, or more than once"
+        assert screen.session is session and session.cfg is candidate and session.inf_prior is made
+        assert session.posterior is None and session.observation is None
+        assert set(threads) == {threading.main_thread()}
+        training = RunSpec("Training", ("inference", "training")).with_call(lambda *a: None,
+                                                                            (session.cfg, session.inf_prior), {})
+        assert retry.made_in(training, session)
+        assert page.in_use.line_text() == "In use: retrain_2"
+        assert page.in_use.sentence.plain_text() == "Built on master.txt, 13 parameters. Saved as a record."
+        assert (page.names.name.text(), page.names.note.text()) == ("", "")
+        assert not page.next_button.isHidden() and page.next_button.text() == "Go to Training"
+        assert page.switch_button.isEnabled()
+
+
+@pytest.mark.parametrize("build", [True, False], ids=["a build", "a load"])
+def test_another_prior_asks_before_it_releases_a_posterior(build, tmp_path, monkeypatch):
+    """With a posterior held, another prior asks first, "Keep the posterior" preselected: kept, nothing starts; the other
+    answer starts the run, and the posterior and the observation held go only when its prior comes back. The question
+    names the observation with the posterior, or the posterior alone."""
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    app = qt_app()
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        if not build:
+            page.show_view("saved")
+            page.prior_picker.combo.addItem("old_prior", "p_old")
+            page.prior_picker.combo.addItem("other_prior", "p_two")
+            page.prior_picker.restore_key("p_two")
+        page.main_pressed()
+        question = asked()
+        title, other = ("Build a new prior?", "Build and release the posterior") if build else (
+            "Load this prior?", "Load and release the posterior")
+        once = "is built" if build else "has loaded"
+        assert (question.title, question.answers, question.default) == (title, (other, "Keep the posterior"),
+                                                                        "Keep the posterior")
+        assert question.sentence == (
+            f"This session holds the posterior retrain and the observation cell_a. They belong to the prior in use, so "
+            f"another prior releases them once it {once}. Each stays in Records and can be loaded again.")
+        assert not controller().is_live() and stand_in.calls == []
+        screen.session.observation = None
+        forget_asked()
+        page.main_pressed()
+        assert asked().sentence == (f"This session holds the posterior retrain. It belongs to the prior in use, so "
+                                    f"another prior releases it once it {once}. It stays in Records and can be loaded "
+                                    "again.")
+        choose(monkeypatch, words=other)
+        page.main_pressed()
+        assert controller().is_live() and stand_in.started.wait(5)
+        assert screen.session.posterior is not None
+        stand_in.release(SimpleNamespace(kind="prior", id="p_new", name="", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert screen.session.posterior is None
+
+
+def test_a_prior_held_with_no_posterior_is_replaced_without_a_question(tmp_path, monkeypatch):
+    """No posterior, no question: an observation held alone is let go by the new prior, unasked."""
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    app = qt_app()
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        screen.session.posterior = None
+        forget_asked()
+        page.main_pressed()
+        assert all_asked() == [] and stand_in.started.wait(5)
+        stand_in.release(SimpleNamespace(kind="prior", id="p_new", name="retrain_2", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert screen.session.observation is None and screen.session.inf_prior.id == "p_new"
+
+
+def test_the_bounds_file_changed_reads_changed_not_applied(tmp_path, monkeypatch):
+    """With a prior held, another bounds file selected reads "Changed, not applied" under its list, naming the file in
+    use, and the rail says so; the limits typed by hand chosen say it under their tick, in the fold, which counts it;
+    limits typed by hand in use are said as such; put back, all of it goes. Saved, the prior chosen is the other row
+    that picks what the step holds."""
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        assert _line(page, "bounds") == ("", "")
+        page.typed_tick.setChecked(True)
+        assert _line(page, "bounds") == ("", "")
+        assert _line(page, "bounds_typed") == ("warn", "Changed, not applied. In use: master.txt.")
+        assert page.form.fold.button.text() == "Rarely changed (8 settings, 1 not usual, 1 changed)"
+        page.typed_tick.setChecked(False)
+        assert _line(page, "bounds_typed") == ("", "") and screen.pending() == frozenset()
+        page.bounds_picker.restore_key("master_tier1.txt")
+        assert _line(page, "bounds") == ("warn", "Changed, not applied. In use: master.txt.")
+        assert screen.pending() == {"prior"} and screen.step_states()[1].rail_words == "Changed, not applied"
+        page.bounds_picker.restore_key("master.txt")
+        assert _line(page, "bounds") == ("", "") and screen.pending() == frozenset()
+        screen.session.cfg.sources = {}
+        screen.session.cfg.params_dict = {"k": (None, (0.01, 5.0))}
+        page.redraw()
+        assert _line(page, "bounds") == ("warn", "Changed, not applied. In use: limits typed by hand.")
+        page.show_view("saved")
+        page.prior_picker.combo.addItem("old_prior", "p_old")
+        page.prior_picker.restore_key("p_old")
+        from core.config import BOUNDS_PATH
+        screen.session.cfg.sources = {"bounds": str(BOUNDS_PATH / "nadrowski" / "master.txt")}
+        page.redraw()
+        assert _line(page, "prior") == ("", "") and page.nothing_to_apply() is True
+        page.prior_picker.combo.addItem("other_prior", "p_two")
+        page.prior_picker.restore_key("p_two")
+        assert _line(page, "prior") == ("warn", "Changed, not applied. In use: old_prior.")
+
+
+def test_a_load_that_fails_says_so_in_the_shared_question(tmp_path, monkeypatch):
+    """A load is never handed the run's page, so its failure is told in the shared question, the error's type and its
+    trace behind its button, and stands after it as the page's own line; nothing held changes. A refusal at the load is
+    told as every refusal is."""
+    from core.gui.run.controller import controller
+    from core.refusals import Refusal
+    from tests._runs import turn_until
+    app = qt_app()
+    choose(monkeypatch, words="Load and release the posterior")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        held = screen.session.inf_prior
+        page.show_view("saved")
+        page.prior_picker.combo.addItem("other_prior", "p_two")
+        page.prior_picker.restore_key("p_two")
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        forget_asked()
+        stand_in.fail(OSError("prior.pt cannot be read"))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        _settle_events()
+        error = asked()
+        assert (error.kind, error.title, error.marker, error.answers) == ("error", "Error", "err", ("OK",))
+        assert error.sentence == "prior.pt cannot be read"
+        assert error.detail.startswith("OSError: prior.pt cannot be read") and "Traceback" in error.detail
+        said = page.in_use.said
+        assert not said.isHidden() and said.sentence.plain_text() == "Attention. prior.pt cannot be read"
+        assert screen.session.inf_prior is held and page.results.currentWidget() is page.figures
+        forget_asked()
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        assert said.isHidden(), "the page's own line stood through its next run"
+        stand_in.fail(Refusal("Prior 'other_prior' does not match this configuration.", field="prior"))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        _settle_events()
+        assert [box.kind for box in all_asked()][-1] == "refusal"
+        assert _line(page, "prior") == ("err", "Prior 'other_prior' does not match this configuration.")
+
+
+def test_a_prior_saved_under_another_name_says_so(tmp_path, monkeypatch):
+    """A record that comes back under another name than the one typed, taken while the run was going, says so under
+    "In use"; the name and the note are emptied all the same, for the record was made."""
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    app = qt_app()
+    choose(monkeypatch, words="Build and release the posterior")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        stand_in.release(SimpleNamespace(kind="prior", id="p_new", name="", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        said = page.in_use.said
+        assert not said.isHidden() and said.sentence.plain_text() == (
+            "Attention. It was saved without its name: 'retrain_2' was taken while the run was going.")
+        assert (page.names.name.text(), page.names.note.text()) == ("", "")
+
+
+def test_the_stop_and_end_of_a_prior_build_say_what_is_true_of_the_page(tmp_path, monkeypatch):
+    """The words a prior build's run says of its stop and its end hold on the page that starts it: its stop asks first and
+    says nothing of the prior is kept, and the prior in use stays in use; a build stopped keeps its page until "Back to
+    the form", and the form then holds the name and the note as typed; one finished gives the column back with "How the
+    run went" over the new prior's figure, its alone."""
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    app = qt_app()
+    choose(monkeypatch, words="Build and release the posterior")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        held = screen.session.inf_prior
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        assert page.results.currentWidget() is page.run_view
+        choose(monkeypatch, words="Stop the build")
+        forget_asked()
+        page.run_view.stop_button.click()
+        question = asked()
+        assert (question.title, question.answers, question.default) == (
+            "Stop the prior build?", ("Stop the build", "Keep building"), "Keep building")
+        assert question.sentence.endswith("Nothing of the prior is kept; it is built again from the start next time.")
+        choose(monkeypatch, words="Build and release the posterior")
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert page.results.currentWidget() is page.run_view and screen.session.inf_prior is held
+        page.run_view.back.emit()
+        assert page.results.currentWidget() is page.figures
+        assert (page.names.name.text(), page.names.note.text()) == ("retrain_2", "a second try")
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        stand_in.figure("Prior")
+        stand_in.release(SimpleNamespace(kind="prior", id="p_new", name="retrain_2", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        _settle_events()
+        assert page.results.currentWidget() is page.figures and page.run_view.how_link.isVisibleTo(page.figures)
+        assert [page.figure_stack.tabText(i) for i in range(page.figure_stack.count())] == ["Prior"]
+        assert page.in_use.line_text() == "In use: retrain_2"
+
+
+def _settle_events():
+    from tests._look_helpers import _settle
+    _settle()
+
+
+def test_a_load_by_the_keyboard_hands_it_on_to_training_and_one_by_the_mouse_does_not(tmp_path, monkeypatch):
+    """A load greys the main button while it runs, and no run's page takes the keyboard. Pressed by the keyboard, Enter
+    with the ring on it, the keyboard goes on to the way to Training once the prior has come back, ring and all, and not
+    where the toolkit put it from the greyed button; a load that fails gives it back to the main button once its question
+    is answered. Pressed by the mouse, the page hands it nowhere: the toolkit gives it to the step's row of the rail."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from core import orchestrator
+    from core.artifacts import ArtifactStore
+    from core.gui import style
+    from core.gui.run.controller import controller
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    from tests._look_helpers import _arrive, _settle
+    from tests._runs import StandIn, turn_until
+    stand_in = StandIn(word="Prior load")
+    monkeypatch.setattr(orchestrator, "build_prior", stand_in)
+    with _first_step_with_the_ring(tmp_path, monkeypatch) as (window, screen, first):
+        _apply(first)
+        window.go_to("inference", "prior")
+        _settle()
+        page = screen.prior_panel
+        store, cfg = ArtifactStore(tmp_path / "Artifacts"), _nad_cfg()
+        one, two = (_prior_artifact(store, cfg, name=name).id for name in ("a_prior", "b_prior"))
+        page.show_view("saved")
+        page.prior_picker.refresh()
+        page.bounds_picker.restore_key("master.txt")
+        page.prior_picker.restore_key(one)
+        page.read_facts()
+        said = page.prior_line.plain_text()
+        assert said.startswith("Made ") and said.endswith(", for Nadrowski: 13 parameters, built on master.txt."), said
+        assert [row.sentence.plain_text() for row in page.foot.facts.rows()] == [
+            "Fine. Built on master.txt, the bounds file selected.",
+            "Information. No saved simulation set was made with this prior."]
+        page.bounds_picker.restore_key("master_tier1.txt")
+        page.read_facts()
+        assert page.foot.facts.rows()[0].sentence.plain_text() == (
+            "Attention. Built on master.txt; the bounds file selected is master_tier1.txt. PRISM's own check compares "
+            "only the model's parameters and their limits, which these two files share, so the load goes through.")
+        page.bounds_picker.restore_key("master.txt")
+        app, button, follower = QApplication.instance(), page.foot.main_button, style.current_follower()
+
+        def loaded_by(key, prior, how, ends=lambda: stand_in.release(SimpleNamespace(kind="prior", id="", name="",
+                                                                                      manifest=None))):
+            page.prior_picker.restore_key(prior)
+            page.read_facts()
+            _settle()
+            assert button.isEnabled(), page.foot.reason.text()
+            if how == "keyboard":
+                button.setFocus(Qt.TabFocusReason)
+                _arrive(button, Qt.TabFocusReason)
+                assert follower.target() is button
+                QTest.keyClick(button, Qt.Key_Return)
+            else:
+                page.bounds_picker.combo.setFocus(Qt.TabFocusReason)
+                _arrive(page.bounds_picker.combo, Qt.TabFocusReason)
+                QTest.mouseClick(button, Qt.LeftButton)
+            assert stand_in.started.wait(5)
+            stand_in.started.clear()
+            ends()
+            turn_until(app, lambda: not controller().is_live(), 10.0)
+            _settle()
+
+        loaded_by("keyboard", one, "keyboard", lambda: stand_in.release(SimpleNamespace(kind="prior", id=one,
+                                                                                        name="a_prior", manifest=None)))
+        assert QApplication.focusWidget() is page.next_button and follower.target() is page.next_button
+        loaded_by("keyboard", two, "keyboard", lambda: stand_in.fail(OSError("prior.pt cannot be read")))
+        assert asked().title == "Error" and screen.session.inf_prior.id == one
+        assert QApplication.focusWidget() is button, QApplication.focusWidget()
+        loaded_by("mouse", two, "mouse", lambda: stand_in.release(SimpleNamespace(kind="prior", id=two,
+                                                                                  name="b_prior", manifest=None)))
+        assert QApplication.focusWidget() is window.shell.rail.row("prior") and follower.target() is None
+
+
+def test_a_store_change_during_a_build_reads_nothing_until_it_ends(tmp_path, monkeypatch):
+    """Records may change the store while a build is live: the saved list is read again, which a run does not forbid,
+    and nothing else is, neither the record's facts nor the sets nor the history, until the build has ended; it then
+    reads once. A store change with no run live reads the page in sight at once."""
+    from core.gui.run.controller import controller
+    from tests._fixtures import readings_of_a_run
+    from tests._runs import turn_until
+    app = qt_app()
+    choose(monkeypatch, words="Build and release the posterior")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        readings = []
+        monkeypatch.setattr(page, "read_disk", lambda kept=page.read_disk: (readings.append(1), kept())[1])
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        listed = []
+        monkeypatch.setattr(page.prior_picker, "refresh",
+                            lambda kept=page.prior_picker.refresh: (listed.append(1), kept())[1])
+        calls = readings_of_a_run(monkeypatch)
+        window._store_changed()
+        assert listed == [1] and readings == [] and calls == [], (listed, readings, calls)
+        stand_in.release(SimpleNamespace(kind="prior", id="p_new", name="retrain_2", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert readings == [1]
+        window._store_changed()
+        assert readings == [1, 1], "a store change with no run live did not read the page in sight"
+
+
+def test_a_load_by_code_reads_first_and_asks_nothing(tmp_path, monkeypatch):
+    """A caller that asked its own question loads a saved prior through the page as its button does, the facts read
+    first and no question asked: True when the load started, False when the facts block it, with nothing started."""
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    app = qt_app()
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        page.prior_picker.combo.addItem("other", "p_two")
+        assert page.load_record("p_two") is False and stand_in.calls == [], "a prior that cannot be read was loaded"
+        monkeypatch.setattr(page, "_read_the_record", lambda: None)
+        forget_asked()
+        assert page.load_record("p_two") is True and all_asked() == []
+        assert stand_in.started.wait(5) and stand_in.calls[-1][0][1:] == ("p_two", False)
+        stand_in.release(SimpleNamespace(kind="prior", id="p_two", name="other", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert screen.session.inf_prior.id == "p_two" and page.view == "saved"
+
+
+def test_the_configuration_in_use_says_its_units_and_its_force_scale(tmp_path, monkeypatch):
+    """While a configuration is in use, what its units declare against the pipeline's own, and a scale of the force no
+    drive can move, are said in "Before you start" as "Attention.", blocking nothing."""
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        cfg = screen.session.cfg
+        cfg.check_unit_consistency = lambda: ["Units file declares frequency in 'Hz' but time in 'ms'."]
+        cfg.rescale_params = {"f_scale": (None, (0.1, 10.0))}
+        page.redraw()
+        said = [row.sentence.plain_text() for row in page.foot.facts.rows() if row.kind == "warn"]
+        assert said[:2] == [
+            "Attention. Units file declares frequency in 'Hz' but time in 'ms'.",
+            "Attention. This bounds file lists f_scale, but a posterior trained on it reads a spontaneous recording only, "
+            "where no drive acts: f_scale cannot change what is observed, so its estimate will be the prior's. Choose a "
+            "bounds file with neither a forcing section nor f_scale for a spontaneous recording."]
+        assert page.foot.main_button.isEnabled(), page.foot.reason.text()

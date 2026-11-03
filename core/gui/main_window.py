@@ -533,6 +533,7 @@ class MainWindow(QMainWindow):
         inference = self._built.get("inference")
         if inference is not None:
             inference.refresh_gates()
+            inference.stale_store()
         else:
             self._states_changed(self._step_states())
 

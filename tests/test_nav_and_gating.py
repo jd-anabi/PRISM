@@ -520,39 +520,31 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     assert len(refused) == 1 and refused[0].field == "num_transforms", [str(e) for e in refused]
     pp.flow_transforms.setText("3")
 
-    # Prior. NON-VACUOUS now: the old version added the bounds item with no userData (so the click
-    # returned at "Select a bounds file first.", before the dispatch) and then skipped its assertions
-    # when the kwargs never arrived. A config stub that survives install_config lets the click reach
-    # the dispatch, and the assertions are unconditional.
+    # Prior: the seven settings of a build reach the stage as its arguments, through the page's own press, with the
+    # name and the note typed. A configuration stub that the draft hands back stands in for the candidate.
     pp = inf.prior_panel
+    inf.session.posterior = None                 # what another prior asks before it lets a posterior go is held apart
     inf.session.cfg = _spont_cfg()
-    inf.session.draft = type("D", (), {"make_config": lambda self, **kw: inf.session.cfg})()
-    pp.prior_picker.selected = lambda: (None, True)           # "(from scratch)": the build branch
-    pp.bounds_source.set_direct(False)
-    pp.bounds_picker.combo.clear()
-    pp.bounds_picker.combo.addItem("master.txt", userData="master.txt")
-    pp.cluster_size.setText("9")
-    pp.cluster_samples.setText("4")
-    pp.sweep_iters.setText("3")
+    type(inf.session.cfg).params_dict = {"k": (None, (0.01, 5.0))}      # a parameter, with its limits
+    inf.session.draft = type("D", (), {"make_config": lambda self, **kw: inf.session.cfg, "model": "NADROWSKI"})()
+    pp.show_view("build")
+    pp.bounds_picker.restore_key("master.txt")
+    pp.names.name.setText("forwarded_knobs_prior")
+    pp.names.note.setText("from the master file")
+    rows = pp.form.rows
+    rows["min_cluster_size"].widget.setText("9")
+    rows["min_samples"].widget.setText("4")
+    rows["num_iterations"].widget.setText("3")
     cap.clear()
-    pp._build_prior()
+    pp._main_clicked()
+    assert pp.foot.main_button.isEnabled(), pp.foot.reason.text()
     k = cap["kwargs"]
     assert (k["min_cluster_size"], k["min_samples"], k["num_iterations"]) == (9, 4, 3), k
+    assert (k["name"], k["note"]) == ("forwarded_knobs_prior", "from the master file"), k
     # a name another prior takes during the sweep is dropped, not refused: the window asks the stage so
     assert k["if_name_taken"] == "unnamed", k
     assert _cfg.PRIOR_CLUSTER_MIN_SIZE != 9, "the panel wrote PRIOR_CLUSTER_MIN_SIZE"
-    # a blank knob box is REFUSED at the click (the yellow box), never clamped to 2 and dispatched
-    refused = []
-    pp._refusal = lambda e: refused.append(e)
-    cap.clear()
-    pp.cluster_size.setText("")
-    pp._build_prior()
-    assert cap == {} and refused[-1].field == "min_cluster_size", (cap, refused)
-    # a LOAD click with the same blank box still dispatches: the load branch never reads the knobs
-    pp.prior_picker.selected = lambda: ("p1", False)
-    pp._build_prior()
-    assert cap["kwargs"] and "min_cluster_size" not in cap["kwargs"], cap["kwargs"]
-    assert len(refused) == 1, "the load click must not refuse a knob the load branch never reads"
+
 
 def test_posterior_from_scratch_is_gated_on_a_prior():
     from core.gui.session import SbiSession
@@ -1560,13 +1552,13 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "observation": "Set it in the 'Observation' box in step 6, Narrowing round.",
         "n_cal": "Set it in the 'Calibration datasets' box in step 4, Checks.",
         "cal_n_scales": "Set it in the '(t_scale, T_obs) operating points' box in step 4, Checks.",
-        "num_iterations": "Set it in the 'Global rounds' box in step 2, Prior.",
-        "sweep_batch": "Set it in the 'Candidates per round (0 = auto)' box in step 2, Prior.",
-        "max_sets": "Set it in the 'Max accepted sets' box in step 2, Prior.",
+        "num_iterations": "Set it in the 'Sweep rounds' box in step 2, Prior.",
+        "sweep_batch": "Set it in the 'Candidates per round' box in step 2, Prior.",
+        "max_sets": "Set it in the 'Stable sets to collect' box in step 2, Prior.",
         "walk_step": "Set it in the 'Random-walk step' box in step 2, Prior.",
-        "stability_units": "Set it in the 'Stability duration (ND units)' box in step 2, Prior.",
-        "min_cluster_size": "Set it in the 'Min cluster size' box in step 2, Prior.",
-        "min_samples": "Set it in the 'Min samples' box in step 2, Prior.",
+        "stability_units": "Set it in the 'Stability test length' box in step 2, Prior.",
+        "min_cluster_size": "Set it in the 'Smallest cluster' box in step 2, Prior.",
+        "min_samples": "Set it in the 'Cluster density' box in step 2, Prior.",
         "hidden_features": "Set it in the 'Hidden features' box in step 3, Training.",
         "num_transforms": "Set it in the 'Transforms' box in step 3, Training.",
         "learning_rate": "Set it in the 'Learning rate' box in step 3, Training.",
@@ -1576,9 +1568,9 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "fisher_points": "Set it in the 'Operating points' box in step 3, Training.",
         "accept_truncated": "Confirm the load in the dialog in step 3, Training.",
         "accept_other_observation": "Tick 'Run on a different observation' in step 5, Inference.",
-        "name": ("Choose another name in the Save box in step 2, Prior, or step 3, Training, or in the 'Record name' "
-                 "or 'Comparison name' box in Effective temperature, One cell, or in Effective temperature, Sweep "
-                 "study."),
+        "name": ("Choose another name in 'Name' in step 2, Prior, in the Save box in step 3, Training, or in the "
+                 "'Record name' or 'Comparison name' box in Effective temperature, One cell, or in Effective "
+                 "temperature, Sweep study."),
         # the two of Records, where the list and the Note box are no form rows
         "artifact": "Select an artifact in the list in Records.",
         "note": ("Edit it in the Note box in Records, or in the 'Note' or 'Comparison note' box in Effective "
@@ -1587,14 +1579,14 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
                             "in the 'Sweeps to compare' list in Effective temperature, Sweep study."),
         "prefactor": "Set it in the 'Normalisation constant' box in Effective temperature, One cell.",
         "slice_at": "Set it in the 'Slice at' box in Effective temperature, Sweep study.",
-        "bounds": "Set it in the 'Bounds' box in step 2, Prior.",
+        "bounds": "Set it in the 'Bounds file' box in step 2, Prior.",
         # an input in several places lists them all, in the rail's order
         "cell": ("Set it in the 'Cell' box in step 5, Inference, or in Effective temperature, One cell, or in "
                  "Effective temperature, Sweep study, or in Live simulation, or in Reduction map."),
         "units": "Set it in the 'Units' box in step 1, Model and options.",
         "model": ("Set it in the 'Model' box in step 1, Model and options, or in Effective temperature, One cell, or "
                   "in Live simulation."),
-        "prior": "Set it in the 'Prior' box in step 2, Prior.",
+        "prior": "Set it in the 'Saved prior' box in step 2, Prior.",
         "posterior": "Set it in the 'Posterior' box in step 3, Training.",
         "recording_spont": ("Select the passive recording in step 5, Inference (the 'Spontaneous' box, or the "
                             "'Passive' box for a χ observation)."),
@@ -1678,17 +1670,17 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
 
 
 def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
-    """Save on the Prior and Posterior tabs is a rename, and a bad or taken name is a StoreError -- a
+    """Save on the Training page is a rename, and a bad or taken name is a StoreError -- a
     Refusal with field="name" -- so it opens the yellow box with the core's sentence as its text and
-    this front end's fix ``fix_sentence("name")``, which starts "Choose another name in the Save box"
-    and goes on to the record and comparison name boxes, under it. It used to go through
+    this front end's fix ``fix_sentence("name")``, which names 'Name' on the Prior page, then the Save box
+    and the record and comparison name boxes, under it. It used to go through
     _config_error, whose box read "The configuration could not be built." over a sentence about a
     name: a lie for a rename. A rename that fails for any other reason is a bug and stays red, with
     its traceback. Either way the loaded artifact keeps its old name."""
     import types
     from core.artifacts import StoreError
     from core.gui import fields as gui_fields
-    from core.gui.panels.inference import posterior_tab as post_mod, prior_tab as prior_mod
+    from core.gui.panels.inference import posterior_tab as post_mod
     from core.gui.session import SbiSession
     from tests._fixtures import asked, forget_asked, page_lines, qt_app
 
@@ -1704,10 +1696,8 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
         raise PermissionError("manifest.json is locked")
 
     for kind, mod, panel, name_box, save, loaded in (
-            ("prior", prior_mod, inf.prior_panel, inf.prior_panel.prior_name,
-             inf.prior_panel._save_prior, inf.session.inf_prior),
             ("posterior", post_mod, inf.posterior_panel, inf.posterior_panel.post_name,
-             inf.posterior_panel._save_posterior, inf.session.posterior)):
+             inf.posterior_panel._save_posterior, inf.session.posterior),):
         pane = page_lines(panel)
         name_box.setText("p")
 
@@ -1718,9 +1708,9 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
         assert (box.kind, box.marker) == ("refusal", "warn"), kind
         assert box.sentence == f"a {kind} named 'p' already exists; rename or delete it first", kind
         assert box.beneath == gui_fields.fix_sentence("name") == (
-            "Choose another name in the Save box in step 2, Prior, or step 3, Training, or in the 'Record "
-            "name' or 'Comparison name' box in Effective temperature, One cell, or in Effective temperature, "
-            "Sweep study."), kind
+            "Choose another name in 'Name' in step 2, Prior, in the Save box in step 3, Training, or in the "
+            "'Record name' or 'Comparison name' box in Effective temperature, One cell, or in Effective "
+            "temperature, Sweep study."), kind
         assert box.detail == "", kind
         assert loaded.name == "", "a refused rename must not relabel the loaded artifact"
         assert pane.lines[-1][0] == "warning" and "already exists" in pane.lines[-1][1], pane.lines
@@ -1738,11 +1728,11 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
 
 def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_config_error(monkeypatch,
                                                                                             tmp_path):
-    """"Build / Load prior" builds the SimConfig first. A Refusal from that builder (a bounds file
-    the parser will not take, a units declaration that does not parse) opens the yellow box with the
-    core's sentence as its TEXT -- not as the informative line under a generic "The configuration
-    could not be built." -- and a bug in the builder opens the red box with its traceback. Nothing is
-    installed on the session and nothing is dispatched either way.
+    """The Prior page builds the configuration a press would hand the run as it reads its facts. A Refusal from that
+    builder (a bounds file the parser will not take, a units declaration that does not parse) says its own sentence
+    under "Bounds file" and as an "Error." that greys the main button; a bug in the builder says its kind and its words
+    the same way, for it is read as the page reads and no box may open then. Nothing is asked, installed on the session
+    or dispatched either way, and a press reads again and starts nothing.
 
     And a source pin, because the routing is a rule for all five inference tabs: none of
     core/gui/panels/inference/*.py calls _config_error any more. That method was retired altogether
@@ -1750,19 +1740,17 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
     tab reintroducing the call."""
     import types
     import core.gui.panels.inference as inference_pkg
-    from core.gui import fields as gui_fields
     from core.gui.session import SbiSession
     from core.refusals import Refusal
-    from tests._fixtures import asked, forget_asked, page_lines, qt_app
+    from tests._fixtures import all_asked, forget_asked, qt_app
 
     qt_app()
     inf = build_inference()
     pp = inf.prior_panel
     reached = []
-    inf.install_config = lambda cfg: reached.append(("installed", cfg))
     pp.dispatch = lambda fn, *a, **k: reached.append(("dispatched", fn))
-    pp.bounds_picker.selected_path = lambda: "Resources/Bounds/nadrowski/master.txt"
-    pane = page_lines(pp)
+    pp.bounds_picker.restore_key("master.txt")
+    pp.names.name.setText("retrain_prior")
 
     def _refusing(bounds_path=None, *, bounds_dicts=None):
         raise Refusal("The units are not parseable: 'furlong' is not a length unit.", field="units")
@@ -1770,28 +1758,21 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
     def _buggy(bounds_path=None, *, bounds_dicts=None):
         raise ZeroDivisionError("division by zero")
 
-    inf.session = SbiSession(draft=types.SimpleNamespace(make_config=_refusing))
-    forget_asked()
-    pp._build_prior()
-    box = asked()
-    assert (box.kind, box.marker) == ("refusal", "warn")
-    assert box.sentence == "The units are not parseable: 'furlong' is not a length unit."
-    assert box.beneath == gui_fields.fix_sentence("units")
-    assert "'Units'" in box.text, box.text
-    assert box.detail == "" and reached == []
-    assert pane.lines[-1][0] == "warning" and "'Units'" in pane.lines[-1][1], pane.lines
+    def said():
+        line = pp.form.rows["bounds"].line
+        return (line.kind, line.words), pp.foot.main_button.isEnabled(), pp.foot.reason.text()
 
-    inf.session = SbiSession(draft=types.SimpleNamespace(make_config=_buggy))
-    forget_asked()
-    pp._build_prior()
-    box = asked()
-    assert (box.kind, box.title) == ("error", "Error")
-    assert box.sentence == "division by zero" and "ZeroDivisionError" in box.detail
-    assert reached == [] and pane.lines[-1] == ("error", "division by zero")
+    for builder, sentence in ((_refusing, "The units are not parseable: 'furlong' is not a length unit."),
+                              (_buggy, "The bounds file cannot be read: ZeroDivisionError: division by zero")):
+        inf.session = SbiSession(draft=types.SimpleNamespace(make_config=builder, model="NADROWSKI"))
+        forget_asked()
+        pp.read_facts()
+        assert said() == (("err", sentence), False, "Cannot start yet: the bounds file cannot be read."), said()
+        pp._main_clicked()
+        assert all_asked() == [] and reached == [] and inf.session.cfg is None
 
-    # A bounds file that vanished between the picker's refresh and the click, through the REAL
-    # builder: cli.make_sim_config refuses it by the input kind, so it is the yellow box naming the
-    # Bounds picker -- not the parser's FileNotFoundError in the red one.
+    # A bounds file that vanished between the list's reading and the press, through the REAL builder:
+    # cli.make_sim_config refuses it by the input kind, and the page says so under the list.
     from core import cli, registry
     from core.config import VALID_LABELS, VALID_MODELS
     gone = str(tmp_path / "gone.txt")
@@ -1802,13 +1783,10 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
                                    registry.state_dep_drift("NADROWSKI"), bounds_path,
                                    bounds_dicts=bounds_dicts)
 
-    inf.session = SbiSession(draft=types.SimpleNamespace(make_config=_real))
-    forget_asked()
-    pp._build_prior()
-    box = asked()
-    assert (box.kind, box.marker) == ("refusal", "warn"), box.sentence
-    assert box.sentence == f"The bounds file was not found: {gone!r}."
-    assert box.beneath == gui_fields.fix_sentence("bounds") and reached == []
+    inf.session = SbiSession(draft=types.SimpleNamespace(make_config=_real, model="NADROWSKI"))
+    pp.read_facts()
+    assert said()[0] == ("err", f"The bounds file was not found: {gone!r}."), said()
+    assert reached == [] and all_asked() == []
 
     for path in sorted(Path(inference_pkg.__file__).parent.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -3363,190 +3341,312 @@ def test_the_config_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
     assert apply() == [] and drafts[2].reparam_rotate is (not config.REPARAM_ROTATE)
 
 
-def test_the_prior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
-    """On the Prior tab, a blank, half-typed or out-of-rule knob box is REFUSED at the click -- the
-    yellow box, through _refusal -- and nothing is dispatched, the config is not built and the
-    session's downstream is not reset. The tab used to clamp (max(2, cluster_size.value())) and
-    default (walk_step or config.PRIOR_SWEEP_STEP), so a blank "Min cluster size" silently built a
-    prior with a floor of 2 that nobody typed, and a blank "Random-walk step" one with the default
-    that nobody chose.
-
-    Three more things the same click must get right, because the stage, which has a load branch,
-    does: a LOAD click reads none of the seven knobs, so a blank box does not stop it and no knob is
-    forwarded (the stage resolves None to its default); a typed 0 in "Candidates per round" is the
-    automatic value, not a blank; and the live sweep note under the boxes renders a bad box as
-    "<label> is blank." / "<label> must be <rule>." from the SAME rule the click runs, so the note and
-    the refusal can never name different limits."""
-    from core import orchestrator
-    from core.gui.fields import label
-    from core.gui.session import SbiSession
-    from core.refusals import Refusal
+def _prior_step(*, chi=False):
+    """The inference screen with its first step applied, Nadrowski with the kind of observation ``chi`` names, and its
+    second step, not shown: the build view, the master bounds file selected, a name typed and the facts read."""
     from tests._fixtures import qt_app
-
     qt_app()
-    inf = build_inference()
-    cfg = _spont_cfg()
-    inf.session = SbiSession(draft=object(), cfg=None, inf_prior=_prior_stub())
-    inf.session.draft = type("D", (), {"make_config": lambda self, **kw: cfg})()
-    pp = inf.prior_panel
-    pp.bounds_source.set_direct(False)
-    pp.bounds_picker.combo.clear()
-    pp.bounds_picker.combo.addItem("master.txt", userData="master.txt")
-    pp.prior_picker.selected = lambda: (None, True)           # "(from scratch)": the BUILD branch
+    screen = build_inference()
+    first = screen.config_panel
+    first.kind_choice.setCurrentIndex(first.kind_choice.findData(chi))
+    first.foot.main_button.click()
+    page = screen.prior_panel
+    page.show_view("build")
+    page.bounds_picker.restore_key("master.txt")
+    page.names.name.setText("retrain_prior")
+    page.read_facts()
+    return screen, page
+
+
+#: Each rule of a build at both of its ends: the setting, what is typed, and the line under its field, or None where
+#: that end passes. A rule that reads one row's value for another's, or moves an end by one, is seen here.
+_PRIOR_RULE_ENDS = [
+    ("num_iterations", "0", "Sweep rounds must be at least 1."),
+    ("num_iterations", "1", None),
+    ("sweep_batch", "-1", "Candidates per round must be at least 0."),
+    ("sweep_batch", "0", None),
+    ("max_sets", "0", "Stable sets to collect must be at least 1."),
+    ("max_sets", "1", None),
+    ("walk_step", "0", "Random-walk step must be greater than 0."),
+    ("walk_step", "0.001", None),
+    ("walk_step", "1e999", "Random-walk step must be a finite number."),
+    ("stability_units", "-5", "Stability test length must be greater than 0."),
+    ("stability_units", "0.5", None),
+    ("min_cluster_size", "1", "Smallest cluster must be at least 2."),
+    ("min_cluster_size", "2", None),
+    ("min_samples", "0", "Cluster density must be at least 1."),
+    ("min_samples", "1", None),
+    ("min_cluster_size", "", "Smallest cluster is blank."),
+    ("walk_step", "0,5", "Use a point as the decimal sign."),
+]
+
+
+@pytest.mark.parametrize("key, typed, line", _PRIOR_RULE_ENDS, ids=[f"{k}={v}" for k, v, _ in _PRIOR_RULE_ENDS])
+def test_each_setting_of_a_build_says_its_rule_greys_the_build_and_refuses_the_press_alike(key, typed, line):
+    """The seven settings a build reads keep their one table of rules. A value that breaks a rule says the rule under its
+    field, built from the row's label, and greys "Build a new prior" with "a setting cannot be used"; a press made past
+    the button by code is refused in the same words with what it found and the usual value, and nothing is dispatched.
+    The end that passes says nothing. A blank, a number that is no number and a comma are the field's own words."""
+    from core.refusals import default_clause
+    screen, page = _prior_step()
     sent, refused = [], []
-    pp.dispatch = lambda fn, *a, **k: sent.append((fn, a, k))
-    pp._refusal = lambda e: refused.append(e)
-
-    def click():
-        sent.clear()
-        refused.clear()
-        pp._build_prior()
-
-    # (a) a blank box: refused with its field named; nothing dispatched, nothing built, nothing reset
-    pp.cluster_size.setText("")
-    click()
-    assert sent == [], "a blank box must be refused at the click, not clamped and dispatched"
-    assert isinstance(refused[-1], Refusal) and refused[-1].field == "min_cluster_size", refused
-    assert "is blank" in refused[-1].message and "default" in refused[-1].message, refused[-1].message
-    assert inf.session.cfg is None, "a refused click must not build the config"
-    assert inf.session.inf_prior is not None, "a refused click must not reset the session's prior"
-
-    # (b) half-typed and out-of-rule boxes, one per rule, each naming its field and its limit
-    pp.cluster_size.setText("50")
-    for attr, text, key, words in (("cluster_size", "-", "min_cluster_size", "is blank"),
-                                   ("cluster_size", "1", "min_cluster_size", "must be at least 2"),
-                                   ("cluster_samples", "0", "min_samples", "must be at least 1"),
-                                   ("sweep_iters", "0", "num_iterations", "must be at least 1"),
-                                   ("sweep_batch", "-1", "sweep_batch", "must be at least 0"),
-                                   ("sweep_max_sets", "0", "max_sets", "must be at least 1"),
-                                   ("sweep_step", "0", "walk_step", "must be greater than 0"),
-                                   ("sweep_step", "", "walk_step", "is blank"),
-                                   ("sweep_units", "-5", "stability_units", "must be greater than 0")):
-        field = getattr(pp, attr)
-        keep = field.text()
-        field.setText(text)
-        click()
-        assert sent == [] and refused and refused[-1].field == key and words in refused[-1].message, \
-            (attr, text, refused[-1].message if refused else None, sent)
-        field.setText(keep)
-
-    # (c) every box in rule: dispatched on the build branch with the seven knobs as numbers, and a
-    # typed 0 in "Candidates per round" travels as 0 (= automatic), not as a refusal
-    pp.sweep_iters.setText("3")
-    pp.sweep_batch.setText("0")
-    pp.sweep_max_sets.setText("40")
-    pp.sweep_step.setText("0.02")
-    pp.sweep_units.setText("250")
-    pp.cluster_size.setText("9")
-    pp.cluster_samples.setText("4")
-    click()
-    assert refused == [], refused
-    fn, args, kw = sent[-1]
-    assert fn is orchestrator.build_prior and args[0] is cfg and args[1] is None and args[2] is True
-    assert (kw["num_iterations"], kw["sweep_batch"], kw["max_sets"]) == (3, 0, 40), kw
-    assert (kw["walk_step"], kw["stability_units"]) == (0.02, 250.0), kw
-    assert (kw["min_cluster_size"], kw["min_samples"]) == (9, 4), kw
-    assert inf.session.cfg is cfg, "the build click installs the config"
-
-    # (d) a LOAD click with a blank knob box still dispatches, and forwards no knob at all
-    pp.prior_picker.selected = lambda: ("abc123def456", False)
-    pp.sweep_iters.setText("")
-    pp.cluster_size.setText("-")
-    click()
-    assert refused == [], "the load branch never reads the knobs, so a blank one must not refuse"
-    fn, args, kw = sent[-1]
-    assert fn is orchestrator.build_prior and args[1] == "abc123def456" and args[2] is False
-    knob_keys = {"num_iterations", "sweep_batch", "max_sets", "walk_step", "stability_units",
-                 "min_cluster_size", "min_samples"}
-    assert not (knob_keys & set(kw)), f"a load must not forward the knobs: {sorted(knob_keys & set(kw))}"
-    assert kw["provide_fig_sink"] is True and kw["on_result"] == pp._on_prior
-
-    # (e) the live note: a bad box renders as the label and the rule -- nothing computed, nothing
-    # raised, no dialog -- and a good set renders the census line again
-    pp.sweep_iters.setText("")
-    assert pp.sweep_note.text() == f"{label('num_iterations')} is blank."
-    pp.sweep_iters.setText("0")
-    assert pp.sweep_note.text() == f"{label('num_iterations')} must be at least 1."
-    pp.sweep_iters.setText("3")
-    pp.sweep_units.setText("-")
-    assert pp.sweep_note.text() == f"{label('stability_units')} is blank."
-    pp.sweep_units.setText("0")
-    assert pp.sweep_note.text() == f"{label('stability_units')} must be greater than 0."
-    pp.sweep_units.setText("250")
-    pp.sweep_max_sets.setText("0")
-    assert pp.sweep_note.text() == f"{label('max_sets')} must be at least 1."
-    pp.sweep_max_sets.setText("40")
-    pp.sweep_batch.setText("-1")
-    assert pp.sweep_note.text() == f"{label('sweep_batch')} must be at least 0."
-    pp.sweep_batch.setText("0")
-    note = pp.sweep_note.text()
-    assert note.startswith("Global census screens") and "(3 rounds x " in note and "40 sets" in note, note
-
-    # (f) the note's words are the click's: for every box the note reads, its "must be" clause is a
-    # substring of the refusal the click raises for the same value
-    from core.gui.panels.inference.prior_tab import _KNOB_RULES, _NOTE_KEYS, _rule_words
-    pp.prior_picker.selected = lambda: (None, True)
-    for key, attr, minimum in _KNOB_RULES:
-        if key not in _NOTE_KEYS:
-            continue
-        field = getattr(pp, attr)
-        keep = field.text()
-        field.setText("-1")
-        assert pp.sweep_note.text() == f"{label(key)} must be {_rule_words(minimum)}.", (key, pp.sweep_note.text())
-        click()
-        assert refused[-1].field == key and f"must be {_rule_words(minimum)}" in refused[-1].message, \
-            (key, refused[-1].message)
-        field.setText(keep)
+    page.dispatch = lambda fn, *a, **k: sent.append((fn, a, k))
+    page._refusal = lambda exc: refused.append(exc)
+    row = page.form.rows[key]
+    if key == "sweep_batch":
+        row.widget.ticked_box.setChecked(False)
+        row.widget.field.setText(typed)
+    else:
+        row.widget.setText(typed)
+    said = (row.line.kind, row.line.words) if row.line.says() else ("", "")
+    if line is None:
+        assert said == ("", "") and page.foot.main_button.isEnabled(), (said, page.foot.reason.text())
+        return
+    assert said == ("err", line)
+    assert not page.foot.main_button.isEnabled() and page.foot.reason.text() == "Cannot start yet: a setting cannot be used."
+    page.main_pressed()
+    assert sent == [] and len(refused) == 1 and refused[0].field == key
+    shown = typed if key != "walk_step" or typed != "1e999" else "inf"
+    if line.endswith(" is blank."):
+        assert refused[0].message == f"{line[:-1]}{default_clause(key)}."
+    elif line.startswith("Use a point"):
+        assert refused[0].message == line
+    else:
+        assert refused[0].message == f"{line[:-1]}; got {shown}{default_clause(key)}.", refused[0].message
 
 
-def test_the_prior_tabs_chi_line_reads_the_summary_width_at_the_click(monkeypatch):
-    """The Prior tab's chi line states the conditioning layout, [S(n) | log T_obs | chi(m)]. Both widths
-    are read when the line is written, never typed in: a summary that gains or loses a feature must not
-    leave the tab printing the old width, as it once printed 41 while the block was 49 wide."""
-    from core.gui.session import SbiSession
-    from core.SBI import statistics
-    from tests._fixtures import qt_app
-
+def test_the_prior_page_opens_on_the_saved_view_when_a_prior_exists(store, tmp_path):
+    """The Prior page opens, the first time it comes into sight, on a saved prior to load when one is saved, else on a
+    new one to build; the choice waits for that moment, so a page built before a prior is saved opens on the saved
+    view. After that it stays where it stood: a prior saved later, or the view a person chose, is not undone by a
+    later show."""
+    from tests._fixtures import _nad_cfg, _prior_artifact, build_window, qt_app
+    from tests._look_helpers import _settle
+    from tests._runs import Clock, at, controller_on
+    from tests._window_helpers import shown_off_screen
     qt_app()
-    inf = build_inference()
-    cfg = _chi_built_cfg()
-    inf.session = SbiSession(draft=object(), cfg=None, inf_prior=_prior_stub())
-    inf.session.draft = type("D", (), {"make_config": lambda self, **kw: cfg})()
-    pp = inf.prior_panel
-    pp.bounds_source.set_direct(False)
-    pp.bounds_picker.combo.clear()
-    pp.bounds_picker.combo.addItem("master.txt", userData="master.txt")
-    pp.prior_picker.selected = lambda: ("abc123def456", False)      # a load: no knob box is read
+    controller_on(tmp_path, Clock(at(8, 12, 4)))
+
+    def shown(page, window):
+        window.go_to("home")
+        window.go_to("inference", "prior")
+        _settle()
+        return page.view
+
+    first = build_window()
+    shown_off_screen(first, 1300, 820)
+    page = first.part("inference").prior_panel
+    assert page.view == "build" and shown(page, first) == "build"
+    assert page.foot.main_button.text() == "&Build a new prior"
+    assert page.switch_button.text() == "&Use a saved prior instead…"
+    _prior_artifact(store, _nad_cfg(), name="saved_one")
+    assert shown(page, first) == "build", "a later show chose the view again"
+    second = build_window()
+    shown_off_screen(second, 1300, 820)
+    page = second.part("inference").prior_panel
+    assert page.view == "build" and shown(page, second) == "saved"
+    assert page.foot.main_button.text() == "&Load this prior"
+    assert page.switch_button.text() == "&Build a new prior instead…"
+    page.switch_button.click()
+    assert shown(page, second) == "build", "a later show chose the view again"
+
+
+def test_a_remembered_file_gone_shows_no_selection_and_says_so():
+    """The bounds file that came into use last is put back as the choice of its model's folder once step 1 applies that
+    model, said to be kept from last time; one no longer in the folder is selected not at all, never the first file, and
+    the page says it has gone. Another model applied says nothing of it."""
+    from core.gui import settings as st
+    from core.gui.remembered import BOUNDS_KEY, MODEL_KEY
+    from tests._fixtures import qt_app
+    qt_app()
+    qs = st.settings()
+    for key, (model, bounds) in enumerate((("NADROWSKI", "master_tier1.txt"), ("NADROWSKI", "gone_since.txt"))):
+        qs.setValue(MODEL_KEY, model)
+        qs.setValue(BOUNDS_KEY, bounds)
+        qs.sync()
+        screen = build_inference()
+        page = screen.prior_panel
+        screen.config_panel.foot.main_button.click()
+        if bounds == "master_tier1.txt":
+            assert page.bounds_picker.key() == "master_tier1.txt" and not page.gone_line.isVisibleTo(page)
+            assert page.form.rows["bounds"].origin.text() == "kept from last time"
+            page.bounds_picker.restore_key("master.txt")
+            assert page.form.rows["bounds"].origin.text() == ""
+        else:
+            assert page.bounds_picker.combo.currentIndex() == -1 and page.bounds_picker.key() == ""
+            assert page.gone_line.plain_text() == (
+                "The bounds file used last time, gone_since.txt, is no longer in the folder.")
+            assert not page.foot.main_button.isEnabled()
+            assert page.foot.reason.text().startswith("Cannot start yet: no bounds file is chosen")
+            assert page.form.rows["bounds"].origin.text() == ""
+            first = screen.config_panel
+            first.model_combo.setCurrentText("HOPF")
+            first.foot.main_button.click()
+            assert page.gone_line.isHidden() and page.bounds_picker.key() == ""
+
+
+def test_a_saved_view_says_whether_no_prior_is_saved_or_none_is_chosen(store):
+    """The saved view with no prior saved says so and how to make one; with priors saved and none chosen it asks for
+    one; either greys the load with its own words."""
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    screen, page = _prior_step()
+    page.show_view("saved")
+    assert page.foot.reason.text() == "Cannot start yet: no prior is saved yet."
+    assert any(row.sentence.plain_text() == "Error. No prior is saved yet: build one with 'Build a new prior "
+               "instead…'." for row in page.foot.facts.rows())
+    _prior_artifact(store, _nad_cfg(), name="saved_one")
+    page.prior_picker.refresh()
+    page.redraw()
+    assert page.prior_picker.key() == "" and page.foot.reason.text() == "Cannot start yet: no saved prior is chosen."
+
+
+def test_with_no_model_applied_the_prior_page_is_blocked_first():
+    """With no model applied the step's need comes first, "Blocked." with its words, and nothing can be loaded or built
+    whatever else the page says."""
+    from tests._fixtures import qt_app
+    qt_app()
+    page = build_inference().prior_panel
+    page.read_facts()
+    first = page.foot.facts.rows()[0]
+    assert (first.kind, first.sentence.plain_text()) == (
+        "lock", "Blocked. Needs a model: apply one in step 1, Model and options.")
+    assert page.foot.reason.text().startswith("Cannot start yet: needs a model") and not page.foot.main_button.isEnabled()
+
+
+def test_a_load_reads_none_of_the_seven_settings():
+    """A load reads only the saved prior and the bounds file: a setting of the build left blank or broken stops nothing
+    in the saved view, and none of the seven travels with the load."""
+    screen, page = _prior_step()
     sent = []
-    pp.dispatch = lambda fn, *a, **k: sent.append(fn)
-    monkeypatch.setattr(statistics, "SUMMARY_WIDTH", 50)
-    pp._build_prior()
-    assert sent, "the click did not reach its dispatch"
-    text = pp.log_pane.toPlainText()
-    assert "[S(50) |" in text, text
+    page.dispatch = lambda fn, *a, **k: sent.append((fn, a, k))
+    page.form.rows["min_cluster_size"].widget.setText("")
+    page.form.rows["walk_step"].widget.setText("0")
+    page.show_view("saved")
+    page.prior_picker.combo.addItem("a_prior", "p1")
+    page.prior_picker.restore_key("p1")
+    page.main_pressed()
+    from core import orchestrator
+    fn, args, kwargs = sent[-1]
+    assert fn is orchestrator.build_prior and args[1:] == ("p1", False)
+    knobs = {"num_iterations", "sweep_batch", "max_sets", "walk_step", "stability_units", "min_cluster_size",
+             "min_samples", "name", "note"}
+    assert not knobs & set(kwargs), sorted(knobs & set(kwargs))
+    assert kwargs["provide_fig_sink"] is True and kwargs["on_result"] == page._on_prior
+    assert page.problems() == {}
 
 
-def test_the_prior_tab_rows_are_labelled_from_the_control_table():
-    """Every registered field's row on the Prior tab takes its label from core.gui.fields.label(key),
-    so the name in the yellow box ("Set it in the '<label>' box in step 2, Prior.") and the name on
-    the tab are ONE string. A literal at an add_help_row call is the defect: the row can be renamed
-    while the refusal keeps naming the old label. The control table's read-back pin
-    (test_the_gui_control_table_matches_the_tabs_labels) checks the rendered QLabels over every tab;
-    this is the source-level half for this tab."""
-    import re
-    from core.gui.fields import CONTROL, label
-    from core.gui.panels.inference.prior_tab import PriorPanel
-    from tests._fixtures import code_only
+@pytest.mark.parametrize("chi, name, reads", [
+    (True, "master.txt", "With the kind of observation applied in step 1, a posterior trained on it reads: a frequency "
+                         "response."),
+    (False, "master.txt", "With the kind of observation applied in step 1, a posterior trained on it reads: a "
+                          "spontaneous recording and one driven recording."),
+    (False, "master_spont.txt", "With the kind of observation applied in step 1, a posterior trained on it reads: a "
+                                "spontaneous recording only."),
+])
+def test_what_the_bounds_file_is_is_said_under_its_list(chi, name, reads):
+    """Under the list, as the file is read: its parameters, the model's and the scales, named in the file's order;
+    whether it has a forcing section; and how a posterior trained on it reads, from the configuration built on it, built
+    again when step 1 is applied again."""
+    screen, page = _prior_step(chi=not chi)
+    page.bounds_picker.restore_key(name)
+    page.read_facts()
+    first = screen.config_panel
+    first.kind_choice.setCurrentIndex(first.kind_choice.findData(chi))
+    first.foot.main_button.click()
+    page.read_facts()
+    said = page.file_line.plain_text()
+    if name == "master.txt":
+        assert said.startswith("13 parameters: 10 of the model (k, lam, f_max, tau, tau_c, s, delta_E, beta, n, temp) "
+                               "and 3 scales (x_scale, t_scale, f_scale). It has a forcing section. "), said
+    else:
+        assert "It has no forcing section." in said, said
+    assert said.endswith(reads) and page.file_line.isVisibleTo(page)
 
-    src = code_only(PriorPanel.__init__)
-    assert src.count("add_help_row(") == 9, "the Prior tab has nine labelled rows"
-    literal = re.findall(r"add_help_row\(\w+, (['\"][^'\"]*['\"])", src)
-    assert literal == [], f"rows labelled by a literal instead of label(key): {literal}"
-    keys = re.findall(r"add_help_row\(\w+, label\(['\"](\w+)['\"]\)", src)
-    assert keys == ["bounds", "prior", "num_iterations", "sweep_batch", "max_sets", "walk_step",
-                    "stability_units", "min_cluster_size", "min_samples"], keys
-    for key in keys:
-        assert CONTROL[key] == ("prior", label(key)), (key, CONTROL[key])
+
+@pytest.mark.parametrize("line, said", [
+    ("k in (a, b)", "The bounds file cannot be used. The limits of k must both be numbers."),
+    ("k in (5, 1)", "The bounds file cannot be used. The lower limit of k, 5, must be less than its upper limit, 1."),
+    ("k in (2, 2)", "The bounds file cannot be used. The lower limit of k, 2, must be less than its upper limit, 2."),
+], ids=["no numbers", "crossed", "equal"])
+def test_a_malformed_bounds_file_is_refused_beside_the_list(line, said, tmp_path):
+    """The builder takes a line it cannot read as a parameter with no limits, so the page holds the limits a bounds file
+    gives to the rule the limits typed by hand are held to: the first broken is said under the list, as an "Error."
+    that greys the build, and nothing raises. Ticked, the limits typed by hand start from the file, the line it could not
+    read blank, and say so under the tick; another file mends both."""
+    screen, page = _prior_step()
+    master = (Path(page.bounds_picker.base_path) / "master.txt").read_text(encoding="utf-8")
+    (tmp_path / "broken.txt").write_text(master.replace("k in (0.01, 5)", line), encoding="utf-8")
+    (tmp_path / "good.txt").write_text(master, encoding="utf-8")
+    page.bounds_picker.repoint(tmp_path, "broken.txt")
+    page.read_facts()
+    assert _line_of(page, "bounds") == ("err", said)
+    assert not page.foot.main_button.isEnabled()
+    assert page.foot.reason.text() == "Cannot start yet: the bounds file cannot be read."
+    assert any(row.sentence.plain_text() == f"Error. {said}" for row in page.foot.facts.rows())
+    page.typed_tick.setChecked(True)
+    page.read_facts()
+    assert _line_of(page, "bounds_typed") == ("err", said.split(". ", 1)[1])
+    page.bounds_picker.restore_key("good.txt")
+    page.read_facts()
+    assert page.bounds_grid.is_loaded() and _line_of(page, "bounds_typed") == ("", "")
+    page.typed_tick.setChecked(False)
+    page.read_facts()
+    assert _line_of(page, "bounds") == ("", "") and page.foot.main_button.isEnabled(), page.foot.reason.text()
+    import os
+    good = tmp_path / "good.txt"
+    good.write_text(master.replace("k in (0.01, 5)", line), encoding="utf-8")
+    os.utime(good, ns=(good.stat().st_atime_ns, good.stat().st_mtime_ns + 10 ** 9))   # written since it was read
+    page.read_facts()
+    assert _line_of(page, "bounds") == ("err", said), "a file written since it was read was not read again"
+
+
+def _line_of(page, key) -> tuple:
+    """What the line under the row ``key`` says: its marker and its words, or two empty strings."""
+    line = page.form.rows[key].line
+    return (line.kind, line.words) if line.says() else ("", "")
+
+
+def test_typed_limits_survive_a_switch_and_go_with_another_file():
+    """The limits typed by hand keep what was typed while the page moves between the file and hand entry, and between
+    its two views; they stand only while the tick is on, and opening them opens no fold; another bounds file selected
+    loads them from it, and so does step 1 applied again."""
+    from collections import OrderedDict
+    screen, page = _prior_step()
+    page.typed_tick.setChecked(True)
+    assert not page.form.fold.is_open(), "the limits typed opened the fold"
+    row = page.bounds_grid._rows[("PARAM", "k")]
+    assert (row.lo.value_or_none(), row.hi.value_or_none()) == (0.01, 5.0)
+    row.hi.setText("4")
+    page.show_view("saved")
+    page.show_view("build")
+    assert page.bounds_grid._rows[("PARAM", "k")].hi.value_or_none() == 4.0
+    page.typed_tick.setChecked(False)
+    assert page.bounds_grid.isHidden() and page.typed_note.isHidden(), "the limits stand with the tick off"
+    page.typed_tick.setChecked(True)
+    assert page.bounds_grid._rows[("PARAM", "k")].hi.value_or_none() == 4.0
+    page.bounds_picker.restore_key("master_tier1.txt")
+    assert page.bounds_grid._rows[("PARAM", "k")].hi.value_or_none() == 5.0
+    assert ("RESCALE", "T") in page.bounds_grid._rows
+    page.bounds_grid._rows[("PARAM", "k")].hi.setText("3")
+    screen.config_panel.rot_choice.setCurrentIndex(screen.config_panel.rot_choice.findData(False))
+    screen.config_panel.foot.main_button.click()
+    assert page.bounds_grid._rows[("PARAM", "k")].hi.value_or_none() == 5.0
+
+
+def test_a_comma_in_a_typed_limit_is_refused_in_the_fields_own_words():
+    """A limit typed with a comma shows as it is typed and is never read as another number; left, the field is outlined
+    and the line under the tick says the field's own words; the build is greyed until it is mended."""
+    screen, page = _prior_step()
+    page.typed_tick.setChecked(True)
+    field = page.bounds_grid._rows[("PARAM", "k")].lo
+    field.setText("0,5")
+    assert _line_of(page, "bounds_typed") == ("err", "The limits of k must both be numbers.")
+    field.editingFinished.emit()                         # the field is left
+    assert field.text() == "0,5" and field.value_or_none() is None and field.property("state") == "error"
+    assert _line_of(page, "bounds_typed") == ("err", "The lower limit of k reads 0,5. Use a point as the decimal sign.")
+    assert page.foot.reason.text() == "Cannot start yet: the limits typed cannot be used."
+    field.setText("0.5")
+    assert _line_of(page, "bounds_typed") == ("", "") and page.foot.main_button.isEnabled(), page.foot.reason.text()
 
 
 def test_a_list_read_again_keeps_its_selection_and_never_falls_to_the_first_file(tmp_path, monkeypatch):
@@ -4217,7 +4317,7 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     two steps' pages swapped among them, fails here, as does an entry that names the wrong place. The
     labels are held as one literal, the words each row shows today, so a row reworded in the table and
     on its page together is still seen as a change of what a person reads. And every control a sentence
-    entry quotes -- a tick box, a list's row, a name or note box, the Save button beside the Save box --
+    entry quotes -- a tick box, a list's row, a name or note box, 'Name', the Save button beside the Save box --
     is shown in the panel the window shows at each place its sentence names, so a page that rewords or
     moves it leaves no sentence pointing at words that are not there.
     Step 5 is read after install_config with a FORCED stub config so its three drive rows exist; a
@@ -4301,14 +4401,14 @@ def test_the_gui_control_table_matches_the_tabs_labels():
         "t_obs": "T_obs (s)", "num_runs": "Batches", "run_size_cap": "Max rows per batch (0 = auto)",
         "n_directions": "Directions truncated", "hpd_level": "HPD level", "observation": "Observation",
         "n_cal": "Calibration datasets", "cal_n_scales": "(t_scale, T_obs) operating points",
-        "num_iterations": "Global rounds", "sweep_batch": "Candidates per round (0 = auto)",
-        "max_sets": "Max accepted sets", "walk_step": "Random-walk step",
-        "stability_units": "Stability duration (ND units)", "min_cluster_size": "Min cluster size",
-        "min_samples": "Min samples", "hidden_features": "Hidden features", "num_transforms": "Transforms",
+        "num_iterations": "Sweep rounds", "sweep_batch": "Candidates per round",
+        "max_sets": "Stable sets to collect", "walk_step": "Random-walk step",
+        "stability_units": "Stability test length", "min_cluster_size": "Smallest cluster",
+        "min_samples": "Cluster density", "hidden_features": "Hidden features", "num_transforms": "Transforms",
         "learning_rate": "Learning rate", "stop_after_epochs": "Early-stop patience",
         "fisher_m": "Ensemble per perturbation", "fisher_dz": "Central-difference step",
         "fisher_points": "Operating points", "prefactor": "Normalisation constant", "slice_at": "Slice at",
-        "bounds": "Bounds", "cell": "Cell", "units": "Units", "model": "Model", "prior": "Prior",
+        "bounds": "Bounds file", "cell": "Cell", "units": "Units", "model": "Model", "prior": "Saved prior",
         "posterior": "Posterior", "recording_forced": "Forced", "drive_amplitude": "A (N)", "drive_frequency": "f (Hz)",
         "drive_phase": "φ (rad)", "chi_f0_si": "Drive F₀ (N)", "chi_mode": "Kind of observation",
         "chi_n_freqs": "Driven recordings per observation", "chi_k_pad": "Slots for driven recordings",
@@ -4326,7 +4426,7 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     quoted = (
         ("accept_other_observation", "infer", "Run on a different observation"),
         ("new_run", "narrowing", "Start a new simulation even if a cache one setting away exists"),
-        ("name", "prior", "Save"), ("name", "training", "Save"),
+        ("name", "prior", "Name"), ("name", "training", "Save"),
         ("name", "temperature/one_cell", "Record name"), ("name", "temperature/one_cell", "Comparison name"),
         ("name", "temperature/sweep", "Record name"), ("name", "temperature/sweep", "Comparison name"),
         ("note", "temperature/one_cell", "Note"), ("note", "temperature/one_cell", "Comparison note"),
@@ -4605,9 +4705,9 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     one fact it shares with the item text the SAME way: "narrowed (TSNPE)", in place of the old
     "NON-AMORTIZED (TSNPE)" -- one wording for one fact, in the item, the tooltip and the line. No
     test in the repository pinned either string before this one. And each of the three tabs that
-    owns a StorePicker carries a read-only line beneath it, spelling the current selection out
-    through ``selection_summary()`` -- refreshed on ``currentIndexChanged`` AND on ``refresh()``,
-    because a stage that writes the store rescans the picker without anyone clicking.
+    owns a StorePicker spells the current selection out through ``selection_summary()``, and the two that carry a
+    read-only line beneath it say it there -- refreshed on ``currentIndexChanged`` AND on ``refresh()``, because a stage
+    that writes the store rescans the picker without anyone clicking.
 
     The store is stubbed at the picker's one seam, ``_resolved_store``, the way
     tests/test_settings_persistence.py already stubs it; each row carries exactly the ``Summary``
@@ -4674,11 +4774,11 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     assert pp.post_picker.selection_summary() == ""
     assert pp.post_line.text() == ""
 
-    # (d) the other two kinds: a prior carries only its creation time, an observation its geometry
+    # (d) the other two kinds: a prior carries only its creation time, an observation its geometry. The Prior page's
+    # list has no "(from scratch)"; what stands under it is read from the record, as that page's own test holds
     prior_picker = inf.prior_panel.prior_picker
-    prior_picker.combo.setCurrentIndex(1)          # index 0 is "(from scratch)"
+    prior_picker.combo.setCurrentIndex(0)
     assert prior_picker.selection_summary() == "2026-09-14T10:00:00"
-    assert inf.prior_panel.prior_line.text() == "2026-09-14T10:00:00"
     obs_picker = inf.tsnpe_panel.obs_picker        # allow_new=False: index 0 IS the observation
     assert obs_picker.selection_summary() == "spontaneous · width 50 · 2026-09-16T12:00:00"
     assert inf.tsnpe_panel.obs_line.text() == "spontaneous · width 50 · 2026-09-16T12:00:00"

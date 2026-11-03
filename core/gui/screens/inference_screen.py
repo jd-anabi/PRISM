@@ -17,21 +17,12 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from .. import chain, keys, record_words, remembered
+from ..panels.inference.prior_tab import bounds_in_use
 from ..panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel,
                                      TSNPEPanel, ValidatePanel)
 from ..run.controller import controller
 from ..session import SbiSession
 from ..widgets.adaptive_stack import AdaptiveStack
-
-
-def _phrase(word: str, record) -> str:
-    """How ``session_contents`` names one record held: "the prior retrain_prior" by its label, or, for one with no name,
-    "the unnamed prior, 1 Oct 2026, 22:29". Never raises: a stand-in that says neither is "the unnamed record"."""
-    label = record_words.label_of(record)
-    name = getattr(record, "name", None)
-    if isinstance(name, str) and name:
-        return f"the {word} {label}"
-    return "the " + label[:1].lower() + label[1:]
 
 
 class InferenceScreen(QWidget):
@@ -134,7 +125,7 @@ class InferenceScreen(QWidget):
         s = self.session
         held = [(word, getattr(s, slot, None)) for word, slot in
                 (("prior", "inf_prior"), ("posterior", "posterior"), ("observation", "observation"))]
-        return [_phrase(word, record) for word, record in held if record is not None]
+        return [record_words.phrase_of(word, record) for word, record in held if record is not None]
 
     def new_draft(self, draft):
         """Config applied: replace the WHOLE session (a different model or unit system invalidates
@@ -165,19 +156,32 @@ class InferenceScreen(QWidget):
         self.refresh_gates()
 
     def install_config(self, cfg):
-        """Prior stage: bounds chosen, so the SimConfig now exists. Set it IN PLACE and fan out to
-        the steps whose pickers/fields depend on it.
+        """A configuration set IN PLACE, fanned out to the steps whose pickers and fields depend on it, then the gates
+        and the states worked out again. The Prior step no longer calls this: its configuration comes into use with its
+        prior, through ``take_prior``. Its destructive twin ``new_draft`` is the one the first step confirms."""
+        self._fan_out(cfg)
+        self.refresh_gates()
 
-        THE IN-PLACE ONE OF THE TWO ENTRY POINTS, and in place BECAUSE OF WHEN IT IS CALLED: the
-        Prior stage installs the config as the first step of building the prior, so a new session
-        here would wipe the draft that built this config and the artifact the stage is about to
-        store -- mid-stage, with nothing to confirm against, because the operator pressed a button
-        that promised to build a prior and not to start over. That asymmetry is the difference
-        between replacing the session's configuration and installing into it: its destructive twin
-        ``new_draft`` is the one the first step confirms, and this one is never confirmed at all.
-        """
+    def _fan_out(self, cfg) -> None:
+        """Hold ``cfg`` and hand it to the steps whose pickers and fields depend on it."""
         self.session.cfg = cfg
         self.infer_panel.on_config_built(cfg)
+
+    def take_prior(self, cfg, loaded) -> None:
+        """A prior has come back from its run, made on ``cfg``, the very configuration the Prior step handed the run:
+        what depended on the prior held is let go, the two come into use together, the bounds file and the prior are
+        remembered as the picks last in use, and the gates and the states are worked out once. Called while the run is
+        still live, so it writes the session and nothing else reads: the Prior step reads its lists again when the run
+        has ended."""
+        session = self.session
+        session.reset_downstream("prior")
+        session.inf_prior = loaded
+        self._fan_out(cfg)
+        key = bounds_in_use(cfg)
+        picks = [(remembered.PRIOR_KEY, getattr(loaded, "id", None))]
+        if key:
+            picks.insert(0, (remembered.BOUNDS_KEY, key))
+        remembered.put_many([(name, value) for name, value in picks if isinstance(value, str) and value])
         self.refresh_gates()
 
     def refresh_gates(self):

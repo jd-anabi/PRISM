@@ -49,6 +49,16 @@ def record_label(kind: str, name: str, created: datetime | None, *, prior_label:
     return f"{words}, {date_text(created)}" if created is not None else words
 
 
+def phrase_of(word: str, record) -> str:
+    """How a sentence names one record held: "the prior retrain_prior" by its label, or, for one with no name, "the
+    unnamed prior, 1 Oct 2026, 22:29". Never raises: a stand-in that says neither is "the unnamed record"."""
+    label = label_of(record)
+    name = getattr(record, "name", None)
+    if isinstance(name, str) and name:
+        return f"the {word} {label}"
+    return "the " + label[:1].lower() + label[1:]
+
+
 def label_of(loaded) -> str:
     """The label of a record the session holds (a loaded prior, posterior, observation or the like): its kind,
     its name and the moment its manifest says it was made, turned into local time. Never raises: a field that

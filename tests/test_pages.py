@@ -5,6 +5,7 @@ when it reads and how it hosts a run. They are read here on a stand-in page as a
 """
 import itertools
 import re
+from pathlib import Path
 
 import pytest
 import shiboken6
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QPushButton, QScr
 
 from core.gui import design, fields, fonts, style
 from core.gui.panels.inference.config_tab import ConfigPanel
+from core.gui.panels.inference.prior_tab import PriorPanel
 from core.gui.run.controller import LIVE_TEXT, NOT_READ_YET_TEXT, controller
 from core.gui.step_facts import (LEADS, REFUSED_BLOCKS, Fact, about_words, ordered, origin_words, reading_words,
                                   reason_beside, refused_facts)
@@ -33,7 +35,9 @@ from tests._window_helpers import in_front, shown_off_screen
 BLOCKS = "the name cannot be used"
 #: Each rebuilt page by its step, as the standing tests a page joins in its own task name it: the stand-in, then the
 #: pages of the window.
-PAGES = {"the stand-in": None, "Model and options": ConfigPanel}
+PAGES = {"the stand-in": None, "Model and options": ConfigPanel, "Prior": PriorPanel}
+#: A field of each page an edit is typed into, by the page's class.
+EDITED = {None: "num_runs", ConfigPanel: "chi_n_freqs", PriorPanel: "num_iterations"}
 #: A record's name of the length the store lets stand, which no line of an origin holds at the window's least width.
 LONG_NAME = "retrain_narrowing_round_of_the_second_of_november"
 
@@ -1438,7 +1442,7 @@ def test_no_reading_happens_between_a_runs_start_and_its_end(left_for, page_clas
         monkeypatch.setattr(page, "read_disk" if name == "readings" else "main_pressed",
                             lambda name=name, kept=kept: (counted.__setitem__(name, counted[name] + 1), kept())[1])
     readings = 0
-    page.form.rows["num_runs" if "num_runs" in page.form.rows else "chi_n_freqs"].widget.setText("7")
+    page.form.rows[EDITED[page_class]].widget.setText("7")
     stand_in = StandIn(word="Reduction")
     calls = readings_of_a_run(monkeypatch)
     start_run(runner, stand_in)
@@ -1729,17 +1733,30 @@ def test_the_figures_stand_in_their_place_and_hide_while_they_hold_nothing(tmp_p
 
 
 def test_a_run_empties_the_figures_of_the_page_it_starts_on(tmp_path):
-    """One record's figures at a time: a run empties the viewer as it starts, and a load, which never takes the page, does
-    not. A start on another page empties nothing here."""
+    """One record's figures at a time: a run empties the viewer as it starts. A load, which never takes the page, keeps
+    them while it runs, and once it has returned its record leaves its own alone; one that fails leaves what stood. A
+    start on another page empties nothing here."""
     from core.gui.run.model import RunSpec
     app = qt_app()
     window, page, _clock = _a_page(tmp_path)
     page.figure_stack.add_figure("Held", b"")
+    loading = RunSpec("Prior load", ("inference", "training"), keeps_files=False, loads_only=True)
+
+    def titles():
+        return [page.figure_stack.tabText(at) for at in range(page.figure_stack.count())]
+
     load = StandIn(word="Prior load")
-    _start(page, load, spec=RunSpec("Prior load", ("inference", "training"), keeps_files=False, loads_only=True))
-    assert page.figure_stack.count() == 1
+    _start(page, load, spec=loading, provide_fig_sink=True)
+    load.figure("Prior (loaded)")
+    turn_until(app, lambda: page.figure_stack.count() == 2)
     load.release()
     turn_until(app, lambda: not controller().is_live())
+    assert titles() == ["Prior (loaded)"]
+    failing = StandIn(word="Prior load")
+    _start(page, failing, spec=loading, provide_fig_sink=True)
+    failing.fail(RuntimeError("the record cannot be read"))
+    turn_until(app, lambda: not controller().is_live())
+    assert titles() == ["Prior (loaded)"]
     other = StandIn(word="Reduction")
     start_run(window.part("reduction"), other)
     assert page.figure_stack.count() == 1
@@ -1750,6 +1767,28 @@ def test_a_run_empties_the_figures_of_the_page_it_starts_on(tmp_path):
     assert page.figure_stack.count() == 0
     stand_in.release()
     turn_until(app, lambda: not controller().is_live())
+
+
+def test_a_failure_no_runs_page_shows_is_told_in_the_shared_question(tmp_path):
+    """A load's failure, which no run's page shows, is told in the shared question, the error's type and its trace
+    behind its button, a stop asked for meanwhile said beneath, and it stands after as the page's own line; a refusal is
+    told as every refusal is."""
+    from core.gui.run.retry import NOTED_TEXT
+    from core.refusals import Refusal
+    window, page, _clock = _a_page(tmp_path)
+    page._on_error(OSError("the file is locked"), "Traceback (most recent call last):\nOSError: the file is locked\n")
+    box = asked()
+    assert (box.kind, box.title, box.marker, box.sentence, box.answers, box.beneath) == (
+        "error", "Error", "err", "the file is locked", ("OK",), "")
+    assert box.detail == ("OSError: the file is locked\n\nTraceback (most recent call last):\n"
+                          "OSError: the file is locked")
+    said = page.in_use.said
+    assert not said.isHidden() and said.sentence.plain_text() == "Attention. the file is locked"
+    page._on_error(RuntimeError(), "", cancel_noted=True)
+    box = asked()
+    assert (box.sentence, box.beneath, box.detail) == ("RuntimeError", NOTED_TEXT, "RuntimeError")
+    page._on_error(Refusal("The prior is for another model.", field="prior"), "")
+    assert asked().kind == "refusal"
 
 
 @pytest.mark.parametrize("how", ["a stop", "a failure"])
@@ -1953,16 +1992,45 @@ def _driven(page) -> list:
     return [page.form.rows[key].widget for key in ("chi_n_freqs", "chi_k_pad", "chi_max_cycles")]
 
 
+def _applied(page) -> None:
+    """The first step applied as it opens."""
+    page.window().part("inference").config_panel.foot.main_button.click()
+
+
+def _to_build(page, *, typed: bool = False) -> None:
+    """The second step: the first applied, a new prior to build from the master bounds file, named; with ``typed``, its
+    limits typed by hand."""
+    _applied(page)
+    page.show_view("build")
+    page.bounds_picker.restore_key("master.txt")
+    page.names.name.setText("retrain_prior")
+    page.typed_tick.setChecked(typed)
+
+
+def _knobs(page) -> list:
+    """The fields of the seven settings of a build, in their order, a ticked one by its box."""
+    rows = page.form.rows
+    return [rows["num_iterations"].widget, rows["sweep_batch"].widget.ticked_box, rows["max_sets"].widget,
+            rows["walk_step"].widget, rows["stability_units"].widget, rows["min_cluster_size"].widget,
+            rows["min_samples"].widget]
+
+
+def _typed_limits(page) -> list:
+    """The fields of the limits typed by hand, each parameter's lower then its upper, in the file's order."""
+    return [field for row in page.bounds_grid._rows.values() for field in (row.lo, row.hi)]
+
+
 #: The rebuilt pages of the window, by the step each stands on, and the shapes its walk is read in: by the name of the
 #: shape, what is done to the page after its first show; the heading's buttons and the way to the next step that stand
-#: in that shape; the controls of its main settings; those of the fold, while it is open; and the foot's, in the low
-#: window or not; each in their order. All are written out by hand, never read off the page: a control the Tab key skips
-#: is then missing from the walk and not from what it is held to.
+#: in that shape; the controls of its main settings; those of the fold, while it is open, or None for a shape with no
+#: fold; those of the block for the run; and the foot's, in the low window or not; each in their order. All are written
+#: out by hand, never read off the page: a control the Tab key skips is then missing from the walk and not from what it
+#: is held to.
 WALKED = {
     "model": {
         "set by the bounds file": (lambda page: None, lambda page: [page.help_button],
                                    lambda page: [page.model_combo, page.kind_choice],
-                                   lambda page: [page.rot_choice, page.units_choice],
+                                   lambda page: [page.rot_choice, page.units_choice], lambda page: [],
                                    lambda page, small: [page.foot.main_button]),
         "the frequency response, typed units, applied": (
             lambda page: (page.kind_choice.setCurrentIndex(page.kind_choice.findData(True)),
@@ -1970,8 +2038,24 @@ WALKED = {
                           page.foot.main_button.click()),
             lambda page: [page.help_button, page.next_button],
             lambda page: [page.model_combo, page.kind_choice],
-            lambda page: [*_driven(page), page.rot_choice, page.units_choice, page.units_text],
+            lambda page: [*_driven(page), page.rot_choice, page.units_choice, page.units_text], lambda page: [],
             lambda page, small: []),
+    },
+    "prior": {
+        "a saved prior to load": (
+            lambda page: (_applied(page), page.show_view("saved")),
+            lambda page: [page.help_button, page.switch_button],
+            lambda page: [page.bounds_picker.combo, page.prior_picker.combo], lambda page: None, lambda page: [],
+            lambda page, small: [page.foot.check_again]),
+        "a new prior to build": (
+            _to_build, lambda page: [page.help_button, page.switch_button], lambda page: [page.bounds_picker.combo],
+            lambda page: [page.typed_tick, *_knobs(page)], lambda page: [page.names.name, page.names.note],
+            lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again, page.foot.main_button]),
+        "limits typed by hand": (
+            lambda page: _to_build(page, typed=True), lambda page: [page.help_button, page.switch_button],
+            lambda page: [page.bounds_picker.combo], lambda page: [page.typed_tick, *_typed_limits(page), *_knobs(page)],
+            lambda page: [page.names.name, page.names.note],
+            lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again, page.foot.main_button]),
     },
 }
 
@@ -1998,15 +2082,17 @@ def test_tab_walks_the_page_in_view_at_every_size(size, factor, step, shape, fol
         window.go_to("inference", step)
         page = window.part("inference").pages.currentWidget()
         _settle()
-        shaped, head, main, folded, at_the_foot = WALKED[step][shape]
+        shaped, head, main, folded, block, at_the_foot = WALKED[step][shape]
         shaped(page)
         page.form.fold.set_open(fold_open)
         _settle()
         form, foot = page.form, page.foot
-        expected = [*head(page), *main(page), form.fold.button, *(folded(page) if fold_open else [])]
+        rows = folded(page)
+        expected = [*head(page), *main(page), *([] if rows is None else [form.fold.button, *(rows if fold_open else [])]),
+                    *block(page)]
         if page.scroller.verticalScrollBar().maximum() > 0:
             expected.append(page.scroller)
-        if not foot.facts.isHidden():
+        if not foot.facts.isHidden() and foot.facts.scroller.verticalScrollBar().maximum() > 0:
             expected.append(foot.facts.scroller)
         expected += at_the_foot(page, size == (900, 600))
         rail = window.shell.rail.row(step)
@@ -2026,7 +2112,7 @@ def test_tab_walks_the_page_in_view_at_every_size(size, factor, step, shape, fol
         assert walked[first] is page.first_focus(), "the walk reached a setting before the page's first"
         assert not any(stop in walked[:first] for stop in foot.stops()), "a button that applies came before the form"
         inside = page.form.fold.stops()[1:]
-        assert [stop for stop in walked if stop in inside] == (folded(page) if fold_open else []), (
+        assert [stop for stop in walked if stop in inside] == (rows if rows is not None and fold_open else []), (
             "the fold's rows that stand are not the shape's")
 
 
@@ -2061,6 +2147,47 @@ def test_the_widest_model_name_a_person_can_save_fits_the_first_step_at_the_leas
             assert _edge_of(page.model_combo, port).right() < port.width()
     finally:
         registry.unregister(name)
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_longest_file_name_fits_the_second_step_at_the_least_size(factor, tmp_path):
+    """A bounds file is named by a person, at any length. The list of bounds files is as wide as its longest name up to a
+    cap, past which the name shown is cut short and stands whole in the tip and in the list as it opens: chosen, an 86
+    letters' name leaves the form inside its viewport at the window's least size with the fold open and the limits typed
+    by hand, for the body never scrolls sideways."""
+    name = "a_bounds_file_named_at_length_for_the_cell_measured_on_the_second_of_november_2026.txt"
+    assert len(name) == 86
+    with text_size(factor), _the_look(False):
+        fonts.load_app_font(qt_app())
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        window = build_window()
+        design.set_room((3400, 1380))
+        window.setMinimumSize(1, 1)
+        inference = window.part("inference")
+        inference.config_panel.foot.main_button.click()
+        page = inference.prior_panel
+        (tmp_path / name).write_text((Path(page.bounds_picker.base_path) / "master.txt").read_text(encoding="utf-8"),
+                                     encoding="utf-8")
+        page.bounds_picker.repoint(tmp_path, name)
+        shown_off_screen(window, design.scaled(900), design.scaled(600))
+        window.go_to("inference", "prior")
+        _settle()
+        page.show_view("build")
+        page.typed_tick.setChecked(True)
+        page.form.fold.set_open(True)
+        _settle()
+        combo, port = page.bounds_picker.combo, page.scroller.viewport()
+        assert combo.currentText() == name and combo.toolTip() == name
+        assert combo.width() >= combo.minimumSizeHint().width()
+        assert page.scroller.body.minimumSizeHint().width() <= port.width(), (
+            page.scroller.body.minimumSizeHint().width(), port.width())
+        assert _edge_of(combo, port).right() < port.width()
+        combo.showPopup()
+        try:
+            assert combo.view().minimumWidth() > combo.width() and combo.view().minimumWidth() >= (
+                combo.fontMetrics().horizontalAdvance(name))
+        finally:
+            combo.hidePopup()
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])
@@ -2804,7 +2931,7 @@ def test_the_fix_sentence_names_this_page_or_the_steps_that_show_the_setting():
     assert fields.fix_sentence("num_runs", here="narrowing") == "Set it in 'Batches' on this page."
     assert fields.fix_sentence("num_runs", here="prior") == (
         "Set it in 'Batches' in step 3, Training, or step 6, Narrowing round.")
-    assert fields.fix_sentence("bounds", here="training") == "Set it in 'Bounds' in step 2, Prior."
+    assert fields.fix_sentence("bounds", here="training") == "Set it in 'Bounds file' in step 2, Prior."
     assert fields.fix_sentence("new_run", here="training") == "Answer the question that the start button asks on this page."
     assert fields.fix_sentence("name", here="prior") == "Choose another name in 'Name' on this page."
     assert fields.fix_sentence("note", here="prior") == "Change it in 'Note' on this page."

@@ -5373,7 +5373,7 @@ def test_with_no_message_the_figures_stand_where_they_stand_after_the_messages(f
 _LARGE_SCREEN, _SMALL_SCREEN = (3400, 1380), (1240, 660)
 # The pages that keep the form beside the run's page, by a name for a test and the place the window opens each at. A
 # video stands its run's page among Live simulation's figures, whole; the other runs stand theirs in the column's stack.
-_FORM_BESIDE_THE_COLUMN = {"prior": ("inference", "prior"), "training": ("inference", "training"),
+_FORM_BESIDE_THE_COLUMN = {"training": ("inference", "training"),
                            "checks": ("inference", "checks"), "inference": ("inference", "infer"),
                            "narrowing round": ("inference", "narrowing"), "one cell": ("temperature", "one_cell"),
                            "sweep": ("temperature", "sweep"), "reduction map": ("reduction", None),
@@ -5693,14 +5693,16 @@ def test_a_past_view_on_the_live_simulations_page_shares_the_width_too(tmp_path)
         assert host.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W
 
 
+@pytest.mark.parametrize("step", ["the stand-in", "Prior"])
 @pytest.mark.parametrize("factor, room", [(1.0, _LARGE_SCREEN), (1.5, _LARGE_SCREEN), (1.5, _SMALL_SCREEN)],
                          ids=["text 1.0", "text 1.5", "text 1.5 on a small screen"])
-def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room, tmp_path):
+def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room, step, tmp_path):
     """A rebuilt page holds no form beside its run's page: the run's page takes the place of everything under the heading.
     At every width a window of the text size at hand can have, the run's page and then a past run's stand whole inside
     the window with nothing over them, what stands hidden behind them in the page's stack not widening it, with the
-    longest main button a page has and a block for the run beside the form. The window is made as narrow as it can be
-    and as wide as the screen, then narrow again."""
+    longest main button a page has and a block for the run beside the form: on a stand-in page, and on the Prior page,
+    built anew with its fold open and a name typed. The window is made as narrow as it can be and as wide as the screen,
+    then narrow again."""
     from core.gui import design
     from core.gui.run import history
     from core.gui.run.controller import controller
@@ -5709,18 +5711,26 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
     from tests._runs import Clock, StandIn, start_run, turn_until
     from tests._window_helpers import shown_off_screen
     app = qt_app()
-    past = "20261001T090000-training"
+    place = ("inference", "training") if step == "the stand-in" else ("inference", "prior")
+    word = "Training" if step == "the stand-in" else "Prior build"
+    past = f"20261001T090000-{place[1]}"
     with text_size(factor), _the_look(False):
         _controller_on(tmp_path, Clock(_at(9, 18, 0)))
-        history.write(tmp_path / "runs", {"id": past, "word": "Training", "started": _at(1, 9, 0), "ended": _at(1, 9, 30),
-                                          "outcome": "finished", "place": ["inference", "training"]})
+        history.write(tmp_path / "runs", {"id": past, "word": word, "started": _at(1, 9, 0), "ended": _at(1, 9, 30),
+                                          "outcome": "finished", "place": list(place)})
         window = build_window()
         design.set_room(room)
         window.setMinimumSize(1, 1)
         opening, least = design.window_sizes(room)
-        host = build_step_page(window=window)
+        if step == "the stand-in":
+            host = build_step_page(window=window)
+        else:
+            host = window.part("inference").prior_panel
+            host.show_view("build")
+            host.form.fold.set_open(True)
+            host.names.name.setText("retrain_prior")
         shown_off_screen(window, *opening)
-        window.go_to("inference", "training")
+        window.go_to(*place)
         widths = sorted({*range(least[0], least[0] + _WHERE_THEY_MEET, 3), *range(least[0], opening[0], 40), opening[0],
                          room[0]})
 
@@ -5738,8 +5748,8 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
         across("the past view")
         host.past_view.back_button.click()
         _settle()
-        stand_in = StandIn()
-        start_run(host, stand_in, spec=_training(stop_button="Stop the run…", place=("inference", "training")))
+        stand_in = StandIn(word=word)
+        start_run(host, stand_in, spec=_training(word, stop_button="Stop the run…", place=place))
         _settle()
         assert host.results.currentWidget() is host.run_view
         across("the run's page")

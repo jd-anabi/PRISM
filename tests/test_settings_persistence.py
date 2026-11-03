@@ -1402,8 +1402,57 @@ def test_the_config_tab_science_knobs_open_at_config_and_are_not_written():
     assert again.value("layout/ConfigPanel/splitter") == "stale"
 
 
+def test_the_prior_picks_are_written_when_they_come_into_use(tmp_path, monkeypatch):
+    """The bounds file and the prior are remembered as they come into use, when a run returns its prior, and at no other
+    moment: not as they are chosen, not as a run starts, not at closing. Limits typed by hand leave the bounds file
+    remembered as it was."""
+    from types import SimpleNamespace
+    from core import orchestrator
+    from core.config import BOUNDS_PATH
+    from core.gui import settings as st
+    from core.gui.remembered import BOUNDS_KEY, PRIOR_KEY
+    from core.gui.run.controller import controller
+    from tests._fixtures import qt_app
+    from tests._runs import Clock, StandIn, at, controller_on, turn_until
+    app = qt_app()
+    controller_on(tmp_path, Clock(at(8, 12, 4)))
+    screen = build_inference()
+    screen.config_panel.foot.main_button.click()
+    page = screen.prior_panel
+    stand_in = StandIn(word="Prior build")
+    monkeypatch.setattr(orchestrator, "build_prior", stand_in)
+
+    def remembered():
+        qs = st.settings()
+        qs.sync()
+        return qs.value(BOUNDS_KEY), qs.value(PRIOR_KEY)
+
+    page.bounds_picker.restore_key("master_tier1.txt")
+    page.names.name.setText("retrain_prior")
+    page.read_facts()
+    assert remembered() == (None, None), "a choice was remembered as it was made"
+    page.main_pressed()
+    assert stand_in.started.wait(5) and remembered() == (None, None), "a pick was remembered as its run started"
+    stand_in.release(SimpleNamespace(kind="prior", id="20261008T120400", name="retrain_prior", manifest=None))
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+    assert remembered() == ("master_tier1.txt", "20261008T120400")
+    assert screen.session.cfg.sources["bounds"] == str(BOUNDS_PATH / "nadrowski" / "master_tier1.txt")
+    page.typed_tick.setChecked(True)
+    page.names.name.setText("retrain_prior_2")
+    page.read_facts()
+    page.main_pressed()
+    assert stand_in.started.wait(5)
+    stand_in.release(SimpleNamespace(kind="prior", id="20261008T130000", name="", manifest=None))
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+    assert remembered() == ("master_tier1.txt", "20261008T130000")
+    out = st.settings()
+    page.save_settings(out)
+    out.sync()
+    assert remembered() == ("master_tier1.txt", "20261008T130000")
+
+
 def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
-    """On the Prior, Posterior, Validate and TSNPE tabs (the Config tab is pinned the same way by
+    """On the Prior, Posterior, Validate and TSNPE pages (the Config tab is pinned the same way by
     test_the_config_tab_science_knobs_open_at_config_and_are_not_written), every SCIENCE KNOB opens at
     config.py's value -- the truncate module's, for the HPD level and the direction count -- on EVERY
     launch, and its key is neither written nor read. A stale key an older build left in PRISM.ini is
@@ -1419,7 +1468,10 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
     ran.
 
     Three legs: an empty file; a file holding every old key one step from config.py; a save after
-    every knob box was edited, which must write the selections and the budget and nothing else.
+    every knob box was edited, which must write the selections and the budget and nothing else. The
+    Prior page holds its settings as rows of its form, and writes nothing at a save: what it remembers
+    is written as it comes into use, so the old keys of its boxes and the keys of its rows are both
+    in the file, and neither is read.
     """
     from PySide6.QtCore import QSettings
     from core import config
@@ -1428,14 +1480,15 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
     from tests._fixtures import qt_app
 
     qt_app()
-    # (group, the screen's panel attribute, {key, which is also the box attribute: config.py's value})
+    # (group, the screen's panel attribute, {key, which is also the box attribute or the form row's key: config.py's
+    # value})
     knobs = (
         ("inference_prior", "prior_panel", {
-            "sweep_iters": config.PRIOR_SWEEP_ITERATIONS, "sweep_batch": config.PRIOR_SWEEP_BATCH,
-            "sweep_max_sets": config.PRIOR_SWEEP_MAX_SETS, "sweep_step": config.PRIOR_SWEEP_STEP,
-            "sweep_units": config.STABILITY_SWEEP_ND_UNITS,
-            "cluster_size": config.PRIOR_CLUSTER_MIN_SIZE,
-            "cluster_samples": config.PRIOR_CLUSTER_MIN_SAMPLES}),
+            "num_iterations": config.PRIOR_SWEEP_ITERATIONS, "sweep_batch": config.PRIOR_SWEEP_BATCH,
+            "max_sets": config.PRIOR_SWEEP_MAX_SETS, "walk_step": config.PRIOR_SWEEP_STEP,
+            "stability_units": config.STABILITY_SWEEP_ND_UNITS,
+            "min_cluster_size": config.PRIOR_CLUSTER_MIN_SIZE,
+            "min_samples": config.PRIOR_CLUSTER_MIN_SAMPLES}),
         ("inference_posterior", "posterior_panel", {
             "flow_hidden": config.NSF_HIDDEN_FEATURES, "flow_transforms": config.NSF_NUM_TRANSFORMS,
             "flow_lr": config.TRAINING_LEARNING_RATE, "flow_patience": config.TRAINING_STOP_AFTER_EPOCHS,
@@ -1451,12 +1504,21 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
         """One step from config.py: an int box plus one, a float box halved."""
         return str(default + 1) if isinstance(default, int) else str(default / 2)
 
+    def box(inf, attr, key):
+        """The knob's box: the panel's attribute, or the field of a page's form row, a ticked field's own box."""
+        panel = getattr(inf, attr)
+        rows = getattr(getattr(panel, "form", None), "rows", None)
+        if rows is None:
+            return getattr(panel, key)
+        widget = rows[key].widget
+        return getattr(widget, "field", widget)
+
     def off_config(inf):
         """Every knob box whose number is not config.py's, as {(group, key): text}. Compared as
         numbers: the old restore wrote str(float(...)), so config.py's 1000 came back as "1000.0"."""
-        return {(group, key): getattr(getattr(inf, attr), key).text()
+        return {(group, key): box(inf, attr, key).text()
                 for group, attr, keys in knobs for key, default in keys.items()
-                if float(getattr(getattr(inf, attr), key).text()) != float(default)}
+                if float(box(inf, attr, key).text().replace(",", "")) != float(default)}
 
     # (a) an empty file (the autouse settings fixture points at a fresh path for this test)
     first = build_inference()
@@ -1468,6 +1530,8 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
     for group, _attr, keys in knobs:
         for key, default in keys.items():
             qs.setValue(f"{group}/{key}", stale(default))
+    for old in ("sweep_iters", "sweep_max_sets", "sweep_step", "sweep_units", "cluster_size", "cluster_samples"):
+        qs.setValue(f"inference_prior/{old}", "7")
     qs.setValue("inference_prior/bounds_source", "direct")
     qs.setValue("inference_prior/bounds", "stale_bounds.txt")
     qs.setValue("inference_posterior/num_runs", "1234")
@@ -1475,21 +1539,21 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
     qs.sync()
     relaunched = build_inference()
     assert off_config(relaunched) == {}, f"science knobs restored from an old file: {off_config(relaunched)}"
-    assert relaunched.prior_panel._saved_bounds_key == "stale_bounds.txt", "the bounds file is a selection"
-    assert relaunched.prior_panel.bounds_source.is_direct() is False
+    assert relaunched.prior_panel._kept_pick == ("", "stale_bounds.txt"), "the bounds file is a selection"
+    assert relaunched.prior_panel.typed_tick.isChecked() is False
     assert relaunched.posterior_panel.num_runs.text() == "1234", "the Posterior budget is remembered"
     assert relaunched.tsnpe_panel.num_runs.text() == "4321", "the TSNPE budget is remembered"
 
     # (c) nothing writes them: every knob box edited, the four panels saved into a file of their own
     for _group, attr, keys in knobs:
         for key, default in keys.items():
-            getattr(getattr(relaunched, attr), key).setText(stale(default))
+            box(relaunched, attr, key).setText(stale(default))
     out = QSettings(str(tmp_path / "saved.ini"), QSettings.IniFormat)
     for panel in (relaunched.prior_panel, relaunched.posterior_panel, relaunched.validate_panel,
                   relaunched.tsnpe_panel):
         panel.save_settings(out)
     out.sync()
-    expected = {"inference_prior": {"prior", "bounds"},
+    expected = {"inference_prior": set(),
                 "inference_posterior": {"posterior", "num_runs", "run_size_cap"},
                 "inference_validate": set(),
                 "inference_tsnpe": {"observation", "num_runs", "run_size_cap"}}
