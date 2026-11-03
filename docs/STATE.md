@@ -101,9 +101,9 @@ STAGE 4'S PLAN IS WRITTEN, COMMITTED AND APPROVED ("I approve it", 30 October).
   (two tasks), plans, Home's "Continue with these", after a reopening Continue and Resume, the exit.
 - **Departures 126 to 161** are in the plan and the design's section 8. The owner's answers of 30 October are 136 (Home names a
   training kept on purpose), 137 (a kept round's Resume after a reopening waits for stage 5), 143 (`CLAUDE.md`: three edits at
-  the exit, with two counts shown at the same yes), 144 (the room read again on a change of screen), 145 (Cascadia Mono is carried:
-  it is NOT installed on this computer, the window has shown Consolas all along, and the file needs a download the owner allows at
-  Task 7), 153 (the start's choice is the question, then the list).
+  the exit, with two counts shown at the same yes), 144 (the room read again on a change of screen), 145 (Cascadia Mono is carried;
+  corrected by 191: the window has shown Cascadia Mono here all along, from Windows Terminal's shared fonts, and the file,
+  downloaded on the owner's yes of 2 November, carries it to a computer without Terminal), 153 (the start's choice is the question, then the list).
 - **THE FIRM REQUIREMENT** is met on the rebuilt pages by their shape and in today's frame by departure 147; a test at text 1.0 and
   1.5, and one at 150 % display scaling in a fresh interpreter; Windows' own scaling in the exit's pictures (departure 160).
 - **The card test is owed once, at the exit** (the five lines and run 5; no diagnostic card); the slow set waits for stage 5's exit.
