@@ -717,6 +717,7 @@ class PriorPanel(StepPage):
         """Load the saved prior ``ref`` as "Load this prior" does, with the bounds file selected, for a caller that asked
         its own question first: the saved view shown, ``ref`` selected, the facts read, and the load started unless they
         block it. True when its run was started."""
+        self._by_keyboard = False                # no key pressed this load
         self.show_view("saved")
         self.prior_picker.restore_key(ref)
         self.read_facts()

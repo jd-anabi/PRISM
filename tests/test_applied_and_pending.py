@@ -1241,6 +1241,103 @@ def test_a_load_by_the_keyboard_hands_it_on_to_training_and_one_by_the_mouse_doe
         assert QApplication.focusWidget() is window.shell.rail.row("prior") and follower.target() is None
 
 
+def test_a_press_that_starts_nothing_hands_no_keyboard_to_a_later_load(tmp_path, monkeypatch):
+    """A press by the keyboard is remembered while the run it started lives, and no longer. Answered "Keep the
+    posterior", it started none; a load the chain starts later, with no key pressed, then hands the keyboard to no
+    step."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from core import orchestrator
+    from core.artifacts import ArtifactStore
+    from core.gui import style
+    from core.gui.run.controller import controller
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    from tests._look_helpers import _arrive, _settle
+    from tests._runs import StandIn, turn_until
+    stand_in = StandIn(word="Prior load")
+    monkeypatch.setattr(orchestrator, "build_prior", stand_in)
+    with _first_step_with_the_ring(tmp_path, monkeypatch) as (window, screen, first):
+        _apply(first)
+        window.go_to("inference", "prior")
+        _settle()
+        page = screen.prior_panel
+        store, cfg = ArtifactStore(tmp_path / "Artifacts"), _nad_cfg()
+        one, two = (_prior_artifact(store, cfg, name=name).id for name in ("a_prior", "b_prior"))
+        held = SimpleNamespace(kind="posterior", id="post_old", name="retrain")
+        screen.session.posterior = held
+        page.show_view("saved")
+        page.prior_picker.refresh()
+        page.bounds_picker.restore_key("master.txt")
+        page.prior_picker.restore_key(one)
+        page.read_facts()
+        _settle()
+        app, button, follower = QApplication.instance(), page.foot.main_button, style.current_follower()
+        button.setFocus(Qt.TabFocusReason)
+        _arrive(button, Qt.TabFocusReason)
+        assert follower.target() is button
+        choose(monkeypatch, words="Keep the posterior")
+        forget_asked()
+        QTest.keyClick(button, Qt.Key_Return)
+        _settle()
+        assert asked().title == "Load this prior?" and not controller().is_live() and stand_in.calls == []
+        assert page._by_keyboard is False, "a press that started no run is still taken for a press by the keyboard"
+        assert page.load_record(two) is True
+        assert stand_in.started.wait(5)
+        stand_in.release(SimpleNamespace(kind="prior", id=two, name="b_prior", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        _settle()
+        assert screen.session.inf_prior.id == two
+        assert QApplication.focusWidget() is not page.next_button and follower.target() is not page.next_button
+
+
+@pytest.mark.parametrize("load", ["returns its record", "fails"])
+def test_after_a_load_how_the_run_went_opens_no_run_of_another_record(load, tmp_path, monkeypatch):
+    """A build that finished leaves "How the run went" over its figure. A load of another prior that returns it closes
+    the build's figure and the link with it: the page shows the record loaded alone, and no run's page holds its figure.
+    A load that fails leaves the build's figure, the link, and the build's page holding that figure."""
+    from core.artifacts import default_store
+    from core.gui.run.controller import controller
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    from tests._runs import turn_until
+    app = qt_app()
+    choose(monkeypatch, words="Build and release the posterior")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        stack, link = page.figure_stack, page.run_view.how_link
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        stand_in.started.clear()
+        stand_in.figure("Prior")
+        stand_in.release(SimpleNamespace(kind="prior", id="p_new", name="retrain_2", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        _settle_events()
+        assert [stack.tabText(i) for i in range(stack.count())] == ["Prior"] and link.isVisibleTo(page.figures)
+        two = _prior_artifact(default_store(), _nad_cfg(), name="other_prior").id
+        page.show_view("saved")
+        page.prior_picker.refresh()
+        page.prior_picker.restore_key(two)
+        page.read_facts()
+        assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        stand_in.figure("Prior (loaded)")
+        turn_until(app, lambda: stack.count() == 2, 10.0)
+        if load == "returns its record":
+            stand_in.release(SimpleNamespace(kind="prior", id=two, name="other_prior", manifest=None))
+        else:
+            stand_in.fail(OSError("prior.pt cannot be read"))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        _settle_events()
+        shown = [stack.tabText(i) for i in range(stack.count())]
+        if load == "returns its record":
+            assert shown == ["Prior (loaded)"] and not link.isVisibleTo(page.figures), shown
+            return
+        assert shown == ["Prior"] and link.isVisibleTo(page.figures), shown
+        link.click()
+        assert page.results.currentWidget() is page.run_view
+        assert [stack.tabText(i) for i in range(stack.count()) if stack.isTabVisible(i)] == ["Prior"]
+
+
 def test_a_store_change_during_a_build_reads_nothing_until_it_ends(tmp_path, monkeypatch):
     """Records may change the store while a build is live: the saved list is read again, which a run does not forbid,
     and nothing else is, neither the record's facts nor the sets nor the history, until the build has ended; it then

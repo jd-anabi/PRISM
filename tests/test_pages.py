@@ -1732,31 +1732,59 @@ def test_the_figures_stand_in_their_place_and_hide_while_they_hold_nothing(tmp_p
     assert box.indexOf(stack) == box.indexOf(page.run_view.how_link) + 1 and stack.isVisible()
 
 
-def test_a_run_empties_the_figures_of_the_page_it_starts_on(tmp_path):
-    """One record's figures at a time: a run empties the viewer as it starts. A load, which never takes the page, keeps
-    them while it runs, and once it has returned its record leaves its own alone; one that fails leaves what stood. A
-    start on another page empties nothing here."""
+@pytest.mark.parametrize("end", ["returns its record", "is refused", "fails", "is stopped"])
+def test_a_run_empties_the_figures_of_the_page_it_starts_on(end, tmp_path):
+    """One record's figures at a time: a run that takes the column empties the viewer as it starts, and once it has
+    finished "How the run went" opens its page on its figures alone. A load, which never takes the page, keeps every
+    figure while it runs and leaves that run's page as it was. One that returns its record closes the figures that are
+    not its own, and "How the run went" goes, for the page then shows that record alone and no run's page is the load's;
+    one that returns none, refused, failed or stopped, closes what it added and leaves the figures, the link and the
+    run's page as they stood. A start on another page empties nothing here."""
     from core.gui.run.model import RunSpec
+    from core.refusals import Refusal
     app = qt_app()
     window, page, _clock = _a_page(tmp_path)
     page.figure_stack.add_figure("Held", b"")
-    loading = RunSpec("Prior load", ("inference", "training"), keeps_files=False, loads_only=True)
+    loading = RunSpec("Prior load", ("inference", "training"), keeps_files=False, loads_only=True, stop_asks=False)
+    stack, link = page.figure_stack, page.run_view.how_link
 
-    def titles():
-        return [page.figure_stack.tabText(at) for at in range(page.figure_stack.count())]
+    def titles(shown=False):
+        return [stack.tabText(at) for at in range(stack.count()) if not shown or stack.isTabVisible(at)]
 
+    build = StandIn()
+    _start(page, build, provide_fig_sink=True)
+    assert titles() == []
+    build.figure("Built")
+    turn_until(app, lambda: stack.count() == 1)
+    build.release()
+    turn_until(app, lambda: not controller().is_live())
+    _settle()
+    assert titles() == ["Built"] and link.isVisibleTo(page.figures)
     load = StandIn(word="Prior load")
     _start(page, load, spec=loading, provide_fig_sink=True)
-    load.figure("Prior (loaded)")
-    turn_until(app, lambda: page.figure_stack.count() == 2)
-    load.release()
+    if end != "is refused":
+        load.figure("Prior (loaded)")
+        turn_until(app, lambda: stack.count() == 2)
+    if end == "returns its record":
+        load.release()
+    elif end == "is refused":
+        load.fail(Refusal("The prior is for another model.", field="prior"))
+    elif end == "fails":
+        load.fail(RuntimeError("the record cannot be read"))
+    else:
+        controller().request_stop()
     turn_until(app, lambda: not controller().is_live())
-    assert titles() == ["Prior (loaded)"]
-    failing = StandIn(word="Prior load")
-    _start(page, failing, spec=loading, provide_fig_sink=True)
-    failing.fail(RuntimeError("the record cannot be read"))
-    turn_until(app, lambda: not controller().is_live())
-    assert titles() == ["Prior (loaded)"]
+    _settle()
+    assert page.results.currentWidget() is page.figures
+    if end == "returns its record":
+        assert titles() == ["Prior (loaded)"] and not link.isVisibleTo(page.figures), (titles(), end)
+    else:
+        assert titles() == ["Built"] and link.isVisibleTo(page.figures), (titles(), end)
+        link.click()
+        assert page.results.currentWidget() is page.run_view and titles(shown=True) == ["Built"], end
+        page.run_view.back_button.click()
+        _settle()
+        assert page.results.currentWidget() is page.figures and link.isVisibleTo(page.figures)
     other = StandIn(word="Reduction")
     start_run(window.part("reduction"), other)
     assert page.figure_stack.count() == 1

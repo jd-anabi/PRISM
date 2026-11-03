@@ -196,11 +196,24 @@ class FigureStack(QTabWidget):
         if self._run is not None and self._run[1] is None:
             self._run[1] = self._added
 
-    def keep_only_the_run(self) -> None:
-        """Close every tab that is no figure of the page's last run: a page whose run has returned its record shows that
-        record's figures alone."""
+    def mark(self) -> int:
+        """Where the tabs added from now on begin, for ``close_before`` and ``close_from``: what a run that only loads a
+        record adds, kept apart from the run the run's page shows."""
+        return self._added
+
+    def close_before(self, mark: int) -> None:
+        """Close every tab added before ``mark``: a load that has returned its record shows that record's figures
+        alone."""
+        self._close_where(lambda number: number < mark)
+
+    def close_from(self, mark: int) -> None:
+        """Close every tab added from ``mark`` on: a load that returned no record leaves the figures as they stood."""
+        self._close_where(lambda number: number >= mark)
+
+    def _close_where(self, which) -> None:
         for index in reversed(range(self.count())):
-            if not self._of_the_run(self.widget(index)):
+            number = getattr(self.widget(index), "_number", None)
+            if number is not None and which(number):
                 self._close_tab(index)
 
     def only_the_run(self, on: bool) -> None:

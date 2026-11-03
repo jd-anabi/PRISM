@@ -98,6 +98,7 @@ class StepPage(RunHost, QWidget):
         self._live = controller().is_live()
         self._by_keyboard = False            # the last press was made by the keyboard, until its run is over
         self._hand_back = False              # a load pressed by the keyboard failed: its question gives the keyboard back
+        self._load_from = None               # where the figures of the load in hand begin, while it runs
         self.names = None                    # the name and note of the record a run makes, when the page holds them
         self._said_changed: dict = {}        # what this page said under each selection row, by its field key
         box = QVBoxLayout(self)
@@ -406,13 +407,17 @@ class StepPage(RunHost, QWidget):
     def _main_clicked(self) -> None:
         """The press: the reading that counts, then the page's own, unless that reading found something that blocks,
         which greys the button and says so beside it. A press is by the keyboard when the ring stands on the button as it
-        is pressed, which is the window's own test for Enter."""
+        is pressed, which is the window's own test for Enter. It is remembered while the run it started lives, and no
+        longer: a press that started none, greyed by its reading or answered "keep", ends with itself."""
         follower = style.current_follower()
         self._by_keyboard = follower is not None and follower.target() is self.foot.main_button
         self.read_facts()
-        if not self.foot.main_button.isEnabled():
-            return
-        self.main_pressed()
+        try:
+            if self.foot.main_button.isEnabled():
+                self.main_pressed()
+        finally:
+            if not self.is_running():
+                self._by_keyboard = False
 
     @reported()
     def _focus_moved(self, before, now) -> None:
@@ -453,26 +458,31 @@ class StepPage(RunHost, QWidget):
 
     def _run_began(self, spec) -> None:
         """A run of this page's own takes away the page's own line, and empties its figures and takes its column. A run
-        that only loads a record keeps them while it runs: the figures it adds are its own."""
+        that only loads a record keeps them while it runs, and leaves the last run that took the column its figures and
+        its link: the figures the load adds are kept apart."""
         self.in_use.say(None)
         self._hand_back = False
         if spec.loads_only:
-            self.figure_stack.run_begins()
+            self._load_from = self.figure_stack.mark()
         else:
             self.figure_stack.clear_all()
         super()._run_began(spec)
 
     def _run_over(self, status) -> None:
         """A run of this page's own has ended. One that only loaded a record and returned it leaves its own figures
-        alone, as a run that takes the column does; one that failed leaves what stood. Pressed by the keyboard, a load
-        that returned its record hands the keyboard on to the next step, and one that failed has it given back to the
-        main button once its failure is told."""
+        alone, the page then showing that record alone, so "How the run went" goes until a run that takes the column
+        ends: no run's page is the load's. One that returned none leaves the figures, the link and the run's page as
+        they stood before it. Pressed by the keyboard, a load that returned its record hands the keyboard on to the
+        next step, and one that failed has it given back to the main button once its failure is told."""
         by_keyboard, self._by_keyboard = self._by_keyboard, False
         if status.loading:
-            self.figure_stack.run_ends()
             finished = status.outcome == "finished"
-            if finished:
-                self.figure_stack.keep_only_the_run()
+            mark, self._load_from = self._load_from, None
+            if mark is not None and finished:
+                self.figure_stack.close_before(mark)
+                self.run_view.how_link.setVisible(False)
+            elif mark is not None:
+                self.figure_stack.close_from(mark)
             if by_keyboard and finished and not self.next_button.isHidden():
                 self.next_button.setFocus(Qt.TabFocusReason)
             self._hand_back = by_keyboard and not finished
