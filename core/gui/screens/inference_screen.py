@@ -169,10 +169,10 @@ class InferenceScreen(QWidget):
 
     def take_prior(self, cfg, loaded) -> None:
         """A prior has come back from its run, made on ``cfg``, the very configuration the Prior step handed the run:
-        what depended on the prior held is let go, the two come into use together, the bounds file and the prior are
-        remembered as the picks last in use, and the gates and the states are worked out once. Called while the run is
-        still live, so it writes the session and nothing else reads: the Prior step reads its lists again when the run
-        has ended."""
+        what depended on the prior held is let go, the two come into use together, the bounds file, with the model it
+        came into use with, and the prior are remembered as the picks last in use, and the gates and the states are
+        worked out once. Called while the run is still live, so it writes the session and nothing else reads: the Prior
+        step reads its lists again when the run has ended."""
         session = self.session
         session.reset_downstream("prior")
         session.inf_prior = loaded
@@ -180,7 +180,7 @@ class InferenceScreen(QWidget):
         key = bounds_in_use(cfg)
         picks = [(remembered.PRIOR_KEY, getattr(loaded, "id", None))]
         if key:
-            picks.insert(0, (remembered.BOUNDS_KEY, key))
+            picks[:0] = [(remembered.BOUNDS_KEY, key), (remembered.BOUNDS_MODEL_KEY, getattr(cfg, "model", None))]
         remembered.put_many([(name, value) for name, value in picks if isinstance(value, str) and value])
         self.refresh_gates()
 

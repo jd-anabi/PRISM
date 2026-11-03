@@ -255,6 +255,7 @@ OTHERS_TEXT = ("A new prior cannot continue a saved simulation set: the {} saved
 READS = {"chi": "a frequency response", "forced": "a spontaneous recording and one driven recording",
          "spontaneous": "a spontaneous recording only"}
 PARAMETERS_TEXT = "{} parameters: {} of the model ({}) and {} {} ({})."
+MODEL_ONLY_TEXT = "{} parameters, all of the model ({})."
 FORCING_TEXT = "It has a forcing section."
 NO_FORCING_TEXT = "It has no forcing section."
 READS_TEXT = "With the kind of observation applied in step 1, a posterior trained on it reads: {}."
@@ -296,11 +297,14 @@ def build_words(took) -> str:
 def bounds_words(params: Sequence[str], scales: Sequence[str], forcing: bool, mode: str) -> str:
     """What a bounds file is, under its list: its parameters, the model's and the scales, named in the file's order;
     whether it has a forcing section; and how a posterior trained on it reads, by ``mode``, the kind of observation of a
-    configuration made from it."""
+    configuration made from it. A file with no scale names none."""
     scale = "scale" if len(scales) == 1 else "scales"
-    return " ".join((PARAMETERS_TEXT.format(len(params) + len(scales), len(params), ", ".join(params), len(scales),
-                                            scale, ", ".join(scales)),
-                     FORCING_TEXT if forcing else NO_FORCING_TEXT, READS_TEXT.format(READS.get(mode, mode))))
+    if scales:
+        named = PARAMETERS_TEXT.format(len(params) + len(scales), len(params), ", ".join(params), len(scales), scale,
+                                       ", ".join(scales))
+    else:
+        named = MODEL_ONLY_TEXT.format(len(params), ", ".join(params))
+    return " ".join((named, FORCING_TEXT if forcing else NO_FORCING_TEXT, READS_TEXT.format(READS.get(mode, mode))))
 
 
 def saved_prior_words(made: str, model: str, parameters: int, built_on: "str | None") -> str:

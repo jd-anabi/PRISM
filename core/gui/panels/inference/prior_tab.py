@@ -31,7 +31,7 @@ from core.SBI import training_checkpoint
 
 from ... import record_words, settings, style, texts
 from ...reported import reported
-from ...remembered import BOUNDS_KEY, MODEL_KEY, PRIOR_KEY
+from ...remembered import BOUNDS_KEY, BOUNDS_MODEL_KEY, MODEL_KEY, PRIOR_KEY
 from ...run import history
 from ...run.controller import controller
 from ...run.model import RunSpec
@@ -192,6 +192,7 @@ class PriorPanel(StepPage):
         self._bounds_pick = ("", "")             # the model and the bounds file that came into use last
         self._kept_pick = None                   # the same, as the settings file gave it, until a model is applied
         self._grid_from = None                   # the bounds file the limits typed by hand were loaded from
+        self._lists_wait = False                 # the reading after the typing stops reads neither list
         self.switch_button = QPushButton()
         self.switch_button.clicked.connect(self._switch)
         self.head.add_action(self.switch_button)
@@ -440,10 +441,13 @@ class PriorPanel(StepPage):
 
     # ── the reading of the disk and the card ──
     def read_disk(self) -> None:
-        """The candidate the press would hand the run, built once for each bounds file as it stands and each draft; what
-        it is; and, for the view shown, the saved prior's record and the simulation sets made with it, or how long the
-        last build took and the sets of the model."""
+        """The two lists read again, but at the reading after the typing stops; the candidate the press would hand the
+        run, built once for each bounds file as it stands and each draft; what it is; and, for the view shown, the saved
+        prior's record and the simulation sets made with it, or how long the last build took and the sets of the
+        model."""
         self._read = {}
+        if not self._lists_wait:
+            self._read_the_lists()
         self._build_candidate()
         self._say_the_file()
         if self.view == "saved":
@@ -451,6 +455,21 @@ class PriorPanel(StepPage):
         else:
             self._took = history.duration(controller().folder(), "Prior build")
             self._read["sets_for_model"] = self._sets_of_model()
+
+    def _read_the_lists(self) -> None:
+        """The bounds files of the model's folder and the saved priors, listed again: a file or a record written by
+        another program comes in. Each list keeps its selection and says it only when it moved."""
+        self.bounds_picker.refresh()
+        self.prior_picker.refresh()
+
+    def _timer_fired(self) -> None:
+        """The reading after the typing stops reads what the typing changed and neither list: a person typing adds no
+        file, and the saved list takes longer to read the more priors are saved. Every other reading reads both."""
+        self._lists_wait = True
+        try:
+            super()._timer_fired()
+        finally:
+            self._lists_wait = False
 
     def _build_candidate(self) -> None:
         """The configuration of the draft held and the bounds chosen, built again only when either changed, a file by
@@ -604,14 +623,18 @@ class PriorPanel(StepPage):
     @reported(QWidget.showEvent)
     def showEvent(self, event):
         """The first time the page comes into sight it opens on a saved prior to load when one is saved, else on a new
-        one to build: the list of saved priors is read for it, which a run does not forbid."""
+        one to build: the list of saved priors is read for it, which a run does not forbid. Each time it comes into
+        sight with no run live, the two lists are read again, by the reading when the page has one to make."""
         if not self._view_chosen:
             self._view_chosen = True
             self.prior_picker.refresh()
             self._apply_view("saved" if self.prior_picker.has_entries() else "build")
             self.redraw()
             self._tell_the_rail()
+        reads = self.stale
         super().showEvent(event)
+        if not reads and not controller().is_live():
+            self._read_the_lists()
 
     # ── the choices ──
     def _bounds_chosen(self, _index: int = 0) -> None:
@@ -659,7 +682,8 @@ class PriorPanel(StepPage):
         self.gone_line.set_text(GONE_TEXT.format(_named(key)) if gone else "")
         self.gone_line.setVisible(gone)
         self.form.rows["bounds"].kept = not gone and bool(key) and self._kept_pick == (model, key)
-        self._kept_pick = None
+        if self._kept_pick is not None and self._kept_pick[0] == model:
+            self._kept_pick = None               # given back to its model: kept from last time until touched
         self._grid_from = None
         if self.typed_tick.isChecked():
             self._load_the_grid()
@@ -753,7 +777,7 @@ class PriorPanel(StepPage):
             cfg = self._dispatched
             key = bounds_in_use(cfg)
             if key:
-                self._bounds_pick = (getattr(cfg, "model", ""), key)
+                self._bounds_pick, self._kept_pick = (getattr(cfg, "model", ""), key), None
             self.prior_picker.refresh()
             self.prior_picker.restore_key(getattr(made, "id", "") or "")
             if self.view == "build":
@@ -779,9 +803,11 @@ class PriorPanel(StepPage):
     # ── what is remembered ──
     def restore_settings(self, qs) -> None:
         """The bounds file and the prior that came into use last, put back as choices, never applied, and marked kept
-        from last time until they are touched. The bounds file waits for the model step 1 applies, whose folder holds it;
-        a file no longer there is said."""
-        self._bounds_pick = self._kept_pick = (settings.get_str(qs, MODEL_KEY, ""), settings.get_str(qs, BOUNDS_KEY, ""))
+        from last time until they are touched. The bounds file waits for step 1 to apply the model it came into use
+        with, whose folder holds it; a file no longer there is said. A file remembered with no model, as an older PRISM
+        wrote it, waits for the model step 1 applied last."""
+        model = settings.get_str(qs, BOUNDS_MODEL_KEY, "") or settings.get_str(qs, MODEL_KEY, "")
+        self._bounds_pick = self._kept_pick = (model, settings.get_str(qs, BOUNDS_KEY, ""))
         prior = settings.get_str(qs, PRIOR_KEY, "")
         self.prior_picker.restore_key(prior)
         self.form.rows["prior"].kept = bool(prior) and self.prior_picker.key() == prior

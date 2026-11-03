@@ -1072,18 +1072,22 @@ def test_a_load_that_fails_says_so_in_the_shared_question(tmp_path, monkeypatch)
     """A load is never handed the run's page, so its failure is told in the shared question, the error's type and its
     trace behind its button, and stands after it as the page's own line; nothing held changes. A refusal at the load is
     told as every refusal is."""
+    from core.artifacts import default_store
     from core.gui.run.controller import controller
     from core.refusals import Refusal
+    from tests._fixtures import _nad_cfg, _prior_artifact
     from tests._runs import turn_until
     app = qt_app()
     choose(monkeypatch, words="Load and release the posterior")
     with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
         held = screen.session.inf_prior
+        two = _prior_artifact(default_store(), _nad_cfg(), name="other_prior").id
         page.show_view("saved")
-        page.prior_picker.combo.addItem("other_prior", "p_two")
-        page.prior_picker.restore_key("p_two")
+        page.prior_picker.refresh()
+        page.prior_picker.restore_key(two)
         page.main_pressed()
         assert stand_in.started.wait(5)
+        stand_in.started.clear()
         forget_asked()
         stand_in.fail(OSError("prior.pt cannot be read"))
         turn_until(app, lambda: not controller().is_live(), 10.0)
@@ -1367,20 +1371,123 @@ def test_a_store_change_during_a_build_reads_nothing_until_it_ends(tmp_path, mon
 
 def test_a_load_by_code_reads_first_and_asks_nothing(tmp_path, monkeypatch):
     """A caller that asked its own question loads a saved prior through the page as its button does, the facts read
-    first and no question asked: True when the load started, False when the facts block it, with nothing started."""
+    first and no question asked: True when the load started, False when the facts block it, with nothing started. A
+    load leaves the name and the note as typed for a build, and says nothing of a name."""
+    from core.artifacts import default_store
     from core.gui.run.controller import controller
+    from tests._fixtures import _nad_cfg, _prior_artifact
     from tests._runs import turn_until
     app = qt_app()
     with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
-        page.prior_picker.combo.addItem("other", "p_two")
-        assert page.load_record("p_two") is False and stand_in.calls == [], "a prior that cannot be read was loaded"
-        monkeypatch.setattr(page, "_read_the_record", lambda: None)
+        other_model = _prior_artifact(default_store(), _nad_cfg(), name="of_hopf", model="HOPF").id
+        two = _prior_artifact(default_store(), _nad_cfg(), name="other").id
+        assert page.load_record(other_model) is False and stand_in.calls == [], "a prior of another model was loaded"
         forget_asked()
-        assert page.load_record("p_two") is True and all_asked() == []
-        assert stand_in.started.wait(5) and stand_in.calls[-1][0][1:] == ("p_two", False)
-        stand_in.release(SimpleNamespace(kind="prior", id="p_two", name="other", manifest=None))
+        assert page.load_record(two) is True and all_asked() == []
+        assert stand_in.started.wait(5) and stand_in.calls[-1][0][1:] == (two, False)
+        stand_in.release(SimpleNamespace(kind="prior", id=two, name="other", manifest=None))
         turn_until(app, lambda: not controller().is_live(), 10.0)
-        assert screen.session.inf_prior.id == "p_two" and page.view == "saved"
+        assert screen.session.inf_prior.id == two and page.view == "saved"
+        assert page.in_use.said.isHidden(), page.in_use.said.sentence.plain_text()
+        page.show_view("build")
+        assert (page.names.name.text(), page.names.note.text()) == ("retrain_2", "a second try")
+
+
+def test_the_two_lists_are_read_again_at_check_again_and_at_the_show_and_not_as_one_types(tmp_path, monkeypatch):
+    """A bounds file put into the model's folder, and a prior written into the store by another program, which tells the
+    window nothing, come into the two lists at "Check again", and as the page comes into sight again; the reading after
+    the typing stops reads neither list. Each list keeps its selection."""
+    import shutil
+    from core.artifacts import default_store
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    from tests._look_helpers import _settle
+    with _second_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        folder = tmp_path / "bounds"
+        folder.mkdir()
+        shutil.copyfile(page.bounds_picker.selected_path(), folder / "master.txt")
+        page.bounds_picker.repoint(folder, "master.txt")
+        page.read_facts()
+        files, priors = page.bounds_picker.combo, page.prior_picker.combo
+
+        def listed(combo):
+            return [combo.itemData(at) for at in range(combo.count())]
+
+        shutil.copyfile(folder / "master.txt", folder / "added.txt")
+        made = _prior_artifact(default_store(), _nad_cfg(), name="from_the_command_line").id
+        page.names.name.setText("retrain_3")
+        page.read_timer.timeout.emit()                   # the reading after the typing stops
+        assert "added.txt" not in listed(files) and made not in listed(priors), "the typing's reading read a list"
+        page.foot.check_again.click()
+        assert "added.txt" in listed(files) and made in listed(priors), (listed(files), listed(priors))
+        assert page.bounds_picker.key() == "master.txt" and page.prior_picker.key() == ""
+        shutil.copyfile(folder / "master.txt", folder / "another.txt")
+        later = _prior_artifact(default_store(), _nad_cfg(), name="written_later").id
+        window.go_to("home")
+        _settle()
+        window.go_to("inference", "prior")
+        _settle()
+        assert "another.txt" in listed(files) and later in listed(priors), (listed(files), listed(priors))
+        assert page.bounds_picker.key() == "master.txt"
+
+
+@pytest.mark.parametrize("then", ["another model applied", "a prior built for it on limits typed by hand"])
+def test_the_bounds_file_remembered_comes_back_with_the_model_it_came_into_use_with(then, tmp_path, monkeypatch):
+    """The bounds file is remembered with the model it came into use with. Another model applied after it, or a prior
+    built for that model on limits typed by hand, which leave the file remembered as it was, change nothing of it: that
+    model says nothing of the file, at the next launch either, and the model the file came into use with gives it back,
+    in this session and kept from last time at the next."""
+    from core.gui import settings as st
+    from core.gui.remembered import BOUNDS_KEY, BOUNDS_MODEL_KEY, MODEL_KEY
+    from core.gui.run.controller import controller
+    from tests._look_helpers import _settle
+    from tests._runs import turn_until
+    app = qt_app()
+    with _second_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        first = screen.config_panel
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        stand_in.started.clear()
+        stand_in.release(SimpleNamespace(kind="prior", id="p_new", name="retrain_2", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        window.go_to("inference", "model")
+        _settle()
+        first.model_combo.setCurrentText("HOPF")
+        choose(monkeypatch, words="Apply and start a new session")
+        _apply(first)
+        assert page.bounds_picker.key() == "" and page.gone_line.isHidden()
+        if then == "another model applied":
+            first.model_combo.setCurrentText("NADROWSKI")
+            _apply(first)
+            assert page.bounds_picker.key() == "master.txt", "the file a build came into use on was not given back"
+            first.model_combo.setCurrentText("HOPF")
+            _apply(first)
+        else:
+            window.go_to("inference", "prior")
+            _settle()
+            page.show_view("build")
+            page.bounds_picker.restore_key("cell.txt")
+            page.typed_tick.setChecked(True)
+            page.names.name.setText("hopf_typed")
+            page.read_facts()
+            assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+            page.main_pressed()
+            assert stand_in.started.wait(5)
+            stand_in.release(SimpleNamespace(kind="prior", id="p_hopf", name="hopf_typed", manifest=None))
+            turn_until(app, lambda: not controller().is_live(), 10.0)
+        qs = st.settings()
+        qs.sync()
+        assert (qs.value(MODEL_KEY), qs.value(BOUNDS_KEY), qs.value(BOUNDS_MODEL_KEY)) == (
+            "HOPF", "master.txt", "NADROWSKI")
+    again = build_inference()
+    later = again.prior_panel
+    again.config_panel.model_combo.setCurrentText("HOPF")
+    again.config_panel.foot.main_button.click()
+    assert later.bounds_picker.key() == "" and later.gone_line.isHidden()
+    assert later.form.rows["bounds"].origin.text() == ""
+    again.config_panel.model_combo.setCurrentText("NADROWSKI")
+    again.config_panel.foot.main_button.click()
+    assert later.bounds_picker.key() == "master.txt" and later.gone_line.isHidden()
+    assert later.form.rows["bounds"].origin.text() == "kept from last time"
 
 
 def test_the_configuration_in_use_says_its_units_and_its_force_scale(tmp_path, monkeypatch):

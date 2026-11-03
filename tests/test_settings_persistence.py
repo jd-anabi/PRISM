@@ -1451,6 +1451,28 @@ def test_the_prior_picks_are_written_when_they_come_into_use(tmp_path, monkeypat
     assert remembered() == ("master_tier1.txt", "20261008T130000")
 
 
+def test_the_saved_prior_of_last_time_is_put_back_at_launch(store):
+    """The prior that came into use last is selected in the saved list at the next launch, marked kept from last time
+    until it is touched, and never loaded; one no longer saved selects nothing and is marked nothing."""
+    from core.gui import settings as st
+    from core.gui.remembered import PRIOR_KEY
+    from tests._fixtures import _nad_cfg, _prior_artifact, qt_app
+    qt_app()
+    made = _prior_artifact(store, _nad_cfg(), name="last_time").id
+    _prior_artifact(store, _nad_cfg(), name="another")
+    for remembered, selected, origin in ((made, made, "kept from last time"), ("gone_since", "", "")):
+        qs = st.settings()
+        qs.setValue(PRIOR_KEY, remembered)
+        qs.sync()
+        screen = build_inference()
+        page = screen.prior_panel
+        screen.config_panel.foot.main_button.click()
+        page.show_view("saved")
+        page.redraw()
+        assert page.prior_picker.key() == selected and screen.session.inf_prior is None, remembered
+        assert page.form.rows["prior"].origin.text() == origin, remembered
+
+
 def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
     """On the Prior, Posterior, Validate and TSNPE pages (the Config tab is pinned the same way by
     test_the_config_tab_science_knobs_open_at_config_and_are_not_written), every SCIENCE KNOB opens at

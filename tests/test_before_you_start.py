@@ -158,6 +158,20 @@ def test_what_a_bounds_file_is_is_said_in_one_line(mode, reads):
     assert bounds_words(["k"], ["x_scale"], True, "forced").startswith("2 parameters: 1 of the model (k) and 1 scale (")
 
 
+def test_a_bounds_file_with_no_scale_names_none():
+    """A bounds file with no section of scales, as each of Bp's, says its parameters are all the model's, and names no
+    scale."""
+    from core.config import BOUNDS_PATH
+    from core.Helpers import file_manager
+    params, scales, forcing, _ = file_manager.parse_bounds_file(str(BOUNDS_PATH / "bp" / "cell_1.txt"))
+    assert (len(params), len(scales), len(forcing)) == (17, 0, 0)
+    said = bounds_words(list(params), list(scales), bool(forcing), "spontaneous")
+    assert said == (f"17 parameters, all of the model ({', '.join(params)}). It has no forcing section. With the kind "
+                    "of observation applied in step 1, a posterior trained on it reads: a spontaneous recording only.")
+    assert bounds_words(["k"], ["x_scale"], False, "chi").startswith(
+        "2 parameters: 1 of the model (k) and 1 scale (x_scale).")
+
+
 def test_a_prior_is_said_by_what_it_was_built_on():
     assert prior_in_use("retrain_prior", "master_tier1.txt", 13) == (
         "retrain_prior", "Built on master_tier1.txt, 13 parameters. Saved as a record.")
