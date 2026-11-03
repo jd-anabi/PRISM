@@ -1415,6 +1415,59 @@ def test_before_you_start_reads_the_record_and_its_sets_in_the_saved_view(tmp_pa
             "Information. 1 saved simulation set was made with this prior; it holds 4 batches."], said
 
 
+@pytest.mark.parametrize("way", ["Back to the form", "the past view's way back"])
+def test_after_a_load_how_the_run_went_stays_away_until_a_build_ends(way, tmp_path, monkeypatch):
+    """A load that returns its record withdraws "How the run went" whatever stands in the column as it starts. A load by
+    code while the build's page is open leaves that page up, without the build's figure; its way back, "Back to the
+    form" or the past view's, gives the figures again, the loaded record's alone, with no link. The next build that ends
+    brings the link back, and "Back to the form" after it keeps it."""
+    from core.artifacts import default_store
+    from core.gui.run.controller import controller
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    from tests._runs import turn_until
+    app = qt_app()
+    choose(monkeypatch, words="Build and release the posterior")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        stack, link = page.figure_stack, page.run_view.how_link
+
+        def ran(figure, made):
+            assert stand_in.started.wait(5)
+            stand_in.started.clear()
+            stand_in.figure(figure)
+            stand_in.release(made)
+            turn_until(app, lambda: not controller().is_live(), 10.0)
+            _settle_events()
+
+        page.main_pressed()
+        ran("Prior", SimpleNamespace(kind="prior", id="p_new", name="retrain_2", manifest=None))
+        assert link.isVisibleTo(page.figures)
+        link.click()
+        assert page.results.currentWidget() is page.run_view
+        two = _prior_artifact(default_store(), _nad_cfg(), name="other_prior").id
+        assert page.load_record(two) is True
+        ran("Prior (loaded)", SimpleNamespace(kind="prior", id=two, name="other_prior", manifest=None))
+        assert page.results.currentWidget() is page.run_view, "the load took the column"
+        if way == "Back to the form":
+            page.run_view.back_button.click()
+        else:
+            page.show_past_view()
+            page.past_view.back.emit()
+        _settle_events()
+        assert page.results.currentWidget() is page.figures
+        assert [stack.tabText(i) for i in range(stack.count())] == ["Prior (loaded)"]
+        assert not link.isVisibleTo(page.figures), f"the link came back by {way}"
+        page.show_view("build")
+        page.names.name.setText("retrain_3")
+        page.read_facts()
+        page.main_pressed()
+        ran("Prior", SimpleNamespace(kind="prior", id="p_third", name="retrain_3", manifest=None))
+        assert link.isVisibleTo(page.figures), "the next build's end did not bring the link back"
+        link.click()
+        page.run_view.back_button.click()
+        _settle_events()
+        assert link.isVisibleTo(page.figures), "the link went at the next build's own way back"
+
+
 def test_a_store_change_during_a_build_reads_nothing_until_it_ends(tmp_path, monkeypatch):
     """Records may change the store while a build is live: the saved list is read again, which a run does not forbid,
     and nothing else is, neither the record's facts nor the sets nor the history, until the build has ended; it then
@@ -1486,8 +1539,9 @@ def test_a_load_by_code_reads_first_and_asks_nothing(tmp_path, monkeypatch):
 
 def test_the_two_lists_are_read_again_at_check_again_and_at_the_show_and_not_as_one_types(tmp_path, monkeypatch):
     """A bounds file put into the model's folder, and a prior written into the store by another program, which tells the
-    window nothing, come into the two lists at "Check again", and as the page comes into sight again; the reading after
-    the typing stops reads neither list. Each list keeps its selection."""
+    window nothing, come into the two lists as the page comes into sight again, and at "Check again"; the reading after
+    an edit reads neither list. Each list keeps its selection, and what the page says follows the lists: the first
+    prior saved ends "No prior is saved yet" as the page is shown again."""
     import shutil
     from core.artifacts import default_store
     from tests._fixtures import _nad_cfg, _prior_artifact
@@ -1497,28 +1551,60 @@ def test_the_two_lists_are_read_again_at_check_again_and_at_the_show_and_not_as_
         folder.mkdir()
         shutil.copyfile(page.bounds_picker.selected_path(), folder / "master.txt")
         page.bounds_picker.repoint(folder, "master.txt")
+        page.show_view("saved")
         page.read_facts()
         files, priors = page.bounds_picker.combo, page.prior_picker.combo
 
         def listed(combo):
             return [combo.itemData(at) for at in range(combo.count())]
 
+        def said():
+            return [row.sentence.plain_text() for row in page.foot.facts.rows()]
+
+        none_saved = "Error. No prior is saved yet: build one with 'Build a new prior instead…'."
+        assert none_saved in said(), said()
         shutil.copyfile(folder / "master.txt", folder / "added.txt")
-        made = _prior_artifact(default_store(), _nad_cfg(), name="from_the_command_line").id
-        page.names.name.setText("retrain_3")
-        page.read_timer.timeout.emit()                   # the reading after the typing stops
-        assert "added.txt" not in listed(files) and made not in listed(priors), "the typing's reading read a list"
-        page.foot.check_again.click()
-        assert "added.txt" in listed(files) and made in listed(priors), (listed(files), listed(priors))
-        assert page.bounds_picker.key() == "master.txt" and page.prior_picker.key() == ""
-        shutil.copyfile(folder / "master.txt", folder / "another.txt")
-        later = _prior_artifact(default_store(), _nad_cfg(), name="written_later").id
+        first = _prior_artifact(default_store(), _nad_cfg(), name="from_the_command_line").id
+        page.read_timer.timeout.emit()                   # the reading after an edit
+        assert "added.txt" not in listed(files) and first not in listed(priors), "the edit's reading read a list"
         window.go_to("home")
         _settle()
         window.go_to("inference", "prior")
         _settle()
+        assert "added.txt" in listed(files) and first in listed(priors), (listed(files), listed(priors))
+        assert none_saved not in said() and "Error. Choose a saved prior." in said(), said()
+        assert page.bounds_picker.key() == "master.txt" and page.prior_picker.key() == ""
+        shutil.copyfile(folder / "master.txt", folder / "another.txt")
+        later = _prior_artifact(default_store(), _nad_cfg(), name="written_later").id
+        page.foot.check_again.click()
         assert "another.txt" in listed(files) and later in listed(priors), (listed(files), listed(priors))
-        assert page.bounds_picker.key() == "master.txt"
+        assert page.bounds_picker.key() == "master.txt" and page.prior_picker.key() == ""
+
+
+def test_the_page_shown_again_during_a_run_reads_neither_list_until_it_ends(tmp_path, monkeypatch):
+    """While a run is live the page lists nothing as it comes into sight again: left for Home and come back to during a
+    build, it reads neither list; the build's end reads both."""
+    from core.gui.run.controller import controller
+    from tests._look_helpers import _settle
+    from tests._runs import turn_until
+    app = qt_app()
+    choose(monkeypatch, words="Build and release the posterior")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        listed = []
+        for name, picker in (("bounds", page.bounds_picker), ("prior", page.prior_picker)):
+            monkeypatch.setattr(picker, "refresh",
+                                lambda kept=picker.refresh, name=name: (listed.append(name), kept())[1])
+        window.go_to("home")
+        _settle()
+        window.go_to("inference", "prior")
+        _settle()
+        assert listed == [] and page.isVisible(), listed
+        stand_in.release(SimpleNamespace(kind="prior", id="p_new", name="retrain_2", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        _settle()
+        assert {"bounds", "prior"} <= set(listed), listed
 
 
 @pytest.mark.parametrize("then", ["another model applied", "a prior built for it on limits typed by hand"])

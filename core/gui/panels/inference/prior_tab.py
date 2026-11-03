@@ -624,7 +624,8 @@ class PriorPanel(StepPage):
     def showEvent(self, event):
         """The first time the page comes into sight it opens on a saved prior to load when one is saved, else on a new
         one to build: the list of saved priors is read for it, which a run does not forbid. Each time it comes into
-        sight with no run live, the two lists are read again, by the reading when the page has one to make."""
+        sight with no run live, the two lists are read again, by the reading when the page has one to make, else on
+        their own and drawn: a list that gained its first record moves no selection, and says nothing itself."""
         if not self._view_chosen:
             self._view_chosen = True
             self.prior_picker.refresh()
@@ -635,6 +636,7 @@ class PriorPanel(StepPage):
         super().showEvent(event)
         if not reads and not controller().is_live():
             self._read_the_lists()
+            self.redraw()
 
     # ── the choices ──
     def _bounds_chosen(self, _index: int = 0) -> None:

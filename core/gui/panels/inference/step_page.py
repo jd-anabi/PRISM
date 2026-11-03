@@ -99,6 +99,7 @@ class StepPage(RunHost, QWidget):
         self._by_keyboard = False            # the last press was made by the keyboard, until its run is over
         self._hand_back = False              # a load pressed by the keyboard failed: its question gives the keyboard back
         self._load_from = None               # where the figures of the load in hand begin, while it runs
+        self._link_withdrawn = False         # a load returned its record since the last run that took the column
         self.names = None                    # the name and note of the record a run makes, when the page holds them
         self._said_changed: dict = {}        # what this page said under each selection row, by its field key
         box = QVBoxLayout(self)
@@ -466,14 +467,16 @@ class StepPage(RunHost, QWidget):
             self._load_from = self.figure_stack.mark()
         else:
             self.figure_stack.clear_all()
+            self._link_withdrawn = False
         super()._run_began(spec)
 
     def _run_over(self, status) -> None:
         """A run of this page's own has ended. One that only loaded a record and returned it leaves its own figures
         alone, the page then showing that record alone, so "How the run went" goes until a run that takes the column
-        ends: no run's page is the load's. One that returned none leaves the figures, the link and the run's page as
-        they stood before it. Pressed by the keyboard, a load that returned its record hands the keyboard on to the
-        next step, and one that failed has it given back to the main button once its failure is told."""
+        begins, whatever stands in the column: no run's page is the load's. One that returned none leaves the figures,
+        the link and the run's page as they stood before it. Pressed by the keyboard, a load that returned its record
+        hands the keyboard on to the next step, and one that failed has it given back to the main button once its
+        failure is told."""
         by_keyboard, self._by_keyboard = self._by_keyboard, False
         if status.loading:
             finished = status.outcome == "finished"
@@ -481,12 +484,26 @@ class StepPage(RunHost, QWidget):
             if mark is not None and finished:
                 self.figure_stack.close_before(mark)
                 self.run_view.how_link.setVisible(False)
+                self._link_withdrawn = True
             elif mark is not None:
                 self.figure_stack.close_from(mark)
             if by_keyboard and finished and not self.next_button.isHidden():
                 self.next_button.setFocus(Qt.TabFocusReason)
             self._hand_back = by_keyboard and not finished
         super()._run_over(status)
+
+    def _back_to_the_form(self) -> None:
+        """"Back to the form": the figures again, "How the run went" above them unless a load has returned its record
+        since the last run that took the column."""
+        super()._back_to_the_form()
+        self.run_view.how_link.setVisible(not self._link_withdrawn)
+
+    def _back_from_the_past(self) -> None:
+        """The past view's way back, which leaves the link away while a load's record stands in place of the last
+        run's."""
+        super()._back_from_the_past()
+        if self._link_withdrawn:
+            self.run_view.how_link.setVisible(False)
 
     def set_controls_enabled(self, enabled: bool) -> None:
         """A run locks the form and the foot's two buttons; the facts stay readable."""
