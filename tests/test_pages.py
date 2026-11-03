@@ -1954,19 +1954,24 @@ def _driven(page) -> list:
 
 
 #: The rebuilt pages of the window, by the step each stands on, and the shapes its walk is read in: by the name of the
-#: shape, what is done to the page after its first show, the controls of its main settings that stand in that shape,
-#: and those of the fold, while it is open, each in their order. Both are written out by hand, never read off the
-#: form: a control the Tab key skips is then missing from the walk and not from what it is held to.
+#: shape, what is done to the page after its first show; the heading's buttons and the way to the next step that stand
+#: in that shape; the controls of its main settings; those of the fold, while it is open; and the foot's, in the low
+#: window or not; each in their order. All are written out by hand, never read off the page: a control the Tab key skips
+#: is then missing from the walk and not from what it is held to.
 WALKED = {
     "model": {
-        "set by the bounds file": (lambda page: None, lambda page: [page.model_combo, page.kind_choice],
-                                   lambda page: [page.rot_choice, page.units_choice]),
+        "set by the bounds file": (lambda page: None, lambda page: [page.help_button],
+                                   lambda page: [page.model_combo, page.kind_choice],
+                                   lambda page: [page.rot_choice, page.units_choice],
+                                   lambda page, small: [page.foot.main_button]),
         "the frequency response, typed units, applied": (
             lambda page: (page.kind_choice.setCurrentIndex(page.kind_choice.findData(True)),
                           page.units_choice.setCurrentIndex(page.units_choice.findData("typed")),
                           page.foot.main_button.click()),
+            lambda page: [page.help_button, page.next_button],
             lambda page: [page.model_combo, page.kind_choice],
-            lambda page: [*_driven(page), page.rot_choice, page.units_choice, page.units_text]),
+            lambda page: [*_driven(page), page.rot_choice, page.units_choice, page.units_text],
+            lambda page, small: []),
     },
 }
 
@@ -1993,18 +1998,17 @@ def test_tab_walks_the_page_in_view_at_every_size(size, factor, step, shape, fol
         window.go_to("inference", step)
         page = window.part("inference").pages.currentWidget()
         _settle()
-        shaped, main, folded = WALKED[step][shape]
+        shaped, head, main, folded, at_the_foot = WALKED[step][shape]
         shaped(page)
         page.form.fold.set_open(fold_open)
         _settle()
         form, foot = page.form, page.foot
-        expected = [*page.head.findChildren(QPushButton), *([] if page.next_button.isHidden() else [page.next_button])]
-        expected += [*main(page), form.fold.button, *(folded(page) if fold_open else [])]
+        expected = [*head(page), *main(page), form.fold.button, *(folded(page) if fold_open else [])]
         if page.scroller.verticalScrollBar().maximum() > 0:
             expected.append(page.scroller)
         if not foot.facts.isHidden():
             expected.append(foot.facts.scroller)
-        expected += [stop for stop in foot.stops() if stop.isVisibleTo(page) and stop.isEnabled()]
+        expected += at_the_foot(page, size == (900, 600))
         rail = window.shell.rail.row(step)
         with in_front(window):
             rail.setFocus(Qt.TabFocusReason)

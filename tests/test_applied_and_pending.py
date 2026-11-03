@@ -257,6 +257,9 @@ def test_a_model_chosen_reads_its_units_file_again_and_a_drawing_does_not(monkey
     assert len(reads) == read, "a drawing read the units file again"
     declared[0] = "s pN nm ms"
     _pick(page.model_combo, "NADROWSKI")
+    assert len(reads) == read + 1, "choosing a model read more than its own units file"
+    page.refresh_local_gates()
+    assert len(reads) == read + 1, "a drawing read the units file of the model held"
     _pick(page.model_combo, "HOPF")
     assert page.units_line.plain_text() == "ms nm pN s, from Units/hopf/units.txt"
     assert page.units_text.text() == "ms nm pN s"
@@ -528,19 +531,37 @@ def test_typed_units_are_judged_as_they_are_typed(tmp_path):
     assert _line(page, "units") == ("", "") and page.foot.main_button.isEnabled()
     page._refusal(Refusal("The units were refused.", field="units"))
     assert _line(page, "units") == ("err", "The units were refused.")
+    assert page.units_text.property("state") == "error", "a refusal of the units left their box without its outline"
     page.units_text.setText("nm ms pN Hz")
-    assert _line(page, "units") == ("", "")
+    assert _line(page, "units") == ("", "") and page.units_text.property("state") == ""
 
 
 def test_typed_units_in_error_outline_their_box():
     """The box of typed units is outlined while what it holds is in error, as every field in error is, and no longer
-    once it is mended: a box a row hears as its own field takes the row's outline."""
+    once it is mended: a box a row hears as its own field takes the row's outline. A line under the row that is no
+    error, "Changed, not applied", outlines nothing."""
     _screen, page = _first_step()
+    _apply(page)
     _pick(page.units_choice, "typed")
+    assert _line(page, "units")[0] == "warn" and page.units_text.property("state") == ""
     page.units_text.setText("nm ms pN kHzz")
     assert page.units_text.property("state") == "error"
     page.units_text.setText("nm ms pN kHz")
-    assert page.units_text.property("state") == ""
+    assert _line(page, "units")[0] == "warn" and page.units_text.property("state") == ""
+
+
+def test_units_filled_from_a_file_follow_the_model_until_they_are_typed():
+    """Typed here, the box still holds what the model's units file filled it with until a person types: a model chosen
+    then fills it from its own file, so that the units of the model before it are never applied as typed for this one.
+    Once typed, no model chosen writes over them."""
+    _screen, page = _first_step()
+    _pick(page.units_choice, "typed")
+    assert page.units_text.text() == "kHz ms nm pN"
+    _pick(page.model_combo, "BP")
+    assert page.units_text.text() == "ms nm"
+    page.units_text.setText("nm")
+    _pick(page.model_combo, "HOPF")
+    assert page.units_text.text() == "nm"
 
 
 def test_a_refusal_whose_cure_is_in_another_field_stops_the_press_only_until_the_page_reads_again(tmp_path):
@@ -757,14 +778,15 @@ def test_only_a_press_by_the_keyboard_hands_it_on_to_the_next_step(tmp_path, mon
     on to the way to the next step, ring and all, and not where the toolkit hands it from a greyed button; so it does with
     records held, the question answered, though the question held the keyboard while it stood. The access key presses
     the button without giving it the keyboard, which stays where it was. A press by the mouse gives the button the
-    keyboard with no ring, and the page hands it nowhere."""
+    keyboard with no ring, and the page hands it nowhere: the toolkit gives it to the step's row of the rail. A press by
+    the mouse on the button while it wears the ring counts as the keyboard's, and hands the keyboard on with no ring."""
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
     from core.gui import style
     from tests._look_helpers import _arrive, _settle
     from tests._runs import turn_until
-    with _first_step_with_the_ring(tmp_path, monkeypatch) as (_window, screen, page):
+    with _first_step_with_the_ring(tmp_path, monkeypatch) as (window, screen, page):
         button, follower = page.foot.main_button, style.current_follower()
 
         def ring_on(widget):
@@ -793,7 +815,13 @@ def test_only_a_press_by_the_keyboard_hands_it_on_to_the_next_step(tmp_path, mon
         QTest.mouseClick(button, Qt.LeftButton)
         _settle()
         assert screen.session.draft.reparam_rotate == page.rot_choice.currentData()
-        assert QApplication.focusWidget() is not page.next_button and follower.target() is None
+        assert QApplication.focusWidget() is window.shell.rail.row("model") and follower.target() is None
+        one_more_change()
+        ring_on(button)
+        QTest.mouseClick(button, Qt.LeftButton)
+        _settle()
+        assert screen.session.draft.reparam_rotate == page.rot_choice.currentData()
+        assert QApplication.focusWidget() is page.next_button and follower.target() is None
         one_more_change()
         screen.session = SbiSession(draft=screen.session.draft, cfg=object(),
                                     inf_prior=SimpleNamespace(kind="prior", name="retrain_prior"))

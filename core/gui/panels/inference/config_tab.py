@@ -117,6 +117,7 @@ class ConfigPanel(StepPage):
     def __init__(self, screen, parent=None):
         super().__init__(screen, TITLE, SENTENCE, step="model", parent=parent)
         self._units_read: dict = {}
+        self._seeded = ""                    # what the box of typed units was last filled with from a units file
         self.model_combo = _ModelChoice()
         self.model_combo.addItems(VALID_MODELS)
         self.model_combo.setCurrentText("NADROWSKI")
@@ -341,14 +342,16 @@ class ConfigPanel(StepPage):
 
     def _on_model_changed(self, model: str) -> None:
         """A model chosen, by a person or by the list read again: its units file read again, so that a file written since
-        says its units; its units line; and, while the units come from that file, the box of typed units filled from it,
-        so that typing them starts from the file in use. Units typed here are never written over."""
+        says its units; its units line; and the box of typed units filled from it while the units come from that file, or
+        while the box still holds what a file filled it with, so that typing them starts from the file in use. Units
+        typed here are never written over."""
         self.form.rows["model"].kept = False
         self._units_read.pop(model, None)
         words, where, trouble = self._units_of(model)
         self.units_line.set_text(UNITS_FROM.format(words, where) if words else NO_UNITS_FILE.format(trouble))
-        if not self._typed():
+        if not self._typed() or self.units_text.text() == self._seeded:
             self.units_text.setText(words)
+            self._seeded = words
         self._edited()
 
     def _kind_chosen(self, _index: int = 0) -> None:
