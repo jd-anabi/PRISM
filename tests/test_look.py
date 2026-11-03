@@ -3462,8 +3462,8 @@ def test_the_ring_of_a_typed_limit_is_whole_on_the_real_grid():
         assert not grid.findChildren(QScrollArea), "the grid opened a scrolling area of its own"
         fields = [field for row in grid._rows.values() for field in (row.lo, row.hi)]
         assert len(fields) == 28 and all(isinstance(field, FloatField) for field in fields)
-        assert {(field.width(), int(field.alignment() & Qt.AlignRight) != 0) for field in fields} == {
-            (design.scaled(design.SIZE["number_w"]), True)}
+        assert {(field.width(), int(field.alignment() & Qt.AlignRight) != 0, field.font().featureValue(_tabular()))
+                for field in fields} == {(design.scaled(design.SIZE["number_w"]), True, 1)}
         seen = {}
         for field in fields:
             _arrive(field, Qt.TabFocusReason)
@@ -6172,6 +6172,53 @@ def test_the_drop_down_paints_its_own_chevron_eight_inside_its_outline(monkeypat
             calls.clear()
             _holder_picture(holder)
             assert calls == [("chev_down", where, True)], (dark, factor)
+
+
+def test_a_capped_list_paints_its_item_cut_short_and_its_hint_as_the_toolkits_own():
+    """A list whose names a person gives, capped, paints the item shown cut short in its middle to the room it has, as a
+    list that holds those very words paints them; and its hint, while nothing is selected, as the toolkit's own list
+    paints a hint: in both themes, at three text sizes and four scalings. Under the sheet the hint takes the sheet's
+    ink, as the toolkit's own does; with the look's palette alone it takes the palette's colour for a hint, and so
+    stands apart from an item of the same words."""
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.choice import Choice
+    for dark in (False, True):
+        with _the_look(dark, sheet=False):
+            holder = QWidget()
+            column = QVBoxLayout(holder)
+            hinted, worded, plain = Choice(most=360), Choice(most=360), Choice()
+            for box in (hinted, plain):
+                box.setPlaceholderText("Choose a bounds file")
+                box.addItem("a.txt")
+                box.setCurrentIndex(-1)
+            worded.addItem("Choose a bounds file")
+            for box in (hinted, worded, plain):
+                column.addWidget(box)
+            holder.resize(400, 200)
+            holder.grab()
+            for ratio in _SCALINGS:
+                assert _rendered(hinted, ratio) == _rendered(plain, ratio), (dark, ratio, "not the toolkit's hint")
+                assert _rendered(hinted, ratio) != _rendered(worded, ratio), (dark, ratio, "the hint in an item's ink")
+            _gone(holder)
+    long = "a_bounds_file_named_at_length_for_the_cell_measured_on_the_second_of_november_2026.txt"
+    for dark, factor in itertools.product((False, True), (1.0, 1.25, 1.5)):
+        with theme(dark), text_size(factor):
+            capped, same, hinted, plain = Choice(most=360), Choice(most=360), Choice(most=360), Choice()
+            capped.addItem(long)
+            for box in (hinted, plain):
+                box.setPlaceholderText("Choose a bounds file")
+                box.addItem("a.txt")
+                box.setCurrentIndex(-1)
+            holder = _held_under_the_sheet(dark, capped, same, hinted, plain)
+            shown = capped.shown_text()
+            same.addItem(shown)
+            holder.grab()
+            assert "…" in shown and same.shown_text() == shown, (dark, factor, shown)
+            assert capped.width() == same.width() and hinted.width() == plain.width(), (dark, factor)
+            for ratio in _SCALINGS:
+                assert _rendered(capped, ratio) == _rendered(same, ratio), (dark, factor, ratio, "the name was not cut")
+                assert _rendered(hinted, ratio) == _rendered(plain, ratio), (dark, factor, ratio, "the hint's colour")
+            _gone(holder)
 
 
 def test_a_grouped_whole_number_is_saved_without_its_commas_and_comes_back_grouped(tmp_path):

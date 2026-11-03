@@ -857,9 +857,10 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
     exactly when the step cannot start, but that a rebuilt page may grey it for a reason of its own, which it says
     beside it. On a step
     that cannot start, each button that can be pressed is pressed, with every question answered by the guard and
-    every file chooser cancelled, and the session built again before each press, while it can still be pressed: a
-    press may show another view of its page. No run is started, nothing is raised, no drawing error is caught and
-    nothing is shown but a question or a notice."""
+    every file chooser cancelled, and the session built again before each press. A press may show another view of its
+    page, so on a page of two views each view is put back before each press, and the buttons that can be pressed are
+    read again for each: every view's own are pressed. No run is started, nothing is raised, no drawing error is caught
+    and nothing is shown but a question or a notice."""
     from core.gui import reported
     from core.gui.run.controller import RunController
     from core.gui.session import SbiSession
@@ -914,17 +915,25 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
             assert panel.isEnabled() and inference.pages.isEnabled(), (session, step.key)
             if state.can_start:
                 continue
-            for button in _pressable(panel):
-                hold(session)
-                window.go_to("inference", step.key)
-                if button not in _pressable(panel):
-                    continue                     # a press before it showed another view of the page
-                forget_asked()
-                button.click()
-                asked = [(box.kind, box.title) for box in all_asked()]
-                assert (started, raised, list(reported.ERRORS)) == ([], [], []), (session, step.key, button.text())
-                assert all(kind in ("question", "notice") for kind, _title in asked), (session, step.key, asked)
-                pressed.append((session, step.key, button.text()))
+            for view in ("saved", "build") if hasattr(panel, "show_view") else (None,):
+                done = set()
+                while True:
+                    hold(session)
+                    window.go_to("inference", step.key)
+                    if view is not None:
+                        panel.show_view(view)    # a press may have shown the other view: each is put back
+                    waiting = [button for button in _pressable(panel) if button not in done]
+                    if not waiting:
+                        break
+                    button = waiting[0]
+                    done.add(button)
+                    forget_asked()
+                    button.click()
+                    asked = [(box.kind, box.title) for box in all_asked()]
+                    assert (started, raised, list(reported.ERRORS)) == ([], [], []), (session, step.key, view,
+                                                                                         button.text())
+                    assert all(kind in ("question", "notice") for kind, _title in asked), (session, step.key, asked)
+                    pressed.append((session, step.key, button.text()))
     assert pressed, "no button of a step that cannot start was pressed"
 
 

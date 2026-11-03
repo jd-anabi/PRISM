@@ -520,8 +520,9 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     assert len(refused) == 1 and refused[0].field == "num_transforms", [str(e) for e in refused]
     pp.flow_transforms.setText("3")
 
-    # Prior: the seven settings of a build reach the stage as its arguments, through the page's own press, with the
-    # name and the note typed. A configuration stub that the draft hands back stands in for the candidate.
+    # Prior: the seven settings of a build reach the stage as its arguments, through the page's own press, each typed
+    # one step off the usual, with the name and the note typed: "Automatic" sends 0, and a number typed in its place
+    # sends itself. A configuration stub that the draft hands back stands in for the candidate.
     pp = inf.prior_panel
     inf.session.posterior = None                 # what another prior asks before it lets a posterior go is held apart
     inf.session.cfg = _spont_cfg()
@@ -532,18 +533,26 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     pp.names.name.setText("forwarded_knobs_prior")
     pp.names.note.setText("from the master file")
     rows = pp.form.rows
-    rows["min_cluster_size"].widget.setText("9")
-    rows["min_samples"].widget.setText("4")
-    rows["num_iterations"].widget.setText("3")
-    cap.clear()
-    pp._main_clicked()
-    assert pp.foot.main_button.isEnabled(), pp.foot.reason.text()
-    k = cap["kwargs"]
-    assert (k["min_cluster_size"], k["min_samples"], k["num_iterations"]) == (9, 4, 3), k
+    typed = {"num_iterations": _cfg.PRIOR_SWEEP_ITERATIONS + 1, "max_sets": _cfg.PRIOR_SWEEP_MAX_SETS + 1,
+             "walk_step": _cfg.PRIOR_SWEEP_STEP * 2, "stability_units": float(_cfg.STABILITY_SWEEP_ND_UNITS) + 1.0,
+             "min_cluster_size": _cfg.PRIOR_CLUSTER_MIN_SIZE + 1, "min_samples": _cfg.PRIOR_CLUSTER_MIN_SAMPLES + 1}
+    for key, value in typed.items():
+        rows[key].widget.setText(f"{value:g}" if isinstance(value, float) else str(value))
+    batch_field = rows["sweep_batch"].widget
+    assert batch_field.ticked_box.isChecked(), "the candidates per round did not open on Automatic"
+    for automatic, batch in ((True, 0), (False, _cfg.PRIOR_SWEEP_BATCH + 1)):
+        if not automatic:
+            batch_field.ticked_box.setChecked(False)
+            batch_field.field.setText(str(batch))
+        cap.clear()
+        pp._main_clicked()
+        assert pp.foot.main_button.isEnabled(), pp.foot.reason.text()
+        k = cap["kwargs"]
+        assert {key: k[key] for key in (*typed, "sweep_batch")} == {**typed, "sweep_batch": batch}, k
     assert (k["name"], k["note"]) == ("forwarded_knobs_prior", "from the master file"), k
     # a name another prior takes during the sweep is dropped, not refused: the window asks the stage so
     assert k["if_name_taken"] == "unnamed", k
-    assert _cfg.PRIOR_CLUSTER_MIN_SIZE != 9, "the panel wrote PRIOR_CLUSTER_MIN_SIZE"
+    assert _cfg.PRIOR_CLUSTER_MIN_SIZE != typed["min_cluster_size"], "the panel wrote PRIOR_CLUSTER_MIN_SIZE"
 
 
 def test_posterior_from_scratch_is_gated_on_a_prior():
@@ -3382,7 +3391,7 @@ _PRIOR_RULE_ENDS = [
 
 
 @pytest.mark.parametrize("key, typed, line", _PRIOR_RULE_ENDS, ids=[f"{k}={v}" for k, v, _ in _PRIOR_RULE_ENDS])
-def test_each_setting_of_a_build_says_its_rule_greys_the_build_and_refuses_the_press_alike(key, typed, line):
+def test_each_setting_of_a_build_says_its_rule_greys_the_build_and_refuses_the_press_alike(key, typed, line, store):
     """The seven settings a build reads keep their one table of rules. A value that breaks a rule says the rule under its
     field, built from the row's label, and greys "Build a new prior" with "a setting cannot be used"; a press made past
     the button by code is refused in the same words with what it found and the usual value, and nothing is dispatched.
@@ -3451,7 +3460,7 @@ def test_the_prior_page_opens_on_the_saved_view_when_a_prior_exists(store, tmp_p
     assert shown(page, second) == "build", "a later show chose the view again"
 
 
-def test_a_remembered_file_gone_shows_no_selection_and_says_so():
+def test_a_remembered_file_gone_shows_no_selection_and_says_so(store):
     """The bounds file that came into use last is put back as the choice of its model's folder once step 1 applies that
     model, said to be kept from last time; one no longer in the folder is selected not at all, never the first file, and
     the page says it has gone. Another model applied says nothing of it."""
@@ -3500,7 +3509,7 @@ def test_a_saved_view_says_whether_no_prior_is_saved_or_none_is_chosen(store):
     assert page.prior_picker.key() == "" and page.foot.reason.text() == "Cannot start yet: no saved prior is chosen."
 
 
-def test_with_no_model_applied_the_prior_page_is_blocked_first():
+def test_with_no_model_applied_the_prior_page_is_blocked_first(store):
     """With no model applied the step's need comes first, "Blocked." with its words, and nothing can be loaded or built
     whatever else the page says."""
     from tests._fixtures import qt_app
@@ -3513,7 +3522,7 @@ def test_with_no_model_applied_the_prior_page_is_blocked_first():
     assert page.foot.reason.text().startswith("Cannot start yet: needs a model") and not page.foot.main_button.isEnabled()
 
 
-def test_a_load_reads_none_of_the_seven_settings():
+def test_a_load_reads_none_of_the_seven_settings(store):
     """A load reads only the saved prior and the bounds file: a setting of the build left blank or broken stops nothing
     in the saved view, and none of the seven travels with the load."""
     screen, page = _prior_step()
@@ -3543,7 +3552,7 @@ def test_a_load_reads_none_of_the_seven_settings():
     (False, "master_spont.txt", "With the kind of observation applied in step 1, a posterior trained on it reads: a "
                                 "spontaneous recording only."),
 ])
-def test_what_the_bounds_file_is_is_said_under_its_list(chi, name, reads):
+def test_what_the_bounds_file_is_is_said_under_its_list(chi, name, reads, store):
     """Under the list, as the file is read: its parameters, the model's and the scales, named in the file's order;
     whether it has a forcing section; and how a posterior trained on it reads, from the configuration built on it, built
     again when step 1 is applied again."""
@@ -3568,7 +3577,7 @@ def test_what_the_bounds_file_is_is_said_under_its_list(chi, name, reads):
     ("k in (5, 1)", "The bounds file cannot be used. The lower limit of k, 5, must be less than its upper limit, 1."),
     ("k in (2, 2)", "The bounds file cannot be used. The lower limit of k, 2, must be less than its upper limit, 2."),
 ], ids=["no numbers", "crossed", "equal"])
-def test_a_malformed_bounds_file_is_refused_beside_the_list(line, said, tmp_path):
+def test_a_malformed_bounds_file_is_refused_beside_the_list(line, said, tmp_path, store):
     """The builder takes a line it cannot read as a parameter with no limits, so the page holds the limits a bounds file
     gives to the rule the limits typed by hand are held to: the first broken is said under the list, as an "Error."
     that greys the build, and nothing raises. Ticked, the limits typed by hand start from the file, the line it could not
@@ -3606,7 +3615,7 @@ def _line_of(page, key) -> tuple:
     return (line.kind, line.words) if line.says() else ("", "")
 
 
-def test_typed_limits_survive_a_switch_and_go_with_another_file():
+def test_typed_limits_survive_a_switch_and_go_with_another_file(store):
     """The limits typed by hand keep what was typed while the page moves between the file and hand entry, and between
     its two views; they stand only while the tick is on, and opening them opens no fold; another bounds file selected
     loads them from it, and so does step 1 applied again."""
@@ -3618,6 +3627,11 @@ def test_typed_limits_survive_a_switch_and_go_with_another_file():
     assert (row.lo.value_or_none(), row.hi.value_or_none()) == (0.01, 5.0)
     row.hi.setText("4")
     page.show_view("saved")
+    page.read_facts()
+    built_on = (page._candidate.sources or {}).get("bounds") if page._candidate is not None else None
+    assert built_on and Path(built_on) == Path(page.bounds_picker.selected_path()), (
+        "the saved view's candidate was built from the limits typed for a build")
+    assert _line_of(page, "bounds") == ("", "") and _line_of(page, "bounds_typed") == ("", "")
     page.show_view("build")
     assert page.bounds_grid._rows[("PARAM", "k")].hi.value_or_none() == 4.0
     page.typed_tick.setChecked(False)
@@ -3633,7 +3647,21 @@ def test_typed_limits_survive_a_switch_and_go_with_another_file():
     assert page.bounds_grid._rows[("PARAM", "k")].hi.value_or_none() == 5.0
 
 
-def test_a_comma_in_a_typed_limit_is_refused_in_the_fields_own_words():
+def test_a_press_after_a_typed_limit_is_edited_hands_the_run_the_limits_on_the_screen(store):
+    """The candidate is built again for other limits typed by hand: a press after a limit is edited hands the run the
+    limits the screen shows, never those read when the tick was set."""
+    screen, page = _prior_step()
+    sent = []
+    page.dispatch = lambda fn, *a, **k: sent.append(a)
+    page.typed_tick.setChecked(True)
+    page.read_facts()
+    page.bounds_grid._rows[("PARAM", "k")].hi.setText("4")
+    page._main_clicked()
+    assert sent, page.foot.reason.text()
+    assert sent[-1][0].params_dict["k"][1] == (0.01, 4.0), sent[-1][0].params_dict["k"]
+
+
+def test_a_comma_in_a_typed_limit_is_refused_in_the_fields_own_words(store):
     """A limit typed with a comma shows as it is typed and is never read as another number; left, the field is outlined
     and the line under the tick says the field's own words; the build is greyed until it is mended."""
     screen, page = _prior_step()

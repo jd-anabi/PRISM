@@ -928,11 +928,13 @@ def test_a_build_that_ends_any_way_but_well_leaves_what_was_held(end, tmp_path, 
 def test_a_prior_comes_into_use_only_when_its_run_returns(tmp_path, monkeypatch):
     """The press holds nothing new. The prior the run returns comes into use with the very configuration the press
     handed the run, while the run is still live: what depended on the prior held goes with it, the states are said once,
-    on the window's thread, and a training continued with the session is one made with what it holds. At the run's end
-    the saved list is read again and moved to the new prior, the name and the note are emptied, and the way to Training
-    stands."""
+    on the window's thread, and a training continued with the session is one made with what it holds; step 5 is told of
+    the configuration once, as it comes into use. At the run's end the saved list is read again and moved to the new
+    prior, the name and the note are emptied, and the way to Training stands."""
     import threading
+    from core.artifacts import default_store
     from core.gui.run import retry
+    from tests._fixtures import _nad_cfg, _prior_artifact
     from core.gui.run.controller import controller
     from core.gui.run.model import RunSpec
     from tests._runs import turn_until
@@ -951,7 +953,12 @@ def test_a_prior_comes_into_use_only_when_its_run_returns(tmp_path, monkeypatch)
         assert args[0] is candidate and args[1:] == (None, True)
         assert session.cfg is old_cfg and session.inf_prior is old_prior
         assert not page.switch_button.isEnabled(), "the way to the other view stood open during the run"
-        made = SimpleNamespace(kind="prior", id="p_new", name="retrain_2",
+        written = _prior_artifact(default_store(), _nad_cfg(), name="retrain_2").id     # what the stage writes
+        told = []
+        monkeypatch.setattr(screen.infer_panel, "on_config_built",
+                            lambda cfg, kept=screen.infer_panel.on_config_built: (
+                                told.append((cfg, controller().is_live())), kept(cfg))[1])
+        made = SimpleNamespace(kind="prior", id=written, name="retrain_2",
                                manifest=SimpleNamespace(created="2026-10-08T12:04:00+00:00",
                                                         inputs={"bounds": {"path": "Bounds/nadrowski/master.txt"}},
                                                         config={"param_keys": ["k"] * 13}))
@@ -966,6 +973,8 @@ def test_a_prior_comes_into_use_only_when_its_run_returns(tmp_path, monkeypatch)
         stand_in.release(made)
         turn_until(app, lambda: not controller().is_live(), 10.0)
         assert taken == [(True, threading.main_thread(), 1)], "the prior was taken after its run, or more than once"
+        assert told == [(candidate, True)], "step 5 was not told of the configuration once, as it came into use"
+        assert page.prior_picker.key() == written, "the saved list was not moved to the prior just made"
         assert screen.session is session and session.cfg is candidate and session.inf_prior is made
         assert session.posterior is None and session.observation is None
         assert set(threads) == {threading.main_thread()}
@@ -1340,6 +1349,70 @@ def test_after_a_load_how_the_run_went_opens_no_run_of_another_record(load, tmp_
         link.click()
         assert page.results.currentWidget() is page.run_view
         assert [stack.tabText(i) for i in range(stack.count()) if stack.isTabVisible(i)] == ["Prior"]
+
+
+def test_before_you_start_reads_the_history_the_sets_and_the_settings_in_the_build_view(tmp_path, monkeypatch):
+    """"Before you start" as the build view reads it, word for word: what the build costs, from the settings typed and
+    the candidate's step; how long the last build on this computer took, from the run history, said on the button too;
+    and the saved simulation set of the model, which a new prior cannot continue."""
+    from datetime import datetime, timedelta, timezone
+    from core.artifacts import default_store, write_simulation_manifest
+    from core.gui.run.controller import controller
+    from core.SBI.training_checkpoint import identity_digest
+    from tests._fixtures import write_history
+    with _second_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        started = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
+        write_history(controller().folder(), id="20261008T120000-prior-build", word="Prior build", name="retrain_1",
+                      outcome="finished", started=started, ended=started + timedelta(seconds=92))
+        identity = {"format": "training-rows/2", "model": "NADROWSKI", "prior_fingerprint": "f" * 16, "n_runs": 4,
+                    "truncation": None}
+        write_simulation_manifest(default_store().kind_dir("simulation") / identity_digest(identity), identity,
+                                  batches_done=4, complete=True)
+        rows = page.form.rows
+        rows["num_iterations"].widget.setText("3")
+        rows["sweep_batch"].widget.ticked_box.setChecked(False)
+        rows["sweep_batch"].widget.field.setText("64")
+        rows["max_sets"].widget.setText("100")
+        rows["stability_units"].widget.setText("2")
+        page.read_facts()
+        said = [row.sentence.plain_text() for row in page.foot.facts.rows()]
+        assert said == [
+            "Information. Tests 192 candidates (3 rounds of 64), each integrated over 80 steps, then walks outward "
+            "until 100 stable sets are collected.",
+            "Information. About a minute and a half: the last build on this computer took 1 min 32 s.",
+            "Information. A new prior cannot continue a saved simulation set: the saved set for this model was made "
+            "with another prior."], said
+        assert page.foot.main_button.text() == "&Build a new prior (about a minute and a half)"
+
+
+def test_before_you_start_reads_the_record_and_its_sets_in_the_saved_view(tmp_path, monkeypatch):
+    """"Before you start" as the saved view reads it, word for word: a saved prior built on the bounds file selected as
+    it was before that file was edited, its box no longer the file's, said as a load PRISM will refuse; and the saved
+    simulation set made with it, found by its fingerprint."""
+    import json
+    from core.artifacts import default_store
+    from tests._fixtures import _nad_cfg, _prior_artifact, write_simulation_set
+    with _second_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        store, cfg = default_store(), _nad_cfg()
+        lows = [bounds[0] for _value, bounds in cfg.params_dict.values()]
+        lows[0] = lows[0] * 2
+        made = _prior_artifact(store, cfg, name="older_box", lows=lows).id
+        manifest = next(store.kind_dir("prior").glob(f"*__{made}")) / "manifest.json"
+        written = json.loads(manifest.read_text(encoding="utf-8"))
+        written["inputs"]["bounds"]["sha256"] = "0" * 64           # the file it was built on, edited since
+        manifest.write_text(json.dumps(written, indent=1), encoding="utf-8")
+        identity = {"format": "training-rows/2", "n_runs": 4, "truncation": None,
+                    "prior_fingerprint": store.get("prior", made).fingerprints["gmm"]}
+        write_simulation_set(store.kind_dir("simulation"), identity, 4, complete=True)
+        page.show_view("saved")
+        page.read_facts()
+        page.prior_picker.restore_key(made)
+        page.read_facts()
+        said = [row.sentence.plain_text() for row in page.foot.facts.rows()]
+        assert said == [
+            "Attention. Built on master.txt as it was then; the file has been edited since. Its parameters or their "
+            "limits have changed with it, so PRISM will refuse the load.",
+            "Information. 1 saved simulation set was made with this prior; it holds 4 batches."], said
 
 
 def test_a_store_change_during_a_build_reads_nothing_until_it_ends(tmp_path, monkeypatch):

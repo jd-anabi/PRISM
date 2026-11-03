@@ -1445,6 +1445,8 @@ def test_the_prior_picks_are_written_when_they_come_into_use(tmp_path, monkeypat
     stand_in.release(SimpleNamespace(kind="prior", id="20261008T130000", name="", manifest=None))
     turn_until(app, lambda: not controller().is_live(), 10.0)
     assert remembered() == ("master_tier1.txt", "20261008T130000")
+    typed = page.form.rows["bounds_typed"].line
+    assert not typed.says() and screen.pending() == frozenset(), (typed.words, screen.pending())
     out = st.settings()
     page.save_settings(out)
     out.sync()
