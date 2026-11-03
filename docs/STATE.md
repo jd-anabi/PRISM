@@ -1,7 +1,44 @@
 # PRISM — state
 
-**Last updated:** 2026-11-02, morning (09:06 by the clock; the weekly bar 14 %, resetting on 8 November at 04:00 UTC):
-STAGE 4'S BUILD STANDS WITH TASKS 0 TO 6 COMPLETE. The session started on 31 October from
+**Last updated:** 2026-11-03, afternoon (15:32 by the clock; the weekly bar 50 %, resetting on 8 November at 04:00 UTC):
+STAGE 4'S BUILD STANDS WITH TASKS 0 TO 9 COMPLETE. The session started on 2 November from
+`docs/superpowers/prompts/2026-11-02-window-redesign-stage-4-build-from-task-7.md` and built Tasks 7, 8 and 9.
+
+- **Task 7, the page's pieces:** `2480058`..`d72b3b8` (the build to `4db67b0`, two fix rounds). The step page, the form with its
+  rows, fold, name and note, the facts as values with their origins and the reason beside the button, the foot and "In use", and
+  the console face (Cascadia Mono) carried with the program (`core/gui/assets/fonts/`). Departures 191 to 203; the owner's
+  answer "Leave them out" (196): a page with nothing saved to read has no "read at" line and no "Check again".
+- **Task 8, step 1, "Model and options":** `004e6e1`..`f19cdbd`, then `77e8536`. The first rebuilt step: selection rows, typed
+  and sorted units, the fold that counts what changed, the calibration note for a model of your own, the keyboard handed on to
+  "Go to Prior" only by a press of the keyboard, and a new per-test check, `_application_font_put_back` (a draft for `CLAUDE.md`
+  waits for the owner's yes at the exit). Departures 204 to 217. The owner kept the greyed main button bold.
+- **Task 9, step 2, "Prior":** `f4f79f2`..`224b231` (the build `28db5bf`, `cfb5516`, `867a968`; fix `769949c`, `f0dea96`,
+  `5bc8f0b`; second fix `30fb66a`, `224b231`). The first rebuilt page that starts a run: two views (a saved prior, a new build), a
+  prior that comes into use only when its run returns (`InferenceScreen.take_prior`), nothing read while a run is live, the
+  candidate built by the page's reading alone, a file's limits held to the typed limits' rule, a capped list cut short in its
+  middle, the grid in the page's own scroll, the bounds file remembered with the model it came into use with. Departures 218 to 231.
+- **The reviews found:** in Task 9, the page never read its two lists again once their refresh buttons went, a load re-marked
+  the build's run page, and the bounds file was paired with the wrong model (seat two); eighteen faults of seat three's own went
+  green on the task's tests, six of them in how the page fed "Before you start"; the first fix round's reader found a test the
+  round had weakened. Each was built in a fix round of its own; the second round's reader left three Minor test gaps, carried
+  to Task 10's first commit.
+- **The gate:** 2929 passed, 9 skipped, 5 deselected, 2943 collected, 30 min 59 s at `224b231`. No engine file was opened;
+  `FIT_CODE` untouched; `Artifacts/` 429 entries, no `fits/`; no `Resources/Plans`; `PRISM.ini` unchanged. The real-screen run
+  last passed at `5546069` (9); none was owed since. The carried-over list: 1326 rows, missing 0.
+- **For the owner at the exit, new from these tasks:** two proposals not built because each changes something the owner approved
+  (a build that never ran leaves the prior in use with no figure, from "A rebuilt page empties its figures when a run starts on
+  it"; a list's hint paints like a real name, the palette's hint colour unused), the new words, the `CLAUDE.md` draft for the
+  eighth per-test check, and the walkthrough rows; the next prompt lists each. The code audit's list gains items 17 and 18 (the
+  units file's set order, the bounds file's reader).
+- **Measured:** Task 7 about 16 points of the weekly bar, Task 8 about 9, Task 9 about 11. Five building tasks, the last review
+  and the exit read about 50 to 70 points: more than the bar holds before its reset.
+
+NEXT: Task 10, step 3, "Training": the form and "Before you start", in a new chat the owner starts from
+`docs/superpowers/prompts/2026-11-03-window-redesign-stage-4-build-from-task-10.md`. That prompt lists what is carried to each
+task. It was not checked by a reader, to spare the bar. The ledger's section "Stage 4 — … (build of …)" is the record.
+
+What follows is the head as the morning of 2 November left it (09:06 by the clock; the weekly bar 14 %):
+STAGE 4'S BUILD STOOD WITH TASKS 0 TO 6 COMPLETE. The session started on 31 October from
 `docs/superpowers/prompts/2026-10-31-window-redesign-stage-4-build-from-task-4.md` and built Tasks 4, 5 and 6; the owner said "Go"
 after the reset of 1 November.
 
