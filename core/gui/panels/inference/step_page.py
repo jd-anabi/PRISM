@@ -227,10 +227,11 @@ class StepPage(RunHost, QWidget):
     def order_the_keys(self) -> None:
         """The Tab key's order, as the page is read: the heading's buttons, the run's page, which stands in place of what
         comes next, what stands over the form, the form, then what scrolls while it scrolls, and the foot. Figures stand on
-        the run's page or over the form, so they follow both. Widgets take their turn as they come to the window, and a page adds its
-        rows after this page is built, so the order is set here, once they stand, as a page first comes into sight, and
-        again as a row joins the form or a figure joins the stack. A part that is a stop only at times has its place all the
-        same. A control that makes its own fields again after that, as a grid does, calls this when it has."""
+        the run's page or over the form, so they follow both. Widgets take their turn as they come to the window, and a
+        page adds its rows after this page is built, so the order is set here, once they stand, as a page first comes into
+        sight, and again as a row joins the form or a figure joins the stack. A part that is a stop only at times has its
+        place all the same. A control that makes its own fields again after that, as a grid does, calls this when it
+        has."""
         stops = [*self.head.findChildren(QPushButton), *self.run_view.stops(), self.run_view.how_link,
                  *self.figure_stack.stops(), self.next_button, *self.form.stops(), self.scroller, self.foot.facts.scroller,
                  *self.foot.stops()]

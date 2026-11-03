@@ -319,7 +319,8 @@ class Row:
         is outlined too, and a number field says the sentence as its tool tip. What the field says of itself, a comma's
         sentence, stands while the field holds it: it is no page's to take away. Nor is a refusal's sentence, while it stops
         the start: a page says its lines as it draws, at every edit, and its line comes at the first drawing after the field
-        is edited. Once the facts have been read again a line with words takes its place, and an empty one still leaves it."""
+        is edited. Once the facts have been read again a line with words takes its place, and an empty one still leaves
+        it."""
         if self._marked and (self._blocks or not sentence):
             return
         self._marked = False

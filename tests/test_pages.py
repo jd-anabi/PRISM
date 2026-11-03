@@ -1886,8 +1886,9 @@ def test_the_tab_key_walks_a_step_in_the_order_it_is_read(size, tmp_path):
     """With real keys: the heading's buttons, the main settings, the fold and what it holds, the block for the run, what
     scrolls while it scrolls, the foot, then the rail, with an "Information." among the facts, so that the low window keeps
     its link. A row added after the page was built takes its place all the same, a greyed field is passed over for its
-    box, and no help mark is a stop. No stop comes before the page's first setting but the heading's own. Each stop in the
-    body stands whole in view."""
+    box, and no help mark is a stop. No stop comes before the page's first setting but the heading's own. That each stop
+    stands whole in view is held by the test of both laps, at both text sizes: at this size the toolkit's own scroll on
+    the Tab key keeps a stop in view, so a check here would see no fault of the page's."""
     window, page, _clock = _a_page(tmp_path, size=size)
     form, foot = page.form, page.foot
     form.fold.set_open(True)
@@ -2043,7 +2044,7 @@ def test_a_window_that_goes_to_the_back_and_comes_to_the_front_stays_as_it_was_s
             assert bar.value() == place, (before, now)
     with in_front(window):
         _settle()
-        assert bar.value() == place
+        assert QApplication.focusWidget() is field and bar.value() == place, "the round trip moved the page"
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])
