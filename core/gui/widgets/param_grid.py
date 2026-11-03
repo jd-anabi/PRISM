@@ -10,15 +10,41 @@ Validation is explicit because ``FloatField.value()`` silently returns 0.0 on un
 "min" box would otherwise become a real bound of 0. ``problems()`` returns human-readable strings and the
 callers refuse to build anything while it is non-empty.
 """
+import math
 from collections import OrderedDict
 
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QFormLayout, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget)
 
+from .. import design, fonts
 from .field_row import LabeledFieldRow
 from .labeled_inputs import FloatField
 from .forms import make_form
 
 _MAX_VISIBLE_HEIGHT = 320          # keep a 13-parameter grid from swallowing the controls column
+NOT_LOADED_TEXT = "No limits are loaded: choose a bounds file to start them from."
+NOT_NUMBERS_TEXT = "The limits of {} must both be numbers."
+CROSSED_TEXT = "The lower limit of {}, {:g}, must be less than its upper limit, {:g}."
+#: A limit typed that the field itself refuses, a comma for a point: its words, then the field's own.
+FIELD_SAYS_TEXT = "The {} limit of {} reads {}. {}"
+
+
+def limit_problems(limits) -> list:
+    """What is wrong with ``limits``, each ``(name, lower, upper)`` in their order, a limit None where it reads as no
+    number: one sentence for each parameter whose limits are not two numbers, the lower below the upper. The one rule
+    for the limits a bounds file gives and those typed by hand."""
+    out = []
+    for name, lo, hi in limits:
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (lo, hi)):
+            out.append(NOT_NUMBERS_TEXT.format(name))
+        elif not lo < hi:
+            out.append(CROSSED_TEXT.format(name, lo, hi))
+    return out
+
+
+def two_limits(bounds) -> tuple:
+    """A parameter's limits as a file gives them, as two values; (None, None) for limits it does not give as two."""
+    return tuple(bounds) if isinstance(bounds, (tuple, list)) and len(bounds) == 2 else (None, None)
 
 
 def _num(field) -> "float | None":
@@ -68,7 +94,7 @@ def _scrollable(inner: QWidget) -> QScrollArea:
 class _BoundsRow(LabeledFieldRow):
     """min / max for one parameter."""
 
-    def __init__(self, lo: float, hi: float, parent=None):
+    def __init__(self, lo: "float | None", hi: "float | None", parent=None):
         self.lo, self.hi = FloatField(lo), FloatField(hi)
         super().__init__((("min", self.lo), ("max", self.hi)), parent=parent)
 
@@ -77,9 +103,16 @@ class BoundsGrid(QWidget):
     """A (min, max) row per parameter, across the ND / Dimensional / Forcing sections.
 
     Produces exactly what ``file_manager.parse_bounds_file`` produces -- ``{name: (None, (lo, hi))}``
-    per section, in the loaded order -- so downstream code cannot tell the difference."""
+    per section, in the loaded order -- so downstream code cannot tell the difference.
 
-    def __init__(self, parent=None):
+    ``scrolls`` puts the rows in a scroll area of their own, as a form that does not scroll needs. A page that scrolls
+    as a whole asks for none: its grid stands at its full height, and every field is reached by the page's own scroll,
+    which keeps the room a field's ring needs round what it holds. Its fields then stand as a rebuilt page's number
+    fields stand: right aligned, their digits of equal width, the look's width."""
+
+    changed = Signal()                             # a limit was typed or refused, or the rows were made again
+
+    def __init__(self, parent=None, *, scrolls: bool = True):
         super().__init__(parent)
         self._rows = OrderedDict()                 # (section, name) -> _BoundsRow
         self._sections = OrderedDict()             # section -> [names] (preserves file order)
@@ -87,14 +120,16 @@ class BoundsGrid(QWidget):
         self._form = make_form(inner)
         self._form.setContentsMargins(0, 0, 0, 0)
         outer = QVBoxLayout(self)
+        self._dressed = not scrolls
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(_scrollable(inner))
+        outer.addWidget(_scrollable(inner) if scrolls else inner)
         self._placeholder = QLabel("(load a bounds file to edit its values)")
         self._placeholder.setProperty("type", "caption")
         self._form.addRow(self._placeholder)
 
     def load(self, params: OrderedDict, rescale: OrderedDict, forcing: OrderedDict) -> None:
-        """Populate from parsed bounds dicts. Rebuilds the whole grid, preserving section + name order."""
+        """Populate from parsed bounds dicts. Rebuilds the whole grid, preserving section + name order. A parameter
+        whose limits the file does not give as two values stands with its two fields blank."""
         while self._form.rowCount():
             self._form.removeRow(0)
         self._rows, self._sections = OrderedDict(), OrderedDict()
@@ -107,24 +142,31 @@ class BoundsGrid(QWidget):
             header.setProperty("type", "caption")
             self._form.addRow(header)
             self._sections[section] = list(d)
-            for name, (_v, (lo, hi)) in d.items():
-                row = _BoundsRow(lo, hi)
+            for name, (_v, bounds) in d.items():
+                row = _BoundsRow(*two_limits(bounds))
                 self._rows[(section, name)] = row
                 self._form.addRow(name, row)
+                for field in (row.lo, row.hi):
+                    if self._dressed:
+                        field.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                        field.setFont(fonts.inter("body", tabular=True))
+                        field.setFixedWidth(design.scaled(design.SIZE["number_w"]))
+                    field.textChanged.connect(self.changed)
+                    field.error_changed.connect(self.changed)
+        self.changed.emit()
 
     def is_loaded(self) -> bool:
         return bool(self._rows)
 
     def problems(self) -> list:
+        """Each thing wrong with the limits typed, in a sentence, in the rows' order; none when they can be used."""
         if not self.is_loaded():
-            return ["no bounds loaded — pick a file to start from, then edit it"]
+            return [NOT_LOADED_TEXT]
         out = []
-        for (section, name), row in self._rows.items():
-            lo, hi = _num(row.lo), _num(row.hi)
-            if lo is None or hi is None:
-                out.append(f"{name}: min and max must both be numbers")
-            elif not lo < hi:
-                out.append(f"{name}: min ({lo:g}) must be less than max ({hi:g})")
+        for (_section, name), row in self._rows.items():
+            said = [FIELD_SAYS_TEXT.format(which, name, field.text().strip(), field.error())
+                    for which, field in (("lower", row.lo), ("upper", row.hi)) if field.error()]
+            out += said[:1] or limit_problems([(name, _num(row.lo), _num(row.hi))])
         return out
 
     def to_dicts(self) -> tuple:

@@ -1,6 +1,11 @@
 """A combo box populated from ``file_manager.list_dir(base, keep=...)``: the GUI's INPUT-file picker
 (cells, bounds). Optionally offers a '(from scratch)' sentinel. StorePicker below is its
-generated-kind twin, which reads the artifact store instead of a directory."""
+generated-kind twin, which reads the artifact store instead of a directory.
+
+A page of the look asks either for ``keeps_selection``: its list is a ``Choice`` that the page stands in a row of its
+own form, the picker lays nothing out, and a list read again keeps the item selected while it is there, else selects
+nothing and shows ``hint``, never the first item. Nothing is judged in passing: the list's signals are held while it
+is read again, and it says its selection once, only when that moved."""
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -10,6 +15,36 @@ _TOOLTIP_ROLE = Qt.ToolTipRole
 
 from core.Helpers import file_manager
 from core.gui import icons
+
+from .choice import Choice
+
+#: How wide a list that keeps its selection may grow, in the look's pixels at the ordinary text size: a longer name
+#: is cut short in the box, whole in its tip and in the open list.
+LIST_MOST = 360
+
+
+def _held_list(owner: QWidget, hint: str) -> Choice:
+    """The list of a picker that keeps its selection: the owner stands in no layout and is never shown, and the page
+    stands the list where its form reads it."""
+    owner.setVisible(False)
+    combo = Choice(owner, most=LIST_MOST)
+    combo.setPlaceholderText(hint)
+    return combo
+
+
+def _relisted(combo, fill, wanted: str, said, before) -> None:
+    """List ``combo`` again by ``fill`` with its signals held, then select ``wanted`` while it stands, else nothing; it
+    says its selection once, when what ``said()`` reads now is not ``before``."""
+    combo.blockSignals(True)
+    try:
+        combo.clear()
+        fill()
+        combo.setCurrentIndex(combo.findData(wanted) if wanted else -1)
+    finally:
+        combo.blockSignals(False)
+    combo.say_whole()
+    if said() != before:
+        combo.currentIndexChanged.emit(combo.currentIndex())
 
 
 class ArtifactPicker(QWidget):
@@ -21,11 +56,17 @@ class ArtifactPicker(QWidget):
     # coverage and colour vary per font -- exactly the quirk the icon font was introduced to sidestep.
     NEW_LABEL = "+  (from scratch)"
 
-    def __init__(self, base_path, keep=None, allow_new: bool = False, parent=None):
+    def __init__(self, base_path, keep=None, allow_new: bool = False, parent=None, *, keeps_selection: bool = False,
+                 hint: str = ""):
         super().__init__(parent)
         self.base_path = Path(base_path)
         self._keep = keep
         self._allow_new = allow_new
+        self.keeps_selection = keeps_selection
+        if keeps_selection:
+            self.combo = _held_list(self, hint)
+            self.refresh()
+            return
 
         self.combo = QComboBox()
         refresh = QPushButton()                 # keep QPushButton -> QSS selector QPushButton#iconButton
@@ -42,7 +83,13 @@ class ArtifactPicker(QWidget):
         self.refresh()
 
     def refresh(self):
+        if self.keeps_selection:
+            _relisted(self.combo, self._fill, self.key(), self.selected_path, self.selected_path())
+            return
         self.combo.clear()
+        self._fill()
+
+    def _fill(self) -> None:
         if self._allow_new:
             self.combo.addItem(self.NEW_LABEL, userData=None)
         entries = []
@@ -78,7 +125,11 @@ class ArtifactPicker(QWidget):
 
     def restore_key(self, key: str) -> None:
         """Reselect a previously saved key. If the file is gone (findData == -1), leave the current
-        selection alone rather than blanking the combo with setCurrentIndex(-1)."""
+        selection alone rather than blanking the combo with setCurrentIndex(-1). A list that keeps its
+        selection selects nothing then: it never shows a file that was not chosen."""
+        if self.keeps_selection:
+            self.combo.setCurrentIndex(self.combo.findData(key) if key else -1)
+            return
         if not key:
             return
         i = self.combo.findData(key)
@@ -94,6 +145,11 @@ class ArtifactPicker(QWidget):
         MODEL combo first and call their _on_model_changed explicitly (currentTextChanged does not
         fire when the saved value equals the current text), since that is what routes here.
         """
+        if self.keeps_selection:
+            wanted, before = self.key() if restore_key is None else restore_key, self.selected_path()
+            self.base_path = Path(base_path)
+            _relisted(self.combo, self._fill, wanted, self.selected_path, before)
+            return
         self.base_path = Path(base_path)
         self.refresh()
         if restore_key is not None:
@@ -149,9 +205,10 @@ class StorePicker(QWidget):
     NEW_LABEL = ArtifactPicker.NEW_LABEL
 
     def __init__(self, kind: str, allow_new: bool = False, store=None, row_filter=None,
-                 parent=None):
+                 parent=None, *, keeps_selection: bool = False, hint: str = ""):
         super().__init__(parent)
         self.kind, self._allow_new, self._store = kind, allow_new, store
+        self.keeps_selection = keeps_selection
         # ``Summary -> bool``, or None for "every row of the kind". One kind can hold several things
         # a screen wants to offer separately: the ``fdt`` kind holds single-cell measurements, sweeps
         # and comparisons, told apart by ``body["study"]``, and the FDT and CrossVal screens each
@@ -161,6 +218,10 @@ class StorePicker(QWidget):
         # id -> the line selection_summary() returns, recorded by refresh(). BEFORE refresh() below,
         # which fills it.
         self._summaries: dict = {}
+        if keeps_selection:
+            self.combo = _held_list(self, hint)
+            self.refresh()
+            return
         self.combo = QComboBox()
         refresh = QPushButton()
         refresh.setObjectName("iconButton")
@@ -180,7 +241,14 @@ class StorePicker(QWidget):
 
     def refresh(self):
         current = self.key()
+        if self.keeps_selection:
+            _relisted(self.combo, self._fill, current, self.key, current)
+            return
         self.combo.clear()
+        self._fill()
+        self.restore_key(current)
+
+    def _fill(self) -> None:
         self._summaries = {}                     # rebuilt here, so a deleted artifact's line goes too
         if self._allow_new:
             self.combo.addItem(self.NEW_LABEL, userData=None)
@@ -216,7 +284,6 @@ class StorePicker(QWidget):
                 # thing. The tooltip keeps everything else it carried.
                 tip += " · amortized" if s.amortized else " · narrowed (TSNPE)"
             self.combo.setItemData(self.combo.count() - 1, tip, _TOOLTIP_ROLE)
-        self.restore_key(current)
 
     def selected(self):
         """``(id_or_None, is_new)``."""
@@ -247,6 +314,11 @@ class StorePicker(QWidget):
         return self.combo.currentText() if self.combo.currentData() is not None else ""
 
     def restore_key(self, key: str) -> None:
+        """Reselect ``key``; one that is gone leaves the selection alone, and on a list that keeps its selection
+        selects nothing."""
+        if self.keeps_selection:
+            self.combo.setCurrentIndex(self.combo.findData(key) if key else -1)
+            return
         if not key:
             return
         i = self.combo.findData(key)

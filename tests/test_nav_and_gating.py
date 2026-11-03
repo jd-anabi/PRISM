@@ -3549,6 +3549,80 @@ def test_the_prior_tab_rows_are_labelled_from_the_control_table():
         assert CONTROL[key] == ("prior", label(key)), (key, CONTROL[key])
 
 
+def test_a_list_read_again_keeps_its_selection_and_never_falls_to_the_first_file(tmp_path, monkeypatch):
+    """A picker that keeps its selection, of files or of records: a list read again keeps the item selected while it is
+    there, else selects nothing and shows its hint, never the first item; it judges no entry in passing, and says its
+    selection once, only when it moved; pointed at another folder it selects the item it is handed, or nothing. It
+    lays nothing out and is never shown: its list stands where a page puts it, as wide as its longest name up to a cap,
+    past which the name shown is cut short and stands whole in the tip. A picker that does not ask keeps today's ways."""
+    from types import SimpleNamespace
+    from core.gui import design
+    from core.gui.widgets.artifact_picker import LIST_MOST, ArtifactPicker, StorePicker
+    from core.gui.widgets.choice import Choice
+    from tests._fixtures import build_part, qt_app
+    qt_app()
+    here, there = tmp_path / "here", tmp_path / "there"
+    for folder, names in ((here, ("a.txt", "b.txt", "c.txt")), (there, ("a.txt", "d.txt"))):
+        folder.mkdir()
+        for name in names:
+            (folder / name).write_text("", encoding="utf-8")
+    files = build_part(ArtifactPicker, base_path=here, keeps_selection=True, hint="Choose a file")
+    assert isinstance(files.combo, Choice) and files.isHidden() and files.layout() is None
+    assert files.combo.currentIndex() == -1 and files.combo.placeholderText() == "Choose a file"
+    files.restore_key("b.txt")
+    heard = []
+    files.combo.currentIndexChanged.connect(heard.append)
+    files.refresh()
+    assert files.key() == "b.txt" and heard == []
+    (here / "b.txt").unlink()
+    files.refresh()
+    assert files.combo.currentIndex() == -1 and heard == [-1]
+    files.restore_key("gone.txt")
+    assert files.combo.currentIndex() == -1
+    files.repoint(there, "d.txt")
+    assert files.selected_path() == str(there / "d.txt") and len(heard) == 2
+    files.restore_key("a.txt")
+    files.repoint(here, None)
+    assert files.selected_path() == str(here / "a.txt") and len(heard) == 4, heard
+    long = "a_bounds_file_named_at_length_for_the_cell_measured_on_the_second_of_november_2026.txt"
+    (here / long).write_text("", encoding="utf-8")
+    files.refresh()
+    files.restore_key(long)
+    combo = files.combo
+    combo.resize(combo.sizeHint())
+    assert combo.sizeHint().width() == design.scaled(LIST_MOST) and combo.toolTip() == long
+    shown = combo.shown_text()
+    assert "…" in shown and shown.startswith(long[:6]) and shown.endswith(long[-6:]), shown
+    files.restore_key("a.txt")
+    assert combo.sizeHint().width() == design.scaled(LIST_MOST) and combo.toolTip() == "a.txt"
+    assert combo.shown_text() == "a.txt"
+    files.restore_key("")
+    assert combo.shown_text() == "Choose a file"
+
+    def row(label, id_):
+        return SimpleNamespace(complete=True, finished=True, label=label, id=id_, created="2026-10-01T22:29:00",
+                               mode=None, width=None, amortized=None)
+
+    rows = [row("first", "p1"), row("second", "p2")]
+    monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: SimpleNamespace(list=lambda kind: list(rows)))
+    priors = build_part(StorePicker, kind="prior", keeps_selection=True, hint="Choose a saved prior")
+    assert priors.combo.currentIndex() == -1 and priors.combo.placeholderText() == "Choose a saved prior"
+    assert priors.combo.count() == 2 and priors.isHidden()
+    priors.restore_key("p2")
+    told = []
+    priors.combo.currentIndexChanged.connect(told.append)
+    rows.insert(0, row("newest", "p3"))
+    priors.refresh()
+    assert priors.key() == "p2" and told == []
+    del rows[2]
+    priors.refresh()
+    assert priors.key() == "" and priors.combo.currentIndex() == -1 and told == [-1]
+    today = build_part(ArtifactPicker, base_path=here)
+    assert today.combo.currentIndex() == 0 and not isinstance(today.combo, Choice)
+    today.restore_key("gone.txt")
+    assert today.combo.currentIndex() == 0
+
+
 def test_the_posterior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
     """At the Posterior tab's click, every knob the TRAIN branch reads is validated before any
     worker starts, through the shared rules, and the refusal carries the box's field key so the

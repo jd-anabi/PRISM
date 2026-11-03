@@ -3429,6 +3429,57 @@ def test_a_control_given_the_focus_out_of_sight_wears_the_ring_when_it_comes_int
             "out", "in", ["whole"] * 4)
 
 
+def test_the_ring_of_a_typed_limit_is_whole_on_the_real_grid():
+    """Limits typed by hand on a page that scrolls as a whole: the grid opens no scrolling area of its own, and every
+    field of it, the last row's too, wears the whole ring once the page brings it into its view, standing at the foot of
+    the page's body with nothing under it. Its fields stand as a rebuilt page's number fields do."""
+    from collections import OrderedDict
+    from PySide6.QtWidgets import QScrollArea
+    from core.gui import style
+    from core.gui.widgets import page
+    from core.gui.widgets.labeled_inputs import FloatField
+    from core.gui.widgets.param_grid import BoundsGrid
+    app = QApplication.instance() or QApplication([])
+    window, body = QWidget(), QWidget()
+    column = QVBoxLayout(body)
+    column.setContentsMargins(0, 0, 0, 0)
+    grid = BoundsGrid(scrolls=False)
+    grid.load(OrderedDict((f"p{n}", (None, (0.1 * n, 1.0 + n))) for n in range(10)),
+              OrderedDict((name, (None, (1.0, 40.0))) for name in ("x_scale", "t_scale", "T")),
+              OrderedDict(amp=(None, (0.0, 6.0))))
+    column.addWidget(grid)
+    area = page.Scroller(body)
+    outer = QVBoxLayout(window)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.addWidget(area)
+    window.resize(420, 300)
+    window.setAttribute(Qt.WA_DontShowOnScreen, True)
+    window.setAttribute(Qt.WA_ShowWithoutActivating, True)
+    follows = style.FocusFollower(app, style.PrismStyle())
+    try:
+        window.show()
+        _settle()
+        assert not grid.findChildren(QScrollArea), "the grid opened a scrolling area of its own"
+        fields = [field for row in grid._rows.values() for field in (row.lo, row.hi)]
+        assert len(fields) == 28 and all(isinstance(field, FloatField) for field in fields)
+        assert {(field.width(), int(field.alignment() & Qt.AlignRight) != 0) for field in fields} == {
+            (design.scaled(design.SIZE["number_w"]), True)}
+        seen = {}
+        for field in fields:
+            _arrive(field, Qt.TabFocusReason)
+            area.bring_into_view(field)
+            _settle()
+            seen[fields.index(field)] = (_where_in_its_view(SimpleNamespace(area=area), field),
+                                         _ring_sides(window, field))
+            _leave(field, Qt.TabFocusReason)
+        assert seen == dict.fromkeys(range(28), ("in", ["whole"] * 4)), {at: was for at, was in seen.items()
+                                                                          if was != ("in", ["whole"] * 4)}
+    finally:
+        follows.stop()                       # first: the ring holds its control by address
+        window.close()
+        _gone(window)
+
+
 def test_the_ring_just_inside_a_control_shows_over_a_body_the_area_was_given_later():
     """A control that fills its place has the ring just inside its own edge, where the control itself paints.
     The ring is seen there only while its frame lies above everything the view holds, and a body that the
