@@ -797,12 +797,12 @@ def test_config_units_control_declares_units_and_validates_them():
     screen = build_inference()
     cfgp = screen.config_panel
     cfgp.model_combo.setCurrentText("NADROWSKI")
-    cfgp._on_model_changed("NADROWSKI")
+    units = cfgp.units_choice
 
-    cfgp.units_toggle.set_direct(False)                       # model's units file
+    units.setCurrentIndex(units.findData("file"))                    # the model's units file
     assert cfgp._units_override() is None
 
-    cfgp.units_toggle.set_direct(True)                        # typed
+    units.setCurrentIndex(units.findData("typed"))                   # typed
     cfgp.units_text.setText("nm s pN Hz")
     assert cfgp._units_override() == ("nm", "s", "pN", "Hz")
     cfgp._build_config()
@@ -819,8 +819,8 @@ def test_config_units_control_declares_units_and_validates_them():
 
     before = screen.session.draft
     refused = []
-    cfgp._refusal = lambda exc: refused.append(exc)          # the yellow box, recorded instead of shown
-    cfgp.units_text.setText("notaunit")                       # must be refused, draft left alone
+    cfgp._refusal = lambda exc: refused.append(exc)            # the shared question, recorded instead of shown
+    cfgp.units_text.setText("notaunit")                         # must be refused, draft left alone
     cfgp._build_config()
     assert screen.session.draft is before
     assert len(refused) == 1 and refused[0].field == "units", refused
@@ -1604,11 +1604,13 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "drive_frequency": "Set it in the 'f (Hz)' box in step 5, Inference.",
         "drive_phase": "Set it in the 'φ (rad)' box in step 5, Inference.",
         "chi_f0_si": "Set it in the 'Drive F₀ (N)' box in step 5, Inference.",
-        "chi_n_freqs": "Set it in the 'χ probes per observation' box in step 1, Model and options.",
-        "chi_k_pad": "Set it in the 'χ probe slots (capacity)' box in step 1, Model and options.",
-        "chi_max_cycles": "Set it in the 'χ lock-in ceiling (cycles)' box in step 1, Model and options.",
-        "chi_f0": "Fixed by measurement: change it in config.py, deliberately.",
-        "chi_freq_bounds": "Fixed by measurement: change it in config.py, deliberately.",
+        "chi_mode": "Set it in the 'Kind of observation' box in step 1, Model and options.",
+        "chi_n_freqs": "Set it in the 'Driven recordings per observation' box in step 1, Model and options.",
+        "chi_k_pad": "Set it in the 'Slots for driven recordings' box in step 1, Model and options.",
+        "chi_max_cycles": "Set it in the 'Lock-in limit' box in step 1, Model and options.",
+        "chi_f0": "Fixed by measurement: it cannot be changed in the window.",
+        "chi_freq_bounds": "Fixed by measurement: it cannot be changed in the window.",
+        "reparam_rotate": "Set it in the 'Rotation' box in step 1, Model and options.",
         "n_freqs": ("Set it in the 'n_freqs' box in Effective temperature, One cell, or in Effective temperature, "
                     "Sweep study."),
         "ensemble_m": ("Set it in the 'M_ensemble' box in Effective temperature, One cell, or in Effective "
@@ -1663,8 +1665,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd",
         # the kept training to resume: the window's Resume comes with its training page
         "resume_fit",
-        # settings a plan holds: no box is named for them until the rebuilt pages show them
-        "chi_mode", "reparam_rotate", "expected_epochs"}
+        # a setting a plan holds: no box is named for it until the training page shows it
+        "expected_epochs"}
 
     # (e) the drive labels, as the Infer tab builds them
     for key, name in (("drive_amplitude", "amp"), ("drive_frequency", "freq"), ("drive_phase", "phase")):
@@ -3216,49 +3218,41 @@ def test_record_summary_never_prints_none():
 
 
 def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():
-    """The χ drive amplitude and band are MEASUREMENTS (config.py's CHI_F0 and CHI_FREQ_BOUNDS), not
-    per-run choices: there is no chi override, so build_prior refuses any other value seconds after
-    Apply, and a box that accepts one only manufactures that refusal. The boxes stay as displays of
-    config.py under a caption saying so; the draft carries None for both, so make_sim_config takes
-    config.py's values exactly as the command-line tool does; and the "Model applied" line reports
-    config.py, not the boxes. The help and the config.py comment stop inviting the edit.
-
-    The proof is not the read-only flag (setText bypasses it, and so would a restore) but the draft:
-    even after a programmatic write into the boxes, the config built from the draft passes the chi
-    guard that would refuse any other band or amplitude.
-    """
+    """The χ drive amplitude and band are MEASUREMENTS (config.py's CHI_F0 and CHI_FREQ_BOUNDS), not per-run choices:
+    there is no chi override, so build_prior refuses any other value seconds after Apply, and a field that accepted one
+    only manufactured that refusal. They stand as text with no field, saying where they came from, and only for the
+    frequency response; the draft carries None for both, so make_sim_config takes config.py's values exactly as the
+    command-line tool does. The help and the config.py comment stop inviting the edit."""
     from pathlib import Path
     from core import config
     from core.config import BOUNDS_PATH
     from core.gui.panels.inference.help_text import HELP
     from core.SBI.run_guards import _assert_chi_config_is_deliberate
-    from tests._fixtures import page_lines, qt_app
+    from tests._fixtures import qt_app
 
     qt_app()
     screen = build_inference()
     cfgp = screen.config_panel
     cfgp.model_combo.setCurrentText("NADROWSKI")
-    cfgp._on_model_changed("NADROWSKI")
-    cfgp.units_toggle.set_direct(False)
-    for box in (cfgp.chi_f0, cfgp.chi_range.lo, cfgp.chi_range.hi):
-        assert box.isReadOnly(), "the drive amplitude and band are displays of config.py"
-    assert "config.py" in cfgp.chi_fixed_note.text(), cfgp.chi_fixed_note.text()
-    assert cfgp.chi_f0.value() == config.CHI_F0
-    assert cfgp.chi_range.value() == tuple(config.CHI_FREQ_BOUNDS)
+    kinds = cfgp.kind_choice
+    kinds.setCurrentIndex(kinds.findData(True))
+    lo, hi = config.CHI_FREQ_BOUNDS
+    for key, said in (("chi_f0", f"Drive amplitude in training: {config.CHI_F0:g} (no unit)."),
+                      ("chi_freq_bounds", f"Frequency band in training: {lo:g} to {hi:g} times the cell's own frequency.")):
+        row = cfgp.form.rows[key]
+        assert row.widget is None and row.label_text() == said and row.origin.text() == "fixed by measurement", key
+        assert row.is_shown(), key
+    kinds.setCurrentIndex(kinds.findData(False))
+    assert not cfgp.form.rows["chi_f0"].is_shown(), "a value of the frequency response stood for the other kind"
+    kinds.setCurrentIndex(kinds.findData(True))
 
-    cap = page_lines(cfgp)
-    cfgp.chi_check.setChecked(True)
-    cfgp.chi_f0.setText("0.05")                          # a programmatic write: the draft must ignore it
-    cfgp.chi_range.lo.setText("0.1")
-    cfgp.chi_range.hi.setText("10")
     cfgp._build_config()
     draft = screen.session.draft
     assert draft is not None and draft.chi_mode is True
     assert draft.chi_f0 is None and draft.chi_freq_bounds is None, (draft.chi_f0, draft.chi_freq_bounds)
-    lo, hi = config.CHI_FREQ_BOUNDS
-    applied = [text for _level, text in cap.lines if text.startswith("Model applied")]
-    assert len(applied) == 1, cap.lines
-    assert f"over {lo:g}–{hi:g}×Ω₀ at ND amplitude {config.CHI_F0:g}" in applied[0], applied[0]
+    assert cfgp.in_use.sentence.plain_text().startswith(
+        f"Frequency response, {config.CHI_N_FREQS} driven recordings in {config.CHI_K_PAD} slots, lock-in limit "
+        f"{config.CHI_MAX_CYCLES:g} drive cycles.")
 
     bounds = BOUNDS_PATH / "nadrowski" / "master.txt"
     if bounds.exists():
@@ -3266,20 +3260,20 @@ def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():
         assert cfg.chi_f0 == config.CHI_F0 and tuple(cfg.chi_freq_bounds) == tuple(config.CHI_FREQ_BOUNDS)
         _assert_chi_config_is_deliberate(cfg)             # raises on any other band or amplitude
 
-    # The three texts that used to invite the edit now say the values are fixed by measurement.
+    # The texts that used to invite the edit say the values are fixed by measurement.
     for key in ("chi_f0", "chi_range"):
         assert "config.py" in HELP[key] and "measurement" in HELP[key].lower(), (key, HELP[key])
     src = Path(config.__file__).read_text(encoding="utf-8")
     assert "TUNABLE per config in the Config tab" not in src, "config.py's CHI_F0 comment is stale"
 
 def test_the_config_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
-    """At Apply, every bad box is a Refusal naming its field, shown through _refusal (the yellow box),
+    """At Apply, every bad box is a Refusal naming its field, told through _refusal (the shared question),
     and the session is left exactly as it was: no new draft, no re-gate. A BLANK box is refused,
     never read as zero -- IntField.value() gave 0 for "" and the old chain refused it only because
-    0 < 2, while the pad was not checked here at all and surfaced one tab later as "The
-    configuration could not be built." with a traceback. With χ mode off the three χ boxes are not
-    read (they are disabled) and Apply goes through with None for them, so make_sim_config takes
-    config.py's values, as the tool does."""
+    0 < 2, while the pad was not checked here at all and surfaced one step later as "The
+    configuration could not be built." with a traceback. With the frequency response not chosen its three boxes are
+    not read (they are not on the page) and Apply goes through with None for them, so make_sim_config takes
+    config.py's values, as the tool does; the kind and the rotation travel as chosen."""
     from core import config
     from core.config import CHI_K_MAX
     from core.refusals import Refusal
@@ -3289,20 +3283,26 @@ def test_the_config_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
     screen = build_inference()
     cfgp = screen.config_panel
     cfgp.model_combo.setCurrentText("NADROWSKI")
-    cfgp._on_model_changed("NADROWSKI")
-    cfgp.units_toggle.set_direct(False)
+    cfgp.units_choice.setCurrentIndex(cfgp.units_choice.findData("file"))
     refused, drafts = [], []
-    cfgp._refusal = lambda exc: refused.append(exc)      # the yellow box, recorded instead of shown
+    cfgp._refusal = lambda exc: refused.append(exc)      # the shared question, recorded instead of shown
     screen.new_draft = lambda draft: drafts.append(draft)
+    rows = cfgp.form.rows
+    boxes = {"chi_k": rows["chi_n_freqs"].widget, "chi_pad": rows["chi_k_pad"].widget,
+             "chi_cycles": rows["chi_max_cycles"].widget}
 
-    def apply(**boxes):
-        """Apply with χ on, every χ box at config.py's value except the overrides; the new refusals."""
-        cfgp.chi_check.setChecked(True)
-        cfgp.chi_k.setText(str(config.CHI_N_FREQS))
-        cfgp.chi_pad.setText(str(config.CHI_K_PAD))
-        cfgp.chi_cycles.setText(str(config.CHI_MAX_CYCLES))
-        for name, text in boxes.items():
-            getattr(cfgp, name).setText(text)
+    def kind(chi):
+        cfgp.kind_choice.setCurrentIndex(cfgp.kind_choice.findData(chi))
+
+    def apply(**typed):
+        """Apply with the frequency response, every one of its boxes at config.py's value but those typed; the new
+        refusals."""
+        kind(True)
+        boxes["chi_k"].setText(str(config.CHI_N_FREQS))
+        boxes["chi_pad"].setText(str(config.CHI_K_PAD))
+        boxes["chi_cycles"].setText(str(config.CHI_MAX_CYCLES))
+        for name, text in typed.items():
+            boxes[name].setText(text)
         before = len(refused)
         cfgp._build_config()
         return refused[before:]
@@ -3319,15 +3319,15 @@ def test_the_config_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
         ({"chi_cycles": str(config.CHI_MIN_CYCLES)}, "chi_max_cycles",
          f"greater than {config.CHI_MIN_CYCLES:g}"),
     ]
-    for boxes, field, needle in cases:
-        got = apply(**boxes)
-        assert len(got) == 1 and isinstance(got[0], Refusal), (boxes, got)
-        assert got[0].field == field and needle in str(got[0]), (boxes, str(got[0]))
+    for typed, field, needle in cases:
+        got = apply(**typed)
+        assert len(got) == 1 and isinstance(got[0], Refusal), (typed, got)
+        assert got[0].field == field and needle in str(got[0]), (typed, str(got[0]))
         assert "(default " in str(got[0]), f"every message carries the default: {got[0]}"
     assert drafts == [], "a refused Apply must not touch the session"
 
-    # Typed units: blank, then unusable. Both name "units"; neither names a box or a tab.
-    cfgp.units_toggle.set_direct(True)
+    # Typed units: blank, then unusable. Both name "units"; neither names a box or a step.
+    cfgp.units_choice.setCurrentIndex(cfgp.units_choice.findData("typed"))
     cfgp.units_text.setText("")
     got = apply()
     assert len(got) == 1 and got[0].field == "units" and "blank" in str(got[0]), got
@@ -3335,12 +3335,12 @@ def test_the_config_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
     got = apply()
     assert len(got) == 1 and got[0].field == "units" and "notaunit" in str(got[0]), got
     assert drafts == []
-    cfgp.units_toggle.set_direct(False)
+    cfgp.units_choice.setCurrentIndex(cfgp.units_choice.findData("file"))
 
-    # χ mode OFF: the three boxes are not read. Blank them all and Apply goes through with None.
+    # The other kind: the three boxes are not read. Blank them all and Apply goes through with None.
     n_refused = len(refused)
-    cfgp.chi_check.setChecked(False)
-    for box in (cfgp.chi_k, cfgp.chi_pad, cfgp.chi_cycles):
+    kind(False)
+    for box in boxes.values():
         box.setText("")
     cfgp._build_config()
     assert len(refused) == n_refused and len(drafts) == 1, (refused[n_refused:], drafts)
@@ -3348,7 +3348,7 @@ def test_the_config_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
     assert off.chi_mode is False
     assert off.chi_n_freqs is None and off.chi_k_pad is None and off.chi_max_cycles is None
 
-    # The happy path with χ on: the values travel typed, and the amplitude and band travel as None.
+    # The happy path with the frequency response: the values travel typed, and the amplitude and band as None.
     assert apply() == []
     on = drafts[1]
     assert (on.chi_n_freqs, on.chi_k_pad, on.chi_max_cycles) == (
@@ -3356,6 +3356,11 @@ def test_the_config_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
     assert isinstance(on.chi_n_freqs, int) and isinstance(on.chi_k_pad, int)
     assert isinstance(on.chi_max_cycles, float)
     assert on.chi_f0 is None and on.chi_freq_bounds is None
+    assert on.chi_mode is True and on.reparam_rotate is config.REPARAM_ROTATE
+
+    # The rotation travels as chosen.
+    cfgp.rot_choice.setCurrentIndex(cfgp.rot_choice.findData(not config.REPARAM_ROTATE))
+    assert apply() == [] and drafts[2].reparam_rotate is (not config.REPARAM_ROTATE)
 
 
 def test_the_prior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
@@ -4154,7 +4159,8 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     from tests._fixtures import code_only, qt_app
 
     def shown(panel) -> list:
-        out = []
+        out = [row.label.text() for row in getattr(getattr(panel, "form", None), "rows", {}).values()
+               if row.widget is not None]
         for form in panel.findChildren(QFormLayout):
             for i in range(form.rowCount()):
                 item = form.itemAt(i, QFormLayout.LabelRole)
@@ -4230,8 +4236,9 @@ def test_the_gui_control_table_matches_the_tabs_labels():
         "fisher_points": "Operating points", "prefactor": "Normalisation constant", "slice_at": "Slice at",
         "bounds": "Bounds", "cell": "Cell", "units": "Units", "model": "Model", "prior": "Prior",
         "posterior": "Posterior", "recording_forced": "Forced", "drive_amplitude": "A (N)", "drive_frequency": "f (Hz)",
-        "drive_phase": "φ (rad)", "chi_f0_si": "Drive F₀ (N)", "chi_n_freqs": "χ probes per observation",
-        "chi_k_pad": "χ probe slots (capacity)", "chi_max_cycles": "χ lock-in ceiling (cycles)", "n_freqs": "n_freqs",
+        "drive_phase": "φ (rad)", "chi_f0_si": "Drive F₀ (N)", "chi_mode": "Kind of observation",
+        "chi_n_freqs": "Driven recordings per observation", "chi_k_pad": "Slots for driven recordings",
+        "chi_max_cycles": "Lock-in limit", "reparam_rotate": "Rotation", "n_freqs": "n_freqs",
         "ensemble_m": "M_ensemble", "freqs_per_batch": "freqs / batch", "f0": "F0 (ND forcing amplitude)",
         "preset": "Preset", "s_grid": "S grid  (T_a/T = 1)", "t_grid": "T_a/T grid  (S = 0)", "seed": "Seed",
         "param_value": "value", "param_min": "min", "param_max": "max", "init": "init", "x_scale": "x_scale (nm)",
@@ -4414,22 +4421,18 @@ def test_the_run_status_is_published_last_after_every_lock_is_final():
 
 
 def test_the_config_tab_says_what_the_session_holds():
-    """Apply's session line, the first half. ONE describer, ``InferenceScreen.session_contents()``,
-    answers "what would a new draft throw away" -- the records held, in the steps' order, each by the label
-    the rail gives it, in plain phrases with no code identifiers in them -- and the Config tab shows it as a
-    permanent read-only line refreshed from ``refresh_local_gates``, which ``refresh_gates`` already calls
-    on every panel after every stage.
+    """What applying would let go of. ONE describer, ``InferenceScreen.session_contents()``, answers it: the records
+    held, in the steps' order, each by the label the rail gives it, in plain phrases with no code's names in them; and
+    the first step's question quotes them.
 
-    THE DRAFT IS NOT IN THE LIST, deliberately: ``new_draft`` replaces it and replacing it is the
-    whole point of pressing Apply, so naming it would question every model change made on purpose.
-    Nor is the configuration, which is never held without its prior.
+    THE DRAFT IS NOT IN THE LIST, deliberately: ``new_draft`` replaces it and replacing it is the whole point of
+    applying, so naming it would question every model change made on purpose. Nor is the configuration, which is never
+    held without its prior.
 
-    The last leg is the one that keeps the line safe: the gate tests put a bare ``object()`` in the
-    slots, and a derived status line must never be able to raise into ``refresh_gates()`` and take the
-    tab down with it.
-    """
+    The last leg is the one that keeps it safe: the gate tests put a bare ``object()`` in the slots, and what a page draws
+    must never be able to raise into ``refresh_gates()``."""
     from core.gui.session import SbiSession
-    from tests._fixtures import qt_app
+    from tests._fixtures import asked, forget_asked, qt_app
 
     qt_app()
     inf = build_inference()
@@ -4439,8 +4442,7 @@ def test_the_config_tab_says_what_the_session_holds():
     assert inf.session_contents() == []
     inf.session = SbiSession(draft=object(), cfg=_spont_cfg())
     inf.refresh_gates()
-    assert inf.session_contents() == [], "replacing a draft is what Apply is for; it is not a loss"
-    assert "nothing yet" in cfgp.session_line.text(), cfgp.session_line.text()
+    assert inf.session_contents() == [], "replacing a draft is what applying is for; it is not a loss"
 
     # (b) one phrase per record, in the steps' order, by its label
     inf.session = SbiSession(draft=object(), cfg=_spont_cfg(),
@@ -4450,55 +4452,47 @@ def test_the_config_tab_says_what_the_session_holds():
     held = inf.session_contents()
     assert held == ["the prior p_master", "the unnamed record", "the observation obs1"], held
 
-    # (c) the line names every phrase and says the records survive on disk
-    inf.refresh_gates()
-    line = cfgp.session_line.text()
+    # (c) the question names every phrase, and says each record stays in Records
+    forget_asked()
+    cfgp._build_config()
+    sentence = asked().sentence
     for phrase in held:
-        assert phrase in line, (phrase, line)
-    assert "stays on disk" in line, line
+        assert phrase in sentence, (phrase, sentence)
+    assert "Each stays in Records" in sentence, sentence
 
     # (d) stand-ins carrying neither a name nor a kind: named, never raised
     inf.session = SbiSession(cfg=object(), inf_prior=object(), posterior=object())
     inf.refresh_gates()
     assert inf.session_contents() == ["the unnamed record", "the unnamed record"], inf.session_contents()
-    assert "the unnamed record" in cfgp.session_line.text(), cfgp.session_line.text()
+
 
 def test_apply_confirms_before_it_discards_the_session(monkeypatch):
-    """Apply's confirmation, the second half. Apply is the destructive one of the screen's two entry
-    points, so it asks -- but ONLY when there is something to lose.
+    """The first step's question. Applying is the destructive one of the screen's two entry points, so it asks -- but
+    ONLY when there is something to lose.
 
-    Four legs, and the first is the one that keeps the guard tolerable: an empty session is replaced
-    in silence, with SHOWN empty, so nothing about the first Apply of a sitting changes. A non-empty
-    one raises an INSTANCE QMessageBox (never QMessageBox.question -- the statics are C++ and escape
-    tests/conftest.py's dialog guard, so a static call STALLS the offscreen suite instead of failing
-    it) that lists exactly what ``session_contents()`` reports, says those artifacts stay on disk,
-    and has "Keep this session" as its default BY NAME -- the lesson of the near-miss dialog and the
-    load question, where buttons() orders by role and Enter landed on the destructive button.
-    Anything but the destructive button leaves the session object identical.
-    """
+    Four legs, and the first is the one that keeps the question tolerable: a session holding no record is replaced in
+    silence, so nothing about the first Apply of a sitting changes. One holding records asks the shared question, which
+    names exactly what ``session_contents()`` reports, says each stays in Records, and has "Keep this session" as the
+    answer Enter and Escape give. Anything but the other answer leaves the session object identical."""
     from core.gui.session import SbiSession
-    from tests._fixtures import all_asked, asked, choose, forget_asked, page_lines, qt_app
+    from tests._fixtures import all_asked, asked, choose, forget_asked, qt_app
 
     qt_app()
     inf = build_inference()
     cfgp = inf.config_panel
     cfgp.model_combo.setCurrentText("NADROWSKI")
-    cfgp._on_model_changed("NADROWSKI")
-    cfgp.units_toggle.set_direct(False)
-    cfgp.chi_check.setChecked(False)
-    cap = page_lines(cfgp)
+    cfgp.units_choice.setCurrentIndex(cfgp.units_choice.findData("file"))
+    cfgp.kind_choice.setCurrentIndex(cfgp.kind_choice.findData(False))
 
-    def applied():
-        return [text for _level, text in cap.lines if text.startswith("Model applied")]
-
-    # (a) an EMPTY session: no dialog at all, and the session is replaced exactly as before
+    # (a) a session holding no record: no question at all, and the session is replaced as before
     forget_asked()
     cfgp._build_config()
-    assert all_asked() == [], "an empty session must be replaced silently"
-    assert inf.session.draft is not None and len(applied()) == 1, applied()
+    assert all_asked() == [], "a session holding nothing must be replaced silently"
+    first = inf.session
+    assert first.draft is not None
 
-    # (b) a non-empty session, nothing clicked: the dialog names what is held and nothing changes
-    inf.session = SbiSession(draft=inf.session.draft, cfg=_spont_cfg(),
+    # (b) records held, nothing clicked: the question names what is held and nothing changes
+    inf.session = SbiSession(draft=first.draft, cfg=_spont_cfg(),
                              inf_prior=_prior_stub(id_="20260914T100000", name="p_master"))
     inf.refresh_gates()
     before = inf.session
@@ -4507,29 +4501,24 @@ def test_apply_confirms_before_it_discards_the_session(monkeypatch):
     cfgp._build_config()
     assert len(all_asked()) == 1, all_asked()
     box = asked()
-    assert box.marker == "warn"
-    assert box.default is not None, "no default button: Enter would do the destructive thing"
-    assert box.default == "Keep this session", box.default
+    assert (box.kind, box.marker, box.title) == ("question", "warn", "Start a new session?")
+    assert box.default == box.safe == "Keep this session", (box.default, box.safe)
+    assert box.answers == ("Apply and start a new session", "Keep this session") and not box.loses_work
     for phrase in held:
-        assert phrase in box.text, (phrase, box.text)
-    assert "STAYS ON DISK" in box.text, box.text
-    assert inf.session is before, "a dialog nobody answered replaced the session"
-    assert len(applied()) == 1, "a refused Apply must not report a model as applied"
+        assert phrase in box.sentence, (phrase, box.sentence)
+    assert inf.session is before, "a question nobody answered replaced the session"
 
-    # (c) Enter -- i.e. the default button -- keeps the session too
-    forget_asked()
+    # (c) Enter -- the default answer -- keeps the session too
     choose(monkeypatch, default=True)
     cfgp._build_config()
-    assert inf.session is before, "clicking the default button replaced the session"
-    assert len(applied()) == 1, applied()
+    assert inf.session is before, "the default answer replaced the session"
 
-    # (d) the destructive button: the session IS replaced, and the prior goes with it
+    # (d) the other answer: the session IS replaced, and the prior goes with it
     choose(monkeypatch, words="Apply and start a new session")
     cfgp._build_config()
-    assert inf.session is not before, "the destructive button did not replace the session"
+    assert inf.session is not before, "the other answer did not replace the session"
     assert inf.session.inf_prior is None and inf.session.cfg is None, inf.session
-    assert len(applied()) == 2, applied()
-    assert inf.session_contents() == [] and "nothing yet" in cfgp.session_line.text()
+    assert inf.session_contents() == []
 
 
 def test_the_store_pickers_say_what_they_hold(monkeypatch):
@@ -5106,3 +5095,114 @@ def test_every_comparison_refusal_reaches_the_yellow_box_naming_its_control(tmp_
             assert box.beneath == fixes[field], (label, box.beneath)
         written = [s.name for s in store.list("fdt") if s.study == "comparison"]
         assert written == [], f"a refused comparison left a record behind: {written}"
+
+
+def test_the_model_list_shows_the_models_names_and_speaks_the_engines():
+    """Step 1's list of models shows each model by the name the window gives it and is read and set by the engine's
+    names, as every list of models in the window is; it is as wide as its longest name, its own chevron beside it."""
+    from PySide6.QtGui import QFontMetrics
+    from core.config import VALID_MODELS
+    from tests._fixtures import qt_app
+    qt_app()
+    screen = build_inference()
+    combo = screen.config_panel.model_combo
+    shown = [combo.itemText(n) for n in range(combo.count())]
+    assert shown[:3] == ["BP", "Nadrowski", "Hopf"], shown
+    assert shown[3:] == list(VALID_MODELS[3:]), "a model of your own is not shown by the name it was stored under"
+    assert [combo.itemData(n) for n in range(combo.count())] == list(VALID_MODELS)
+    assert combo.currentText() == "NADROWSKI" and combo.itemText(combo.currentIndex()) == "Nadrowski"
+    combo.setCurrentText("HOPF")
+    assert combo.currentText() == "HOPF" and screen.config_panel.form.rows["model"].value() == "HOPF"
+    combo.setCurrentText("NOT_A_MODEL")
+    assert combo.currentText() == "HOPF", "a name the list does not hold moved it"
+    longest = max(QFontMetrics(combo.font()).horizontalAdvance(combo.itemText(n)) for n in range(combo.count()))
+    assert combo.minimumSizeHint().width() > longest, (combo.minimumSizeHint().width(), longest)
+
+
+def test_a_saved_model_reaches_the_rebuilt_list(monkeypatch):
+    """A model of your own saved joins the list through the window, by its own name, and the selection stands; one deleted
+    while it is chosen falls to Nadrowski, and the page hears it as a change of model: its units line follows."""
+    from core import registry
+    from tests._fixtures import qt_app
+    qt_app()
+    window = build_window()
+    page = window.part("inference").config_panel
+    heard = []
+    real = page._on_model_changed
+    monkeypatch.setattr(page, "_on_model_changed", lambda model: (heard.append(model), real(model))[1])
+    registry.register(registry.ModelSpec("UMTESTSTEP", ["a"], is_user_model=True, n_vars=1))
+    try:
+        window._on_user_models_changed()
+        combo = page.model_combo
+        assert combo.findData("UMTESTSTEP") >= 0 and combo.itemText(combo.findData("UMTESTSTEP")) == "UMTESTSTEP"
+        assert heard == [] and combo.currentText() == "NADROWSKI", "a list read again moved a selection that stood"
+        combo.setCurrentText("UMTESTSTEP")
+        heard.clear()
+    finally:
+        registry.unregister("UMTESTSTEP")
+    window._on_user_models_changed()
+    assert page.model_combo.currentText() == "NADROWSKI" and heard == ["NADROWSKI"], heard
+    assert page.units_line.plain_text() == "kHz ms nm pN, from Units/nadrowski/units.txt"
+
+
+def test_the_typed_units_follow_the_model():
+    """The box of typed units is filled from the units file of the model chosen, whenever the model changes, typed or not:
+    typed units never declare another model's units."""
+    from tests._fixtures import qt_app
+    qt_app()
+    page = build_inference().config_panel
+    page.units_choice.setCurrentIndex(page.units_choice.findData("typed"))
+    page.units_text.setText("nm s")
+    page.model_combo.setCurrentText("BP")
+    assert page.units_text.text() == "ms nm"
+    page.model_combo.setCurrentText("HOPF")
+    assert page.units_text.text() == "kHz ms nm pN"
+
+
+def test_the_units_line_is_sorted_and_names_the_file(monkeypatch):
+    """The line under "Units" names the model's units in the order of the alphabet, whatever order the file is read in,
+    and the file by its path in the resources folder; a model with no units file says so."""
+    from core.Helpers import file_manager
+    from tests._fixtures import qt_app
+    qt_app()
+    page = build_inference().config_panel
+    assert page.units_line.plain_text() == "kHz ms nm pN, from Units/nadrowski/units.txt"
+    monkeypatch.setattr(file_manager, "parse_units_file", lambda path: ("pN", "nm", "ms", "kHz"))
+    page._units_read.clear()
+    page.model_combo.setCurrentText("HOPF")
+    assert page.units_line.plain_text() == "kHz ms nm pN, from Units/hopf/units.txt"
+    page.model_combo.setCurrentText("BP")
+    assert page.units_line.plain_text() == "kHz ms nm pN, from Units/bp/units.txt"
+    page._units_read.clear()
+    monkeypatch.setattr(file_manager, "parse_units_file", lambda path: ("ms", "nm"))
+    page.model_combo.setCurrentText("NADROWSKI")
+    assert page.units_line.plain_text() == "ms nm, from Units/nadrowski/units.txt"
+    from core import cli
+    from core.refusals import Refusal
+
+    def missing(model):
+        raise Refusal(f"Missing units file for model '{model}'", field="units")
+
+    monkeypatch.setattr(cli, "resolve_units_file", missing)
+    page._units_read.clear()
+    page.model_combo.setCurrentText("HOPF")
+    assert page.units_line.plain_text() == "This model has no units file: Missing units file for model 'HOPF'"
+
+
+@pytest.mark.parametrize("rotation", [True, False], ids=["on", "off"])
+@pytest.mark.parametrize("chi", [True, False], ids=["frequency response", "set by the bounds file"])
+def test_rotation_is_always_stated(rotation, chi):
+    """What step 1 holds says the rotation, on or off, whatever the kind of observation."""
+    from core import config
+    from tests._fixtures import qt_app
+    qt_app()
+    screen = build_inference()
+    page = screen.config_panel
+    page.kind_choice.setCurrentIndex(page.kind_choice.findData(chi))
+    page.rot_choice.setCurrentIndex(page.rot_choice.findData(rotation))
+    page._build_config()
+    kind = (f"Frequency response, {config.CHI_N_FREQS} driven recordings in {config.CHI_K_PAD} slots, lock-in limit "
+            f"{config.CHI_MAX_CYCLES:g} drive cycles." if chi else "Set by the bounds file.")
+    assert page.in_use.line_text() == "In use: Nadrowski"
+    assert page.in_use.sentence.plain_text() == (
+        f"{kind} Rotation {'on' if rotation else 'off'}. Units kHz ms nm pN, from the model's file.")

@@ -1342,21 +1342,15 @@ def test_int_field_value_or_none_tells_a_blank_from_a_zero():
 
 
 def test_the_config_tab_science_knobs_open_at_config_and_are_not_written():
-    """On the Config tab, the χ probe count, probe slots and lock-in ceiling open at config.py's
-    values on EVERY launch, and the drive amplitude and band are never saved or read at all.
+    """On Model and options the driven recordings' count, slots and lock-in limit open at config.py's values on EVERY
+    launch, the drive amplitude and band are text, never a field, and the rotation and the units choice open at their
+    usual values. Only the model and the kind of observation are remembered, and only when they are applied: nothing is
+    written at closing, and a key an older build left -- the units choice, the typed units, the rotation, every science
+    key -- is neither read nor written again.
 
-    The seed-then-restore pattern is what trained the 2026-08-19 retrain on the retired band: the tab
-    seeded the boxes from config.CHI_* and then restored whatever the last session had saved, so a
-    value written before config.py changed won silently on every launch afterwards. There is no chi
-    override, so a non-default band or amplitude is refused seconds into the prior build, and
-    restoring one only manufactures that refusal; the slots and the ceiling are frozen into every
-    posterior trained with them, so a stale one silently trains a different network. A stale key in
-    an old PRISM.ini is IGNORED, never migrated.
-
-    Two launches: from an empty file, and from a file holding every old key one step from the
-    defaults. Both must show config.py, while the selections (model, χ-mode tick) are still
-    remembered. test_science_knobs_open_at_config_and_are_not_written pins the Prior, Posterior,
-    Validate and TSNPE tabs the same way.
+    The seed-then-restore pattern is what trained the 2026-08-19 retrain on the retired band: the tab seeded the boxes
+    from config.CHI_* and then restored whatever the last session had saved, so a value written before config.py changed
+    won silently on every launch afterwards. A stale key in an old PRISM.ini is IGNORED, never migrated.
     """
     from core import config
     from core.gui import settings as st
@@ -1364,24 +1358,24 @@ def test_the_config_tab_science_knobs_open_at_config_and_are_not_written():
     from tests._fixtures import qt_app
 
     qt_app()
-    want = {"chi_k": str(config.CHI_N_FREQS), "chi_k_pad": str(config.CHI_K_PAD),
-            "chi_f0": str(config.CHI_F0), "chi_lo": str(config.CHI_FREQ_BOUNDS[0]),
-            "chi_hi": str(config.CHI_FREQ_BOUNDS[1]), "chi_max_cycles": str(config.CHI_MAX_CYCLES)}
+    want = {"chi_n_freqs": config.CHI_N_FREQS, "chi_k_pad": config.CHI_K_PAD, "chi_max_cycles": config.CHI_MAX_CYCLES,
+            "reparam_rotate": config.REPARAM_ROTATE, "units": "file"}
 
-    def boxes(panel):
-        return {"chi_k": panel.chi_k.text(), "chi_k_pad": panel.chi_pad.text(),
-                "chi_f0": panel.chi_f0.text(), "chi_lo": panel.chi_range.lo.text(),
-                "chi_hi": panel.chi_range.hi.text(), "chi_max_cycles": panel.chi_cycles.text()}
+    def shown(panel):
+        return {key: panel.form.rows[key].value() for key in want}
 
     # (a) an empty file: the autouse settings fixture points at a fresh path for this test
     fresh = build_part(it.ConfigPanel, screen=None)
-    assert boxes(fresh) == want, boxes(fresh)
+    assert shown(fresh) == want, shown(fresh)
+    for key in ("chi_f0", "chi_freq_bounds"):
+        assert fresh.form.rows[key].widget is None, f"{key} is a field"
+    assert (fresh.model_combo.currentText(), fresh.kind_choice.currentData()) == ("NADROWSKI", False)
 
-    # (b) a file holding every old key, each one step from the default, beside two selections
+    # (b) a file holding every old key, each one step from the default, beside the two selections
     stale = {"chi_k": str(config.CHI_N_FREQS + 1), "chi_k_pad": str(config.CHI_K_PAD - 1),
              "chi_f0": str(config.CHI_F0 / 2), "chi_lo": str(config.CHI_FREQ_BOUNDS[0] / 3),
-             "chi_hi": str(config.CHI_FREQ_BOUNDS[1] * 3),
-             "chi_max_cycles": str(config.CHI_MAX_CYCLES + 5)}
+             "chi_hi": str(config.CHI_FREQ_BOUNDS[1] * 3), "chi_max_cycles": str(config.CHI_MAX_CYCLES + 5),
+             "units_mode": "direct", "units_text": "nm s pN Hz", "reparam_rotate": str(not config.REPARAM_ROTATE)}
     qs = st.settings()
     qs.beginGroup("inference_config")
     for key, value in stale.items():
@@ -1389,32 +1383,23 @@ def test_the_config_tab_science_knobs_open_at_config_and_are_not_written():
     qs.setValue("chi_mode", "1")
     qs.setValue("model", "HOPF")
     qs.endGroup()
+    qs.setValue("layout/ConfigPanel/splitter", "stale")
     qs.sync()
     relaunched = build_part(it.ConfigPanel, screen=None)
-    assert boxes(relaunched) == want, boxes(relaunched)
-    assert relaunched.chi_check.isChecked() is True, "the χ-mode tick is a selection: remembered"
+    assert shown(relaunched) == want, shown(relaunched)
+    assert relaunched.kind_choice.currentData() is True, "the kind of observation is a selection: remembered"
     assert relaunched.model_combo.currentText() == "HOPF", "the model is a selection: remembered"
 
-    # (c) nothing writes them: edit every box, clear the stale keys, save -- a key present afterwards
-    # can only be a fresh WRITE, and the only keys written are the five selections.
-    relaunched.chi_k.setText("3")
-    relaunched.chi_pad.setText("4")
-    relaunched.chi_cycles.setText("7")
-    relaunched.chi_f0.setText("0.05")                    # setText ignores read-only, as a restore would
-    relaunched.chi_range.lo.setText("0.1")
-    relaunched.chi_range.hi.setText("0.9")
-    out = st.settings()
-    out.beginGroup("inference_config")
-    for key in stale:
-        out.remove(key)
-    out.endGroup()
-    relaunched.save_settings(out)
-    out.sync()
-    out.beginGroup("inference_config")
-    written = set(out.childKeys())
-    out.endGroup()
-    assert not (written & set(stale)), f"science keys written: {sorted(written & set(stale))}"
-    assert {"model", "units_mode", "units_text", "chi_mode", "reparam_rotate"} <= written, written
+    # (c) nothing is written at closing, and the old keys stay as they were, unread and unwritten
+    relaunched.form.rows["chi_n_freqs"].widget.setText("3")
+    relaunched.save_settings(qs)
+    qs.sync()
+    again = st.settings()
+    again.beginGroup("inference_config")
+    held = {key: again.value(key) for key in again.childKeys()}
+    again.endGroup()
+    assert held == {**stale, "chi_mode": "1", "model": "HOPF"}, held
+    assert again.value("layout/ConfigPanel/splitter") == "stale"
 
 
 def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
@@ -1707,9 +1692,10 @@ def test_get_bool_falls_back_on_an_unparseable_value():
         for key in ("blank", "maybe", "two", "missing"):
             assert st.get_bool(fresh, f"flags/{key}", default) is default, (key, default)
 
-    # On screen: a corrupt reparam_rotate opens at config.py's value. (config.REPARAM_ROTATE is True
-    # today, which is what makes this leg tell the fallback from the old unconditional False.)
-    qs.setValue("inference_config/reparam_rotate", "maybe")
+    # On screen: a corrupt kind of observation opens at the usual one, and is not said to be kept from last time.
+    qs.setValue("inference_config/chi_mode", "maybe")
     qs.sync()
     panel = build_part(it.ConfigPanel, screen=None)
-    assert panel.rot_check.isChecked() == config.REPARAM_ROTATE, "a corrupt reparam_rotate did not open at config.py"
+    assert panel.kind_choice.currentData() is False and panel.form.rows["chi_mode"].kept is False, (
+        "a corrupt kind of observation did not open at the usual one")
+    assert panel.rot_choice.currentData() == config.REPARAM_ROTATE

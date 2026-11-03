@@ -25,8 +25,7 @@ Three shapes of entry:
 * ``None`` for a key the window has no control for: the tool-only diagnostics knobs, and the six
   settings the window never exposes (the checkpoint cadence, the resume policy, the device, the
   two sample counts, the epoch ceiling), the five FDT settings neither front end exposes, and the
-  three settings of a plan no box names yet (the kind of observation, the rotation, the expected
-  epochs).
+  one setting of a plan no box names yet (the expected epochs).
 
 A place is written in the words the rail's places are written in (``keys.place_words``), and several
 are joined as ``keys.places_words`` joins them, so a place is named in one table and its joining is
@@ -45,7 +44,7 @@ from core.refusals import FIELDS
 
 from . import keys
 
-_FIXED = "Fixed by measurement: change it in config.py, deliberately."
+_FIXED = "Fixed by measurement: it cannot be changed in the window."
 
 
 def _drive(name: str) -> str:
@@ -124,7 +123,7 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # inputs. The cell picker and the model combo appear in several places at once and each entry
     # names them ALL: a bad cell chosen for the effective temperature used to be answered with step 5
     # alone. ``units`` is NOT widened -- one units control exists in the whole application (the
-    # toggle of step 1); everywhere else the units file is resolved from the model and there is no
+    # choice of step 1); everywhere else the units file is resolved from the model and there is no
     # control to name.
     "bounds": ("prior", "Bounds"),
     "cell": (("infer", "temperature/one_cell", "temperature/sweep", "live", "reduction"), "Cell"),
@@ -142,16 +141,18 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "drive_frequency": ("infer", _drive("freq")),
     "drive_phase": ("infer", _drive("phase")),
     "chi_f0_si": ("infer", "Drive F₀ (N)"),
-    # chi conditioning
-    "chi_n_freqs": ("model", "χ probes per observation"),
-    "chi_k_pad": ("model", "χ probe slots (capacity)"),
-    "chi_max_cycles": ("model", "χ lock-in ceiling (cycles)"),
+    # the kind of observation, its driven recordings, and the rotation
+    "chi_mode": ("model", "Kind of observation"),
+    "chi_n_freqs": ("model", "Driven recordings per observation"),
+    "chi_k_pad": ("model", "Slots for driven recordings"),
+    "chi_max_cycles": ("model", "Lock-in limit"),
     "chi_f0": _FIXED,
     "chi_freq_bounds": _FIXED,
-    # a run plan: the thing to correct is the file, so the sentence names no box. The three settings a plan
-    # holds have no box of their own to name until the rebuilt pages show them.
+    "reparam_rotate": ("model", "Rotation"),
+    # a run plan: the thing to correct is the file, so the sentence names no box. The expected epochs a plan
+    # holds have no box of their own to name until the training page shows them.
     "plan": "Correct the file, then choose the plan again.",
-    "chi_mode": None, "reparam_rotate": None, "expected_epochs": None,
+    "expected_epochs": None,
     # the two secondary analyses, one page each: the label is the row the panel builds, so label(key)
     # keeps a box and its hint sentence from drifting apart; the Seed rows too are built from
     # label("seed") on both panels.

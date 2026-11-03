@@ -828,9 +828,17 @@ def test_each_store_kind_has_one_word():
     assert record_words.kind_word("crossval") == "record"
 
 
-# the main button of each step's page, by the step
-_MAIN = {"model": "btn_config", "prior": "btn_prior", "training": "btn_post", "checks": "btn_validate",
+# the main button of each step's page, by the step; a rebuilt page's is its foot's
+_MAIN = {"model": "foot.main_button", "prior": "btn_prior", "training": "btn_post", "checks": "btn_validate",
          "infer": "btn_infer", "narrowing": "btn_round"}
+
+
+def _main_button(panel, step):
+    """The main button of ``panel``, the page of ``step``."""
+    found = panel
+    for name in _MAIN[step].split("."):
+        found = getattr(found, name)
+    return found
 
 
 def _pressable(panel) -> list:
@@ -846,7 +854,8 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
     """No step is disabled. On four sessions -- an empty one; a model chosen, by the first step's own button; a
     configuration and a prior; and a posterior with them, the tiny run's -- each of the six steps opens as the
     page shown, neither it nor the stack of the pages disabled, and the rail marks it; its main button is greyed
-    exactly when the step cannot start. On a step
+    exactly when the step cannot start, but that a rebuilt page may grey it for a reason of its own, which it says
+    beside it. On a step
     that cannot start, each button that can be pressed is pressed, with every question answered by the guard and
     every file chooser cancelled, and the session built again before each press: no run is started, nothing is
     raised, no drawing error is caught and nothing is shown but a question or a notice."""
@@ -866,7 +875,7 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
     first = inference.config_panel
     first.model_combo.setCurrentText("SBITEST")
     window.go_to("inference", "model")
-    first.btn_config.click()
+    first.foot.main_button.click()
     draft = inference.session.draft
     assert getattr(draft, "model", None) == "SBITEST", "the first step's button chose no model"
     cfg = tiny_run.cfg.copy_for_run()
@@ -895,7 +904,12 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
             assert (window.current_place(), inference.pages.currentWidget()) == (("inference", step.key), panel), (
                 session, step.key)
             assert window.shell.rail.row(step.key).property("ring_left"), (session, step.key)
-            assert getattr(panel, _MAIN[step.key]).isEnabled() == state.can_start, (session, step.key)
+            button = _main_button(panel, step.key)
+            if hasattr(panel, "foot"):
+                assert not button.isEnabled() or state.can_start, (session, step.key)
+                assert button.isEnabled() or panel.foot.reason.text(), (session, step.key)
+            else:
+                assert button.isEnabled() == state.can_start, (session, step.key)
             assert panel.isEnabled() and inference.pages.isEnabled(), (session, step.key)
             if state.can_start:
                 continue

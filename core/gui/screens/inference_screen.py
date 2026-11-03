@@ -16,7 +16,7 @@ step, then works out where each of the six steps stands, which the rail and Home
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from .. import chain, keys, record_words
+from .. import chain, keys, record_words, remembered
 from ..panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel,
                                      TSNPEPanel, ValidatePanel)
 from ..run.controller import controller
@@ -38,8 +38,9 @@ class InferenceScreen(QWidget):
     """Parameter inference: its six steps as pages over one shared SbiSession.
 
     Drives the workflow from a model to a narrowing round and owns its gating: ``refresh_gates`` runs every
-    step's own gate after every run of a step, then the steps' states. Persists nothing itself -- each panel saves its
-    own settings group. ``states_changed`` carries the six steps' states each time they are worked out again.
+    step's own gate after every run of a step, then the steps' states. Remembers the model and the kind of observation
+    when the first step is applied; each other panel saves its own settings group. ``states_changed`` carries the six
+    steps' states each time they are worked out again.
     ``pages`` holds the six steps in their order, its height following the step shown; ``show_step`` shows one
     (``show_page`` is the same) and ``current_step`` (or ``current_page``) names the one shown.
     """
@@ -149,9 +150,18 @@ class InferenceScreen(QWidget):
         Nothing is deleted either way: every stage writes its artifact at completion, so what this
         drops is the session's HANDLES, and the artifacts stay on disk to be selected again. Its
         in-place twin is ``install_config``.
+
+        The model and the kind of observation applied are remembered here, in one write, as they come into use: the
+        next launch puts them back as choices. A value the settings file could not give back as it was written, from a
+        draft that is not the window's own, is not written.
         """
         self.session = SbiSession(draft=draft)
         self.prior_panel.on_draft_set(draft)
+        model, kind = getattr(draft, "model", None), getattr(draft, "chi_mode", None)
+        picks = [(key, value) for key, value, fits in ((remembered.MODEL_KEY, model, isinstance(model, str)),
+                                                       (remembered.KIND_KEY, kind, isinstance(kind, bool))) if fits]
+        if picks:
+            remembered.put_many(picks)
         self.refresh_gates()
 
     def install_config(self, cfg):

@@ -1,362 +1,401 @@
-from PySide6.QtWidgets import QCheckBox, QComboBox, QGroupBox, QLabel, QLineEdit, QMessageBox, QPushButton
+"""Step 1, Model and options: the model, the kind of observation and the settings that go with them, applied at once as
+what every later step is made for.
+
+The step holds a draft and never a configuration: a configuration cannot be built before a bounds file, which declares
+the parameters inferred and so the observation mode, and the Prior step chooses that. Applying reads the fields through
+the page's one table of rules, which the line under each field reads as it is typed; asks before it lets go of the
+records the session holds; and replaces the session with one that holds the new draft. Every row picks what the step
+holds, so a choice that differs from it reads "Changed, not applied" under its field, and in the rail.
+
+The drive amplitude and the frequency band used in training are measurements, shown as text: no draft carries them, so
+every configuration takes core/config.py's. The three settings of the driven recordings stand only while the kind is the
+frequency response, and open at core/config.py's values at every launch. The model and the kind are put back as they
+were last applied, as choices; nothing else is read from the settings file, and nothing is written but by applying.
+"""
+import math
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLineEdit
 
 from core import cli, config, registry
+from core.config import CHI_K_MAX, CHI_MIN_CYCLES, VALID_LABELS, VALID_MODELS
 from core.Helpers import file_manager
-from core.refusals import Refusal, require_at_least, require_finite
-from core.config import CHI_K_MAX, VALID_LABELS, VALID_MODELS
+from core.refusals import Refusal, default_clause
 
-from ... import icons, settings
-from ...fields import label
+from ... import chain, keys, settings
+from ...remembered import KIND_KEY, MODEL_KEY
 from ...session import ConfigDraft
-from ...widgets.forms import make_form
-from ...widgets.help_badge import add_help_row, with_badge
-from ...widgets.labeled_inputs import FloatField, IntField, PathField
-from ...widgets.source_toggle import SourceToggle
-from .rows import _ChiRangeRow
-from .base import _StagePanel, _TrainingBudgetMixin
+from ...step_facts import NOT_HELD, Fact, SelectionRow, held_value, model_facts, model_in_use, units_words
+from ...widgets.ask import ask
+from ...widgets.choice import Choice
+from ...widgets.labeled_inputs import FloatField, IntField
 from .help_text import HELP
+from .step_page import StepPage
+
+TITLE = "Model and options"
+SENTENCE = "Choose the model and the kind of observation. Everything after this step is made for these choices."
+APPLY = "Apply model and options"
+NOTHING_YET = "Choose the model and the kind of observation, then apply them."
+GO_TO_PRIOR = "Go to Prior"
+KINDS = (("Set by the bounds file", False), ("Frequency response", True))
+ROTATIONS = (("On", True), ("Off", False))
+UNIT_SOURCES = (("From the model's units file", "file"), ("Typed here", "typed"))
+FREQUENCY_RESPONSE_TEXT = ("Frequency response (χ(ω)): one spontaneous recording and several driven recordings, each at "
+                           "one frequency.")
+BOUNDS_FILE_TEXT = ("Set by the bounds file: a spontaneous recording, and one driven recording when the file has a "
+                    "forcing section.")
+SLOTS_TEXT = "Slots: the most driven recordings one observation can hold. Fixed in the posterior once it is trained."
+LOCK_IN_TEXT = ("Lock-in limit: the longest stretch of a driven recording, in drive cycles, used to measure the "
+                "response.")
+TYPED_TEXT = "Typed units cannot continue a simulation set made with the model's units file, even when they match it."
+AMPLITUDE_TEXT = "Drive amplitude in training: {:g} (no unit)."
+BAND_TEXT = "Frequency band in training: {:g} to {:g} times the cell's own frequency."
+MEASURED = "fixed by measurement"
+KEPT = "kept from last time"
+UNITS_FROM = "{}, from {}"
+NO_UNITS_FILE = "This model has no units file: {}"
+TYPED_HERE = "typed here"
+FORCING_TEXT = "This model has external forcing, so parameter inference cannot use it."
+NO_PARAMETERS_TEXT = "This model has no free parameters to infer, so parameter inference cannot use it."
+#: Said while the model chosen is one of your own that parameter inference can take: the place is the window's own words.
+CALIBRATION_TEXT = ("The checks are not tuned for a model of your own: read their results in {}, before you rely on its "
+                    "posterior.")
+#: The words beside the main button while a field breaks a rule of the page.
+SETTING_BLOCKS = "a setting cannot be used"
+QUESTION = "Start a new session?"
+QUESTION_TEXT = ("Applying releases what this session holds: {}. A different model, units or kind of observation makes "
+                 "them invalid. Each stays in Records and can be loaded again.")
+KEEP = "Keep this session"
+APPLY_ANSWER = "Apply and start a new session"
+#: The fewest driven recordings an observation holds, and the fewest slots.
+LEAST_DRIVEN = 2
+#: The rows the page's rules read, in the order a press reads them.
+RULED = ("chi_n_freqs", "chi_k_pad", "chi_max_cycles", "units")
+#: The settings of the frequency response: shown, and read, only while that kind is chosen.
+DRIVEN = ("chi_n_freqs", "chi_k_pad", "chi_max_cycles", "chi_f0", "chi_freq_bounds")
 
 
-# ── 1. Config ─────────────────────────────────────────────────────────────────
-class ConfigPanel(_StagePanel):
-    """Tab 1. Records the MODEL-level choices as a ``ConfigDraft`` -- it does NOT build the SimConfig.
+class _ModelChoice(Choice):
+    """The list of models: each shown by its name on screen, spoken of by its engine name. ``addItems``,
+    ``currentText`` and ``setCurrentText`` take and give engine names, as every list of models in the window does."""
 
-    A SimConfig cannot exist without a bounds file, because the bounds file declares which parameters
-    are inferred and hence the observation mode; the Prior tab owns that. Reads and validates the
-    boxes at Apply through ``_read_inputs`` (2 <= K <= pad <= CHI_K_MAX, ceiling > CHI_MIN_CYCLES,
-    typed units resolvable), since this is where they are entered; a bad box is a ``Refusal`` shown
-    as the yellow "Check your inputs" box, and the session is left untouched. The chi drive
-    amplitude and band are READ-ONLY displays of config.py: the draft carries None for both, so
-    every config built from it carries config.py's values, as the command-line tool's does.
+    def addItems(self, names) -> None:
+        for name in names:
+            self.addItem(chain.model_label(name), name)
 
-    Persists (group "inference_config"): model, units source/text, the chi-mode tick and the
-    rotation tick -- the selections. The chi probe count, slots and lock-in ceiling open at
-    config.py's values on every launch, and the amplitude and band are never written or read.
-    """
+    def currentText(self) -> str:
+        name = self.currentData()
+        return name if isinstance(name, str) else super().currentText()
+
+    def setCurrentText(self, name) -> None:
+        found = self.findData(name)
+        if found >= 0:
+            self.setCurrentIndex(found)
+
+
+def _choice(items) -> Choice:
+    choice = Choice()
+    for words, value in items:
+        choice.addItem(words, value)
+    return choice
+
+
+def _words_of(items, value) -> str:
+    """The words a list shows for ``value``, or the value itself when no item holds it."""
+    return next((words for words, held in items if held == value), str(value))
+
+
+class ConfigPanel(StepPage):
+    """Step 1: a model and its options, held as a draft once applied. ``model_combo`` lists the models; ``kind_choice``,
+    ``rot_choice`` and ``units_choice`` are the other choices, and ``units_text`` the units typed here."""
+
+    reads_the_disk = False
+
     def __init__(self, screen, parent=None):
-        super().__init__(screen, parent)
-        box = QGroupBox("Config")
-        form = make_form(box)
-        self.model_combo = QComboBox()
+        super().__init__(screen, TITLE, SENTENCE, step="model", parent=parent)
+        self._units_read: dict = {}
+        self.model_combo = _ModelChoice()
         self.model_combo.addItems(VALID_MODELS)
         self.model_combo.setCurrentText("NADROWSKI")
-        self.model_combo.currentTextChanged.connect(self._on_model_changed)
-        self.btn_config = QPushButton("Apply model & options")
-        self.btn_config.setProperty("accent", True)       # primary CTA (Fluent accent)
-        self.btn_config.clicked.connect(self._build_config)
-        add_help_row(form, label("model"), self.model_combo, HELP["model"])
-
-        # Units DECLARE what the numbers in the bounds/cell files mean; they never convert them.
-        self.units_default = QLabel("—")
-        self.units_default.setProperty("type", "caption")
+        self.model_combo.currentIndexChanged.connect(self._model_chosen)
+        self.kind_choice = _choice(KINDS)
+        self.rot_choice = _choice(ROTATIONS)
+        self.rot_choice.setCurrentIndex(self.rot_choice.findData(bool(config.REPARAM_ROTATE)))
+        self.units_choice = _choice(UNIT_SOURCES)
         self.units_text = QLineEdit()
-        self.units_text.setPlaceholderText("e.g. nm ms pN kHz")
-        self.units_toggle = SourceToggle(self.units_default, self.units_text,
-                                         file_label="Model's units file", direct_label="Type units")
-        add_help_row(form, label("units"), self.units_toggle, HELP["units"])
-
-        # chi(omega) mode. Captured onto the config at build time (SimConfig carries K/F0/range), so a
-        # posterior is self-describing and toggling this later cannot reinterpret an existing run.
-        self.chi_check = QCheckBox("Multi-frequency χ(ω) conditioning")
-        self.chi_k = IntField(config.CHI_N_FREQS)
-        # The drive amplitude and band are MEASUREMENTS (config.py's CHI_F0 record), not per-run
-        # choices: there is no chi override -- build_prior refuses any band or amplitude but
-        # config.py's -- so a box that accepted one only manufactured that refusal seconds after
-        # Apply. Read-only displays; the draft never reads them (see _build_config), so every config
-        # built here carries config.py's values.
-        self.chi_f0 = FloatField(config.CHI_F0)
-        self.chi_f0.setReadOnly(True)
-        self.chi_range = _ChiRangeRow(*config.CHI_FREQ_BOUNDS)
-        self.chi_range.lo.setReadOnly(True)
-        self.chi_range.hi.setReadOnly(True)
-        self.chi_pad = IntField(config.CHI_K_PAD)
-        self.chi_cycles = FloatField(config.CHI_MAX_CYCLES)
-        self.chi_check.toggled.connect(lambda _on: self._sync_chi_enabled())
-        form.addRow(with_badge(self.chi_check, HELP["chi_mode"]))
-        add_help_row(form, label("chi_n_freqs"), self.chi_k, HELP["chi_k"])
-        add_help_row(form, label("chi_k_pad"), self.chi_pad, HELP["chi_k_pad"])
-        add_help_row(form, "χ drive F₀ (ND)", self.chi_f0, HELP["chi_f0"])
-        add_help_row(form, "χ frequency range", self.chi_range, HELP["chi_range"])
-        self.chi_fixed_note = QLabel("fixed by measurement; change it in config.py")
-        self.chi_fixed_note.setProperty("type", "caption")
-        form.addRow("", self.chi_fixed_note)
-        add_help_row(form, label("chi_max_cycles"), self.chi_cycles, HELP["chi_max_cycles"])
-
-        self.rot_check = QCheckBox("Decorrelating Fisher rotation")
-        form.addRow(with_badge(self.rot_check, HELP["reparam_rotate"]))
-
-        form.addRow(self.btn_config)
-        # WHAT APPLY WOULD REPLACE, stated permanently and not only in the dialog. The
-        # confirmation Apply raises is answered and gone; this line is what lets someone see, before
-        # they reach for the button, that this session is holding a prior and a posterior. Same
-        # word-wrapped PlainText label as every other derived line in this section, for the same
-        # reason: it carries a generated string that can be long, and an unwrapped label widens the
-        # whole controls column.
-        self.session_line = _TrainingBudgetMixin._derived_label()
-        form.addRow("", self.session_line)
-        self.controls_layout.addWidget(box)
-
+        self.units_text.setPlaceholderText("e.g. kHz ms nm pN")
+        form = self.form
+        form.add("model", self.model_combo, usual="NADROWSKI", help_text=HELP["model"])
+        form.add("chi_mode", self.kind_choice, usual=False, help_text=HELP["chi_mode"])
+        form.add_sentence(FREQUENCY_RESPONSE_TEXT, under="chi_mode")
+        form.add_sentence(BOUNDS_FILE_TEXT, under="chi_mode")
+        form.add("chi_n_freqs", IntField(config.CHI_N_FREQS, grouped=True), usual=config.CHI_N_FREQS, folded=True,
+                 help_text=HELP["chi_k"])
+        form.add("chi_k_pad", IntField(config.CHI_K_PAD, grouped=True), usual=config.CHI_K_PAD, folded=True,
+                 help_text=HELP["chi_k_pad"])
+        form.add_sentence(SLOTS_TEXT, under="chi_k_pad")
+        form.add("chi_max_cycles", FloatField(config.CHI_MAX_CYCLES), "drive cycles", usual=config.CHI_MAX_CYCLES,
+                 folded=True, help_text=HELP["chi_max_cycles"])
+        form.add_sentence(LOCK_IN_TEXT, under="chi_max_cycles")
+        form.add_text("chi_f0", AMPLITUDE_TEXT.format(config.CHI_F0), MEASURED, folded=True)
+        form.add_text("chi_freq_bounds", BAND_TEXT.format(*config.CHI_FREQ_BOUNDS), MEASURED, folded=True)
+        form.add("reparam_rotate", self.rot_choice, usual=bool(config.REPARAM_ROTATE), folded=True,
+                 help_text=HELP["reparam_rotate"])
+        units = form.add("units", self.units_choice, usual="file", folded=True, help_text=HELP["units"])
+        self.units_line = form.add_sentence("", under="units")
+        units.add_under(self.units_text)
+        units.hear(self.units_text)
+        self.typed_note = form.add_sentence(TYPED_TEXT, under="units")
+        self.kind_choice.currentIndexChanged.connect(self._kind_chosen)
+        self.units_choice.currentIndexChanged.connect(self._units_chosen)
         self.restore_settings(settings.settings())
-        self._sync_chi_enabled()
-        # LAST: refresh_gates draws this on every stage afterwards, but the first paint happens
-        # before InferenceScreen.__init__ reaches its own refresh_gates() call, and an empty label
-        # on launch reads as a missing feature rather than an empty session.
-        self._sync_session_line()
+        self._kind_chosen()
+        self._units_chosen()
+        self.refresh_local_gates()
 
-    def _sync_chi_enabled(self):
-        """The three χ knobs are meaningless unless χ-mode is on. The rotation is available in ALL
-        THREE observation modes -- it used to be greyed out under χ, on the assumption that χ already
-        decorrelated what the rotation targets; measured on the master cell, χ leaves k~x_scale at
-        0.95 (vs 0.98 forced), so that assumption was wrong and the exclusion is gone."""
-        on = self.chi_check.isChecked()
-        for w in (self.chi_k, self.chi_pad, self.chi_f0, self.chi_range, self.chi_cycles):
-            w.setEnabled(on)
-        self.rot_check.setEnabled(True)
-        self.rot_check.setToolTip(
-            "In χ(ω) mode the Fisher is built over the χ feature set, which costs (K+1)/2× what a "
-            "forced-mode rotation does." if on else "")
+    # ── what the step holds ──
+    def _draft(self):
+        """The draft the step holds, or None; None too on a page with no screen."""
+        return getattr(getattr(self._screen, "session", None), "draft", None)
 
-    def _show_model_units(self, model: str):
-        """Reflect the model's declared units, and seed the direct-entry box from them so switching to
-        'Type units' starts from the truth rather than an empty field."""
-        try:
-            tokens = file_manager.parse_units_file(cli.resolve_units_file(model))
-        except Exception as e:                         # noqa: BLE001 -- a missing units file is the
-            self.units_default.setText(f"(no units file for {model}: {e})")   # model's problem, not a crash
-            return
-        self.units_default.setText(" ".join(tokens) + f"   —  Resources/Units/{model.lower()}/units.txt")
-        if not self.units_text.text().strip():
-            self.units_text.setText(" ".join(tokens))
+    def _chi(self) -> bool:
+        return self.kind_choice.currentData() is True
+
+    def _typed(self) -> bool:
+        return self.units_choice.currentData() == "typed"
 
     def _units_override(self):
-        """None => use the model's units file; a token tuple => the user typed them."""
-        if not self.units_toggle.is_direct():
-            return None
-        tokens = tuple(self.units_text.text().split())
-        return tokens or None
+        """What the draft's units are: None for the model's units file, else the words typed here."""
+        return tuple(self.units_text.text().split()) if self._typed() else None
 
-    def _on_model_changed(self, model: str):
-        self._show_model_units(model)
-        # The bounds picker lives on the PRIOR tab now (bounds are what build the config), and it is
-        # repointed via InferenceScreen.on_draft_set when the model is APPLIED -- not on every combo
-        # change, so a half-changed selection cannot leave the two tabs disagreeing.
-        # User models are inferable only when SBI-eligible: no forcing (spontaneous dynamics) AND at
-        # least one ND parameter. Forced / zero-parameter user models stay out of parameter inference.
-        ineligible_user = registry.is_user_model(model) and not registry.is_sbi_user_model(model)
-        self.btn_config.setEnabled(not ineligible_user)
-        if ineligible_user:
-            reason = ("has external forcing" if registry.user_model_has_forcing(model)
-                      else "has no free parameters to infer")
-            self.log_pane.append_line(
-                f"'{model}' {reason}, so parameter inference cannot take it: it supports "
-                "user-defined models with no forcing and at least one parameter.", "warning")
+    def _units_of(self, model) -> tuple:
+        """The model's units file as the units line says it, read once for each model: its words, its path from the
+        resources folder, and why it could not be read."""
+        if model not in self._units_read:
+            try:
+                path = cli.resolve_units_file(model)
+                tokens = file_manager.parse_units_file(path)
+                where = Path(path).resolve().relative_to(Path(config.RESOURCES_ROOT).resolve()).as_posix()
+                self._units_read[model] = (units_words(tokens), where, "")
+            except Refusal as refused:
+                self._units_read[model] = ("", "", refused.message)
+            except Exception as error:               # noqa: BLE001 -- a model's units file is the model's own trouble
+                self._units_read[model] = ("", "", f"{type(error).__name__}: {error}")
+        return self._units_read[model]
 
-    def _read_inputs(self) -> dict:
-        """Every box Apply will read, through ``value_or_none()`` and the shared rules; the first bad
-        one raises ``Refusal``. The keys are the field keys of ``core.refusals.FIELDS``.
+    def _units_said(self, override, model) -> str:
+        """Units held as a sentence names them, and where they come from: "kHz ms nm pN, from the model's file"."""
+        if override is None:
+            words = self._units_of(model)[0]
+            return UNITS_FROM.format(words, "the model's file") if words else ""
+        if isinstance(override, (tuple, list)):
+            return f"{units_words(override)}, {TYPED_HERE}"
+        return ""
 
-        The χ boxes are read only while χ mode is on: off, they are disabled and the draft carries
-        None for them, so ``make_sim_config`` takes config.py's values -- the tool's behaviour. A
-        blank box is a refusal, never a zero: ``IntField.value()`` returned 0 for "" and the old
-        chain refused it by accident (0 < 2), while a blank pad was not checked here at all and
-        surfaced one tab later as SimConfig.__post_init__'s traceback dialog.
-        """
-        out = {"units": None, "chi_n_freqs": None, "chi_k_pad": None, "chi_max_cycles": None}
-        if self.chi_check.isChecked():
-            # K has an UPPER bound too. Cost is linear in K (each probe is a whole extra simulation
-            # per observation, so training and calibration both scale as K+1), and the Infer tab
-            # grows one file-picker row per probe frequency -- K=500 would mean 500 rows.
-            k = require_at_least("chi_n_freqs", self.chi_k.value_or_none(), 2)
-            if k > CHI_K_MAX:
-                raise Refusal(f"The number of chi probe frequencies must be at most {CHI_K_MAX}; "
-                              f"got {k} (default {config.CHI_N_FREQS}).", field="chi_n_freqs")
-            pad = require_at_least("chi_k_pad", self.chi_pad.value_or_none(), 2)
-            if pad > CHI_K_MAX:
-                raise Refusal(f"The number of chi probe slots must be at most {CHI_K_MAX}; got {pad} "
-                              f"(default {config.CHI_K_PAD}).", field="chi_k_pad")
-            if k > pad:
-                raise Refusal(f"The number of chi probe frequencies must be at most the number of "
-                              f"chi probe slots, {pad}; got {k} (default {config.CHI_N_FREQS}).",
-                              field="chi_n_freqs")
-            # Caught here rather than by SimConfig.__post_init__ so it reads as a form error next to
-            # the box, not as a dialog on the Prior tab's "Build / Load prior".
-            cycles = require_finite("chi_max_cycles", self.chi_cycles.value_or_none())
-            if cycles <= config.CHI_MIN_CYCLES:
-                raise Refusal(f"The chi lock-in ceiling, in cycles must be greater than "
-                              f"{config.CHI_MIN_CYCLES:g}, the floor below which a probe is masked; "
-                              f"got {cycles:g} (default {config.CHI_MAX_CYCLES:g}).",
-                              field="chi_max_cycles")
-            out.update(chi_n_freqs=k, chi_k_pad=pad, chi_max_cycles=cycles)
-        if self.units_toggle.is_direct():
-            units = self._units_override()
-            if units is None:
-                raise Refusal("The units are blank: type at least one unit token, or use the "
-                              "model's units file.", field="units")
-            try:                                       # reject unresolvable tokens HERE, not mid-run
-                cli.units_to_factors(units)
-            except Exception as e:                     # noqa: BLE001 -- UnitParseError, or pint's own
-                raise Refusal(f"The units are not usable: {e}", field="units") from e
-            out["units"] = units
-        return out
+    def _unusable(self, model) -> str:
+        """Why parameter inference cannot take ``model``, or "" when it can."""
+        if registry.is_user_model(model) and not registry.is_sbi_user_model(model):
+            return FORCING_TEXT if registry.user_model_has_forcing(model) else NO_PARAMETERS_TEXT
+        return ""
 
-    def _confirm_replace_session(self) -> bool:
-        """Ask before Apply throws this session's work away. True = go ahead.
+    # ── the rules ──
+    def problems(self) -> dict:
+        """Every rule of the page the form breaks now, by field key in the order a press reads them: the line under the
+        field, built from its row's label, and what the press says, the same with the value it found and the usual one.
+        The settings of the frequency response are read only while that kind is chosen, as the draft reads them; typed
+        units only while they are typed."""
+        rows, found = self.form.rows, {}
 
-        SILENT WHEN THERE IS NOTHING TO LOSE. An empty ``session_contents()`` shows no dialog at all,
-        so the first Apply of a sitting -- and every Apply made before a prior exists -- behaves
-        exactly as it did before this guard. A confirmation that fires when nothing is at stake is
-        trained away within a day, and then it is not a guard.
+        def label(key) -> str:
+            return rows[key].label_text()
 
-        NOTHING IS DELETED EITHER WAY, and the informative text says so in as many words: every stage
-        writes its artifact at completion, so what Apply releases is the SESSION's hold on them. The
-        one thing the operator cannot get back by re-picking is the minute spent re-running the
-        stages, which is why this is a question and not a warning after the fact.
+        def rule(key, words, value) -> tuple:
+            shown = f"{value:g}" if isinstance(value, float) else str(value)
+            return f"{label(key)} must be {words}.", f"{label(key)} must be {words}; got {shown}{default_clause(key)}."
 
-        "Keep this session" is the default BY NAME, not by index: ``QMessageBox.buttons()`` orders by
-        role (Reject before Destructive), so ``buttons()[-1]`` is the destructive one -- that is how
-        Enter once started the very run the Posterior tab's fresh-cache dialog exists to stop
-        (posterior_tab._ask_new_run). And it is an INSTANCE ``QMessageBox`` shown with ``.exec()``:
-        tests/conftest.py patches the instance method only, so ``QMessageBox.question`` would hang
-        the offscreen suite rather than fail it.
+        if self._chi():
+            numbers = {}
+            for key in ("chi_n_freqs", "chi_k_pad", "chi_max_cycles"):
+                said = rows[key].reading()
+                if said is None:
+                    numbers[key] = rows[key].value()
+                elif said.endswith(" is blank."):
+                    found[key] = (said, f"{said[:-1]}{default_clause(key)}.")
+                else:
+                    found[key] = (said, said)
+            for key in ("chi_n_freqs", "chi_k_pad"):
+                value = numbers.get(key)
+                if value is not None and value < LEAST_DRIVEN:
+                    found[key] = rule(key, f"at least {LEAST_DRIVEN}", value)
+                elif value is not None and value > CHI_K_MAX:
+                    found[key] = rule(key, f"at most {CHI_K_MAX}", value)
+            most, pad = numbers.get("chi_n_freqs"), numbers.get("chi_k_pad")
+            if most is not None and pad is not None and not found.keys() & {"chi_n_freqs", "chi_k_pad"} and most > pad:
+                found["chi_n_freqs"] = rule("chi_n_freqs", f"at most the {label('chi_k_pad').lower()}, {pad}", most)
+            cycles = numbers.get("chi_max_cycles")
+            if cycles is not None and not math.isfinite(cycles):
+                found["chi_max_cycles"] = rule("chi_max_cycles", "a finite number", cycles)
+            elif cycles is not None and cycles <= CHI_MIN_CYCLES:
+                found["chi_max_cycles"] = rule("chi_max_cycles", f"greater than {CHI_MIN_CYCLES:g}", cycles)
+        if self._typed():
+            typed = self._units_override()
+            if not typed:
+                found["units"] = (f"{label('units')} typed here are blank.",
+                                  f"{label('units')} typed here are blank: type at least one unit, or use the model's "
+                                  "units file.")
+            else:
+                try:
+                    cli.units_to_factors(typed)
+                except Refusal as refused:
+                    found["units"] = (f"{label('units')} typed here cannot be used: {refused.message}",) * 2
+                except Exception as error:           # noqa: BLE001 -- what a units library raises on a word it cannot read
+                    found["units"] = (f"{label('units')} typed here cannot be used: {error}",) * 2
+        return {key: found[key] for key in RULED if key in found}
 
-        A method of its own so a test can answer it without a click, like the Posterior tab's two.
-        """
-        held = self._screen.session_contents()
-        if not held:
-            return True
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("Start a new session?")
-        box.setText("Applying a model replaces the whole session.")
-        box.setInformativeText(
-            "This session holds:\n\n"
-            + "\n".join(f"  • {phrase}" for phrase in held)
-            + "\n\nEvery one of them STAYS ON DISK and can be selected again in the pickers — what "
-              "is released is this session's hold on them. They cannot be carried over: a different "
-              "model or unit system invalidates them, which is why applying one starts a new "
-              "session rather than keeping what it can.")
-        go = box.addButton("Apply and start a new session", QMessageBox.DestructiveRole)
-        keep = box.addButton("Keep this session", QMessageBox.RejectRole)
-        box.setDefaultButton(keep)
-        box.exec()
-        return box.clickedButton() is go
+    def _read(self) -> dict:
+        """What a draft is made of, read through the rules: the first rule broken is refused, and nothing changes."""
+        for key, (_line, said) in self.problems().items():
+            raise Refusal(said, field=key)
+        chi, rows = self._chi(), self.form.rows
+        return {"units": self._units_override(),
+                **{key: rows[key].value() if chi else None for key in ("chi_n_freqs", "chi_k_pad", "chi_max_cycles")}}
 
-    def _build_config(self):
+    # ── what a page answers ──
+    def main_words(self) -> str:
+        return APPLY
+
+    def nothing_to_apply(self) -> bool:
+        """A draft is held and every choice shows what it holds."""
+        return self._draft() is not None and not any(row.changed() for row in self.selection_rows())
+
+    def selection_rows(self) -> tuple:
+        """Every row of the step: each picks what the step holds. The settings of the frequency response are compared
+        only while both the draft and the form are of that kind, as they are read only then."""
+        draft, rows = self._draft(), self.form.rows
+
+        def held(name):
+            return lambda: held_value(draft, name)
+
+        def driven(name):
+            return lambda: held_value(draft, name) if held_value(draft, "chi_mode") is True and self._chi() else NOT_HELD
+
+        def rotation():
+            value = held_value(draft, "reparam_rotate")
+            return value if isinstance(value, bool) else NOT_HELD
+
+        def number(key):
+            return lambda value: f"{value:g} {rows[key].unit.text()}".rstrip() if isinstance(value, float) else str(value)
+
+        model = getattr(draft, "model", None)
+        return (SelectionRow("model", held("model"), self.model_combo.currentText, chain.model_label),
+                SelectionRow("chi_mode", held("chi_mode"), self.kind_choice.currentData,
+                             lambda value: _words_of(KINDS, value)),
+                *(SelectionRow(key, driven(key), rows[key].value, number(key))
+                  for key in ("chi_n_freqs", "chi_k_pad", "chi_max_cycles")),
+                SelectionRow("reparam_rotate", rotation, self.rot_choice.currentData,
+                             lambda value: _words_of(ROTATIONS, value)),
+                SelectionRow("units", held("units_override"), self._units_override,
+                             lambda value: self._units_said(value, model)))
+
+    def plan_fields(self) -> dict:
+        return {key: self.form.rows[key] for key in ("chi_mode", "chi_n_freqs", "chi_k_pad", "chi_max_cycles",
+                                                      "reparam_rotate", "units")}
+
+    def facts_from_form(self) -> tuple:
+        """Each rule broken, under its field and as a fact; where a value put back came from; that the model cannot be
+        used, when it cannot; and, for a model of your own it can use, that its checks are not tuned."""
+        found = self.problems()
+        for key, row in self.form.rows.items():
+            if row.widget is None:
+                continue
+            row.set_line("err" if key in found else "", found[key][0] if key in found else "")
+            row.set_origin(KEPT if row.kept else "")
         model = self.model_combo.currentText()
-        if registry.is_user_model(model) and not registry.is_sbi_user_model(model):   # backstop
-            self.log_pane.append_line(
-                "This user-defined model cannot be inferred (inference needs no forcing and ≥1 "
-                "parameter).", "warning")
-            return
-        try:
-            v = self._read_inputs()
-        except Refusal as e:
-            self._refusal(e)
-            return
-        # model_labels, NOT `labels`: this module imports the core.Helpers.labels MODULE at the top
-        # and calls labels.axis_label(...) / labels.gui_forcing_label(...) elsewhere in this same
-        # file. Binding a local of that name shadowed it for the whole function, so any future line
-        # added here that touched the module would raise AttributeError on a list -- a crash sitting
-        # one edit away, and invisible until someone made that edit.
-        model_labels = VALID_LABELS[VALID_MODELS.index(model)]
-        state_dep_drift = registry.state_dep_drift(model)
-        chi_on = self.chi_check.isChecked()
-        # chi_f0 / chi_freq_bounds are NEVER read from their boxes: they are read-only displays of
-        # config.py, and None makes make_sim_config take config.py's values (cli.py), exactly as the
-        # command-line tool's config does. _assert_chi_config_is_deliberate therefore cannot fire
-        # on a config built from this tab; it stays as the last line of defence for every other caller.
-        draft = ConfigDraft(
-            model=model, labels=model_labels, state_dep_drift=state_dep_drift,
-            units_override=v["units"],
-            chi_mode=chi_on, chi_n_freqs=v["chi_n_freqs"], chi_f0=None, chi_freq_bounds=None,
-            chi_k_pad=v["chi_k_pad"], chi_max_cycles=v["chi_max_cycles"],
-            reparam_rotate=self.rot_check.isChecked())
-        # AFTER the boxes are read and the draft is built, and BEFORE anything is installed: a
-        # refused box must never cost a dialog, and a dialog answered "keep" must leave the session
-        # byte-for-byte as it found it -- including the log, which is why the "Model applied" lines
-        # below are downstream of this return.
-        if not self._confirm_replace_session():
-            return
-        self._screen.new_draft(draft)                # replaces the session + repoints Prior + re-gates
-        extras = []
-        if chi_on:
-            lo, hi = config.CHI_FREQ_BOUNDS          # config.py's, not the boxes': the values the run gets
-            extras.append(f"χ(ω) on — {v['chi_n_freqs']} frequencies over {lo:g}–{hi:g}×Ω₀ at ND "
-                          f"amplitude {config.CHI_F0:g}, ≤{v['chi_max_cycles']:g} cycles per probe, "
-                          "so expect more simulation per row than forced mode (1 + K recordings "
-                          "against 2, K drawn per batch from 2 to the probe slots) and train a NEW "
-                          "posterior")
-        elif draft.reparam_rotate:
-            extras.append("decorrelating Fisher rotation on")
-        self.log_pane.append_line(
-            f"Model applied: {model}" + (f" ({'; '.join(extras)})" if extras else "")
-            + ". Now pick a bounds file on the Prior tab — that builds the config and selects the "
-              "observation mode.")
-        if registry.is_user_model(model):
-            self.log_pane.append_line(
-                "Note: user-model inference runs the full pipeline (spontaneous dynamics only), but "
-                "calibration is NOT pre-tuned — check the Validate tab's SBC/TARP results for this model.",
-                "warning")
+        own = ((Fact("info", CALIBRATION_TEXT.format(keys.place_words("checks"))),)
+               if registry.is_user_model(model) and not self._unusable(model) else ())
+        return model_facts(usable_reason=self._unusable(model),
+                           field_facts=(*(Fact("err", line, SETTING_BLOCKS) for line, _said in found.values()), *own))
 
-    def _sync_session_line(self) -> None:
-        """The one derived line on this tab, and the only one about the SESSION rather than a box.
+    def in_use_words(self) -> tuple:
+        draft = self._draft()
+        if draft is None:
+            return "", NOTHING_YET
+        return model_in_use(draft, self._units_said(getattr(draft, "units_override", None), getattr(draft, "model", None)))
 
-        Refreshed from ``refresh_local_gates``, which ``InferenceScreen.refresh_gates`` calls on every
-        panel after every stage, so the line can never be behind the session it describes.
+    def main_pressed(self) -> None:
+        self._build_config()
 
-        WRAPPED, like every derived line in this section: a status line must never be able to raise
-        into ``refresh_gates()``. Two real ways it could. This panel is constructed with
-        ``screen=None`` by tests/test_settings_persistence.py, so there is no session to read at all;
-        and ``BasePanel._instances`` is a process-wide WeakSet, so ``set_controls_enabled`` can reach
-        a panel whose screen's C++ object has already gone.
-        """
-        screen = self._screen
-        try:
-            held = [] if screen is None else screen.session_contents()
-        except Exception as e:                  # noqa: BLE001 -- never break the tab over a label
-            self.session_line.setText(f"Session summary unavailable: {type(e).__name__}: {e}")
-            return
-        if not held:
-            self.session_line.setText(
-                "This session holds nothing yet, so applying a model discards nothing.")
-            return
-        self.session_line.setText(
-            "This session holds " + "; ".join(held)
-            + ".\nApplying a model starts a new session and releases them. Each one stays on disk "
-              "and can be selected again in the pickers.")
+    def refresh_local_gates(self) -> None:
+        """What the step holds and what follows from it, and the way on to the next step once a model is applied."""
+        super().refresh_local_gates()
+        held = self._draft() is not None
+        self.set_next(GO_TO_PRIOR if held else "", "prior" if held else None)
 
-    def refresh_local_gates(self):
-        """This tab's derived line. The other five tabs gate BUTTONS here; Apply is gated by the
-        model combo instead (``_on_model_changed`` disables it for an SBI-ineligible user model), so
-        the session line is the only thing left to re-derive."""
-        self._sync_session_line()
-
-    def save_settings(self, qs):
-        """The SELECTIONS only. The chi probe count, slots and lock-in ceiling are science knobs
-        that open at config.py on every launch, and the amplitude and band are read-only displays:
-        none of the six is written, and a stale `chi_k` / `chi_k_pad` / `chi_f0` / `chi_lo` /
-        `chi_hi` / `chi_max_cycles` key in an old PRISM.ini is ignored by restore_settings. Seeding
-        those boxes from config.py and then restoring them is what trained the 2026-08-19 retrain
-        on the retired band."""
-        qs.beginGroup("inference_config")
-        qs.setValue("model", self.model_combo.currentText())
-        qs.setValue("units_mode", self.units_toggle.key())
-        settings.save_field(qs, "units_text", self.units_text)
-        settings.set_bool(qs, "chi_mode", self.chi_check.isChecked())
-        settings.set_bool(qs, "reparam_rotate", self.rot_check.isChecked())
-        qs.endGroup()
-
-    def restore_settings(self, qs):
-        qs.beginGroup("inference_config")
-        # Explicit _on_model_changed: currentTextChanged won't fire if the value already equals the
-        # default. (The bounds picker moved to the Prior tab, which restores its own key in on_draft_set,
-        # so the old restore-order trap no longer applies here.)
-        self.model_combo.setCurrentText(settings.get_str(qs, "model", self.model_combo.currentText()))
-        # units_text BEFORE _on_model_changed: the latter seeds the box from the model's file only when
-        # it is empty, so a restored custom value must already be in place to survive.
-        settings.restore_field(qs, "units_text", self.units_text)
+    # ── the choices ──
+    def _model_chosen(self, _index: int) -> None:
         self._on_model_changed(self.model_combo.currentText())
-        self.units_toggle.restore_key(settings.get_str(qs, "units_mode", "file"))
-        self.chi_check.setChecked(settings.get_bool(qs, "chi_mode", False))
-        self.rot_check.setChecked(settings.get_bool(qs, "reparam_rotate", config.REPARAM_ROTATE))
-        qs.endGroup()
+
+    def _on_model_changed(self, model: str) -> None:
+        """A model chosen, by a person or by the list read again: its units line, and the box of typed units filled from
+        its units file, so that switching to typed units starts from what the file declares."""
+        self.form.rows["model"].kept = False
+        words, where, trouble = self._units_of(model)
+        self.units_line.set_text(UNITS_FROM.format(words, where) if words else NO_UNITS_FILE.format(trouble))
+        self.units_text.setText(words)
+        self._edited()
+
+    def _kind_chosen(self, _index: int = 0) -> None:
+        """The settings of the frequency response stand only while it is chosen."""
+        for key in DRIVEN:
+            self.form.rows[key].set_shown(self._chi())
+
+    def _units_chosen(self, _index: int = 0) -> None:
+        """The line of the model's units file while it is chosen; the box of typed units, and what typing them means,
+        while they are typed."""
+        typed = self._typed()
+        self.units_line.setVisible(not typed)
+        self.units_text.setVisible(typed)
+        self.typed_note.setVisible(typed)
+
+    # ── applying ──
+    def _build_config(self) -> None:
+        """Apply: read the fields through the rules, ask before letting go of what the session holds, and hold the new
+        draft. A refusal and a kept session change nothing."""
+        model = self.model_combo.currentText()
+        if self._unusable(model):
+            return                                   # the main button is greyed, with its reason, for this model
+        try:
+            values = self._read()
+        except Refusal as refused:
+            self._refusal(refused)
+            return
+        draft = ConfigDraft(
+            model=model, labels=VALID_LABELS[VALID_MODELS.index(model)], state_dep_drift=registry.state_dep_drift(model),
+            units_override=values["units"], chi_mode=self._chi(), chi_n_freqs=values["chi_n_freqs"], chi_f0=None,
+            chi_freq_bounds=None, chi_k_pad=values["chi_k_pad"], chi_max_cycles=values["chi_max_cycles"],
+            reparam_rotate=self.rot_choice.currentData())
+        held = self._screen.session_contents()
+        if held and not ask(self, QUESTION, QUESTION_TEXT.format("; ".join(held)), KEEP, APPLY_ANSWER):
+            return
+        pressed = self.foot.main_button.hasFocus()
+        self._screen.new_draft(draft)
+        if pressed and not self.next_button.isHidden():
+            self.next_button.setFocus(Qt.TabFocusReason)          # the button greys as it applies: on to the next step
+
+    # ── what is remembered ──
+    def restore_settings(self, qs) -> None:
+        """The model and the kind last applied, put back as choices and marked kept from last time until they are
+        touched. Nothing else is read, and nothing is applied: a model no longer listed, or a kind that cannot be read,
+        leaves its row as it opens."""
+        rows = self.form.rows
+        model = settings.get_str(qs, MODEL_KEY, "")
+        known = self.model_combo.findData(model) >= 0
+        if known:
+            self.model_combo.setCurrentText(model)
+        self._on_model_changed(self.model_combo.currentText())
+        raw = str(qs.value(KIND_KEY, "")).strip().lower()
+        kind = {"1": True, "true": True, "0": False, "false": False}.get(raw)
+        if kind is not None:
+            self.kind_choice.setCurrentIndex(self.kind_choice.findData(kind))
+        rows["model"].kept, rows["chi_mode"].kept = known, kind is not None

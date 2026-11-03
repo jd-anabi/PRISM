@@ -182,7 +182,8 @@ class _Line(QWidget):
 class Row:
     """One setting of a form: ``key``, ``widget``, what the form asks of it. ``value`` is what the field reads as: a
     number or None for a number field, the item's data or else its words for a list, whether it is ticked for a tick
-    box, the text for a text field or a value that is only shown. ``usual`` is the value the field opens at."""
+    box, the text for a text field or a value that is only shown. ``usual`` is the value the field opens at. ``kept``
+    says a page put the value back from what it remembers, and it has not been touched since: any edit ends it."""
 
     def __init__(self, key: str, widget: QWidget | None, label: str, usual, *, unit: str = "", edited=None, marked=None,
                  help_text: str = "") -> None:
@@ -190,6 +191,7 @@ class Row:
         self._label, self._usual, self._unit = label, usual, unit
         self._on_edit, self._on_mark = edited, marked
         self._shown, self._marked, self._blocks = True, False, False
+        self.kept = False
         self.label = QLabel(labels.pretty_gui(label))
         self.label.setWordWrap(True)
         self.label.setMinimumHeight(design.scaled(design.SIZE["field_h"]))
@@ -236,12 +238,17 @@ class Row:
             self._on_mark()
 
     def _edited(self) -> None:
-        """A refusal's sentence stands under the field until the field is edited."""
+        """A refusal's sentence stands under the field until the field is edited; a value put back is no longer that."""
+        self.kept = False
         if self._marked:
             self._marked = self._blocks = False
             self._set_line("", "")
         if self._on_edit is not None:
             self._on_edit()
+
+    def hear(self, widget: QWidget) -> None:
+        """Hear ``widget``'s edits as the field's own: a field under the row that the row's value stands on."""
+        self._listen(widget)
 
     # ── what a page reads and sets ──
     def label_text(self) -> str:

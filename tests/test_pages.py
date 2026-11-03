@@ -13,6 +13,7 @@ from PySide6.QtGui import QFont, QFontInfo
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QPushButton, QScrollArea, QWidget
 
 from core.gui import design, fields, fonts, style
+from core.gui.panels.inference.config_tab import ConfigPanel
 from core.gui.run.controller import LIVE_TEXT, NOT_READ_YET_TEXT, controller
 from core.gui.step_facts import (LEADS, REFUSED_BLOCKS, Fact, about_words, ordered, origin_words, reading_words,
                                   reason_beside, refused_facts)
@@ -30,6 +31,9 @@ from tests._runs import Clock, StandIn, at, controller_on, start_run, turn_until
 from tests._window_helpers import in_front, shown_off_screen
 
 BLOCKS = "the name cannot be used"
+#: Each rebuilt page by its step, as the standing tests a page joins in its own task name it: the stand-in, then the
+#: pages of the window.
+PAGES = {"the stand-in": None, "Model and options": ConfigPanel}
 #: A record's name of the length the store lets stand, which no line of an origin holds at the window's least width.
 LONG_NAME = "retrain_narrowing_round_of_the_second_of_november"
 
@@ -69,8 +73,9 @@ def _a_page(tmp_path, *, clock=None, shown=True, size=(1300, 820), programs_font
         shown_off_screen(window, *size)
         window.go_to("inference", "training")
         _settle()
-    page.names.name.setText("retrain_3")
-    page.names.check_now()
+    if page.names is not None:
+        page.names.name.setText("retrain_3")
+        page.names.check_now()
     page.readings = 0
     return window, page, clock
 
@@ -583,7 +588,7 @@ def test_a_row_off_the_page_reads_as_nothing_wrong():
     """A blank field a model does not use is no fault: a page need not remember to ask whether the row stands."""
     form = _the_form()
     row = form.add("chi_n_freqs", IntField(None))
-    assert row.reading() == "χ probes per observation is blank."
+    assert row.reading() == "Driven recordings per observation is blank."
     row.set_shown(False)
     assert row.reading() is None
 
@@ -1315,7 +1320,7 @@ def test_a_pages_own_line_stands_under_what_is_in_use_and_goes_when_its_next_run
 
 
 # ── when a page reads ──
-@pytest.mark.parametrize("page_class", [None], ids=["the stand-in"])
+@pytest.mark.parametrize("page_class", list(PAGES.values()), ids=list(PAGES))
 def test_a_page_is_built_with_no_reading_and_no_running_timer(page_class, tmp_path, monkeypatch):
     """A constructor reads none of what a run may not have read and starts nothing: no card, no program, no reading of the
     disk's facts, no timer running. A window that is never shown reads nothing either."""
@@ -1417,18 +1422,23 @@ def test_a_reading_says_when_on_the_controllers_clock_and_a_run_changes_the_line
     assert page.readings == 1 and page.foot.reading.text() == "The saved records were read at 09:09."
 
 
+@pytest.mark.parametrize("page_class", list(PAGES.values()), ids=list(PAGES))
 @pytest.mark.parametrize("left_for", ["the end", "the first opening"])
-def test_no_reading_happens_between_a_runs_start_and_its_end(left_for, tmp_path, monkeypatch):
+def test_no_reading_happens_between_a_runs_start_and_its_end(left_for, page_class, tmp_path, monkeypatch):
     """Nothing a page reads is read between a run's start and its end: a page opened during the run, an edit waiting as the
     run starts, the timer firing, "Check again" and the press each read nothing, and the run's end reads once on a page in
     sight, or at its next show on one that is not. Parameter inference's old pages have their own count."""
     app = qt_app()
-    window, page, _clock = _a_page(tmp_path, shown=left_for == "the end")
+    window, page, _clock = _a_page(tmp_path, shown=left_for == "the end", cls=page_class)
     if left_for == "the first opening":
         shown_off_screen(window, 1300, 820)
     runner = window.part("reduction")
-    readings = page.readings = 0
-    page.form.rows["num_runs"].widget.setText("7")
+    counted = {"readings": 0, "pressed": 0}
+    for name, kept in (("readings", page.read_disk), ("pressed", page.main_pressed)):
+        monkeypatch.setattr(page, "read_disk" if name == "readings" else "main_pressed",
+                            lambda name=name, kept=kept: (counted.__setitem__(name, counted[name] + 1), kept())[1])
+    readings = 0
+    page.form.rows["num_runs" if "num_runs" in page.form.rows else "chi_n_freqs"].widget.setText("7")
     stand_in = StandIn(word="Reduction")
     calls = readings_of_a_run(monkeypatch)
     start_run(runner, stand_in)
@@ -1437,7 +1447,7 @@ def test_no_reading_happens_between_a_runs_start_and_its_end(left_for, tmp_path,
         window.go_to("inference", "training")
         _settle()
         assert page.foot.reading.text() == NOT_READ_YET_TEXT
-    assert page.readings == readings
+    assert counted["readings"] == readings
     page.read_timer.timeout.emit()
     page.read_soon()
     page.foot.check_again.click()
@@ -1447,11 +1457,11 @@ def test_no_reading_happens_between_a_runs_start_and_its_end(left_for, tmp_path,
     page.stale_store()
     page.refresh_local_gates()
     page.redraw()
-    assert (page.readings, page.pressed) == (readings, 0), "a page read during a run"
+    assert (counted["readings"], counted["pressed"]) == (readings, 0), "a page read during a run"
     assert calls == []
     stand_in.release()
     turn_until(app, lambda: not controller().is_live())
-    assert page.readings == readings + 1, "the run's end did not read once"
+    assert counted["readings"] == readings + 1, "the run's end did not read once"
     assert not page.read_timer.isActive(), "a reading still waits after the run's end has read"
 
 
@@ -1936,6 +1946,114 @@ def test_the_tab_key_walks_a_step_in_the_order_it_is_read(size, tmp_path):
         walked = _walked(window, len(expected))
         assert walked == expected, [type(widget).__name__ for widget in walked]
         assert QApplication.focusWidget() is window.shell.rail.row("training"), "the walk did not go on to the rail"
+
+
+def _driven(page) -> list:
+    """The fields of the first step's frequency response, in their order."""
+    return [page.form.rows[key].widget for key in ("chi_n_freqs", "chi_k_pad", "chi_max_cycles")]
+
+
+#: The rebuilt pages of the window, by the step each stands on, and the shapes its walk is read in: by the name of the
+#: shape, what is done to the page after its first show, and the controls of the fold that stand in that shape, in
+#: their order, while it is open.
+WALKED = {
+    "model": {
+        "set by the bounds file": (lambda page: None, lambda page: [page.rot_choice, page.units_choice]),
+        "the frequency response, typed units, applied": (
+            lambda page: (page.kind_choice.setCurrentIndex(page.kind_choice.findData(True)),
+                          page.units_choice.setCurrentIndex(page.units_choice.findData("typed")),
+                          page.foot.main_button.click()),
+            lambda page: [*_driven(page), page.rot_choice, page.units_choice, page.units_text]),
+    },
+}
+
+
+@pytest.mark.parametrize("fold_open", [False, True], ids=["fold shut", "fold open"])
+@pytest.mark.parametrize("step, shape", [(step, shape) for step, shapes in WALKED.items() for shape in shapes])
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+@pytest.mark.parametrize("size", [(900, 600), (1300, 820)], ids=str)
+def test_tab_walks_the_page_in_view_at_every_size(size, factor, step, shape, fold_open, tmp_path):
+    """From the step's row of the rail the Tab key goes into the page and, with real keys, walks it as it is read: the
+    heading's button, then the way to the next step once there is one, then the first setting, before any button that
+    starts or applies anything; every field in reading order, the fold and what it holds, a row the page shows only for
+    a choice made after its first show in its place among them; what scrolls; the foot; and back to the row of the rail
+    it began from. Each stop in the scrolling body stands whole in its viewport as it takes the keyboard, at the window's
+    least size and a larger one, at both text sizes."""
+    from PySide6.QtTest import QTest
+    with text_size(factor), _the_look(False):
+        fonts.load_app_font(qt_app())
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        window = build_window()
+        design.set_room((3400, 1380))
+        window.setMinimumSize(1, 1)
+        shown_off_screen(window, design.scaled(size[0]), design.scaled(size[1]))
+        window.go_to("inference", step)
+        page = window.part("inference").pages.currentWidget()
+        _settle()
+        shaped, folded = WALKED[step][shape]
+        shaped(page)
+        page.form.fold.set_open(fold_open)
+        _settle()
+        form, foot = page.form, page.foot
+        expected = [*page.head.findChildren(QPushButton), *([] if page.next_button.isHidden() else [page.next_button])]
+        expected += [stop for stop in form.stops() if stop.isVisibleTo(page) and stop.isEnabled()]
+        if page.scroller.verticalScrollBar().maximum() > 0:
+            expected.append(page.scroller)
+        if not foot.facts.isHidden():
+            expected.append(foot.facts.scroller)
+        expected += [stop for stop in foot.stops() if stop.isVisibleTo(page) and stop.isEnabled()]
+        rail = window.shell.rail.row(step)
+        with in_front(window):
+            rail.setFocus(Qt.TabFocusReason)
+            _settle()
+            walked, out = [], []
+            for _ in range(len(expected) + 1):
+                QTest.keyClick(QApplication.focusWidget(), Qt.Key_Tab)
+                _settle()
+                walked.append(QApplication.focusWidget())
+                if page.scroller.body.isAncestorOf(walked[-1]) and not _in_view(page, walked[-1]):
+                    out.append(type(walked[-1]).__name__)
+        assert walked == [*expected, rail], [type(widget).__name__ for widget in walked]
+        assert out == [], out
+        first = next(at for at, stop in enumerate(walked) if form.isAncestorOf(stop))
+        assert walked[first] is page.first_focus(), "the walk reached a setting before the page's first"
+        assert not any(stop in walked[:first] for stop in foot.stops()), "a button that applies came before the form"
+        inside = page.form.fold.stops()[1:]
+        assert [stop for stop in walked if stop in inside] == (folded(page) if fold_open else []), (
+            "the fold's rows that stand are not the shape's")
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_widest_model_name_a_person_can_save_fits_the_first_step_at_the_least_size(factor, tmp_path):
+    """A model of your own is named in at most 24 letters and figures, and the list of models is as wide as its longest
+    item: the widest name, chosen, leaves the form inside its viewport at the window's least size with the fold open,
+    for the body never scrolls sideways."""
+    from core import registry
+    from core.Helpers import model_store
+    name = "W" * 24
+    assert model_store.NAME_RE.match(name) and not model_store.NAME_RE.match(name + "W"), "the longest name moved"
+    registry.register(registry.ModelSpec(name, ["a"], is_user_model=True, n_vars=1))
+    try:
+        with text_size(factor), _the_look(False):
+            fonts.load_app_font(qt_app())
+            controller_on(tmp_path, Clock(at(8, 12, 4)))
+            window = build_window()
+            design.set_room((3400, 1380))
+            window.setMinimumSize(1, 1)
+            page = window.part("inference").config_panel
+            page.model_combo.setCurrentText(name)
+            page.kind_choice.setCurrentIndex(page.kind_choice.findData(True))
+            page.form.fold.set_open(True)
+            shown_off_screen(window, design.scaled(900), design.scaled(600))
+            window.go_to("inference", "model")
+            _settle()
+            port = page.scroller.viewport()
+            assert page.model_combo.width() >= page.model_combo.minimumSizeHint().width()
+            assert page.scroller.body.minimumSizeHint().width() <= port.width(), (
+                page.scroller.body.minimumSizeHint().width(), port.width())
+            assert _edge_of(page.model_combo, port).right() < port.width()
+    finally:
+        registry.unregister(name)
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])

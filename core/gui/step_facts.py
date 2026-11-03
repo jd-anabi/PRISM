@@ -1,6 +1,6 @@
 """What a step says before it starts, as values: a fact and the order facts stand in, the reason beside the main
 button, the line that says when the saved records were read, where a field's value came from, and how long something
-takes, in a person's words; and a row that picks what a step holds.
+takes, in a person's words; a row that picks what a step holds, and what the first step holds and says.
 
 A fact is a marker with its lead word, one or two plain sentences, and, for what stops the start, the few words that go
 beside the button. Every "Error." and every "Blocked." blocks and nothing else does, and a fact that says otherwise is
@@ -12,6 +12,8 @@ import math
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+
+from .chain import model_label
 
 #: The lead word of each marker, as a fact is shown.
 LEADS = {"err": "Error.", "lock": "Blocked.", "warn": "Attention.", "info": "Information.", "fine": "Fine."}
@@ -121,6 +123,7 @@ def about_words(seconds: float) -> str:
         return f"about {minutes} minutes"
     return "about " + _in_halves(_rounded(seconds / 1800), "hour", "an hour")
 
+
 class _NotHeld:
     """What a selection row's step holds of it while it holds nothing that says the row's value."""
 
@@ -163,3 +166,43 @@ class SelectionRow:
     def line(self) -> str:
         """What the line under the row says while it reads changed: "Changed, not applied. In use: Nadrowski."."""
         return CHANGED_TEXT.format(self.words(self.in_use()))
+
+
+def units_words(tokens: Iterable[str]) -> str:
+    """Units as a sentence names them: in the order of the alphabet, whatever order a file or a person gave them."""
+    return " ".join(sorted((str(token) for token in tokens), key=lambda token: (token.casefold(), token)))
+
+
+#: The words beside the main button of the first step while the model chosen cannot be used.
+UNUSABLE_BLOCKS = "this model cannot be used"
+
+
+def model_in_use(draft, units_said: str) -> tuple[str, str]:
+    """What the first step holds, as "In use" says it: the model's name, and one sentence of the kind of observation,
+    the rotation and ``units_said``, the units and where they come from; ``("", "")`` while it holds nothing. Read
+    from the draft held, as a session's fields are read: what it does not say is left out."""
+    if draft is None:
+        return "", ""
+    parts = []
+    numbers = [getattr(draft, name, None) for name in ("chi_n_freqs", "chi_k_pad", "chi_max_cycles")]
+    if getattr(draft, "chi_mode", None) is True:
+        if all(isinstance(number, (int, float)) and not isinstance(number, bool) for number in numbers):
+            parts.append(f"Frequency response, {numbers[0]} driven recordings in {numbers[1]} slots, lock-in limit "
+                         f"{numbers[2]:g} drive cycles.")
+        else:
+            parts.append("Frequency response.")
+    elif getattr(draft, "chi_mode", None) is False:
+        parts.append("Set by the bounds file.")
+    rotation = getattr(draft, "reparam_rotate", None)
+    if isinstance(rotation, bool):
+        parts.append("Rotation on." if rotation else "Rotation off.")
+    if units_said:
+        parts.append(f"Units {units_said}.")
+    return model_label(getattr(draft, "model", None)), " ".join(parts)
+
+
+def model_facts(*, usable_reason: str, field_facts: Sequence[Fact], plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
+    """The facts of the first step: that the model chosen cannot be used, when ``usable_reason`` says why; then those of
+    its fields; then what the plan in use says. Those that block come first."""
+    lead = (Fact("err", usable_reason, UNUSABLE_BLOCKS),) if usable_reason else ()
+    return ordered((*lead, *field_facts, *plan_lines))

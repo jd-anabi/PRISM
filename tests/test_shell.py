@@ -3733,8 +3733,9 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
     the window's right edge, from its top and from its bottom, at the ordinary text size, and as much more as a larger
     text size scales it, opened first in the usual layout and in the small one: a step and a panel by the frame
     their own layout holds, Effective temperature's row of page names too, lined up with the frame under it, and
-    every other place by what its own layout holds, the list of Your own models by its group too. Home and Settings
-    are pages of the look, which keep its page margin and stand alike, and the window gives them none."""
+    every other place by what its own layout holds, the list of Your own models by its group too. Home, Settings and
+    the steps rebuilt are pages of the look, which keep its page margin and stand alike, and the window gives them
+    none."""
     from PySide6.QtCore import QMargins
     from PySide6.QtWidgets import QGroupBox
     from tests._look_helpers import text_size
@@ -3748,7 +3749,7 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
                     _shown_off_screen(window, 1300, design.small_below() - 1 if low else 820)
                     assert window.shell._small == low, (factor, low)
                     for place in keys.PARTS[1:]:
-                        window.go_to(place.key)
+                        window.go_to(place.key, "prior" if place.key == "inference" else None)
                         QApplication.processEvents()
                         if place.key != "settings":
                             assert _margins(window, place.key) == (design.scaled(12),) * 4, (factor, low, place.key)
@@ -3758,24 +3759,29 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
                     assert (at.x(), at.y(), listed.width() - at.x() - group.width()) == (design.scaled(12),) * 3, (
                         factor, low)
                     settings, home = window.part("settings"), window.part("home")
+                    step = window.part("inference").config_panel
                     assert home.contentsMargins() == settings.contentsMargins() == QMargins(0, 0, 0, 0)
                     assert settings.page.box.contentsMargins() == home.page.box.contentsMargins()
+                    assert step.contentsMargins() == QMargins(0, 0, 0, 0), "the step was given the old margin"
+                    assert step.page.box.contentsMargins() == home.page.box.contentsMargins()
                 finally:
                     window.hide()
 
 
 def test_a_panels_column_lays_each_item_at_its_height_for_the_columns_width():
-    """In the column of a panel's controls -- each of the six steps, Effective temperature's two pages, Live
+    """In the column of a panel's controls -- each step not rebuilt yet, Effective temperature's two pages, Live
     simulation and the Reduction map -- no line that wraps is drawn shorter than its words take at its width, on
     an empty session and with a configuration made from the shipped Nadrowski bounds; and in a column where
     nothing grows, each item stands at its own height for the column's width, what the column has to spare left
     under its last item."""
     from PySide6.QtWidgets import QLabel
     from core import config
+    from core.gui.panels.base_panel import BasePanel
     qt_app()
     window = build_window()
     inference = window.part("inference")
-    panels = [("inference", step.key, panel) for step, panel in zip(keys.STEPS, inference.panels())]
+    panels = [("inference", step.key, panel) for step, panel in zip(keys.STEPS, inference.panels())
+              if isinstance(panel, BasePanel)]
     panels += [("temperature", page.key, panel)
                for page, panel in zip(keys.PAGES["temperature"], window.part("temperature").panels())]
     panels += [("live", None, window.part("live")), ("reduction", None, window.part("reduction"))]
@@ -3807,7 +3813,7 @@ def test_a_panels_column_lays_each_item_at_its_height_for_the_columns_width():
         for session in ("empty", "configuration"):
             if session == "configuration":
                 inference.config_panel.model_combo.setCurrentText("NADROWSKI")
-                inference.config_panel.btn_config.click()          # the first step's own button: a model
+                inference.config_panel.foot.main_button.click()    # the first step's own button: a model
                 bounds = config.BOUNDS_PATH / "nadrowski" / "master.txt"
                 inference.install_config(inference.session.draft.make_config(bounds_path=str(bounds)))
             for part, page, panel in panels:
@@ -3924,13 +3930,14 @@ def test_every_panel_of_the_built_parts_has_its_place():
     not, and hands back a panel of that kind standing in that part. The kinds are found by walking each part's
     widgets, not by the window's own lists, so a kind of panel held by a part those lists do not name is seen too. A
     part that cannot be built stands as an error page and hides its panels, so every part is required to be built."""
-    from core.gui.panels.base_panel import BasePanel
+    from PySide6.QtWidgets import QWidget
+    from core.gui.panels.run_host import RunHost
     qt_app()
     every = build_window()
     held = {}                                          # each kind of panel, with the keys of the parts holding one
     for place in keys.PARTS:
         part = every.part(place.key)
-        for panel in ([part] if isinstance(part, BasePanel) else []) + part.findChildren(BasePanel):
+        for panel in [widget for widget in (part, *part.findChildren(QWidget)) if isinstance(widget, RunHost)]:
             held.setdefault(type(panel), set()).add(place.key)
     assert every.built_parts() == tuple(place.key for place in keys.PARTS), "a part could not be built"
     assert len(held) >= 10, f"the walk found only {sorted(kind.__name__ for kind in held)}"
@@ -4416,6 +4423,7 @@ def test_a_part_never_opened_keeps_what_it_remembered_when_the_window_closes(tmp
     part, built and closed, writes values of its own in their place. Here Live simulation alone is opened."""
     from PySide6.QtCore import QByteArray
     from core.gui import settings as st
+    from core.gui.panels.base_panel import BasePanel
     qt_app()
     every = build_window()                    # what each part writes as the window closes, off one that opened all
     for place in keys.PARTS:
@@ -4425,10 +4433,11 @@ def test_a_part_never_opened_keeps_what_it_remembered_when_the_window_closes(tmp
     remembered = {key: "kept from the last launch" for key in written.allKeys()
                   if key.split("/")[0] not in ("window", "simulate")}
     remembered.update({f"layout/{panel.layout_key()}/{splitter}": QByteArray(b"kept from the last launch")
-                       for panel in every._all_panels() for splitter in ("splitter", "results")})
+                       for panel in every._all_panels() if isinstance(panel, BasePanel)
+                       for splitter in ("splitter", "results")})
     groups = {key.split("/")[0] for key in remembered}
-    assert groups == {"artifacts", "crossval", "fdt", "inference_config", "inference_infer", "inference_posterior",
-                      "inference_prior", "inference_tsnpe", "layout", "reduction"}, groups
+    assert groups == {"artifacts", "crossval", "fdt", "inference_infer", "inference_posterior", "inference_prior",
+                      "inference_tsnpe", "layout", "reduction"}, groups
     st.use_ini_file(str(tmp_path / "kept.ini"))
     kept = st.settings()
     for key, value in remembered.items():
@@ -6849,16 +6858,18 @@ def _stand_in_step(window, monkeypatch):
 
 def test_the_step_shown_hears_the_low_window_and_names_where_the_keyboard_starts(monkeypatch):
     """A step built on the look's page is told when the window is low and when it is not, through its screen, and the
-    keyboard starts on the control it names. Today's steps name none: the keyboard starts at the first setting, as it
-    did, and they offer no low form, which nothing asks of them."""
+    keyboard starts on the control it names, as the first step names its list of models. The steps not rebuilt yet
+    name none: the keyboard starts at the first setting, as it did, and they offer no low form, which nothing asks of
+    them."""
     from core.gui.main_window import _first_control
     app = qt_app()
     window = build_window()
     window.setMinimumSize(1, 1)
     _shown_off_screen(window, 1300, 820)
     today = window.part("inference")
-    assert today.first_focus() is None and today.pending() == frozenset()
+    assert today.first_focus() is today.config_panel.model_combo and today.pending() == frozenset()
     window.go_to("inference", "prior")
+    assert today.first_focus() is None
     assert window.focusWidget() is window._start_of(today) is _first_control(today), "today's steps moved"
     window.resize(1300, design.small_below() - 1)
     app.processEvents()                                      # today's panels offer no low form: nothing raises
@@ -6943,6 +6954,7 @@ def test_the_margin_of_parameter_inference_stands_on_each_old_panel_and_on_no_pa
     """The place's margin stands on each old panel, which so stands where it stood, and not on the part: a page of the
     look brings its own margin, and takes none here, at either text size, though it hosts a run as a panel does."""
     from PySide6.QtCore import QMargins
+    from core.gui.panels.base_panel import BasePanel
     from core.gui.screens.inference_screen import InferenceScreen
     from tests._look_helpers import text_size
     qt_app()
@@ -6958,7 +6970,8 @@ def test_the_margin_of_parameter_inference_stands_on_each_old_panel_and_on_no_pa
             assert inference.contentsMargins() == QMargins(0, 0, 0, 0), "the part keeps a margin of its own"
             assert step.contentsMargins() == QMargins(0, 0, 0, 0), "a page of the look was given the margin"
             assert all(panel.contentsMargins() == QMargins(margin, margin, margin, margin)
-                       for panel in today(inference)), "an old panel lost its margin"
+                       for panel in today(inference) if isinstance(panel, BasePanel)), "an old panel lost its margin"
+            assert inference.config_panel.contentsMargins() == QMargins(0, 0, 0, 0), "the first step took the margin"
 
 
 def _a_screen_of(width, height):

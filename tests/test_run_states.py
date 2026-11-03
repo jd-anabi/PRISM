@@ -5409,8 +5409,9 @@ def test_nothing_of_the_run_page_is_hidden_under_the_form_at_any_width(page, fac
         _settle()
         _the_two_share_the_width(window, host, (page, factor, "left and come back to"))
         _in_its_column(host.run_view, host.results, (page, factor))
-        window.go_to("inference", "model")
-        other = window.part("inference").config_panel
+        elsewhere = ("inference", "checks") if place == ("reduction", None) else ("reduction", None)
+        window.go_to(*elsewhere)
+        other = next(panel for panel, at in window._places.items() if at == elsewhere)
         assert other.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W, "a page with no run gave up its width"
         stand_in.release()
         turn_until(app, lambda: not controller().is_live())
