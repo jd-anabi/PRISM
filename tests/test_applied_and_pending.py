@@ -163,6 +163,45 @@ def test_the_units_held_are_said_as_the_model_held_declares_them():
     assert _line(page, "units") == ("warn", "Changed, not applied. In use: kHz ms nm pN, from the model's file.")
 
 
+def test_the_driven_recordings_are_no_change_once_the_other_kind_is_chosen():
+    """Held as the frequency response with one of its settings changed, the step chosen back to the other kind counts
+    the kind alone: the settings of the frequency response, read only while it is chosen, are no change then."""
+    _screen, page = _first_step()
+    _pick(page.kind_choice, True)
+    _apply(page)
+    page.form.rows["chi_n_freqs"].widget.setText("5")
+    assert [row.key for row in page.selection_rows() if row.changed()] == ["chi_n_freqs"]
+    _pick(page.kind_choice, False)
+    assert [row.key for row in page.selection_rows() if row.changed()] == ["chi_mode"]
+    assert page.in_use.pending.sentence.plain_text() == "Attention. 1 choice below is changed and not applied."
+
+
+def test_a_draft_that_holds_no_rotation_is_no_change_of_rotation():
+    """A draft that holds no rotation, as a draft not made on this page may, leaves the rotation unchanged whichever is
+    shown."""
+    from core.gui.session import ConfigDraft
+    screen, page = _first_step(SbiSession(draft=ConfigDraft(model="NADROWSKI", labels=[], state_dep_drift=False)))
+    for shown in (False, True):
+        _pick(page.rot_choice, shown)
+        assert screen.pending() == frozenset() and _line(page, "reparam_rotate") == ("", ""), shown
+
+
+def test_under_units_stands_the_line_of_the_file_or_the_box_and_its_note():
+    """From the model's file, the line that names the file stands under "Units"; typed here, the box and what typing
+    them means stand in its place."""
+    _screen, page = _first_step()
+    page.form.fold.set_open(True)
+
+    def standing():
+        return [part.isVisibleTo(page) for part in (page.units_line, page.units_text, page.typed_note)]
+
+    assert standing() == [True, False, False]
+    _pick(page.units_choice, "typed")
+    assert standing() == [False, True, True]
+    _pick(page.units_choice, "file")
+    assert standing() == [True, False, False]
+
+
 def test_typed_units_are_changed_until_applied_and_read_in_their_words():
     """Typed units held are said in the order of the alphabet, with where they came from; the same words in another
     order make another draft, so they read changed."""
@@ -561,6 +600,7 @@ def test_the_model_and_the_kind_come_back_kept_from_last_time_until_touched():
     assert [key for key, row in rows.items() if row.origin.text()] == ["model", "chi_mode", "chi_f0", "chi_freq_bounds"]
     assert rows["model"].origin.text() == rows["chi_mode"].origin.text() == "kept from last time"
     assert screen.session.draft is None and page.in_use.line_text() == "In use: nothing yet."
+    assert page.in_use.sentence.plain_text() == "Choose the model and the kind of observation, then apply them."
     _pick(page.model_combo, "NADROWSKI")
     assert rows["model"].origin.text() == "" and rows["chi_mode"].origin.text() == "kept from last time"
     _apply(page)
@@ -568,6 +608,16 @@ def test_the_model_and_the_kind_come_back_kept_from_last_time_until_touched():
     _pick(page.kind_choice, False)
     _pick(page.kind_choice, True)
     assert rows["chi_mode"].origin.text() == "", "a kind touched and put back is still said to be kept"
+
+
+@pytest.mark.parametrize("written", ["false", "0"])
+def test_a_kind_of_the_bounds_file_comes_back_kept_from_last_time(written):
+    """The kind last applied as the bounds file's comes back however the settings file wrote it, and is said to be kept
+    from last time."""
+    _remember(**{"inference_config/chi_mode": written})
+    _screen, page = _first_step()
+    assert page.kind_choice.currentData() is False
+    assert page.form.rows["chi_mode"].origin.text() == "kept from last time"
 
 
 @pytest.mark.parametrize("model, kind", [("NOT_A_MODEL", "maybe"), ("", "")], ids=["stale", "blank"])
@@ -612,7 +662,15 @@ def test_applying_remembers_the_model_and_the_kind_and_nothing_else(monkeypatch)
     assert (qs.value("inference_config/model"), settings.get_bool(qs, "inference_config/chi_mode", False)) == (
         "HOPF", True)
     screen.new_draft(SimpleNamespace(model="BP", chi_mode="yes"))
-    assert written[1:] == [[("inference_config/model", "BP")]], written
+
+    class NoName:
+        """A model that is no string, as a draft that is not the window's own may hold: it says only its folder."""
+
+        def lower(self):
+            return "bp"
+
+    screen.new_draft(SimpleNamespace(model=NoName(), chi_mode=True))
+    assert written[1:] == [[("inference_config/model", "BP")], [("inference_config/chi_mode", True)]], written
     page.save_settings(qs)
     qs.sync()
     again = settings.settings()

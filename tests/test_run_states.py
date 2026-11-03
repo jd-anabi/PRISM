@@ -2901,6 +2901,29 @@ def test_a_test_that_leaves_the_applications_font_set_fails(request):
     assert app.font().toString() == began, "the font the test began with is not in force again"
 
 
+def test_a_test_that_began_with_no_application_is_held_to_a_new_ones_font(request):
+    """A test that began before any application was built, and builds one that it leaves with a font set, fails as well:
+    the font it is held to is the one the toolkit gives a new application, which is in force again after it."""
+    from PySide6.QtGui import QFont, QFontDatabase
+    from PySide6.QtWidgets import QApplication
+    from tests._fixtures import qt_app
+    app = qt_app()
+    began = app.font().toString()
+    around_a_test = _guards(request)._application_font_put_back.__wrapped__
+    with pytest.MonkeyPatch.context() as before_the_application:
+        before_the_application.setattr(QApplication, "instance", lambda: None)
+        test = around_a_test()
+        next(test)
+    new = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).toString()
+    app.setFont(QFont("Courier New", 21))
+    try:
+        with pytest.raises(pytest.fail.Exception, match="the test ended with the application's font set, now put back"):
+            next(test)
+        assert app.font().toString() == new, "the font a new application is given is not in force again"
+    finally:
+        app.setFont(_font(began))
+
+
 def _font(words: str):
     """A font as its words say it."""
     from PySide6.QtGui import QFont
