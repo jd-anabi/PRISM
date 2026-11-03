@@ -2018,9 +2018,11 @@ def test_the_keyboard_outside_the_body_scrolls_nothing(tmp_path):
             assert bar.value() == place, type(control).__name__
 
 
-def test_a_window_that_comes_back_to_the_front_stays_as_it_was_scrolled(tmp_path):
-    """A window given the keyboard again hands it to the control that held it, from nowhere: a person who scrolled away
-    from that control with the wheel finds the page where they left it."""
+def test_a_window_that_goes_to_the_back_and_comes_to_the_front_stays_as_it_was_scrolled(tmp_path):
+    """A window that goes to the back takes the keyboard from its control to nowhere; brought to the front again it hands
+    it back from nowhere; a box or a figure's window that closes hands it back from nowhere or from that window. None of
+    them moved the keyboard on the page: a person who scrolled away from the control with the wheel finds the page where
+    they left it."""
     window, page, _clock = _a_page(tmp_path, size=(900, 600))
     page.form.fold.set_open(True)
     page.said = _facts(9, "warn")
@@ -2034,7 +2036,12 @@ def test_a_window_that_comes_back_to_the_front_stays_as_it_was_scrolled(tmp_path
         _settle()
         place = bar.value()
         assert place > 0 and not _in_view(page, field), "the field stands in view, so this says nothing"
-        page._focus_moved(None, field)
+        elsewhere = build_part(QPushButton)
+        for before, now in ((field, None), (None, field), (elsewhere, field)):
+            page._focus_moved(before, now)
+            _settle()
+            assert bar.value() == place, (before, now)
+    with in_front(window):
         _settle()
         assert bar.value() == place
 

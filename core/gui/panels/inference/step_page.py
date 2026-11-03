@@ -367,10 +367,12 @@ class StepPage(RunHost, QWidget):
         self.main_pressed()
 
     @reported()
-    def _focus_moved(self, before, _now) -> None:
-        """The keyboard moved, in any window. It is brought into view once what moved it has been laid out; a window that
-        only came to the front, whose keyboard comes from nowhere, stays as it was scrolled."""
-        if before is not None:
+    def _focus_moved(self, before, now) -> None:
+        """The keyboard moved, in any window. A move from one control to another in the same window is brought into view
+        once what moved it has been laid out. One that comes from no control or goes to none is the window going to the
+        back or coming to the front, and one from another window is a box or a figure's window giving the keyboard back:
+        none of them moved it on the page, so a page scrolled away with the wheel stays where it was."""
+        if before is not None and now is not None and before.window() is now.window():
             QTimer.singleShot(0, self, self._keyboard_into_view)
 
     def _keyboard_into_view(self) -> None:
