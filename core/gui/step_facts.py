@@ -1,6 +1,6 @@
 """What a step says before it starts, as values: a fact and the order facts stand in, the reason beside the main
 button, the line that says when the saved records were read, where a field's value came from, and how long something
-takes, in a person's words.
+takes, in a person's words; and a row that picks what a step holds.
 
 A fact is a marker with its lead word, one or two plain sentences, and, for what stops the start, the few words that go
 beside the button. Every "Error." and every "Blocked." blocks and nothing else does, and a fact that says otherwise is
@@ -9,7 +9,7 @@ refused as it is made, so that a marker never disagrees with the button.
 Nothing here imports the toolkit or the engine: a step's facts are worked out and tested as values, with no widget.
 """
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -120,3 +120,46 @@ def about_words(seconds: float) -> str:
     if minutes < 60:
         return f"about {minutes} minutes"
     return "about " + _in_halves(_rounded(seconds / 1800), "hour", "an hour")
+
+class _NotHeld:
+    """What a selection row's step holds of it while it holds nothing that says the row's value."""
+
+    def __repr__(self) -> str:
+        return "NOT_HELD"
+
+
+#: What a selection row's ``in_use`` answers while the step holds nothing it could compare the row with.
+NOT_HELD = _NotHeld()
+CHANGED_TEXT = "Changed, not applied. In use: {}."
+
+
+def held_value(holder, name: str) -> object:
+    """``name`` of what a step holds, read as a session's fields are read; ``NOT_HELD`` while it holds nothing, or
+    holds something that has no such value."""
+    return NOT_HELD if holder is None else getattr(holder, name, NOT_HELD)
+
+
+@dataclass(frozen=True)
+class SelectionRow:
+    """A row whose value picks what its step holds. ``key`` is its field key; ``in_use`` answers what the step holds of
+    it, or ``NOT_HELD``; ``chosen``, what the row shows now; ``words``, a value held as the line under the row names it.
+    A row reads changed only against something held, so it never does while nothing is in use."""
+    key: str
+    in_use: Callable[[], object]
+    chosen: Callable[[], object]
+    words: Callable[[object], str] = str
+
+    def changed(self) -> bool:
+        """Whether the row shows something other than what is in use. Never raises: a value no comparison can be made
+        with is no change a person made."""
+        held = self.in_use()
+        if held is NOT_HELD:
+            return False
+        try:
+            return bool(self.chosen() != held)
+        except Exception:                    # noqa: BLE001 -- what a session holds may be anything
+            return False
+
+    def line(self) -> str:
+        """What the line under the row says while it reads changed: "Changed, not applied. In use: Nadrowski."."""
+        return CHANGED_TEXT.format(self.words(self.in_use()))

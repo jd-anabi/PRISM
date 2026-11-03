@@ -32,7 +32,8 @@ _MODEL_NAMES = {"NADROWSKI": "Nadrowski", "HOPF": "Hopf", "BP": "BP"}
 class StepState:
     """Where one step stands. ``detail`` is what Home's table says the step holds or waits for, whole;
     ``rail_words`` is the step's second line in the rail. A step that is done holds a record or a model, and its
-    detail is that name; any other detail is words, which a sentence writes with a small first letter."""
+    detail is that name; any other detail is words, which a sentence writes with a small first letter. ``pending``
+    says the step holds something and a choice on its page differs from it."""
     key: str
     number: int
     marker: str
@@ -41,6 +42,7 @@ class StepState:
     rail_words: str
     can_start: bool
     done: bool
+    pending: bool = False
 
     @property
     def spoken(self) -> str:
@@ -68,9 +70,9 @@ def _narrowed(posterior) -> bool:
     return getattr(getattr(posterior, "posterior", None), "truncation", None) is not None
 
 
-def _state(key: str, marker: str, detail: str, rail_words: str, can_start: bool) -> StepState:
+def _state(key: str, marker: str, detail: str, rail_words: str, can_start: bool, pending: bool = False) -> StepState:
     return StepState(key, keys.step_number(key), marker, _WORDS[marker], detail, rail_words, can_start,
-                     marker == "done")
+                     marker == "done", pending)
 
 
 def step_states(session, *, live: str | None = None, stopping: bool = False, ended: int | None = None,
@@ -126,7 +128,8 @@ def step_states(session, *, live: str | None = None, stopping: bool = False, end
             words = "Stopping" if stopping else "Waiting to try again" if retrying else "Running"
             states.append(_state(key, "now", words, f"Now: {words.lower()}", can_start))
         elif key in pending:
-            states.append(_state(key, "warn", "Changed, not applied", "Changed, not applied", can_start))
+            states.append(_state(key, "warn", "Changed, not applied", "Changed, not applied", can_start,
+                                 holds[key] is not None))
         elif holds[key] is not None:
             states.append(_state(key, "done", holds[key], f"Done: {holds[key]}", can_start))
         elif not can_start:
@@ -147,10 +150,11 @@ def step_states(session, *, live: str | None = None, stopping: bool = False, end
 
 def step_in_hand(states) -> str | None:
     """The key of the first step that is neither done nor unable to start, among the steps that can be in hand:
-    never Checks while the checks are not counted, never the narrowing round, which is optional. None when no
-    such step is open."""
+    never Checks while the checks are not counted, never the narrowing round, which is optional, and never a step
+    that holds something with a choice changed and not applied, since what it holds is what the next steps read.
+    None when no such step is open."""
     for state in states:
-        if state.key in _IN_HAND and not state.done and state.can_start:
+        if state.key in _IN_HAND and not state.done and not state.pending and state.can_start:
             return state.key
     return None
 

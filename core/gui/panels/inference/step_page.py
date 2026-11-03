@@ -10,7 +10,10 @@ itself stale, and reads as it is shown. A constructor reads none of this and sta
 
 A page says what it supplies by answering ``main_words``, ``main_pressed``, ``nothing_to_apply``, ``read_disk``,
 ``facts_from_form`` and ``in_use_words``; it hands the keyboard its first setting through ``first_focus``; and it says
-``reads_the_disk`` when it has nothing saved to read.
+``reads_the_disk`` when it has nothing saved to read. A page whose rows pick what its step holds names them in
+``selection_rows``: under each that differs from what the step holds the page says "Changed, not applied" and what is in
+use, wherever it says nothing of its own there, counts them in "In use", and tells the rail as soon as there come to be
+some, or none.
 
 A refusal is told in the shared question and stands on the page after it. On a row it marks the field, under which its
 sentence stands until the field is edited; with no row it is the first of the facts. Either stops the start until the
@@ -86,6 +89,7 @@ class StepPage(RunHost, QWidget):
         self._head_fact: Fact | None = None
         self._live = controller().is_live()
         self.names = None                    # the name and note of the record a run makes, when the page holds them
+        self._said_changed: dict = {}        # what this page said under each selection row, by its field key
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
         self.page = Page()
@@ -277,6 +281,7 @@ class StepPage(RunHost, QWidget):
         live = controller().is_live()
         facts = ordered(((self._head_fact,) if self._head_fact is not None else ()) + refused_facts(self.form.refused())
                         + tuple(self.facts_from_form()))
+        self._say_changed()
         nothing = self.nothing_to_apply()
         self.foot.set_reads(self.reads_the_disk)
         self.foot.set_main_words(self.main_words())
@@ -284,6 +289,33 @@ class StepPage(RunHost, QWidget):
         self.foot.set_main_enabled(not nothing and not any(fact.blocks for fact in facts),
                                    reason_beside(facts, live=live, nothing_to_apply=nothing))
         self.foot.set_reading(reading_words(self._read_at, live=live))
+
+    def _say_changed(self) -> None:
+        """Under each selection row that shows something other than what the step holds, "Changed, not applied" and what
+        is in use, unless the page says something of its own there that stops the start; the line goes when the choice is
+        put back or applied. How many there are stands in "In use"."""
+        changed = 0
+        for selection in self.selection_rows():
+            row = self.form.rows.get(selection.key)
+            if row is None:
+                continue
+            said = self._said_changed.pop(selection.key, None)
+            if selection.changed():
+                changed += 1
+                if not row.in_error():
+                    self._said_changed[selection.key] = selection.line()
+                    row.set_line("warn", self._said_changed[selection.key])
+            elif said is not None and row.line.kind == "warn" and row.line.words == said:
+                row.set_line("", "")
+        self.in_use.set_pending(changed)
+
+    def _tell_the_rail(self) -> None:
+        """Work the steps' states out again when a choice has come to differ from what the step holds, or no longer
+        does, and only then: what the rail last heard is read off the screen."""
+        screen = self._screen
+        told = self.step in getattr(screen, "pending_shown", ())
+        if screen is not None and told != any(selection.changed() for selection in self.selection_rows()):
+            screen.recompute_states()
 
     def refresh_local_gates(self) -> None:
         """What the step holds and what follows from it. No reading."""
@@ -331,6 +363,7 @@ class StepPage(RunHost, QWidget):
     def _edited(self) -> None:
         self.redraw()
         self.read_soon()
+        self._tell_the_rail()
 
     def _status_heard(self, status) -> None:
         """A run began or ended, or a start was taken back, which says no ``run_ended``. What follows from it is drawn

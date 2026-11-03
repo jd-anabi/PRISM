@@ -24,20 +24,14 @@ from ..session import SbiSession
 from ..widgets.adaptive_stack import AdaptiveStack
 
 
-def _held_ref(wrapper) -> str:
-    """How ``session_contents`` names one held artifact: its name in quotes, or ``(unnamed, id
-    <id>)`` -- the wording the Prior, Training and Inference steps' own "ready" lines already use, so the
-    log and the line agree.
-
-    ``(unidentified)`` for a stand-in carrying neither. That branch is not defensive padding: the
-    gate tests put a bare ``object()`` on every session field, and everything this function feeds is
-    a derived status line, which may never raise.
-    """
-    name = getattr(wrapper, "name", "") or ""
-    if name:
-        return f"'{name}'"
-    ref = getattr(wrapper, "id", "") or ""
-    return f"(unnamed, id {ref})" if ref else "(unidentified)"
+def _phrase(word: str, record) -> str:
+    """How ``session_contents`` names one record held: "the prior retrain_prior" by its label, or, for one with no name,
+    "the unnamed prior, 1 Oct 2026, 22:29". Never raises: a stand-in that says neither is "the unnamed record"."""
+    label = record_words.label_of(record)
+    name = getattr(record, "name", None)
+    if isinstance(name, str) and name:
+        return f"the {word} {label}"
+    return "the " + label[:1].lower() + label[1:]
 
 
 class InferenceScreen(QWidget):
@@ -59,6 +53,7 @@ class InferenceScreen(QWidget):
         super().__init__(parent)
         self.session = SbiSession()
         self._states = ()
+        self.pending_shown = frozenset()         # the steps the states last worked out read as changed and not applied
 
         self.config_panel = ConfigPanel(self)
         self.prior_panel = PriorPanel(self)
@@ -107,9 +102,10 @@ class InferenceScreen(QWidget):
                 told()
 
     def pending(self) -> frozenset[str]:
-        """The steps whose page holds a choice not yet applied: none, while no step tells what it holds from what it
-        shows."""
-        return frozenset()
+        """The steps whose page shows a choice other than what the step holds: each page that has rows that pick what
+        its step holds is asked."""
+        return frozenset(panel.step for panel in self.panels()
+                         if any(row.changed() for row in getattr(panel, "selection_rows", tuple)()))
 
     def show_step(self, name: str) -> None:
         """Show the step whose key is ``name``, whether or not it can start; KeyError, naming it, for a key that
@@ -125,38 +121,19 @@ class InferenceScreen(QWidget):
     current_page = current_step
 
     def session_contents(self) -> list[str]:
-        """Plain phrases for what the session holds -- the config, the prior, the posterior and the
-        observation -- in pipeline order; empty when a ``new_draft`` would lose nothing.
+        """Plain phrases for the records the session holds -- the prior, the posterior and the observation -- in the
+        steps' order, each by its label; empty when a ``new_draft`` would let go of nothing.
 
-        THE DRAFT IS DELIBERATELY NOT IN THE LIST. ``new_draft`` replaces the draft, and replacing it
-        is the entire point of pressing Apply: a list that named it would make every deliberate model
-        change look like a loss, and the guard built on this list would then interrupt every one of
-        them. What Apply discards that nobody asked it to discard is the work DOWNSTREAM of
-        the draft -- the built config, the prior, the posterior and the recorded observation -- which
-        is exactly ``SbiSession.reset_downstream``'s subject and exactly this list.
+        THE DRAFT IS DELIBERATELY NOT IN THE LIST. ``new_draft`` replaces the draft, and replacing it is the point of
+        applying the first step: a list that named it would make every deliberate change of model look like a loss.
+        Nor is the configuration built from it, which is never held without its prior.
 
-        NOTHING HERE MAY RAISE. Every field is read through ``getattr``: the gate tests put a bare
-        ``object()`` on ``cfg``, ``inf_prior`` and ``posterior``, and this feeds a derived status line
-        on the first step, which must never be able to take a step down through ``refresh_gates()``
-        (the rule ``_TrainingBudgetMixin._sync_budget`` states for its own three lines).
-
-        The phrases carry no code identifiers and name no control: the first step's line and the
-        confirmation both quote them verbatim, and each front end says where to look for itself.
-        """
+        NOTHING HERE MAY RAISE: each record is read as its label reads it, which a bare ``object()`` passes. The phrases
+        carry no code's names and name no control, since the first step's question quotes them."""
         s = self.session
-        held: list[str] = []
-        if s.cfg is not None:
-            model = getattr(s.cfg, "model", "") or "an unnamed model"
-            mode = getattr(s.cfg, "observation_mode", "") or ""
-            held.append(f"the built config for {model}"
-                        + (f", {mode} observations" if mode else ""))
-        if s.inf_prior is not None:
-            held.append(f"the prior {_held_ref(s.inf_prior)}")
-        if s.posterior is not None:
-            held.append(f"the posterior {_held_ref(s.posterior)}")
-        if s.observation is not None:
-            held.append(f"the observation {_held_ref(s.observation)}")
-        return held
+        held = [(word, getattr(s, slot, None)) for word, slot in
+                (("prior", "inf_prior"), ("posterior", "posterior"), ("observation", "observation"))]
+        return [_phrase(word, record) for word, record in held if record is not None]
 
     def new_draft(self, draft):
         """Config applied: replace the WHOLE session (a different model or unit system invalidates
@@ -211,8 +188,9 @@ class InferenceScreen(QWidget):
         status = held.status
         place = status.place if status.live else None
         live = place[1] if place is not None and place[0] == "inference" else None
+        self.pending_shown = self.pending()
         self._states = chain.step_states(self.session, live=live, stopping=status.state == "stopping",
-                                         ended=held.training_kept(),
+                                         ended=held.training_kept(), pending=self.pending_shown,
                                          observation_on_offer=self.tsnpe_panel.obs_picker.has_entries(),
                                          label=record_words.label_of, retrying=status.state == "retrying")
         self.states_changed.emit(self._states)

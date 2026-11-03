@@ -662,7 +662,8 @@ def test_the_rule_never_raises_on_what_a_session_may_hold():
 
 def test_the_step_in_hand_is_the_first_open_step_and_never_the_narrowing_round():
     """The first step neither done nor unable to start: never Checks while the checks are not counted, never
-    the narrowing round, which is optional; and the step in hand is the one step marked Now when nothing runs."""
+    the narrowing round, which is optional, never a step that holds something with a choice changed and not
+    applied; and the step in hand is the one step marked Now when nothing runs."""
     open_steps = [chain.StepState(s.key, n, "done", "Done", "x", "Done: x", True, True)
                   for n, s in enumerate(keys.STEPS, 1)]
     open_steps[3] = chain.StepState("checks", 4, "now", "Now", "", "Now", True, False)
@@ -679,8 +680,12 @@ def test_the_step_in_hand_is_the_first_open_step_and_never_the_narrowing_round()
     states = chain.step_states(_session(**_WITH_PRIOR), ended=4)
     assert chain.step_in_hand(states) == "training" and states[2].marker == "half"
     states = chain.step_states(_session(**_MODEL), pending=frozenset({"model"}))
-    assert [s.marker for s in states[:2]] == ["warn", "later"] and chain.step_in_hand(states) == "model", (
-        "a step whose change was not applied was passed over for the step in hand")
+    assert states[0].pending and [s.marker for s in states[:2]] == ["warn", "now"], (
+        "a step that holds a model with a change not applied was not passed over")
+    assert chain.step_in_hand(states) == "prior"
+    states = chain.step_states(_session(), pending=frozenset({"model"}))
+    assert not states[0].pending and chain.step_in_hand(states) == "model", (
+        "a step that holds nothing was passed over for a change not applied")
     blocked = (chain.StepState("model", 1, "later", "To come", "Needs a model", "Needs a model", False, False),
                chain.StepState("prior", 2, "later", "To come", "", "To come", True, False))
     assert chain.step_in_hand(blocked) == "prior", "a step that cannot start was taken for the step in hand"

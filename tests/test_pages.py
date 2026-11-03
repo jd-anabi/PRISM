@@ -1266,6 +1266,34 @@ def test_in_use_counts_the_choices_not_applied():
     assert in_use.pending.isHidden()
 
 
+def test_a_row_that_picks_what_the_step_holds_says_when_it_differs_and_the_rail_hears(tmp_path):
+    """A page names its selection rows and the step page does the rest: under a row that shows something other than what
+    is held, "Changed, not applied" and what is in use, counted in "In use", and the rail told once each way; a line of
+    the page's own that stops the start stands in its place, and the line goes when the choice is put back."""
+    from core.gui.step_facts import SelectionRow
+    window, page, _clock = _a_page(tmp_path)
+    screen, held = window.part("inference"), [False]
+    page.selection_rows = lambda: (SelectionRow("chi_mode", lambda: held[0], page.kind_choice.currentData,
+                                                lambda value: "Frequency response" if value else "Set by the bounds file"),)
+    heard = []
+    screen.states_changed.connect(lambda states: heard.append(states[2].rail_words))
+    row = page.form.rows["chi_mode"]
+    page.kind_choice.setCurrentIndex(1)
+    assert (row.line.kind, row.line.words) == ("warn", "Changed, not applied. In use: Set by the bounds file.")
+    assert page.in_use.pending.sentence.plain_text() == "Attention. 1 choice below is changed and not applied."
+    assert heard == ["Changed, not applied"] and screen.pending() == {"training"}
+    page.redraw()
+    page.refresh_local_gates()
+    assert heard == ["Changed, not applied"], "a drawing told the rail again"
+    page.kind_choice.setCurrentIndex(0)
+    assert not row.line.says() and page.in_use.pending.isHidden() and screen.pending() == frozenset()
+    assert heard == ["Changed, not applied", "Needs a prior"], heard
+    page.facts_from_form = lambda: (row.set_line("err", "Not that one."), ())[1]
+    page.kind_choice.setCurrentIndex(1)
+    assert (row.line.kind, row.line.words) == ("err", "Not that one.")
+    assert not page.in_use.pending.isHidden(), "a change under an error was not counted"
+
+
 def test_a_pages_own_line_stands_under_what_is_in_use_and_goes_when_its_next_run_starts(tmp_path):
     """A line the page says is a marked line that blocks nothing, even of a level that would be an error, and a run started
     here takes it away."""
