@@ -301,7 +301,7 @@ class Row:
         self._marked = False
         number = None if self.widget is None else _number_of(self.widget)
         if number is not None:
-            number.set_error(sentence if kind == "err" else "")
+            number.set_error((sentence if kind == "err" else "") or number.own_error())
             if number.error():
                 kind, sentence = "err", number.error()
         elif isinstance(self.widget, QLineEdit):

@@ -5638,22 +5638,19 @@ def test_a_grouped_field_told_none_shows_nothing():
     assert labeled_inputs._whole(None) is None
 
 
-def test_clearing_a_pages_error_leaves_the_commas_own():
-    """The comma's sentence is the field's: a page that takes its own error back, or asks for no error at all, leaves it
-    while the comma stands; and with the comma gone it goes, a page's sentence set meanwhile staying a page's."""
+def test_an_error_taken_back_is_gone_whatever_it_was():
+    """Asked for no error a field has none, the comma's own sentence among what goes: a page greys a box it asked to clear,
+    and a greyed box in error cannot be mended. What it says of itself it says while the comma stands, to whoever asks."""
     QApplication.instance() or QApplication([])
     field = FloatField("1,5")
     field.editingFinished.emit()
-    assert field.error() == COMMA_SENTENCE
-    field.set_error("Learning rate must be above 0.")
-    assert field.error() == "Learning rate must be above 0."
+    assert field.error() == field.own_error() == COMMA_SENTENCE
     field.set_error("")
-    assert field.error() == COMMA_SENTENCE, "a page's clearing took the comma's sentence too"
-    field.set_error("Learning rate must be above 0.")
+    assert (field.error(), field.property("state"), field.toolTip()) == ("", "", "")
+    assert field.own_error() == COMMA_SENTENCE
     field.setText("1.5")
-    assert field.error() == "Learning rate must be above 0.", "the comma took a page's sentence with it"
-    field.set_error("")
-    assert field.error() == ""
+    assert field.own_error() == ""
+    assert IntField(5).own_error() == ""
 
 
 def test_a_tip_set_during_an_error_is_kept():

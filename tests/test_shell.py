@@ -2531,6 +2531,17 @@ def test_the_two_options_apply_a_limit_and_take_it_away(monkeypatch):
     page.limited.click()
     assert (config.SIM_VRAM_CEILING_GIB, page.limit_line.plain_text()) == (
         0.0, "That is not a number. In force, unchanged: no limit."), "what the field holds is judged as its option is"
+    page.limit_field.setText("6")
+    QTest.keyClick(page.limit_field, Qt.Key_Return)
+    assert page.limit_field.error() == ""
+    page.limit_field.setText("6,5")
+    page.limit_field.editingFinished.emit()
+    assert page.limit_field.own_error() != "", "the comma was not refused, so this says nothing"
+    page.no_limit.click()
+    field = page.limit_field
+    assert (field.isEnabled(), field.error(), field.property("state"), field.toolTip(), field.accessibleDescription()) == (
+        False, "", "", "", ""), "a greyed box stands in error, which nothing can mend"
+    assert page.limit_line.isHidden()
 
 
 @pytest.mark.parametrize("variable, chosen, line, free", (

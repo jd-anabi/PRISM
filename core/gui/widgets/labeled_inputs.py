@@ -94,6 +94,11 @@ class _NumberField(QLineEdit):
         self.setAccessibleDescription(sentence)
         self.error_changed.emit(sentence)
 
+    def own_error(self) -> str:
+        """What the field says of itself, which no page put there: nothing. An error taken back is gone whatever it was;
+        a form that keeps this sentence under its field asks for it."""
+        return ""
+
     def plain_text(self) -> str:
         """The text to remember for this field: the text as it stands."""
         return self.text()
@@ -118,10 +123,9 @@ class FloatField(_NumberField):
             self.set_error(COMMA_SENTENCE)
             self._comma_told = True
 
-    def set_error(self, sentence: str = "") -> None:
-        """As any number field; but while the comma stands and the field has said so, taking an error back leaves the
-        comma's own sentence, which no caller put there."""
-        super().set_error(sentence or (COMMA_SENTENCE if self._comma_told else ""))
+    def own_error(self) -> str:
+        """The comma's sentence, from the moment the field refused the comma until the comma goes."""
+        return COMMA_SENTENCE if self._comma_told else ""
 
     def _text_changed(self, text):
         if self._comma_told and "," not in text:
