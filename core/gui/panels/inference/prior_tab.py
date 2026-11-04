@@ -62,6 +62,8 @@ NO_PARAMETERS = "It names no parameter of the model."
 SETTING_BLOCKS = "a setting cannot be used"
 NEW_PRIOR = "The new prior"
 GONE_TEXT = "The bounds file used last time, {}, is no longer in the folder."
+#: How the bounds file in use is named when the file has been written since its configuration was built on it.
+EDITED_IN_USE = "{}, as it was before it was edited"
 GO_TO_TRAINING = "Go to Training"
 KEPT = "kept from last time"
 UNITS = "model time units"
@@ -188,6 +190,8 @@ class PriorPanel(StepPage):
         self._read: dict = {}                    # what the last reading found
         self._took = None                        # the run history's last build, as the last reading found it
         self._dispatched = None                  # the candidate handed to the run in hand
+        self._dispatched_key = None              # what that candidate was built from: a file by when it was written
+        self._held_at = (None, None)             # the configuration in use and when its bounds file was written then
         self._made = None                        # the prior a run of this page returned, until the run has ended
         self._bounds_pick = ("", "")             # the model and the bounds file that came into use last
         self._kept_pick = None                   # the same, as the settings file gave it, until a model is applied
@@ -254,13 +258,20 @@ class PriorPanel(StepPage):
         return self.view == "build" and self.typed_tick.isChecked()
 
     def _bounds_chosen_value(self) -> tuple:
-        """What the bounds row shows now: the file selected, or the limits typed by hand."""
+        """What the bounds row shows now: the file selected, with when it was written as the last reading found it, or
+        the limits typed by hand. The moment is compared only with a moment the step holds."""
         if self._typed():
             return "typed", self._grid_limits()
-        return "file", self.bounds_picker.key()
+        key, held = self.bounds_picker.key(), self._bounds_held_value()
+        if held is NOT_HELD or held[0] != "file" or held[2] is None:
+            return "file", key, None
+        built = self._candidate_key
+        written = built[3] if built and built[0] == "file" and built[2] == self.bounds_picker.selected_path() else None
+        return "file", key, written if written is not None else held[2]
 
     def _bounds_held_value(self):
-        """What the step holds of the bounds row: the file its configuration was built on, or the limits typed by hand;
+        """What the step holds of the bounds row: the file its configuration was built on, with when the file was
+        written as that configuration was built when the page built it, else None; or the limits typed by hand;
         ``NOT_HELD`` while it holds no prior."""
         cfg, prior = self._held()
         if prior is None or held_value(cfg, "sources") is NOT_HELD:
@@ -268,7 +279,7 @@ class PriorPanel(StepPage):
         try:
             key = bounds_in_use(cfg)
             if key:
-                return "file", key
+                return "file", key, self._held_at[1] if self._held_at[0] is cfg else None
             return NOT_HELD if held_value(cfg, "params_dict") is NOT_HELD else ("typed", _limits(cfg))
         except Exception:                    # noqa: BLE001 -- what a session holds may be anything
             return NOT_HELD
@@ -283,10 +294,14 @@ class PriorPanel(StepPage):
                                                                     ("force_params_dict", forcing))
                      for name, (_value, (lo, hi)) in held.items())
 
-    @staticmethod
-    def _bounds_words(value) -> str:
-        kind, key = value
-        return _named(key) if kind == "file" else TYPED_BY_HAND
+    def _bounds_words(self, value) -> str:
+        """The bounds held, as the line under the row names them: the file, said as it was before it was edited when
+        the file selected is the same and was written since."""
+        if value[0] != "file":
+            return TYPED_BY_HAND
+        chosen = self._bounds_chosen_value()
+        edited = chosen[0] == "file" and chosen[1] == value[1] and chosen[2] != value[2]
+        return EDITED_IN_USE.format(_named(value[1])) if edited else _named(value[1])
 
     def _prior_words(self, value) -> str:
         found = self.prior_picker.combo.findData(value)
@@ -736,7 +751,7 @@ class PriorPanel(StepPage):
             args, kwargs = (candidate, key, False), {}
         if not self._release_asked(build):
             return
-        self._dispatched = candidate
+        self._dispatched, self._dispatched_key = candidate, self._candidate_key
         self.dispatch(orchestrator.build_prior, *args, provide_fig_sink=True, on_result=self._on_prior, **kwargs)
 
     def load_record(self, ref: str) -> bool:
@@ -751,7 +766,7 @@ class PriorPanel(StepPage):
         self.read_facts()
         if self.prior_picker.key() != ref or not self.foot.main_button.isEnabled() or self._candidate is None:
             return False
-        self._dispatched = self._candidate
+        self._dispatched, self._dispatched_key = self._candidate, self._candidate_key
         return self.dispatch(orchestrator.build_prior, self._candidate, ref, False, provide_fig_sink=True,
                              on_result=self._on_prior)
 
@@ -778,7 +793,8 @@ class PriorPanel(StepPage):
         the record came back under another name. Then the reading."""
         made, self._made = self._made, None
         if made is not None:
-            cfg = self._dispatched
+            cfg, built = self._dispatched, self._dispatched_key
+            self._held_at = (cfg, built[3] if built and built[0] == "file" else None)
             key = bounds_in_use(cfg)
             if key:
                 self._bounds_pick, self._kept_pick = (getattr(cfg, "model", ""), key), None
@@ -790,7 +806,7 @@ class PriorPanel(StepPage):
                 got = getattr(made, "name", "")
                 if typed and got != typed:
                     self.in_use.say(Fact("warn", SAVED_WITHOUT_NAME.format(typed)))
-        self._dispatched = None
+        self._dispatched = self._dispatched_key = None
         super()._run_ended(status)
 
     def refresh_local_gates(self) -> None:

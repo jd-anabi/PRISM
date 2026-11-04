@@ -1502,6 +1502,7 @@ def test_a_load_by_code_reads_first_and_asks_nothing(tmp_path, monkeypatch):
     saved by another program since the page last read its lists is found. A load leaves the name and the note as typed
     for a build, and says nothing of a name."""
     from core.artifacts import ArtifactStore, default_store
+    from core.artifacts.store import StoreError
     from core.gui.run.controller import controller
     from tests._fixtures import _nad_cfg, _prior_artifact
     from tests._runs import turn_until
@@ -1512,14 +1513,16 @@ def test_a_load_by_code_reads_first_and_asks_nothing(tmp_path, monkeypatch):
         unreadable = _prior_artifact(store, _nad_cfg(), name="unreadable").id
         kept_get = ArtifactStore.get
 
-        def get(held, kind, key, *args, **kwargs):
-            if key == unreadable:
-                raise OSError("prior.pt cannot be read")
-            return kept_get(held, kind, key, *args, **kwargs)
+        def get(held, kind, ref, *args, **kwargs):
+            """What the store raises for a record gone or damaged since it was listed."""
+            if ref == unreadable:
+                raise StoreError(f"no complete prior artifact named or id'd {ref!r}")
+            return kept_get(held, kind, ref, *args, **kwargs)
 
         monkeypatch.setattr(ArtifactStore, "get", get)
         blocks = ((other_model, "Error. This prior was made for the model Hopf."),
-                  (unreadable, "Error. The prior cannot be read: OSError: prior.pt cannot be read"))
+                  (unreadable, f"Error. The prior cannot be read: StoreError: no complete prior artifact named or id'd "
+                               f"'{unreadable}'"))
         for ref, said in blocks:
             assert page.load_record(ref) is False and stand_in.calls == [], ref
             assert page.prior_picker.key() == ref, "the load was refused before the facts were read"
@@ -1535,6 +1538,29 @@ def test_a_load_by_code_reads_first_and_asks_nothing(tmp_path, monkeypatch):
         assert page.in_use.said.isHidden(), page.in_use.said.sentence.plain_text()
         page.show_view("build")
         assert (page.names.name.text(), page.names.note.text()) == ("retrain_2", "a second try")
+
+
+def test_a_load_by_code_while_a_run_is_live_lists_nothing_and_starts_nothing(tmp_path, monkeypatch):
+    """A load by code asked for while a build is live reads neither list, for nothing is read while a run is live, and
+    starts nothing; the build goes on as it was."""
+    from core.artifacts import default_store
+    from core.gui.run.controller import controller
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    from tests._runs import turn_until
+    app = qt_app()
+    choose(monkeypatch, words="Build and release the posterior")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        saved = _prior_artifact(default_store(), _nad_cfg(), name="saved_before").id
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        listed = []
+        for name, picker in (("bounds", page.bounds_picker), ("prior", page.prior_picker)):
+            monkeypatch.setattr(picker, "refresh",
+                                lambda kept=picker.refresh, name=name: (listed.append(name), kept())[1])
+        assert page.load_record(saved) is False
+        assert listed == [] and len(stand_in.calls) == 1 and controller().is_live(), listed
+        stand_in.release(SimpleNamespace(kind="prior", id="p_new", name="retrain_2", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
 
 
 def test_the_two_lists_are_read_again_at_check_again_and_at_the_show_and_not_as_one_types(tmp_path, monkeypatch):
@@ -1682,3 +1708,89 @@ def test_the_configuration_in_use_says_its_units_and_its_force_scale(tmp_path, m
             "where no drive acts: f_scale cannot change what is observed, so its estimate will be the prior's. Choose a "
             "bounds file with neither a forcing section nor f_scale for a spontaneous recording."]
         assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+
+
+@pytest.mark.parametrize("end", ["failed", "stopped"])
+def test_after_a_load_a_build_that_ends_badly_gives_how_the_run_went_back_at_back_to_the_form(end, tmp_path, monkeypatch):
+    """A load that returned its record withdraws "How the run went"; the next build takes the column as it begins, and
+    the link is the page's again from then on, however the build ends: one that fails or is stopped keeps its page until
+    "Back to the form", which then shows the link to it."""
+    from core.artifacts import default_store
+    from core.gui.run.controller import controller
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    from tests._runs import turn_until
+    app = qt_app()
+    choose(monkeypatch, words="Build and release the posterior")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        link = page.run_view.how_link
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        stand_in.started.clear()
+        stand_in.release(SimpleNamespace(kind="prior", id="p_new", name="retrain_2", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        two = _prior_artifact(default_store(), _nad_cfg(), name="other_prior").id
+        assert page.load_record(two) is True and stand_in.started.wait(5)
+        stand_in.started.clear()
+        stand_in.release(SimpleNamespace(kind="prior", id=two, name="other_prior", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        _settle_events()
+        assert not link.isVisibleTo(page.figures), "the load left the link"
+        page.show_view("build")
+        page.names.name.setText("retrain_3")
+        page.read_facts()
+        _press_and_end(page, stand_in, end, monkeypatch)
+        _settle_events()
+        assert page.results.currentWidget() is page.run_view, f"a build that {end} gave its page up by itself"
+        page.run_view.back_button.click()
+        _settle_events()
+        assert link.isVisibleTo(page.figures), f"after a build that {end}, the link stayed away"
+
+
+def test_a_bounds_file_edited_since_it_came_into_use_can_be_applied_again(tmp_path, monkeypatch):
+    """A prior comes into use on a bounds file, and the file is written again afterwards. Once the page has read it, the
+    line under the list says the file in use is the one from before the edit, "Changed, not applied"; the rail hears
+    it; and the saved view's button loads the prior again, on the file as it is now, where it said there was nothing to
+    apply. A drawing before that reading says nothing of the edit, for the page has not read it."""
+    import os
+    import shutil
+    from core.artifacts import default_store
+    from core.config import BOUNDS_PATH
+    from core.gui.panels.inference import prior_tab
+    from core.gui.run.controller import controller
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    from tests._runs import turn_until
+    app = qt_app()
+    folder = tmp_path / "Bounds" / "nadrowski"
+    folder.mkdir(parents=True)
+    path = folder / "master.txt"
+    shutil.copyfile(BOUNDS_PATH / "nadrowski" / "master.txt", path)
+    monkeypatch.setattr(prior_tab, "BOUNDS_PATH", tmp_path / "Bounds")
+    with _second_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        made = _prior_artifact(default_store(), _nad_cfg(), name="on_the_file").id
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        stand_in.started.clear()
+        stand_in.release(SimpleNamespace(kind="prior", id=made, name="on_the_file", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        page.show_view("saved")
+        page.read_facts()
+        assert page.prior_picker.key() == made and screen.session.cfg.sources["bounds"] == str(path)
+        assert page.foot.reason.text() == "Nothing to apply: these choices are in use."
+        assert _line(page, "bounds") == ("", "") and screen.pending() == frozenset()
+        held = path.stat()
+        path.write_text(path.read_text(encoding="utf-8") + "\n# the file written again\n", encoding="utf-8")
+        os.utime(path, ns=(held.st_atime_ns, held.st_mtime_ns + 10 ** 9))
+        page.redraw()
+        assert _line(page, "bounds") == ("", ""), "a drawing read the file"
+        page.read_facts()
+        assert _line(page, "bounds") == (
+            "warn", "Changed, not applied. In use: master.txt, as it was before it was edited.")
+        assert page.foot.main_button.isEnabled() and screen.pending() == frozenset({"prior"})
+        candidate = page._candidate
+        page.main_pressed()
+        assert stand_in.started.wait(5)
+        assert stand_in.calls[-1][0][0] is candidate and stand_in.calls[-1][0][1:] == (made, False)
+        stand_in.release(SimpleNamespace(kind="prior", id=made, name="on_the_file", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert screen.session.cfg is candidate and _line(page, "bounds") == ("", "")
+        assert page.foot.reason.text() == "Nothing to apply: these choices are in use."
