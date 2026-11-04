@@ -829,7 +829,7 @@ def test_each_store_kind_has_one_word():
 
 
 # the main button of each step's page, by the step; a rebuilt page's is its foot's
-_MAIN = {"model": "foot.main_button", "prior": "foot.main_button", "training": "btn_post", "checks": "btn_validate",
+_MAIN = {"model": "foot.main_button", "prior": "foot.main_button", "training": "foot.main_button", "checks": "btn_validate",
          "infer": "btn_infer", "narrowing": "btn_round"}
 
 

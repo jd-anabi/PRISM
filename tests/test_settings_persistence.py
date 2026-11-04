@@ -32,7 +32,7 @@ from tests._fixtures import (budget_cfg as _budget_cfg, build_inference, build_p
 import contextlib                                                  # noqa: E402
 import pytest                                                      # noqa: E402
 
-# -- the training budget (Posterior tab) ----------------------------------------------------------
+# -- the training budget (the Narrowing round's page) -----------------------------------------------
 def _budget_panel(cfg=None, prior=None):
     from core.gui.session import SbiSession
 
@@ -41,128 +41,20 @@ def _budget_panel(cfg=None, prior=None):
     inf.session.cfg = cfg
     inf.session.inf_prior = prior
     inf.refresh_gates()
-    return inf, inf.posterior_panel         # the training step's page
+    return inf, inf.tsnpe_panel             # the page that keeps the budget's three lines
 
-
-def test_the_training_budget_shows_the_simulation_count_and_the_cap_trade():
-    """The count was invisible: 5000 x 2048 = 10,240,000 simulations lived only in config.py. The line
-    also has to say what the cap really trades, because batch width is NOT a speed knob -- the solver
-    is kernel-launch-bound (measured 7.37 s at 2048 against 7.74 s at 1024, the SMALLER batch being
-    slightly slower), so halving it halves the training rows for the same wall-clock.
-
-    ⚠ RUNS AGAINST AN EMPTY SETTINGS FILE, and must (tests/conftest.py::_isolated_settings gives every
-    test a fresh, absent one; this test used to redirect by hand). The panel seeds these fields from
-    config.py and then RESTORES them from QSettings, so without isolation the assertions read whatever
-    the developer last left in their real PRISM.ini. This test passed all morning and then failed the
-    moment a run was configured with 10000 batches -- nothing to do with the code under test. It is
-    the same restore-wins-over-config mechanism that cost a ~5-day run on 2026-08-19 (the retired chi
-    band), so a test asserting the DEFAULT has to start from a file with no saved value.
-    """
-    from core import config
-
-    cfg = _budget_cfg()
-    _inf, panel = _budget_panel(cfg)
-    width = cfg.hw.batch_size
-
-    assert panel.num_runs.value() == config.TRAINING_NUM_RUNS, (
-        f"the field must seed from config.py, not from a saved session: "
-        f"{panel.num_runs.value()} != {config.TRAINING_NUM_RUNS}")
-    assert panel.run_size_cap.value() == config.TRAINING_RUN_SIZE
-    assert f"{config.TRAINING_NUM_RUNS * width:,} simulations" in panel.budget_total.text(), \
-        panel.budget_total.text()
-    assert "diversity" in panel.budget_total.text(), \
-        "the line must say batch COUNT is the (t_scale, T_obs) diversity, not just a budget"
-
-    panel.run_size_cap.setText(str(width // 4))
-    assert f"{config.TRAINING_NUM_RUNS * (width // 4):,} simulations" in panel.budget_total.text()
-    assert "capped from" in panel.budget_total.text(), panel.budget_total.text()
-
-    # ...and quadrupling the batch COUNT is what buys those rows back, at 4x the wall-clock.
-    panel.num_runs.setText(str(config.TRAINING_NUM_RUNS * 4))
-    assert f"{config.TRAINING_NUM_RUNS * width:,} simulations" in panel.budget_total.text()
-
-def test_the_training_budget_reaches_build_posterior_as_arguments_not_via_config():
-    """THE WIRING THAT MAKES THE FIELDS DO ANYTHING AT ALL.
-
-    orchestrator binds TRAINING_NUM_RUNS / TRAINING_RUN_SIZE at import, so a panel that "applied" the
-    user's numbers by assigning to core.config would be a silent no-op -- the run would simulate 5000
-    x 2048 anyway and nothing would say otherwise. Both halves are asserted: the values arrive as
-    call kwargs, AND the config constants are untouched.
-    """
-    from core import config
-
-    before = (config.TRAINING_NUM_RUNS, config.TRAINING_RUN_SIZE)
-    _inf, panel = _budget_panel(_budget_cfg(), prior=_prior_stub())
-    panel.num_runs.setText("777")
-    panel.run_size_cap.setText("256")
-
-    seen = {}
-    panel.dispatch = lambda fn, *a, **kw: seen.update(fn=fn, args=a, kwargs=kw)
-    panel._build_posterior()
-
-    assert seen, "the Train button dispatched nothing"
-    assert seen["kwargs"].get("num_runs") == 777, seen["kwargs"]
-    assert seen["kwargs"].get("run_size_cap") == 256, seen["kwargs"]
-    assert (config.TRAINING_NUM_RUNS, config.TRAINING_RUN_SIZE) == before, \
-        "the panel mutated the config constants, which orchestrator has already snapshotted"
-
-def test_the_budget_refuses_a_batch_count_below_one():
-    """0 batches is a whole run that simulates nothing and then trains on an empty tensor.
-
-    The refusal is the CLICK's, through the shared rule, and it arrives as the yellow "Check your
-    inputs" box (BasePanel._refusal, stubbed here) naming the Batches box by its field key -- not
-    as a log line the user has to notice. Nothing is dispatched."""
-    from core.refusals import Refusal
-
-    _inf, panel = _budget_panel(_budget_cfg(), prior=object())
-    panel.num_runs.setText("0")
-    seen, refused = [], []
-    panel.dispatch = lambda fn, *a, **kw: seen.append(kw)
-    panel._refusal = lambda exc: refused.append(exc)
-    panel._build_posterior()
-    assert not seen, "a zero batch count was dispatched"
-    assert len(refused) == 1 and isinstance(refused[0], Refusal), refused
-    assert refused[0].field == "num_runs", refused[0].field
-    assert "at least 1" in str(refused[0]) and "got 0" in str(refused[0]), str(refused[0])
-
-def test_the_budget_memory_line_reads_pipelines_own_cost_model():
-    """The estimate must come from pipeline.peak_sim_elements, not a second copy of the formula, and
-    it must be quoted at the WORST geometry the Sobol pre-filter admits -- n_fine swings from a median
-    ~40k to a p99 ~283k, so a width that fits the median still OOMs on a few percent of batches, which
-    is how two retrains actually died."""
-    from core import config
-    from core.SBI import pipeline
-
-    cfg = _budget_cfg()
-    _inf, panel = _budget_panel(cfg)
-    width = cfg.hw.batch_size
-
-    if cfg.hw.device.type != "cuda":
-        assert "CUDA-only" in panel.budget_mem.text(), panel.budget_mem.text()
-        return
-
-    n_fine = min(config.N_ND_MAX, cfg.t.shape[0])
-    need = pipeline.peak_sim_elements(width, n_fine, cfg.steady_idx, cfg.inits_tensor.shape[-1], 1, 1)
-    gib = need * cfg.hw.dtype.itemsize / float(1 << 30)
-    assert f"{gib:.2f} GiB" in panel.budget_mem.text(), panel.budget_mem.text()
-    assert f"{n_fine:,}" in panel.budget_mem.text(), "the line must name the geometry it assumed"
-    assert "upper bound" in panel.budget_mem.text().lower(), \
-        "free-VRAM readings overstate what is available; the line must not present one as fact"
-
-    # Halving the width must halve the estimate -- the peak is linear in the batch.
-    panel.run_size_cap.setText(str(width // 2))
-    assert f"{gib / 2:.2f} GiB" in panel.budget_mem.text(), panel.budget_mem.text()
 
 def test_the_budget_lines_never_raise_on_a_config_they_do_not_understand(monkeypatch):
     """_sync_budget runs from refresh_gates(), so an exception in a STATUS LINE would take down the
-    whole tab. The gate tests set session.cfg to a bare object(); so could any future stub.
+    whole page. The gate tests set session.cfg to a bare object(); so could any future stub.
 
-    The tab no longer swaps such a config for None: it goes into orchestrator.training_preview as it
+    The page does not swap such a config for None: it goes into orchestrator.training_preview as it
     is, so this pins the preview's FAIL-SOFT branch. A config the preview cannot read lands in
-    estimate_error and checkpoint_error, and the lines say "unavailable" with the error. The session's
-    cadence is 0 (tests/conftest.py rebinds orchestrator's copy), which keeps the checkpoint line at
-    "off" and the word "config"; checkpointing is turned on here to reach the identity at all. With no
-    config the checkpoint line still carries the word "config"."""
+    estimate_error, and the memory line says "unavailable" with the error. The session's cadence is 0
+    (tests/conftest.py rebinds orchestrator's copy), which keeps the checkpoint line at "off" and the
+    word "config"; with checkpointing on the Narrowing round's own rule stands. With no config the memory
+    line says its geometry was the hardware's defaults. Read on the Narrowing round's page, which keeps
+    these lines."""
     from core import orchestrator
 
     inf, panel = _budget_panel(cfg=object(), prior=object())
@@ -173,17 +65,15 @@ def test_the_budget_lines_never_raise_on_a_config_they_do_not_understand(monkeyp
     monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 50)
     panel._sync_budget()                                   # must not raise
     assert "simulations" in panel.budget_total.text(), panel.budget_total.text()
-    assert panel.budget_ckpt.text().startswith("Checkpoint status unavailable: AttributeError"), \
-        panel.budget_ckpt.text()
+    assert "OWN identity" in panel.budget_ckpt.text(), panel.budget_ckpt.text()
     mem = panel.budget_mem.text()
     assert "CUDA-only" in mem or mem.startswith("Peak-memory estimate unavailable: AttributeError"), mem
 
     inf.session.cfg = None
     panel._sync_budget()                                   # must not raise
-    ckpt = panel.budget_ckpt.text()
-    assert "config" in ckpt.lower() and "needs a config and a prior" in ckpt, ckpt
     mem = panel.budget_mem.text()
     assert "CUDA-only" in mem or mem.endswith("(Estimated from hardware defaults until a config is built.)"), mem
+
 
 def test_the_budget_lines_name_a_blank_or_half_typed_box_and_nothing_raises():
     """The mixin used to read value() -- 0 for "" and for a lone "-" mid-typing -- and then
@@ -191,7 +81,8 @@ def test_the_budget_lines_name_a_blank_or_half_typed_box_and_nothing_raises():
     a negative cap showed the hardware width, both as if someone had typed them. A live line cannot
     pop a dialog, so it says which box is wrong, in the box's own label, and shows no number until
     it is fixed: no clamp, no default, no raise. The memory and checkpoint lines go empty with it --
-    an estimate for a width nobody asked for is the same lie in GiB."""
+    an estimate for a width nobody asked for is the same lie in GiB. Read on the Narrowing round's
+    page, whose row of the simulations per batch reads the label with what its 0 means."""
     from core.gui.fields import label
 
     _inf, panel = _budget_panel(cfg=object(), prior=object())
@@ -213,9 +104,10 @@ def test_the_budget_lines_name_a_blank_or_half_typed_box_and_nothing_raises():
         panel.budget_total.text()
     assert panel.budget_ckpt.text(), "the checkpoint line must come back once both boxes pass"
 
+
 def test_the_tsnpe_tab_never_claims_it_will_resume_the_amortized_checkpoint(monkeypatch):
     """The user-facing face of the rule that the region belongs to the simulation cache's identity.
-    The TSNPE tab shares the Posterior tab's budget group, whose checkpoint line is computed from the
+    The TSNPE tab shares the budget group's code, whose checkpoint line is computed from the
     AMORTIZED identity -- so at the parent's budget it read
     "Resumes a COMPLETE checkpoint ... simulation will be skipped entirely", which is exactly what a
     round at that budget did before the region became part of the identity. The region is drawn
@@ -231,11 +123,8 @@ def test_the_tsnpe_tab_never_claims_it_will_resume_the_amortized_checkpoint(monk
     monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 50)
     monkeypatch.setattr(_cfg, "TRAINING_CHECKPOINT_EVERY", 0)
     panel._sync_budget()
-    inf.posterior_panel._sync_budget()
     text = panel.budget_ckpt.text()
     assert "Resumes" not in text and "OWN identity" in text, text
-    assert text != inf.posterior_panel.budget_ckpt.text(), \
-        "the TSNPE tab shows the Posterior tab's amortized checkpoint line"
     monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 0)
     monkeypatch.setattr(_cfg, "TRAINING_CHECKPOINT_EVERY", 50)
     panel._sync_budget()
@@ -250,7 +139,9 @@ def test_the_budget_lines_only_format_the_preview(monkeypatch):
     run to disagree. Now ONE orchestrator call resolves all of it as build_posterior does, and the tabs
     only format what it returns.
 
-    Pinned three ways. Every line is exactly the formatting of a preview the test hands in -- a
+    Read on the Narrowing round's page, the one page that keeps the lines; the mixin's own checkpoint line,
+    whose "off" the round's page says, is read off the mixin state by state. Pinned three ways. Every line is exactly
+    the formatting of a preview the test hands in -- a
     deliberately inconsistent one (width 700 against a 512 box), so a tab that recomputed anything
     would show a different number. The call receives the session's config and prior as they are, the
     two boxes as ints and the tab's memoised hardware, and is not made at all while a box is blank
@@ -267,7 +158,7 @@ def test_the_budget_lines_only_format_the_preview(monkeypatch):
 
     cfg, prior = _budget_cfg(), _prior_stub()
     inf, panel = _budget_panel(cfg, prior=prior)
-    tsnpe = inf.tsnpe_panel
+    tsnpe = panel
     base = orchestrator.TrainingPreview(
         n_runs=3, width=700, hw_batch=2048, n_fine=250_000, n_vars=3,
         need_elements=2 ** 28, have_elements=2 ** 30, estimate_error=None,
@@ -334,14 +225,14 @@ def test_the_budget_lines_only_format_the_preview(monkeypatch):
                                  batches_done=2 if state.startswith("resume") else 0,
                                  siblings=sib if state == "new_with_siblings" else "",
                                  cadence=0 if state == "off" else 50)
-        assert lines(panel, pv)[2] == text, (state, panel.budget_ckpt.text())
+        assert _TrainingBudgetMixin._budget_checkpoint(panel, pv) == text, state
         rule = lines(tsnpe, pv)[2]
         if state == "off":
-            assert rule == text, "with checkpointing off the TSNPE tab says what the Posterior tab says"
+            assert rule == text, "with checkpointing off the TSNPE tab says what the budget's own line says"
         else:
             assert "OWN identity" in rule and "Resumes" not in rule, (state, rule)
-    assert lines(panel, dataclasses.replace(base, checkpoint_error="OSError: disk gone"))[2] == \
-        "Checkpoint status unavailable: OSError: disk gone"
+    assert _TrainingBudgetMixin._budget_checkpoint(panel, dataclasses.replace(
+        base, checkpoint_error="OSError: disk gone")) == "Checkpoint status unavailable: OSError: disk gone"
 
     # no config yet: the memory line says its geometry was the hardware defaults
     inf.session.cfg = None
@@ -369,45 +260,6 @@ def test_the_budget_lines_only_format_the_preview(monkeypatch):
     assert "training_preview" in mixin and not (mixin & gone), sorted(mixin & gone)
     override = names(TSNPEPanel._budget_checkpoint)
     assert not (override & {"config", "TRAINING_CHECKPOINT_EVERY", "orchestrator"}), sorted(override)
-
-def test_the_training_budget_round_trips_through_settings():
-    """"I have to retype it every launch" is the complaint the remembered splitter layout already
-    answered for splitters.
-
-    The budget stays REMEMBERED -- the inference tabs remember their selections and the training
-    budget, and nothing else -- and is saved as the boxes' TEXT. The old save wrote value(), which
-    reads a blank box as 0, so a Batches box left empty at close came back on the next launch as a 0
-    nobody typed -- a run that simulates nothing, caught only at the next click. Saved as "", get_int
-    falls back to config.py's default exactly as for a missing key.
-    """
-    from core import config
-    from core.gui import settings as st
-
-    _inf, panel = _budget_panel(_budget_cfg())
-    panel.num_runs.setText("1234")
-    panel.run_size_cap.setText("512")
-    panel.save_settings(st.settings())
-
-    _inf2, fresh = _budget_panel(_budget_cfg())
-    fresh.restore_settings(st.settings())
-    assert fresh.num_runs.value() == 1234, fresh.num_runs.text()
-    assert fresh.run_size_cap.value() == 512, fresh.run_size_cap.text()
-    # And the derived line followed the restored values, not the defaults.
-    assert "1,234 batches" in fresh.budget_total.text(), fresh.budget_total.text()
-
-    # Both boxes BLANK at close: the file holds the text "", and the next launch opens at config.py.
-    panel.num_runs.setText("")
-    panel.run_size_cap.setText("")
-    qs = st.settings()
-    panel.save_settings(qs)
-    qs.sync()
-    qs.beginGroup("inference_posterior")
-    raw = (str(qs.value("num_runs")), str(qs.value("run_size_cap")))
-    qs.endGroup()
-    assert raw == ("", ""), f"the budget must be saved as the boxes' text, not value()'s 0: {raw}"
-    _inf3, relaunched = _budget_panel(_budget_cfg())
-    assert relaunched.num_runs.text() == str(config.TRAINING_NUM_RUNS), relaunched.num_runs.text()
-    assert relaunched.run_size_cap.text() == str(config.TRAINING_RUN_SIZE), relaunched.run_size_cap.text()
 
 def test_settings_round_trip_reduction_and_fdt():
     from core.gui import settings as st
@@ -963,32 +815,82 @@ def test_a_one_field_near_miss_blocks_a_fresh_run_until_confirmed():
         # An identity that MATCHES a checkpoint is a resume, so there is nothing to confirm.
         assert tc.near_miss_siblings(sib, root) == [] or             all(r["name"] != d.name for r in tc.near_miss_siblings(sib, root)),             "a checkpoint must never be a near miss of itself"
 
-def test_the_confirmation_is_reached_and_can_refuse():
-    """The dialog must actually gate the dispatch, Cancel must mean cancel, and the answer must travel
-    to the stage as `new_run=` -- a consent the panel kept to itself would be re-refused inside the
-    worker. The panel also no longer computes the identity itself: ONE detector,
-    orchestrator.fresh_run_near_misses, so the dialog and the stage cannot disagree about which
-    directory the run will touch."""
-    from core.gui.panels import inference_tabs as it
+def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch):
+    """What the window writes of steps 1 to 3 into the settings file, each key at its moment and at no other: the model
+    and the kind of observation as step 1 is applied; the bounds file, the model it came into use with and the prior as a
+    prior's run returns it; the batches and the simulations per batch as a training starts, as the text of their boxes;
+    the posterior as a training's run returns it. Nothing is written as a choice is made or a button is pressed before a
+    run starts; and closing writes the window's size and place and the groups of the pages not rebuilt yet, never a key
+    of the three steps."""
+    from types import SimpleNamespace
+    from PySide6.QtCore import QSettings
+    from core import orchestrator
+    from core.artifacts import ArtifactStore, default_store, use_store
+    from core.gui import settings as st
+    from core.gui.run.controller import controller
+    from tests._fixtures import _nad_cfg, _prior_artifact, build_run_host, build_window
+    from tests._runs import Clock, StandIn, at, controller_on, running, turn_until
+    app = qt_app()
+    written = []
+    kept = QSettings.setValue
+    monkeypatch.setattr(QSettings, "setValue", lambda qs, key, value: (
+        written.append(f"{qs.group()}/{key}" if qs.group() else key), kept(qs, key, value))[1])
 
-    src = code_only(it.PosteriorPanel._build_posterior)
-    assert "_confirm_fresh_run" in src, "the Train handler must consult the confirmation"
-    i_confirm = src.find("_confirm_fresh_run")
-    i_dispatch = src.find("self.dispatch(")
-    assert i_confirm < i_dispatch, "the confirmation must gate the dispatch, not follow it"
-    assert "return" in src[i_confirm:i_dispatch], "a refusal must return instead of training"
-    assert "new_run=" in src, "the dialog's answer must reach build_posterior as an argument"
+    def at_the_moment():
+        moment = sorted(set(written))
+        written.clear()
+        return moment
 
-    # Fails open rather than blocking a run it cannot assess.
-    body = code_only(it.PosteriorPanel._confirm_fresh_run)
-    assert body.count("True, False") >= 3, (
-        "the check must fail OPEN -- no prior, an unreadable identity, and no near miss must all "
-        "proceed; a warning that can block a run is worse than no warning")
-    assert "fresh_run_near_misses" in body, "the panel must use the stage's own detector"
-    for banned in ("near_miss_siblings", "resolve_dir", "peek"):
-        assert banned not in body, (
-            f"_confirm_fresh_run reimplements '{banned}' -- the GUI's own identity derivation is the "
-            f"defect this pin keeps out (it resolved run_size as `cap or hw`, not `min(hw, cap)`)")
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        window = build_window()
+        for part in ("temperature", "reduction", "live", "records", "inference"):
+            window.part(part)
+        screen = window.part("inference")
+        first, prior_page, page = screen.config_panel, screen.prior_panel, screen.posterior_panel
+        first.kind_choice.setCurrentIndex(first.kind_choice.findData(False))
+        assert at_the_moment() == [], "a choice of step 1 was written"
+        first.foot.main_button.click()
+        assert at_the_moment() == ["inference_config/chi_mode", "inference_config/model"]
+        prior_page.show_view("build")
+        prior_page.bounds_picker.restore_key("master.txt")
+        prior_page.names.name.setText("retrain_prior")
+        prior_page.read_facts()
+        built = StandIn(word="Prior build")
+        monkeypatch.setattr(orchestrator, "build_prior", built)
+        prior_page.main_pressed()
+        assert built.started.wait(5) and at_the_moment() == [], "a prior's build wrote as it started"
+        made = _prior_artifact(default_store(), _nad_cfg(), name="retrain_prior").id
+        built.release(default_store().load_prior(_nad_cfg(), made))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert at_the_moment() == ["inference_prior/bounds", "inference_prior/bounds_model", "inference_prior/prior"]
+        with running(build_run_host()):
+            page.names.name.setText("refused_while_live")
+            page.main_pressed()                      # another run is live: nothing starts, and nothing is written
+            assert at_the_moment() == [], "a training that did not start wrote its boxes"
+        page.names.name.setText("retrain")
+        page.form.rows["num_runs"].widget.setText("1234")
+        page.read_facts()
+        assert at_the_moment() == [], "the training's boxes were written as they were typed"
+        trained = StandIn(word="Training")
+        monkeypatch.setattr(orchestrator, "build_posterior", trained)
+        page._main_clicked()
+        assert trained.started.wait(5)
+        assert at_the_moment() == ["inference_posterior/num_runs", "inference_posterior/run_size_cap"]
+        held = st.settings()
+        assert (held.value("inference_posterior/num_runs"), held.value("inference_posterior/run_size_cap")) == (
+            "1234", "0"), "the training's boxes were not written as their text"
+        trained.release(SimpleNamespace(kind="posterior", id="20261008T130000", name="retrain", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert at_the_moment() == ["inference_posterior/posterior"]
+        window._save_state()
+        closing = at_the_moment()
+        groups = {key.split("/")[0] for key in closing}
+        assert "window/geometry" in closing
+        assert groups <= {"window", "layout", "inference_validate", "inference_infer", "inference_tsnpe", "fdt",
+                          "crossval", "reduction", "simulate", "artifacts"}, sorted(groups)
+        assert not groups & {"inference_config", "inference_prior", "inference_posterior"}, closing
+
 
 
 # ── the shared test helpers ──────────────────────────────────────────────────────────────────────
@@ -1501,9 +1403,9 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
 
     Three legs: an empty file; a file holding every old key one step from config.py; a save after
     every knob box was edited, which must write the selections and the budget and nothing else. The
-    Prior page holds its settings as rows of its form, and writes nothing at a save: what it remembers
-    is written as it comes into use, so the old keys of its boxes and the keys of its rows are both
-    in the file, and neither is read.
+    Prior and Training pages hold their settings as rows of their forms, and write nothing at a save: what
+    they remember is written as it comes into use, so the old keys of their boxes and the keys of their rows
+    are both in the file, and neither is read.
     """
     from PySide6.QtCore import QSettings
     from core import config
@@ -1522,10 +1424,10 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
             "min_cluster_size": config.PRIOR_CLUSTER_MIN_SIZE,
             "min_samples": config.PRIOR_CLUSTER_MIN_SAMPLES}),
         ("inference_posterior", "posterior_panel", {
-            "flow_hidden": config.NSF_HIDDEN_FEATURES, "flow_transforms": config.NSF_NUM_TRANSFORMS,
-            "flow_lr": config.TRAINING_LEARNING_RATE, "flow_patience": config.TRAINING_STOP_AFTER_EPOCHS,
-            "fisher_m": config.REPARAM_FISHER_M, "fisher_dz": config.REPARAM_FISHER_DZ,
-            "fisher_points": config.REPARAM_FISHER_POINTS}),
+            "hidden_features": config.NSF_HIDDEN_FEATURES, "num_transforms": config.NSF_NUM_TRANSFORMS,
+            "learning_rate": config.TRAINING_LEARNING_RATE, "stop_after_epochs": config.TRAINING_STOP_AFTER_EPOCHS,
+            "checkpoint_every": config.TRAINING_CHECKPOINT_EVERY, "fisher_m": config.REPARAM_FISHER_M,
+            "fisher_dz": config.REPARAM_FISHER_DZ, "fisher_points": config.REPARAM_FISHER_POINTS}),
         ("inference_validate", "validate_panel", {
             "cal_n": config.SBC_N_CAL, "cal_scales": config.CAL_N_SCALES}),
         ("inference_tsnpe", "tsnpe_panel", {
@@ -1564,6 +1466,8 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
             qs.setValue(f"{group}/{key}", stale(default))
     for old in ("sweep_iters", "sweep_max_sets", "sweep_step", "sweep_units", "cluster_size", "cluster_samples"):
         qs.setValue(f"inference_prior/{old}", "7")
+    for old in ("flow_hidden", "flow_transforms", "flow_lr", "flow_patience"):
+        qs.setValue(f"inference_posterior/{old}", "7")
     qs.setValue("inference_prior/bounds_source", "direct")
     qs.setValue("inference_prior/bounds", "stale_bounds.txt")
     qs.setValue("inference_posterior/num_runs", "1234")
@@ -1573,7 +1477,7 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
     assert off_config(relaunched) == {}, f"science knobs restored from an old file: {off_config(relaunched)}"
     assert relaunched.prior_panel._kept_pick == ("", "stale_bounds.txt"), "the bounds file is a selection"
     assert relaunched.prior_panel.typed_tick.isChecked() is False
-    assert relaunched.posterior_panel.num_runs.text() == "1234", "the Posterior budget is remembered"
+    assert relaunched.posterior_panel.form.rows["num_runs"].value() == 1234, "the Training budget is remembered"
     assert relaunched.tsnpe_panel.num_runs.text() == "4321", "the TSNPE budget is remembered"
 
     # (c) nothing writes them: every knob box edited, the four panels saved into a file of their own
@@ -1586,7 +1490,7 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
         panel.save_settings(out)
     out.sync()
     expected = {"inference_prior": set(),
-                "inference_posterior": {"posterior", "num_runs", "run_size_cap"},
+                "inference_posterior": set(),
                 "inference_validate": set(),
                 "inference_tsnpe": {"observation", "num_runs", "run_size_cap"}}
     for group, keys in expected.items():

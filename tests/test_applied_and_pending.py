@@ -16,7 +16,7 @@ from tests._dialogs import all_asked, asked, choose, forget_asked
 from tests._fixtures import build_inference, build_window, qt_app
 
 #: The pages of Parameter inference built on the step page, by their files beside it.
-REBUILT = ("config_tab.py", "prior_tab.py")
+REBUILT = ("config_tab.py", "prior_tab.py", "posterior_tab.py")
 
 
 def _first_step(session=None):
@@ -1794,3 +1794,770 @@ def test_a_bounds_file_edited_since_it_came_into_use_can_be_applied_again(tmp_pa
         turn_until(app, lambda: not controller().is_live(), 10.0)
         assert screen.session.cfg is candidate and _line(page, "bounds") == ("", "")
         assert page.foot.reason.text() == "Nothing to apply: these choices are in use."
+
+
+# ── the third step: a posterior comes into use when its run returns ──
+def _held_posterior():
+    """A posterior held, as a stand-in that says what a page reads of one."""
+    return SimpleNamespace(kind="posterior", id="post_old", name="retrain", manifest=None)
+
+
+@contextlib.contextmanager
+def _third_step(tmp_path, monkeypatch, *, held=True, name="retrain_2"):
+    """The third step in a whole window in sight, off the screen, on the test's own clock, its store the test's own: the
+    first step applied, Nadrowski with the bounds file's kind; a real prior of the master bounds file in use, with its
+    configuration, the Prior page showing that file; with ``held``, a posterior and an observation held too; a name and
+    a note typed, the page read, and the stage's training a stand-in run: (window, screen, page, the stand-in run)."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore, default_store, use_store
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    from tests._runs import StandIn
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        window, screen, first = _shown_first_step(tmp_path)
+        _apply(first)
+        cfg = _nad_cfg()
+        made = _prior_artifact(default_store(), cfg, name="retrain_prior").id
+        prior = default_store().load_prior(cfg, made)
+        session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior)
+        if held:
+            _cfg, _prior, _posterior, observation = _held_records()
+            session.posterior, session.observation = _held_posterior(), observation
+        screen.session = session
+        screen.prior_panel.bounds_picker.restore_key("master.txt")
+        screen.refresh_gates()
+        window.go_to("inference", "training")
+        page = screen.posterior_panel
+        page.names.name.setText(name)
+        page.names.note.setText("a second try")
+        page.read_facts()
+        stand_in = StandIn(word="Training")
+        monkeypatch.setattr(orchestrator, "build_posterior", stand_in)
+        yield window, screen, page, stand_in
+
+
+def _start_and_end(page, stand_in, end, monkeypatch, tmp_path):
+    """Press "Start training", and end its run as ``end`` names: refused at the stage's entry, failed, stopped in the fit
+    with the training it kept then kept or discarded on the run's page, or taken back as it starts."""
+    from core.artifacts import default_store
+    from core.gui.run.controller import RunController, controller
+    from core.refusals import Refusal
+    from tests._fixtures import build_fit_record
+    from tests._runs import RunText, note, to_the_fit, turn_until
+    app = qt_app()
+    if end == "withdrawn":
+        def broken(_self):
+            raise TypeError("the first drawing failed")
+        monkeypatch.setattr(RunController, "_draw", broken)
+        with pytest.raises(TypeError):
+            page._main_clicked()
+        return
+    text = RunText(controller())
+    page._main_clicked()
+    assert controller().is_live() and stand_in.started.wait(5)
+    if end == "refused before the spend":
+        stand_in.fail(Refusal("A posterior named 'retrain_2' was made meanwhile.", field="name"))
+    elif end == "failed":
+        stand_in.fail(RuntimeError("the fit found no network"))
+    else:
+        kept = build_fit_record(default_store(), passes=3)
+        stand_in.kept_fit = note(kept, passes=3)
+        to_the_fit(app, stand_in, text, controller()._clock, tmp_path / "set", ((1, 0), (2, 1), (3, 2)))
+        choose(monkeypatch, words="Stop training")
+        page.run_view.stop_button.click()
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        button = page.run_view.keep_button if end == "stopped, the training kept" else page.run_view.discard_button
+        assert button.isVisible(), "the run's page offers neither Keep nor Discard"
+        button.click()
+        assert [summary.id for summary in default_store().list("fit")] == ([kept] if end.endswith("kept") else [])
+        return
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+
+
+@pytest.mark.parametrize("end", ["refused before the spend", "failed", "stopped, the training kept",
+                                 "stopped, the training discarded", "withdrawn"])
+def test_a_training_that_ends_any_way_but_well_leaves_what_was_held(end, tmp_path, monkeypatch):
+    """A training that is refused at the stage's entry, fails, is stopped in its fit and its training kept or discarded on
+    the run's page, or is taken back as it starts writes no slot: the configuration, the prior, the posterior and the
+    observation held are the very objects they were, the name and the note stand as typed, and the rail, Home's next step
+    and "In use" say what they said."""
+    with _third_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        session = screen.session
+        held = (session.cfg, session.inf_prior, session.posterior, session.observation)
+        home = window.part("home")
+        said = (screen.step_states(), page.in_use.line_text(), page.in_use.sentence.plain_text(),
+                window.shell.rail.row("training").accessibleName())
+        _start_and_end(page, stand_in, end, monkeypatch, tmp_path)
+        assert screen.session is session
+        assert all(now is then for now, then in zip((session.cfg, session.inf_prior, session.posterior,
+                                                     session.observation), held)), end
+        assert (page.names.name.text(), page.names.note.text()) == ("retrain_2", "a second try"), end
+        assert (screen.step_states(), page.in_use.line_text(), page.in_use.sentence.plain_text(),
+                window.shell.rail.row("training").accessibleName()) == said, end
+        assert home is window.part("home")
+
+
+def test_a_second_press_starts_no_second_training(tmp_path, monkeypatch):
+    """Two presses in one turn of the loop start one training: the first greys the button as its run starts, and the
+    second finds it so. A third press while the run is live asks the controller nothing, and a press reached with no
+    prior held, which no button gives, asks it nothing either."""
+    from core.gui.run.controller import RunController, controller
+    from tests._runs import turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        asked = []
+        kept = RunController.dispatch
+        monkeypatch.setattr(RunController, "dispatch",
+                            lambda held, *args, **kwargs: (asked.append(args[0]), kept(held, *args, **kwargs))[1])
+        page.foot.main_button.click()
+        page.foot.main_button.click()
+        assert len(asked) == 1 and controller().is_live() and stand_in.started.wait(5)
+        page.foot.main_button.click()
+        page._main_clicked()
+        page.main_pressed()
+        assert len(asked) == 1, "a press while the run was live asked for a second training"
+        assert len(stand_in.calls) == 1
+        stand_in.release(None)
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        screen.session.inf_prior = None
+        page.main_pressed()
+        assert len(asked) == 1, "a press with no prior held asked for a training"
+
+
+def test_a_posterior_comes_into_use_only_when_its_run_returns(tmp_path, monkeypatch):
+    """The press holds nothing new: the posterior held stays in use through the run. The posterior the run returns comes
+    into use while the run is still live, made with the very configuration and prior the press handed the run: what
+    depended on the posterior held goes with it, the states are said once, on the window's thread, it is remembered as the
+    posterior last in use, and the observation held stays. At the run's end the name and the note are emptied, "In use"
+    names the new posterior from its record, and the way to Checks stands."""
+    import threading
+    from core.gui import settings as st
+    from core.gui.remembered import POSTERIOR_KEY
+    from core.gui.run import retry
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        session = screen.session
+        cfg, prior, old, observation = session.cfg, session.inf_prior, session.posterior, session.observation
+        heard, threads = [], []
+        screen.states_changed.connect(lambda states: (heard.append(states), threads.append(threading.current_thread())))
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        args, _kwargs = stand_in.calls[-1]
+        assert args[0] is cfg and args[1] is prior and args[2:] == (None, True)
+        assert session.posterior is old and controller().is_live()
+        assert retry.made_in(controller()._run.spec, session)
+        made = SimpleNamespace(kind="posterior", id="20261008T120400", name="retrain_2",
+                               manifest=SimpleNamespace(created="2026-10-08T12:04:00+00:00", parents={"prior": prior.id},
+                                                        body={"training": {"epochs_trained": 131, "n_runs": 5000,
+                                                                           "run_size": 64, "hidden_features": 128,
+                                                                           "num_transforms": 8}},
+                                                        config={"max_num_epochs": 2147483647}))
+        taken = []
+
+        def take(loaded, kept=screen.take_posterior):
+            said = len(heard)
+            kept(loaded)
+            taken.append((controller().is_live(), threading.current_thread(), len(heard) - said))
+
+        monkeypatch.setattr(screen, "take_posterior", take)
+        stand_in.release(made)
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert taken == [(True, threading.main_thread(), 1)], "the posterior was taken after its run, or more than once"
+        assert screen.session is session and session.posterior is made
+        assert (session.cfg, session.inf_prior, session.observation) == (cfg, prior, observation)
+        assert set(threads) == {threading.main_thread()}
+        qs = st.settings()
+        qs.sync()
+        assert qs.value(POSTERIOR_KEY) == "20261008T120400"
+        assert page.in_use.line_text() == "In use: retrain_2"
+        assert page.in_use.sentence.plain_text() == (
+            "131 epochs, network 128 by 8, on 320,000 simulations, prior retrain_prior. Saved as a record.")
+        assert (page.names.name.text(), page.names.note.text()) == ("", "")
+        assert not page.next_button.isHidden() and page.next_button.text() == "Go to Checks"
+
+
+def test_every_argument_of_the_table_reaches_the_stage(tmp_path, monkeypatch):
+    """Every setting of the form reaches the stage as an argument of its call, read as the field reads it: the batches, the
+    simulations per batch ("Automatic" is 0), the network, the fit's settings, the batches between two saves, the choice
+    of continuing, the name and the note, with the call's own words for a taken name and the figures. The epoch limit is
+    passed only when one is typed, the rotation's three only while they are read, and the expected epochs never: they
+    reach the run's page alone. No constant of the configuration is written."""
+    from core import config, orchestrator
+    from core.gui.run.controller import RunController
+    with _third_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        seen = []
+        monkeypatch.setattr(RunController, "dispatch", lambda held, fn, *args, **kwargs: seen.append((fn, args, kwargs)))
+        constants = {name: getattr(config, name) for name in dir(config) if name.isupper()}
+        rows = page.form.rows
+        rows["num_runs"].widget.setText("777")
+        rows["run_size_cap"].widget.ticked_box.setChecked(False)
+        rows["run_size_cap"].widget.field.setText("256")
+        rows["hidden_features"].widget.setText("64")
+        rows["num_transforms"].widget.setText("3")
+        rows["learning_rate"].widget.setText("0.0007")
+        rows["stop_after_epochs"].widget.setText("7")
+        rows["max_num_epochs"].widget.ticked_box.setChecked(False)
+        rows["max_num_epochs"].widget.field.setText("200")
+        rows["expected_epochs"].widget.setText("150")
+        rows["checkpoint_every"].widget.field.setText("25")
+        rows["fisher_m"].widget.setText("12")
+        rows["fisher_dz"].widget.setText("0.03")
+        rows["fisher_points"].widget.setText("2")
+        _pick(page.resume_choice, "never")
+        page.read_facts()
+        page._main_clicked()
+        fn, args, kwargs = seen[-1]
+        spec = kwargs.pop("spec")
+        assert fn is orchestrator.build_posterior and args == (screen.session.cfg, screen.session.inf_prior, None, True)
+        assert {key: value for key, value in kwargs.items() if key not in ("host", "on_result")} == {
+            "name": "retrain_2", "note": "a second try", "num_runs": 777, "run_size_cap": 256, "hidden_features": 64,
+            "num_transforms": 3, "learning_rate": 0.0007, "stop_after_epochs": 7, "max_num_epochs": 200,
+            "checkpoint_every": 25, "resume": "never", "new_run": False, "fisher_m": 12, "fisher_dz": 0.03,
+            "fisher_points": 2, "if_name_taken": "unnamed", "provide_fig_sink": True, "provide_stream": False,
+            "on_chunk": None, "watch_dir": None}
+        assert kwargs["on_result"] == page._on_posterior and kwargs["host"] is page
+        assert (spec.expected_epochs, spec.epoch_limit, spec.patience, spec.name) == (150, 200, 7, "retrain_2")
+        rows["max_num_epochs"].widget.ticked_box.setChecked(True)
+        rows["run_size_cap"].widget.ticked_box.setChecked(True)
+        screen.session.cfg.reparam_rotate = False
+        page.read_facts()
+        page._main_clicked()
+        _fn, _args, kwargs = seen[-1]
+        assert "max_num_epochs" not in kwargs and kwargs["run_size_cap"] == 0, kwargs
+        assert not {"fisher_m", "fisher_dz", "fisher_points", "expected_epochs"} & set(kwargs), kwargs
+        assert {name: getattr(config, name) for name in dir(config) if name.isupper()} == constants
+
+
+def test_before_you_start_reads_each_input_where_the_page_reads_it(tmp_path, monkeypatch):
+    """"Before you start" as the Training page reads each of its inputs, each moved where the page reads it and seen to
+    move the fact: the batches, the simulations per batch and the batches between two saves the form holds reach the
+    reading of the saved sets, never the usual ones or the remembered ones; the run history's paces are asked for this
+    size and this network, and said with their words for the batches still to simulate and the epochs typed; the memory
+    limit is said as it stands at each drawing, and the last run on this computer from the run history, with the last
+    that measured its batches when the last measured none; another step's change not applied is said with the name of
+    what is in use, as the page is shown again; the name's and every field's facts stand with them."""
+    from datetime import datetime, timedelta, timezone
+    from core import config, orchestrator
+    from core.gui.memory_limit import computer
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from tests._fixtures import write_history
+    from tests._look_helpers import _settle
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        read, paces = [], []
+        kept_reading, kept_estimate = orchestrator.training_reading, history.estimate
+        monkeypatch.setattr(orchestrator, "training_reading", lambda *args, **kwargs: (
+            read.append(kwargs), kept_reading(*args, **kwargs))[1])
+        monkeypatch.setattr(history, "estimate", lambda folder, **kwargs: (
+            paces.append((kwargs["per"], kwargs["size"])), kept_estimate(folder, **kwargs))[1])
+        started = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
+        write_history(controller().folder(), id="20261008T120000-training", word="Training", name="retrain_1",
+                      outcome="finished", started=started, ended=started + timedelta(hours=3),
+                      memory_limit={"gib": 6.0, "source": "setting", "computer": computer()},
+                      health={"memory_peak": 5.4},
+                      simulation_set={"per_batch": 32, "seconds_per_batch": 9.7},
+                      fit={"network": [64, 3], "simulations": 777 * 32, "seconds_per_epoch": 60.0})
+        rows = page.form.rows
+        rows["num_runs"].widget.setText("777")
+        rows["run_size_cap"].widget.ticked_box.setChecked(False)
+        rows["run_size_cap"].widget.field.setText("32")
+        rows["checkpoint_every"].widget.field.setText("25")
+        rows["hidden_features"].widget.setText("64")
+        rows["num_transforms"].widget.setText("3")
+        rows["expected_epochs"].widget.setText("150")
+        monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", 6.0)
+        read.clear()
+        paces.clear()
+        page.read_facts()
+        assert [{key: kwargs[key] for key in ("num_runs", "run_size_cap", "checkpoint_every")} for kwargs in read] == [
+            {"num_runs": 777, "run_size_cap": 32, "checkpoint_every": 25}]
+        assert paces == [("batch", {"per_batch": 32}), ("epoch", {"network": (64, 3), "simulations": 777 * 32})]
+
+        def said():
+            return [row.sentence.plain_text() for row in page.foot.facts.rows()]
+
+        assert said() == [
+            "Information. Model Nadrowski; bounds file master.txt; prior retrain_prior; a spontaneous recording and one "
+            "driven recording; rotation on.",
+            "Information. 777 batches of 32 make 24,864 simulations. Each simulates one spontaneous recording and one "
+            "driven recording.",
+            "Information. Starts a new simulation set; none is saved for this model yet.",
+            "Information. The fit is saved after every epoch, so a stop or a failure keeps it.",
+            "Information. A resume first reads the simulation set back, about four minutes at full size.",
+            "Information. Simulation: about 2 hours: the last training of this size, retrain_1, took 9.7 s per batch. "
+            "Fit: about 2 and a half hours for 150 epochs: the last training of this size, retrain_1, took about 1 "
+            "minute per epoch.",
+            "Information. Memory limit: 6 GiB for each batch of simulations (set in Settings, This computer). The last "
+            "run on this computer (retrain_1, ended 8 Oct 2026, 15:00) ran with a limit of 6 GiB. Its largest batch "
+            "held 5.4 GiB."], said()
+        monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", 4.0)
+        page.redraw()
+        assert said()[-1].startswith("Information. Memory limit: 4 GiB for each batch"), said()[-1]
+        write_history(controller().folder(), id="20261008T160000-prior-build", word="Prior build", name="later",
+                      outcome="finished", started=started + timedelta(hours=4), ended=started + timedelta(hours=5),
+                      memory_limit={"gib": 4.0, "source": "setting", "computer": computer()})
+        page.read_facts()
+        assert said()[-1] == (
+            "Information. Memory limit: 4 GiB for each batch of simulations (set in Settings, This computer). The last "
+            "run on this computer (later, ended 8 Oct 2026, 17:00) ran with a limit of 4 GiB. The last run that "
+            "measured its batches (retrain_1, ended 8 Oct 2026, 15:00): the largest held 5.4 GiB."), said()[-1]
+        window.go_to("inference", "prior")
+        _settle()
+        screen.prior_panel.bounds_picker.restore_key("master_tier1.txt")
+        window.go_to("inference", "training")
+        _settle()
+        assert said()[-1] == ("Attention. Step 2, Prior, has changes that are not applied. This run uses what is in "
+                              "use: retrain_prior."), said()[-1]
+        rows["learning_rate"].widget.setText("")
+        page.names.name.setText("")
+        page.redraw()
+        assert said()[:2] == ["Error. Type a name.", "Error. Learning rate is blank."], said()[:2]
+
+
+def test_each_setting_of_a_training_says_its_rule_greys_the_start_and_refuses_the_press_alike(tmp_path, monkeypatch):
+    """Each setting a training reads, at the end of its rule: the line under its field says the rule in the row's own
+    words, the start is greyed with the words beside it, and the press, made anyway, is refused with the same words, the
+    value it found and the usual one; one step inside the rule is no line at all. A blank expected epochs is a choice."""
+    from core.gui.run.controller import RunController
+    ends = (("num_runs", "0", "Batches must be at least 1."),
+            ("num_runs", "1", None),
+            ("run_size_cap", "-1", "Simulations per batch must be at least 0."),
+            ("hidden_features", "0", "Network width must be at least 1."),
+            ("num_transforms", "0", "Network depth must be at least 1."),
+            ("learning_rate", "0", "Learning rate must be greater than 0."),
+            ("learning_rate", "1e-9", None),
+            ("stop_after_epochs", "0", "End the fit after … epochs without improvement must be at least 1."),
+            ("max_num_epochs", "0", "Epoch limit must be at least 1."),
+            ("expected_epochs", "0", "Expected epochs (for the time estimate only) must be at least 1."),
+            ("expected_epochs", "", None),
+            ("checkpoint_every", "-1", "Save the simulations every … batches must be at least 0."),
+            ("fisher_m", "0", "Rotation: simulations per perturbation must be at least 1."),
+            ("fisher_dz", "0", "Rotation: step must be greater than 0."),
+            ("fisher_points", "0", "Rotation: parameter sets averaged must be at least 1."),
+            ("hidden_features", "", "Network width is blank."))
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        seen, refused = [], []
+        monkeypatch.setattr(RunController, "dispatch", lambda held, fn, *args, **kwargs: seen.append(kwargs))
+        monkeypatch.setattr(page, "_refusal", lambda exc: refused.append(exc))
+        rows = page.form.rows
+        for key, typed, line in ends:
+            widget = rows[key].widget
+            field = widget.field if hasattr(widget, "field") else widget
+            if hasattr(widget, "ticked_box"):
+                widget.ticked_box.setChecked(False)
+            usual = field.text()
+            field.setText(typed)
+            page.redraw()
+            assert _line(page, key) == (("err", line) if line else ("", "")), (key, typed)
+            assert page.foot.main_button.isEnabled() is (line is None), (key, typed, page.foot.reason.text())
+            if line is not None:
+                assert page.foot.reason.text() == "Cannot start yet: a setting cannot be used.", key
+                page.main_pressed()
+                assert refused and refused[-1].field == key and refused[-1].message.startswith(line[:-1]), (
+                    key, refused[-1].message if refused else None)
+                assert "; got " in refused[-1].message or "is blank" in refused[-1].message
+            field.setText(usual)
+            if key == "max_num_epochs":
+                widget.ticked_box.setChecked(True)
+        assert seen == [], "a press with a broken rule started a training"
+
+
+def test_the_batches_and_the_simulations_per_batch_come_back_kept_from_last_time_until_touched(tmp_path, monkeypatch):
+    """The batches and the simulations per batch the last training started with are put back at the next launch as they
+    were written, said to be kept from last time until they are touched; a value that is no whole number is passed over
+    and the box opens at its usual value."""
+    from core import config
+    from core.gui.remembered import NUM_RUNS_KEY, RUN_SIZE_KEY
+    for remembered, shown, cap in (({NUM_RUNS_KEY: "1234", RUN_SIZE_KEY: "512"}, 1234, 512),
+                                   ({NUM_RUNS_KEY: "1234", RUN_SIZE_KEY: "0"}, 1234, 0),
+                                   ({NUM_RUNS_KEY: "many", RUN_SIZE_KEY: ""}, config.TRAINING_NUM_RUNS, 0)):
+        _remember(**remembered)
+        screen = build_inference()
+        page = screen.posterior_panel
+        rows = page.form.rows
+        page.redraw()
+        assert (rows["num_runs"].value(), rows["run_size_cap"].value()) == (shown, cap), remembered
+        kept = remembered[NUM_RUNS_KEY] == "1234"
+        assert (rows["num_runs"].origin.text(), rows["run_size_cap"].origin.text()) == (
+            ("kept from last time", "kept from last time") if kept else ("", "")), remembered
+        if kept:
+            rows["num_runs"].widget.setText("1235")
+            assert rows["num_runs"].origin.text() == "" and rows["run_size_cap"].origin.text() == "kept from last time"
+
+
+def test_the_training_page_reads_nothing_while_a_run_is_live(tmp_path, monkeypatch):
+    """With a prior in use, so that the page makes every reading it can, nothing it reads is read between a run's start and
+    its end, its own training's or another page's: an edit, the timer, "Check again", the press, a store change, the gates
+    and the page shown again read nothing; a training that returns its posterior writes the session and reads nothing.
+    The run's end reads once: the sets, the history and the paces."""
+    from core.gui.run.controller import controller
+    from tests._fixtures import readings_of_a_run
+    from tests._look_helpers import _settle
+    from tests._runs import turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        calls = readings_of_a_run(monkeypatch)
+        page.form.rows["num_runs"].widget.setText("4321")
+        page.read_timer.timeout.emit()
+        page.foot.check_again.click()
+        page._main_clicked()
+        window._store_changed()
+        screen.refresh_gates()
+        window.go_to("inference", "prior")
+        _settle()
+        window.go_to("inference", "training")
+        _settle()
+        assert calls == [], calls
+        stand_in.release(SimpleNamespace(kind="posterior", id="p1", name="retrain_2", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        _settle()
+        # the Narrowing round's own lines read the preview, which reads the sets itself: the rest are this page's
+        assert (calls.count("training_reading") - calls.count("training_preview"), calls.count("last_on"),
+                calls.count("last_measured_on")) == (1, 1, 1), calls
+
+
+def test_the_training_page_built_during_a_run_says_it_has_read_nothing(tmp_path, monkeypatch):
+    """A Training page first built while a run is live reads nothing, says so beside "Before you start", and reads once
+    the run has ended."""
+    from core.gui.panels.inference.posterior_tab import PosteriorPanel
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.run.controller import NOT_READ_YET_TEXT, controller
+    from tests._fixtures import build_step_page, readings_of_a_run
+    from tests._look_helpers import _settle
+    from tests._runs import running, turn_until
+    app = qt_app()
+    window, screen, first = _shown_first_step(tmp_path)
+    with running(window.panel(ReductionPanel)):
+        calls = readings_of_a_run(monkeypatch)
+        page = build_step_page(PosteriorPanel, window=window)
+        window.go_to("inference", "training")
+        _settle()
+        assert calls == [] and page.foot.reading.text() == NOT_READ_YET_TEXT, calls
+    turn_until(app, lambda: not controller().is_live())
+    _settle()
+    assert page.foot.reading.text() == "The saved records were read at 12:04.", page.foot.reading.text()
+    assert (calls.count("last_on"), calls.count("last_measured_on")) == (1, 1), calls
+
+
+def test_the_run_page_of_a_training_started_on_the_page_keeps_what_was_built_for_it(tmp_path, monkeypatch):
+    """A training started by the page's own press has the run's page that a training has: failed during its simulation,
+    "Continue from batch N" repeats the page's own call, its name and every setting, with the policy that must continue;
+    the graphics card running out of memory, the window's try a minute later repeats it so too; stopped in its fit, the run's page asks whether to keep the training and offers to resume it, the call then naming
+    the kept training; and both repeat only into the session the page's call was made with."""
+    import torch
+    from core.artifacts import default_store
+    from core.gui.run import retry
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_fit_record
+    from tests._runs import RunText, note, to_the_fit, to_the_simulation, turn_until
+    app = qt_app()
+    folder = tmp_path / "simulations" / "_unnamed__20261003T030211"
+    folder.mkdir(parents=True)
+    torch.save({"batches_done": 236, "complete": False}, folder / "state.pt")    # the set as the engine writes it
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        held, view = controller(), page.run_view
+        text = RunText(held)
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        first_args, first_kwargs = stand_in.calls[-1]
+        assert retry.made_in(held._run.spec, screen.session)
+        to_the_simulation(app, stand_in, text, held, folder, 236)
+        stand_in.fail(OSError(28, "No space left on device"))
+        turn_until(app, lambda: not held.is_live(), 10.0)
+        assert view.continue_button.isVisibleTo(view) and view.continue_button.text() == "Continue from batch 236"
+        view.continue_button.click()
+        turn_until(app, lambda: len(stand_in.calls) == 2)
+        assert stand_in.calls[-1] == (first_args, {**first_kwargs, "resume": "require"})
+        assert first_kwargs["name"] == "retrain_2" and first_kwargs["note"] == "a second try"
+        lack = RuntimeError("the simulation of batch 237 failed")
+        lack.__cause__ = RuntimeError("CUDA error: out of memory")      # the card's error, under the one raised from it
+        stand_in.fail(lack)
+        turn_until(app, lambda: held.status.state == "retrying", 10.0)
+        held._clock.advance(60)
+        held.tick()
+        turn_until(app, lambda: len(stand_in.calls) == 3 and held.status.state == "running", 10.0)
+        assert stand_in.calls[-1] == (first_args, {**first_kwargs, "resume": "require"})
+        kept = build_fit_record(default_store(), passes=3)
+        stand_in.kept_fit = note(kept, passes=3)
+        to_the_fit(app, stand_in, text, held._clock, folder, ((1, 0), (2, 1), (3, 2)), again=False)
+        choose(monkeypatch, words="Stop training")
+        view.stop_button.click()
+        turn_until(app, lambda: not held.is_live(), 10.0)
+        assert view.keep_block.isVisibleTo(view) and view.resume_button.isVisibleTo(view)
+        view.resume_button.click()
+        turn_until(app, lambda: len(stand_in.calls) == 4)
+        assert stand_in.calls[-1] == (first_args, {**first_kwargs, "resume": "require", "resume_fit": kept})
+        stand_in.release(None)
+        turn_until(app, lambda: not held.is_live(), 10.0)
+
+
+# ── step 3, Training ──
+def _a_saved_set(page, batches, *, complete=False) -> None:
+    """A simulation set in the store in use made with the settings the Training page holds now, as the engine names it:
+    the reading at this budget then continues it."""
+    from core import orchestrator
+    from core.artifacts import default_store
+    from tests._fixtures import write_simulation_set
+    cfg, prior = page.session.cfg, page.session.inf_prior
+    page.read_facts()
+    width, runs = page._reading.width, page.form.rows["num_runs"].value()
+    write_simulation_set(default_store().kind_dir("simulation"), orchestrator.training_identity(cfg, prior, width, runs),
+                         batches, complete=complete)
+
+
+def test_a_blank_rotation_setting_does_not_stop_a_training_that_will_not_read_it(tmp_path, monkeypatch):
+    """The rotation's three are read only while the rotation is computed afresh. With the rotation off, or a saved set of
+    these settings continued, whose own rotation is reused, they are greyed with the reason under them, are not judged,
+    and are not passed: a blank one stops nothing. With the rotation computed afresh a blank one is judged and greys the
+    start. A box of the budget left blank sets the last reading aside: what it found of the saved set is not said."""
+    from core.gui.run.controller import RunController
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        seen = []
+        monkeypatch.setattr(RunController, "dispatch", lambda held, fn, *args, **kwargs: seen.append(kwargs))
+        rows = page.form.rows
+        rows["fisher_dz"].widget.setText("")
+        page.read_facts()
+        assert rows["fisher_dz"].line.words == "Rotation: step is blank." and not page.foot.main_button.isEnabled()
+        assert page.rotation_line.isHidden() and rows["fisher_dz"].widget.isEnabled()
+        for why, words in (("off", "Not used: rotation is off."),
+                           ("a saved set", "Not used: this training reuses the saved simulation set's rotation.")):
+            if why == "off":
+                screen.session.cfg.reparam_rotate = False
+            else:
+                screen.session.cfg.reparam_rotate = True
+                _a_saved_set(page, 12)
+            page.read_facts()
+            assert (page.rotation_line.isHidden(), page.rotation_line.plain_text()) == (False, words), why
+            assert not any(rows[key].widget.isEnabled() for key in ("fisher_m", "fisher_dz", "fisher_points")), why
+            assert rows["fisher_dz"].line.words == "" and page.foot.main_button.isEnabled(), why
+            page._main_clicked()
+            assert not {"fisher_m", "fisher_dz", "fisher_points"} & set(seen[-1]), (why, seen[-1])
+        said = [row.sentence.plain_text() for row in page.foot.facts.rows()]
+        assert any("12 of 5,000 batches are done" in one for one in said), said
+        rows["checkpoint_every"].widget.field.setText("")
+        page.redraw()
+        said = [row.sentence.plain_text() for row in page.foot.facts.rows()]
+        assert not any("batches are done" in one for one in said), "a reading made at another budget was said"
+
+
+def test_never_fixes_continue_or_start_new_with_its_reason(tmp_path, monkeypatch):
+    """"Never" for the saves, or a 0 typed for them: "Continue or start new" goes back to its first choice and is greyed,
+    with the reason under it; the start passes that first choice, whatever was chosen before. Ticked off, or another
+    number typed, the choice can be made again."""
+    from core.gui.run.controller import RunController
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        seen = []
+        monkeypatch.setattr(RunController, "dispatch", lambda held, fn, *args, **kwargs: seen.append(kwargs))
+        never = page.form.rows["checkpoint_every"].widget
+        _pick(page.resume_choice, "never")
+        assert page.never_line.isHidden()
+        never.ticked_box.setChecked(True)
+        assert (page.resume_choice.currentData(), page.resume_choice.isEnabled(), page.never_line.isHidden()) == (
+            "auto", False, False)
+        assert page.never_line.plain_text() == (
+            "No simulation set is kept or continued. A stop or a failure during simulation loses every simulation; a "
+            "stop or a failure during the fit loses the fit, which cannot be tried again without simulating again; "
+            "and the check 'Use of each part of the input' cannot be run on the posterior.")
+        page.read_facts()
+        said = [row.sentence.plain_text() for row in page.foot.facts.rows()]
+        assert ("Attention. The simulations of this training are not saved, so no saved simulation set is continued."
+                in said and "Attention. A training whose simulation set is not kept cannot be resumed: a stop or a "
+                "failure during the fit loses it." in said), said
+        page._main_clicked()
+        assert (seen[-1]["resume"], seen[-1]["checkpoint_every"]) == ("auto", 0)
+        never.ticked_box.setChecked(False)
+        assert page.resume_choice.isEnabled() and page.never_line.isHidden()
+        _pick(page.resume_choice, "require")
+        page.read_facts()
+        assert page.foot.reason.text() == "Cannot start yet: there is nothing to continue."
+        never.field.setText("0")                    # a typed 0 saves nothing either, as the stage reads it
+        assert (page.resume_choice.currentData(), page.resume_choice.isEnabled(), page.never_line.isHidden()) == (
+            "auto", False, False)
+        never.field.setText("50")
+        assert page.resume_choice.isEnabled() and page.never_line.isHidden()
+
+
+def test_the_expected_epochs_reach_the_run_and_never_the_stage(tmp_path, monkeypatch):
+    """"Expected epochs" is for the time alone: typed, it reaches the run's page through its spec and the fit's time in
+    "Before you start", and never the stage; left blank, the last finished training of this kind is read, and with none
+    the line under the field says what the run's page will do."""
+    from core.gui.run.controller import RunController
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        seen = []
+        monkeypatch.setattr(RunController, "dispatch", lambda held, fn, *args, **kwargs: seen.append(kwargs))
+        assert not page.no_earlier_line.isHidden(), "no earlier training, and the line does not say so"
+        page.form.rows["expected_epochs"].widget.setText("150")
+        page.read_facts()
+        assert page.no_earlier_line.isHidden()
+        page._main_clicked()
+        assert "expected_epochs" not in seen[-1] and seen[-1]["spec"].expected_epochs == 150
+        page.form.rows["expected_epochs"].widget.setText("")
+        assert not page.no_earlier_line.isHidden(), "the epochs once typed stood for the last training's"
+        page.read_facts()
+        page._main_clicked()
+        assert seen[-1]["spec"].expected_epochs is None
+
+
+def test_the_name_and_note_are_emptied_after_a_record_and_kept_after_a_stop(tmp_path, monkeypatch):
+    """A training that returned its posterior empties the name and the note, so a second press starts nothing until a new
+    name is typed; one stopped before it returned one keeps them as typed."""
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        choose(monkeypatch, words="Stop training")
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        page.run_view.stop_button.click()
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert (page.names.name.text(), page.names.note.text()) == ("retrain_2", "a second try")
+        page.run_view.back_button.click()
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        stand_in.release(SimpleNamespace(kind="posterior", id="p1", name="retrain_2", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert (page.names.name.text(), page.names.note.text()) == ("", "")
+        assert not page.foot.main_button.isEnabled() and page.foot.reason.text() == "Cannot start yet: a name is needed."
+
+
+def test_a_record_saved_under_another_name_says_so(tmp_path, monkeypatch):
+    """A posterior that comes back under no name, its name taken while the run was going, says so under what is in use,
+    in the run's own sentence; one that came back under its name says nothing."""
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        stand_in.release(SimpleNamespace(kind="posterior", id="p1", name="", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        said = page.in_use.said
+        assert not said.isHidden() and said.sentence.plain_text() == (
+            "Attention. It was saved without its name: 'retrain_2' was taken while the run was going.")
+        page.names.name.setText("retrain_3")
+        page.read_facts()
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        stand_in.release(SimpleNamespace(kind="posterior", id="p2", name="retrain_3", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert said.isHidden(), said.sentence.plain_text()
+
+
+def test_the_narrowing_rounds_row_keeps_its_meaning(tmp_path, monkeypatch):
+    """The Narrowing round keeps its page of today: its row of the simulations per batch reads the label with what its 0
+    means, its budget lines say what they said, and its refusals name no box of the Training page's own four settings."""
+    from PySide6.QtWidgets import QLabel
+    from core.gui import fields
+    from core.refusals import Refusal
+    qt_app()
+    screen = build_inference()
+    page = screen.tsnpe_panel
+    labels = [label.text() for label in page.findChildren(QLabel)]
+    assert "Simulations per batch (0 = automatic)" in labels, labels
+    page.run_size_cap.setText("")
+    assert page.budget_total.text() == "Simulations per batch is blank."
+    for key in ("checkpoint_every", "resume", "max_num_epochs", "expected_epochs"):
+        assert fields.fix_sentence(key) == "", key
+        assert fields.fix_sentence(key, here="training") == f"Set it in '{fields.label(key)}' on this page.", key
+    shown = []
+    monkeypatch.setattr(page, "own_line", lambda text, level="info": shown.append(text))
+    monkeypatch.setattr("core.gui.panels.run_host.show_refusal", lambda host, exc: None)
+    page._refusal(Refusal("resume='require' needs checkpointing on.", field="resume"))
+    assert shown == ["resume='require' needs checkpointing on."], shown
+
+
+def test_a_taken_name_greys_the_start_as_it_is_typed(tmp_path, monkeypatch):
+    """A name another posterior holds is said under "Name" once the typing stops, in the store's own words, and greys
+    "Start training" with its words beside it; a free name says so and the button comes back."""
+    from core.artifacts import default_store
+    from tests._fixtures import _nad_cfg, _posterior_artifact
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        _posterior_artifact(default_store(), _nad_cfg(), name="taken")
+        page.names.name.setText("taken")
+        page.names.check_now()
+        row = page.form.rows["name"]
+        assert row.line.kind == "err" and "taken" in row.line.words, row.line.words
+        assert not page.foot.main_button.isEnabled() and page.foot.reason.text() == (
+            "Cannot start yet: the name cannot be used.")
+        page.names.name.setText("free_one")
+        page.names.check_now()
+        assert row.line.words == "Fine. This name is free." and page.foot.main_button.isEnabled()
+
+
+def test_the_number_of_simulations_is_said_in_words(tmp_path, monkeypatch):
+    """"Before you start" says how many simulations a training makes: the batches typed, times the simulations of each
+    as the reading at this budget gives them, which a cap typed under the computer's own batch lowers; and what each
+    simulates. The boxes open at config.py's values, never at a session's."""
+    from core import config
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        rows = page.form.rows
+        assert (rows["num_runs"].value(), rows["run_size_cap"].value()) == (config.TRAINING_NUM_RUNS,
+                                                                           config.TRAINING_RUN_SIZE)
+        width = page._reading.width
+        assert width == screen.session.cfg.hw.batch_size
+
+        def said():
+            return [row.sentence.plain_text() for row in page.foot.facts.rows()][1]
+
+        assert said() == (f"Information. {config.TRAINING_NUM_RUNS:,} batches of {width:,} make "
+                          f"{config.TRAINING_NUM_RUNS * width:,} simulations. Each simulates one spontaneous recording "
+                          "and one driven recording.")
+        rows["run_size_cap"].widget.ticked_box.setChecked(False)
+        rows["run_size_cap"].widget.field.setText(str(width // 4))
+        rows["num_runs"].widget.setText(str(config.TRAINING_NUM_RUNS * 4))
+        page.read_facts()
+        assert said() == (f"Information. {config.TRAINING_NUM_RUNS * 4:,} batches of {width // 4:,} make "
+                          f"{config.TRAINING_NUM_RUNS * width:,} simulations. Each simulates one spontaneous recording "
+                          "and one driven recording.")
+
+
+def test_the_sentences_beside_the_settings_are_the_pages_own(tmp_path, monkeypatch):
+    """What stands beside the settings, word for word: under the network, that width and depth open at their usual values
+    at each launch; under the epoch limit, its two traps; under the expected epochs, that they never limit the fit, and,
+    with no earlier training of this kind, what the run's page will say; under the choice of continuing, nothing until
+    the simulations are not saved; under the rotation's three, nothing while they are read."""
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        page.form.fold.set_open(True)
+
+        def under(key):
+            return [part.plain_text() for part in page.form.rows[key].under if not part.isHidden()]
+
+        assert under("num_transforms") == ["Width and depth open at 128 and 8 each time PRISM starts. A plan can set "
+                                           "them."]
+        assert under("max_num_epochs") == ["A limit of N lets the fit run N + 1 epochs.",
+                                           "A fit that reaches the limit keeps the network of its last epoch, which "
+                                           "may not be its best."]
+        assert under("expected_epochs") == [
+            "Used only to say when the fit should end. It never limits the fit. Left blank, PRISM takes the epochs of "
+            "the last finished training of this kind in Records.",
+            "No earlier training of this kind: the run's page will say only when the fit cannot end before."]
+        assert under("resume") == [] and under("fisher_points") == []
+
+
+def test_a_history_no_reading_foresaw_says_no_time_and_raises_nothing(tmp_path, monkeypatch):
+    """A run history written by hand may hold a pace that is no number: the page's reading says no time is known and
+    raises nothing, and the press still starts the training."""
+    from datetime import datetime, timedelta, timezone
+    from core.gui.run.controller import controller
+    from tests._fixtures import write_history
+    from tests._runs import turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        started = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
+        width = page._reading.width
+        write_history(controller().folder(), id="20261008T120000-training", word="Training", name="by_hand",
+                      outcome="finished", started=started, ended=started + timedelta(hours=1),
+                      simulation_set={"per_batch": width, "seconds_per_batch": "fast"},
+                      fit={"network": [128, 8], "simulations": page.form.rows["num_runs"].value() * width,
+                           "seconds_per_epoch": "slow"})
+        page.read_facts()
+        said = [row.sentence.plain_text() for row in page.foot.facts.rows()]
+        assert ("Information. No time estimate: no training of this size has run on this computer, and the timing of "
+                "a short fit has not been run.") in said, said
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        stand_in.release(None)
+        turn_until(app, lambda: not controller().is_live(), 10.0)

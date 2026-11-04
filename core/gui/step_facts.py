@@ -396,3 +396,223 @@ def prior_facts(*, view: str, needs: bool = False, bounds_error: str = "", bound
             facts.append(Fact("info", OTHERS_TEXT.format(sets_for_model)))
     facts += [Fact("warn", sentence) for sentence in attention]
     return ordered((*facts, *name_facts, *field_facts, *plan_lines))
+
+
+# ── the third step, Training ──
+START_WORDS = "Start training"
+NEEDS_A_PRIOR = "Needs a prior: build or load one in step 2, Prior."
+NEEDS_A_PRIOR_BLOCKS = "needs a prior"
+USES_TEXT = "Model {}; bounds file {}; prior {}; {}; rotation {}."
+#: What a training's observation is, by the kind of observation of the configuration in use.
+USES_KIND = {"chi": "frequency response with {} slots", "forced": "a spontaneous recording and one driven recording",
+             "spontaneous": "a spontaneous recording only"}
+BUDGET_TEXT = "{:,} batches of {:,} make {:,} simulations. Each simulates {}."
+#: What each simulation of a training simulates, by the kind of observation; the frequency response's driven
+#: recordings run from the fewest an observation holds to its slots.
+EACH_SIMULATES = {"chi": "one spontaneous recording and {} to {} driven recordings",
+                  "forced": "one spontaneous recording and one driven recording",
+                  "spontaneous": "one spontaneous recording"}
+LEAST_DRIVEN = 2
+DRIVEN_EACH_TEXT = "one spontaneous recording and its driven recordings"
+CONTINUES_TEXT = "Continues the saved simulation set: {:,} of {:,} batches are done."
+NO_SIMULATIONS_TEXT = "No simulations this time: the saved {:,} are used."
+NO_SIMULATIONS_BATCHES_TEXT = "No simulations this time: the saved {:,} batches are used."
+NONE_SAVED_SET_TEXT = "Starts a new simulation set; none is saved for this model yet."
+ONE_NOT_MATCHING_TEXT = "Starts a new simulation set. 1 saved set for this model does not match these settings:"
+NOT_MATCHING_TEXT = "Starts a new simulation set. {} saved sets for this model do not match these settings:"
+SET_DIFFERS_TEXT = "the set of {:,} batches ({}) differs in {}"
+DIFFERENCE_TEXT = "{}: {} here, {} in that set"
+NOT_SAVED_TEXT = "The simulations of this training are not saved, so no saved simulation set is continued."
+SETS_UNREAD_TEXT = "The saved simulation sets could not be read: {}."
+NOTHING_TO_CONTINUE_TEXT = "There is no saved simulation set to continue."
+NOTHING_TO_CONTINUE_BLOCKS = "there is nothing to continue"
+WOULD_CONTINUE_TEXT = "A saved simulation set would be continued."
+WOULD_CONTINUE_BLOCKS = "a saved simulation set would be continued"
+FIT_SAVED_TEXT = "The fit is saved after every epoch, so a stop or a failure keeps it."
+READ_BACK_TEXT = "A resume first reads the simulation set back, about four minutes at full size."
+FIT_LOST_TEXT = ("A training whose simulation set is not kept cannot be resumed: a stop or a failure during the fit "
+                 "loses it.")
+SIMULATION_TAKES_TEXT = "Simulation: {}: {}."
+FIT_TAKES_TEXT = "Fit: {} for {:,} epochs: {}."
+EPOCH_TAKES_TEXT = "Fit: {}."
+NO_ESTIMATE_TEXT = ("No time estimate: no training of this size has run on this computer, and the timing of a short "
+                    "fit has not been run.")
+PENDING_TEXT = "Step {}, {}, has changes that are not applied. This run uses what is in use: {}."
+POSTERIOR_IN_USE_TEXT = "{:,} epochs, network {} by {}, on {:,} simulations, prior {}. Saved as a record."
+POSTERIOR_SAVED_TEXT = "Saved as a record."
+LIMIT_REACHED_TEXT = "The fit reached the epoch limit; the network kept is its last epoch's."
+NO_POSTERIOR_TEXT = "Start a training to make a posterior."
+#: The settings of a saved simulation set this step can name, by the entry of the set's identity: the others are named
+#: as the identity names them.
+DIFFERENCE_NAMES = {"n_runs": "Batches", "run_size": "Simulations per batch", "reparam_rotate": "Rotation",
+                    "chi_mode": "Kind of observation", "mode": "Kind of observation",
+                    "chi_k_pad": "Slots for driven recordings", "chi_max_cycles": "Lock-in limit", "prior_fingerprint": "Prior"}
+#: The states of the saved simulation sets in which a training continues the set of its own settings.
+CONTINUING = ("resume_partial", "resume_complete")
+
+
+def _whole(value) -> "int | None":
+    """``value`` as a whole number above nothing a sentence can count, or None: a truth value, a fraction, a number
+    a float cannot hold, or anything else is none."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
+
+
+def uses_words(*, model, bounds, prior: str, kind, slots, rotate) -> str:
+    """What a training uses, in one sentence: the model by its name, the bounds file (``""`` for limits typed by hand),
+    the prior by its label, the kind of observation with its slots, and the rotation."""
+    if kind == "chi":
+        held = _whole(slots)
+        observed = USES_KIND["chi"].format(f"{held:,}") if held else "frequency response"
+    else:
+        observed = USES_KIND.get(kind, str(kind))
+    return USES_TEXT.format(model_label(model), bounds or TYPED_BY_HAND, prior, observed,
+                            "on" if rotate is True else "off" if rotate is False else "unknown")
+
+
+def budget_words(batches, width, kind, slots) -> str:
+    """How many simulations a training makes, from its ``batches`` and the simulations of each, ``width``, and what each
+    simulates by the kind of observation; "" while either count is not known."""
+    batches, width = _whole(batches), _whole(width)
+    if batches is None or width is None:
+        return ""
+    if kind == "chi":
+        held = _whole(slots)
+        each = EACH_SIMULATES["chi"].format(LEAST_DRIVEN, held) if held is not None else DRIVEN_EACH_TEXT
+    else:
+        each = EACH_SIMULATES.get(kind, "one observation")
+    return BUDGET_TEXT.format(batches, width, batches * width, each)
+
+
+def _difference(field) -> str:
+    """One setting a saved set differs in, by the name this step gives it, with both values as the set holds them."""
+    if not isinstance(field, dict):
+        return str(field)
+    key = field.get("field")
+    return DIFFERENCE_TEXT.format(DIFFERENCE_NAMES.get(key, str(key)), field.get("mine"), field.get("theirs"))
+
+
+def _of_this_model(diffs) -> list:
+    """The saved sets of ``diffs`` made for the model in use: a set whose model differs is another model's."""
+    try:
+        held = list(diffs or ())
+    except TypeError:
+        return []
+    return [one for one in held
+            if not any(isinstance(field, dict) and field.get("field") == "model" for field in getattr(one, "fields", ()) or ())]
+
+
+def _unmatched_fact(sets) -> Fact:
+    """The saved sets of this model a new set is started beside, each with what it differs in."""
+    head = ONE_NOT_MATCHING_TEXT if len(sets) == 1 else NOT_MATCHING_TEXT.format(len(sets))
+    said = []
+    for one in sets:
+        batches = getattr(one, "batches", None)
+        count = batches if isinstance(batches, int) and not isinstance(batches, bool) else 0
+        differs = "; ".join(_difference(field) for field in (getattr(one, "fields", ()) or ())) or "nothing it says"
+        said.append(SET_DIFFERS_TEXT.format(count, "complete" if getattr(one, "complete", False) else "partial", differs))
+    return Fact("warn", " ".join((head, *(f"{one[:1].upper()}{one[1:]}." for one in said))))
+
+
+def continue_facts(reading, *, never: bool, resume: str, batches) -> list:
+    """What a training does with the saved simulation sets, as the last reading found them, ``reading`` (a training's
+    reading of them, or None for none made); and what the choice "Continue or start new", ``resume``, stops. With
+    ``never`` the simulations are not saved, and nothing is read."""
+    if never:
+        return [Fact("warn", NOT_SAVED_TEXT)]
+    if reading is None:
+        return []
+    error = getattr(reading, "checkpoint_error", None)
+    if error:
+        return [Fact("warn", SETS_UNREAD_TEXT.format(str(error).rstrip(".")))]
+    state, facts = getattr(reading, "checkpoint", None), []
+    done = _whole(getattr(reading, "batches_done", None))
+    if state == "resume_partial" and done is not None and _whole(batches) is not None:
+        facts.append(Fact("fine", CONTINUES_TEXT.format(done, batches)))
+    elif state == "resume_complete" and done is not None:
+        width = _whole(getattr(reading, "width", None))
+        facts.append(Fact("fine", NO_SIMULATIONS_TEXT.format(done * width) if width is not None
+                          else NO_SIMULATIONS_BATCHES_TEXT.format(done)))
+    elif state in ("new", "new_with_siblings"):
+        sets = _of_this_model(getattr(reading, "sibling_diffs", ()))
+        facts.append(_unmatched_fact(sets) if sets else Fact("info", NONE_SAVED_SET_TEXT))
+    if resume == "require" and state in ("new", "new_with_siblings"):
+        facts.append(Fact("err", NOTHING_TO_CONTINUE_TEXT, NOTHING_TO_CONTINUE_BLOCKS))
+    elif resume == "never" and state in CONTINUING:
+        facts.append(Fact("err", WOULD_CONTINUE_TEXT, WOULD_CONTINUE_BLOCKS))
+    return facts
+
+
+def _pace(estimate) -> "tuple[float, str] | None":
+    """A pace the run history gives, its seconds and its words, or None for one that says no length."""
+    try:
+        seconds, words = estimate
+        seconds = float(seconds)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return (seconds, str(words)) if math.isfinite(seconds) and seconds > 0 else None
+
+
+def how_long_words(*, per_batch=None, per_epoch=None, batches=0, epochs=None) -> str:
+    """How long a training should take: its ``batches`` still to simulate at the pace ``per_batch``, and its fit at the
+    pace ``per_epoch`` for ``epochs``, each pace as the run history says it, its seconds and its words; each half left
+    out when it is not known, and both together said to be unknown."""
+    said = []
+    pace, count = _pace(per_batch), _whole(batches)
+    if pace is not None and count is not None:
+        about = about_words(pace[0] * count)
+        if about:
+            said.append(SIMULATION_TAKES_TEXT.format(about, pace[1]))
+    pace, held = _pace(per_epoch), _whole(epochs)
+    if pace is not None:
+        about = about_words(pace[0] * held) if held is not None else ""
+        said.append(FIT_TAKES_TEXT.format(about, held, pace[1]) if about else EPOCH_TAKES_TEXT.format(pace[1]))
+    return " ".join(said) or NO_ESTIMATE_TEXT
+
+
+def pending_words(number: int, name: str, held: str) -> str:
+    """Another step whose page shows changes it has not applied: this run uses what that step holds, ``held``."""
+    return PENDING_TEXT.format(number, name, held)
+
+
+def posterior_in_use(label: str, training, config, prior: str) -> tuple[str, str]:
+    """What the third step holds, as "In use" says it: the posterior's label, and from its record how many epochs it
+    was fitted for, its network, the simulations it was trained on and its prior, and that a fit that ran past its limit,
+    which a fit reaches only by running one epoch more, kept its last epoch's network; ``("", "")`` while it holds none.
+    What its record does not hold is left out."""
+    if not label:
+        return "", ""
+    training = training if isinstance(training, dict) else {}
+    config = config if isinstance(config, dict) else {}
+    epochs, runs, size = (_whole(training.get(key)) for key in ("epochs_trained", "n_runs", "run_size"))
+    width, depth = (_whole(training.get(key)) for key in ("hidden_features", "num_transforms"))
+    if None in (epochs, runs, size, width, depth) or not prior:
+        said = POSTERIOR_SAVED_TEXT
+    else:
+        said = POSTERIOR_IN_USE_TEXT.format(epochs, width, depth, runs * size, prior)
+    limit = _whole(config.get("max_num_epochs"))
+    if epochs is not None and limit is not None and epochs > limit:
+        said = f"{said} {LIMIT_REACHED_TEXT}"
+    return label, said
+
+
+def training_facts(*, needs_prior: bool = False, uses: str = "", budget: str = "", reading=None, never: bool = False,
+                   resume: str = "auto", batches=None, how_long: str = "", memory: str = "",
+                   others_pending: Sequence[str] = (), name_facts: Sequence[Fact] = (),
+                   field_facts: Sequence[Fact] = (), plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
+    """The facts of the third step, in the order of its table, those that block first. ``needs_prior``: no prior is in
+    use, so nothing can be trained. ``uses`` and ``budget``: what the run uses and how many simulations it makes, said
+    when known. ``reading``: the last reading of the saved simulation sets for this budget, or None; ``never``: the
+    simulations are not saved; ``resume``, the choice "Continue or start new", and ``batches``, the batches typed, for
+    what the sets say and what the choice stops. Then that the fit is saved and how a resume reads back, or that it
+    cannot be resumed; ``how_long`` and ``memory``, each one sentence or more; ``others_pending``, the sentences of the
+    other steps that hold changes not applied; the name's and the fields' facts; and what the plan in use says. Reads
+    nothing, and raises on nothing a reading or a session holds."""
+    facts = [Fact("lock", NEEDS_A_PRIOR, NEEDS_A_PRIOR_BLOCKS)] if needs_prior else []
+    facts += [Fact("info", said) for said in (uses, budget) if said]
+    facts += continue_facts(reading, never=never, resume=resume, batches=batches)
+    facts += [Fact("warn", FIT_LOST_TEXT)] if never else [Fact("info", FIT_SAVED_TEXT), Fact("info", READ_BACK_TEXT)]
+    facts += [Fact("info", said) for said in (how_long, memory) if said]
+    facts += [Fact("warn", said) for said in others_pending if said]
+    return ordered((*facts, *name_facts, *field_facts, *plan_lines))

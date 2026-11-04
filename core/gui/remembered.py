@@ -22,6 +22,11 @@ KIND_KEY = "inference_config/chi_mode"
 BOUNDS_KEY = "inference_prior/bounds"
 BOUNDS_MODEL_KEY = "inference_prior/bounds_model"
 PRIOR_KEY = "inference_prior/prior"
+#: The posterior that came into use last, put back as a choice at the next launch; and the batches and the simulations
+#: per batch of the training started last, written as the text of their boxes once its run has been started.
+POSTERIOR_KEY = "inference_posterior/posterior"
+NUM_RUNS_KEY = "inference_posterior/num_runs"
+RUN_SIZE_KEY = "inference_posterior/run_size_cap"
 #: The window's log, when the settings file could not be written: the file, and why.
 NOT_WRITTEN_TEXT = "The settings file %s could not be written (%s): what was set holds until PRISM is closed."
 

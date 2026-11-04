@@ -184,6 +184,24 @@ class InferenceScreen(QWidget):
         remembered.put_many([(name, value) for name, value in picks if isinstance(value, str) and value])
         self.refresh_gates()
 
+    def take_posterior(self, loaded) -> None:
+        """A posterior has come back from its run, made with the configuration and the prior held: what depended on the
+        posterior held is let go, the new one comes into use, it is remembered as the posterior last in use, and the
+        gates and the states are worked out once. Called while the run is still live, so it writes the session and
+        nothing else reads: the Training step reads when the run has ended. The posterior held before stays in use
+        through the run."""
+        session = self.session
+        session.reset_downstream("posterior")
+        session.posterior = loaded
+        ident = getattr(loaded, "id", None)
+        if isinstance(ident, str) and ident:
+            remembered.put(remembered.POSTERIOR_KEY, ident)
+        self.refresh_gates()
+
+    def plan_entry(self) -> "dict | None":
+        """The plan in use, as a run's history keeps it: none, until a plan can be put in use."""
+        return None
+
     def refresh_gates(self):
         """Run every step's own gate, which greys the buttons of a step that cannot start yet (no step is ever
         disabled as a whole), then work out the six steps' states again. The states come after the gates: the

@@ -1,376 +1,509 @@
-import traceback
+"""Step 3, Training: the training that makes the simulation set and fits the network to it, set up, named and started.
 
-from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLineEdit, QMessageBox, QPushButton, QVBoxLayout)
+The step holds a posterior, and holds it only when a training's run returns one: the press hands the run the
+configuration and the prior the session holds, and the posterior held before stays in use through the run. A run
+refused, failed, stopped or withdrawn changes nothing that is held, and the name and the note stand as typed.
+
+The form holds what the training stage reads, each as an argument of its call: the batches and the simulations of each,
+the network, whether a saved simulation set is continued, and, folded, the fit's settings, how often the simulations are
+saved and the rotation's three. A setting a training will not read is shown as such and is neither judged nor passed: the
+rotation's three while the rotation is off or the saved set's own is reused, and the choice of continuing while the
+simulations are not saved. "Before you start" says what the run uses, what it makes, what it does with the saved sets,
+how long it should take and the memory it may use.
+
+Nothing is read while a run is live: the saved simulation sets, the run history and the records of earlier trainings are
+read by the page's reading alone. The batches and the simulations per batch are remembered as the text of their boxes
+once a training has started with them; the posterior that comes into use is remembered as it comes.
+"""
+import math
+from dataclasses import replace
+
+from PySide6.QtWidgets import QWidget
 
 from core import config, orchestrator
-from core.artifacts import Accept, default_store
-from core.refusals import Refusal, require_at_least, require_positive
+from core.refusals import Refusal, default_clause, require_at_least, require_positive
 
-from ... import icons, settings
-from ...fields import label
+from ... import keys, record_words, settings
+from ...chain import model_label
+from ...memory_limit import computer, limit_words, memory_limit_in_force
+from ...remembered import NUM_RUNS_KEY, RUN_SIZE_KEY, put_many
+from ...reported import reported
+from ...run import ends, history
+from ...run.controller import controller
 from ...run.model import RunSpec
-from ...widgets.artifact_picker import StorePicker
-from ...widgets.forms import make_form
-from ...widgets.help_badge import add_help_row, with_badge
-from ...widgets.labeled_inputs import FloatField, IntField, PathField
-from .base import _StagePanel, _TrainingBudgetMixin, training_spec
+from ...step_facts import (CONTINUING, NO_POSTERIOR_TEXT, START_WORDS, Fact, budget_words, how_long_words,
+                           pending_words, posterior_in_use, training_facts, uses_words)
+from ...widgets.choice import Choice
+from ...widgets.form import NameAndNote, TickedField
+from ...widgets.labeled_inputs import FloatField, IntField
+from .base import training_spec
 from .help_text import HELP
+from .prior_tab import bounds_in_use
+from .step_page import StepPage
+
+TITLE = "Training"
+SENTENCE = ("Makes the simulation set, then fits the network to it. The result is saved as a posterior: the trained "
+            "network that turns an observation into parameter estimates with their uncertainty.")
+#: "Continue or start new": what each choice says, and the policy the training stage is handed for it.
+RESUME_CHOICES = (("Continue the saved simulation set if there is one", "auto"),
+                  ("Only continue: do not start if there is nothing to continue", "require"),
+                  ("Only start new: do not start if a saved simulation set would be continued", "never"))
+NETWORK_TEXT = "Width and depth open at {} and {} each time PRISM starts. A plan can set them."
+LIMIT_TEXT = "A limit of N lets the fit run N + 1 epochs."
+LIMIT_KEPT_TEXT = "A fit that reaches the limit keeps the network of its last epoch, which may not be its best."
+EXPECTED_TEXT = ("Used only to say when the fit should end. It never limits the fit. Left blank, PRISM takes the epochs "
+                 "of the last finished training of this kind in Records.")
+NO_EARLIER_TEXT = "No earlier training of this kind: the run's page will say only when the fit cannot end before."
+NEVER_TEXT = ("No simulation set is kept or continued. A stop or a failure during simulation loses every simulation; a "
+              "stop or a failure during the fit loses the fit, which cannot be tried again without simulating again; "
+              "and the check 'Use of each part of the input' cannot be run on the posterior.")
+REUSED_TEXT = "Not used: this training reuses the saved simulation set's rotation."
+ROTATION_OFF_TEXT = "Not used: rotation is off."
+PRIOR_IN_USE_TEXT = "Prior in use: {}"
+NEW_POSTERIOR = "The new posterior"
+GO_TO_CHECKS = "Go to Checks"
+STOP_WORDS = "Stop training…"
+KEPT = "kept from last time"
+EPOCHS = "epochs"
+SAVED_WITHOUT_NAME = "It was saved without its name: '{}' was taken while the run was going."
+#: The words beside the main button while a field breaks a rule of the page.
+SETTING_BLOCKS = "a setting cannot be used"
+
+# THE SETTINGS A TRAINING READS, in the order the stage checks them: the field key, which is also build_posterior's
+# keyword but for the expected epochs, which only the run's page reads; and the rule's floor, an int for
+# require_at_least, None for require_positive. ONE table, read by the line under each field as it is typed and at the
+# press, so the two can never name different limits.
+_RULES = (
+    ("num_runs", 1),
+    ("run_size_cap", 0),                     # a TYPED 0 = follow the hardware batch, as "Automatic" does
+    ("hidden_features", 1),
+    ("num_transforms", 1),
+    ("learning_rate", None),
+    ("stop_after_epochs", 1),
+    ("max_num_epochs", 1),                   # "No limit" passes nothing
+    ("expected_epochs", 1),                  # blank: the last training's, or none
+    ("checkpoint_every", 0),                 # "Never" = 0
+    ("fisher_m", 1),
+    ("fisher_dz", None),
+    ("fisher_points", 1),
+)
+#: The rotation's three: read only while the rotation is computed afresh.
+_ROTATION = ("fisher_m", "fisher_dz", "fisher_points")
+#: The rows a blank leaves at their choice of nothing, which no rule refuses.
+_BLANK_CHOSEN = ("expected_epochs",)
 
 # Where the window shows this step's runs: Parameter inference, its step Training.
 _PLACE = ("inference", "training")
 
 
-# ── 3. Posterior ──────────────────────────────────────────────────────────────
-class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
-    """Tab 3. Trains a new neural posterior, or loads a saved one.
+def _check(key: str, value, minimum):
+    """Run one setting's rule: require_at_least with its floor, or require_positive when the floor is None. Returns the
+    value; raises Refusal(field=key) on a blank or an out-of-rule value."""
+    return require_positive(key, value) if minimum is None else require_at_least(key, value, minimum)
 
-    A loaded posterior is checked against the config's observation mode before anything else runs --
-    the three conditioning widths cannot collide, so a cross-mode load is caught immediately rather
-    than as a matrix-shape error deep inside the embedding net.
 
-    Also owns the TRAINING BUDGET (batches x rows-per-batch), which was previously reachable only by
-    editing config.py. Both fields are passed to build_posterior as arguments rather than written to
-    config: orchestrator snapshots those constants at import, so assigning to them would be a silent
-    no-op. See _sync_budget for the three derived lines and why the checkpoint one is not a tooltip.
+def _rule_words(minimum) -> str:
+    """The rule as the line under a field says it: the words the refusal's own message uses after "must be"."""
+    return "greater than 0" if minimum is None else f"at least {minimum}"
 
-    Persists (group "inference_posterior"): the posterior picker selection, the batch count and the
-    rows-per-batch cap.
-    """
+
+def _shown(value) -> str:
+    return f"{value:g}" if isinstance(value, float) else str(value)
+
+
+def _quietly(read, *args, **kwargs):
+    """What ``read`` answers, or None when it raises: a history written by hand may hold what no reading foresaw, and the
+    page's reading never raises."""
+    try:
+        return read(*args, **kwargs)
+    except Exception:                        # noqa: BLE001 -- what cannot be read says nothing
+        return None
+
+
+def _plain(value):
+    """``value`` as a run's history holds it: a name, a number, a truth value or nothing as it is; a list of them as a
+    list; anything else by its words."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_plain(one) for one in value]
+    return str(value)
+
+
+class PosteriorPanel(StepPage):
+    """Step 3. The form's rows are read by their field keys; ``resume_choice`` is "Continue or start new"; the line of
+    the prior in use stands in the block for the run."""
+
     def __init__(self, screen, parent=None):
-        super().__init__(screen, parent)
-        box = QGroupBox("Posterior")
-        v = QVBoxLayout(box)
-        form = make_form()
-        self.post_picker = StorePicker("posterior", allow_new=True)
-        self.post_picker.combo.currentIndexChanged.connect(lambda _i: self._sync_train_button())
-        add_help_row(form, label("posterior"), self.post_picker, HELP["posterior"])
-        # AMORTIZATION SPELLED OUT, under the one picker where it decides what the artifact is good
-        # for. The item text marks a narrowed posterior; this line says so in words, next to the
-        # mode, the conditioning width and when it was trained.
-        self.post_line = self._derived_label()
-        form.addRow("", self.post_line)
-        self.post_picker.combo.currentIndexChanged.connect(lambda _i: self._sync_post_line())
-        self._sync_post_line()
-        v.addLayout(form)
-        self.btn_post = QPushButton("Train / Load posterior")
-        self.btn_post.setProperty("accent", True)         # primary CTA (Fluent accent)
-        self.btn_post.clicked.connect(self._build_posterior)
-        v.addWidget(self.btn_post)
-        self.post_name = QLineEdit()
-        self.post_name.setPlaceholderText("name to save posterior as…")
-        self.btn_save_post = QPushButton("Save")
-        self.btn_save_post.clicked.connect(self._save_posterior)
-        row = QHBoxLayout()
-        row.addWidget(self.post_name, 1)
-        row.addWidget(self.btn_save_post)
-        v.addLayout(row)
-        self.controls_layout.addWidget(box)
-
-        # -- training budget: what a new posterior will actually simulate, and what it costs -------
-        budget = QGroupBox("Training budget")
-        bv = QVBoxLayout(budget)
-        bform = make_form()
-        self.num_runs = IntField(config.TRAINING_NUM_RUNS)
-        self.run_size_cap = IntField(config.TRAINING_RUN_SIZE)
-        add_help_row(bform, label("num_runs"), self.num_runs, HELP["num_runs"])
-        add_help_row(bform, label("run_size_cap"), self.run_size_cap, HELP["run_size"])
-        bv.addLayout(bform)
-        self.budget_total = self._derived_label()
-        self.budget_mem = self._derived_label()
-        self.budget_ckpt = self._derived_label()
-        for lab in (self.budget_total, self.budget_mem, self.budget_ckpt):
-            bv.addWidget(lab)
-        # After the labels exist: textChanged fires during restore_settings below.
-        for fld in (self.num_runs, self.run_size_cap):
-            fld.textChanged.connect(lambda _t: self._sync_budget())
-        self.controls_layout.addWidget(budget)
-
-        # -- flow capacity: re-tryable against a COMPLETE checkpoint without re-simulating --------
-        flow = QGroupBox("Density estimator")
-        fv = QVBoxLayout(flow)
-        fform = make_form()
-        self.flow_hidden = IntField(str(config.NSF_HIDDEN_FEATURES))
-        self.flow_transforms = IntField(str(config.NSF_NUM_TRANSFORMS))
-        self.flow_lr = FloatField(str(config.TRAINING_LEARNING_RATE))
-        self.flow_patience = IntField(str(config.TRAINING_STOP_AFTER_EPOCHS))
-        add_help_row(fform, label("hidden_features"), self.flow_hidden, HELP["flow_hidden"])
-        add_help_row(fform, label("num_transforms"), self.flow_transforms, HELP["flow_transforms"])
-        add_help_row(fform, label("learning_rate"), self.flow_lr, HELP["flow_lr"])
-        add_help_row(fform, label("stop_after_epochs"), self.flow_patience, HELP["flow_patience"])
-        fv.addLayout(fform)
-        self.controls_layout.addWidget(flow)
-
-        fisher = QGroupBox("Fisher rotation")
-        rv = QVBoxLayout(fisher)
-        rform = make_form()
-        self.fisher_m = IntField(str(config.REPARAM_FISHER_M))
-        self.fisher_dz = FloatField(str(config.REPARAM_FISHER_DZ))
-        self.fisher_points = IntField(str(config.REPARAM_FISHER_POINTS))
-        add_help_row(rform, label("fisher_m"), self.fisher_m, HELP["fisher_m"])
-        add_help_row(rform, label("fisher_dz"), self.fisher_dz, HELP["fisher_dz"])
-        add_help_row(rform, label("fisher_points"), self.fisher_points, HELP["fisher_points"])
-        rv.addLayout(rform)
-        self.controls_layout.addWidget(fisher)
-
+        super().__init__(screen, TITLE, SENTENCE, step="training", parent=parent)
+        self._reading = None                 # the saved simulation sets, as the last reading found them at its budget
+        self._per_batch = self._per_epoch = None  # the run history's paces, for this size
+        self._expected = None                # the epochs the last finished training of this kind ran, and its words
+        self._last = self._measured = None   # the last run on this computer, and the last that measured its batches
+        self._history_read = False           # whether a reading has read the run history yet
+        self._made = None                    # the posterior a run of this page returned, until the run has ended
+        self.resume_choice = Choice()
+        for words, policy in RESUME_CHOICES:
+            self.resume_choice.addItem(words, policy)
+        self._saves = TickedField(IntField(config.TRAINING_CHECKPOINT_EVERY, grouped=True), "Never", 0)
+        # Heard before its row hears it: the choice of continuing is fixed before the page judges the form.
+        self._saves.changed.connect(self._saves_changed)
+        form = self.form
+        form.add("num_runs", IntField(config.TRAINING_NUM_RUNS, grouped=True), usual=config.TRAINING_NUM_RUNS,
+                 help_text=HELP["num_runs"])
+        form.add("run_size_cap", TickedField(IntField(config.TRAINING_RUN_SIZE, grouped=True), "Automatic", 0),
+                 usual=config.TRAINING_RUN_SIZE, help_text=HELP["run_size"])
+        form.add("hidden_features", IntField(config.NSF_HIDDEN_FEATURES, grouped=True), usual=config.NSF_HIDDEN_FEATURES,
+                 help_text=HELP["flow_hidden"])
+        form.add("num_transforms", IntField(config.NSF_NUM_TRANSFORMS, grouped=True), usual=config.NSF_NUM_TRANSFORMS,
+                 help_text=HELP["flow_transforms"])
+        form.add_sentence(NETWORK_TEXT.format(config.NSF_HIDDEN_FEATURES, config.NSF_NUM_TRANSFORMS),
+                          under="num_transforms")
+        form.add("resume", self.resume_choice, usual="auto")
+        self.never_line = form.add_sentence(NEVER_TEXT, under="resume")
+        self.never_line.setVisible(False)
+        form.add("learning_rate", FloatField(config.TRAINING_LEARNING_RATE), usual=config.TRAINING_LEARNING_RATE,
+                 folded=True, help_text=HELP["flow_lr"])
+        form.add("stop_after_epochs", IntField(config.TRAINING_STOP_AFTER_EPOCHS, grouped=True),
+                 usual=config.TRAINING_STOP_AFTER_EPOCHS, folded=True, help_text=HELP["flow_patience"])
+        form.add("max_num_epochs", TickedField(IntField(None, grouped=True), "No limit", None), EPOCHS, usual=None,
+                 folded=True)
+        form.add_sentence(LIMIT_TEXT, under="max_num_epochs")
+        form.add_sentence(LIMIT_KEPT_TEXT, under="max_num_epochs")
+        form.add("expected_epochs", IntField(None, grouped=True), EPOCHS, usual=None, folded=True)
+        form.add_sentence(EXPECTED_TEXT, under="expected_epochs")
+        self.no_earlier_line = form.add_sentence(NO_EARLIER_TEXT, under="expected_epochs")
+        self.no_earlier_line.setVisible(False)
+        form.add("checkpoint_every", self._saves, usual=config.TRAINING_CHECKPOINT_EVERY, folded=True)
+        form.add("fisher_m", IntField(config.REPARAM_FISHER_M, grouped=True), usual=config.REPARAM_FISHER_M,
+                 folded=True, help_text=HELP["fisher_m"])
+        form.add("fisher_dz", FloatField(config.REPARAM_FISHER_DZ), usual=config.REPARAM_FISHER_DZ, folded=True,
+                 help_text=HELP["fisher_dz"])
+        form.add("fisher_points", IntField(config.REPARAM_FISHER_POINTS, grouped=True),
+                 usual=config.REPARAM_FISHER_POINTS, folded=True, help_text=HELP["fisher_points"])
+        self.rotation_line = form.add_sentence("", under="fisher_points")
+        self.rotation_line.setVisible(False)
+        form.set_side_heading(NEW_POSTERIOR)
+        self._names = NameAndNote("posterior", required=True)
+        self.use_names(self._names)
+        self.prior_row = form.add_text("prior", "", "", side=True)
         self.restore_settings(settings.settings())
-        self._sync_budget()
+        self.refresh_local_gates()
 
-    def _build_posterior(self):
-        cfg = self.session.cfg
-        if cfg is None:
-            return
-        entry, is_new = self.post_picker.selected()
-        if is_new and self.session.inf_prior is None:
-            self.log_pane.append_line("Build or load a prior first to train a new posterior.", "warning")
-            return
-        # THE CLICK-TIME RULES, on the boxes the chosen branch will read and no other, before any
-        # worker starts. A refusal is the yellow "Check your inputs" box naming the box; the stage
-        # runs the same rules again at entry, so the two front ends cannot disagree.
+    # ── what the step holds ──
+    def _held(self) -> tuple:
+        """The configuration and the prior a training is made with, or ``(None, None)``: the one is held only with the
+        other, and a session that holds one alone holds nothing a training can be made with."""
+        session = getattr(self._screen, "session", None)
+        cfg, prior = getattr(session, "cfg", None), getattr(session, "inf_prior", None)
+        return (cfg, prior) if cfg is not None and prior is not None else (None, None)
+
+    def _never(self) -> bool:
+        """Whether the simulations of this training are not saved: "Never", or a typed 0."""
+        return self._saves.value_or_none() == 0
+
+    def _resume(self) -> str:
+        """The policy "Continue or start new" hands the stage: always the first while the simulations are not saved."""
+        return "auto" if self._never() else (self.resume_choice.currentData() or "auto")
+
+    def _rotation_unused(self) -> str:
+        """Why the rotation's three settings are not read by this training, in a sentence; "" when they are: while the
+        rotation is off in the configuration held, and while the last reading says the saved set is continued, whose own
+        rotation is reused."""
+        cfg = self._held()[0]
+        rotate = getattr(cfg, "reparam_rotate", None)
+        if rotate is not None and not rotate:
+            return ROTATION_OFF_TEXT
+        if not self._never() and getattr(self._reading, "checkpoint", None) in CONTINUING:
+            return REUSED_TEXT
+        return ""
+
+    def _ruled(self) -> tuple:
+        """The settings the press reads, by field key, in the table's order: the rotation's only while they are used."""
+        unused = bool(self._rotation_unused())
+        return tuple((key, floor) for key, floor in _RULES if not (unused and key in _ROTATION))
+
+    def _budget(self) -> "tuple[int, int, int] | None":
+        """The batches, the simulations per batch and the batches between two saves the form holds, each passing its
+        rule; None while any does not."""
+        rows, found = self.form.rows, self.problems()
+        if found.keys() & {"num_runs", "run_size_cap", "checkpoint_every"}:
+            return None
+        values = tuple(rows[key].value() for key in ("num_runs", "run_size_cap", "checkpoint_every"))
+        return None if None in values else values
+
+    # ── what a page answers ──
+    def main_words(self) -> str:
+        return START_WORDS
+
+    def plan_fields(self) -> dict:
+        return {key: self.form.rows[key] for key, _ in _RULES}
+
+    def in_use_words(self) -> tuple:
+        posterior = getattr(self.session, "posterior", None)
+        if posterior is None:
+            return "", NO_POSTERIOR_TEXT
+        manifest = getattr(posterior, "manifest", None)
+        body, made_for = getattr(manifest, "body", None), getattr(manifest, "config", None)
+        parents = getattr(manifest, "parents", None)
+        prior = self._held()[1]
+        trained_with = parents.get("prior") if isinstance(parents, dict) else None
+        named = ""
+        if prior is not None and trained_with is not None and trained_with == getattr(prior, "id", None):
+            named = getattr(prior, "name", None) or record_words.label_of(prior)
+        return posterior_in_use(record_words.label_of(posterior),
+                                body.get("training") if isinstance(body, dict) else None, made_for, named)
+
+    def problems(self) -> dict:
+        """Every rule the form breaks now, by field key in the order a press reads them: the line under the field, built
+        from its row's label, and what the press says, the same with the value it found and the usual one. A setting the
+        training will not read breaks none, and a blank expected epochs is a choice."""
+        found, rows = {}, self.form.rows
+        for key, minimum in self._ruled():
+            row = rows[key]
+            if key in _BLANK_CHOSEN and not row.widget.text().strip():
+                continue
+            said = row.reading()
+            if said is not None:
+                found[key] = (said, f"{said[:-1]}{default_clause(key)}." if said.endswith(" is blank.") else said)
+                continue
+            value = row.value()
+            if value is None:
+                continue
+            if isinstance(value, float) and not math.isfinite(value):
+                line = f"{row.label_text()} must be a finite number."
+            else:
+                try:
+                    _check(key, value, minimum)
+                    continue
+                except Refusal:
+                    line = f"{row.label_text()} must be {_rule_words(minimum)}."
+            found[key] = (line, f"{line[:-1]}; got {_shown(value)}{default_clause(key)}.")
+        return found
+
+    def facts_from_form(self) -> tuple:
+        """The facts of the step as the form, the session and the last reading stand: the rules under their fields and
+        what stands under them; what the run uses and makes; what it does with the saved sets; how long it takes; the
+        memory limit and the last run; the other steps' changes not applied; the name and the note."""
+        found = self.problems()
+        unused = self._rotation_unused()
+        for key, row in self.form.rows.items():
+            if row.widget is None or key in ("name", "note"):
+                continue
+            if key in found:
+                row.set_line("err", found[key][0])
+            else:
+                row.set_line("", "")
+            row.set_origin(KEPT if row.kept else "")
+        for key in _ROTATION:
+            self.form.rows[key].widget.setEnabled(not unused)
+        self.rotation_line.set_text(unused)
+        self.rotation_line.setVisible(bool(unused))
+        cfg, prior = self._held()
+        reading = self._reading if self._budget() is not None else None
+        rows = self.form.rows
+        batches = None if "num_runs" in found else rows["num_runs"].value()
+        width = getattr(reading, "width", None)
+        typed = rows["expected_epochs"].value() if "expected_epochs" not in found else None
+        self.no_earlier_line.setVisible(self._history_read and typed is None and self._expected is None)
+        uses = budget = how_long = ""
+        if cfg is not None:
+            uses = uses_words(model=getattr(cfg, "model", None), bounds=bounds_in_use(cfg),
+                              prior=getattr(prior, "name", None) or record_words.label_of(prior),
+                              kind=getattr(cfg, "observation_mode", None), slots=getattr(cfg, "chi_k_pad", None),
+                              rotate=getattr(cfg, "reparam_rotate", None))
+            budget = budget_words(batches, width, getattr(cfg, "observation_mode", None),
+                                  getattr(cfg, "chi_k_pad", None))
+        if reading is not None and batches is not None:
+            state, done = getattr(reading, "checkpoint", None), getattr(reading, "batches_done", 0) or 0
+            to_do = 0 if state == "resume_complete" and not self._never() else (
+                batches - done if state == "resume_partial" and not self._never() else batches)
+            epochs = typed if typed is not None else (self._expected[0] if self._expected else None)
+            how_long = how_long_words(per_batch=self._per_batch, per_epoch=self._per_epoch, batches=to_do,
+                                      epochs=epochs)
+        memory = limit_words(memory_limit_in_force())
+        if self._history_read:
+            memory = f"{memory} {ends.last_run_sentence(self._last, self._measured)}"
+        field_facts = [Fact("err", line, SETTING_BLOCKS) for line, _said in found.values()]
+        names = [fact for fact in (self._names.name_fact(), self._names.note_fact()) if fact]
+        return training_facts(needs_prior=prior is None, uses=uses, budget=budget, reading=reading,
+                              never=self._never(), resume=self._resume(), batches=batches, how_long=how_long,
+                              memory=memory, others_pending=self._others_pending(), name_facts=names,
+                              field_facts=field_facts)
+
+    def _others_pending(self) -> list:
+        """The other steps whose page shows changes they have not applied, each with what this run uses of it."""
+        screen = self._screen
         try:
-            v = self._read_inputs(is_new)
-        except Refusal as e:
-            self._refusal(e)
+            pending = screen.pending() if screen is not None else frozenset()
+        except Exception:                    # noqa: BLE001 -- a page's facts never raise
+            return []
+        session, said = getattr(screen, "session", None), []
+        held = {"model": lambda: model_label(getattr(getattr(session, "draft", None), "model", None)),
+                "prior": lambda: record_words.label_of(getattr(session, "inf_prior", None))}
+        for step in ("model", "prior"):
+            if step in pending:
+                said.append(pending_words(keys.step_number(step), keys.step(step).name, held[step]()))
+        return said
+
+    # ── the reading of the disk ──
+    def read_disk(self) -> None:
+        """The run history (the last run on this computer and the last that measured its batches); and, while a prior is
+        held and the budget passes its rules, the saved simulation sets at this budget, the run history's paces for this
+        size, and the epochs the last finished training of this kind ran."""
+        folder, here = controller().folder(), computer()
+        self._last, self._measured = history.last_on(folder, here), history.last_measured_on(folder, here)
+        self._history_read = True
+        self._reading = self._per_batch = self._per_epoch = self._expected = None
+        cfg, prior = self._held()
+        budget = self._budget()
+        if prior is None or budget is None:
             return
-        new_run, accept = False, Accept()
-        if is_new:
-            go, new_run = self._confirm_fresh_run(cfg, v["num_runs"], v["run_size_cap"])
-            if not go:
-                return
-        else:
-            accept = self._accept_for_load(entry)
-            if accept is None:                 # the user cancelled the load
-                return
-        # AFTER both questions, never before: Cancel must leave the session exactly as it was, and
-        # reset_downstream drops the posterior the user is still working with. The load branch above
-        # asks through _accept_for_load before loading a non-amortized posterior.
-        self.session.reset_downstream("posterior")
-        self._screen.refresh_gates()
-        # Passed, never written to config: orchestrator does `from .config import TRAINING_NUM_RUNS`,
-        # so setting the constant here would be a silent no-op and the run would use the default.
-        # On a load `v` is empty: every knob stays at its default of None, which the load branch
-        # never reads. A name another posterior takes while this one trains is dropped, not refused: the
-        # posterior is saved under its id and the run says so, so the training is never lost to it.
-        self.dispatch(orchestrator.build_posterior, cfg, self.session.inf_prior,
-                      entry, is_new, accept=accept, new_run=new_run, if_name_taken="unnamed",
-                      provide_fig_sink=True, on_result=self._on_posterior, **v)
+        num_runs, cap, cadence = budget
+        self._reading = orchestrator.training_reading(cfg, prior, num_runs=num_runs, run_size_cap=cap,
+                                                      checkpoint_every=cadence)
+        width = getattr(self._reading, "width", None)
+        if width:
+            self._per_batch = _quietly(history.estimate, folder, word="Training", per="batch",
+                                       size={"per_batch": width})
+            network = tuple(self.form.rows[key].value() for key in ("hidden_features", "num_transforms"))
+            if None not in network and not self.problems().keys() & {"hidden_features", "num_transforms"}:
+                self._per_epoch = _quietly(history.estimate, folder, word="Training", per="epoch",
+                                           size={"network": network, "simulations": num_runs * width})
+        try:
+            spec = self.run_spec(orchestrator.build_posterior, cfg, prior, None, True, **self._stage_values())
+        except Exception:                    # noqa: BLE001 -- a configuration that cannot say its kind has no last training
+            return
+        # The last finished training's alone: the epochs typed are the form's, read at each drawing.
+        self._expected = controller().expected_epochs(replace(spec, expected_epochs=None))
+
+    def _stage_values(self) -> dict:
+        """The settings the stage would be handed now, as far as they pass their rules: for the run's facts."""
+        found, rows = self.problems(), self.form.rows
+        return {key: rows[key].value() for key, _ in self._ruled()
+                if key not in found and key != "expected_epochs" and rows[key].value() is not None}
+
+    # ── the choices ──
+    def _saves_changed(self) -> None:
+        """"Never", or a typed 0: no simulation set is continued, so "Continue or start new" stands at its first choice,
+        greyed, with the reason under it."""
+        never = self._never()
+        if never:
+            self.resume_choice.setCurrentIndex(0)
+        self.resume_choice.setEnabled(not never)
+        self.never_line.setVisible(never)
+
+    # ── the press ──
+    def _read_knobs(self) -> dict:
+        """The settings the stage is handed, read through the rules: the first broken is refused, and nothing changes. The
+        epoch limit only when one is typed, and the rotation's three only when they are read."""
+        for key, (_line, said) in self.problems().items():
+            raise Refusal(said, field=key)
+        rows = self.form.rows
+        return {key: rows[key].value() for key, _ in self._ruled()
+                if key != "expected_epochs" and not (key == "max_num_epochs" and rows[key].value() is None)}
+
+    def main_pressed(self) -> None:
+        """Start the training on the configuration and the prior held: nothing is held anew until the run returns its
+        posterior. The batches and the simulations per batch are remembered once the run has started."""
+        cfg, prior = self._held()
+        if prior is None:
+            return                               # the facts say why, and the button is greyed with them
+        try:
+            knobs = self._read_knobs()
+        except Refusal as refused:
+            self._refusal(refused)
+            return
+        started = self.dispatch(orchestrator.build_posterior, cfg, prior, None, True, name=self._names.name_value(),
+                                note=self._names.note_value(), resume=self._resume(), new_run=False,
+                                if_name_taken="unnamed", provide_fig_sink=True, on_result=self._on_posterior, **knobs)
+        if started:
+            put_many([(NUM_RUNS_KEY, str(knobs["num_runs"])), (RUN_SIZE_KEY, str(knobs["run_size_cap"]))])
 
     def run_spec(self, fn, *args, **kwargs) -> RunSpec:
-        """A training, which writes a posterior, its simulation set and its kept training and may be tried again;
-        or a posterior's load, which writes nothing, keeps no file and stops without a question (its fourth
-        argument says which, as the stage reads it)."""
+        """A training, which writes a posterior, its simulation set and its kept training, and may be tried again: with
+        the epochs typed for its time, the plan in use and the settings it was started with. Or a posterior's load,
+        which writes nothing, keeps no file and stops without a question (its fourth argument says which, as the stage
+        reads it)."""
         if fn is not orchestrator.build_posterior:
             return super().run_spec(fn, *args, **kwargs)
         if args[3]:
-            return training_spec("Training", _PLACE, "Stop training…", args[0], kwargs, narrowed=False)
+            row = self.form.rows["expected_epochs"]
+            typed = None if "expected_epochs" in self.problems() else row.value()
+            return training_spec("Training", _PLACE, STOP_WORDS, args[0], kwargs, narrowed=False,
+                                 expected_epochs=typed, plan=self._screen.plan_entry() if self._screen else None,
+                                 settings=self.settings_entry())
         return RunSpec("Posterior load", _PLACE, stop_button="Stop loading", loads_only=True, keeps_files=False,
                        stop_asks=False)
 
-    def _read_inputs(self, is_new: bool) -> dict:
-        """Every box the chosen branch of build_posterior will read, as the stage's own keyword
-        arguments, read through value_or_none() and the shared rules -- raising the FIRST Refusal,
-        with the box named by its field key, before any worker starts.
+    def settings_entry(self) -> dict:
+        """What this training is started with, as its run's history keeps it: names and numbers only. The model and its
+        options as step 1 holds them, the bounds file and the prior in use, the choice of continuing, the name and the
+        note, and one row for each setting the training reads, with its label, its value, where the value came from and
+        its usual one."""
+        session = self.session
+        draft = getattr(session, "draft", None)
+        cfg, prior = self._held()
+        options = {name: _plain(getattr(draft, name, None))
+                   for name in ("chi_mode", "chi_n_freqs", "chi_k_pad", "chi_max_cycles", "reparam_rotate",
+                                "units_override")}
+        rows = [{"step": "training", "name": key, "label": row.label_text(), "value": _plain(row.value()),
+                 "origin": row.origin.text(), "plan": None, "usual": _plain(row.usual())}
+                for key, row in ((key, self.form.rows[key]) for key, _ in self._ruled())]
+        return {"model": _plain(getattr(draft, "model", None)), "chi_mode": _plain(getattr(draft, "chi_mode", None)),
+                "options": options, "bounds": _plain(bounds_in_use(cfg)), "prior": _plain(getattr(prior, "id", None)),
+                "resume": self._resume(), "name": self._names.name_value(), "note": self._names.note_value(),
+                "rows": rows}
 
-        WHICH BRANCH is decided as the stage decides it: ``is_new`` from the picker mirrors
-        ``trains = train_new or ref is None`` in build_posterior. A LOAD reads the picker and the
-        accept dialog and nothing else, so it returns {} and the knobs are not forwarded at all (the
-        stage resolves None to its default and its load branch never reads them) -- a blank Hidden
-        features box cannot block loading a posterior. A TRAIN reads every knob, in the tab's order.
+    def _on_posterior(self, payload) -> None:
+        """The run returned its posterior, while it is still live: it comes into use, and nothing is read until the run
+        has ended."""
+        self._made = payload
+        self._screen.take_posterior(payload)
 
-        NO CLAMP, NO DEFAULT. ``max(1, self.flow_hidden.value())`` turned a blank box into 1 and
-        ``self.flow_lr.value() or config.TRAINING_LEARNING_RATE`` turned a typed 0 into the default,
-        both silently, and the stage then trained a flow nobody had configured. A blank is a refusal
-        ("The number of hidden features is blank (default 128)."), a 0 is refused where the rule says
-        so, and only the cap's 0 means automatic.
-        """
-        if not is_new:
-            return {}
-        return {
-            "num_runs": require_at_least("num_runs", self.num_runs.value_or_none(), 1),
-            "run_size_cap": require_at_least("run_size_cap", self.run_size_cap.value_or_none(), 0),
-            "hidden_features": require_at_least("hidden_features", self.flow_hidden.value_or_none(), 1),
-            "num_transforms": require_at_least("num_transforms", self.flow_transforms.value_or_none(), 1),
-            "learning_rate": require_positive("learning_rate", self.flow_lr.value_or_none()),
-            "stop_after_epochs": require_at_least("stop_after_epochs", self.flow_patience.value_or_none(), 1),
-            "fisher_m": require_at_least("fisher_m", self.fisher_m.value_or_none(), 1),
-            "fisher_dz": require_positive("fisher_dz", self.fisher_dz.value_or_none()),
-            "fisher_points": require_at_least("fisher_points", self.fisher_points.value_or_none(), 1),
-        }
+    def _run_ended(self, status) -> None:
+        """A run has ended. One of this page's that returned its posterior: the name and the note emptied, with a word
+        when the record came back under another name. Then the reading."""
+        made, self._made = self._made, None
+        if made is not None:
+            typed = self._names.name_value()
+            self._names.clear()
+            got = getattr(made, "name", "")
+            if typed and got != typed:
+                self.in_use.say(Fact("warn", SAVED_WITHOUT_NAME.format(typed)))
+        super()._run_ended(status)
 
-    def _confirm_fresh_run(self, cfg, n_runs: int, cap: int) -> tuple:
-        """Ask before starting from zero when a committed cache is ONE FIELD away.
+    def refresh_local_gates(self) -> None:
+        """What the step holds and what follows from it, the prior a training would use, and the way on to Checks once a
+        posterior is in use."""
+        prior = self._held()[1]
+        self.prior_row.set_value(PRIOR_IN_USE_TEXT.format(getattr(prior, "name", None)
+                                                          or record_words.label_of(prior)) if prior is not None else "")
+        self.prior_row.set_shown(prior is not None)
+        super().refresh_local_gates()
+        held = getattr(self.session, "posterior", None) is not None
+        self.set_next(GO_TO_CHECKS if held else "", "checks" if held else None)
 
-        Returns ``(go, new_run)``: whether to dispatch at all, and the consent to hand
-        build_posterior, which refuses the same near miss again inside the worker. The stage is the
-        one that must be sure; this dialog is the early, cheap version of that refusal, and the two
-        share ONE detector so they cannot disagree about which directory the run will touch.
+    @reported(QWidget.showEvent)
+    def showEvent(self, event):
+        """Shown again with nothing owed, the page is drawn again, since what the other steps hold may have changed;
+        it reads nothing."""
+        reads = self.stale
+        super().showEvent(event)
+        if not reads:
+            self.redraw()
 
-        THE STATUS LINE WAS NOT ENOUGH, and this is the evidence. `_budget_checkpoint` already says
-        "these settings match no checkpoint, so this starts a NEW run" and names the differing field
-        -- but it is a passive label, on a tab the user has usually scrolled past by the time they
-        press Train, and it has now failed to prevent three restarts: 884 batches lost outright on
-        2026-08-27 (a prior rebuilt rather than loaded, and never saved, so unrecoverable), and a
-        3989-batch checkpoint nearly abandoned twice on 2026-08-28.
-
-        DELIBERATELY NARROW. The detector reports only a committed sibling that differs in EXACTLY
-        ONE field -- the signature of an accident rather than of a different experiment.
-
-        FAILS OPEN. No prior, a detector that raises, and no near miss all return ``(True, False)``
-        and the run proceeds, exactly as before.
-        """
-        if self.session.inf_prior is None:
-            return True, False
-        try:
-            near = orchestrator.fresh_run_near_misses(cfg, self.session.inf_prior,
-                                                      num_runs=n_runs, run_size_cap=cap)
-        except Exception as e:               # noqa: BLE001 -- never block a run over a warning
-            self.log_pane.append_line(
-                f"Could not check for resumable checkpoints ({type(e).__name__}: {e}); "
-                f"continuing -- the training stage checks again before it simulates.", "warning")
-            return True, False
-        if not near:
-            return True, False
-        return (True, True) if self._ask_new_run(near, n_runs) else (False, False)
-
-    def _ask_new_run(self, near, n_runs: int) -> bool:
-        """The modal itself, split out so a test can answer it without a click. True = start anyway."""
-        lines = [f"  • {r['name']}: {r['batches']:,} batches — differs only in {r['field']}\n"
-                 f"      this run: {str(r['mine'])[:60]}\n"
-                 f"      that one: {str(r['theirs'])[:60]}" for r in near[:3]]
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("This starts a NEW run")
-        box.setText(f"This will simulate {n_runs:,} batches from zero.")
-        box.setInformativeText(
-            "A checkpoint that is ONE setting away already exists:\n\n" + "\n".join(lines) +
-            "\n\nIf you meant to continue that run, cancel and change the setting named above "
-            "— for a prior, remember that choosing it in the picker does nothing until you press "
-            "\"Build / Load prior\".")
-        go = box.addButton("Start a new run anyway", QMessageBox.DestructiveRole)
-        # Cancel is the default BY NAME: buttons() orders by role (Reject before Destructive), so
-        # buttons()[-1] was the destructive one, and Enter started the run this dialog exists to stop.
-        cancel = box.addButton("Cancel", QMessageBox.RejectRole)
-        box.setDefaultButton(cancel)
-        box.exec()
-        return box.clickedButton() is go
-
-    def _accept_for_load(self, entry) -> "Accept | None":
-        """What to load a STORED posterior with: ``Accept()``, ``Accept(truncated=True)``, or None for
-        "the user cancelled".
-
-        The tab used to pass ``Accept(truncated=True)`` unconditionally, which made the store's refusal
-        unreachable from the GUI: a non-amortized artifact -- valid only near ONE observation -- loaded
-        as silently as an amortized one, and the only sign was a log line after the fact. Asking costs a
-        click on the rare occasion a TSNPE posterior is picked, and the question is the only place the
-        three consequences (Validate restricts its prior, Infer refuses another observation, a further
-        round can only be drawn around this posterior's own observation) are stated before the load.
-
-        FAILS OPEN on any error: the load itself then names the problem, which it does far better than a
-        dialog here could.
-        """
-        try:
-            m = default_store().get("posterior", entry)       # the picker's userData is the id
-        except Exception:                                     # noqa: BLE001 -- let the load report it
-            return Accept()
-        if m.body.get("amortized", True):
-            return Accept()
-        return Accept(truncated=True) if self._ask_load_non_amortized(m) else None
-
-    def _ask_load_non_amortized(self, m) -> bool:
-        """The dialog. A method of its own so tests can replace it without a live event loop."""
-        trd = m.body.get("truncation") or {}
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("Load a NON-AMORTIZED posterior?")
-        box.setText(f"'{m.name or m.id}' was trained by a TSNPE round.")
-        box.setInformativeText(
-            f"It was trained on a prior truncated to a {trd.get('level', '?')}-HPD region along Fisher "
-            f"direction(s) {trd.get('dims')}, drawn around the observation with digest "
-            f"{trd.get('x_obs_digest')}.\n\n"
-            "It is valid only near that observation; anywhere else the flow has never seen a training "
-            "row and extrapolates confidently rather than returning the prior.\n\n"
-            "If you load it:\n"
-            "  • Validate restricts its prior to that region.\n"
-            "  • Infer refuses any other observation unless \"Run on a different observation\" is "
-            "ticked on the Infer tab.\n"
-            "  • A further TSNPE round can only be drawn around this posterior's own observation — "
-            "there is no override for that one.")
-        load = box.addButton("Load it", QMessageBox.DestructiveRole)
-        cancel = box.addButton("Cancel", QMessageBox.RejectRole)      # the default by name
-        box.setDefaultButton(cancel)
-        box.exec()
-        return box.clickedButton() is load
-
-    def _on_posterior(self, payload):
-        self.session.posterior = payload                 # a LoadedPosterior
-        region = payload.posterior.truncation
-        if region is not None:
-            self.log_pane.append_line(
-                f"This posterior is NON-AMORTIZED (observation digest {payload.posterior.x_obs_digest}): "
-                f"Validate restricts its prior to the region it was trained on; Infer refuses any other "
-                f"observation unless 'Run on a different observation' is ticked on the Infer tab.",
-                "warning")
-        self.log_pane.append_line(f"Posterior ready: {payload.name or '(unnamed, id ' + payload.id + ')'}. "
-                                  f"Name it below to keep it.")
-        self._screen.refresh_gates()
-
-    def _save_posterior(self):
-        name = self.post_name.text().strip()
-        lp = self.session.posterior
-        if not name or lp is None:
-            self.log_pane.append_line("Train a posterior and enter a name first.", "warning")
-            return
-        try:
-            lp.manifest = default_store().rename("posterior", lp.id, name)
-        except Refusal as e:                         # a bad or taken name is a StoreError(field="name")
-            self._refusal(e)
-            return
-        except Exception as e:                       # noqa: BLE001 -- anything else is a bug
-            self._on_error(e, traceback.format_exc())
-            return
-        lp.name = name
-        self.post_picker.refresh()
-        self.post_picker.restore_key(lp.id)
-        self._screen.recompute_states()                # the step's row names the posterior by its new name
-        self.log_pane.append_line(f"Posterior named '{name}'.")
-
-    def _sync_post_line(self) -> None:
-        """The read-only line under the posterior picker. See PriorPanel._sync_prior_line for
-        why ``currentIndexChanged`` also covers ``refresh()``."""
-        self.post_line.setText(self.post_picker.selection_summary())
-
-    def _sync_train_button(self):
-        """Disable the Train button when the "(from scratch)" option is selected but no prior exists --
-        loading an existing posterior is always allowed; training a new one needs a prior."""
-        _entry, is_new = self.post_picker.selected()
-        blocked = is_new and self.session.inf_prior is None
-        self.btn_post.setEnabled(self.session.cfg is not None and not blocked)
-        self.btn_post.setToolTip("Build or load a prior first to train a new posterior." if blocked else "")
-
-    def refresh_local_gates(self):
-        self._sync_train_button()
-        self.btn_save_post.setEnabled(self.session.posterior is not None)
-        self._sync_post_line()
-        # A config or a prior arriving changes every derived line, and the checkpoint line cannot be
-        # computed without both.
-        self._sync_budget()
-
-    def save_settings(self, qs):
-        """The selection and the budget only. The budget is written as the boxes' TEXT, so a box
-        left blank at close opens at config.py's default on the next launch instead of as the 0 that
-        value() reads a blank as. The network and Fisher boxes are science knobs: they open at
-        config.py on every launch and a stale key an older build left in PRISM.ini is ignored -- a
-        restored learning rate trained a different network with nothing on screen saying so."""
-        qs.beginGroup("inference_posterior")
-        qs.setValue("posterior", self.post_picker.key())
-        settings.save_field(qs, "num_runs", self.num_runs)
-        settings.save_field(qs, "run_size_cap", self.run_size_cap)
-        qs.endGroup()
-
-    def restore_settings(self, qs):
-        qs.beginGroup("inference_posterior")
-        self.post_picker.restore_key(settings.get_str(qs, "posterior"))
-        # Defaults are the config constants, so a fresh install, a wiped QSettings and a box saved
-        # blank all land on exactly the stage defaults (get_int falls back on "" as on a missing key).
-        self.num_runs.setText(str(settings.get_int(qs, "num_runs", config.TRAINING_NUM_RUNS)))
-        self.run_size_cap.setText(str(settings.get_int(qs, "run_size_cap", config.TRAINING_RUN_SIZE)))
-        qs.endGroup()
+    # ── what is remembered ──
+    def restore_settings(self, qs) -> None:
+        """The batches and the simulations per batch the last training started with, put back as their boxes' text,
+        never read anywhere else, and marked kept from last time until they are touched. A value that is no whole
+        number is passed over."""
+        for key, name in ((NUM_RUNS_KEY, "num_runs"), (RUN_SIZE_KEY, "run_size_cap")):
+            raw = settings.get_str(qs, key, "").strip()
+            try:
+                value = int(raw)
+            except ValueError:
+                continue
+            row = self.form.rows[name]
+            row.set_value(value)
+            row.kept = True

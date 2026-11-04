@@ -22,16 +22,20 @@ Three shapes of entry:
   fields, whose rows are labelled by parameter name, or a plan, whose file is what is corrected; the
   sentence quotes the control's own text ("Run on a different observation") and names its places as
   a box's sentence does.
-* ``None`` for a key the window has no control for: the tool-only diagnostics knobs, and the six
-  settings the window never exposes (the checkpoint cadence, the resume policy, the device, the
-  two sample counts, the epoch ceiling), the five FDT settings neither front end exposes, and the
-  one setting of a plan no box names yet (the expected epochs).
+* ``None`` for a key the window has no control for: the tool-only diagnostics knobs, the three
+  settings the window never exposes (the device and the two sample counts), and the five FDT
+  settings neither front end exposes.
+
+Four settings stand only on the Training page, for its own run: the checkpoint cadence, the resume
+policy, the epoch limit and the expected epochs. A page of the old kind, whose run reads none of them
+from a box, names no box for them (``ON_TRAINING_ALONE``).
 
 A place is written in the words the rail's places are written in (``keys.place_words``), and several
 are joined as ``keys.places_words`` joins them, so a place is named in one table and its joining is
 written in one place. ``num_runs`` and ``run_size_cap`` sit in both training and the narrowing round
 with the same label, so their place is a tuple of both and the sentence names both: one place would
-send a user refused in the narrowing round to training. The three drive keys
+send a user refused in the narrowing round to training. The narrowing round's row of the second reads
+"(0 = automatic)" after the label, where the Training page has its tick "Automatic". The three drive keys
 are static strings built exactly as the Infer tab builds its rows (``labels.gui_forcing_label``
 with ``config.FORCING_DISPLAY_UNITS``); ``_rebuild_forcing_fields`` keeps deriving its rows from
 the config's forcing names, so a model with an ``amp_y`` or ``offset`` drive shows rows this table
@@ -63,9 +67,9 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # the observation and the training budget
     "t_obs": (("infer", "live"), "T_obs (s)"),   # Live simulation's box too
     "num_runs": (("training", "narrowing"), "Batches"),
-    "run_size_cap": (("training", "narrowing"), "Max rows per batch (0 = auto)"),
-    "checkpoint_every": None,
-    "resume": None,
+    "run_size_cap": (("training", "narrowing"), "Simulations per batch"),
+    "checkpoint_every": ("training", "Save the simulations every … batches"),
+    "resume": ("training", "Continue or start new"),
     "new_run": (f"Answer 'Start a new run anyway' in the dialog {_in('training')}, or tick 'Start a "
                 f"new simulation even if a cache one setting away exists' {_in('narrowing')}."),
     # the kept training to resume: no control yet, its Resume comes with the window's training page
@@ -88,23 +92,23 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "min_cluster_size": ("prior", "Smallest cluster"),
     "min_samples": ("prior", "Cluster density"),
     # the flow and the Fisher rotation
-    "hidden_features": ("training", "Hidden features"),
-    "num_transforms": ("training", "Transforms"),
+    "hidden_features": ("training", "Network width"),
+    "num_transforms": ("training", "Network depth"),
     "learning_rate": ("training", "Learning rate"),
-    "stop_after_epochs": ("training", "Early-stop patience"),
-    "max_num_epochs": None,
-    "fisher_m": ("training", "Ensemble per perturbation"),
-    "fisher_dz": ("training", "Central-difference step"),
-    "fisher_points": ("training", "Operating points"),
+    "stop_after_epochs": ("training", "End the fit after … epochs without improvement"),
+    "max_num_epochs": ("training", "Epoch limit"),
+    "fisher_m": ("training", "Rotation: simulations per perturbation"),
+    "fisher_dz": ("training", "Rotation: step"),
+    "fisher_points": ("training", "Rotation: parameter sets averaged"),
     # consents and names
     "accept_truncated": f"Confirm the load in the dialog {_in('training')}.",
     "accept_other_observation": f"Tick 'Run on a different observation' {_in('infer')}.",
     # A name and a note are typed in several boxes, and each sentence lists them all: 'Name' on step 2 names the
-    # prior a build makes, the Save box beside the Save button of step 3 the posterior held, and a run's record and a
-    # comparison's are named in boxes of their own on the two pages of Effective temperature, so a taken comparison
-    # name is sent to the 'Comparison name' box, not the run's.
-    "name": (f"Choose another name in 'Name' {_in('prior')}, in the Save box {_in('training')}, or in the "
-             f"'Record name' or 'Comparison name' box {_in(('temperature/one_cell', 'temperature/sweep'))}."),
+    # prior a build makes, 'Name' on step 3 the posterior a training makes, and a run's record and a comparison's
+    # are named in boxes of their own on the two pages of Effective temperature, so a taken comparison name is sent
+    # to the 'Comparison name' box, not the run's.
+    "name": (f"Choose another name in 'Name' {_in(('prior', 'training'))}, or in the 'Record name' or 'Comparison "
+             f"name' box {_in(('temperature/one_cell', 'temperature/sweep'))}."),
     # Records. Sentences, not (place, label), although Records is a place: the list is not a box, and
     # the Note box sits in its action row, not in a form row the read-back pin reads.
     "artifact": f"Select an artifact in the list {_in('records')}.",
@@ -131,7 +135,8 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "model": (("model", "temperature/one_cell", "live"), "Model"),
     "device": None,
     "prior": ("prior", "Saved prior"),
-    "posterior": ("training", "Posterior"),
+    # The Training page makes a posterior and lists none until it can load one: the cure is another training.
+    "posterior": f"Train another posterior {_in('training')}.",
     # recordings and the drive
     "recording_spont": (f"Select the passive recording {_in('infer')} (the 'Spontaneous' box, or the "
                         "'Passive' box for a χ observation)."),
@@ -149,10 +154,9 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "chi_f0": _FIXED,
     "chi_freq_bounds": _FIXED,
     "reparam_rotate": ("model", "Rotation"),
-    # a run plan: the thing to correct is the file, so the sentence names no box. The expected epochs a plan
-    # holds have no box of their own to name until the training page shows them.
+    # a run plan: the thing to correct is the file, so the sentence names no box
     "plan": "Correct the file, then choose the plan again.",
-    "expected_epochs": None,
+    "expected_epochs": ("training", "Expected epochs (for the time estimate only)"),
     # the two secondary analyses, one page each: the label is the row the panel builds, so label(key)
     # keeps a box and its hint sentence from drifting apart; the Seed rows too are built from
     # label("seed") on both panels.
@@ -198,6 +202,10 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
 }
 
 
+#: The settings that stand on the Training page alone, for its own run: a page of the old kind names no box for them,
+#: since its run reads none of them from one.
+ON_TRAINING_ALONE = frozenset({"checkpoint_every", "resume", "max_num_epochs", "expected_epochs"})
+
 #: What a page of the look says where the table's own sentence lists every old page's box.
 ON_THIS_PAGE: dict[str, str] = {
     "new_run": "Answer the question that the start button asks on this page.",
@@ -231,8 +239,8 @@ def fix_sentence(key: str | None, here: str | None = None) -> str:
     box: ``"Set it in 'Batches' on this page."`` when the row stands there, and else
     ``"Set it in 'Batches' in step 3, Training, or step 6, Narrowing round."``; a sentence entry says what
     ``ON_THIS_PAGE`` gives for it, when it gives anything. With no ``here`` a page not rebuilt yet keeps its own
-    words."""
-    if key is None:
+    words, and names no box of ``ON_TRAINING_ALONE``."""
+    if key is None or (here is None and key in ON_TRAINING_ALONE):
         return ""
     entry = CONTROL.get(key)
     if isinstance(entry, tuple):

@@ -346,10 +346,9 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
 
     Every posterior is now WRITTEN at completion, so there is no deferred-save window for a region to
     fall out of on the way to disk -- but the SESSION must still carry the right LoadedPosterior after
-    a TSNPE round, after its Save (a rename, which must not touch the body), and after an ordinary
-    train replaces it. Three things, and the third is the one that is easy to miss: the round
-    installs a NON-AMORTIZED posterior, the Save renames it in place, and training an ordinary
-    posterior afterwards installs an AMORTIZED one.
+    a TSNPE round, and after an ordinary train replaces it. Two things, and the second is the one that
+    is easy to miss: the round installs a NON-AMORTIZED posterior, and training an ordinary posterior
+    afterwards installs an AMORTIZED one.
     """
     from core.artifacts import Accept
     from core.SBI import reparam, truncate
@@ -369,18 +368,11 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
     inf = build_inference(session=SbiSession(cfg=cfg, inf_prior=object()))
     panel = inf.tsnpe_panel
 
-    inf.posterior_panel._ask_load_non_amortized = lambda m: pytest.fail(
-        "a round's OWN result must install with no dialog -- it is the posterior the user just made")
     panel._on_round(loaded)
     assert inf.session.posterior is loaded, "the round's LoadedPosterior never reached the session"
     assert inf.session.posterior.manifest.body["amortized"] is False,         "the round's posterior was not installed as NON-AMORTIZED"
 
-    # the Save button is a RENAME now -- it must not touch the body, so it stays non-amortized on disk
     pp = inf.posterior_panel
-    pp.post_name.setText("some_name")
-    pp._save_posterior()
-    assert store.get("posterior", loaded.id).name == "some_name"
-    assert store.get("posterior", loaded.id).body["amortized"] is False
 
     # and an ordinary train afterwards must install an AMORTIZED posterior, or the mislabelling runs
     # the other way
@@ -390,87 +382,11 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
     assert inf.session.posterior.manifest.body["amortized"] is True
 
 
-def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session(store):
-    """⚠ The calibrate-on-the-region rule's GUI half, plus the question the Posterior tab asks before
-    it loads a stored narrowed posterior. A non-amortized artifact is loaded through the Posterior
-    tab, which now ASKS first and opts in with ``Accept(truncated=True)`` only on a yes; the
-    LoadedPosterior it installs carries the region, Validate passes that wrapper straight through to
-    validate_calibration (which reads the region off ``posterior.posterior.truncation`` so calibration
-    draws from the truncated prior), and an amortized LoadedPosterior clears it -- and is loaded with no
-    question at all."""
-    from core.artifacts import Accept
-    from core.SBI import reparam, truncate
-    from core.SBI.training_checkpoint import bijection_probe
-    from core.gui.session import SbiSession
-    from tests._fixtures import _nad_cfg, _posterior_artifact
-
-    cfg = _nad_cfg(chi_mode=True)
-    P = len(cfg.params_dict) + len(cfg.rescale_params)
-    T = reparam.build_inferred_bijection(cfg, log_params=[])
-    region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=None,
-                                       probe=bijection_probe(T, P), x_obs_digest="d" * 16)
-    trunc = _posterior_artifact(store, cfg, name="trunc", amortized=False, region=region)
-    amortized = _posterior_artifact(store, cfg, name="amort")
-
-    qt_app()
-    inf = build_inference(session=SbiSession(cfg=cfg, inf_prior=_prior_stub()))
-    pp, vp = inf.posterior_panel, inf.validate_panel
-
-    # the session half: a loaded region reaches Validate
-    stub_region = object()
-    stub = type("Post", (), {"truncation": stub_region, "x_obs_digest": "feedfacefeedface",
-                             "latent": object()})()
-    loaded = type("LoadedPosterior", (), {"posterior": stub, "name": "", "id": "p1"})()
-    pp._on_posterior(loaded)
-    assert inf.session.posterior.posterior.truncation is stub_region
-    assert inf.session.posterior.posterior.x_obs_digest == "feedfacefeedface"
-
-    captured = {}
-    vp.dispatch = lambda fn, *a, **k: captured.update(args=a, kwargs=k)
-    vp._validate()
-    assert captured["args"][1] is inf.session.posterior and captured["args"][1].posterior.truncation is stub_region, \
-        "Validate did not pass the posterior whose region restricts calibration"
-
-    load = {}
-    pp.dispatch = lambda fn, *a, **k: load.update(args=a, kwargs=k)
-
-    # (a) the ask says yes: the load opts in, and it is a LOAD (build_new False)
-    asked = []
-    pp._ask_load_non_amortized = lambda m: asked.append(m) or True
-    pp.post_picker.selected = lambda: (trunc.id, False)
-    pp._build_posterior()
-    accept = load["kwargs"].get("accept")
-    assert isinstance(accept, Accept) and accept.truncated is True and load["args"][3] is False, \
-        "the confirmed LOAD does not opt in to non-amortized artifacts"
-    assert len(asked) == 1 and asked[0].id == trunc.id, "the dialog was not shown the artifact's manifest"
-
-    # (b) the ask says no: nothing is dispatched and the session keeps what it had. Reinstall a
-    # posterior first -- step (a)'s LOAD already reset the session's to None via reset_downstream, so
-    # "is before" would hold trivially (None is None) even if Cancel reset it too.
-    load.clear()
-    pp._on_posterior(loaded)
-    before = inf.session.posterior
-    pp._ask_load_non_amortized = lambda m: False
-    pp._build_posterior()
-    assert load == {}, "Cancel dispatched the load anyway"
-    assert inf.session.posterior is before, "Cancel reset the session"
-
-    # (c) an amortized artifact is loaded with no question at all
-    load.clear()
-    pp._ask_load_non_amortized = lambda m: pytest.fail("an amortized posterior must not raise a dialog")
-    pp.post_picker.selected = lambda: (amortized.id, False)
-    pp._build_posterior()
-    assert load["kwargs"]["accept"].used() == [], load["kwargs"]["accept"]
-
-    amortized_stub = type("Post", (), {"truncation": None, "x_obs_digest": None, "latent": object()})()
-    amortized_loaded = type("LoadedPosterior", (), {"posterior": amortized_stub, "name": "", "id": "p2"})()
-    pp._on_posterior(amortized_loaded)
-    assert inf.session.posterior.posterior.truncation is None
-
 def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
-    """Prior, Posterior and Validate all gained fields. Each must reach its orchestrator function as
-    an ARGUMENT -- orchestrator snapshots those constants at import, so writing them would be a
-    silent no-op and the run would use the defaults with nothing to say so."""
+    """Prior and Validate gained fields. Each must reach its orchestrator function as an ARGUMENT --
+    orchestrator snapshots those constants at import, so writing them would be a silent no-op and the
+    run would use the defaults with nothing to say so. The Training page's call is held whole by its
+    own test, its every argument from its form."""
     from core.gui.session import SbiSession
     from core import config as _cfg
 
@@ -479,7 +395,7 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
                                              posterior=_posterior_stub()))
 
     cap = {}
-    for panel in (inf.prior_panel, inf.posterior_panel, inf.validate_panel):
+    for panel in (inf.prior_panel, inf.validate_panel):
         panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
 
     inf.validate_panel.cal_n.setText("77")
@@ -487,38 +403,6 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     inf.validate_panel._validate()
     assert cap["kwargs"]["n_cal"] == 77 and cap["kwargs"]["cal_n_scales"] == 11, cap["kwargs"]
     assert _cfg.SBC_N_CAL != 77, "the panel wrote the config constant instead of passing an argument"
-
-    pp = inf.posterior_panel
-    refused = []
-    pp._refusal = lambda exc: refused.append(exc)       # the yellow box, recorded instead of shown
-    pp.flow_hidden.setText("64")
-    pp.flow_transforms.setText("3")
-    pp.flow_lr.setText("0.0007")
-    pp.flow_patience.setText("7")
-    pp.fisher_dz.setText("0.03")
-    pp.post_picker.combo.setCurrentIndex(0)
-    pp._build_posterior()
-    assert refused == [], [str(e) for e in refused]
-    k = cap["kwargs"]
-    from core.gui.run import retry
-    from core.gui.run.model import RunSpec
-    called = RunSpec("Training", ("inference", "training")).with_call(cap["fn"], cap["args"], k)
-    assert len(cap["args"]) > 1 and retry.made_in(called, inf.session), (
-        "the training is not called with the session's own model and prior as its first two arguments, which is "
-        "what its page's Continue and Resume compare with the session before they repeat the call")
-    assert (k["hidden_features"], k["num_transforms"], k["stop_after_epochs"]) == (64, 3, 7), k
-    # The two float knobs arrive as typed, through the rule -- not through `value() or default`.
-    assert (k["learning_rate"], k["fisher_dz"]) == (0.0007, 0.03), k
-    assert _cfg.NSF_HIDDEN_FEATURES != 64, "the panel wrote NSF_HIDDEN_FEATURES"
-    # the Fisher knobs ride along on the same call
-    assert (k["fisher_m"], k["fisher_points"]) == (_cfg.REPARAM_FISHER_M, _cfg.REPARAM_FISHER_POINTS)
-    # A BLANK box is refused at the click, by name, and nothing new is dispatched -- not clamped to 1.
-    pp.flow_transforms.setText("")
-    pp._build_posterior()
-    assert cap["kwargs"] is k, \
-        f"a blank Transforms box was dispatched as {cap['kwargs'].get('num_transforms')!r}"
-    assert len(refused) == 1 and refused[0].field == "num_transforms", [str(e) for e in refused]
-    pp.flow_transforms.setText("3")
 
     # Prior: the seven settings of a build reach the stage as its arguments, through the page's own press, each typed
     # one step off the usual, with the name and the note typed: "Automatic" sends 0, and a number typed in its place
@@ -556,19 +440,28 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
 
 
 def test_posterior_from_scratch_is_gated_on_a_prior():
+    """With no prior in use "Start training" is greyed, with its reason beside it, and the block for the run names no
+    prior; a prior in use, with its configuration, lets it be pressed once a name is typed, and the block for the run
+    names it, as text no one can edit."""
     from core.gui.session import SbiSession
 
     qt_app()
     inf = build_inference(session=SbiSession(cfg=object()))
     inf.refresh_gates()
     pp = inf.posterior_panel
-    pp.post_picker.combo.setCurrentIndex(0)               # the "(from scratch)" sentinel (allow_new adds it first)
-    assert pp.post_picker.selected()[1] is True, "index 0 should be the from-scratch sentinel"
+    pp.names.name.setText("retrain")
+    pp.redraw()
+    assert not pp.foot.main_button.isEnabled(), "training must be greyed without a prior"
+    assert pp.foot.reason.text() == "Cannot start yet: needs a prior."
+    assert not pp.prior_row.is_shown(), "a prior in use was named with none held"
+    inf.session.inf_prior = prior_stub()                  # named retrain_prior
     pp.refresh_local_gates()
-    assert not pp.btn_post.isEnabled(), "training from scratch must be disabled without a prior"
-    inf.session.inf_prior = object()
+    assert pp.foot.main_button.isEnabled(), "with a prior and its configuration, training is allowed"
+    assert pp.prior_row.is_shown() and pp.prior_row.label.text() == "Prior in use: retrain_prior"
+    inf.session.cfg = None                                # a prior with no configuration makes no training
     pp.refresh_local_gates()
-    assert pp.btn_post.isEnabled(), "with a prior, training from scratch is allowed"
+    assert pp.foot.reason.text() == "Cannot start yet: needs a prior." and not pp.prior_row.is_shown()
+
 
 def test_inference_pickers_repoint_from_draft_and_config():
     """The Prior tab's BOUNDS picker follows the applied model (new_draft), and the Infer tab's CELL
@@ -1176,111 +1069,6 @@ def test_the_infer_tab_dispatches_the_compositions(tmp_path):
     assert cap["kwargs"]["accept"].other_observation is True, cap["kwargs"]["accept"]
 
 
-def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
-    """The dialog gates the dispatch and its answer TRAVELS: consent is a keyword on the stage call,
-    not a flag the panel keeps to itself. The stage asks the same question again inside the worker --
-    this is only the early, cheap version of the refusal -- so a dialog that answered "yes" and then
-    dispatched without new_run would be refused seconds later for no reason the user can see.
-
-    And it FAILS OPEN in both the shapes that can happen in the wild: no near miss, and a detector
-    that raises. A warning that can block a run is worse than no warning."""
-    from core import orchestrator
-    from core.gui.session import SbiSession
-    from tests._fixtures import page_lines
-
-    qt_app()
-    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub()))
-    pp = inf.posterior_panel
-    pp.post_picker.selected = lambda: ("", True)              # "(from scratch)" -> a NEW run
-    pp.num_runs.setText("2")
-    pp.run_size_cap.setText("8")
-    sent = {}
-    pp.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
-    row = [{"name": "abcdef012345", "batches": 3989, "field": "n_runs", "mine": 2, "theirs": 3}]
-
-    # one near miss, answered yes. monkeypatch, never a bare rebind: an assertion that fails below
-    # would otherwise leave the stub installed on core.orchestrator for the rest of this
-    # single-process gate, silently disabling the near-miss check for every later test in the run.
-    # The detector must be asked about THIS run's identity: a stub that ignored its arguments stayed
-    # green through a regression that dropped run_size_cap, where the real detector looks at another
-    # identity, the dialog never shows, and the stage then refuses with advice to press a button that
-    # cannot appear.
-    seen = {}
-    monkeypatch.setattr(orchestrator, "fresh_run_near_misses",
-                        lambda cfg, prior, **k: seen.update(k, prior=prior) or list(row))
-    pp._ask_new_run = lambda near, n_runs: True
-    pp._build_posterior()
-    assert seen["num_runs"] == 2 and seen["run_size_cap"] == 8, seen
-    assert seen["prior"] is inf.session.inf_prior, seen
-    assert sent["fn"] is orchestrator.build_posterior and sent["kwargs"]["new_run"] is True
-    # a name another posterior takes during the training is dropped, not refused: the window asks so
-    assert sent["kwargs"]["if_name_taken"] == "unnamed", sent["kwargs"]
-    assert sent["kwargs"]["num_runs"] == 2 and sent["kwargs"]["run_size_cap"] == 8
-
-    # answered no: nothing is dispatched at all
-    sent.clear()
-    pp._ask_new_run = lambda near, n_runs: False
-    pp._build_posterior()
-    assert sent == {}, "Cancel must not start the run"
-
-    # no near miss: dispatched without consent, and nothing is asked
-    sent.clear()
-    monkeypatch.setattr(orchestrator, "fresh_run_near_misses", lambda *a, **k: [])
-    pp._ask_new_run = lambda near, n_runs: pytest.fail("a run with no near miss must not be questioned")
-    pp._build_posterior()
-    assert sent["kwargs"]["new_run"] is False
-
-    # a detector that raises: the run proceeds and the log says so
-    sent.clear()
-
-    def _boom(*a, **k):
-        raise RuntimeError("unreadable header")
-
-    monkeypatch.setattr(orchestrator, "fresh_run_near_misses", _boom)
-    pane = page_lines(pp)               # both pane channels, as (level, text) -- the stub's own order
-    lines = pane.lines
-    pp._build_posterior()
-    assert sent["kwargs"]["new_run"] is False
-    assert any(k == "warning" and "unreadable header" in t for k, t in lines), lines
-
-
-def test_the_fresh_cache_and_narrowed_posterior_dialogs_default_to_cancel(monkeypatch):
-    """Enter on either dialog must do the SAFE thing, so Cancel is the default: on the load question
-    the other button loads a NON-AMORTIZED posterior with Accept(truncated=True), and on the near-miss
-    dialog it starts a fresh cache one setting away from a committed one, the accident the near-miss
-    dialog exists to stop. Every other test replaces the _ask_* methods, so only this one sees the
-    dialogs themselves."""
-    from types import SimpleNamespace
-    from tests._fixtures import all_asked, asked, choose, forget_asked
-
-    qt_app()
-    inf = build_inference()
-    pp = inf.posterior_panel
-
-    def ask_new_run():
-        return pp._ask_new_run([{"name": "a", "batches": 3, "field": "n_runs", "mine": 2, "theirs": 3}], 2)
-
-    def ask_load():
-        return pp._ask_load_non_amortized(SimpleNamespace(
-            body={"truncation": {"level": 0.99, "dims": [0], "x_obs_digest": "d" * 16}}, name="r", id="x"))
-
-    for ask, destructive in ((ask_new_run, "Start a new run anyway"), (ask_load, "Load it")):
-        # nothing clicked: the default is Cancel
-        forget_asked()
-        choose(monkeypatch)
-        assert ask() is False
-        assert all_asked() and asked().default is not None
-        assert asked().default == "Cancel", asked().default
-
-        # Enter: the default button is clicked, and the answer is NO
-        choose(monkeypatch, default=True)
-        assert ask() is False, f"clicking the default button on the '{destructive}' dialog answered yes"
-
-        # the destructive button clicked: the answer is YES
-        choose(monkeypatch, words=destructive)
-        assert ask() is True, f"clicking '{destructive}' did not answer yes"
-
-
 def test_the_tsnpe_tab_dispatches_a_loaded_observation(monkeypatch):
     """The tab loads the observation ITSELF, on the GUI thread, and hands the wrapper to the stage.
 
@@ -1505,6 +1293,11 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
             assert isinstance(text, str) and text, f"{key}: empty label"
             assert gui_fields.label(key) == text
             # the box by its label, then each place in the table's order, as the rail's places are written
+            # a setting of the Training page alone is named by no page of the old kind, and on that page as any row is
+            if key in gui_fields.ON_TRAINING_ALONE:
+                assert names == ("training",) and gui_fields.fix_sentence(key) == "", key
+                assert gui_fields.fix_sentence(key, here="training") == f"Set it in '{text}' on this page.", key
+                continue
             sentence, at = gui_fields.fix_sentence(key), 0
             assert sentence.startswith(f"Set it in the '{text}' box in ") and sentence.endswith("."), sentence
             for name in names:
@@ -1550,7 +1343,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         # beginning with its own number
         "t_obs": "Set it in the 'T_obs (s)' box in step 5, Inference, or in Live simulation.",
         "num_runs": "Set it in the 'Batches' box in step 3, Training, or step 6, Narrowing round.",
-        "run_size_cap": ("Set it in the 'Max rows per batch (0 = auto)' box in step 3, Training, or step 6, "
+        "run_size_cap": ("Set it in the 'Simulations per batch' box in step 3, Training, or step 6, "
                          "Narrowing round."),
         # the consents and the dialogs quote their controls' own text (tsnpe_tab.py:102,
         # posterior_tab.py:232, infer_tab.py:150)
@@ -1568,18 +1361,17 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "stability_units": "Set it in the 'Stability test length' box in step 2, Prior.",
         "min_cluster_size": "Set it in the 'Smallest cluster' box in step 2, Prior.",
         "min_samples": "Set it in the 'Cluster density' box in step 2, Prior.",
-        "hidden_features": "Set it in the 'Hidden features' box in step 3, Training.",
-        "num_transforms": "Set it in the 'Transforms' box in step 3, Training.",
+        "hidden_features": "Set it in the 'Network width' box in step 3, Training.",
+        "num_transforms": "Set it in the 'Network depth' box in step 3, Training.",
         "learning_rate": "Set it in the 'Learning rate' box in step 3, Training.",
-        "stop_after_epochs": "Set it in the 'Early-stop patience' box in step 3, Training.",
-        "fisher_m": "Set it in the 'Ensemble per perturbation' box in step 3, Training.",
-        "fisher_dz": "Set it in the 'Central-difference step' box in step 3, Training.",
-        "fisher_points": "Set it in the 'Operating points' box in step 3, Training.",
+        "stop_after_epochs": "Set it in the 'End the fit after … epochs without improvement' box in step 3, Training.",
+        "fisher_m": "Set it in the 'Rotation: simulations per perturbation' box in step 3, Training.",
+        "fisher_dz": "Set it in the 'Rotation: step' box in step 3, Training.",
+        "fisher_points": "Set it in the 'Rotation: parameter sets averaged' box in step 3, Training.",
         "accept_truncated": "Confirm the load in the dialog in step 3, Training.",
         "accept_other_observation": "Tick 'Run on a different observation' in step 5, Inference.",
-        "name": ("Choose another name in 'Name' in step 2, Prior, in the Save box in step 3, Training, or in the "
-                 "'Record name' or 'Comparison name' box in Effective temperature, One cell, or in Effective "
-                 "temperature, Sweep study."),
+        "name": ("Choose another name in 'Name' in step 2, Prior, or step 3, Training, or in the 'Record name' or "
+                 "'Comparison name' box in Effective temperature, One cell, or in Effective temperature, Sweep study."),
         # the two of Records, where the list and the Note box are no form rows
         "artifact": "Select an artifact in the list in Records.",
         "note": ("Edit it in the Note box in Records, or in the 'Note' or 'Comparison note' box in Effective "
@@ -1596,7 +1388,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "model": ("Set it in the 'Model' box in step 1, Model and options, or in Effective temperature, One cell, or "
                   "in Live simulation."),
         "prior": "Set it in the 'Saved prior' box in step 2, Prior.",
-        "posterior": "Set it in the 'Posterior' box in step 3, Training.",
+        "posterior": "Train another posterior in step 3, Training.",
         "recording_spont": ("Select the passive recording in step 5, Inference (the 'Spontaneous' box, or the "
                             "'Passive' box for a χ observation)."),
         "recording_forced": "Set it in the 'Forced' box in step 5, Inference.",
@@ -1652,9 +1444,10 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     assert gui_fields.label("s_grid") == "S grid  (T_a/T = 1)", \
         "a box of a page still has a label, so a row and its hint cannot drift apart"
 
-    # (d) no window control: the six the window never exposes, and the tool-only set
+    # (d) no window control: the three the window never exposes, and the tool-only set
+    assert gui_fields.ON_TRAINING_ALONE == {"checkpoint_every", "resume", "max_num_epochs", "expected_epochs"}
     assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
-        "checkpoint_every", "resume", "device", "n_samples", "num_posterior_samples", "max_num_epochs",
+        "device", "n_samples", "num_posterior_samples",
         "repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
         "n_sweep", "chi_k_fixed",
         # the probe checks: command line only
@@ -1665,9 +1458,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         # the five FDT settings neither front end exposes
         "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd",
         # the kept training to resume: the window's Resume comes with its training page
-        "resume_fit",
-        # a setting a plan holds: no box is named for it until the training page shows it
-        "expected_epochs"}
+        "resume_fit"}
 
     # (e) the drive labels, as the Infer tab builds them
     for key, name in (("drive_amplitude", "amp"), ("drive_frequency", "freq"), ("drive_phase", "phase")):
@@ -1676,63 +1467,6 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     assert gui_fields.label("drive_amplitude") == "A (N)"
     assert gui_fields.label("drive_frequency") == "f (Hz)"
     assert gui_fields.label("drive_phase") == "φ (rad)"
-
-
-def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
-    """Save on the Training page is a rename, and a bad or taken name is a StoreError -- a
-    Refusal with field="name" -- so it opens the yellow box with the core's sentence as its text and
-    this front end's fix ``fix_sentence("name")``, which names 'Name' on the Prior page, then the Save box
-    and the record and comparison name boxes, under it. It used to go through
-    _config_error, whose box read "The configuration could not be built." over a sentence about a
-    name: a lie for a rename. A rename that fails for any other reason is a bug and stays red, with
-    its traceback. Either way the loaded artifact keeps its old name."""
-    import types
-    from core.artifacts import StoreError
-    from core.gui import fields as gui_fields
-    from core.gui.panels.inference import posterior_tab as post_mod
-    from core.gui.session import SbiSession
-    from tests._fixtures import asked, forget_asked, page_lines, qt_app
-
-    qt_app()
-    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub(),
-                                             posterior=_posterior_stub()))
-
-    def _taken(kind, ref, new_name):
-        raise StoreError(f"a {kind} named {new_name!r} already exists; rename or delete it first",
-                         field="name")
-
-    def _bug(kind, ref, new_name):
-        raise PermissionError("manifest.json is locked")
-
-    for kind, mod, panel, name_box, save, loaded in (
-            ("posterior", post_mod, inf.posterior_panel, inf.posterior_panel.post_name,
-             inf.posterior_panel._save_posterior, inf.session.posterior),):
-        pane = page_lines(panel)
-        name_box.setText("p")
-
-        monkeypatch.setattr(mod, "default_store", lambda: types.SimpleNamespace(rename=_taken))
-        forget_asked()
-        save()
-        box = asked()
-        assert (box.kind, box.marker) == ("refusal", "warn"), kind
-        assert box.sentence == f"a {kind} named 'p' already exists; rename or delete it first", kind
-        assert box.beneath == gui_fields.fix_sentence("name") == (
-            "Choose another name in 'Name' in step 2, Prior, in the Save box in step 3, Training, or in the "
-            "'Record name' or 'Comparison name' box in Effective temperature, One cell, or in Effective "
-            "temperature, Sweep study."), kind
-        assert box.detail == "", kind
-        assert loaded.name == "", "a refused rename must not relabel the loaded artifact"
-        assert pane.lines[-1][0] == "warning" and "already exists" in pane.lines[-1][1], pane.lines
-
-        monkeypatch.setattr(mod, "default_store", lambda: types.SimpleNamespace(rename=_bug))
-        forget_asked()
-        save()
-        box = asked()
-        assert (box.kind, box.title) == ("error", "Error"), kind
-        assert box.sentence == "manifest.json is locked", kind
-        assert "Traceback" in box.detail and "PermissionError" in box.detail, kind
-        assert loaded.name == "", kind
-        assert pane.lines[-1] == ("error", "manifest.json is locked"), pane.lines
 
 
 def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_config_error(monkeypatch,
@@ -3751,86 +3485,6 @@ def test_a_list_read_again_keeps_its_selection_and_never_falls_to_the_first_file
     assert today.combo.currentIndex() == 0
 
 
-def test_the_posterior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
-    """At the Posterior tab's click, every knob the TRAIN branch reads is validated before any
-    worker starts, through the shared rules, and the refusal carries the box's field key so the
-    yellow box can say where to fix it. Three shapes used to pass silently: a blank box read as 0
-    and was clamped to 1 (`max(1, ...)`), a 0 in a `... or default` box became the default, and a
-    negative Fisher step sailed through. Each is now a refusal, and NOTHING is dispatched.
-
-    The LOAD branch is the other half of the rule, and the half that cuts the other way: a load
-    reads the picker and the accept dialog, never the knob boxes, so a blank Hidden features box
-    must not block loading a posterior -- and the knobs are not forwarded at all (the stage resolves
-    None to its default and its load branch never reads them). Decided as the stage decides it:
-    is_new from the picker mirrors `trains = train_new or ref is None`."""
-    from core.artifacts import Accept
-    from core.gui.session import SbiSession
-    from core.refusals import Refusal
-    from tests._fixtures import qt_app
-
-    qt_app()
-    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub()))
-    pp = inf.posterior_panel
-    pp.post_picker.selected = lambda: ("", True)              # "(from scratch)" -> the TRAIN branch
-    pp._confirm_fresh_run = lambda cfg, n_runs, cap: (True, False)
-    sent, refused = [], []
-    pp.dispatch = lambda fn, *a, **k: sent.append(k)
-    pp._refusal = lambda exc: refused.append(exc)
-
-    def click(box, text):
-        """One click with `box` holding `text`; the box is put back afterwards."""
-        good = box.text()
-        box.setText(text)
-        sent.clear()
-        refused.clear()
-        pp._build_posterior()
-        box.setText(good)
-        return list(sent), list(refused)
-
-    cases = [
-        (pp.num_runs, "", "num_runs", "is blank"),
-        (pp.num_runs, "0", "num_runs", "at least 1"),
-        (pp.run_size_cap, "", "run_size_cap", "is blank"),
-        (pp.run_size_cap, "-5", "run_size_cap", "at least 0"),
-        (pp.flow_hidden, "", "hidden_features", "is blank"),
-        (pp.flow_hidden, "0", "hidden_features", "at least 1"),
-        (pp.flow_transforms, "0", "num_transforms", "at least 1"),
-        (pp.flow_lr, "", "learning_rate", "is blank"),
-        (pp.flow_lr, "0", "learning_rate", "greater than 0"),
-        (pp.flow_patience, "0", "stop_after_epochs", "at least 1"),
-        (pp.fisher_m, "0", "fisher_m", "at least 1"),
-        (pp.fisher_dz, "", "fisher_dz", "is blank"),
-        (pp.fisher_dz, "-0.01", "fisher_dz", "greater than 0"),
-        (pp.fisher_points, "0", "fisher_points", "at least 1"),
-    ]
-    for box, text, field, rule in cases:
-        got_sent, got_refused = click(box, text)
-        assert got_sent == [], f"{field}={text!r} was dispatched: {got_sent}"
-        assert len(got_refused) == 1 and isinstance(got_refused[0], Refusal), (field, got_refused)
-        assert got_refused[0].field == field, (field, got_refused[0].field, str(got_refused[0]))
-        assert rule in str(got_refused[0]), (field, str(got_refused[0]))
-
-    # A typed 0 in the cap box is "automatic", not blank: the one 0 this tab accepts.
-    got_sent, got_refused = click(pp.run_size_cap, "0")
-    assert got_refused == [] and len(got_sent) == 1 and got_sent[0]["run_size_cap"] == 0, \
-        (got_refused, got_sent)
-
-    # The LOAD branch: a blank knob box does not block a load, and no knob is forwarded.
-    pp.post_picker.selected = lambda: ("p1", False)
-    pp._accept_for_load = lambda entry: Accept()
-    pp.flow_hidden.setText("")
-    pp.fisher_dz.setText("")
-    sent.clear()
-    refused.clear()
-    pp._build_posterior()
-    assert refused == [] and len(sent) == 1, ([str(e) for e in refused], sent)
-    forwarded = set(sent[0]) & {"num_runs", "run_size_cap", "hidden_features", "num_transforms",
-                                "learning_rate", "stop_after_epochs", "fisher_m", "fisher_dz",
-                                "fisher_points"}
-    assert forwarded == set(), f"a load forwarded knobs the load branch never reads: {forwarded}"
-    assert sent[0]["new_run"] is False and isinstance(sent[0]["accept"], Accept), sent[0]
-
-
 def test_the_validate_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
     """On the Validate tab, both boxes were clamped with max(1, ...) at the click, so a blank or a 0
     became a 1 nobody typed -- and for the operating points a 1 is a DIFFERENT measurement, not a
@@ -4421,23 +4075,27 @@ def test_the_gui_control_table_matches_the_tabs_labels():
         for name in (place if isinstance(place, tuple) else (place,)):   # the budget boxes name two steps
             if name not in seen:
                 seen[name] = read(name)
-            if labels.pretty_gui(text) not in seen[name]:
+            # the Narrowing round's row of the simulations per batch says what its 0 means after the label
+            shown_as = text + " (0 = automatic)" if (key, name) == ("run_size_cap", "narrowing") else text
+            if labels.pretty_gui(shown_as) not in seen[name]:
                 missing.append((key, name, text))
     assert not missing, f"CONTROL names labels no place shows: {missing}\nshown: {seen}"
     # the labels, as the window shows them today
     labels_today = {
-        "t_obs": "T_obs (s)", "num_runs": "Batches", "run_size_cap": "Max rows per batch (0 = auto)",
+        "t_obs": "T_obs (s)", "num_runs": "Batches", "run_size_cap": "Simulations per batch",
         "n_directions": "Directions truncated", "hpd_level": "HPD level", "observation": "Observation",
         "n_cal": "Calibration datasets", "cal_n_scales": "(t_scale, T_obs) operating points",
         "num_iterations": "Sweep rounds", "sweep_batch": "Candidates per round",
         "max_sets": "Stable sets to collect", "walk_step": "Random-walk step",
         "stability_units": "Stability test length", "min_cluster_size": "Smallest cluster",
-        "min_samples": "Cluster density", "hidden_features": "Hidden features", "num_transforms": "Transforms",
-        "learning_rate": "Learning rate", "stop_after_epochs": "Early-stop patience",
-        "fisher_m": "Ensemble per perturbation", "fisher_dz": "Central-difference step",
-        "fisher_points": "Operating points", "prefactor": "Normalisation constant", "slice_at": "Slice at",
-        "bounds": "Bounds file", "cell": "Cell", "units": "Units", "model": "Model", "prior": "Saved prior",
-        "posterior": "Posterior", "recording_forced": "Forced", "drive_amplitude": "A (N)", "drive_frequency": "f (Hz)",
+        "min_samples": "Cluster density", "hidden_features": "Network width", "num_transforms": "Network depth",
+        "learning_rate": "Learning rate", "stop_after_epochs": "End the fit after … epochs without improvement",
+        "max_num_epochs": "Epoch limit", "expected_epochs": "Expected epochs (for the time estimate only)",
+        "checkpoint_every": "Save the simulations every … batches", "resume": "Continue or start new",
+        "fisher_m": "Rotation: simulations per perturbation", "fisher_dz": "Rotation: step",
+        "fisher_points": "Rotation: parameter sets averaged", "prefactor": "Normalisation constant",
+        "slice_at": "Slice at", "bounds": "Bounds file", "cell": "Cell", "units": "Units", "model": "Model",
+        "prior": "Saved prior", "recording_forced": "Forced", "drive_amplitude": "A (N)", "drive_frequency": "f (Hz)",
         "drive_phase": "φ (rad)", "chi_f0_si": "Drive F₀ (N)", "chi_mode": "Kind of observation",
         "chi_n_freqs": "Driven recordings per observation", "chi_k_pad": "Slots for driven recordings",
         "chi_max_cycles": "Lock-in limit", "reparam_rotate": "Rotation", "n_freqs": "n_freqs",
@@ -4454,7 +4112,7 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     quoted = (
         ("accept_other_observation", "infer", "Run on a different observation"),
         ("new_run", "narrowing", "Start a new simulation even if a cache one setting away exists"),
-        ("name", "prior", "Name"), ("name", "training", "Save"),
+        ("name", "prior", "Name"), ("name", "training", "Name"),
         ("name", "temperature/one_cell", "Record name"), ("name", "temperature/one_cell", "Comparison name"),
         ("name", "temperature/sweep", "Record name"), ("name", "temperature/sweep", "Comparison name"),
         ("note", "temperature/one_cell", "Note"), ("note", "temperature/one_cell", "Comparison note"),
@@ -4732,10 +4390,11 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     combo sized to its first show). The per-item TOOLTIP keeps every fact it carried, and words the
     one fact it shares with the item text the SAME way: "narrowed (TSNPE)", in place of the old
     "NON-AMORTIZED (TSNPE)" -- one wording for one fact, in the item, the tooltip and the line. No
-    test in the repository pinned either string before this one. And each of the three tabs that
-    owns a StorePicker spells the current selection out through ``selection_summary()``, and the two that carry a
-    read-only line beneath it say it there -- refreshed on ``currentIndexChanged`` AND on ``refresh()``, because a stage
-    that writes the store rescans the picker without anyone clicking.
+    test in the repository pinned either string before this one. And a picker spells the current selection
+    out through ``selection_summary()``, and the page that carries a read-only line beneath it says it there --
+    refreshed on ``currentIndexChanged`` AND on ``refresh()``, because a stage that writes the store rescans
+    the picker without anyone clicking. A posterior's list is read on a picker of its own: no page lists the
+    saved posteriors while the Training page has no view that loads one.
 
     The store is stubbed at the picker's one seam, ``_resolved_store``, the way
     tests/test_settings_persistence.py already stubs it; each row carries exactly the ``Summary``
@@ -4774,8 +4433,8 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
 
     inf = build_inference()
-    pp = inf.posterior_panel
-    combo = pp.post_picker.combo
+    picker = StorePicker("posterior", allow_new=True)       # the page that lists saved posteriors lists none yet
+    combo = picker.combo
 
     # (a) the item text: the exception is marked, the norm is not, the incomplete row is absent
     texts = [combo.itemText(i) for i in range(combo.count())]
@@ -4790,17 +4449,13 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
                        "narrowed (TSNPE)"), tips[2]
     assert "NON-AMORTIZED" not in tips[2], tips[2]
 
-    # (c) selection_summary + the line under the combo, for the posterior's two shapes and for none
+    # (c) selection_summary, for the posterior's two shapes and for none
     combo.setCurrentIndex(1)
-    assert pp.post_picker.selection_summary() == "chi · width 18 · amortized · 2026-09-14T10:22:31"
-    assert pp.post_line.text() == pp.post_picker.selection_summary(), pp.post_line.text()
+    assert picker.selection_summary() == "chi · width 18 · amortized · 2026-09-14T10:22:31"
     combo.setCurrentIndex(2)
-    assert pp.post_picker.selection_summary() == \
-        "chi · width 18 · narrowed (TSNPE) · 2026-09-15T09:00:00"
-    assert pp.post_line.text() == pp.post_picker.selection_summary(), pp.post_line.text()
+    assert picker.selection_summary() == "chi · width 18 · narrowed (TSNPE) · 2026-09-15T09:00:00"
     combo.setCurrentIndex(0)                       # the "(from scratch)" sentinel is not an artifact
-    assert pp.post_picker.selection_summary() == ""
-    assert pp.post_line.text() == ""
+    assert picker.selection_summary() == ""
 
     # (d) the other two kinds: a prior carries only its creation time, an observation its geometry. The Prior page's
     # list has no "(from scratch)"; what stands under it is read from the record, as that page's own test holds
@@ -4811,13 +4466,12 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     assert obs_picker.selection_summary() == "spontaneous · width 50 · 2026-09-16T12:00:00"
     assert inf.tsnpe_panel.obs_line.text() == "spontaneous · width 50 · 2026-09-16T12:00:00"
 
-    # (e) the line follows a refresh(), not only a click: drop the narrowed posterior and rescan
+    # (e) a refresh(), not only a click: drop the narrowed posterior and rescan
     combo.setCurrentIndex(1)
     rows["posterior"] = rows["posterior"][:1]
-    pp.post_picker.refresh()
+    picker.refresh()
     assert [combo.itemText(i) for i in range(combo.count())] == [StorePicker.NEW_LABEL, "amort"]
-    assert pp.post_line.text() == "chi · width 18 · amortized · 2026-09-14T10:22:31", \
-        pp.post_line.text()
+    assert picker.selection_summary() == "chi · width 18 · amortized · 2026-09-14T10:22:31"
 
 
 def test_the_store_picker_offers_finished_rows_only_and_honours_a_row_filter(monkeypatch):

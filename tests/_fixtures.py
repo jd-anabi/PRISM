@@ -988,7 +988,8 @@ def card_and_programs(monkeypatch) -> list:
 # What ``readings_of_a_run`` stands in for, by the last word of the module that defines each.
 COUNTED_READINGS = {"orchestrator": ("training_preview", "training_reading", "matching_fits"),
                     "fit_state": ("kept_fits",), "training_checkpoint": ("checkpoints_using_prior", "peek"),
-                    "history": ("read", "latest", "newest_unseen", "last_on", "last_measured_on", "duration")}
+                    "history": ("read", "latest", "newest_unseen", "last_on", "last_measured_on", "duration",
+                                "estimate")}
 # What ``card_and_programs`` answers with a stand-in of its own, and the ways it names to start a program: a module of the
 # window that bound one of these at its own import would be read past. The other public functions of the card's package
 # it passes through are not listed here.

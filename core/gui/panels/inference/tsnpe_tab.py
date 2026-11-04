@@ -87,7 +87,8 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         self.num_runs = IntField(str(config.TRAINING_NUM_RUNS))
         self.run_size_cap = IntField(str(config.TRAINING_RUN_SIZE))
         add_help_row(bform, label("num_runs"), self.num_runs, HELP["num_runs"])
-        add_help_row(bform, label("run_size_cap"), self.run_size_cap, HELP["run_size"])
+        # The row's label says the zero its box takes for automatic, which the Training page says with a tick.
+        add_help_row(bform, label("run_size_cap") + " (0 = automatic)", self.run_size_cap, HELP["run_size"])
         bv.addLayout(bform)
         self.budget_total = self._derived_label()
         self.budget_mem = self._derived_label()

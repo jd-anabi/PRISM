@@ -5010,7 +5010,7 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
     """At the window's least size, 900 x 600 grown with the text, a training's page fits the column it stands in, at the
     ordinary text size and at one and a half times it, in each state where it holds the most: starting; simulating, its
     end firm; in its fit, with the fit's range named after a training of a long name, the health and the loss curve;
-    stopping, with three buttons, two then one to a row at the ordinary text size; asking whether to keep the training
+    stopping, with three buttons on one row at the ordinary text size; asking whether to keep the training
     its stop kept; failed in its fit, its own name longer than the head's row, cut at its end with "…" and drawn so,
     then with the error's kind and traceback shown; failed so that only reopening PRISM can help, its command naming a
     long path; waiting to try again, with "Stop trying"; saving its posterior while the window waits to close, with
@@ -5024,8 +5024,8 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
     it comes on a page scrolled to its end: a kept stop's question, with the keyboard on Keep, and a failure; a page
     whose end was in sight already is not scrolled again when Keep is answered; and with the full text shown at the
     least size, the Keep the keyboard goes to is brought into sight. Before the page's first run, out of sight, it asks
-    for no width of its own, and the form beside the figures keeps its least width; back at the form after its last run
-    it asks for none again. The window is the whole program's, in the look, on a screen as large as this computer's, its
+    for no width of its own, and the form beside the figures of a page that keeps one, the Narrowing round's, keeps its
+    least width; back at the form after its last run it asks for none again. The window is the whole program's, in the look, on a screen as large as this computer's, its
     form and the run's page sharing the room as they do there."""
     import torch
     from collections import Counter
@@ -5054,14 +5054,20 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
         window.setMinimumSize(1, 1)
         opening, least = (design.scaled(1300), design.scaled(820)), (design.scaled(900), design.scaled(600))
         shown_off_screen(window, *opening)
+        window.go_to("inference", "narrowing")
+        beside = window.part("inference").tsnpe_panel
+        window.resize(*least)
+        _settle()
+        assert (beside.run_view.minimumWidth(), beside.controls_scroll.width() >= CONTROLS_MIN_W) == (0, True), (
+            "a run's page, out of sight before its first run, narrows the form beside the figures",
+            beside.run_view.minimumWidth(), beside.controls_scroll.width())
         window.go_to("inference", "training")
         host = window.part("inference").posterior_panel
         view, column = host.run_view, host.results
-        window.resize(*least)
         _settle()
-        assert (view.minimumWidth(), host.controls_scroll.width() >= CONTROLS_MIN_W) == (0, True), (
-            "the run's page, out of sight before its first run, narrows the form beside the figures",
-            view.minimumWidth(), host.controls_scroll.width())
+        assert view.minimumWidth() == 0, ("the run's page, out of sight before its first run, asks for a width",
+                                          view.minimumWidth())
+        room = column.width()                                  # what the window's least size gives the run's page
         window.resize(*opening)
 
         def begin(stand_in, *args, run_name="retrain_3", retries=False, **kwargs):
@@ -5096,7 +5102,7 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
                 _in_its_column(view, column, f"{why} at {factor}", whole=whole)
                 return
             asked = view.minimumSizeHint().width()             # wide, it still asks for no more than the least gives
-            assert asked <= design.scaled(326), (f"{why} at {factor}", "the page asks for more width than the "
+            assert asked <= room, (f"{why} at {factor}", "the page asks for more width than the "
                                                  "window's least size gives it", asked)
             if view.health.isVisibleTo(view):
                 _health_holds(view, f"{why} at {factor}")
@@ -5165,8 +5171,9 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
             at(least, "stopping")
             rows = Counter(button.mapTo(view.head, QPoint(0, 0)).y() for button in
                            (view.text_button, view.stop_button, view.withdraw_button) if button.isVisibleTo(view))
-            assert factor != 1.0 or [rows[top] for top in sorted(rows)] == [2, 1], (
-                "stopping's three buttons do not stand two then one", sorted(rows.items()))
+            # the step page gives the run's page the column whole: at the ordinary text size the three stand on one row
+            assert factor != 1.0 or [rows[top] for top in sorted(rows)] == [3], (
+                "stopping's three buttons do not stand on one row", sorted(rows.items()))
             at(opening, "stopping")
             to_the_end()
             clock.advance(3780)
@@ -5275,7 +5282,7 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
             asked = view.minimumSizeHint().width()
             tools = [(part.mapTo(column, QPoint(0, 0)).x(), part.width(), part.sizeHint().width())
                      for part in (view.find_field, view.find_button, view.file_button, view.folder_button)]
-            assert asked <= design.scaled(326) and all(left >= 0 and left + wide <= column.width() and wide >= asks
+            assert asked <= room and all(left >= 0 and left + wide <= column.width() and wide >= asks
                                                        for left, wide, asks in tools), (
                 f"the full text's tools at {factor}, {when}", "the page asks for more width than the window's least "
                 "size gives it, or a tool is narrower than it asks, or stands outside the column", asked,
@@ -5373,8 +5380,7 @@ def test_with_no_message_the_figures_stand_where_they_stand_after_the_messages(f
 _LARGE_SCREEN, _SMALL_SCREEN = (3400, 1380), (1240, 660)
 # The pages that keep the form beside the run's page, by a name for a test and the place the window opens each at. A
 # video stands its run's page among Live simulation's figures, whole; the other runs stand theirs in the column's stack.
-_FORM_BESIDE_THE_COLUMN = {"training": ("inference", "training"),
-                           "checks": ("inference", "checks"), "inference": ("inference", "infer"),
+_FORM_BESIDE_THE_COLUMN = {"checks": ("inference", "checks"), "inference": ("inference", "infer"),
                            "narrowing round": ("inference", "narrowing"), "one cell": ("temperature", "one_cell"),
                            "sweep": ("temperature", "sweep"), "reduction map": ("reduction", None),
                            "video": ("live", None)}
@@ -5693,16 +5699,16 @@ def test_a_past_view_on_the_live_simulations_page_shares_the_width_too(tmp_path)
         assert host.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W
 
 
-@pytest.mark.parametrize("step", ["the stand-in", "Prior"])
+@pytest.mark.parametrize("step", ["the stand-in", "Prior", "Training"])
 @pytest.mark.parametrize("factor, room", [(1.0, _LARGE_SCREEN), (1.5, _LARGE_SCREEN), (1.5, _SMALL_SCREEN)],
                          ids=["text 1.0", "text 1.5", "text 1.5 on a small screen"])
 def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room, step, tmp_path):
     """A rebuilt page holds no form beside its run's page: the run's page takes the place of everything under the heading.
     At every width a window of the text size at hand can have, the run's page and then a past run's stand whole inside
     the window with nothing over them, what stands hidden behind them in the page's stack not widening it, with the
-    longest main button a page has and a block for the run beside the form: on a stand-in page, and on the Prior page,
-    built anew with its fold open and a name typed. The window is made as narrow as it can be and as wide as the screen,
-    then narrow again."""
+    longest main button a page has and a block for the run beside the form: on a stand-in page, and on the Prior page
+    and the Training page, each with its fold open and a name typed. The window is made as narrow as it can be and as
+    wide as the screen, then narrow again."""
     from core.gui import design
     from core.gui.run import history
     from core.gui.run.controller import controller
@@ -5711,8 +5717,8 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
     from tests._runs import Clock, StandIn, start_run, turn_until
     from tests._window_helpers import shown_off_screen
     app = qt_app()
-    place = ("inference", "training") if step == "the stand-in" else ("inference", "prior")
-    word = "Training" if step == "the stand-in" else "Prior build"
+    place = ("inference", "prior") if step == "Prior" else ("inference", "training")
+    word = "Prior build" if step == "Prior" else "Training"
     past = f"20261001T090000-{place[1]}"
     with text_size(factor), _the_look(False):
         _controller_on(tmp_path, Clock(_at(9, 18, 0)))
@@ -5724,11 +5730,15 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
         opening, least = design.window_sizes(room)
         if step == "the stand-in":
             host = build_step_page(window=window)
-        else:
+        elif step == "Prior":
             host = window.part("inference").prior_panel
             host.show_view("build")
             host.form.fold.set_open(True)
             host.names.name.setText("retrain_prior")
+        else:
+            host = window.part("inference").posterior_panel
+            host.form.fold.set_open(True)
+            host.names.name.setText("retrain_3")
         shown_off_screen(window, *opening)
         window.go_to(*place)
         widths = sorted({*range(least[0], least[0] + _WHERE_THEY_MEET, 3), *range(least[0], opening[0], 40), opening[0],
@@ -5756,6 +5766,117 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
         _in_its_column(host.run_view, host.results, factor)
         stand_in.release()
         turn_until(app, lambda: not controller().is_live())
+
+
+@pytest.mark.parametrize("factor, room", [(1.0, _LARGE_SCREEN), (1.5, _LARGE_SCREEN), (1.5, _SMALL_SCREEN)],
+                         ids=["text 1.0", "text 1.5", "text 1.5 on a small screen"])
+def test_nothing_of_a_trainings_run_page_is_cut_on_the_training_page_at_any_width(factor, room, tmp_path, monkeypatch):
+    """The Training page's run page carries more than a build's: in its fit, the loss curve over the epochs said, the
+    fit's lines and a figure; stopped in its fit, the question of keeping the training kept, with Keep, Discard and
+    "Resume the training"; failed in its fit, its failure with "Continue from batch N" or "Resume the training". At every
+    width a window of the text size at hand can have, each stands whole inside the window with nothing over it, the page
+    built with its fold open and a name typed, the window made as narrow as it can be and as wide as the screen, then
+    narrow again."""
+    from core.gui import design
+    from core.gui.run.controller import controller
+    from tests._dialogs import choose
+    from tests._fixtures import build_fit_record, build_window, qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import Clock, RunText, StandIn, note, start_run, to_the_fit, turn_until
+    from tests._window_helpers import shown_off_screen
+    from core.artifacts import ArtifactStore, use_store
+    app = qt_app()
+    place = ("inference", "training")
+    with text_size(factor), _the_look(False), use_store(ArtifactStore(tmp_path / "Artifacts")) as store:
+        clock = Clock(_at(9, 18, 0))
+        held = _controller_on(tmp_path, clock)
+        window = build_window()
+        design.set_room(room)
+        window.setMinimumSize(1, 1)
+        opening, least = design.window_sizes(room)
+        host = window.part("inference").posterior_panel
+        host.form.fold.set_open(True)
+        host.names.name.setText("retrain_3")
+        shown_off_screen(window, *opening)
+        window.go_to(*place)
+        widths = sorted({*range(least[0], least[0] + _WHERE_THEY_MEET, 3), *range(least[0], opening[0], 40), opening[0],
+                         room[0]})
+        text = RunText(held)
+
+        def across(why):
+            _settle()
+            assert host.results.currentWidget() is host.run_view, why
+            for width in widths + widths[::-1]:
+                window.resize(width, least[1])
+                _settle()
+                assert window.width() == width, ("the window did not take the width", window.width(), width)
+                _the_two_share_the_width(window, host, (why, factor, width))
+            _in_its_column(host.run_view, host.results, (why, factor))
+
+        choose(monkeypatch, words="Stop training")
+        kept = build_fit_record(store, passes=3)
+        stand_in = StandIn()
+        stand_in.kept_fit = note(kept, passes=3)
+        start_run(host, stand_in, spec=_training(stop_button="Stop training…", place=place), provide_fig_sink=True)
+        to_the_fit(app, stand_in, text, clock, tmp_path / "set", ((1, 0), (2, 1), (3, 2)))
+        stand_in.figure("Training loss")
+        turn_until(app, lambda: host.figure_stack.count() == 1)
+        across("in the fit")
+        host.run_view.stop_button.click()
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert host.run_view.keep_block.isVisibleTo(host.run_view) and host.run_view.resume_button.isVisibleTo(
+            host.run_view)
+        across("stopped in the fit, the training kept")
+        host.run_view.keep_button.click()
+        host.run_view.back_button.click()
+        failed = StandIn()
+        failed.kept_fit = note(build_fit_record(store, passes=3), passes=3)
+        start_run(host, failed, spec=_training(stop_button="Stop training…", place=place), provide_fig_sink=True)
+        to_the_fit(app, failed, text, clock, tmp_path / "set", ((1, 0), (2, 1)))
+        failed.fail(RuntimeError("the fit failed for a reason of its own"))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert host.run_view.resume_button.isVisibleTo(host.run_view)
+        across("failed in the fit")
+
+
+def test_a_page_hands_its_run_plain_settings(tmp_path, monkeypatch):
+    """What the Training page hands its run for the run's history is plain: names, numbers, truth values and lists of
+    them, which the history's own writer takes as they are. Read off the page's spec as the press makes it."""
+    import json
+    from core import config
+    from core.artifacts import ArtifactStore, default_store, use_store
+    from core.gui.run.controller import RunController
+    from core.gui.session import SbiSession
+    from tests._fixtures import _nad_cfg, _prior_artifact, build_inference, qt_app
+    qt_app()
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        screen = build_inference()
+        screen.config_panel.foot.main_button.click()
+        cfg = _nad_cfg()
+        prior = default_store().load_prior(cfg, _prior_artifact(default_store(), cfg, name="retrain_prior").id)
+        screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior)
+        screen.refresh_gates()
+        page = screen.posterior_panel
+        page.names.name.setText("retrain")
+        page.names.note.setText("a note")
+        page.read_facts()
+        seen = []
+        monkeypatch.setattr(RunController, "dispatch", lambda held, fn, *args, **kwargs: seen.append(kwargs["spec"]))
+        page._main_clicked()
+        spec, = seen
+        entry = page.settings_entry()
+        assert spec.settings == entry and json.loads(json.dumps(entry)) == entry
+        assert (entry["model"], entry["bounds"], entry["prior"], entry["name"], entry["note"], entry["resume"]) == (
+            "NADROWSKI", "master.txt", prior.id, "retrain", "a note", "auto")
+        rows = {row["name"]: row for row in entry["rows"]}
+        assert rows["num_runs"] == {"step": "training", "name": "num_runs", "label": "Batches",
+                                    "value": config.TRAINING_NUM_RUNS, "origin": "", "plan": None,
+                                    "usual": config.TRAINING_NUM_RUNS}
+        assert (rows["max_num_epochs"]["value"], rows["run_size_cap"]["value"]) == (None, 0)
+        assert set(rows) == {"num_runs", "run_size_cap", "hidden_features", "num_transforms", "learning_rate",
+                             "stop_after_epochs", "max_num_epochs", "expected_epochs", "checkpoint_every", "fisher_m",
+                             "fisher_dz", "fisher_points"}
+        assert spec.plan is None
 
 
 def test_a_past_view_over_a_failed_videos_page_is_what_is_measured(tmp_path):

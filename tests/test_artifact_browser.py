@@ -145,7 +145,8 @@ def test_homes_records_row_opens_the_browser_and_the_window_saves_its_state():
     Home's table of the parts opens it from its row "Records", with one click; the window holds it as
     its part Records; and _save_state calls the screen's save_settings BY NAME. It is NOT a BasePanel and NOT in
     _all_panels(), which is what keeps it out of both the app-wide control lock and
-    _refresh_model_combos.
+    _refresh_model_combos. The three rebuilt steps of Parameter inference, built too, write nothing as the window
+    closes: what they remember is written as it comes into use.
     """
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
@@ -171,12 +172,14 @@ def test_homes_records_row_opens_the_browser_and_the_window_saves_its_state():
     assert screen not in w._all_panels()
 
     screen.kind_combo.setCurrentIndex(KINDS.index("posterior"))
+    w.part("inference")                      # its three rebuilt steps remember what comes into use, never at closing
     w._save_state()
     qs = st.settings()
     qs.beginGroup("artifacts")
     got = {k: qs.value(k) for k in qs.childKeys()}
     qs.endGroup()
     assert got.get("kind") == "posterior", got
+    assert not {"inference_config", "inference_prior", "inference_posterior"} & set(qs.childGroups()),         qs.childGroups()
 
 
 def test_the_browser_remembers_the_kind_and_the_sort_but_never_the_selection(tmp_path):
@@ -1118,8 +1121,9 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
         w._refresh_store_pickers()
         # A SUBSET, not an equality: the pickers are found by type, so a screen that gains one is
         # covered by construction, and an equality would make the change that adds it break this
-        # test instead. The FDT screen's saved-run picker is the first such addition.
-        assert {"observation", "posterior", "prior"} <= set(seen), seen
+        # test instead. The FDT screen's saved-run picker is the first such addition. No page lists the
+        # saved posteriors while the Training page has no view that loads one.
+        assert {"observation", "prior"} <= set(seen), seen
         assert "fdt" in seen, seen
     finally:
         w.close()

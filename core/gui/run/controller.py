@@ -125,10 +125,11 @@ def _made(created) -> datetime | None:
 
 
 def _asked(kwargs: dict) -> str:
-    """The name the person typed for the record a run writes, as its call was handed it: the call's ``name``, or
-    the name of the record its page made at the click (a measurement's ``writer``). "" when the call was handed
-    none: a check, and a training, a narrowing round, a prior's build and an inference started from the window, are
-    named after they are saved, never by their call; a run's own word for itself ("Calibration") is no name."""
+    """The name the person typed for the record a run writes, as its call was handed it: the call's ``name``, as a
+    prior's build and a training started from the window are handed theirs, or the name of the record its page made at
+    the click (a measurement's ``writer``). "" when the call was handed none: a check, and a narrowing round and an
+    inference started from the window, are named after they are saved, never by their call; a run's own word for itself
+    ("Calibration") is no name."""
     for given in (kwargs.get("name"), getattr(kwargs.get("writer"), "name", None)):
         if isinstance(given, str) and given:
             return given

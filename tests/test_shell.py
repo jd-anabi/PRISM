@@ -1203,27 +1203,6 @@ def test_the_narrowing_round_reads_an_observation_written_after_the_window_opene
         assert window.shell.rail.row("narrowing").accessibleName() == spoken(True) != spoken(False)
 
 
-def test_a_step_names_a_held_record_by_the_name_its_save_box_gave_it(monkeypatch):
-    """Naming the held posterior in its Save box renames the record, and the step's row in the rail then names it by
-    its new name. A prior is named before it is built, on its own page."""
-    from core.gui.panels.inference import posterior_tab
-    from core.gui.session import SbiSession
-    qt_app()
-    window = build_window()
-    inference, rail = window.part("inference"), window.shell.rail
-    made = SimpleNamespace(created="2026-10-03T14:02:00+00:00")
-    held = {kind: SimpleNamespace(kind=kind, id=f"{kind[0]}1", name="", manifest=made)
-            for kind in ("prior", "posterior")}
-    inference.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"), cfg=object(), inf_prior=held["prior"],
-                                   posterior=held["posterior"])
-    inference.refresh_gates()
-    assert rail.row("training").accessibleName().startswith("Step 3, Training. Done: Unnamed posterior, ")
-    monkeypatch.setattr(posterior_tab, "default_store", lambda: SimpleNamespace(rename=lambda kind, ref, name: made))
-    inference.posterior_panel.post_name.setText("retrain")
-    inference.posterior_panel._save_posterior()
-    assert rail.row("training").accessibleName() == "Step 3, Training. Done: retrain"
-
-
 def test_the_foot_reads_nothing_is_running_at_start_and_follows_each_run_to_its_end(tmp_path, monkeypatch):
     """At the window's start the foot says nothing is running and is no control, and the window keeps no clock.
     While a panel's run is live the foot says the run's word, the stage it is in, in a few words, and that settings
@@ -3745,7 +3724,7 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
                     _shown_off_screen(window, 1300, design.small_below() - 1 if low else 820)
                     assert window.shell._small == low, (factor, low)
                     for place in keys.PARTS[1:]:
-                        window.go_to(place.key, "training" if place.key == "inference" else None)
+                        window.go_to(place.key, "checks" if place.key == "inference" else None)
                         QApplication.processEvents()
                         if place.key != "settings":
                             assert _margins(window, place.key) == (design.scaled(12),) * 4, (factor, low, place.key)
@@ -3830,8 +3809,8 @@ class _CannotBeBuilt(Exception):
 # What the first opening of a part asks of the card or starts, by name and how often: Parameter inference's six
 # steps are built together, four of them read the card as they are built, and their gates read it again. The list
 # may only shrink: a page that reads the card reads it at a moment of its own, never as it is built.
-_READ_AT_FIRST_OPENING = {"inference": {"the device check": 2, "the card's free memory": 4,
-                                        "the card's memory held": 4, "the card's memory in use": 4}}
+_READ_AT_FIRST_OPENING = {"inference": {"the device check": 1, "the card's free memory": 2,
+                                        "the card's memory held": 2, "the card's memory in use": 2}}
 
 
 def test_opening_prism_touches_no_card_and_starts_no_program(tmp_path, monkeypatch):
@@ -4432,8 +4411,7 @@ def test_a_part_never_opened_keeps_what_it_remembered_when_the_window_closes(tmp
                        for panel in every._all_panels() if isinstance(panel, BasePanel)
                        for splitter in ("splitter", "results")})
     groups = {key.split("/")[0] for key in remembered}
-    assert groups == {"artifacts", "crossval", "fdt", "inference_infer", "inference_posterior", "inference_tsnpe",
-                      "layout", "reduction"}, groups
+    assert groups == {"artifacts", "crossval", "fdt", "inference_infer", "inference_tsnpe", "layout", "reduction"}, groups
     st.use_ini_file(str(tmp_path / "kept.ini"))
     kept = st.settings()
     for key, value in remembered.items():
@@ -4514,7 +4492,7 @@ def test_a_store_change_reaches_only_the_built_parts_and_a_part_built_later_list
         window.go_to("records")
         window.go_to("inference")
         pickers = [picker for panel in window._all_panels() for picker in panel.findChildren(StorePicker)]
-        assert {"prior", "posterior", "observation"} <= {picker.kind for picker in pickers}, pickers
+        assert {"prior", "observation"} <= {picker.kind for picker in pickers}, pickers
         seen = []
         for picker in pickers:
             monkeypatch.setattr(picker, "refresh",
@@ -6864,7 +6842,7 @@ def test_the_step_shown_hears_the_low_window_and_names_where_the_keyboard_starts
     _shown_off_screen(window, 1300, 820)
     today = window.part("inference")
     assert today.first_focus() is today.config_panel.model_combo and today.pending() == frozenset()
-    window.go_to("inference", "training")
+    window.go_to("inference", "checks")
     assert today.first_focus() is None
     assert window.focusWidget() is window._start_of(today) is _first_control(today), "today's steps moved"
     window.resize(1300, design.small_below() - 1)
@@ -6873,7 +6851,7 @@ def test_the_step_shown_hears_the_low_window_and_names_where_the_keyboard_starts
     step = _stand_in_step(window, monkeypatch)
     window.go_to("inference", "model")
     assert window._start_of(today) is step.named and window.focusWidget() is step.named
-    window.go_to("inference", "training")
+    window.go_to("inference", "infer")
     assert today.first_focus() is None, "the screen answered for a step not shown"
     window.go_to("inference", "model")
     assert not step.is_small()
@@ -7410,7 +7388,8 @@ def test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end(tmp_pat
     """Parameter inference and Settings, first opened while a run is live, read no simulation set, no kept training, no
     run history, and of the card nothing but what is listed, and start no program. The two pages whose lines the card and
     the saved sets feed say they have read nothing yet. When the run ends each reads once, and the lines say what they
-    read; Settings, in sight, reads the last run once."""
+    read; Settings, in sight, reads the last run once. The Training page, built with the screen, says beside "Before
+    you start" that it has read nothing yet."""
     from collections import Counter
     from core.gui.panels.reduction_panel import ReductionPanel
     from core.gui.run.controller import NOT_READ_YET_TEXT
@@ -7430,10 +7409,14 @@ def test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end(tmp_pat
         assert Counter(calls) == _READ_DURING_A_RUN, f"a first opening during a run read: {Counter(calls)}"
         calls.clear()
         inference = window.part("inference")
-        pages = (inference.posterior_panel, inference.tsnpe_panel)
+        pages = (inference.tsnpe_panel,)
         for page in pages:
             assert (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text()) == (
                 NOT_READ_YET_TEXT, "", ""), type(page).__name__
+        window.go_to("inference", "training")
+        app.processEvents()
+        assert inference.posterior_panel.foot.reading.text() == NOT_READ_YET_TEXT
+        assert calls == [], f"the Training page, shown during a run, read: {calls}"
         window.go_to("settings")
         app.processEvents()
         assert calls == [], f"Settings, first opened during a run, read: {calls}"
@@ -7441,6 +7424,7 @@ def test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end(tmp_pat
     turn_until(app, lambda: not controller().is_live())
     app.processEvents()
     assert calls.count("training_preview") == len(pages), f"each page reads once at the run's end: {calls}"
+    assert inference.posterior_panel.stale, "the Training page, not in sight at the run's end, read"
     assert (calls.count("last_on"), calls.count("last_measured_on")) == (1, 1), calls
     for page in pages:
         assert page.budget_total.text().endswith(".") and NOT_READ_YET_TEXT not in page.budget_total.text()
@@ -7494,7 +7478,7 @@ def test_a_store_change_during_a_run_changes_nothing_on_a_page_until_it_ends(tmp
         assert calls == [], f"a change of the store during a run read: {calls}"
         assert (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text()) == said
     turn_until(app, lambda: not controller().is_live())
-    assert calls.count("training_preview") == 2, calls
+    assert calls.count("training_preview") == 1, calls
 
 
 def test_a_start_taken_back_leaves_the_budget_lines_as_they_were(tmp_path):

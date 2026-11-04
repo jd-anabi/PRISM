@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QPushButton, QScr
 
 from core.gui import design, fields, fonts, style
 from core.gui.panels.inference.config_tab import ConfigPanel
+from core.gui.panels.inference.posterior_tab import PosteriorPanel
 from core.gui.panels.inference.prior_tab import PriorPanel
 from core.gui.run.controller import LIVE_TEXT, NOT_READ_YET_TEXT, controller
 from core.gui.step_facts import (LEADS, REFUSED_BLOCKS, Fact, about_words, ordered, origin_words, reading_words,
@@ -35,9 +36,9 @@ from tests._window_helpers import in_front, shown_off_screen
 BLOCKS = "the name cannot be used"
 #: Each rebuilt page by its step, as the standing tests a page joins in its own task name it: the stand-in, then the
 #: pages of the window.
-PAGES = {"the stand-in": None, "Model and options": ConfigPanel, "Prior": PriorPanel}
+PAGES = {"the stand-in": None, "Model and options": ConfigPanel, "Prior": PriorPanel, "Training": PosteriorPanel}
 #: A field of each page an edit is typed into, by the page's class.
-EDITED = {None: "num_runs", ConfigPanel: "chi_n_freqs", PriorPanel: "num_iterations"}
+EDITED = {None: "num_runs", ConfigPanel: "chi_n_freqs", PriorPanel: "num_iterations", PosteriorPanel: "num_runs"}
 #: A record's name of the length the store lets stand, which no line of an origin holds at the window's least width.
 LONG_NAME = "retrain_narrowing_round_of_the_second_of_november"
 
@@ -494,12 +495,12 @@ def test_not_usual_is_judged_as_the_field_reads_never_as_it_is_typed():
 
 def test_the_folds_sentence_names_those_not_usual_first():
     form, rate, _size, limit = _a_fold()
-    assert form.fold.summary.text() == ("Learning rate 0.0005; Max rows per batch (0 = auto) Automatic; "
+    assert form.fold.summary.text() == ("Learning rate 0.0005; Simulations per batch Automatic; "
                                         "Epoch limit No limit")
     limit.widget.ticked_box.setChecked(False)
     limit.widget.field.setText("300")
     assert form.fold.summary.text() == ("Epoch limit 300 epochs; Learning rate 0.0005; "
-                                        "Max rows per batch (0 = auto) Automatic")
+                                        "Simulations per batch Automatic")
     rate.widget.setText("")
     assert form.fold.summary.text().split("; ")[:2] == ["Learning rate blank", "Epoch limit 300 epochs"]
 
@@ -2048,6 +2049,55 @@ def _typed_limits(page) -> list:
     return [field for row in page.bounds_grid._rows.values() for field in (row.lo, row.hi)]
 
 
+def _to_train(page, *, posterior: bool = False) -> None:
+    """The third step: the first applied, a configuration of the master bounds file and a prior in use, a name typed; with
+    ``posterior``, a posterior held too, the rotation off and the simulations not saved."""
+    from types import SimpleNamespace
+    from core.gui.session import SbiSession
+    from tests._fixtures import _nad_cfg, prior_stub
+    _applied(page)
+    screen = page.window().part("inference")
+    cfg = _nad_cfg()
+    cfg.reparam_rotate = not posterior
+    screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior_stub(),
+                                posterior=SimpleNamespace(kind="posterior", id="q1", name="retrain") if posterior
+                                else None)
+    screen.refresh_gates()
+    page.names.name.setText("retrain")
+    if posterior:
+        page.form.rows["checkpoint_every"].widget.ticked_box.setChecked(True)
+    page.read_facts()
+
+
+def _trained(page, *, posterior: bool = False) -> tuple:
+    """The fields of the third step's main settings, and of its fold, a ticked one by its box and a greyed one left out,
+    in their order."""
+    rows = page.form.rows
+    main = [rows["num_runs"].widget, rows["run_size_cap"].widget.ticked_box, rows["hidden_features"].widget,
+            rows["num_transforms"].widget, *([] if posterior else [page.resume_choice])]
+    folded = [rows["learning_rate"].widget, rows["stop_after_epochs"].widget, rows["max_num_epochs"].widget.ticked_box,
+              rows["expected_epochs"].widget,
+              *([rows["checkpoint_every"].widget.ticked_box] if posterior else
+                [rows["checkpoint_every"].widget.field, rows["checkpoint_every"].widget.ticked_box]),
+              *([] if posterior else [rows[key].widget for key in ("fisher_m", "fisher_dz", "fisher_points")])]
+    return main, folded
+
+
+
+#: The third step's shapes, as ``WALKED`` reads them.
+WALKED_TRAINING = {
+    "a training to start": (
+        _to_train, lambda page: [page.help_button], lambda page: _trained(page)[0], lambda page: _trained(page)[1],
+        lambda page: [page.names.name, page.names.note],
+        lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again, page.foot.main_button]),
+    "a posterior held, the rotation off, the simulations not saved": (
+        lambda page: _to_train(page, posterior=True), lambda page: [page.help_button, page.next_button],
+        lambda page: _trained(page, posterior=True)[0], lambda page: _trained(page, posterior=True)[1],
+        lambda page: [page.names.name, page.names.note],
+        lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again, page.foot.main_button]),
+}
+
+
 #: The rebuilt pages of the window, by the step each stands on, and the shapes its walk is read in: by the name of the
 #: shape, what is done to the page after its first show; the heading's buttons and the way to the next step that stand
 #: in that shape; the controls of its main settings; those of the fold, while it is open, or None for a shape with no
@@ -2085,6 +2135,7 @@ WALKED = {
             lambda page: [page.names.name, page.names.note],
             lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again, page.foot.main_button]),
     },
+    "training": WALKED_TRAINING,
 }
 
 
@@ -2954,7 +3005,8 @@ def test_a_training_resumed_from_its_page_starts_on_that_page(tmp_path):
 
 # ── the fix sentence ──
 def test_the_fix_sentence_names_this_page_or_the_steps_that_show_the_setting():
-    """Each form of the sentence, and the table's own for every key at no page, which the old pages keep."""
+    """Each form of the sentence, and the table's own for every key at no page, which the old pages keep, but for the
+    settings of the Training page alone, for which a page of the old kind names no box."""
     assert fields.fix_sentence("num_runs", here="training") == "Set it in 'Batches' on this page."
     assert fields.fix_sentence("num_runs", here="narrowing") == "Set it in 'Batches' on this page."
     assert fields.fix_sentence("num_runs", here="prior") == (
@@ -2967,7 +3019,10 @@ def test_the_fix_sentence_names_this_page_or_the_steps_that_show_the_setting():
     assert fields.fix_sentence("device", here="prior") == "" and fields.fix_sentence(None, here="prior") == ""
     assert fields.fix_sentence("no_such_key", here="prior") == ""
     for key, entry in fields.CONTROL.items():
-        if isinstance(entry, tuple):
+        if key in fields.ON_TRAINING_ALONE:
+            assert fields.fix_sentence(key) == "" and fields.fix_sentence(key, here="training") == (
+                f"Set it in '{entry[1]}' on this page."), key
+        elif isinstance(entry, tuple):
             assert fields.fix_sentence(key) == f"Set it in the '{entry[1]}' box {fields._in(entry[0])}.", key
         else:
             assert fields.fix_sentence(key) == (entry or ""), key
@@ -3051,3 +3106,59 @@ def test_a_rule_that_says_its_sentence_under_a_field_as_it_draws_lets_it_go_when
     assert row.line.label.text() == "Batches is blank."
     row.widget.setText("6")
     assert row.line.isHidden() and row.widget.error() == "" and not row.in_error()
+
+
+@pytest.mark.display
+def test_the_training_buttons_stand_inside_the_smallest_window_with_real_metrics(tmp_path):
+    """Needs QT_QPA_PLATFORM=windows (the root conftest defaults to offscreen, where this is skipped). With the real
+    platform's fonts and their metrics, at the least size the window takes on the screen it stands on, at the ordinary
+    text size and at one and a half times it, the Training page's main button and the words beside it stand inside the
+    window with nothing drawn over them: a prior in use, no name typed, the fold open and every fact said. The window is
+    laid out where no screen shows it and is never shown or brought to the front: the window in front stays in front."""
+    import ctypes
+    from PySide6.QtCore import QPoint, QRect, Qt
+    from PySide6.QtGui import QGuiApplication
+    from core.gui import fonts
+    from core.gui.session import SbiSession
+    from tests._fixtures import _nad_cfg, prior_stub
+    app = QApplication.instance() or QApplication([])
+    if QGuiApplication.platformName() != "windows":
+        pytest.skip(f"needs the windows platform, got {QGuiApplication.platformName()!r}")
+    user32 = ctypes.WinDLL("user32")
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    front = user32.GetForegroundWindow()
+    for factor in (1.0, 1.5):
+        with text_size(factor), _the_look(False):
+            fonts.load_app_font(app)
+            controller_on(tmp_path, Clock(at(8, 12, 4)))
+            window = build_window()
+            window.setAttribute(Qt.WA_DontShowOnScreen)
+            available = window.screen().availableGeometry()
+            _opening, least = design.window_sizes((available.width(), available.height()))
+            window.setMinimumSize(1, 1)
+            window.resize(*least)
+            window.show()
+            window.go_to("inference", "model")
+            screen = window.part("inference")
+            screen.config_panel.foot.main_button.click()
+            screen.session = SbiSession(draft=screen.session.draft, cfg=_nad_cfg(), inf_prior=prior_stub())
+            screen.refresh_gates()
+            window.go_to("inference", "training")
+            page = screen.posterior_panel
+            page.form.fold.set_open(True)
+            page.read_facts()                        # no name typed: the longest words beside the button stand
+            for _ in range(5):
+                app.processEvents()
+            inside = QRect(0, 0, window.width(), window.height())
+            for part in (page.foot.main_button, page.foot.reason):
+                edge = QRect(part.mapTo(window, QPoint(0, 0)), part.size())
+                assert part.isVisible() and inside.contains(edge), (factor, type(part).__name__, edge, inside)
+                for x, y in ((edge.left() + 2, edge.center().y()), (edge.center().x(), edge.center().y()),
+                             (edge.right() - 2, edge.center().y())):
+                    found = window.childAt(QPoint(x, y))
+                    assert found is part or (found is not None and part.isAncestorOf(found)), (
+                        factor, type(part).__name__, "something stands over it", x, y, found)
+            assert not user32.IsWindowVisible(int(window.winId())), "the window was shown on the screen"
+            window.hide()
+            app.processEvents()
+    assert user32.GetForegroundWindow() == front, "the front was taken from the window the person works in"
