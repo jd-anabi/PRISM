@@ -28,7 +28,8 @@ another, whose own sentence is then not shown. Never both questions.
 
 Nothing is read while a run is live: the saved simulation sets, the kept trainings, the run history, the saved
 posteriors' records and the records of earlier trainings are read by the page's reading alone, and the list of saved
-posteriors is read again and moved to a posterior that came into use once its run has ended. The batches and the
+posteriors is read again and moved to a posterior that came into use once its run has ended, whichever page's run
+brought it: this page's, or a narrowing round's. The batches and the
 simulations per batch are remembered as the text of their boxes once a training has started with them; the posterior
 that comes into use is remembered as it comes, and is put back as the list's choice at the next launch.
 """
@@ -201,6 +202,7 @@ class PosteriorPanel(StepPage):
         self._history_read = False           # whether a reading has read the run history yet
         self._made = None                    # the posterior a run of this page returned, until the run has ended
         self._handed = None                  # the name and the note this page's last training was handed
+        self._moved_to = ""                  # the posterior the list was last moved to at a run's end, by its id
         self.switch_button = QPushButton()
         self.switch_button.clicked.connect(self._switch)
         self.head.add_action(self.switch_button)
@@ -832,14 +834,19 @@ class PosteriorPanel(StepPage):
         self._screen.take_posterior(payload)
 
     def _run_ended(self, status) -> None:
-        """A run has ended. One of this page's that returned its posterior: the list of saved posteriors read again and
-        moved to it; and after a training, a word when the record came back under another name than the one its call
-        asked for (the ended run's own, which "Continue" and "Resume" repeat), and the name and the note each emptied
-        while it still holds what the call was handed, so that one typed since stands. Then the reading."""
+        """A run has ended. One of this page's that returned its posterior, or any that ended with another posterior
+        held than the one the list was last moved to, as a narrowing round's brings one: the list of saved posteriors
+        read again and moved to the posterior held, when it is listed, so that the list says what the step holds. After
+        a training of this page's, a word when the record came back under another name than the one its call asked for
+        (the ended run's own, which "Continue" and "Resume" repeat), and the name and the note each emptied while it
+        still holds what the call was handed, so that one typed since stands. Then the reading."""
         made, self._made = self._made, None
-        if made is not None:
+        held = getattr(made if made is not None else getattr(self.session, "posterior", None), "id", "") or ""
+        if made is not None or (held and held != self._moved_to):
             self.post_picker.refresh()
-            self.post_picker.restore_key(getattr(made, "id", "") or "")
+            if self.post_picker.combo.findData(held) >= 0:
+                self.post_picker.restore_key(held)
+            self._moved_to = held
         if made is not None and not getattr(status, "loading", False):
             asked = getattr(status, "name", "") or ""
             if asked and getattr(made, "name", "") != asked:

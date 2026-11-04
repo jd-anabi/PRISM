@@ -185,11 +185,11 @@ class InferenceScreen(QWidget):
         self.refresh_gates()
 
     def take_posterior(self, loaded) -> None:
-        """A posterior has come back from its run, made with the configuration and the prior held: what depended on the
-        posterior held is let go, the new one comes into use, it is remembered as the posterior last in use, and the
-        gates and the states are worked out once. Called while the run is still live, so it writes the session and
-        nothing else reads: the Training step reads when the run has ended. The posterior held before stays in use
-        through the run."""
+        """A posterior has come back from its run, a training's, a load's or a narrowing round's, made with the
+        configuration and the prior held: what depended on the posterior held is let go, the new one comes into use, it
+        is remembered as the posterior last in use, and the gates and the states are worked out once. Called while the
+        run is still live, so it writes the session and nothing else reads: the Training step reads, and moves its list
+        to the posterior, when the run has ended. The posterior held before stays in use through the run."""
         session = self.session
         session.reset_downstream("posterior")
         session.posterior = loaded

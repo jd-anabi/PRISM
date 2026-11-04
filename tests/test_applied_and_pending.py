@@ -2990,15 +2990,101 @@ def test_the_stop_and_end_of_a_posterior_load_say_what_is_true_of_the_page(tmp_p
             "as a record.")
 
 
+def _a_narrowing_round_brings(window, screen, narrowed, monkeypatch, *, heard=None):
+    """Run the narrowing round of step 6 from its own button, its stage a stand-in that returns the saved posterior
+    ``narrowed``, loaded as the round's stage hands its posterior back, and turn until its run has ended; ``heard`` is
+    called each time the steps' states are worked out again while the run goes. The posterior returned."""
+    from core import orchestrator
+    from core.artifacts import Accept, default_store
+    from core.gui.panels.inference import tsnpe_tab
+    from core.gui.run.controller import controller
+    from tests._runs import StandIn, turn_until
+    app = qt_app()
+    loaded = default_store().load_posterior(screen.session.cfg, narrowed, accept=Accept(truncated=True))
+    rounds = StandIn(word="Narrowing round")
+    monkeypatch.setattr(orchestrator, "tsnpe_round", rounds)
+    observation = SimpleNamespace(kind="observation", id="obs_round", name="cell_b")
+    monkeypatch.setattr(tsnpe_tab, "default_store",
+                        lambda: SimpleNamespace(load_observation=lambda cfg, ref: observation))
+    round_page = screen.tsnpe_panel
+    window.go_to("inference", "narrowing")
+    screen.refresh_gates()
+    assert round_page.obs_picker.key() and round_page.btn_round.isEnabled()
+    round_page.btn_round.click()
+    assert rounds.started.wait(5)
+    if heard is not None:
+        screen.states_changed.connect(heard)
+    try:
+        rounds.release(loaded)
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+    finally:
+        if heard is not None:
+            screen.states_changed.disconnect(heard)
+    return loaded
+
+
 def test_a_narrowed_posterior_in_use_says_it_came_from_a_narrowing_round_wherever_it_came_from(tmp_path, monkeypatch):
     """A posterior from a narrowing round in use, put there by the narrowing round's own run, says so in step 3's "In
     use" as one loaded on step 3 does."""
-    from core.artifacts import Accept, default_store
     with _third_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
         _trained, narrowed = _saved_posteriors(page)
-        loaded = default_store().load_posterior(screen.session.cfg, narrowed, accept=Accept(truncated=True))
-        screen.take_posterior(loaded)
+        _a_narrowing_round_brings(window, screen, narrowed, monkeypatch)
+        assert screen.session.posterior.id == narrowed
         assert page.in_use.sentence.plain_text().endswith("From a narrowing round. Saved as a record.")
+
+
+@pytest.mark.parametrize("view", ["training", "load"])
+def test_a_posterior_a_narrowing_round_brings_moves_the_list_and_leaves_nothing_to_apply(view, tmp_path, monkeypatch):
+    """A posterior a narrowing round puts in use, by its own run, is what step 3 holds from then on: once the run has
+    ended the list of saved posteriors stands on it, whichever view the Training page was in, so the rail, Home and the
+    page say step 3 holds it with nothing changed, and "Load this posterior" is not offered for the posterior it
+    replaced. It is remembered as the posterior last in use. While the run is still live nothing is read, and the list
+    is not moved. A posterior chosen in the list after that is the person's choice, which the end of another run
+    leaves as it is."""
+    from core.gui import settings as st
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.remembered import POSTERIOR_KEY
+    from core.gui.run.controller import controller
+    from tests._look_helpers import _settle
+    from tests._runs import running, turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        trained, narrowed = _saved_posteriors(page)
+        calls = _the_stage_loads(monkeypatch)
+        _to_the_load_view(page)
+        page.post_picker.restore_key(trained)
+        page.read_facts()
+        page._main_clicked()
+        turn_until(app, lambda: not controller().is_live() and calls, 10.0)
+        assert screen.session.posterior.id == trained and page.post_picker.key() == trained
+        page.show_view(view)
+        heard = []
+        _a_narrowing_round_brings(window, screen, narrowed, monkeypatch, heard=lambda states: heard.append(
+            (controller().is_live(), getattr(screen.session.posterior, "id", None), page.post_picker.key(),
+             states[2].pending)))
+        while_live = [key for live, _held, key, _pending in heard if live]
+        assert while_live and set(while_live) == {trained}, heard
+        window.go_to("inference", "training")
+        _settle()
+        if view == "training":
+            page.show_view("load")
+        page.read_facts()
+        assert screen.session.posterior.id == narrowed and page.post_picker.key() == narrowed
+        state = screen.step_states()[2]
+        assert (state.pending, state.rail_words) == (False, "Done: retrain_round1, narrowed"), state
+        assert screen.pending() == frozenset()
+        assert "not applied" not in window.shell.rail.row("training").accessibleName()
+        assert _line(page, "posterior") == ("", "")
+        assert not page.foot.main_button.isEnabled()
+        assert page.foot.reason.text() == "Nothing to apply: these choices are in use."
+        qs = st.settings()
+        qs.sync()
+        assert qs.value(POSTERIOR_KEY) == narrowed
+        page.post_picker.restore_key(trained)
+        page.read_facts()
+        with running(window.panel(ReductionPanel)):
+            pass
+        assert page.post_picker.key() == trained and screen.pending() == {"training"}, "the end of a run undid a choice"
 
 
 @pytest.mark.parametrize("gone", [False, True], ids=["still listed", "no longer listed"])

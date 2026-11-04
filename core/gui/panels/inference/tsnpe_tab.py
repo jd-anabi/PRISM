@@ -180,13 +180,14 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         discarded; without the region riding on the returned wrapper, a later Save (a rename) would
         write it marked amortized -- but the region is already on disk from build_posterior's own
         write, not something this handler has to remember to carry.
+
+        The posterior comes into use through the screen's one way in, which remembers it as the posterior last in use
+        and works the gates and the steps' states out again, as a posterior a training returns does.
         """
-        s = self.session
-        s.posterior = payload
         self.log_pane.append_line(
             f"TSNPE round complete. This posterior is NON-AMORTIZED: it is valid near the "
             f"observation {payload.posterior.x_obs_digest}, and its manifest records so.", "warning")
-        self._screen.refresh_gates()
+        self._screen.take_posterior(payload)
 
     def _budget_checkpoint(self, preview) -> str:
         """The mixin's line is computed from the AMORTIZED identity, and on this tab it used to say
