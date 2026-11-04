@@ -169,9 +169,11 @@ NARROWED_SUFFIX = "  —  narrowed (TSNPE)"
 NARROWED_WORDS = "from a narrowing round"
 
 
-def _summary_line(s) -> str:
+def _summary_line(s, narrowed: str = "narrowed (TSNPE)") -> str:
     """One line describing a store row -- mode, conditioning width, amortization, creation time, in
     that order -- with the parts the kind does not carry left out. ``""`` for a row with none of them.
+    ``narrowed`` is how a row from a narrowing round is said: a list that keeps its selection hands its
+    page's words, as its items and their tips say it.
 
     THE ONE FORMATTER BEHIND THE LINE UNDER EVERY PICKER, so the three tabs cannot word the same
     facts three ways -- and the tooltip now words amortization the same way this does, "narrowed
@@ -190,7 +192,7 @@ def _summary_line(s) -> str:
         parts.append(f"width {s.width}")
     amortized = getattr(s, "amortized", None)
     if amortized is not None:
-        parts.append("amortized" if amortized else "narrowed (TSNPE)")
+        parts.append("amortized" if amortized else narrowed)
     if getattr(s, "created", None):
         parts.append(str(s.created))
     return " · ".join(parts)
@@ -274,7 +276,8 @@ class StorePicker(QWidget):
             # persists or resolves a selection can be broken by a change of wording here.
             narrowed = f"  —  {NARROWED_WORDS}" if self.keeps_selection else NARROWED_SUFFIX
             self.combo.addItem(s.label + (narrowed if s.amortized is False else ""), userData=s.id)
-            self._summaries[str(s.id)] = _summary_line(s)
+            self._summaries[str(s.id)] = (_summary_line(s, NARROWED_WORDS) if self.keeps_selection
+                                          else _summary_line(s))
             tip = f"{s.id} · {s.created}"
             if s.mode:
                 tip += f" · {s.mode}"

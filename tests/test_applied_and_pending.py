@@ -2424,8 +2424,9 @@ def test_the_training_page_reads_nothing_while_a_run_is_live(tmp_path, monkeypat
 def test_the_load_view_reads_nothing_while_a_run_is_live(tmp_path, monkeypatch):
     """The load view reads nothing between a run's start and its end, another page's run: the page shown again with
     nothing owed, another posterior chosen, the timer, "Check again", the press, a store change, the gates and the page
-    shown again read no record and no list but the picker's own; a load by code reads nothing and starts nothing. The
-    run's end reads the record selected once, with the prior it was trained with."""
+    shown again read no record and no list but the picker's own; a load by code reads nothing, starts nothing and
+    changes nothing. The run's end reads the record selected once, with the prior it was trained with and the
+    observation it was narrowed around."""
     from core.gui.panels.reduction_panel import ReductionPanel
     from core.gui.run.controller import controller
     from tests._fixtures import readings_of_a_run
@@ -2456,12 +2457,42 @@ def test_the_load_view_reads_nothing_while_a_run_is_live(tmp_path, monkeypatch):
             _settle()
             assert page.load_record(trained) is False
             assert calls == [] and page.posterior_line.plain_text().startswith("Made"), calls
+            assert (page.view, page.post_picker.key()) == ("load", narrowed)
         turn_until(app, lambda: not controller().is_live(), 10.0)
         _settle()
         # the Narrowing round's own lines read the preview, which reads the sets itself: the rest are this page's, the
-        # posterior a load by code selected and the prior it was trained with
+        # posterior chosen during the run, the prior it was trained with and the observation it was narrowed around
         assert (calls.count("a record's manifest"), calls.count("training_reading") - calls.count("training_preview"),
-                page.post_picker.key()) == (2, 0, trained), calls
+                page.post_picker.key()) == (3, 0, narrowed), calls
+
+
+@pytest.mark.parametrize("step", ["prior", "training"])
+def test_a_load_by_code_while_a_run_is_live_changes_nothing(step, tmp_path, monkeypatch):
+    """A load by code, as Records will call it, during another page's run: the Prior page and the Training page each
+    answer that nothing was started and change nothing, neither the view shown, nor what the list selects, nor what the
+    session holds."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.run.controller import controller
+    from tests._runs import running, turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        trained, _narrowed = _saved_posteriors(page)
+        if step == "prior":
+            page = screen.prior_panel
+            picker, ref, view = page.prior_picker, screen.session.inf_prior.id, "build"
+        else:
+            picker, ref, view = page.post_picker, trained, "training"
+        page.show_view(view)
+        picker.restore_key("")
+        session = screen.session
+        held = (session.cfg, session.inf_prior, session.posterior, session.observation)
+        with running(window.panel(ReductionPanel)):
+            assert page.load_record(ref) is False
+            assert (page.view, picker.key()) == (view, "")
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert (page.view, picker.key()) == (view, "")
+        assert screen.session is session and (session.cfg, session.inf_prior, session.posterior,
+                                              session.observation) == held
 
 
 def test_the_training_page_built_during_a_run_says_it_has_read_nothing(tmp_path, monkeypatch):
@@ -2742,6 +2773,8 @@ def test_the_saved_posterior_list_says_what_it_holds(tmp_path, monkeypatch):
                 for ref in (trained, narrowed)}
         page.post_picker.restore_key(narrowed)
         page.read_facts()
+        assert "from a narrowing round" in page.post_picker.selection_summary()
+        assert "TSNPE" not in page.post_picker.selection_summary()
         assert page.posterior_line.plain_text() == (
             f"Made {made[narrowed]}, for Nadrowski: a spontaneous recording and one driven recording; network 128 by "
             "8; "
@@ -2754,6 +2787,25 @@ def test_the_saved_posterior_list_says_what_it_holds(tmp_path, monkeypatch):
         page.switch_button.click()
         assert page.view == "training" and page.foot.main_button.text() == "&Start training"
         assert page.form.rows["num_runs"].is_shown() and page.form.side.isVisibleTo(page)
+
+
+def test_a_saved_posterior_whose_moment_cannot_be_read_is_said_without_it(tmp_path, monkeypatch):
+    """A saved posterior whose record holds a moment that cannot be read as one is said from its model on, with no
+    "Made" and no empty moment."""
+    import json
+    from core.artifacts import default_store
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        trained, _narrowed = _saved_posteriors(page)
+        path = next(summary.path for summary in default_store().list("posterior") if summary.id == trained)
+        record = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+        record["created"] = "the third of October"
+        (path / "manifest.json").write_text(json.dumps(record), encoding="utf-8")
+        _to_the_load_view(page)
+        page.post_picker.restore_key(trained)
+        page.read_facts()
+        assert page.posterior_line.plain_text().startswith("For Nadrowski: a spontaneous recording and one driven "
+                                                          "recording; network 128 by 8;"), (
+            page.posterior_line.plain_text())
 
 
 def test_a_narrowed_posterior_asks_before_it_loads_and_a_consent_is_never_kept(tmp_path, monkeypatch):

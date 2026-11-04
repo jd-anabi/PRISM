@@ -51,6 +51,7 @@ from core.Helpers import labels
 from core.refusals import FIELDS
 
 from . import keys
+from .step_facts import NO_DIFFERENCE_TEXT
 
 _FIXED = "Fixed by measurement: it cannot be changed in the window."
 
@@ -251,7 +252,6 @@ _KINDS = {"chi": "a frequency response", "forced": "a spontaneous recording and 
 _GRID = {"t_scale_bounds": "t_scale from {}", "dt_nd_min": "smallest step {}", "n_grid": "{} points",
          "steady_idx": "steady part from point {}"}
 DIFFERS_TEXT = "{}: {} here, {} in this set"
-NO_DIFFERENCE_TEXT = "No setting differs: its folder was renamed by hand, so a training does not find it."
 NO_PRIOR_TEXT = "a prior no longer in Records"
 UNITS_TEXT = "Units: the units in use here are not those of this set"
 OTHER_VERSION_TEXT = "Made by another version of PRISM"
@@ -260,8 +260,8 @@ PRECISION_TEXT = "This computer: made with numbers of another precision ({})"
 
 
 def _said(value) -> str:
-    """A value of an identity as a line says it, whole: a whole number grouped, a fraction as briefly as it can be
-    written exactly enough, a list entry by entry, nothing as "none"."""
+    """A value of an identity as a line says it, whole: a whole number grouped, a fraction in the shortest form that
+    is exactly it (a whole one without its ".0"), a list entry by entry, nothing as "none"."""
     if value is None:
         return "none"
     if isinstance(value, bool):
@@ -269,7 +269,8 @@ def _said(value) -> str:
     if isinstance(value, int):
         return f"{value:,}"
     if isinstance(value, float):
-        return f"{value:g}"
+        said = repr(value)
+        return said[:-2] if said.endswith(".0") else said
     if isinstance(value, (list, tuple)):
         return ", ".join(_said(one) for one in value) or "none"
     return str(value)

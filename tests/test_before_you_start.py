@@ -266,10 +266,15 @@ def test_the_simulations_are_counted_for_each_kind_of_observation(kind, slots, e
      ("warn", "Starts a new simulation set. 1 saved set for this model does not match these settings: The set of 4,000 "
               "batches (complete): No setting differs: its folder was renamed by hand, so a training does not find "
               "it.")),
+    (_reading(checkpoint="new_with_siblings", sibling_diffs=(_set(4000),)), None,
+     ("warn", "Starts a new simulation set. 1 saved set for this model does not match these settings: The set of 4,000 "
+              "batches (complete): No setting differs: its folder was renamed by hand, so a training does not find "
+              "it.")),
     (_reading(checkpoint="new_with_siblings", sibling_diffs=(_set(4000, ("model", "NADROWSKI", "HOPF")),)), None,
      ("info", "Starts a new simulation set; none is saved for this model yet.")),
 ], ids=["continues a set", "a complete set", "a complete set of no known width", "none saved", "one set that differs",
-        "two sets, the second unnamed by the page", "a set that differs in nothing", "a set of another model"])
+        "two sets, the second unnamed by the page", "a set that differs in nothing",
+        "a set that differs in nothing, no line named by the page", "a set of another model"])
 def test_continue_or_new_says_each_state(reading, differences, said):
     """What the training does with the saved simulation sets, as the reading at this budget found them, word for word: it
     continues the set of these settings, uses a complete one, or starts a new one beside none of this model, or beside
@@ -387,8 +392,12 @@ def test_the_load_view_compares_the_prior(changed, said):
      "no longer in Records."),
     (dict(made="3 Oct 2026, 03:12", model="NADROWSKI", kind=None, network=(None, 8), simulations=True),
      "Made 3 Oct 2026, 03:12, for Nadrowski."),
+    (dict(made="", model="NADROWSKI", kind="spontaneous", network=(128, 8)),
+     "For Nadrowski: a spontaneous recording only; network 128 by 8."),
+    (dict(made="", model="NADROWSKI", kind=None), "For Nadrowski."),
 ], ids=["a training's", "a narrowing round's, on limits typed by hand", "a narrowing round's that says little",
-        "a record that says nothing more"])
+        "a record that says nothing more", "a record whose moment cannot be read",
+        "a record that says only its model"])
 def test_a_saved_posteriors_record_is_said_under_its_list(given, said):
     """Under the list of saved posteriors, from the record selected: when it was made and for which model, the kind of
     observation it reads, its network, its simulations, the prior it was trained with and the bounds file it was built

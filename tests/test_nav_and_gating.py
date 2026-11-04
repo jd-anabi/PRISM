@@ -4052,6 +4052,9 @@ def test_every_identity_entry_has_an_on_screen_name():
     ([("model", "NADROWSKI", "HOPF")], []),
     ([], ["No setting differs: its folder was renamed by hand, so a training does not find it."]),
     ([("an_entry_of_a_later_version", 1, 2)], ["an_entry_of_a_later_version: 1 here, 2 in this set"]),
+    ([("chi_f0", 0.1234567, 0.1234568), ("dt_nd_min", 0.001, 2.0)],
+     ["Time grid: smallest step 0.001 here, smallest step 2 in this set",
+      "Drive amplitude in training: 0.1234567 here, 0.1234568 in this set"]),
     ([("reparam_rotate", True, False), ("chi_k_pad", 12, 8), ("n_runs", 10000, 4000),
       ("prior_fingerprint", "f_other", "f_held")],
      ["Batches: 10,000 here, 4,000 in this set", "Prior: other_prior here, retrain_prior in this set",
@@ -4063,10 +4066,12 @@ def test_every_identity_entry_has_an_on_screen_name():
         "the rotation", "the units", "the time grid's step and points", "the time grid's scale and steady part",
         "the logarithmic range", "the drive amplitude", "the frequency band", "a narrowing round", "the computer",
         "the computer, the other way", "the precision", "another version", "another version, by the layout",
-        "another model", "a folder renamed", "an entry no row names", "the rows' order"])
+        "another model", "a folder renamed", "an entry no row names", "a fraction to its last digit",
+        "the rows' order"])
 def test_the_differences_read_by_their_on_screen_names(fields, lines):
     """What a saved simulation set differs in, each entry of its identity by its row's name on screen and in the rows'
-    order: a number grouped, a list compared entry by entry and only the entries that differ said, a limit named by its
+    order: a number grouped, a fraction to its last digit and a whole one without its ".0", a list compared entry by
+    entry and only the entries that differ said, a limit named by its
     parameter and never cut short, a prior by its label in Records or as no longer there, the units with their times and
     the time grid's entries each in one line, another version of PRISM said once, another model said nothing of, and a
     set that differs in nothing said to be a folder renamed by hand."""

@@ -8,8 +8,8 @@ withdrawn changes nothing that is held, and the name and the note stand as typed
 Two views, each with its one main button: the training, and "Use a saved posterior", which lists the saved posteriors,
 says of the one selected what its record holds and compares the prior it was trained with to the prior in use, and
 loads it with the prior in use. A posterior from a narrowing round asks first, "Cancel" preselected, and the consent
-holds for that load alone. Loading while a posterior is held asks nothing: the posterior held goes only when the loaded
-one comes back.
+holds for that load alone. Loading while a posterior is held asks no question about the posterior held: it goes only
+when the loaded one comes back.
 
 The form holds what the training stage reads, each as an argument of its call: the batches and the simulations of each,
 the network, whether a saved simulation set is continued, and, folded, the fit's settings, how often the simulations are
@@ -746,7 +746,10 @@ class PosteriorPanel(StepPage):
         """Load the saved posterior ``ref`` as "Load this posterior" does, for a caller of the window's own: the load
         view shown and read, so that the list holds a record saved since by another program, ``ref`` selected, the
         facts read, and the load started unless they block it, asking first when it comes from a narrowing round. True
-        when its run was started."""
+        when its run was started. While a run is live it changes nothing: neither the view, nor the list, nor what is
+        held."""
+        if controller().is_live():
+            return False
         self._by_keyboard = False                # no key pressed this load
         self.show_view("load")
         self.read_facts()

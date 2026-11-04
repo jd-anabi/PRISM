@@ -758,7 +758,9 @@ class PriorPanel(StepPage):
         """Load the saved prior ``ref`` as "Load this prior" does, with the bounds file selected, for a caller that asked
         its own question first: the saved view shown and read, so that the list holds a record saved since by another
         program, ``ref`` selected, the facts read, and the load started unless they block it. True when its run was
-        started."""
+        started. While a run is live it changes nothing: neither the view, nor the list, nor what is held."""
+        if controller().is_live():
+            return False
         self._by_keyboard = False                # no key pressed this load
         self.show_view("saved")
         self.read_facts()

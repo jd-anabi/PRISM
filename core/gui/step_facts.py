@@ -422,6 +422,8 @@ ONE_NOT_MATCHING_TEXT = "Starts a new simulation set. 1 saved set for this model
 NOT_MATCHING_TEXT = "Starts a new simulation set. {} saved sets for this model do not match these settings:"
 SET_DIFFERS_TEXT = "the set of {:,} batches ({}) differs in {}"
 SET_SAID_TEXT = "the set of {:,} batches ({}): {}"
+#: A saved set that differs in nothing: only a folder renamed by hand can be one.
+NO_DIFFERENCE_TEXT = "No setting differs: its folder was renamed by hand, so a training does not find it."
 DIFFERENCE_TEXT = "{}: {} here, {} in this set"
 NOT_SAVED_TEXT = "The simulations of this training are not saved, so no saved simulation set is continued."
 SETS_UNREAD_TEXT = "The saved simulation sets could not be read: {}."
@@ -512,7 +514,7 @@ def _unmatched_fact(sets, differences) -> Fact:
         lines = differences.get(getattr(one, "name", None)) if isinstance(differences, dict) else None
         lines = tuple(lines) if lines else _raw_lines(fields)
         said.append(SET_DIFFERS_TEXT.format(count, state, "; ".join(lines)) if fields and lines
-                    else SET_SAID_TEXT.format(count, state, "; ".join(lines) or "nothing it says"))
+                    else SET_SAID_TEXT.format(count, state, "; ".join(lines) or NO_DIFFERENCE_TEXT))
     return Fact("warn", " ".join((head, *(f"{one[:1].upper()}{one[1:].rstrip('.')}." for one in said))))
 
 
@@ -616,7 +618,8 @@ TRAINED_OTHER_TEXT = ("Trained with {}; the prior in use is {}. Calibration and 
                       "Load {} in step 2 first.")
 TRAINED_GONE_TEXT = ("Trained with a prior no longer in Records; the prior in use is {}. Calibration and a narrowing "
                      "round will refuse this pair.")
-SAVED_POSTERIOR_TEXT = "Made {}, for {}: {}."
+MADE_FOR_WORDS = "Made {}, for {}"
+FOR_WORDS = "For {}"
 NETWORK_WORDS = "network {} by {}"
 SIMULATIONS_WORDS = "{:,} simulations"
 TRAINED_ON_WORDS = "trained with {}, on {}"
@@ -632,7 +635,7 @@ def saved_posterior_words(*, made: str, model, kind, network=None, simulations=N
     observation it reads, its network's width by depth, the simulations it was trained on, the prior it was trained
     with and the bounds file it was built on (None for limits typed by hand); and, from a narrowing round, the
     observation it was narrowed around by its label ("" when its record is no longer in Records). What its record does
-    not hold is left out."""
+    not hold is left out, when it was made too (``made`` "")."""
     parts = [READS.get(kind, str(kind))] if kind else []
     held = [_whole(one) for one in (network or (None, None))]
     if None not in held:
@@ -641,8 +644,8 @@ def saved_posterior_words(*, made: str, model, kind, network=None, simulations=N
         parts.append(SIMULATIONS_WORDS.format(simulations))
     if prior:
         parts.append(TRAINED_ON_WORDS.format(prior, TYPED_BY_HAND if bounds is None else bounds))
-    said = SAVED_POSTERIOR_TEXT.format(made, model_label(model), "; ".join(parts)) if parts else (
-        f"Made {made}, for {model_label(model)}.")
+    head = MADE_FOR_WORDS.format(made, model_label(model)) if made else FOR_WORDS.format(model_label(model))
+    said = f"{head}: {'; '.join(parts)}." if parts else f"{head}."
     if narrowed:
         around = OBSERVATION_WORDS.format(observation) if observation else NO_OBSERVATION_WORDS
         said = f"{said} {ROUND_AROUND_TEXT.format(around)}"
