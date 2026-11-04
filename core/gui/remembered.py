@@ -22,9 +22,9 @@ KIND_KEY = "inference_config/chi_mode"
 BOUNDS_KEY = "inference_prior/bounds"
 BOUNDS_MODEL_KEY = "inference_prior/bounds_model"
 PRIOR_KEY = "inference_prior/prior"
-#: The posterior that came into use last, written as it comes into use, to be put back as a choice once the Training
-#: page lists the saved posteriors (nothing reads it before then); and the batches and the simulations per batch of the
-#: training started last, written as the text of their boxes once its run has been started.
+#: The posterior that came into use last, written as it comes into use and put back as the choice of the Training
+#: page's list of saved posteriors at the next launch; and the batches and the simulations per batch of the training
+#: started last, written as the text of their boxes once its run has been started.
 POSTERIOR_KEY = "inference_posterior/posterior"
 NUM_RUNS_KEY = "inference_posterior/num_runs"
 RUN_SIZE_KEY = "inference_posterior/run_size_cap"

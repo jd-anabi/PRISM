@@ -364,14 +364,16 @@ def _set_path(w, path, value):
     target[path[-1]] = value
 
 
-def _posterior_artifact(store, cfg, *, name="post", amortized=True, region=None, V=None, prior=None, over=None):
-    """A posterior artifact with a _FakeDP payload, laid out exactly as build_posterior writes it."""
+def _posterior_artifact(store, cfg, *, name="post", amortized=True, region=None, V=None, prior=None, over=None,
+                        parents=None):
+    """A posterior artifact with a _FakeDP payload, laid out exactly as build_posterior writes it; ``parents`` adds to,
+    or replaces, the parents it names."""
     keys = list(cfg.params_dict) + list(cfg.rescale_params)
     with store.create("posterior", cfg, name=name) as w:
         dp = _FakeDP()
         dp.prior = prior
         torch.save(dp, str(w.payload("posterior.pt")))
-        w.parents = {"prior": "20260910T100000"}
+        w.parents = {"prior": "20260910T100000", **(parents or {})}
         w.body = {
             "mode": cfg.observation_mode, "conditioning": mf.conditioning_block(cfg),
             "transform": {"param_keys": keys, "log_params": [],
@@ -1004,10 +1006,11 @@ def readings_of_a_run(monkeypatch) -> list:
     ``peek``, which finds no file and loads nothing in a store with no set; the run history's readers, ``read``
     among them, which every history file goes through, whichever reader asks; the check of a record's name, which reads
     every record of its kind; a list of the kept trainings or of the simulation sets, which reads every manifest of what
-    a run may be writing; and the epochs a run is expected to take, which reads the store's posteriors, counted only while
-    a run is live, for a run's own start asks it just before. Each is passed through to the real call. Home, whose "Last
-    runs" lists the live run, reads the history at every opening, so a test that opens Home during a run finds ``latest``
-    and ``read`` here, and says so."""
+    a run may be writing; the epochs a run is expected to take, which reads the store's posteriors, counted only while
+    a run is live, for a run's own start asks it just before; a record's manifest read whole, a posterior's, a prior's,
+    an observation's or a simulation set's, and the search for a prior by its fingerprint, which reads every prior's.
+    Each is passed through to the real call. Home, whose "Last runs" lists the live run, reads the history at every
+    opening, so a test that opens Home during a run finds ``latest`` and ``read`` here, and says so."""
     import torch
     from core import orchestrator
     from core.artifacts import ArtifactStore
@@ -1035,6 +1038,9 @@ def readings_of_a_run(monkeypatch) -> list:
     counted(ArtifactStore, "assert_name_free", "assert_name_free")
     counted(ArtifactStore, "list", "a list of what a run writes", lambda _store, kind: kind in ("fit", "simulation"))
     counted(RunController, "expected_epochs", "expected_epochs", lambda held, _spec: held.is_live())
+    counted(ArtifactStore, "get", "a record's manifest",
+            lambda _store, kind, *_args, **_kwargs: kind in ("posterior", "prior", "observation", "simulation"))
+    counted(ArtifactStore, "find_prior_by_fingerprint", "find_prior_by_fingerprint")
     return calls
 
 

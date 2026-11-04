@@ -17,6 +17,7 @@ import ast
 import inspect
 import textwrap
 import os
+import re
 import tempfile
 import sys
 import time
@@ -1369,7 +1370,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "fisher_m": "Set it in the 'Rotation: simulations per perturbation' box in step 3, Training.",
         "fisher_dz": "Set it in the 'Rotation: step' box in step 3, Training.",
         "fisher_points": "Set it in the 'Rotation: parameter sets averaged' box in step 3, Training.",
-        "accept_truncated": "Confirm the load in the dialog in step 3, Training.",
+        "accept_truncated": ("Answer 'Load this posterior' in the question that loading a posterior from a narrowing "
+                             "round asks in step 3, Training."),
         "accept_other_observation": "Tick 'Run on a different observation' in step 5, Inference.",
         "name": ("Choose another name in 'Name' in step 2, Prior, or step 3, Training, or in the 'Record name' or "
                  "'Comparison name' box in Effective temperature, One cell, or in Effective temperature, Sweep study."),
@@ -1389,7 +1391,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "model": ("Set it in the 'Model' box in step 1, Model and options, or in Effective temperature, One cell, or "
                   "in Live simulation."),
         "prior": "Set it in the 'Saved prior' box in step 2, Prior.",
-        "posterior": "Train another posterior in step 3, Training.",
+        "posterior": "Set it in the 'Saved posterior' box in step 3, Training.",
         "recording_spont": ("Select the passive recording in step 5, Inference (the 'Spontaneous' box, or the "
                             "'Passive' box for a χ observation)."),
         "recording_forced": "Set it in the 'Forced' box in step 5, Inference.",
@@ -4076,6 +4078,180 @@ def test_the_differences_read_by_their_on_screen_names(fields, lines):
     assert list(said) == lines
 
 
+#: Words of the old pages that a page of the look never shows: the old tabs by their names, and "tab" itself.
+OLD_PLACES = re.compile(r"\b(TSNPE|Validate|Infer)\b|\b(Config|Prior|Posterior) tab\b|\btabs?\b")
+
+
+def _on_screen(page) -> list:
+    """Every string a page can show, read off its widgets whether they stand in sight now or in its other view: each
+    label's and button's words and tip, a field's text and its hint, each item of a list with its tip, a sentence's
+    words, the facts and the reason beside the main button, and the heading."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QAbstractButton, QComboBox, QLabel, QLineEdit, QWidget
+    from core.gui.widgets.page import Sentence
+    said = []
+    for widget in [page, *page.findChildren(QWidget)]:
+        said.append(widget.toolTip())
+        if isinstance(widget, (QLabel, QAbstractButton)):
+            said.append(widget.text())
+        if isinstance(widget, QLineEdit):
+            said += [widget.text(), widget.placeholderText()]
+        if isinstance(widget, QComboBox):
+            said.append(widget.placeholderText())
+            for at in range(widget.count()):
+                said += [widget.itemText(at), str(widget.itemData(at, Qt.ToolTipRole) or "")]
+        if isinstance(widget, Sentence):
+            said.append(widget.plain_text())
+    return [words for words in said if words]
+
+
+def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
+    """STANDING. No string the three rebuilt pages show names a place of the old pages, a tab by its old name or the
+    word "tab": every widget's words and tips in each view, with records held and saved, a posterior from a narrowing
+    round listed and selected; every question each page asks before it spends and every refusal it tells, as they are
+    asked; every fix sentence a refusal on the page gives; and every string the modules that make the three pages and
+    their facts hold, which is every question's and fact's words, whether or not a state here shows it. The scan is held
+    to finding the old words where they are planted, so that a walk that reads nothing fails here too."""
+    import re as _re
+    from core import orchestrator
+    from core.artifacts import ArtifactStore, default_store, use_store
+    from core.gui import fields as gui_fields
+    from core.gui.session import SbiSession
+    from core.refusals import FIELDS, Refusal
+    from tests._fixtures import _nad_cfg, _posterior_artifact, _prior_artifact, build_window, qt_app
+    from tests._runs import StandIn, turn_until
+    from tests._dialogs import all_asked, choose
+    from core.gui.run.controller import controller
+    from core.SBI import reparam, truncate
+    from core.SBI.training_checkpoint import bijection_probe
+    app = qt_app()
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        window = build_window()
+        screen = window.part("inference")
+        window.go_to("inference", "model")
+        screen.config_panel.foot.main_button.click()
+        cfg = _nad_cfg()
+        prior = default_store().load_prior(cfg, _prior_artifact(default_store(), cfg, name="retrain_prior").id)
+        count = len(cfg.params_dict) + len(cfg.rescale_params)
+        probe = bijection_probe(reparam.build_inferred_bijection(cfg, log_params=[]), count)
+        region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=count, V=None, probe=probe,
+                                           x_obs_digest="d" * 16)
+        screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior)
+        screen.refresh_gates()
+        pages = (screen.config_panel, screen.prior_panel, screen.posterior_panel)
+        window.go_to("inference", "training")
+        screen.posterior_panel.show_view("load")
+        screen.posterior_panel.read_facts()             # no posterior saved yet: what the load view says then
+        seen = _on_screen(screen.posterior_panel)
+        assert "Error. No posterior is saved yet: start a training with 'Set up a training instead…'." in seen
+        narrowed = _posterior_artifact(default_store(), cfg, name="round1", amortized=False, region=region,
+                                       parents={"prior": prior.id}).id
+        for view in ("saved", "build"):
+            window.go_to("inference", "prior")
+            screen.prior_panel.show_view(view)
+            screen.prior_panel.read_facts()
+            seen += _on_screen(screen.prior_panel)
+        window.go_to("inference", "training")
+        page = screen.posterior_panel
+        page.show_view("load")
+        page.read_facts()
+        page.post_picker.restore_key(narrowed)
+        page.read_facts()
+        seen += _on_screen(page)
+        choose(monkeypatch, default=True)
+        page._main_clicked()
+        stand_in = StandIn(word="Training")
+        monkeypatch.setattr(orchestrator, "build_posterior", stand_in)
+        page.show_view("training")
+        page.names.name.setText("retrain")
+        page.read_facts()
+        seen += _on_screen(page) + _on_screen(screen.config_panel)
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        stand_in.fail(Refusal("A posterior named 'retrain' was made meanwhile.", field="name"))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        asked = all_asked()
+        assert [said.title for said in asked] == ["Load a posterior from a narrowing round?",
+                                                  "Check your inputs"], asked
+        seen += [words for said in asked for words in (said.title, said.sentence, said.beneath, *said.items,
+                                                       *said.answers)]
+        seen += [gui_fields.fix_sentence(key, here=page.step) for page in pages for key in FIELDS]
+        seen = [words for words in seen if words]
+        named = [words for words in seen if OLD_PLACES.search(words)]
+        assert named == [], named
+        assert "round1  —  from a narrowing round" in seen and NARROWED_HELD in " ".join(seen)
+        assert OLD_PLACES.search("the Infer tab") and OLD_PLACES.search("narrowed (TSNPE)") and not OLD_PLACES.search(
+            "Step 2, Prior, has changes"), "the scan's pattern finds nothing it must"
+        assert _re.search(r"Load a posterior from a narrowing round", " ".join(seen))
+    from core.gui import step_facts
+    from core.gui.panels.inference import config_tab, posterior_tab, prior_tab, step_page
+    held = []
+    for module in (config_tab, prior_tab, posterior_tab, step_facts, step_page):
+        for node in ast.walk(ast.parse(inspect.getsource(module))):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                held.append((module.__name__, node.value))
+    assert len(held) > 400 and ("core.gui.step_facts", "Start a new training?") in held, len(held)
+    assert [(name, words) for name, words in held if OLD_PLACES.search(words)] == []
+
+
+#: A sentence the walk must find, or it read nothing of the load view: its record's line.
+NARROWED_HELD = "From a narrowing round around an observation no longer in Records."
+
+
+def _refusal_keys(*names) -> set:
+    """Every refusal key the stage functions ``names`` of the orchestrator can give before they spend, read off the
+    engine's own text: a key handed as ``field=`` to anything, or as the first argument of a ``require_`` rule, in each
+    function and in every function of the orchestrator or method of the store it calls, and in theirs, as far as the
+    calls go."""
+    import ast
+    import inspect
+    from core import orchestrator
+    from core.artifacts import store as store_module
+    trees = {}
+    for module in (orchestrator, store_module):
+        for node in ast.walk(ast.parse(inspect.getsource(module))):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                trees.setdefault(node.name, node)
+    keys, todo, seen = set(), list(names), set()
+    while todo:
+        name = todo.pop()
+        if name in seen or name not in trees:
+            continue
+        seen.add(name)
+        for node in ast.walk(trees[name]):
+            if not isinstance(node, ast.Call):
+                continue
+            called = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+            todo.append(called)
+            for keyword in node.keywords:
+                if keyword.arg in ("field", "key") and isinstance(keyword.value, ast.Constant):
+                    keys.add(keyword.value.value)
+            if called.startswith("require_") and node.args and isinstance(node.args[0], ast.Constant):
+                keys.add(node.args[0].value)
+    return keys
+
+
+def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
+    """STANDING. Every refusal key a stage started from the three rebuilt pages can give, read off the engine's own
+    text, has a row or a sentence on the page that started it: what a refusal says under its message there is never
+    empty, but for the device, which the window never exposes, and the kept training to resume, whose Resume after a
+    reopening is the Training page's yet to come. The key set read is held to the keys each stage is known to give, so
+    that a walk that reads too little fails here too."""
+    from core.gui import fields as gui_fields
+    from core.refusals import FIELDS
+    built, trained = _refusal_keys("build_prior"), _refusal_keys("build_posterior")
+    assert {"num_iterations", "sweep_batch", "max_sets", "walk_step", "stability_units", "min_cluster_size",
+            "min_samples", "name"} <= built, sorted(built)
+    assert {"num_runs", "run_size_cap", "checkpoint_every", "hidden_features", "num_transforms", "learning_rate",
+            "stop_after_epochs", "max_num_epochs", "fisher_m", "fisher_dz", "fisher_points", "resume", "new_run",
+            "posterior", "accept_truncated", "prior", "name", "resume_fit"} <= trained, sorted(trained)
+    unanswered = {"device", "resume_fit"}
+    for step, keys_ in (("prior", built), ("training", trained)):
+        assert keys_ <= set(FIELDS), sorted(keys_ - set(FIELDS))
+        silent = sorted(key for key in keys_ - unanswered if not gui_fields.fix_sentence(key, here=step))
+        assert silent == [], (step, silent)
+
+
 def test_the_gui_control_table_matches_the_tabs_labels():
     """The control table's pin. fields.CONTROL is where a refusal learns which box to name ("Set it
     in the 'T_obs (s)' box in step 5, Inference, or in Live simulation."), and the panels build their
@@ -4187,7 +4363,8 @@ def test_the_gui_control_table_matches_the_tabs_labels():
         "fisher_m": "Rotation: simulations per perturbation", "fisher_dz": "Rotation: step",
         "fisher_points": "Rotation: parameter sets averaged", "prefactor": "Normalisation constant",
         "slice_at": "Slice at", "bounds": "Bounds file", "cell": "Cell", "units": "Units", "model": "Model",
-        "prior": "Saved prior", "recording_forced": "Forced", "drive_amplitude": "A (N)", "drive_frequency": "f (Hz)",
+        "prior": "Saved prior", "posterior": "Saved posterior", "recording_forced": "Forced",
+        "drive_amplitude": "A (N)", "drive_frequency": "f (Hz)",
         "drive_phase": "φ (rad)", "chi_f0_si": "Drive F₀ (N)", "chi_mode": "Kind of observation",
         "chi_n_freqs": "Driven recordings per observation", "chi_k_pad": "Slots for driven recordings",
         "chi_max_cycles": "Lock-in limit", "reparam_rotate": "Rotation", "n_freqs": "n_freqs",

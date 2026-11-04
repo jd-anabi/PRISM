@@ -5770,6 +5770,60 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
 
 @pytest.mark.parametrize("factor, room", [(1.0, _LARGE_SCREEN), (1.5, _LARGE_SCREEN), (1.5, _SMALL_SCREEN)],
                          ids=["text 1.0", "text 1.5", "text 1.5 on a small screen"])
+def test_nothing_of_the_training_page_is_cut_while_a_posterior_loads_at_any_width(factor, room, tmp_path, monkeypatch):
+    """A load takes no run's page: while a posterior loads, the Training page's load view stands in its column whole,
+    its form greyed and its foot saying a run is live, inside the window with nothing over it, at every width a window
+    of the text size at hand can have, made as narrow as it can be and as wide as the screen, then narrow again."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import design
+    from core.gui.run.controller import controller
+    from core.gui.session import SbiSession
+    from tests._fixtures import _nad_cfg, _posterior_artifact, build_window, prior_stub, qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import Clock, StandIn, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    with text_size(factor), _the_look(False), use_store(ArtifactStore(tmp_path / "Artifacts")) as store:
+        _controller_on(tmp_path, Clock(_at(9, 18, 0)))
+        cfg = _nad_cfg()
+        ref = _posterior_artifact(store, cfg, name="retrain_narrowing_round_of_the_second_of_november").id
+        window = build_window()
+        design.set_room(room)
+        window.setMinimumSize(1, 1)
+        opening, least = design.window_sizes(room)
+        screen = window.part("inference")
+        screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior_stub())
+        screen.refresh_gates()
+        host = screen.posterior_panel
+        shown_off_screen(window, *opening)
+        window.go_to("inference", "training")
+        host.show_view("load")
+        host.read_facts()
+        host.post_picker.restore_key(ref)
+        host.read_facts()
+        stand_in = StandIn(word="Posterior load")
+        monkeypatch.setattr(orchestrator, "build_posterior", stand_in)
+        host._main_clicked()
+        assert stand_in.started.wait(5) and controller().is_live()
+        _settle()
+        assert host.results.currentWidget() is host.figures and not host.form.isEnabled()
+        widths = sorted({*range(least[0], least[0] + _WHERE_THEY_MEET, 3), *range(least[0], opening[0], 40), opening[0],
+                         room[0]})
+        for width in widths + widths[::-1]:
+            window.resize(width, least[1])
+            _settle()
+            assert window.width() == width, ("the window did not take the width", window.width(), width)
+            _the_two_share_the_width(window, host, ("a load", factor, width))
+            button = host.foot.main_button
+            right = button.mapTo(window, button.rect().topRight()).x()
+            assert right < window.width(), ("the main button is cut", factor, width, right)
+        stand_in.release(None)
+        turn_until(app, lambda: not controller().is_live())
+
+
+@pytest.mark.parametrize("factor, room", [(1.0, _LARGE_SCREEN), (1.5, _LARGE_SCREEN), (1.5, _SMALL_SCREEN)],
+                         ids=["text 1.0", "text 1.5", "text 1.5 on a small screen"])
 def test_nothing_of_a_trainings_run_page_is_cut_on_the_training_page_at_any_width(factor, room, tmp_path, monkeypatch):
     """The Training page's run page carries more than a build's: in its fit, the loss curve over the epochs said, the
     fit's lines and a figure; stopped in its fit, the question of keeping the training kept, with Keep, Discard and

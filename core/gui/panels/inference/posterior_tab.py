@@ -1,8 +1,15 @@
-"""Step 3, Training: the training that makes the simulation set and fits the network to it, set up, named and started.
+"""Step 3, Training: the training that makes the simulation set and fits the network to it, set up, named and started;
+or a posterior saved before, loaded.
 
-The step holds a posterior, and holds it only when a training's run returns one: the press hands the run the
-configuration and the prior the session holds, and the posterior held before stays in use through the run. A run
-refused, failed, stopped or withdrawn changes nothing that is held, and the name and the note stand as typed.
+The step holds a posterior, and holds it only when a run returns one: the press hands the run the configuration and the
+prior the session holds, and the posterior held before stays in use through the run. A run refused, failed, stopped or
+withdrawn changes nothing that is held, and the name and the note stand as typed.
+
+Two views, each with its one main button: the training, and "Use a saved posterior", which lists the saved posteriors,
+says of the one selected what its record holds and compares the prior it was trained with to the prior in use, and
+loads it with the prior in use. A posterior from a narrowing round asks first, "Cancel" preselected, and the consent
+holds for that load alone. Loading while a posterior is held asks nothing: the posterior held goes only when the loaded
+one comes back.
 
 The form holds what the training stage reads, each as an argument of its call: the batches and the simulations of each,
 the network, whether a saved simulation set is continued, and, folded, the fit's settings, how often the simulations are
@@ -12,46 +19,56 @@ choice of continuing stands at its first choice, greyed, and that choice is what
 the run uses, what it makes, what it does with the saved sets, each set of the model it would not continue with what it
 differs in by the names on screen, how long it should take and the memory it may use.
 
-A training that would simulate from zero while saved sets of its model exist asks first, "Cancel" preselected, listing
-each set with what it differs in; with "Never" a set these very settings would continue heads the list. A yes hands the
-stage the consent to start a new set; so does a yes to the same question asked again when the stage refuses a new set
-it finds one setting away from another, whose own sentence is then not shown.
+A training that kept trainings match asks first, "Cancel" preselected, naming each with where it stopped, and starts a
+new one only on its answer, which leaves each kept training as it is. Else a training that would simulate from
+zero while saved sets of its model exist asks first, "Cancel" preselected, listing each set with what it differs in;
+with "Never" a set these very settings would continue heads the list. A yes hands the stage the consent to start a new
+set; so does a yes to the same question asked again when the stage refuses a new set it finds one setting away from
+another, whose own sentence is then not shown. Never both questions.
 
-Nothing is read while a run is live: the saved simulation sets, the run history and the records of earlier trainings are
-read by the page's reading alone. The batches and the simulations per batch are remembered as the text of their boxes
-once a training has started with them; the posterior that comes into use is remembered as it comes.
+Nothing is read while a run is live: the saved simulation sets, the kept trainings, the run history, the saved
+posteriors' records and the records of earlier trainings are read by the page's reading alone, and the list of saved
+posteriors is read again and moved to a posterior that came into use once its run has ended. The batches and the
+simulations per batch are remembered as the text of their boxes once a training has started with them; the posterior
+that comes into use is remembered as it comes, and is put back as the list's choice at the next launch.
 """
 import math
 from dataclasses import replace
 from datetime import datetime
 
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QPushButton, QWidget
 
 from core import config, orchestrator
-from core.artifacts import default_store
+from core.artifacts import Accept, default_store
 from core.refusals import Refusal, default_clause, require_at_least, require_positive
 
-from ... import fields, keys, record_words, settings, texts
+from ... import fields, keys, record_words, settings, style, texts
 from ...chain import model_label
 from ...memory_limit import computer, limit_words, memory_limit_in_force
-from ...remembered import NUM_RUNS_KEY, RUN_SIZE_KEY, put_many
+from ...remembered import NUM_RUNS_KEY, POSTERIOR_KEY, RUN_SIZE_KEY, put_many
 from ...reported import reported
 from ...run import ends, history
 from ...run.controller import controller
 from ...run.model import RunSpec
-from ...step_facts import (CANCEL, CONTINUING, NO_POSTERIOR_TEXT, START_WORDS, Fact, budget_words, how_long_words,
-                           new_set_question, of_this_model, pending_words, posterior_in_use, set_words, training_facts,
+from ...step_facts import (CANCEL, CONTINUING, LOAD_POSTERIOR_WORDS, NO_POSTERIOR_TEXT, NO_PRIOR_WORDS, START_WORDS,
+                           Fact, SelectionRow, budget_words, held_value, how_long_words, kept_words, load_facts,
+                           narrowed_question, new_set_question, new_training_question, of_this_model, pending_words,
+                           posterior_in_use, saved_posterior_words, set_words, stopped_words, training_facts,
                            uses_words)
+from ...widgets.artifact_picker import StorePicker
 from ...widgets.ask import ask
 from ...widgets.choice import Choice
 from ...widgets.form import NameAndNote, TickedField
 from ...widgets.labeled_inputs import FloatField, IntField
 from .base import training_spec
 from .help_text import HELP
-from .prior_tab import bounds_in_use
+from .prior_tab import bounds_in_use, recorded_file
 from .step_page import StepPage
 
 TITLE = "Training"
+TO_LOAD = "Use a saved posterior instead…"
+TO_TRAINING = "Set up a training instead…"
+CHOOSE_POSTERIOR = "Choose a saved posterior"
 SENTENCE = ("Makes the simulation set, then fits the network to it. The result is saved as a posterior: the trained "
             "network that turns an observation into parameter estimates with their uncertainty.")
 #: "Continue or start new": what each choice says, and the policy the training stage is handed for it.
@@ -105,6 +122,9 @@ _FLOORS = dict(_RULES)
 #: The rows a blank leaves at their choice of nothing, which no rule refuses.
 _BLANK_CHOSEN = ("expected_epochs",)
 
+#: The rows only a training reads: its settings and the choice of continuing.
+_TRAINING_ROWS = ("resume", *(key for key, _ in _RULES))
+
 # Where the window shows this step's runs: Parameter inference, its step Training.
 _PLACE = ("inference", "training")
 
@@ -151,12 +171,25 @@ def _plain(value):
     return str(value)
 
 
+def _label_of(kind: str, manifest) -> str:
+    """A record's label as Records gives it, from its manifest: its name, or its kind and when it was made."""
+    try:
+        made = datetime.fromisoformat(manifest.created).astimezone()
+    except (TypeError, ValueError, OverflowError, OSError):
+        made = None
+    return record_words.record_label(kind, getattr(manifest, "name", "") or "", made)
+
+
 class PosteriorPanel(StepPage):
     """Step 3. The form's rows are read by their field keys; ``resume_choice`` is "Continue or start new"; the line of
-    the prior in use stands in the block for the run."""
+    the prior in use stands in the block for the run. ``post_picker`` lists the saved posteriors; ``view`` is
+    "training" or "load"."""
 
     def __init__(self, screen, parent=None):
         super().__init__(screen, TITLE, SENTENCE, step="training", parent=parent)
+        self.view = "training"
+        self._record: dict = {}              # the saved posterior selected, as the last reading read its record
+        self._matches = ()                   # the kept trainings the last reading found that match the form
         self._reading = None                 # the saved simulation sets, as the last reading found them at its budget
         self._never_reading = None           # with "Never", the same at the built-in cadence: which sets exist
         self._sets_said: dict = {}           # each saved set the last reading found, by its name: its words
@@ -168,6 +201,10 @@ class PosteriorPanel(StepPage):
         self._history_read = False           # whether a reading has read the run history yet
         self._made = None                    # the posterior a run of this page returned, until the run has ended
         self._handed = None                  # the name and the note this page's last training was handed
+        self.switch_button = QPushButton()
+        self.switch_button.clicked.connect(self._switch)
+        self.head.add_action(self.switch_button)
+        self.post_picker = StorePicker("posterior", parent=self, keeps_selection=True, hint=CHOOSE_POSTERIOR)
         self.resume_choice = Choice()
         for words, policy in RESUME_CHOICES:
             self.resume_choice.addItem(words, policy)
@@ -175,6 +212,9 @@ class PosteriorPanel(StepPage):
         # Heard before its row hears it: the choice of continuing is fixed before the page judges the form.
         self._saves.changed.connect(self._saves_changed)
         form = self.form
+        form.add("posterior", self.post_picker.combo)
+        self.posterior_line = form.add_sentence("", under="posterior")
+        self.posterior_line.setVisible(False)
         form.add("num_runs", IntField(config.TRAINING_NUM_RUNS, grouped=True), usual=config.TRAINING_NUM_RUNS,
                  help_text=HELP["num_runs"])
         form.add("run_size_cap", TickedField(IntField(config.TRAINING_RUN_SIZE, grouped=True), "Automatic", 0),
@@ -214,6 +254,7 @@ class PosteriorPanel(StepPage):
         self.use_names(self._names)
         self.prior_row = form.add_text("prior", "", "", side=True)
         self.restore_settings(settings.settings())
+        self._apply_view("training")
         self.refresh_local_gates()
 
     # ── what the step holds ──
@@ -265,7 +306,26 @@ class PosteriorPanel(StepPage):
 
     # ── what a page answers ──
     def main_words(self) -> str:
-        return START_WORDS
+        return LOAD_POSTERIOR_WORDS if self.view == "load" else START_WORDS
+
+    def nothing_to_apply(self) -> bool:
+        """The load view holds the posterior selected: a load would change nothing."""
+        return (self.view == "load" and getattr(self.session, "posterior", None) is not None
+                and not any(row.changed() for row in self.selection_rows()))
+
+    def selection_rows(self) -> tuple:
+        """In the load view, the saved posterior selected, against the posterior held."""
+        if self.view != "load":
+            return ()
+        posterior = getattr(self.session, "posterior", None)
+        return (SelectionRow("posterior", lambda: held_value(posterior, "id"), self.post_picker.key,
+                             self._posterior_words),)
+
+    def _posterior_words(self, value) -> str:
+        found = self.post_picker.combo.findData(value)
+        if found >= 0:
+            return self.post_picker.combo.itemText(found)
+        return record_words.label_of(getattr(self.session, "posterior", None)) or str(value)
 
     def plan_fields(self) -> dict:
         return {key: self.form.rows[key] for key, _ in _RULES}
@@ -282,13 +342,15 @@ class PosteriorPanel(StepPage):
         named = ""
         if prior is not None and trained_with is not None and trained_with == getattr(prior, "id", None):
             named = getattr(prior, "name", None) or record_words.label_of(prior)
-        return posterior_in_use(record_words.label_of(posterior),
-                                body.get("training") if isinstance(body, dict) else None, made_for, named)
+        body = body if isinstance(body, dict) else {}
+        return posterior_in_use(record_words.label_of(posterior), body.get("training"), made_for, named,
+                                narrowed=body.get("amortized") is False)
 
     def problems(self) -> dict:
         """Every rule the form breaks now, by field key in the order a press reads them: the line under the field, built
         from its row's label, and what the press says, the same with the value it found and the usual one. A setting the
-        training will not read breaks none, and a blank expected epochs is a choice."""
+        training will not read breaks none, and a blank expected epochs is a choice. The load view says none of them:
+        its facts are its own."""
         found = {}
         for key, minimum in self._ruled():
             problem = self._row_problem(key, minimum)
@@ -320,7 +382,10 @@ class PosteriorPanel(StepPage):
     def facts_from_form(self) -> tuple:
         """The facts of the step as the form, the session and the last reading stand: the rules under their fields and
         what stands under them; what the run uses and makes; what it does with the saved sets; how long it takes; the
-        memory limit and the last run; the other steps' changes not applied; the name and the note."""
+        memory limit and the last run; the other steps' changes not applied; the name and the note. In the load view,
+        the saved posterior selected as the last reading read it, against the prior in use."""
+        if self.view == "load":
+            return self._load_facts()
         found = self.problems()
         unused = self._rotation_unused()
         for key, row in self.form.rows.items():
@@ -368,6 +433,22 @@ class PosteriorPanel(StepPage):
                               how_long=how_long, memory=memory, others_pending=self._others_pending(),
                               name_facts=names, field_facts=field_facts)
 
+    def _load_facts(self) -> tuple:
+        """The facts of the load view: what blocks a load, and the prior the posterior selected was trained with
+        against the prior in use, as the last reading read its record."""
+        for key, row in self.form.rows.items():
+            if row.widget is not None and key not in ("name", "note"):
+                row.set_origin(KEPT if row.kept else "")
+        prior = self._held()[1]
+        record = self._record if self._record.get("key") == self.post_picker.key() else {}
+        return load_facts(needs_prior=prior is None, chosen=bool(self.post_picker.key()),
+                          saved=self.post_picker.has_entries(), error=record.get("error", ""),
+                          record_model=record.get("model"), model=getattr(self._held()[0], "model", None),
+                          trained_with=record.get("trained_with"), trained_with_label=record.get("prior_label", ""),
+                          in_use=getattr(prior, "id", None),
+                          in_use_label=getattr(prior, "name", None) or record_words.label_of(prior),
+                          others_pending=self._others_pending())
+
     def _differs(self, one) -> tuple:
         """What the saved set ``one`` differs in, line by line, by the names on screen: its limits by the parameters of
         the configuration held, its prior by the label the last reading found for it."""
@@ -395,11 +476,14 @@ class PosteriorPanel(StepPage):
         """The run history (the last run on this computer and the last that measured its batches); and, while a prior is
         held and the budget passes its rules, the saved simulation sets at this budget, the run history's paces for this
         size, and the epochs the last finished training of this kind ran: only then has it looked for one."""
+        if self.view == "load":
+            self._read_the_record()
+            return
         folder, here = controller().folder(), computer()
         self._last, self._measured = history.last_on(folder, here), history.last_measured_on(folder, here)
         self._history_read = True
         self._reading = self._never_reading = self._per_batch = self._per_epoch = self._expected = None
-        self._sets_said, self._prior_labels = {}, {}
+        self._sets_said, self._prior_labels, self._matches = {}, {}, ()
         self._looked = False
         cfg, prior = self._held()
         budget = self._budget()
@@ -415,6 +499,13 @@ class PosteriorPanel(StepPage):
                 cfg, prior, num_runs=num_runs, run_size_cap=cap,
                 checkpoint_every=self.form.rows["checkpoint_every"].usual())
         self._read_the_sets(prior)
+        if getattr(self._reading, "checkpoint", None) == "resume_complete":
+            # A kept training matches only a set of these settings that is whole: only then can one match.
+            values = self._stage_values()
+            self._matches = orchestrator.matching_fits(
+                cfg, prior, num_runs=num_runs, run_size_cap=cap, checkpoint_every=cadence,
+                **{key: values.get(key) for key in ("hidden_features", "num_transforms", "learning_rate",
+                                                    "stop_after_epochs", "max_num_epochs")})
         width = getattr(self._reading, "width", None)
         if width:
             self._per_batch = _quietly(history.estimate, folder, word="Training", per="batch",
@@ -430,6 +521,49 @@ class PosteriorPanel(StepPage):
         # The last finished training's alone: the epochs typed are the form's, read at each drawing.
         self._expected = controller().expected_epochs(replace(spec, expected_epochs=None))
         self._looked = True
+
+    def _read_the_record(self) -> None:
+        """The saved posteriors listed again, keeping the one selected; and its record as the line under the list says
+        it and the load's facts read it: when it was made and for which model, what it reads, its network, its
+        simulations, the prior it was trained with by its label, the bounds file, and, from a narrowing round, the
+        observation it was narrowed around by its label. What cannot be read is said, never raised."""
+        self.post_picker.refresh()
+        key = self.post_picker.key()
+        self._record = {"key": key}
+        self.posterior_line.set_text("")
+        self.posterior_line.setVisible(False)
+        if not key:
+            return
+        store = default_store()
+        try:
+            manifest = store.get("posterior", key)
+            body = dict(manifest.body)
+        except Exception as error:           # noqa: BLE001 -- a record that cannot be read is said, not raised
+            self._record["error"] = f"The posterior cannot be read: {type(error).__name__}: {error}"
+            return
+        parents, made_for = dict(manifest.parents or {}), dict(manifest.config or {})
+        training = body.get("training") if isinstance(body.get("training"), dict) else {}
+        record = self._record
+        record.update(model=made_for.get("model"), trained_with=parents.get("prior"),
+                      label=_label_of("posterior", manifest), narrowed=body.get("amortized") is False, prior_label="",
+                      observation="")
+        for kind, ref, slot in (("prior", parents.get("prior"), "prior_label"),
+                                ("observation", parents.get("observation") if record["narrowed"] else None,
+                                 "observation")):
+            if ref:
+                try:
+                    record[slot] = _label_of(kind, store.get(kind, ref))
+                except Exception:            # noqa: BLE001 -- a record no longer in Records is said so
+                    pass
+        runs, size = training.get("n_runs"), training.get("run_size")
+        simulations = runs * size if isinstance(runs, int) and isinstance(size, int) else None
+        inputs = manifest.inputs if isinstance(manifest.inputs, dict) else {}
+        self.posterior_line.set_text(saved_posterior_words(
+            made=_made(manifest.created), model=made_for.get("model"), kind=body.get("mode"),
+            network=(training.get("hidden_features"), training.get("num_transforms")), simulations=simulations,
+            prior=record["prior_label"] or (NO_PRIOR_WORDS if parents.get("prior") else ""),
+            bounds=recorded_file(inputs.get("bounds")), narrowed=record["narrowed"], observation=record["observation"]))
+        self.posterior_line.setVisible(True)
 
     def _read_the_sets(self, prior) -> None:
         """How the question names each saved set of the model the readings found: by its label in Records, the prior it
@@ -507,6 +641,36 @@ class PosteriorPanel(StepPage):
         return {key: rows[key].value() for key, _ in self._ruled()
                 if key not in found and key != "expected_epochs" and rows[key].value() is not None}
 
+    # ── the views ──
+    def show_view(self, view: str) -> None:
+        """Show "training", a training to set up and start, or "load", a saved posterior to load: each its rows and its
+        main button, its facts read once the choice has settled."""
+        self._apply_view(view)
+        self._edited()
+
+    def _apply_view(self, view: str) -> None:
+        if view not in ("training", "load"):
+            raise ValueError(f"no such view of the Training step: {view!r}")
+        self.view = view
+        load = view == "load"
+        self.switch_button.setText(style.access_key(TO_TRAINING if load else TO_LOAD))
+        rows = self.form.rows
+        rows["posterior"].set_shown(load)
+        for key in _TRAINING_ROWS:
+            rows[key].set_shown(not load)
+        for row in self._names.rows.values():
+            row.set_shown(not load)
+        self.form.side.setVisible(not load)
+        self.names = None if load else self._names
+
+    def _switch(self) -> None:
+        self.show_view("training" if self.view == "load" else "load")
+
+    def set_controls_enabled(self, enabled: bool) -> None:
+        """A run locks the form, the foot's two buttons, and the way between the two views."""
+        self.switch_button.setEnabled(enabled)
+        super().set_controls_enabled(enabled)
+
     # ── the choices ──
     def _saves_changed(self) -> None:
         """"Never", or a typed 0: no simulation set is continued, so "Continue or start new" stands at its first choice,
@@ -528,8 +692,13 @@ class PosteriorPanel(StepPage):
                 if key != "expected_epochs" and not (key == "max_num_epochs" and rows[key].value() is None)}
 
     def main_pressed(self) -> None:
-        """Start the training on the configuration and the prior held: nothing is held anew until the run returns its
-        posterior. The batches and the simulations per batch are remembered once the run has started."""
+        """Start the training on the configuration and the prior held, or load the posterior selected: nothing is held
+        anew until the run returns its posterior. A training asks first when kept trainings match it, and else when it
+        would simulate from zero beside saved sets of its model; never both. The batches and the simulations per batch
+        are remembered once a training has started."""
+        if self.view == "load":
+            self._load()
+            return
         cfg, prior = self._held()
         if prior is None:
             return                               # the facts say why, and the button is greyed with them
@@ -539,12 +708,51 @@ class PosteriorPanel(StepPage):
             self._refusal(refused)
             return
         new_run = False
-        question = self._from_zero()
-        if question is not None:
-            if not self._asked_from_zero(question):
+        if self._matches:
+            title, sentence, items, beneath, other = new_training_question(
+                [kept_words(kept.posterior_name or _label_of("fit", kept),
+                            stopped_words(kept.state, kept.stopped_on_purpose, kept.stop_reason), kept.passes,
+                            _made(kept.saved_at)) for kept in self._matches])
+            if not ask(self, title, sentence, CANCEL, other, items=items, beneath=beneath):
                 return
-            new_run = True
+        else:
+            question = self._from_zero()
+            if question is not None:
+                if not self._asked_from_zero(question):
+                    return
+                new_run = True
         self._start(knobs, new_run)
+
+    def _load(self) -> bool:
+        """Load the saved posterior selected with the configuration and the prior held, asked first when it comes from
+        a narrowing round, the consent then handed for this load alone. True when its run was started."""
+        cfg, prior = self._held()
+        key = self.post_picker.key()
+        if prior is None or not key:
+            return False
+        accept = Accept()
+        record = self._record if self._record.get("key") == key else {}
+        if record.get("narrowed"):
+            title, sentence, beneath, other = narrowed_question(record.get("label", key), record.get("observation", ""))
+            if not ask(self, title, sentence, CANCEL, other, beneath=beneath):
+                return False
+            accept = Accept(truncated=True)
+        return self.dispatch(orchestrator.build_posterior, cfg, prior, key, False, accept=accept,
+                             on_result=self._on_posterior)
+
+    def load_record(self, ref: str) -> bool:
+        """Load the saved posterior ``ref`` as "Load this posterior" does, for a caller of the window's own: the load
+        view shown and read, so that the list holds a record saved since by another program, ``ref`` selected, the
+        facts read, and the load started unless they block it, asking first when it comes from a narrowing round. True
+        when its run was started."""
+        self._by_keyboard = False                # no key pressed this load
+        self.show_view("load")
+        self.read_facts()
+        self.post_picker.restore_key(ref)
+        self.read_facts()
+        if self.post_picker.key() != ref or not self.foot.main_button.isEnabled():
+            return False
+        return self._load()
 
     def _asked_from_zero(self, question) -> bool:
         """Ask the question before simulating from zero, "Cancel" preselected; True for the answer that starts."""
@@ -618,18 +826,21 @@ class PosteriorPanel(StepPage):
                 "rows": rows}
 
     def _on_posterior(self, payload) -> None:
-        """The run returned its posterior, while it is still live: it comes into use, and nothing is read until the run
-        has ended."""
+        """The run returned its posterior, trained or loaded, while it is still live: it comes into use, and nothing is
+        read until the run has ended."""
         self._made = payload
         self._screen.take_posterior(payload)
 
     def _run_ended(self, status) -> None:
-        """A run has ended. One of this page's that returned its posterior: a word when the record came back under
-        another name than the one its call asked for (the ended run's own, which "Continue" and "Resume" repeat), and
-        the name and the note each emptied while it still holds what the call was handed, so that one typed since
-        stands. Then the reading."""
+        """A run has ended. One of this page's that returned its posterior: the list of saved posteriors read again and
+        moved to it; and after a training, a word when the record came back under another name than the one its call
+        asked for (the ended run's own, which "Continue" and "Resume" repeat), and the name and the note each emptied
+        while it still holds what the call was handed, so that one typed since stands. Then the reading."""
         made, self._made = self._made, None
         if made is not None:
+            self.post_picker.refresh()
+            self.post_picker.restore_key(getattr(made, "id", "") or "")
+        if made is not None and not getattr(status, "loading", False):
             asked = getattr(status, "name", "") or ""
             if asked and getattr(made, "name", "") != asked:
                 self.in_use.say(Fact("warn", SAVED_WITHOUT_NAME.format(asked)))
@@ -655,17 +866,24 @@ class PosteriorPanel(StepPage):
     @reported(QWidget.showEvent)
     def showEvent(self, event):
         """Shown again with nothing owed, the page is drawn again, since what the other steps hold may have changed;
-        it reads nothing."""
+        the load view lists the saved posteriors again first, unless a run is live, so that one saved meanwhile by
+        another program comes in. Nothing else is read."""
         reads = self.stale
         super().showEvent(event)
         if not reads:
+            if self.view == "load" and not controller().is_live():
+                self.post_picker.refresh()
             self.redraw()
 
     # ── what is remembered ──
     def restore_settings(self, qs) -> None:
         """The batches and the simulations per batch the last training started with, put back as their boxes' text,
-        never read anywhere else, and marked kept from last time until they are touched. A value that is no whole
-        number is passed over."""
+        never read anywhere else, and the posterior that came into use last, put back as the list's choice, never
+        loaded; each marked kept from last time until it is touched. A value that is no whole number, and a posterior
+        no longer listed, is passed over."""
+        posterior = settings.get_str(qs, POSTERIOR_KEY, "")
+        self.post_picker.restore_key(posterior)
+        self.form.rows["posterior"].kept = bool(posterior) and self.post_picker.key() == posterior
         for key, name in ((NUM_RUNS_KEY, "num_runs"), (RUN_SIZE_KEY, "run_size_cap")):
             raw = settings.get_str(qs, key, "").strip()
             try:

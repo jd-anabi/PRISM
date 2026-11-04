@@ -441,6 +441,7 @@ NO_ESTIMATE_TEXT = ("No time estimate: no training of this size has run on this 
 PENDING_TEXT = "Step {}, {}, has changes that are not applied. This run uses what is in use: {}."
 POSTERIOR_IN_USE_TEXT = "{:,} epochs, network {} by {}, on {:,} simulations, prior {}. Saved as a record."
 POSTERIOR_SAVED_TEXT = "Saved as a record."
+FROM_ROUND_TEXT = "From a narrowing round."
 LIMIT_REACHED_TEXT = "The fit reached the epoch limit; the network kept is its last epoch's."
 NO_POSTERIOR_TEXT = "Start a training to make a posterior."
 #: The states of the saved simulation sets in which a training continues the set of its own settings.
@@ -577,11 +578,11 @@ def pending_words(number: int, name: str, held: str) -> str:
     return PENDING_TEXT.format(number, name, held)
 
 
-def posterior_in_use(label: str, training, config, prior: str) -> tuple[str, str]:
+def posterior_in_use(label: str, training, config, prior: str, narrowed: bool = False) -> tuple[str, str]:
     """What the third step holds, as "In use" says it: the posterior's label, and from its record how many epochs it
-    was fitted for, its network, the simulations it was trained on and its prior, and that a fit that ran past its limit,
-    which a fit reaches only by running one epoch more, kept its last epoch's network; ``("", "")`` while it holds none.
-    What its record does not hold is left out."""
+    was fitted for, its network, the simulations it was trained on and its prior, that it came from a narrowing round
+    when ``narrowed``, and that a fit that ran past its limit, which a fit reaches only by running one epoch more, kept
+    its last epoch's network; ``("", "")`` while it holds none. What its record does not hold is left out."""
     if not label:
         return "", ""
     training = training if isinstance(training, dict) else {}
@@ -592,10 +593,147 @@ def posterior_in_use(label: str, training, config, prior: str) -> tuple[str, str
         said = POSTERIOR_SAVED_TEXT
     else:
         said = POSTERIOR_IN_USE_TEXT.format(epochs, width, depth, runs * size, prior)
+    if narrowed:
+        said = f"{said[:-len(POSTERIOR_SAVED_TEXT)]}{FROM_ROUND_TEXT} {POSTERIOR_SAVED_TEXT}"
     limit = _whole(config.get("max_num_epochs"))
     if epochs is not None and limit is not None and epochs > limit:
         said = f"{said} {LIMIT_REACHED_TEXT}"
     return label, said
+
+
+# ── the load view ──
+LOAD_POSTERIOR_WORDS = "Load this posterior"
+NO_POSTERIOR_CHOSEN_TEXT = "Choose a saved posterior."
+NO_POSTERIOR_CHOSEN_BLOCKS = "no saved posterior is chosen"
+NO_POSTERIOR_SAVED_TEXT = "No posterior is saved yet: start a training with 'Set up a training instead…'."
+NO_POSTERIOR_SAVED_BLOCKS = "no posterior is saved yet"
+POSTERIOR_BLOCKS = "the posterior cannot be read"
+OTHER_MODEL_POSTERIOR_TEXT = "This posterior was made for the model {}."
+OTHER_MODEL_POSTERIOR_BLOCKS = "this posterior is for another model"
+TRAINED_WITH_TEXT = "Trained with {}, the prior in use."
+TRAINED_OTHER_TEXT = ("Trained with {}; the prior in use is {}. Calibration and a narrowing round will refuse this "
+                      "pair. "
+                      "Load {} in step 2 first.")
+TRAINED_GONE_TEXT = ("Trained with a prior no longer in Records; the prior in use is {}. Calibration and a narrowing "
+                     "round will refuse this pair.")
+SAVED_POSTERIOR_TEXT = "Made {}, for {}: {}."
+NETWORK_WORDS = "network {} by {}"
+SIMULATIONS_WORDS = "{:,} simulations"
+TRAINED_ON_WORDS = "trained with {}, on {}"
+ROUND_AROUND_TEXT = "From a narrowing round around {}."
+OBSERVATION_WORDS = "the observation {}"
+NO_OBSERVATION_WORDS = "an observation no longer in Records"
+NO_PRIOR_WORDS = "a prior no longer in Records"
+
+
+def saved_posterior_words(*, made: str, model, kind, network=None, simulations=None, prior: str = "",
+                          bounds: "str | None" = None, narrowed: bool = False, observation: str = "") -> str:
+    """A saved posterior, under its list, from its record: when it was made and for which model; the kind of
+    observation it reads, its network's width by depth, the simulations it was trained on, the prior it was trained
+    with and the bounds file it was built on (None for limits typed by hand); and, from a narrowing round, the
+    observation it was narrowed around by its label ("" when its record is no longer in Records). What its record does
+    not hold is left out."""
+    parts = [READS.get(kind, str(kind))] if kind else []
+    held = [_whole(one) for one in (network or (None, None))]
+    if None not in held:
+        parts.append(NETWORK_WORDS.format(*held))
+    if _whole(simulations) is not None:
+        parts.append(SIMULATIONS_WORDS.format(simulations))
+    if prior:
+        parts.append(TRAINED_ON_WORDS.format(prior, TYPED_BY_HAND if bounds is None else bounds))
+    said = SAVED_POSTERIOR_TEXT.format(made, model_label(model), "; ".join(parts)) if parts else (
+        f"Made {made}, for {model_label(model)}.")
+    if narrowed:
+        around = OBSERVATION_WORDS.format(observation) if observation else NO_OBSERVATION_WORDS
+        said = f"{said} {ROUND_AROUND_TEXT.format(around)}"
+    return said
+
+
+def load_facts(*, needs_prior: bool = False, chosen: bool = True, saved: bool = True, error: str = "",
+               record_model=None, model=None, trained_with=None, trained_with_label: str = "", in_use=None,
+               in_use_label: str = "", others_pending: Sequence[str] = (),
+               plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
+    """The facts of the third step's load view, those that block first. ``needs_prior``: no prior is in use, and a
+    load reads the prior first. ``chosen``: a saved posterior is selected, and ``saved``: one is saved at all.
+    ``error``: why the record selected cannot be read. ``record_model``, the model its record was made for, against
+    ``model``, the one in use. Then the prior it was trained with, ``trained_with`` by its id and its label (empty when
+    it is no longer in Records), against the prior in use, ``in_use`` by its id and its label: never blocking, for the
+    load goes through and what refuses the pair is a later step. Then the other steps' changes not applied, and what
+    the plan in use says. Reads nothing, and raises on nothing a record holds."""
+    facts = [Fact("lock", NEEDS_A_PRIOR, NEEDS_A_PRIOR_BLOCKS)] if needs_prior else []
+    if not chosen:
+        facts.append(Fact("err", NO_POSTERIOR_CHOSEN_TEXT, NO_POSTERIOR_CHOSEN_BLOCKS) if saved
+                     else Fact("err", NO_POSTERIOR_SAVED_TEXT, NO_POSTERIOR_SAVED_BLOCKS))
+    elif error:
+        facts.append(Fact("err", error, POSTERIOR_BLOCKS))
+    elif record_model is not None and model is not None and record_model != model:
+        facts.append(Fact("err", OTHER_MODEL_POSTERIOR_TEXT.format(model_label(record_model)),
+                          OTHER_MODEL_POSTERIOR_BLOCKS))
+    elif not needs_prior and trained_with is not None:
+        if trained_with == in_use:
+            facts.append(Fact("fine", TRAINED_WITH_TEXT.format(in_use_label)))
+        elif trained_with_label:
+            facts.append(Fact("warn", TRAINED_OTHER_TEXT.format(trained_with_label, in_use_label, trained_with_label)))
+        else:
+            facts.append(Fact("warn", TRAINED_GONE_TEXT.format(in_use_label)))
+    facts += [Fact("warn", said) for said in others_pending if said]
+    return ordered((*facts, *plan_lines))
+
+
+# ── the question before loading a posterior from a narrowing round ──
+NARROWED_TITLE = "Load a posterior from a narrowing round?"
+NARROWED_TEXT = ("{} was narrowed around {}. It is valid only near that observation; elsewhere it has seen no training "
+                 "simulations and gives confident answers that are wrong.")
+NARROWED_THEN = ("If you load it: calibration runs on the narrowed prior; inference on any other observation asks "
+                 "first; "
+                 "a further narrowing round can only be drawn around the same observation.")
+
+
+def narrowed_question(label: str, observation: str) -> tuple:
+    """The question asked before a posterior from a narrowing round is loaded: its title, its sentence, the sentence
+    beneath it, and the answer that loads it; ``observation`` is the observation it was narrowed around by its label,
+    "" when its record is no longer in Records."""
+    around = OBSERVATION_WORDS.format(observation) if observation else NO_OBSERVATION_WORDS
+    return NARROWED_TITLE, NARROWED_TEXT.format(label, around), NARROWED_THEN, LOAD_POSTERIOR_WORDS
+
+
+# ── the choice of a kept training that matches ──
+NEW_TRAINING_TITLE = "Start a new training?"
+ONE_KEPT_TEXT = "1 kept training matches these settings and can be resumed:"
+KEPT_TEXT = "{} kept trainings match these settings and can be resumed:"
+LEAVES_IT_TEXT = "A new training leaves it as it is. To resume it, cancel and press Resume beside it on this page."
+LEAVES_THEM_TEXT = ("A new training leaves them as they are. To resume one, cancel and press Resume beside it on this "
+                    "page.")
+NEW_TRAINING_ANSWER = "Start a new training"
+AFTER_ERROR_TEXT = "{} after the error '{}'"
+
+
+def stopped_words(state, on_purpose, reason) -> str:
+    """How a kept training stopped, in words: the listing's own word for its state, and, for one an error stopped, the
+    error as its record words it."""
+    said = str(state or "stopped unexpectedly")
+    if on_purpose is False and isinstance(reason, str) and reason.strip():
+        return AFTER_ERROR_TEXT.format(said, reason.strip())
+    return said
+
+
+def kept_words(label: str, how: str, passes, saved: str) -> str:
+    """A kept training as the choice names it: its label, how it stopped, the epoch it was saved after and when, in the
+    window's words: "retrain_2: kept when stopped, after epoch 41, saved 3 Oct 2026, 03:12"."""
+    parts = [how]
+    if _whole(passes) is not None:
+        parts.append(f"after epoch {passes}")
+    if saved:
+        parts.append(f"saved {saved}")
+    return f"{label}: {', '.join(parts)}"
+
+
+def new_training_question(kept: Sequence[str]) -> tuple:
+    """The question asked before a training starts anew while kept trainings match its settings: its title, its
+    sentence, its items, ``kept`` as ``kept_words`` names each, the sentence beneath them and the answer that starts."""
+    one = len(kept) == 1
+    return (NEW_TRAINING_TITLE, ONE_KEPT_TEXT if one else KEPT_TEXT.format(len(kept)), tuple(kept),
+            LEAVES_IT_TEXT if one else LEAVES_THEM_TEXT, NEW_TRAINING_ANSWER)
 
 
 # ── the question before simulating from zero ──

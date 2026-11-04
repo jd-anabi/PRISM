@@ -2084,17 +2084,28 @@ def _trained(page, *, posterior: bool = False) -> tuple:
 
 
 
+def _to_load(page) -> None:
+    """The load view, with no posterior saved: the list to choose one in, and nothing to load."""
+    _to_train(page)
+    page.show_view("load")
+    page.read_facts()
+
+
 #: The third step's shapes, as ``WALKED`` reads them.
 WALKED_TRAINING = {
     "a training to start": (
-        _to_train, lambda page: [page.help_button], lambda page: _trained(page)[0], lambda page: _trained(page)[1],
-        lambda page: [page.names.name, page.names.note],
+        _to_train, lambda page: [page.help_button, page.switch_button], lambda page: _trained(page)[0],
+        lambda page: _trained(page)[1], lambda page: [page.names.name, page.names.note],
         lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again, page.foot.main_button]),
     "a posterior held, the rotation off, the simulations not saved": (
-        lambda page: _to_train(page, posterior=True), lambda page: [page.help_button, page.next_button],
+        lambda page: _to_train(page, posterior=True), lambda page: [page.help_button, page.switch_button,
+                                                                    page.next_button],
         lambda page: _trained(page, posterior=True)[0], lambda page: _trained(page, posterior=True)[1],
         lambda page: [page.names.name, page.names.note],
         lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again, page.foot.main_button]),
+    "a saved posterior to load": (
+        _to_load, lambda page: [page.help_button, page.switch_button], lambda page: [page.post_picker.combo],
+        lambda page: None, lambda page: [], lambda page, small: [page.foot.check_again]),
 }
 
 

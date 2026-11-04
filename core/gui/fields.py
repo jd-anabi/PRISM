@@ -106,7 +106,8 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "fisher_dz": ("training", "Rotation: step"),
     "fisher_points": ("training", "Rotation: parameter sets averaged"),
     # consents and names
-    "accept_truncated": f"Confirm the load in the dialog {_in('training')}.",
+    "accept_truncated": (f"Answer 'Load this posterior' in the question that loading a posterior from a narrowing "
+                         f"round asks {_in('training')}."),
     "accept_other_observation": f"Tick 'Run on a different observation' {_in('infer')}.",
     # A name and a note are typed in several boxes, and each sentence lists them all: 'Name' on step 2 names the
     # prior a build makes, 'Name' on step 3 the posterior a training makes, and a run's record and a comparison's
@@ -140,8 +141,7 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "model": (("model", "temperature/one_cell", "live"), "Model"),
     "device": None,
     "prior": ("prior", "Saved prior"),
-    # The Training page makes a posterior and lists none until it can load one: the cure is another training.
-    "posterior": f"Train another posterior {_in('training')}.",
+    "posterior": ("training", "Saved posterior"),
     # recordings and the drive
     "recording_spont": (f"Select the passive recording {_in('infer')} (the 'Spontaneous' box, or the "
                         "'Passive' box for a χ observation)."),
@@ -215,6 +215,8 @@ ON_TRAINING_ALONE = frozenset({"checkpoint_every", "resume", "max_num_epochs", "
 ON_THIS_PAGE: dict[str, str] = {
     "new_run": "Answer the question that the start button asks on this page.",
     "name": "Choose another name in 'Name' on this page.",
+    "accept_truncated": "Answer 'Load this posterior' in the question that loading a posterior from a narrowing round "
+                        "asks on this page.",
     "note": "Change it in 'Note' on this page.",
 }
 

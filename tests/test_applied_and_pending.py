@@ -1090,6 +1090,86 @@ def test_a_held_enter_on_build_a_new_prior_leaves_its_question_for_a_fresh_press
         assert not controller().is_live() and stand_in.calls == [] and screen.session.posterior is held
 
 
+@contextlib.contextmanager
+def _third_step_with_the_ring(tmp_path, monkeypatch):
+    """The third step in the whole program, whose ring follows the keyboard as it does for a person, in sight off the
+    screen and in front, on the test's own clock and its own store: the first step applied, a real prior of the master
+    bounds file in use with its configuration, the batches and the simulations per batch typed, a name typed, and the
+    stage's training a stand-in run: (window, screen, page, the stand-in run)."""
+    from core import orchestrator
+    from core.artifacts import default_store
+    from tests._fixtures import _nad_cfg, _prior_artifact, whole_program
+    from tests._look_helpers import _settle
+    from tests._runs import Clock, StandIn, at, controller_on
+    from tests._window_helpers import in_front, shown_off_screen
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    with whole_program() as (_app, window):
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        shown_off_screen(window, 1300, 820)
+        window.go_to("inference", "model")
+        _settle()
+        screen = window.part("inference")
+        _apply(screen.config_panel)
+        cfg = _nad_cfg()
+        prior = default_store().load_prior(cfg, _prior_artifact(default_store(), cfg, name="retrain_prior").id)
+        screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior)
+        screen.prior_panel.bounds_picker.restore_key("master.txt")
+        screen.refresh_gates()
+        window.go_to("inference", "training")
+        _settle()
+        page = screen.posterior_panel
+        _a_budget(page, runs="12", cap="8")
+        page.names.name.setText("retrain_2")
+        page.read_facts()
+        stand_in = StandIn(word="Training")
+        monkeypatch.setattr(orchestrator, "build_posterior", stand_in)
+        with in_front(window):
+            yield window, screen, page, stand_in
+        window.hide()
+
+
+@pytest.mark.parametrize("which", ["a kept training", "from zero", "a narrowed posterior", "the stage's refusal"])
+def test_each_question_of_the_training_page_waits_for_enter_pressed_afresh(which, tmp_path, monkeypatch):
+    """With the ring on the Training page's main button, Enter presses it, and the question it opens, or the refusal the
+    stage gives as its run starts, stands where the key's repeats land: they answer nothing; Enter let go and pressed
+    again gives the answer it preselects, "Cancel" or "OK", so nothing starts that was not started."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from core.gui.run.controller import controller
+    from core.refusals import Refusal
+    from tests._dialogs import held_enter
+    from tests._look_helpers import _arrive
+    from tests._runs import turn_until
+    with _third_step_with_the_ring(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        if which == "a kept training":
+            _a_kept_training(page)
+        elif which == "from zero":
+            _a_set_beside(page, 40, n_runs=40)
+        elif which == "a narrowed posterior":
+            _trained, narrowed = _saved_posteriors(page)
+            _to_the_load_view(page)
+            page.post_picker.restore_key(narrowed)
+        page.read_facts()
+        button = page.foot.main_button
+        assert button.isEnabled(), page.foot.reason.text()
+        seen = []
+        held_enter(monkeypatch, seen)
+        button.setFocus(Qt.TabFocusReason)
+        _arrive(button, Qt.TabFocusReason)
+        QTest.keyClick(button, Qt.Key_Return)
+        if which == "the stage's refusal":
+            turn_until(qt_app(), lambda: len(stand_in.calls) == 1, 10.0)
+            stand_in.fail(Refusal("A posterior named 'retrain_2' was made meanwhile.", field="name"))
+            turn_until(qt_app(), lambda: not controller().is_live() and seen, 10.0)
+        titles = {"a kept training": "Start a new training?", "from zero": "Start a new simulation set?",
+                  "a narrowed posterior": "Load a posterior from a narrowing round?",
+                  "the stage's refusal": "Check your inputs"}
+        assert [said.title for said in all_asked()] == [titles[which]]
+        assert seen == [(True, False)], "a held Enter answered the question, or Enter afresh did not"
+        assert len(stand_in.calls) == (1 if which == "the stage's refusal" else 0)
+        assert not controller().is_live()
+
+
 def test_a_prior_held_with_no_posterior_is_replaced_without_a_question(tmp_path, monkeypatch):
     """No posterior, no question: an observation held alone is let go by the new prior, unasked."""
     from core.gui.run.controller import controller
@@ -2341,6 +2421,49 @@ def test_the_training_page_reads_nothing_while_a_run_is_live(tmp_path, monkeypat
         assert calls == [], f"the page shown again with nothing owed read: {calls}"
 
 
+def test_the_load_view_reads_nothing_while_a_run_is_live(tmp_path, monkeypatch):
+    """The load view reads nothing between a run's start and its end, another page's run: the page shown again with
+    nothing owed, another posterior chosen, the timer, "Check again", the press, a store change, the gates and the page
+    shown again read no record and no list but the picker's own; a load by code reads nothing and starts nothing. The
+    run's end reads the record selected once, with the prior it was trained with."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.run.controller import controller
+    from tests._fixtures import readings_of_a_run
+    from tests._look_helpers import _settle
+    from tests._runs import running, turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        trained, narrowed = _saved_posteriors(page)
+        _to_the_load_view(page)
+        page.post_picker.restore_key(trained)
+        page.read_facts()
+        with running(window.panel(ReductionPanel)):
+            calls = readings_of_a_run(monkeypatch)
+            window.go_to("inference", "prior")              # the page left and shown again with nothing owed
+            _settle()
+            window.go_to("inference", "training")
+            _settle()
+            assert calls == [], calls
+            page.post_picker.restore_key(narrowed)
+            page.read_timer.timeout.emit()
+            page.foot.check_again.click()
+            page._main_clicked()
+            window._store_changed()
+            screen.refresh_gates()
+            window.go_to("inference", "prior")
+            _settle()
+            window.go_to("inference", "training")
+            _settle()
+            assert page.load_record(trained) is False
+            assert calls == [] and page.posterior_line.plain_text().startswith("Made"), calls
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        _settle()
+        # the Narrowing round's own lines read the preview, which reads the sets itself: the rest are this page's, the
+        # posterior a load by code selected and the prior it was trained with
+        assert (calls.count("a record's manifest"), calls.count("training_reading") - calls.count("training_preview"),
+                page.post_picker.key()) == (2, 0, trained), calls
+
+
 def test_the_training_page_built_during_a_run_says_it_has_read_nothing(tmp_path, monkeypatch):
     """A Training page first built while a run is live reads nothing, says so beside "Before you start", and reads once
     the run has ended."""
@@ -2522,6 +2645,538 @@ def _made_words(name) -> str:
     from core.artifacts import default_store
     from core.gui import texts
     return texts.date_text(datetime.fromisoformat(default_store().get("simulation", name).created).astimezone())
+
+
+# ── step 3's load view, and the kept trainings that match ──
+#: How long a narrowed posterior's question is: its words, as the page asks it.
+NARROWED_TEXT = ("retrain_round1 was narrowed around the observation cell_a. It is valid only near that observation; "
+                 "elsewhere it has seen no training simulations and gives confident answers that are wrong.")
+NARROWED_THEN = ("If you load it: calibration runs on the narrowed prior; inference on any other observation asks "
+                 "first; "
+                 "a further narrowing round can only be drawn around the same observation.")
+
+
+def _an_observation(name="cell_a") -> str:
+    """An observation's record in the store in use, as small as a record of its kind can be: its id."""
+    import torch
+    from core.artifacts import default_store
+    from core.artifacts import manifest as mf
+    from core.Helpers import file_manager
+    from tests._fixtures import _nad_cfg
+    cfg = _nad_cfg()
+    x_obs = torch.zeros(1, 4, dtype=torch.float64)
+    with default_store().create("observation", cfg, name=name) as w:
+        file_manager.atomic_torch_save({"x_obs": x_obs, "obs_data": x_obs, "t_dim": x_obs}, w.payload("observation.pt"))
+        w.fingerprints["x_obs"] = mf.tensor_digest(x_obs)
+        w.body = {"mode": cfg.observation_mode, "conditioning": mf.conditioning_block(cfg),
+                  "x_obs_digest": mf.tensor_digest(x_obs), "T_obs_cell": 1.0, "n_obs": 4, "forcing_vals": {},
+                  "chi_obs_freqs": None, "source": {"kind": "simulated"}}
+    return w.id
+
+
+def _saved_posteriors(page) -> tuple:
+    """Two posteriors in the store in use, made for the configuration in use and trained with the prior in use: one a
+    training's, "retrain", and one a narrowing round's, "retrain_round1", narrowed around the observation cell_a: their
+    ids."""
+    from core.artifacts import default_store
+    from core.SBI import reparam, truncate
+    from core.SBI.training_checkpoint import bijection_probe
+    from tests._fixtures import _posterior_artifact
+    cfg, prior = page.session.cfg, page.session.inf_prior
+    count = len(cfg.params_dict) + len(cfg.rescale_params)
+    probe = bijection_probe(reparam.build_inferred_bijection(cfg, log_params=[]), count)
+    region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=count, V=None, probe=probe,
+                                       x_obs_digest="d" * 16)
+    training = {("training",): {"epochs_trained": 131, "n_runs": 5000, "run_size": 64, "hidden_features": 128,
+                                "num_transforms": 8}}
+    trained = _posterior_artifact(default_store(), cfg, name="retrain", parents={"prior": prior.id}, over=training).id
+    narrowed = _posterior_artifact(default_store(), cfg, name="retrain_round1", amortized=False, region=region,
+                                   parents={"prior": prior.id, "observation": _an_observation()}, over=training).id
+    return trained, narrowed
+
+
+def _to_the_load_view(page) -> None:
+    page.show_view("load")
+    page.read_facts()
+
+
+def _the_stage_loads(monkeypatch) -> list:
+    """The training stage stood in for by the store's own load of a posterior, with the consent the call hands it: what
+    each call was handed, in a list."""
+    from core import orchestrator
+    from core.artifacts import default_store
+    calls = []
+
+    def stage(cfg, prior, ref, train_new, **kwargs):
+        calls.append(((cfg, prior, ref, train_new), kwargs))
+        return default_store().load_posterior(cfg, ref, accept=kwargs.get("accept"))
+
+    monkeypatch.setattr(orchestrator, "build_posterior", stage)
+    return calls
+
+
+def test_the_saved_posterior_list_says_what_it_holds(tmp_path, monkeypatch):
+    """The load view lists the saved posteriors by their labels, a narrowing round's marked in the page's own words and
+    nothing offered "from scratch"; under the list stands what the record selected holds, a narrowing round's with the
+    observation it was narrowed around. The heading's button goes between the two views, each with its own main button,
+    and the training's settings and its block stand in the training's view alone."""
+    from datetime import datetime
+    from core.artifacts import default_store
+    from core.gui import texts
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        trained, narrowed = _saved_posteriors(page)
+        assert page.switch_button.text() == "&Use a saved posterior instead…"
+        assert page.form.rows["posterior"].is_shown() is False and page.form.rows["num_runs"].is_shown()
+        page.switch_button.click()
+        page.read_facts()
+        assert (page.view, page.switch_button.text(), page.foot.main_button.text()) == (
+            "load", "&Set up a training instead…", "&Load this posterior")
+        assert page.form.rows["posterior"].is_shown() and not page.form.rows["num_runs"].is_shown()
+        assert not page.form.side.isVisibleTo(page) and page.names is None
+        combo = page.post_picker.combo
+        listed = {combo.itemData(at): combo.itemText(at) for at in range(combo.count())}
+        assert listed == {trained: "retrain", narrowed: "retrain_round1  —  from a narrowing round"}, listed
+        tips = [combo.itemData(at, 3) for at in range(combo.count())]
+        assert not any("TSNPE" in tip or "scratch" in tip for tip in tips), tips
+        made = {ref: texts.date_text(datetime.fromisoformat(default_store().get("posterior", ref).created).astimezone())
+                for ref in (trained, narrowed)}
+        page.post_picker.restore_key(narrowed)
+        page.read_facts()
+        assert page.posterior_line.plain_text() == (
+            f"Made {made[narrowed]}, for Nadrowski: a spontaneous recording and one driven recording; network 128 by "
+            "8; "
+            "320,000 simulations; trained with retrain_prior, on master.txt. From a narrowing round around the "
+            "observation cell_a.")
+        page.post_picker.restore_key(trained)
+        page.read_facts()
+        assert page.posterior_line.plain_text().startswith(f"Made {made[trained]}, for Nadrowski: ")
+        assert page.posterior_line.plain_text().endswith("on master.txt.")
+        page.switch_button.click()
+        assert page.view == "training" and page.foot.main_button.text() == "&Start training"
+        assert page.form.rows["num_runs"].is_shown() and page.form.side.isVisibleTo(page)
+
+
+def test_a_narrowed_posterior_asks_before_it_loads_and_a_consent_is_never_kept(tmp_path, monkeypatch):
+    """A posterior from a narrowing round asks first, in its words, "Cancel" preselected: "Cancel" starts nothing and
+    leaves the session as it was; "Load this posterior" loads it with the consent, its call the load's, and the region
+    it was narrowed in comes into the session with it. The consent is kept nowhere: a second load asks again, and the
+    settings file holds no word of it. A training's posterior is loaded with no question and no consent. A narrowed
+    record the page could not read as narrowed is refused by the store for want of the consent, and the refusal says
+    where the consent is given."""
+    from core.artifacts import Accept, default_store
+    from core.gui import settings as st
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        trained, narrowed = _saved_posteriors(page)
+        calls = _the_stage_loads(monkeypatch)
+        session = screen.session
+        held = (session.cfg, session.inf_prior, session.posterior, session.observation)
+        _to_the_load_view(page)
+        page.post_picker.restore_key(narrowed)
+        page.read_facts()
+        page._main_clicked()
+        question = asked()
+        assert (question.title, question.sentence, question.beneath, question.answers, question.default) == (
+            "Load a posterior from a narrowing round?", NARROWED_TEXT, NARROWED_THEN,
+            ("Load this posterior", "Cancel"), "Cancel")
+        assert calls == [] and (session.cfg, session.inf_prior, session.posterior, session.observation) == held
+        choose(monkeypatch, words="Load this posterior")
+        page._main_clicked()
+        turn_until(app, lambda: not controller().is_live() and calls, 10.0)
+        (args, kwargs), = calls
+        assert args == (held[0], held[1], narrowed, False) and kwargs["accept"] == Accept(truncated=True)
+        assert session.posterior.id == narrowed and session.posterior.posterior.truncation is not None
+        forget_asked()
+        choose(monkeypatch, words="Cancel")
+        page.post_picker.restore_key(trained)
+        page.read_facts()
+        page._main_clicked()
+        turn_until(app, lambda: not controller().is_live() and len(calls) == 2, 10.0)
+        assert all_asked() == [] and calls[-1][1]["accept"] == Accept() and session.posterior.id == trained
+        page.post_picker.restore_key(narrowed)
+        page.read_facts()
+        page._main_clicked()
+        assert asked().title == "Load a posterior from a narrowing round?" and len(calls) == 2, "the consent was kept"
+        held_keys = st.settings().allKeys()
+        assert not [key for key in held_keys if "accept" in key.lower() or "truncat" in key.lower()], held_keys
+        page._record["narrowed"] = False                 # as a record rewritten since the page read it would read
+        page.main_pressed()
+        turn_until(app, lambda: not controller().is_live() and len(calls) == 3, 10.0)
+        refusal = asked()
+        assert refusal.title == "Check your inputs" and refusal.beneath == (
+            "Answer 'Load this posterior' in the question that loading a posterior from a narrowing round asks on this "
+            "page."), refusal
+        assert session.posterior.id == trained
+
+
+def test_a_load_reads_none_of_the_training_settings(tmp_path, monkeypatch):
+    """A load reads none of the training's settings: with the batches blank and the learning rate below its rule, the
+    load view is not greyed, the load starts, and its call holds the posterior, the consent and nothing of the form."""
+    from core import orchestrator
+    from core.gui.run.controller import RunController
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        trained, _narrowed = _saved_posteriors(page)
+        page.form.rows["num_runs"].widget.setText("")
+        page.form.rows["learning_rate"].widget.setText("-1")
+        page.read_facts()
+        assert not page.foot.main_button.isEnabled()
+        seen = []
+        monkeypatch.setattr(RunController, "dispatch",
+                            lambda held, fn, *args, **kwargs: seen.append((fn, args, kwargs)))
+        _to_the_load_view(page)
+        page.post_picker.restore_key(trained)
+        page.read_facts()
+        assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+        page._main_clicked()
+        fn, args, kwargs = seen[-1]
+        spec = kwargs.pop("spec")
+        assert fn is orchestrator.build_posterior
+        assert args == (screen.session.cfg, screen.session.inf_prior, trained, False)
+        assert sorted(kwargs) == ["accept", "host", "on_chunk", "on_result", "provide_fig_sink", "provide_stream",
+                                  "watch_dir"], sorted(kwargs)
+        assert kwargs["provide_fig_sink"] is False and spec.loads_only and spec.word == "Posterior load"
+
+
+def _press_the_load_and_end(page, stand_in, end, monkeypatch):
+    """Press "Load this posterior", and end its run as ``end`` names: refused at the stage's entry, failed, stopped, or
+    taken back as it starts."""
+    from core.gui.run.controller import RunController, controller
+    from core.refusals import Refusal
+    from tests._runs import turn_until
+    app = qt_app()
+    if end == "withdrawn":
+        def broken(_self):
+            raise TypeError("the first drawing failed")
+        monkeypatch.setattr(RunController, "_draw", broken)
+        with pytest.raises(TypeError):
+            page._main_clicked()
+        return
+    page._main_clicked()
+    assert controller().is_live() and stand_in.started.wait(5)
+    if end == "refused before the spend":
+        stand_in.fail(Refusal("Posterior 'retrain' was trained for model HOPF.", field="posterior"))
+    elif end == "failed":
+        stand_in.fail(RuntimeError("the posterior's file could not be read"))
+    else:
+        controller().request_stop()
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+
+
+def test_a_load_by_code_selects_reads_and_asks_as_the_press_does(tmp_path, monkeypatch):
+    """A load by code, the chain of loads' link, shows the load view, reads the list so that a posterior saved since by
+    another program is found, selects it and reads its record, then loads it as "Load this posterior" does: a training's
+    with no question, a narrowing round's asked first, "Cancel" starting nothing; a posterior no longer listed, or one
+    the facts block, starts nothing."""
+    from core.artifacts import Accept
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        calls = _the_stage_loads(monkeypatch)
+        trained, narrowed = _saved_posteriors(page)          # saved after the page last read its list
+        assert page.view == "training"
+        assert page.load_record(trained) is True
+        turn_until(app, lambda: not controller().is_live() and calls, 10.0)
+        assert all_asked() == [] and calls[-1][0][2] == trained and calls[-1][1]["accept"] == Accept()
+        assert page.view == "load" and page.post_picker.key() == trained
+        assert page.load_record(narrowed) is False, "Cancel started the load"
+        assert asked().title == "Load a posterior from a narrowing round?" and len(calls) == 1
+        choose(monkeypatch, words="Load this posterior")
+        assert page.load_record(narrowed) is True
+        turn_until(app, lambda: not controller().is_live() and len(calls) == 2, 10.0)
+        assert calls[-1][1]["accept"] == Accept(truncated=True)
+        assert page.load_record("20200101T000000") is False and len(calls) == 2
+        screen.session.inf_prior = None
+        assert page.load_record(trained) is False and len(calls) == 2
+
+
+@pytest.mark.parametrize("end", ["refused before the spend", "failed", "stopped", "withdrawn"])
+def test_a_load_that_ends_any_way_but_well_leaves_the_posterior_held(end, tmp_path, monkeypatch):
+    """A load that is refused at the stage's entry, fails, is stopped or is taken back as it starts writes no slot: the
+    configuration, the prior, the posterior and the observation held are the very objects they were, and the rail, Home
+    and "In use" say what they said."""
+    with _third_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        trained, _narrowed = _saved_posteriors(page)
+        screen.refresh_gates()                           # the observation the records were written beside is listed
+        _to_the_load_view(page)
+        page.post_picker.restore_key(trained)
+        page.read_facts()
+        session = screen.session
+        held = (session.cfg, session.inf_prior, session.posterior, session.observation)
+        home = window.part("home")
+        said = (screen.step_states(), page.in_use.line_text(), page.in_use.sentence.plain_text(),
+                window.shell.rail.row("training").accessibleName())
+        stand_in.word = "Posterior load"
+        _press_the_load_and_end(page, stand_in, end, monkeypatch)
+        assert screen.session is session
+        assert all(now is then for now, then in zip((session.cfg, session.inf_prior, session.posterior,
+                                                     session.observation), held)), end
+        assert (screen.step_states(), page.in_use.line_text(), page.in_use.sentence.plain_text(),
+                window.shell.rail.row("training").accessibleName()) == said, end
+        assert home is window.part("home") and page.results.currentWidget() is page.figures, end
+
+
+def test_loading_a_posterior_while_one_is_held_asks_nothing(tmp_path, monkeypatch):
+    """With a posterior held, a training's posterior is loaded with no question: the posterior held stays in use through
+    the load, the loaded one comes into use only as its run returns it, is remembered, and the list is moved to it at
+    the run's end; "In use" names it from its record, and the way to Checks stands. The observation held stays."""
+    from core.gui import settings as st
+    from core.gui.remembered import POSTERIOR_KEY
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        trained, narrowed = _saved_posteriors(page)
+        session = screen.session
+        old, observation = session.posterior, session.observation
+        _to_the_load_view(page)
+        page.post_picker.restore_key(trained)
+        page.read_facts()
+        page._main_clicked()
+        assert all_asked() == [] and stand_in.started.wait(5)
+        assert session.posterior is old and page.results.currentWidget() is page.figures
+        assert not page.switch_button.isEnabled(), "the way to the other view stood open during the load"
+        page.post_picker.restore_key(narrowed)            # a choice moved during the load is not what it loaded
+        from core.artifacts import default_store
+        loaded = default_store().load_posterior(session.cfg, trained)
+        stand_in.release(loaded)
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert session.posterior is loaded and session.observation is observation
+        assert page.post_picker.key() == trained, "the list was not moved to the posterior loaded"
+        qs = st.settings()
+        qs.sync()
+        assert qs.value(POSTERIOR_KEY) == trained
+        assert page.in_use.line_text() == "In use: retrain"
+        assert page.in_use.sentence.plain_text() == (
+            "131 epochs, network 128 by 8, on 320,000 simulations, prior retrain_prior. Saved as a record.")
+        assert not page.next_button.isHidden() and page.next_button.text() == "Go to Checks"
+        assert page.foot.reason.text() == "Nothing to apply: these choices are in use."
+
+
+def test_the_stop_and_end_of_a_posterior_load_say_what_is_true_of_the_page(tmp_path, monkeypatch):
+    """A load takes no run's page: its stop asks nothing and keeps nothing, the form stays in its place, and the
+    posterior held stays in use; a load finished shows the record loaded, "How the run went" away, and says it in "In
+    use", a narrowing round's said to be one."""
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        trained, narrowed = _saved_posteriors(page)
+        held = screen.session.posterior
+        _to_the_load_view(page)
+        page.post_picker.restore_key(narrowed)
+        page.read_facts()
+        choose(monkeypatch, words="Load this posterior")
+        stand_in.word = "Posterior load"
+        page._main_clicked()
+        assert stand_in.started.wait(5) and page.results.currentWidget() is page.figures
+        forget_asked()
+        controller().request_stop()
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert all_asked() == [] and screen.session.posterior is held
+        assert page.results.currentWidget() is page.figures
+        page._main_clicked()
+        from core.artifacts import Accept, default_store
+        loaded = default_store().load_posterior(screen.session.cfg, narrowed, accept=Accept(truncated=True))
+        turn_until(app, lambda: controller().is_live() and len(stand_in.calls) == 2, 10.0)
+        stand_in.release(loaded)
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert page.results.currentWidget() is page.figures and not page.run_view.how_link.isVisibleTo(page.figures)
+        assert page.in_use.line_text() == "In use: retrain_round1"
+        assert page.in_use.sentence.plain_text() == (
+            "131 epochs, network 128 by 8, on 320,000 simulations, prior retrain_prior. From a narrowing round. Saved "
+            "as a record.")
+
+
+def test_a_narrowed_posterior_in_use_says_it_came_from_a_narrowing_round_wherever_it_came_from(tmp_path, monkeypatch):
+    """A posterior from a narrowing round in use, put there by the narrowing round's own run, says so in step 3's "In
+    use" as one loaded on step 3 does."""
+    from core.artifacts import Accept, default_store
+    with _third_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        _trained, narrowed = _saved_posteriors(page)
+        loaded = default_store().load_posterior(screen.session.cfg, narrowed, accept=Accept(truncated=True))
+        screen.take_posterior(loaded)
+        assert page.in_use.sentence.plain_text().endswith("From a narrowing round. Saved as a record.")
+
+
+@pytest.mark.parametrize("gone", [False, True], ids=["still listed", "no longer listed"])
+def test_the_posterior_last_in_use_comes_back_as_the_lists_choice(gone, tmp_path, monkeypatch):
+    """The posterior that came into use last is put back at the next launch as the choice of the list of saved
+    posteriors, never loaded, and said kept from last time until it is touched; one no longer listed selects nothing and
+    is not said to be kept."""
+    import shutil
+    from core.artifacts import default_store
+    from core.gui.remembered import POSTERIOR_KEY, put
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        trained, _narrowed = _saved_posteriors(page)
+        put(POSTERIOR_KEY, trained)
+        if gone:
+            shutil.rmtree(next(summary.path for summary in default_store().list("posterior") if summary.id == trained))
+        from core.gui.panels.inference.posterior_tab import PosteriorPanel
+        from tests._fixtures import build_part
+        again = build_part(PosteriorPanel, screen=screen)
+        assert again.post_picker.key() == ("" if gone else trained)
+        assert again.form.rows["posterior"].kept is (not gone)
+        assert screen.session.posterior is None
+        again.show_view("load")
+        again.redraw()
+        assert again.form.rows["posterior"].origin.text() == ("" if gone else "kept from last time")
+        if not gone:
+            again.post_picker.restore_key(_narrowed)
+            assert again.form.rows["posterior"].kept is False
+
+
+def _a_kept_training(page, *, stopped="on_purpose", name="retrain_1", passes=41) -> str:
+    """A kept training in the store in use that the Training page's settings now match, as the stage would name it: its
+    simulation set, of these settings and whole, beside it. Its id."""
+    from core import orchestrator
+    from core.artifacts import default_store
+    from core.SBI import fit_state
+    from tests._fixtures import build_fit_record, write_simulation_set
+    cfg, prior = page.session.cfg, page.session.inf_prior
+    page.read_facts()
+    width, runs = page._reading.width, page.form.rows["num_runs"].value()
+    folder = write_simulation_set(default_store().kind_dir("simulation"),
+                                  orchestrator.training_identity(cfg, prior, width, runs), runs, complete=True)
+    named, kept = [], fit_state.matching_kept_fits
+    fit_state.matching_kept_fits = lambda _store, identity: named.append(identity) or []
+    try:
+        values = page._stage_values()
+        orchestrator.matching_fits(cfg, prior, num_runs=runs, run_size_cap=values["run_size_cap"],
+                                   checkpoint_every=values["checkpoint_every"],
+                                   **{key: values.get(key) for key in ("hidden_features", "num_transforms",
+                                                                       "learning_rate", "stop_after_epochs",
+                                                                       "max_num_epochs")})
+    finally:
+        fit_state.matching_kept_fits = kept
+    identity, = named
+    return build_fit_record(default_store(), passes=passes, stopped=stopped, posterior_name=name,
+                            identity={**identity, "network": "0" * 16}, parents={"simulation": folder.name})
+
+
+def _saved_words(ref) -> str:
+    """When the kept training ``ref`` was last saved, in the window's words, as its record says it."""
+    from datetime import datetime
+    from core.artifacts import default_store
+    from core.gui import texts
+    saved = default_store().get("fit", ref).body["progress"]["saved_at"]
+    return texts.date_text(datetime.fromisoformat(saved).astimezone())
+
+
+def test_a_kept_training_that_matches_is_named_before_a_new_one_starts(tmp_path, monkeypatch):
+    """Kept trainings that match the training about to start are named first, in a question, "Cancel" preselected: each
+    by its name or its label, how it stopped in words, the epoch it was saved after and when, in local time. "Cancel"
+    starts nothing; "Start a new training" starts one beside them, which leaves each kept training as it is, and asks
+    nothing more: a match is of a whole simulation set, which a training continues."""
+    from datetime import datetime
+    from core.artifacts import default_store
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        _a_budget(page, runs="12", cap="8")
+        first = _a_kept_training(page)
+        second = _a_kept_training(page, stopped="error", name="", passes=7)
+        page.read_facts()
+        assert [kept.id for kept in page._matches] == [second, first]
+        page._main_clicked()
+        question = asked()
+        made = datetime.fromisoformat(default_store().get("fit", second).created).astimezone()
+        unnamed = record_words.record_label("fit", "", made)
+        assert (question.title, question.sentence, question.answers, question.default) == (
+            "Start a new training?", "2 kept trainings match these settings and can be resumed:",
+            ("Start a new training", "Cancel"), "Cancel")
+        assert question.items == (
+            f"{unnamed}: stopped unexpectedly after the error 'RuntimeError: the card ran out of memory', after "
+            "epoch 7, "
+            f"saved {_saved_words(second)}",
+            f"retrain_1: kept when stopped, after epoch 41, saved {_saved_words(first)}"), question.items
+        assert question.beneath == ("A new training leaves them as they are. To resume one, cancel and press Resume "
+                                    "beside it on this page.")
+        assert stand_in.calls == []
+        choose(monkeypatch, words="Start a new training")
+        forget_asked()
+        page._main_clicked()
+        _the_call(stand_in, 1)
+        assert [said.title for said in all_asked()] == ["Start a new training?"]
+        assert stand_in.calls[-1][1]["new_run"] is False
+        stand_in.release(None)
+        _settle_the_run()
+        assert sorted(summary.id for summary in default_store().list("fit")) == sorted([first, second])
+
+
+@pytest.mark.parametrize("match, beside", [(False, False), (True, False), (False, True), (True, True)],
+                         ids=["neither", "a kept training", "a set beside", "both"])
+def test_at_most_one_of_the_two_questions_is_asked(match, beside, tmp_path, monkeypatch):
+    """A press asks at most one question before a training: a kept training that matches is named, and its answer starts
+    the training; else a set of the model saved beside asks before simulating from zero; with neither, nothing."""
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        _a_budget(page, runs="12", cap="8")
+        if beside:
+            _a_set_beside(page, 40, n_runs=40)
+        if match:
+            _a_kept_training(page)
+        page.read_facts()
+        choose(monkeypatch, other=True)
+        page._main_clicked()
+        _the_call(stand_in, 1)
+        titles = [said.title for said in all_asked()]
+        wanted = ["Start a new training?"] if match else ["Start a new simulation set?"] if beside else []
+        assert titles == wanted, titles
+        assert stand_in.calls[-1][1]["new_run"] is (beside and not match)
+        stand_in.release(None)
+        _settle_the_run()
+
+
+def test_a_refusal_after_a_match_reads_the_list_again(tmp_path, monkeypatch):
+    """A training started beside a kept training that matches can still be refused by the stage before anything is
+    spent: its run's end reads the kept trainings again, so one deleted meanwhile is named no more at the next press."""
+    import shutil
+    from core.artifacts import default_store
+    from core.refusals import Refusal
+    from tests._fixtures import readings_of_a_run
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        _a_budget(page, runs="12", cap="8")
+        kept = _a_kept_training(page)
+        page.read_facts()
+        choose(monkeypatch, words="Start a new training")
+        page._main_clicked()
+        _the_call(stand_in, 1)
+        calls = readings_of_a_run(monkeypatch)
+        shutil.rmtree(next(summary.path for summary in default_store().list("fit") if summary.id == kept))
+        stand_in.fail(Refusal("A posterior named 'retrain_2' was made meanwhile.", field="name"))
+        _settle_the_run()
+        assert calls.count("matching_fits") == 1, calls
+        assert page._matches == ()
+        forget_asked()
+        page.names.name.setText("retrain_3")
+        page.read_facts()
+        page._main_clicked()
+        _the_call(stand_in, 2)
+        assert all_asked() == []
+        stand_in.release(None)
+        _settle_the_run()
+
+
+@pytest.mark.parametrize("which", ["a kept training", "from zero", "a narrowed posterior"])
+def test_both_questions_of_the_training_page_preselect_cancel(which, tmp_path, monkeypatch):
+    """Every question the Training page asks before it spends, the kept training's, the one before simulating from zero
+    and a narrowed posterior's, preselects "Cancel", the safe answer: answered as Enter answers it, nothing starts."""
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        _a_budget(page, runs="12", cap="8")
+        if which == "a kept training":
+            _a_kept_training(page)
+        elif which == "from zero":
+            _a_set_beside(page, 40, n_runs=40)
+        else:
+            _trained, narrowed = _saved_posteriors(page)
+            _to_the_load_view(page)
+            page.post_picker.restore_key(narrowed)
+        page.read_facts()
+        choose(monkeypatch, default=True)
+        page._main_clicked()
+        question = asked()
+        assert (question.default, question.safe, question.answers[-1]) == ("Cancel", "Cancel", "Cancel"), question
+        assert stand_in.calls == []
 
 
 def test_a_saved_set_of_this_model_asks_first_and_lists_every_difference(tmp_path, monkeypatch):

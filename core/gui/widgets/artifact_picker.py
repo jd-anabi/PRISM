@@ -5,7 +5,8 @@ generated-kind twin, which reads the artifact store instead of a directory.
 A page of the look asks either for ``keeps_selection``: its list is a ``Choice`` that the page stands in a row of its
 own form, the picker lays nothing out, and a list read again keeps the item selected while it is there, else selects
 nothing and shows ``hint``, never the first item. Nothing is judged in passing: the list's signals are held while it
-is read again, and it says its selection once, only when that moved."""
+is read again, and it says its selection once, only when that moved. Such a list names a posterior from a narrowing
+round in the page's words."""
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -164,6 +165,8 @@ class ArtifactPicker(QWidget):
 # one that gets a suffix. Plain text, no icon: see ArtifactPicker.NEW_LABEL for why a combo ITEM
 # cannot carry the bundled icon font.
 NARROWED_SUFFIX = "  —  narrowed (TSNPE)"
+#: The same, on a page of the look, which names no place of the old pages.
+NARROWED_WORDS = "from a narrowing round"
 
 
 def _summary_line(s) -> str:
@@ -269,8 +272,8 @@ class StorePicker(QWidget):
             # The suffix is appended to the DISPLAY only. key(), restore_key(), selected() and
             # has_entries() all go through userData, which is still the bare id, so nothing that
             # persists or resolves a selection can be broken by a change of wording here.
-            self.combo.addItem(s.label + (NARROWED_SUFFIX if s.amortized is False else ""),
-                               userData=s.id)
+            narrowed = f"  —  {NARROWED_WORDS}" if self.keeps_selection else NARROWED_SUFFIX
+            self.combo.addItem(s.label + (narrowed if s.amortized is False else ""), userData=s.id)
             self._summaries[str(s.id)] = _summary_line(s)
             tip = f"{s.id} · {s.created}"
             if s.mode:
@@ -282,7 +285,8 @@ class StorePicker(QWidget):
                 # suffix and the line under the picker use, so nobody has to learn that a
                 # shouted "NON-AMORTIZED" here and a quiet "narrowed" there are the same
                 # thing. The tooltip keeps everything else it carried.
-                tip += " · amortized" if s.amortized else " · narrowed (TSNPE)"
+                tip += " · amortized" if s.amortized else (f" · {NARROWED_WORDS}" if self.keeps_selection
+                                                           else " · narrowed (TSNPE)")
             self.combo.setItemData(self.combo.count() - 1, tip, _TOOLTIP_ROLE)
 
     def selected(self):

@@ -127,7 +127,7 @@ def _named(key: str) -> str:
     return key.replace("\\", "/")
 
 
-def _recorded_file(bounds) -> "str | None":
+def recorded_file(bounds) -> "str | None":
     """The bounds file a record's inputs name, as the list names it: its path under its model's folder of bounds files;
     None for limits typed by hand."""
     path = bounds.get("path") if isinstance(bounds, dict) else None
@@ -338,7 +338,7 @@ class PriorPanel(StepPage):
             return "", NOTHING_HELD_TEXT
         manifest = getattr(prior, "manifest", None)
         inputs, made_for = getattr(manifest, "inputs", None), getattr(manifest, "config", None)
-        built_on = _recorded_file(inputs.get("bounds") if isinstance(inputs, dict) else None)
+        built_on = recorded_file(inputs.get("bounds") if isinstance(inputs, dict) else None)
         keys = made_for.get("param_keys") if isinstance(made_for, dict) else None
         if not isinstance(keys, (list, tuple)):
             keys = [*(getattr(cfg, "params_dict", None) or {}), *(getattr(cfg, "rescale_params", None) or {})]
@@ -568,7 +568,7 @@ class PriorPanel(StepPage):
             return
         recorded = (manifest.inputs or {}).get("bounds")
         self._read["record_model"] = (manifest.config or {}).get("model")
-        self._read["built_on"] = _recorded_file(recorded)
+        self._read["built_on"] = recorded_file(recorded)
         path = self.bounds_picker.selected_path()
         if path and isinstance(recorded, dict) and self._read["built_on"] is not None:
             try:

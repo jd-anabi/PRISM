@@ -915,7 +915,7 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
             assert panel.isEnabled() and inference.pages.isEnabled(), (session, step.key)
             if state.can_start:
                 continue
-            for view in ("saved", "build") if hasattr(panel, "show_view") else (None,):
+            for view in {"prior": ("saved", "build"), "training": ("training", "load")}.get(step.key, (None,)):
                 done = set()
                 while True:
                     hold(session)

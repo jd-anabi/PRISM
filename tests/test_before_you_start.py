@@ -321,6 +321,140 @@ def test_the_question_before_simulating_from_zero_names_each_set_and_what_it_dif
         "Start a new simulation set?", text, items, "To continue one of them, cancel and set these back.", other)
 
 
+# ── the third step's load view ──
+#: What every load's facts are read with but the row a test looks at: a posterior of the model in use, selected, trained
+#: with the prior in use.
+LOADED = dict(record_model="NADROWSKI", model="NADROWSKI", trained_with="p1", trained_with_label="retrain_prior",
+              in_use="p1", in_use_label="retrain_prior")
+
+
+@pytest.mark.parametrize("changed, said", [
+    ({}, [("fine", "Trained with retrain_prior, the prior in use.")]),
+    ({"trained_with": "p0", "trained_with_label": "old_prior"},
+     [("warn", "Trained with old_prior; the prior in use is retrain_prior. Calibration and a narrowing round will "
+               "refuse "
+               "this pair. Load old_prior in step 2 first.")]),
+    ({"trained_with": "p0", "trained_with_label": ""},
+     [("warn", "Trained with a prior no longer in Records; the prior in use is retrain_prior. Calibration and a "
+               "narrowing "
+               "round will refuse this pair.")]),
+    ({"trained_with": None}, []),
+    ({"needs_prior": True}, [("lock", "Needs a prior: build or load one in step 2, Prior.")]),
+    ({"chosen": False}, [("err", "Choose a saved posterior.")]),
+    ({"chosen": False, "saved": False},
+     [("err", "No posterior is saved yet: start a training with 'Set up a training instead…'.")]),
+    ({"error": "The posterior cannot be read: StoreError: gone."}, [("err", "The posterior cannot be read: StoreError: "
+                                                                            "gone.")]),
+    ({"record_model": "HOPF"}, [("err", "This posterior was made for the model Hopf.")]),
+    ({"others_pending": ["Step 2, Prior, has changes that are not applied. This run uses what is in use: "
+                         "retrain_prior."]},
+     [("fine", "Trained with retrain_prior, the prior in use."),
+      ("warn", "Step 2, Prior, has changes that are not applied. This run uses what is in use: retrain_prior.")]),
+], ids=["the prior in use", "another prior", "a prior no longer in Records", "a record that names no prior",
+        "no prior in use", "nothing chosen", "nothing saved", "a record that cannot be read", "another model",
+        "another step's change"])
+def test_the_load_view_compares_the_prior(changed, said):
+    """The facts of the load view: the prior the posterior selected was trained with, against the prior in use, said and
+    never blocking; a posterior trained with another prior names it and says to load it in step 2; with no prior in use,
+    a lock and no comparison; nothing chosen, nothing saved, a record that cannot be read, or one of another model,
+    each an error with its words beside the button. Another step's change not applied is said."""
+    from core.gui.step_facts import load_facts
+    facts = load_facts(**{**LOADED, **changed})
+    assert _said(facts) == said
+    blocks = {"needs_prior": "needs a prior", "chosen": "no saved posterior is chosen",
+              "error": "the posterior cannot be read", "record_model": "this posterior is for another model"}
+    held = [fact.blocks for fact in facts if fact.blocks]
+    named = next((key for key in blocks if key in changed), None)
+    if named == "chosen" and changed.get("saved") is False:
+        assert held == ["no posterior is saved yet"]
+    else:
+        assert held == ([blocks[named]] if named else []), held
+
+
+@pytest.mark.parametrize("given, said", [
+    (dict(made="3 Oct 2026, 03:12", model="NADROWSKI", kind="chi", network=(256, 10), simulations=20480000,
+          prior="retrain_prior", bounds="master.txt"),
+     "Made 3 Oct 2026, 03:12, for Nadrowski: a frequency response; network 256 by 10; 20,480,000 simulations; trained "
+     "with retrain_prior, on master.txt."),
+    (dict(made="3 Oct 2026, 03:12", model="NADROWSKI", kind="forced", network=(128, 8), simulations=320000,
+          prior="a prior no longer in Records", bounds=None, narrowed=True, observation="cell_a"),
+     "Made 3 Oct 2026, 03:12, for Nadrowski: a spontaneous recording and one driven recording; network 128 by 8; "
+     "320,000 simulations; trained with a prior no longer in Records, on limits typed by hand. From a narrowing round "
+     "around the observation cell_a."),
+    (dict(made="3 Oct 2026, 03:12", model="NADROWSKI", kind="spontaneous", narrowed=True),
+     "Made 3 Oct 2026, 03:12, for Nadrowski: a spontaneous recording only. From a narrowing round around an "
+     "observation "
+     "no longer in Records."),
+    (dict(made="3 Oct 2026, 03:12", model="NADROWSKI", kind=None, network=(None, 8), simulations=True),
+     "Made 3 Oct 2026, 03:12, for Nadrowski."),
+], ids=["a training's", "a narrowing round's, on limits typed by hand", "a narrowing round's that says little",
+        "a record that says nothing more"])
+def test_a_saved_posteriors_record_is_said_under_its_list(given, said):
+    """Under the list of saved posteriors, from the record selected: when it was made and for which model, the kind of
+    observation it reads, its network, its simulations, the prior it was trained with and the bounds file it was built
+    on, and, from a narrowing round, the observation it was narrowed around; what its record does not say is left
+    out."""
+    from core.gui.step_facts import saved_posterior_words
+    assert saved_posterior_words(**given) == said
+
+
+def test_a_narrowed_posterior_in_use_says_it_came_from_a_narrowing_round():
+    """A posterior from a narrowing round says so in "In use", whatever else its record says."""
+    training = {"epochs_trained": 131, "n_runs": 10000, "run_size": 2048, "hidden_features": 256, "num_transforms": 10}
+    assert posterior_in_use("retrain_round1", training, {}, "retrain_prior", narrowed=True) == (
+        "retrain_round1", "131 epochs, network 256 by 10, on 20,480,000 simulations, prior retrain_prior. From a "
+                          "narrowing round. Saved as a record.")
+    assert posterior_in_use("retrain_round1", {}, {}, "", narrowed=True) == (
+        "retrain_round1", "From a narrowing round. Saved as a record.")
+    assert posterior_in_use("retrain", training, {}, "retrain_prior")[1].endswith(
+        "prior retrain_prior. Saved as a record.")
+
+
+def test_the_narrowed_question_says_what_loading_it_means():
+    """Before a posterior from a narrowing round is loaded, its question says around which observation it was narrowed,
+    what it is valid for and what loading it means, in its own words; the answer that loads it is the page's button."""
+    from core.gui.step_facts import narrowed_question
+    assert narrowed_question("retrain_round1", "cell_a") == (
+        "Load a posterior from a narrowing round?",
+        "retrain_round1 was narrowed around the observation cell_a. It is valid only near that observation; elsewhere "
+        "it "
+        "has seen no training simulations and gives confident answers that are wrong.",
+        "If you load it: calibration runs on the narrowed prior; inference on any other observation asks first; a "
+        "further narrowing round can only be drawn around the same observation.",
+        "Load this posterior")
+    assert narrowed_question("Unnamed posterior, 3 Oct 2026, 03:12", "")[1].startswith(
+        "Unnamed posterior, 3 Oct 2026, 03:12 was narrowed around an observation no longer in Records. It is valid")
+
+
+@pytest.mark.parametrize("state, on_purpose, reason, how", [
+    ("kept when stopped", True, "cancelled", "kept when stopped"),
+    ("stopped unexpectedly", False, "RuntimeError: the card ran out of memory",
+     "stopped unexpectedly after the error 'RuntimeError: the card ran out of memory'"),
+    ("stopped unexpectedly", None, None, "stopped unexpectedly"),
+    ("stopped unexpectedly", False, "  ", "stopped unexpectedly"),
+    (None, None, None, "stopped unexpectedly"),
+], ids=["kept on purpose", "stopped by an error", "a stop never recorded", "an error with no words", "no state"])
+def test_a_kept_training_is_named_with_how_it_stopped_and_when(state, on_purpose, reason, how):
+    """A kept training as the choice before a new training names it: its label, how it stopped in the listing's words
+    and, when an error stopped it, the error as its record words it, never the record's raw word for a stop on purpose;
+    the epoch it was saved after, and when, in the window's words."""
+    from core.gui.step_facts import kept_words, new_training_question, stopped_words
+    assert stopped_words(state, on_purpose, reason) == how
+    assert kept_words("retrain_2", how, 41, "3 Oct 2026, 03:12") == f"retrain_2: {how}, after epoch 41, saved 3 Oct " \
+                                                                       f"2026, 03:12"
+    assert kept_words("retrain_2", how, None, "") == f"retrain_2: {how}"
+    one = new_training_question(["retrain_2: kept when stopped, after epoch 41, saved 3 Oct 2026, 03:12"])
+    assert one == ("Start a new training?", "1 kept training matches these settings and can be resumed:",
+                   ("retrain_2: kept when stopped, after epoch 41, saved 3 Oct 2026, 03:12",),
+                   "A new training leaves it as it is. To resume it, cancel and press Resume beside it on this page.",
+                   "Start a new training")
+    two = new_training_question(["a: kept when stopped", "b: stopped unexpectedly"])
+    assert two[1:4] == ("2 kept trainings match these settings and can be resumed:",
+                        ("a: kept when stopped", "b: stopped unexpectedly"),
+                        "A new training leaves them as they are. To resume one, cancel and press Resume beside it on "
+                        "this page.")
+
+
 def test_with_never_nothing_saved_is_continued_and_nothing_is_read():
     """With "Never" the simulations are not saved, so no set is continued, whatever a reading says; the reading of the
     built-in cadence is not this training's."""
