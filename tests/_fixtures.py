@@ -41,7 +41,7 @@ from core.artifacts import manifest as mf
 # the SAME objects.
 from tests._dialogs import (CHOOSER_CALLS, NATIVE_BOXES, SHOWN, Asked, ChooserCall, all_asked,  # noqa: F401
                             answer_chooser, asked, check_choosers_answered, check_native_boxes_read, choose,
-                            chooser_guard, forget_asked, hold_open, native_box, native_boxes, record)
+                            chooser_guard, forget_asked, held_enter, hold_open, native_box, native_boxes, record)
 # The record of what the builders below made, which tests/conftest.py lets go at each test's end. Reached
 # through its module, never re-exported: a container of widgets here is what the builders' own test refuses.
 from tests import _built

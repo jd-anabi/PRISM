@@ -1028,6 +1028,68 @@ def test_another_prior_asks_before_it_releases_a_posterior(build, tmp_path, monk
         assert screen.session.posterior is None
 
 
+@contextlib.contextmanager
+def _second_step_with_the_ring(tmp_path, monkeypatch):
+    """The second step in the whole program, whose ring follows the keyboard as it does for a person, in sight off the
+    screen and in front, on the test's own clock and its own store: the first step applied, a configuration, a prior, a
+    posterior and an observation held, the build shown on the master bounds file, a name typed, and the stage's build a
+    stand-in run: (window, screen, page, the stand-in run)."""
+    from core import orchestrator
+    from tests._fixtures import whole_program
+    from tests._look_helpers import _settle
+    from tests._runs import Clock, StandIn, at, controller_on
+    from tests._window_helpers import in_front, shown_off_screen
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    with whole_program() as (_app, window):
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        shown_off_screen(window, 1300, 820)
+        window.go_to("inference", "model")
+        _settle()
+        screen = window.part("inference")
+        _apply(screen.config_panel)
+        cfg, prior, posterior, observation = _held_records()
+        screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior, posterior=posterior,
+                                    observation=observation)
+        screen.refresh_gates()
+        window.go_to("inference", "prior")
+        _settle()
+        page = screen.prior_panel
+        page.show_view("build")
+        page.bounds_picker.restore_key("master.txt")
+        page.names.name.setText("retrain_2")
+        page.read_facts()
+        stand_in = StandIn(word="Prior build")
+        monkeypatch.setattr(orchestrator, "build_prior", stand_in)
+        with in_front(window):
+            yield window, screen, page, stand_in
+        window.hide()
+
+
+def test_a_held_enter_on_build_a_new_prior_leaves_its_question_for_a_fresh_press(tmp_path, monkeypatch):
+    """With a posterior held and the ring on "Build a new prior (…)", Enter presses it and its question opens where the
+    key's repeats land: they answer nothing, and the question stands; Enter let go and pressed again gives the answer it
+    preselects, "Keep the posterior", so nothing starts and the posterior stays held. A fresh press on the button asks
+    again, so the window's own Enter still presses the button with the ring."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from core.gui.run.controller import controller
+    from tests._dialogs import held_enter
+    from tests._look_helpers import _arrive
+    with _second_step_with_the_ring(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        button, held = page.foot.main_button, screen.session.posterior
+        assert button.isEnabled() and button.text().startswith("&Build a new prior"), button.text()
+        seen = []
+        held_enter(monkeypatch, seen)
+        for _ in range(2):
+            button.setFocus(Qt.TabFocusReason)
+            _arrive(button, Qt.TabFocusReason)
+            QTest.keyClick(button, Qt.Key_Return)
+        assert [(said.title, said.default) for said in all_asked()] == [
+            ("Build a new prior?", "Keep the posterior")] * 2
+        assert seen == [(True, False)] * 2, "a held Enter answered the question, or Enter afresh did not"
+        assert not controller().is_live() and stand_in.calls == [] and screen.session.posterior is held
+
+
 def test_a_prior_held_with_no_posterior_is_replaced_without_a_question(tmp_path, monkeypatch):
     """No posterior, no question: an observation held alone is let go by the new prior, unasked."""
     from core.gui.run.controller import controller

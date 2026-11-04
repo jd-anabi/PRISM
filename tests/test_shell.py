@@ -7345,7 +7345,8 @@ def test_enter_with_a_modifier_in_a_field_or_on_a_tick_box_presses_nothing(contr
 
 def test_a_question_keeps_its_own_enter(tmp_path, monkeypatch):
     """A question is a window of its own and the window's handler does not hear it: with the keyboard on its other answer,
-    Enter gives the safe answer, as it always has, whatever the ring shows, and a repeat of the key does too."""
+    Enter gives the safe answer, as it always has, whatever the ring shows. A repeat of the key, Enter held down as the
+    question opened, answers nothing and leaves the question standing, until Enter is pressed afresh."""
     from PySide6.QtWidgets import QDialog
     from core.gui.widgets.ask import Ask
     from tests._look_helpers import _gone
@@ -7363,6 +7364,10 @@ def test_a_question_keeps_its_own_enter(tmp_path, monkeypatch):
             question.other_button.setFocus(Qt.TabFocusReason)
             press(question.other_button)
             QApplication.processEvents()
+            if press is _a_repeat:
+                assert answers == [] and question.isVisible(), "a held Enter answered the question"
+                QTest.keyClick(question.other_button, Qt.Key_Return)
+                QApplication.processEvents()
             assert answers == [QDialog.Rejected], "Enter on the other answer did not give the safe one"
             assert heard == [], "the window heard a key of its question"
             question.close()

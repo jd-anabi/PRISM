@@ -6722,6 +6722,70 @@ def test_the_question_opens_only_through_the_call_the_suites_stand_on():
         "Cancel", "Show the full error", 8, 12, ("warn", "err", "info"))
 
 
+def _held_enter(target, key) -> None:
+    """One repeat of ``key`` held down, a press and a release, as Windows sends a held key's."""
+    for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+        QApplication.sendEvent(target, QKeyEvent(kind, key, Qt.KeyboardModifier.NoModifier, "\r", True))
+    QApplication.processEvents()
+
+
+@pytest.mark.parametrize("box", ["a question", "a notice", "a line of text", "a message box",
+                                 "a message box asking yes or no", "the toolkit's own file chooser"])
+def test_a_held_enter_answers_no_box_and_enter_pressed_afresh_answers_it(box, tmp_path):
+    """A box a press opened stands where the key's repeats land. The follower takes every repeat of Enter, of either
+    key, in a box of each kind the window opens, and the box stands unanswered; Enter let go and pressed again answers
+    it with what it preselects: the safe answer of a question and of a notice, the other answer of a question that asks
+    for a line of text once the text holds, a message box's default, the chooser's file. A held Escape is not held
+    back."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    from core.gui import style
+    from core.gui.widgets.ask import Ask
+    app = QApplication.instance() or QApplication([])
+    follows = style.FocusFollower(app, style.PrismStyle())
+    host = QWidget()
+    dialog = None
+    try:
+        if box == "a question":
+            dialog, answer = Ask(host, *A_QUESTION, "Stop and lose the fit", loses_work=True), 0
+        elif box == "a notice":
+            dialog, answer = Ask(host, "Check your inputs", "Batches must be at least 1.", "OK"), 0
+        elif box == "a line of text":
+            dialog, answer = Ask(host, "Name it", "A name for the posterior.", "Cancel", "Resume", marker="info",
+                                 label="Name", text="retrain"), 1
+        elif box == "a message box":
+            dialog, answer = QMessageBox(QMessageBox.Icon.Warning, "Check your inputs", "Batches must be at least 1.",
+                                         QMessageBox.StandardButton.Ok, host), QMessageBox.StandardButton.Ok.value
+        elif box == "a message box asking yes or no":
+            dialog = QMessageBox(QMessageBox.Icon.Warning, "Delete?", "The record goes for good.",
+                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, host)
+            dialog.setDefaultButton(QMessageBox.StandardButton.No)
+            answer = QMessageBox.StandardButton.No.value
+        else:
+            dialog, answer = QFileDialog(host, "Save what is shown", str(tmp_path)), 1
+            dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+            dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+            dialog.selectFile("shown.txt")
+        dialog, got = _question_opened(dialog)
+        target = dialog.focusWidget() or dialog
+        for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            for _ in range(5):
+                _held_enter(target, key)
+        assert got == [] and dialog.isVisible(), (box, "a held Enter answered the box", got)
+        _question_key(dialog.focusWidget() or dialog, Qt.Key.Key_Return)
+        assert got == [answer], (box, got)
+        if box == "a question":
+            dialog, got = _question_opened(Ask(host, *A_QUESTION, "Go on"))
+            QApplication.sendEvent(dialog.focusWidget(), QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
+                                                                   Qt.KeyboardModifier.NoModifier, "", True))
+            QApplication.processEvents()
+            assert got == [0], ("a held Escape is not held back", got)
+    finally:
+        if dialog is not None:
+            _question_closed(dialog)
+        follows.stop()
+        host.deleteLater()
+
+
 @pytest.mark.display
 def test_the_question_opens_with_the_systems_title_bar_on_a_real_display():
     """Needs QT_QPA_PLATFORM=windows (the root conftest defaults to offscreen, where this is skipped). Neither

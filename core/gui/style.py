@@ -4,8 +4,9 @@
 dot from the look's table, leaves the toolkit's dotted focus mark out, tells the focus frame how far outside
 its control it stands, and lets the wheel pass over a closed drop-down. ``FocusRing`` is that frame, painted
 as the one sign of keyboard focus. ``FocusFollower`` decides where it shows, from the reason the focus
-arrived with and from whether a key or a mouse button was pressed last. ``set_class`` names a widget's
-class for the style sheet.
+arrived with and from whether a key or a mouse button was pressed last; it also keeps a held Enter out of every
+box, so that a box a press opened is answered only by Enter pressed afresh. ``set_class`` names a widget's class
+for the style sheet.
 
 What a widget may ask of the follower: the property ``ring`` with the value ``"inset"`` puts the ring just
 inside the widget's own edge; the property ``ring_left`` is a number of pixels an inset ring leaves free at
@@ -15,8 +16,8 @@ and gets no ring.
 import shiboken6
 from PySide6.QtCore import QEvent, QObject, QRectF, Qt
 from PySide6.QtGui import QPainter, QPen
-from PySide6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QFocusFrame, QLineEdit, QMessageBox,
-                               QProxyStyle, QStyle)
+from PySide6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QDialog, QFocusFrame, QLineEdit,
+                               QMessageBox, QProxyStyle, QStyle)
 
 from . import design, paint
 from .reported import reported
@@ -103,6 +104,7 @@ class FocusRing(QFocusFrame):
 # cost more than the rest of the filter.
 _FOCUS_IN, _FOCUS_OUT, _HIDE = QEvent.FocusIn, QEvent.FocusOut, QEvent.Hide
 _KEY_PRESS, _MOUSE_PRESS = QEvent.KeyPress, QEvent.MouseButtonPress
+_ENTER = (Qt.Key_Return, Qt.Key_Enter)
 
 
 class FocusFollower(QObject):
@@ -110,7 +112,12 @@ class FocusFollower(QObject):
     shows wherever the focus goes; after a mouse click only in a field one types in. A window coming back
     to the front keeps what it had. A widget with ``set_focus_shown`` draws its own sign and gets no ring,
     and an opened list marks its own row. One event filter on the application, which reads the kind of an
-    event and nothing more for all but five kinds."""
+    event and nothing more for all but five kinds.
+
+    It also keeps a held Enter out of every box. A key held down repeats, and a box a press opened stands
+    where the repeats land, so a repeated Enter is taken here and never reaches a box, a question or a
+    chooser of the toolkit's own: only Enter pressed afresh answers one. A chooser that Windows draws
+    itself hears its keys from Windows, not through here."""
     _TYPED_IN = (QLineEdit, QAbstractSpinBox)
 
     def __init__(self, app, worn=None, *, listen: bool = True):
@@ -155,6 +162,9 @@ class FocusFollower(QObject):
                 self.arrived(obj, event.reason())
         elif kind == _KEY_PRESS:
             self._key_last = True            # a key was the last thing pressed
+            if (event.isAutoRepeat() and event.key() in _ENTER and obj.isWidgetType()
+                    and isinstance(obj.window(), QDialog)):
+                return True                  # a held Enter answers no box: only a fresh press does
         elif kind == _MOUSE_PRESS:
             self._key_last = False           # a mouse button was,
             self._keyboard = False           # and the press ends the keyboard's turn, wherever it lands

@@ -22,8 +22,8 @@ asked for, which ``native_box`` keeps in its place.
 
 No name here is ever bound a second time: ``forget_asked()`` empties the two lists in place. A
 test reads a box or a question through ``asked()`` and ``all_asked()``, starts over with
-``forget_asked()``, answers with ``choose()`` and leaves one open a while with ``hold_open()``; it
-reads the plain Windows messages it caused with ``native_boxes()``.
+``forget_asked()``, answers with ``choose()``, leaves one open a while with ``hold_open()`` and holds Enter down
+into one with ``held_enter()``; it reads the plain Windows messages it caused with ``native_boxes()``.
 """
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -296,6 +296,46 @@ def hold_open(monkeypatch, seen: list, *, during: Callable[[], None] | None = No
         seen.append((box.isVisible(), over is not None and over.window().isVisible()))
         box.hide()
         return 0
+
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui.widgets.ask import Ask
+    monkeypatch.setattr(QMessageBox, "exec", held)
+    monkeypatch.setattr(Ask, "exec", held)
+
+
+def held_enter(monkeypatch, seen: list, *, repeats: int = 5) -> None:
+    """Answer every box or question from now until the test ends, or until the next ``choose``, ``hold_open`` or
+    ``held_enter``, as a person who holds Enter down as it opens and then presses it again: it is recorded first and
+    shown, modal, by the toolkit's own loop; ``repeats`` repeats of Enter held down are sent where the keyboard is in
+    it, each a press and a release as Windows sends a held key's, and whether it still stands is noted; then Enter
+    pressed afresh, and whether it stands after that, as a pair in ``seen``. A box Enter pressed afresh does not close
+    is closed with nothing, as the guard leaves one. Undone with the test's ``monkeypatch``."""
+    def held(box) -> int:
+        from PySide6.QtCore import QEvent, Qt, QTimer
+        from PySide6.QtGui import QKeyEvent
+        from PySide6.QtWidgets import QApplication, QDialog
+        record(box)
+        noted = []
+
+        def key(autorepeat: bool) -> None:
+            target = box.focusWidget() or box
+            for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+                QApplication.sendEvent(target, QKeyEvent(kind, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier, "\r",
+                                                         autorepeat))
+
+        def held_down() -> None:
+            for _ in range(repeats):
+                key(True)
+            noted.append(box.isVisible())
+            key(False)
+            noted.append(box.isVisible())
+            if box.isVisible():
+                box.done(0)
+
+        QTimer.singleShot(0, box, held_down)
+        answer = QDialog.exec(box)
+        seen.append(tuple(noted))
+        return answer
 
     from PySide6.QtWidgets import QMessageBox
     from core.gui.widgets.ask import Ask
