@@ -5841,7 +5841,8 @@ def test_nothing_of_a_trainings_run_page_is_cut_on_the_training_page_at_any_widt
 
 def test_a_page_hands_its_run_plain_settings(tmp_path, monkeypatch):
     """What the Training page hands its run for the run's history is plain: names, numbers, truth values and lists of
-    them, which the history's own writer takes as they are. Read off the page's spec as the press makes it."""
+    them, which the history's own writer takes as they are, each setting with the value the form holds. Read off the
+    page's spec as the press makes it."""
     import json
     from core import config
     from core.artifacts import ArtifactStore, default_store, use_store
@@ -5859,6 +5860,7 @@ def test_a_page_hands_its_run_plain_settings(tmp_path, monkeypatch):
         page = screen.posterior_panel
         page.names.name.setText("retrain")
         page.names.note.setText("a note")
+        page.form.rows["num_runs"].widget.setText("1234")
         page.read_facts()
         seen = []
         monkeypatch.setattr(RunController, "dispatch", lambda held, fn, *args, **kwargs: seen.append(kwargs["spec"]))
@@ -5869,9 +5871,8 @@ def test_a_page_hands_its_run_plain_settings(tmp_path, monkeypatch):
         assert (entry["model"], entry["bounds"], entry["prior"], entry["name"], entry["note"], entry["resume"]) == (
             "NADROWSKI", "master.txt", prior.id, "retrain", "a note", "auto")
         rows = {row["name"]: row for row in entry["rows"]}
-        assert rows["num_runs"] == {"step": "training", "name": "num_runs", "label": "Batches",
-                                    "value": config.TRAINING_NUM_RUNS, "origin": "", "plan": None,
-                                    "usual": config.TRAINING_NUM_RUNS}
+        assert rows["num_runs"] == {"step": "training", "name": "num_runs", "label": "Batches", "value": 1234,
+                                    "origin": "", "plan": None, "usual": config.TRAINING_NUM_RUNS}
         assert (rows["max_num_epochs"]["value"], rows["run_size_cap"]["value"]) == (None, 0)
         assert set(rows) == {"num_runs", "run_size_cap", "hidden_features", "num_transforms", "learning_rate",
                              "stop_after_epochs", "max_num_epochs", "expected_epochs", "checkpoint_every", "fisher_m",

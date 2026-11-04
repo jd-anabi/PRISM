@@ -1750,7 +1750,8 @@ def test_a_bounds_file_edited_since_it_came_into_use_can_be_applied_again(tmp_pa
     """A prior comes into use on a bounds file, and the file is written again afterwards. Once the page has read it, the
     line under the list says the file in use is the one from before the edit, "Changed, not applied"; the rail hears
     it; and the saved view's button loads the prior again, on the file as it is now, where it said there was nothing to
-    apply. A drawing before that reading says nothing of the edit, for the page has not read it."""
+    apply. A drawing before that reading says nothing of the edit, for the page has not read it. A prior used from
+    Records is loaded on the file as it stands, as the button loads it, so a later edit is said of it alike."""
     import os
     import shutil
     from core.artifacts import default_store
@@ -1794,6 +1795,22 @@ def test_a_bounds_file_edited_since_it_came_into_use_can_be_applied_again(tmp_pa
         turn_until(app, lambda: not controller().is_live(), 10.0)
         assert screen.session.cfg is candidate and _line(page, "bounds") == ("", "")
         assert page.foot.reason.text() == "Nothing to apply: these choices are in use."
+        held = path.stat()
+        path.write_text(path.read_text(encoding="utf-8") + "# written once more\n", encoding="utf-8")
+        os.utime(path, ns=(held.st_atime_ns, held.st_mtime_ns + 10 ** 9))
+        assert page.load_record(made)                    # used from Records: loaded on the file as it is now
+        assert stand_in.started.wait(5)
+        stand_in.started.clear()
+        stand_in.release(SimpleNamespace(kind="prior", id=made, name="on_the_file", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        page.read_facts()
+        assert _line(page, "bounds") == ("", "")
+        held = path.stat()
+        path.write_text(path.read_text(encoding="utf-8") + "# and once more\n", encoding="utf-8")
+        os.utime(path, ns=(held.st_atime_ns, held.st_mtime_ns + 10 ** 9))
+        page.read_facts()
+        assert _line(page, "bounds") == (
+            "warn", "Changed, not applied. In use: master.txt, as it was before it was edited.")
 
 
 # ── the third step: a posterior comes into use when its run returns ──
@@ -2035,8 +2052,11 @@ def test_before_you_start_reads_each_input_where_the_page_reads_it(tmp_path, mon
     reading of the saved sets, never the usual ones or the remembered ones; the run history's paces are asked for this
     size and this network, and said with their words for the batches still to simulate and the epochs typed; the memory
     limit is said as it stands at each drawing, and the last run on this computer from the run history, with the last
-    that measured its batches when the last measured none; another step's change not applied is said with the name of
-    what is in use, as the page is shown again; the name's and every field's facts stand with them."""
+    that measured its batches when the last measured none; a saved set of these settings is continued, the time is for
+    the batches still to simulate, and with "Automatic" the paces are asked at the width the reading gives; another
+    step's change not applied, step 1's or step 2's, is said with the name of what is in use, as the page is shown
+    again, and the line of what the run uses still names the bounds file in use; the name's and every field's facts
+    stand with them. A limit set in the environment is set aside, so the window's own setting is said."""
     from datetime import datetime, timedelta, timezone
     from core import config, orchestrator
     from core.gui.memory_limit import computer
@@ -2044,6 +2064,7 @@ def test_before_you_start_reads_each_input_where_the_page_reads_it(tmp_path, mon
     from core.gui.run.controller import controller
     from tests._fixtures import write_history
     from tests._look_helpers import _settle
+    monkeypatch.delenv("PRISM_VRAM_CEILING_GIB", raising=False)
     with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
         read, paces = [], []
         kept_reading, kept_estimate = orchestrator.training_reading, history.estimate
@@ -2102,6 +2123,18 @@ def test_before_you_start_reads_each_input_where_the_page_reads_it(tmp_path, mon
             "Information. Memory limit: 4 GiB for each batch of simulations (set in Settings, This computer). The last "
             "run on this computer (later, ended 8 Oct 2026, 17:00) ran with a limit of 4 GiB. The last run that "
             "measured its batches (retrain_1, ended 8 Oct 2026, 15:00): the largest held 5.4 GiB."), said()[-1]
+        _a_saved_set(page, 300)                          # 300 of the 777 batches of these settings simulated and saved
+        page.read_facts()
+        assert said()[2] == "Fine. Continues the saved simulation set: 300 of 777 batches are done.", said()[2]
+        assert said()[5].startswith("Information. Simulation: about an hour and a half: the last training of this size, retrain_1, "
+                                    "took 9.7 s per batch."), said()[5]
+        rows["run_size_cap"].widget.ticked_box.setChecked(True)          # "Automatic": the reading gives the width
+        paces.clear()
+        page.read_facts()
+        width = getattr(page._reading, "width", None)
+        assert width and paces[0] == ("batch", {"per_batch": width}), (width, paces)
+        rows["run_size_cap"].widget.ticked_box.setChecked(False)
+        page.read_facts()
         window.go_to("inference", "prior")
         _settle()
         screen.prior_panel.bounds_picker.restore_key("master_tier1.txt")
@@ -2109,6 +2142,18 @@ def test_before_you_start_reads_each_input_where_the_page_reads_it(tmp_path, mon
         _settle()
         assert said()[-1] == ("Attention. Step 2, Prior, has changes that are not applied. This run uses what is in "
                               "use: retrain_prior."), said()[-1]
+        assert said()[0].startswith("Information. Model Nadrowski; bounds file master.txt; "), said()[0]
+        window.go_to("inference", "model")
+        _settle()
+        kind = screen.config_panel.kind_choice
+        kind.setCurrentIndex(kind.findData(not kind.currentData()))
+        window.go_to("inference", "training")
+        _settle()
+        assert said()[-2:] == [
+            "Attention. Step 1, Model and options, has changes that are not applied. This run uses what is in use: "
+            "Nadrowski.",
+            "Attention. Step 2, Prior, has changes that are not applied. This run uses what is in use: retrain_prior."], (
+            said()[-2:])
         rows["learning_rate"].widget.setText("")
         page.names.name.setText("")
         page.redraw()
@@ -2118,7 +2163,8 @@ def test_before_you_start_reads_each_input_where_the_page_reads_it(tmp_path, mon
 def test_each_setting_of_a_training_says_its_rule_greys_the_start_and_refuses_the_press_alike(tmp_path, monkeypatch):
     """Each setting a training reads, at the end of its rule: the line under its field says the rule in the row's own
     words, the start is greyed with the words beside it, and the press, made anyway, is refused with the same words, the
-    value it found and the usual one; one step inside the rule is no line at all. A blank expected epochs is a choice."""
+    value it found and the usual one; one step inside the rule is no line at all. A blank expected epochs is a choice.
+    A note its rule refuses greys the start alike, with the note's words beside it, and the note typed stands."""
     from core.gui.run.controller import RunController
     ends = (("num_runs", "0", "Batches must be at least 1."),
             ("num_runs", "1", None),
@@ -2160,6 +2206,12 @@ def test_each_setting_of_a_training_says_its_rule_greys_the_start_and_refuses_th
             field.setText(usual)
             if key == "max_num_epochs":
                 widget.ticked_box.setChecked(True)
+        page.names.note.setText("n" * 201)
+        page.redraw()
+        assert not page.foot.main_button.isEnabled()
+        assert page.foot.reason.text() == "Cannot start yet: the note cannot be used.", page.foot.reason.text()
+        page._main_clicked()
+        assert page.names.note.text() == "n" * 201
         assert seen == [], "a press with a broken rule started a training"
 
 
@@ -2190,7 +2242,8 @@ def test_the_training_page_reads_nothing_while_a_run_is_live(tmp_path, monkeypat
     """With a prior in use, so that the page makes every reading it can, nothing it reads is read between a run's start and
     its end, its own training's or another page's: an edit, the timer, "Check again", the press, a store change, the gates
     and the page shown again read nothing; a training that returns its posterior writes the session and reads nothing.
-    The run's end reads once: the sets, the history and the paces."""
+    The run's end reads once: the sets, the history and the paces; and shown again after it, with nothing owed, the page
+    reads nothing."""
     from core.gui.run.controller import controller
     from tests._fixtures import readings_of_a_run
     from tests._look_helpers import _settle
@@ -2217,6 +2270,12 @@ def test_the_training_page_reads_nothing_while_a_run_is_live(tmp_path, monkeypat
         # the Narrowing round's own lines read the preview, which reads the sets itself: the rest are this page's
         assert (calls.count("training_reading") - calls.count("training_preview"), calls.count("last_on"),
                 calls.count("last_measured_on")) == (1, 1, 1), calls
+        window.go_to("inference", "model")
+        _settle()
+        calls.clear()
+        window.go_to("inference", "training")
+        _settle()
+        assert calls == [], f"the page shown again with nothing owed read: {calls}"
 
 
 def test_the_training_page_built_during_a_run_says_it_has_read_nothing(tmp_path, monkeypatch):
@@ -2389,6 +2448,7 @@ def test_a_blank_rotation_setting_does_not_stop_a_training_that_will_not_read_it
                 screen.session.cfg.reparam_rotate = False
             else:
                 screen.session.cfg.reparam_rotate = True
+                rows["num_runs"].widget.setText("6000")
                 _a_saved_set(page, 12)
             page.read_facts()
             assert (page.rotation_line.isHidden(), page.rotation_line.plain_text()) == (False, words), why
@@ -2397,7 +2457,7 @@ def test_a_blank_rotation_setting_does_not_stop_a_training_that_will_not_read_it
             page._main_clicked()
             assert not {"fisher_m", "fisher_dz", "fisher_points"} & set(seen[-1]), (why, seen[-1])
         said = [row.sentence.plain_text() for row in page.foot.facts.rows()]
-        assert any("12 of 5,000 batches are done" in one for one in said), said
+        assert any("12 of 6,000 batches are done" in one for one in said), said
         rows["checkpoint_every"].widget.field.setText("")
         page.redraw()
         said = [row.sentence.plain_text() for row in page.foot.facts.rows()]
@@ -2449,8 +2509,12 @@ def test_the_expected_epochs_reach_the_run_and_never_the_stage(tmp_path, monkeyp
     """"Expected epochs" is for the time alone: typed, it reaches the run's page through its spec and the fit's time in
     "Before you start", and never the stage; left blank, the last finished training of this kind is read, and with none
     the line under the field says what the run's page will do, once the page has looked: not before its reading has
-    asked, with no prior held or a box of the budget out of its rule."""
-    from core.gui.run.controller import RunController
+    asked, with no prior held or a box of the budget out of its rule. A finished training of this kind in Records gives
+    its epochs to the fit's time while the box is blank; typed epochs win, and cleared, the training's come back."""
+    from datetime import datetime, timedelta, timezone
+    from core.artifacts import default_store
+    from core.gui.run.controller import RunController, controller
+    from tests._fixtures import _posterior_artifact, write_history
     with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
         seen = []
         monkeypatch.setattr(RunController, "dispatch", lambda held, fn, *args, **kwargs: seen.append(kwargs))
@@ -2476,6 +2540,27 @@ def test_the_expected_epochs_reach_the_run_and_never_the_stage(tmp_path, monkeyp
         page.read_facts()
         page._main_clicked()
         assert seen[-1]["spec"].expected_epochs is None
+        width = page._reading.width
+        started = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
+        write_history(controller().folder(), id="20261008T120000-training", word="Training", name="retrain_1",
+                      outcome="finished", started=started, ended=started + timedelta(hours=3),
+                      simulation_set={"per_batch": width, "seconds_per_batch": 9.7},
+                      fit={"network": [128, 8], "simulations": 5000 * width, "seconds_per_epoch": 60.0})
+        _posterior_artifact(default_store(), screen.session.cfg, name="retrain_1",
+                            over={("training", "epochs_trained"): 130})
+        page.read_facts()
+
+        def fit_time():
+            return next(row.sentence.plain_text() for row in page.foot.facts.rows()
+                        if "Fit: " in row.sentence.plain_text())
+
+        assert page.no_earlier_line.isHidden() and " for 130 epochs: " in fit_time(), fit_time()
+        page.form.rows["expected_epochs"].widget.setText("150")
+        page.redraw()
+        assert " for 150 epochs: " in fit_time(), fit_time()
+        page.form.rows["expected_epochs"].widget.setText("")
+        page.redraw()
+        assert page.no_earlier_line.isHidden() and " for 130 epochs: " in fit_time(), fit_time()
 
 
 def test_the_name_and_note_are_emptied_after_a_record_and_kept_after_a_stop(tmp_path, monkeypatch):
