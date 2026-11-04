@@ -2372,7 +2372,8 @@ def test_a_blank_rotation_setting_does_not_stop_a_training_that_will_not_read_it
     """The rotation's three are read only while the rotation is computed afresh. With the rotation off, or a saved set of
     these settings continued, whose own rotation is reused, they are greyed with the reason under them, are not judged,
     and are not passed: a blank one stops nothing. With the rotation computed afresh a blank one is judged and greys the
-    start. A box of the budget left blank sets the last reading aside: what it found of the saved set is not said."""
+    start. A box of the budget left blank sets the last reading aside, at once: what it found of the saved set is not
+    said, and the rotation's three are read and judged again."""
     from core.gui.run.controller import RunController
     with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
         seen = []
@@ -2401,6 +2402,10 @@ def test_a_blank_rotation_setting_does_not_stop_a_training_that_will_not_read_it
         page.redraw()
         said = [row.sentence.plain_text() for row in page.foot.facts.rows()]
         assert not any("batches are done" in one for one in said), "a reading made at another budget was said"
+        assert page.rotation_line.isHidden() and all(rows[key].widget.isEnabled()
+                                                     for key in ("fisher_m", "fisher_dz", "fisher_points")), (
+            "the rotation's three followed a reading the facts set aside")
+        assert rows["fisher_dz"].line.words == "Rotation: step is blank.", "the rotation's three were not judged"
 
 
 def test_never_fixes_continue_or_start_new_with_its_reason(tmp_path, monkeypatch):
@@ -2443,12 +2448,24 @@ def test_never_fixes_continue_or_start_new_with_its_reason(tmp_path, monkeypatch
 def test_the_expected_epochs_reach_the_run_and_never_the_stage(tmp_path, monkeypatch):
     """"Expected epochs" is for the time alone: typed, it reaches the run's page through its spec and the fit's time in
     "Before you start", and never the stage; left blank, the last finished training of this kind is read, and with none
-    the line under the field says what the run's page will do."""
+    the line under the field says what the run's page will do, once the page has looked: not before its reading has
+    asked, with no prior held or a box of the budget out of its rule."""
     from core.gui.run.controller import RunController
     with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
         seen = []
         monkeypatch.setattr(RunController, "dispatch", lambda held, fn, *args, **kwargs: seen.append(kwargs))
         assert not page.no_earlier_line.isHidden(), "no earlier training, and the line does not say so"
+        page.form.rows["num_runs"].widget.setText("0")            # a box of the budget out of its rule
+        page.read_facts()
+        assert page.no_earlier_line.isHidden(), "the page said there is none without looking"
+        page.form.rows["num_runs"].widget.setText("5000")
+        prior = screen.session.inf_prior
+        screen.session.inf_prior = None                           # no prior held: no training of any kind to look for
+        page.read_facts()
+        assert page.no_earlier_line.isHidden(), "the page said there is none without looking"
+        screen.session.inf_prior = prior
+        page.read_facts()
+        assert not page.no_earlier_line.isHidden()
         page.form.rows["expected_epochs"].widget.setText("150")
         page.read_facts()
         assert page.no_earlier_line.isHidden()
@@ -2463,9 +2480,12 @@ def test_the_expected_epochs_reach_the_run_and_never_the_stage(tmp_path, monkeyp
 
 def test_the_name_and_note_are_emptied_after_a_record_and_kept_after_a_stop(tmp_path, monkeypatch):
     """A training that returned its posterior empties the name and the note, so a second press starts nothing until a new
-    name is typed; one stopped before it returned one keeps them as typed."""
+    name is typed; one stopped before it returned one keeps them as typed. The record a training made is let go at its
+    run's end: a later run that ends any other way, a training stopped or another page's run, leaves the name and the
+    note typed since and says nothing of a name taken."""
     from core.gui.run.controller import controller
-    from tests._runs import turn_until
+    from tests._fixtures import build_run_host
+    from tests._runs import running, turn_until
     app = qt_app()
     with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
         choose(monkeypatch, words="Stop training")
@@ -2481,6 +2501,19 @@ def test_the_name_and_note_are_emptied_after_a_record_and_kept_after_a_stop(tmp_
         turn_until(app, lambda: not controller().is_live(), 10.0)
         assert (page.names.name.text(), page.names.note.text()) == ("", "")
         assert not page.foot.main_button.isEnabled() and page.foot.reason.text() == "Cannot start yet: a name is needed."
+        page.run_view.back_button.click()
+        page.names.name.setText("retrain_3")
+        page.names.note.setText("a third try")
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        page.run_view.stop_button.click()
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert (page.names.name.text(), page.names.note.text()) == ("retrain_3", "a third try")
+        assert page.in_use.said.isHidden(), page.in_use.said.sentence.plain_text()
+        with running(build_run_host()):
+            pass
+        assert (page.names.name.text(), page.names.note.text()) == ("retrain_3", "a third try")
+        assert page.in_use.said.isHidden(), page.in_use.said.sentence.plain_text()
 
 
 def test_a_record_saved_under_another_name_says_so(tmp_path, monkeypatch):
@@ -2504,6 +2537,39 @@ def test_a_record_saved_under_another_name_says_so(tmp_path, monkeypatch):
         stand_in.release(SimpleNamespace(kind="posterior", id="p2", name="retrain_3", manifest=None))
         turn_until(app, lambda: not controller().is_live(), 10.0)
         assert said.isHidden(), said.sentence.plain_text()
+
+
+def test_a_record_is_judged_by_the_name_its_run_asked_for_and_a_name_typed_since_stands(tmp_path, monkeypatch):
+    """A training stopped in its fit and resumed from its run's page repeats its own call, its name with it: the record
+    that comes back under that name says nothing of a name taken, though another name and note were typed meanwhile, and
+    those stand; only fields that still hold what the call was handed are emptied."""
+    from core.artifacts import default_store
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_fit_record
+    from tests._runs import RunText, note, to_the_fit, turn_until
+    app = qt_app()
+    folder = tmp_path / "simulations" / "_unnamed__20261003T030211"
+    folder.mkdir(parents=True)
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        held, view = controller(), page.run_view
+        text = RunText(held)
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        kept = build_fit_record(default_store(), passes=2)
+        stand_in.kept_fit = note(kept, passes=2)
+        to_the_fit(app, stand_in, text, held._clock, folder, ((1, 0), (2, 1)))
+        choose(monkeypatch, words="Stop training")
+        view.stop_button.click()
+        turn_until(app, lambda: not held.is_live(), 10.0)
+        page.names.name.setText("another_name")
+        page.names.note.setText("typed since")
+        view.resume_button.click()
+        turn_until(app, lambda: len(stand_in.calls) == 2 and held.is_live(), 10.0)
+        assert (stand_in.calls[-1][1]["name"], stand_in.calls[-1][1]["note"]) == ("retrain_2", "a second try")
+        stand_in.release(SimpleNamespace(kind="posterior", id="p1", name="retrain_2", manifest=None))
+        turn_until(app, lambda: not held.is_live(), 10.0)
+        assert page.in_use.said.isHidden(), page.in_use.said.sentence.plain_text()
+        assert (page.names.name.text(), page.names.note.text()) == ("another_name", "typed since")
 
 
 def test_the_narrowing_rounds_row_keeps_its_meaning(tmp_path, monkeypatch):

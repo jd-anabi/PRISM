@@ -6,10 +6,10 @@ refused, failed, stopped or withdrawn changes nothing that is held, and the name
 
 The form holds what the training stage reads, each as an argument of its call: the batches and the simulations of each,
 the network, whether a saved simulation set is continued, and, folded, the fit's settings, how often the simulations are
-saved and the rotation's three. A setting a training will not read is shown as such and is neither judged nor passed: the
-rotation's three while the rotation is off or the saved set's own is reused, and the choice of continuing while the
-simulations are not saved. "Before you start" says what the run uses, what it makes, what it does with the saved sets,
-how long it should take and the memory it may use.
+saved and the rotation's three. A setting a training will not read is shown as such and is neither judged nor passed:
+the rotation's three while the rotation is off or the saved set's own is reused. While the simulations are not saved the
+choice of continuing stands at its first choice, greyed, and that choice is what is passed. "Before you start" says what
+the run uses, what it makes, what it does with the saved sets, how long it should take and the memory it may use.
 
 Nothing is read while a run is live: the saved simulation sets, the run history and the records of earlier trainings are
 read by the page's reading alone. The batches and the simulations per batch are remembered as the text of their boxes
@@ -89,6 +89,9 @@ _RULES = (
 )
 #: The rotation's three: read only while the rotation is computed afresh.
 _ROTATION = ("fisher_m", "fisher_dz", "fisher_points")
+#: The budget's three: the reading of the saved simulation sets is made at what they hold.
+_BUDGET = ("num_runs", "run_size_cap", "checkpoint_every")
+_FLOORS = dict(_RULES)
 #: The rows a blank leaves at their choice of nothing, which no rule refuses.
 _BLANK_CHOSEN = ("expected_epochs",)
 
@@ -139,9 +142,11 @@ class PosteriorPanel(StepPage):
         self._reading = None                 # the saved simulation sets, as the last reading found them at its budget
         self._per_batch = self._per_epoch = None  # the run history's paces, for this size
         self._expected = None                # the epochs the last finished training of this kind ran, and its words
+        self._looked = False                 # whether the last reading looked for that training in Records
         self._last = self._measured = None   # the last run on this computer, and the last that measured its batches
         self._history_read = False           # whether a reading has read the run history yet
         self._made = None                    # the posterior a run of this page returned, until the run has ended
+        self._handed = None                  # the name and the note this page's last training was handed
         self.resume_choice = Choice()
         for words, policy in RESUME_CHOICES:
             self.resume_choice.addItem(words, policy)
@@ -208,13 +213,13 @@ class PosteriorPanel(StepPage):
 
     def _rotation_unused(self) -> str:
         """Why the rotation's three settings are not read by this training, in a sentence; "" when they are: while the
-        rotation is off in the configuration held, and while the last reading says the saved set is continued, whose own
-        rotation is reused."""
+        rotation is off in the configuration held, and while the reading that stands says the saved set is continued,
+        whose own rotation is reused."""
         cfg = self._held()[0]
         rotate = getattr(cfg, "reparam_rotate", None)
         if rotate is not None and not rotate:
             return ROTATION_OFF_TEXT
-        if not self._never() and getattr(self._reading, "checkpoint", None) in CONTINUING:
+        if not self._never() and getattr(self._standing_reading(), "checkpoint", None) in CONTINUING:
             return REUSED_TEXT
         return ""
 
@@ -225,12 +230,17 @@ class PosteriorPanel(StepPage):
 
     def _budget(self) -> "tuple[int, int, int] | None":
         """The batches, the simulations per batch and the batches between two saves the form holds, each passing its
-        rule; None while any does not."""
-        rows, found = self.form.rows, self.problems()
-        if found.keys() & {"num_runs", "run_size_cap", "checkpoint_every"}:
+        rule; None while any does not. Judged from those three rows alone, which no other setting changes."""
+        rows = self.form.rows
+        if any(self._row_problem(key, _FLOORS[key]) is not None for key in _BUDGET):
             return None
-        values = tuple(rows[key].value() for key in ("num_runs", "run_size_cap", "checkpoint_every"))
+        values = tuple(rows[key].value() for key in _BUDGET)
         return None if None in values else values
+
+    def _standing_reading(self):
+        """The last reading of the saved simulation sets while the budget it was made at can be read: None while a box of
+        the budget is out of its rule. The facts and the rotation's three both stand on it."""
+        return self._reading if self._budget() is not None else None
 
     # ── what a page answers ──
     def main_words(self) -> str:
@@ -258,28 +268,33 @@ class PosteriorPanel(StepPage):
         """Every rule the form breaks now, by field key in the order a press reads them: the line under the field, built
         from its row's label, and what the press says, the same with the value it found and the usual one. A setting the
         training will not read breaks none, and a blank expected epochs is a choice."""
-        found, rows = {}, self.form.rows
+        found = {}
         for key, minimum in self._ruled():
-            row = rows[key]
-            if key in _BLANK_CHOSEN and not row.widget.text().strip():
-                continue
-            said = row.reading()
-            if said is not None:
-                found[key] = (said, f"{said[:-1]}{default_clause(key)}." if said.endswith(" is blank.") else said)
-                continue
-            value = row.value()
-            if value is None:
-                continue
-            if isinstance(value, float) and not math.isfinite(value):
-                line = f"{row.label_text()} must be a finite number."
-            else:
-                try:
-                    _check(key, value, minimum)
-                    continue
-                except Refusal:
-                    line = f"{row.label_text()} must be {_rule_words(minimum)}."
-            found[key] = (line, f"{line[:-1]}; got {_shown(value)}{default_clause(key)}.")
+            problem = self._row_problem(key, minimum)
+            if problem is not None:
+                found[key] = problem
         return found
+
+    def _row_problem(self, key: str, minimum) -> "tuple[str, str] | None":
+        """The rule the row ``key`` breaks now, as ``problems`` gives it; None for none."""
+        row = self.form.rows[key]
+        if key in _BLANK_CHOSEN and not row.widget.text().strip():
+            return None
+        said = row.reading()
+        if said is not None:
+            return said, (f"{said[:-1]}{default_clause(key)}." if said.endswith(" is blank.") else said)
+        value = row.value()
+        if value is None:
+            return None
+        if isinstance(value, float) and not math.isfinite(value):
+            line = f"{row.label_text()} must be a finite number."
+        else:
+            try:
+                _check(key, value, minimum)
+                return None
+            except Refusal:
+                line = f"{row.label_text()} must be {_rule_words(minimum)}."
+        return line, f"{line[:-1]}; got {_shown(value)}{default_clause(key)}."
 
     def facts_from_form(self) -> tuple:
         """The facts of the step as the form, the session and the last reading stand: the rules under their fields and
@@ -300,12 +315,12 @@ class PosteriorPanel(StepPage):
         self.rotation_line.set_text(unused)
         self.rotation_line.setVisible(bool(unused))
         cfg, prior = self._held()
-        reading = self._reading if self._budget() is not None else None
+        reading = self._standing_reading()
         rows = self.form.rows
         batches = None if "num_runs" in found else rows["num_runs"].value()
         width = getattr(reading, "width", None)
         typed = rows["expected_epochs"].value() if "expected_epochs" not in found else None
-        self.no_earlier_line.setVisible(self._history_read and typed is None and self._expected is None)
+        self.no_earlier_line.setVisible(self._looked and typed is None and self._expected is None)
         uses = budget = how_long = ""
         if cfg is not None:
             uses = uses_words(model=getattr(cfg, "model", None), bounds=bounds_in_use(cfg),
@@ -350,11 +365,12 @@ class PosteriorPanel(StepPage):
     def read_disk(self) -> None:
         """The run history (the last run on this computer and the last that measured its batches); and, while a prior is
         held and the budget passes its rules, the saved simulation sets at this budget, the run history's paces for this
-        size, and the epochs the last finished training of this kind ran."""
+        size, and the epochs the last finished training of this kind ran: only then has it looked for one."""
         folder, here = controller().folder(), computer()
         self._last, self._measured = history.last_on(folder, here), history.last_measured_on(folder, here)
         self._history_read = True
         self._reading = self._per_batch = self._per_epoch = self._expected = None
+        self._looked = False
         cfg, prior = self._held()
         budget = self._budget()
         if prior is None or budget is None:
@@ -376,6 +392,7 @@ class PosteriorPanel(StepPage):
             return
         # The last finished training's alone: the epochs typed are the form's, read at each drawing.
         self._expected = controller().expected_epochs(replace(spec, expected_epochs=None))
+        self._looked = True
 
     def _stage_values(self) -> dict:
         """The settings the stage would be handed now, as far as they pass their rules: for the run's facts."""
@@ -414,10 +431,12 @@ class PosteriorPanel(StepPage):
         except Refusal as refused:
             self._refusal(refused)
             return
-        started = self.dispatch(orchestrator.build_posterior, cfg, prior, None, True, name=self._names.name_value(),
-                                note=self._names.note_value(), resume=self._resume(), new_run=False,
-                                if_name_taken="unnamed", provide_fig_sink=True, on_result=self._on_posterior, **knobs)
+        handed = (self._names.name_value(), self._names.note_value())
+        started = self.dispatch(orchestrator.build_posterior, cfg, prior, None, True, name=handed[0], note=handed[1],
+                                resume=self._resume(), new_run=False, if_name_taken="unnamed", provide_fig_sink=True,
+                                on_result=self._on_posterior, **knobs)
         if started:
+            self._handed = handed
             put_many([(NUM_RUNS_KEY, str(knobs["num_runs"])), (RUN_SIZE_KEY, str(knobs["run_size_cap"]))])
 
     def run_spec(self, fn, *args, **kwargs) -> RunSpec:
@@ -462,15 +481,17 @@ class PosteriorPanel(StepPage):
         self._screen.take_posterior(payload)
 
     def _run_ended(self, status) -> None:
-        """A run has ended. One of this page's that returned its posterior: the name and the note emptied, with a word
-        when the record came back under another name. Then the reading."""
+        """A run has ended. One of this page's that returned its posterior: a word when the record came back under another
+        name than the one its call asked for (the ended run's own, which "Continue" and "Resume" repeat), and the name
+        and the note emptied while they still hold what the call was handed, so that a name typed since stands. Then
+        the reading."""
         made, self._made = self._made, None
         if made is not None:
-            typed = self._names.name_value()
-            self._names.clear()
-            got = getattr(made, "name", "")
-            if typed and got != typed:
-                self.in_use.say(Fact("warn", SAVED_WITHOUT_NAME.format(typed)))
+            asked = getattr(status, "name", "") or ""
+            if asked and getattr(made, "name", "") != asked:
+                self.in_use.say(Fact("warn", SAVED_WITHOUT_NAME.format(asked)))
+            if (self._names.name_value(), self._names.note_value()) == self._handed:
+                self._names.clear()
         super()._run_ended(status)
 
     def refresh_local_gates(self) -> None:
