@@ -128,10 +128,14 @@ def continued_call(spec) -> dict:
 
 def resumed_call(spec, kept: str) -> dict:
     """The keywords of the run's own call, resuming the training it kept: that training named (``resume_fit``) is the
-    one new argument. A narrowing round resumes in the region it was trained in, which the kept training's own record
-    holds, so its call names no number of directions and no HPD level: the round refuses both beside a kept
-    training."""
+    one new argument. A call made with "Only start new" (``resume="never"``) hands "auto" instead: that policy guarded
+    the training's start, and a kept training is always resumed on the simulation set it made, which the stage reads
+    back first and which "never" refuses to read. A narrowing round resumes in the region it was trained in, which the
+    kept training's own record holds, so its call names no number of directions and no HPD level: the round refuses
+    both beside a kept training."""
     kwargs = {**spec.kwargs, "resume_fit": kept}
+    if kwargs.get("resume") == "never":
+        kwargs["resume"] = "auto"
     if spec.word == "Narrowing round":
         kwargs.update({name: None for name in ("n_directions", "level") if name in kwargs})
     return kwargs

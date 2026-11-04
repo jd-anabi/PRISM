@@ -766,7 +766,8 @@ class RunController(QObject):
     def resume_training(self, run: str) -> bool:
         """"Resume the training" on the page of the training ``run``, which was stopped and kept its training, or
         failed during its fit or while its posterior was saved: its own call again, as its page's next run, the kept
-        training named (``resume_fit``) the one new argument. False, and nothing started, while a run is live, for a
+        training named (``resume_fit``) the one new argument, but for a call made with "Only start new", which is handed
+        "auto" (``retry.resumed_call``). False, and nothing started, while a run is live, for a
         run no page offers to resume, and once the page's session holds another model or prior (``_repeat``)."""
         offered = self._offers.get(run)
         if offered is None or offered.kept_fit is None:

@@ -2294,6 +2294,66 @@ def test_the_run_page_of_a_training_started_on_the_page_keeps_what_was_built_for
         turn_until(app, lambda: not held.is_live(), 10.0)
 
 
+def test_a_training_started_with_only_start_new_is_resumed_on_the_training_it_kept(tmp_path, monkeypatch):
+    """"Only start new" guards a training's start, and a kept training is resumed on the simulation set it made, which
+    that policy would refuse to read: the window's try after the graphics card runs out of memory in the fit, and
+    "Resume the training" after a stop kept with Keep, repeat the page's own call with the kept training named and
+    "Continue the saved simulation set if there is one" in its place, and each starts. The stand-in stage refuses, as
+    the stage does before anything is spent, a kept training beside "Only start new"."""
+    from core import orchestrator
+    from core.artifacts import default_store
+    from core.gui.run.controller import controller
+    from core.refusals import Refusal
+    from tests._fixtures import build_fit_record
+    from tests._runs import RunText, note, to_the_fit, turn_until
+    app = qt_app()
+    folder = tmp_path / "simulations" / "_unnamed__20261003T030211"
+    folder.mkdir(parents=True)
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        held, view = controller(), page.run_view
+        text = RunText(held)
+        refused = []
+
+        def stage(*args, **kwargs):
+            if kwargs.get("resume_fit") is not None and kwargs.get("resume") == "never":
+                refused.append(kwargs)
+                raise Refusal("A kept training is resumed on its kept simulation set, which resume='never' refuses "
+                              "to read.", field="resume")
+            return stand_in(*args, **kwargs)
+
+        monkeypatch.setattr(orchestrator, "build_posterior", stage)
+        _pick(page.resume_choice, "never")
+        page.read_facts()
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        first_args, first_kwargs = stand_in.calls[-1]
+        assert first_kwargs["resume"] == "never"
+        kept = build_fit_record(default_store(), passes=3)
+        stand_in.kept_fit = note(kept, passes=3)
+        to_the_fit(app, stand_in, text, held._clock, folder, ((1, 0), (2, 1), (3, 2)))
+        lack = RuntimeError("the fit's epoch 4 failed")
+        lack.__cause__ = RuntimeError("CUDA error: out of memory")      # the card's error, under the one raised from it
+        stand_in.fail(lack)
+        turn_until(app, lambda: held.status.state == "retrying", 10.0)
+        held._clock.advance(60)
+        held.tick()
+        turn_until(app, lambda: len(stand_in.calls) == 2 and held.status.state == "running", 10.0)
+        assert stand_in.calls[-1] == (first_args, {**first_kwargs, "resume": "auto", "resume_fit": kept})
+        to_the_fit(app, stand_in, text, held._clock, folder, ((4, 0),))
+        choose(monkeypatch, words="Stop training")
+        view.stop_button.click()
+        turn_until(app, lambda: not held.is_live(), 10.0)
+        assert view.keep_block.isVisibleTo(view)
+        view.keep_button.click()
+        assert view.resume_button.isVisibleTo(view)
+        view.resume_button.click()
+        turn_until(app, lambda: len(stand_in.calls) == 3 and held.is_live(), 10.0)
+        assert stand_in.calls[-1] == (first_args, {**first_kwargs, "resume": "auto", "resume_fit": kept})
+        assert refused == [], "a resume of the kept training was refused"
+        stand_in.release(None)
+        turn_until(app, lambda: not held.is_live(), 10.0)
+
+
 # ── step 3, Training ──
 def _a_saved_set(page, batches, *, complete=False) -> None:
     """A simulation set in the store in use made with the settings the Training page holds now, as the engine names it:
