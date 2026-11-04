@@ -2,8 +2,10 @@
 bare run host is let go when the test that built it ends.
 
 At module level this file imports the standard library and nothing else -- the toolkit inside its functions
-only, torch and the program nowhere -- as tests/_dialogs.py does. ``BUILT`` holds a weak reference to each thing
-a builder made, in the order they were made, so the record itself keeps nothing alive. tests/conftest.py's
+only, torch and the program nowhere -- as tests/_dialogs.py does. ``BUILT`` holds each thing a builder made, in
+the order they were made, until the test that made it ends. A thing a test made and dropped would otherwise be let
+go by Python's collector of cycles, which runs on whichever thread is running Python when its turn comes: on a run's
+worker, it deleted a window there, and the process ended without a word. tests/conftest.py's
 ``_built_widgets_let_go`` takes ``noted()`` when a test is set up, the record's length among it, and at the
 test's teardown hands it to ``end_of_test``, which deletes what was made since (``let_go``). What a fixture of
 wider scope built (the screen of a module's run, a panel a module builds once) was made before that length was
@@ -21,9 +23,10 @@ stop takes it at its own line only then.
 import sys
 import threading
 import time
-import weakref
 
-BUILT: list = []             # one weak reference for each thing a builder made, the oldest first
+BUILT: list = []             # each thing a builder made, the oldest first, held until its test ends
+# What a test made whose run had not stopped when the test ended: kept alive, for that run's end to find.
+STRANDED: list = []
 # Set from the moment the end of a test asks a run it left live to stop until the next test is set up.
 ENDING = threading.Event()
 
@@ -35,26 +38,26 @@ STOPS_WITHIN = 10.0
 
 def keep(widget):
     """Note ``widget`` among what the builders made, and hand it back."""
-    BUILT.append(weakref.ref(widget))
+    BUILT.append(widget)
     return widget
 
 
 def let_go(since: int) -> None:
     """Delete everything a builder made after the first ``since`` entries of the record, the newest first, each by
-    its own deferred delete, and take those entries out. One that is already gone (dropped by its test, deleted
-    by its parent or by the test itself) is passed over. Never closed: closing a window writes settings."""
+    its own deferred delete, and take those entries out. One that is already gone (deleted by its parent or by the
+    test itself) is passed over. Never closed: closing a window writes settings. On the window's thread: what the
+    record held is let go here, and the collection after it takes the cycles that held it."""
     import gc
     import shiboken6
     from PySide6.QtCore import QCoreApplication, QEvent
     made = BUILT[since:]
     del BUILT[since:]
-    for ref in reversed(made):
-        widget = ref()
-        if widget is not None and shiboken6.isValid(widget):
+    for widget in reversed(made):
+        if shiboken6.isValid(widget):
             widget.deleteLater()
             QCoreApplication.sendPostedEvents(widget, QEvent.DeferredDelete)
-        del widget
     if made:
+        del widget, made[:]      # the last references the record held
         gc.collect()             # the wrappers of what went, and the cycles that held it, go now too
 
 
@@ -126,6 +129,7 @@ def end_of_test(at_start: tuple, within: float = STOPS_WITHIN) -> None:
     if stopped:
         let_go(since)
     else:
+        STRANDED.extend(BUILT[since:])
         del BUILT[since:]
     if left_live:
         raise AssertionError(

@@ -1121,8 +1121,8 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
     five plain functions of tests/_fixtures.py, so a constructor's arguments are written once. Three
     things make them safe under tests that build twice to stand for a relaunch, or build after a
     patch, after a settings write or inside ``use_store``: each call builds anew, at the moment of
-    the call; the helpers keep nothing they built, but for a weak reference in the record of
-    tests/_built.py, from which a fixture lets each go when its test ends (the test below); and the
+    the call; the helpers keep nothing they built, and the record of tests/_built.py holds each
+    only until its test ends, when a fixture lets it go (the test below); and the
     inference builder does what it is handed and no more -- it assigns the session, installs the
     configuration, and refreshes no gate."""
     from core.gui.main_window import MainWindow
@@ -1196,9 +1196,10 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
 
 # What the first turn of the test below made, kept for its second turn as a test that wanted its window to
 # outlive it would keep one; and what one part of it saw as it went: the settings file in force, and whether
-# that turn's drawing record was still unread.
+# that turn's drawing record was still unread; and a weak reference to a part it made and dropped.
 _MADE_IN_THE_FIRST_TURN: list = []
 _SEEN_AS_IT_WENT: list = []
+_DROPPED_IN_THE_FIRST_TURN: list = []
 
 
 @pytest.mark.parametrize("turn", ["builds", "after"])
@@ -1214,7 +1215,10 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
     settings file was never written. They go while that file, and the room the turn left for the window's
     layout, are still in force and before the turn's drawing record is read, which one part notes as it goes:
     the fixture's place in the teardown order comes from the three fixtures it names, and nothing else holds
-    it. The record holds what was built weakly, so a part the test itself dropped is gone at once. The panel a
+    it. The record holds what was built until the test ends, so a part the test itself dropped is still there
+    until then, and goes with the rest on the window's thread: let go of by the collector of cycles, which runs on
+    whichever thread is running Python when its turn comes, a window dropped by a test was deleted on a run's worker,
+    and the process ended without a word. The panel a
     fixture of this module built is no test's own, and it is still there, still in the set. The two turns run
     together, in this order, in one process: the second alone always fails."""
     import shiboken6
@@ -1233,7 +1237,8 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
         gone.deleteLater()
         QCoreApplication.sendPostedEvents(gone, QEvent.DeferredDelete)
         alone = weakref.ref(build_part(QWidget))
-        assert alone() is None, "the record keeps alive a part its test let go"
+        assert alone() is not None, "the record let go of a part its test dropped before the test ended"
+        _DROPPED_IN_THE_FIRST_TURN[:] = [alone]
         watched = build_part(QWidget)
         reported.COUNTS["unread"] = 0        # a mark the drawing check takes away once it has read the record
         watched.destroyed.connect(lambda *_: _SEEN_AS_IT_WENT.extend(
@@ -1247,6 +1252,9 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
     assert len(_MADE_IN_THE_FIRST_TURN) == 9, (
         "the first turn did not run before this one: the two turns run together, in this order, in one process")
     *made, _deleted_by_the_test, written = _MADE_IN_THE_FIRST_TURN
+    dropped, = _DROPPED_IN_THE_FIRST_TURN
+    _DROPPED_IN_THE_FIRST_TURN.clear()
+    assert dropped() is None, "a part its test dropped outlived the test"
     seen = list(_SEEN_AS_IT_WENT)
     _MADE_IN_THE_FIRST_TURN.clear()
     _SEEN_AS_IT_WENT.clear()
