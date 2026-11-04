@@ -4110,12 +4110,32 @@ def _on_screen(page) -> list:
     return [words for words in said if words]
 
 
+def test_each_identity_row_names_the_step_where_its_settings_are_changed():
+    """The step an identity row names, where a person changes its entries, is the step where the window's control for
+    those settings stands in the table of controls (the first of its places); a row whose entries no person changes in
+    the window names none."""
+    from core.gui import fields as gui_fields
+    control_of = {"Batches": "num_runs", "Simulations per batch": "run_size_cap", "Prior": "prior",
+                  "Bounds file": "bounds", "Bounds file: forcing section": "bounds", "Time grid": "bounds",
+                  "Kind of observation": "chi_mode", "Slots for driven recordings": "chi_k_pad",
+                  "Lock-in limit": "chi_max_cycles", "Rotation": "reparam_rotate", "Units": "units"}
+    seen = set()
+    for _keys, shown, step in gui_fields.IDENTITY_ROWS:
+        if shown not in control_of:
+            assert step == "", (shown, step)
+            continue
+        seen.add(shown)
+        place = gui_fields.CONTROL[control_of[shown]][0]
+        assert step == (place[0] if isinstance(place, tuple) else place), (shown, step, place)
+    assert seen == set(control_of), set(control_of) - seen
+
+
 def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
     """STANDING. No string the three rebuilt pages show names a place of the old pages, a tab by its old name or the
     word "tab": every widget's words and tips in each view, with records held and saved, a posterior from a narrowing
-    round listed and selected; every question each page asks before it spends and every refusal it tells, as they are
-    asked; every fix sentence a refusal on the page gives; and every string the modules that make the three pages and
-    their facts hold, which is every question's and fact's words, whether or not a state here shows it. The scan is held
+    round listed and selected; every question and refusal the Training page asks, as they are asked; every fix
+    sentence a refusal on the page gives; and every string the five modules that make the three pages and their facts
+    hold, which is every question's and fact's words, whether or not a state here shows it. The scan is held
     to finding the old words where they are planted, so that a walk that reads nothing fails here too."""
     import re as _re
     from core import orchestrator

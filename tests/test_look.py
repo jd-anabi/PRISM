@@ -6786,6 +6786,26 @@ def test_a_held_enter_answers_no_box_and_enter_pressed_afresh_answers_it(box, tm
         host.deleteLater()
 
 
+def test_a_held_enter_still_reaches_a_field_of_a_window_that_is_no_box():
+    """Only a box holds a held Enter back: in a field of a window that is not one, each repeat of Enter, of either key,
+    reaches the field as a press of Enter does."""
+    from core.gui import style
+    app = QApplication.instance() or QApplication([])
+    follows = style.FocusFollower(app, style.PrismStyle())
+    window = QWidget()
+    field = QLineEdit(window)
+    got = []
+    field.returnPressed.connect(lambda: got.append(1))
+    try:
+        for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            for _ in range(3):
+                _held_enter(field, key)
+        assert len(got) == 6, ("a held Enter was held back outside a box", got)
+    finally:
+        follows.stop()
+        window.deleteLater()
+
+
 @pytest.mark.display
 def test_the_question_opens_with_the_systems_title_bar_on_a_real_display():
     """Needs QT_QPA_PLATFORM=windows (the root conftest defaults to offscreen, where this is skipped). Neither

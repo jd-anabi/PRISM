@@ -2083,7 +2083,6 @@ def _trained(page, *, posterior: bool = False) -> tuple:
     return main, folded
 
 
-
 def _to_load(page) -> None:
     """The load view, with no posterior saved: the list to choose one in, and nothing to load."""
     _to_train(page)

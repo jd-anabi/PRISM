@@ -791,11 +791,12 @@ _FIT_STOPS = {"on_purpose": (True, "cancelled"), "error": (False, "RuntimeError:
 
 
 def _fit_body(*, passes: int = 3, stopped: "str | None" = "on_purpose", posterior_name: str = "",
-              complete: bool = False, unresumable: "str | None" = None, identity: "dict | None" = None) -> dict:
+              complete: bool = False, unresumable: "str | None" = None, identity: "dict | None" = None,
+              saved_at: "str | None" = None) -> dict:
     """A kept training's manifest body at its smallest, every key of its kind present: an identity with
     each of its parts (the one handed in, else one whose parts are zeros), a progress of ``passes`` passes with
-    finite losses, and the stop ``stopped`` names ("on_purpose", "error", or None for a record whose process
-    never wrote how it stopped)."""
+    finite losses, last saved at ``saved_at`` (now when it is None), and the stop ``stopped`` names ("on_purpose",
+    "error", or None for a record whose process never wrote how it stopped)."""
     from datetime import datetime, timezone
     if stopped is not None and stopped not in _FIT_STOPS:
         raise ValueError(f"stopped must be one of {sorted(_FIT_STOPS)} or None, not {stopped!r}")
@@ -809,7 +810,7 @@ def _fit_body(*, passes: int = 3, stopped: "str | None" = "on_purpose", posterio
                     "code": {}, "constants": {}, "libraries": {}, "network": "0" * 16}
     return {"posterior_name": posterior_name, "identity": identity, "region": None,
             "progress": {"passes": int(passes), "best_validation_loss": 1.5, "passes_since_best": 0,
-                         "last_validation_loss": 1.5, "saved_at": at, "wall_seconds": 12.0,
+                         "last_validation_loss": 1.5, "saved_at": saved_at or at, "wall_seconds": 12.0,
                          "processes": 1},
             "stopped": stop, "unresumable": unresumable, "save_error": None, "complete": bool(complete)}
 
@@ -817,7 +818,7 @@ def _fit_body(*, passes: int = 3, stopped: "str | None" = "on_purpose", posterio
 def build_fit_record(store, *, passes: int = 3, stopped: "str | None" = "on_purpose",
                      posterior_name: str = "", note: str = "", parents: "dict | None" = None,
                      complete: bool = False, unresumable: "str | None" = None,
-                     identity: "dict | None" = None) -> str:
+                     identity: "dict | None" = None, saved_at: "str | None" = None) -> str:
     """A kept training's record, its manifest alone (no header and no state), written in an instant
     through ``write_fit_manifest`` into a new folder of ``store`` (``store.new_fit_dir()``).
 
@@ -828,13 +829,14 @@ def build_fit_record(store, *, passes: int = 3, stopped: "str | None" = "on_purp
     smallest one, whose parts are zeros and which matches no configuration. Handed alone it matches no training either:
     a match also needs ``parents={"simulation": <folder's name>}`` naming a complete set of its batches
     (``write_simulation_set`` with ``complete=True``) and the real code, constants and libraries in the identity.
+    ``saved_at`` is when its last pass was saved, an ISO moment with its zone; now when none is handed.
     ``cfg=None``, like ``build_browse_store``'s rows: nothing here reads a bounds file or trains anything.
 
     :returns: the record's id.
     """
     from core.artifacts import write_fit_manifest
     body = _fit_body(passes=passes, stopped=stopped, posterior_name=posterior_name, complete=complete,
-                     unresumable=unresumable, identity=identity)
+                     unresumable=unresumable, identity=identity, saved_at=saved_at)
     return write_fit_manifest(store.new_fit_dir(), body=body, note=note, parents=parents).id
 
 
