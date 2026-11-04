@@ -2126,13 +2126,14 @@ def test_before_you_start_reads_each_input_where_the_page_reads_it(tmp_path, mon
         _a_saved_set(page, 300)                          # 300 of the 777 batches of these settings simulated and saved
         page.read_facts()
         assert said()[2] == "Fine. Continues the saved simulation set: 300 of 777 batches are done.", said()[2]
-        assert said()[5].startswith("Information. Simulation: about an hour and a half: the last training of this size, retrain_1, "
-                                    "took 9.7 s per batch."), said()[5]
+        assert said()[5].startswith("Information. Simulation: about an hour and a half: the last training of this "
+                                    "size, retrain_1, took 9.7 s per batch."), said()[5]
         rows["run_size_cap"].widget.ticked_box.setChecked(True)          # "Automatic": the reading gives the width
         paces.clear()
         page.read_facts()
         width = getattr(page._reading, "width", None)
-        assert width and paces[0] == ("batch", {"per_batch": width}), (width, paces)
+        assert width and paces == [("batch", {"per_batch": width}),
+                                   ("epoch", {"network": (64, 3), "simulations": 777 * width})], (width, paces)
         rows["run_size_cap"].widget.ticked_box.setChecked(False)
         page.read_facts()
         window.go_to("inference", "prior")
@@ -2152,8 +2153,8 @@ def test_before_you_start_reads_each_input_where_the_page_reads_it(tmp_path, mon
         assert said()[-2:] == [
             "Attention. Step 1, Model and options, has changes that are not applied. This run uses what is in use: "
             "Nadrowski.",
-            "Attention. Step 2, Prior, has changes that are not applied. This run uses what is in use: retrain_prior."], (
-            said()[-2:])
+            "Attention. Step 2, Prior, has changes that are not applied. This run uses what is in use: "
+            "retrain_prior."], said()[-2:]
         rows["learning_rate"].widget.setText("")
         page.names.name.setText("")
         page.redraw()
@@ -2656,6 +2657,55 @@ def test_a_record_is_judged_by_the_name_its_run_asked_for_and_a_name_typed_since
         turn_until(app, lambda: not held.is_live(), 10.0)
         assert page.in_use.said.isHidden(), page.in_use.said.sentence.plain_text()
         assert (page.names.name.text(), page.names.note.text()) == ("another_name", "typed since")
+
+
+def test_each_of_the_name_and_the_note_is_emptied_on_its_own_after_a_resume(tmp_path, monkeypatch):
+    """A training stopped in its fit and resumed from its run's page with nothing typed meanwhile returns its record
+    under the name its call asked for, and both fields, which still hold what the call was handed, are emptied. Stopped
+    again and resumed with the note alone typed anew, its record empties the name, which still holds what the call was
+    handed, and leaves the note typed since."""
+    from core.artifacts import default_store
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_fit_record
+    from tests._runs import RunText, note, to_the_fit, turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        held, view = controller(), page.run_view
+
+        def stopped_in_the_fit(folder, started):
+            text = RunText(held)
+            page._main_clicked()
+            assert stand_in.started.wait(5)
+            kept = build_fit_record(default_store(), passes=2)
+            stand_in.kept_fit = note(kept, passes=2)
+            to_the_fit(app, stand_in, text, held._clock, folder, ((1, 0), (2, 1)))
+            choose(monkeypatch, words="Stop training")
+            view.stop_button.click()
+            turn_until(app, lambda: not held.is_live(), 10.0)
+            assert len(stand_in.calls) == started
+
+        def resumed(made):
+            view.resume_button.click()
+            turn_until(app, lambda: held.is_live(), 10.0)
+            stand_in.release(SimpleNamespace(kind="posterior", id=made, name=stand_in.calls[-1][1]["name"],
+                                             manifest=None))
+            turn_until(app, lambda: not held.is_live(), 10.0)
+
+        for at in (1, 2):
+            (tmp_path / "simulations" / f"_unnamed__2026100{at}T030211").mkdir(parents=True)
+        stopped_in_the_fit(tmp_path / "simulations" / "_unnamed__20261001T030211", 1)
+        resumed("p1")
+        assert stand_in.calls[-1][1]["name"] == "retrain_2"
+        assert (page.names.name.text(), page.names.note.text()) == ("", "")
+        page.run_view.back_button.click()
+        page.names.name.setText("retrain_3")
+        page.names.note.setText("a third try")
+        page.read_facts()
+        stopped_in_the_fit(tmp_path / "simulations" / "_unnamed__20261002T030211", 3)
+        page.names.note.setText("typed since")
+        resumed("p2")
+        assert (stand_in.calls[-1][1]["name"], stand_in.calls[-1][1]["note"]) == ("retrain_3", "a third try")
+        assert (page.names.name.text(), page.names.note.text()) == ("", "typed since")
 
 
 def test_the_narrowing_rounds_row_keeps_its_meaning(tmp_path, monkeypatch):

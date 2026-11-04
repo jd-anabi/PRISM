@@ -238,8 +238,8 @@ class PosteriorPanel(StepPage):
         return None if None in values else values
 
     def _standing_reading(self):
-        """The last reading of the saved simulation sets while the budget it was made at can be read: None while a box of
-        the budget is out of its rule. The facts and the rotation's three both stand on it."""
+        """The last reading of the saved simulation sets while the budget it was made at can be read: None while a box
+        of the budget is out of its rule. The facts and the rotation's three both stand on it."""
         return self._reading if self._budget() is not None else None
 
     # ── what a page answers ──
@@ -481,17 +481,21 @@ class PosteriorPanel(StepPage):
         self._screen.take_posterior(payload)
 
     def _run_ended(self, status) -> None:
-        """A run has ended. One of this page's that returned its posterior: a word when the record came back under another
-        name than the one its call asked for (the ended run's own, which "Continue" and "Resume" repeat), and the name
-        and the note emptied while they still hold what the call was handed, so that a name typed since stands. Then
-        the reading."""
+        """A run has ended. One of this page's that returned its posterior: a word when the record came back under
+        another name than the one its call asked for (the ended run's own, which "Continue" and "Resume" repeat), and
+        the name and the note each emptied while it still holds what the call was handed, so that one typed since
+        stands. Then the reading."""
         made, self._made = self._made, None
         if made is not None:
             asked = getattr(status, "name", "") or ""
             if asked and getattr(made, "name", "") != asked:
                 self.in_use.say(Fact("warn", SAVED_WITHOUT_NAME.format(asked)))
-            if (self._names.name_value(), self._names.note_value()) == self._handed:
-                self._names.clear()
+            name, note = self._handed or ("", "")
+            if self._names.name_value() == name:
+                self._names.name.clear()
+                self._names.set_hint("")
+            if self._names.note.text().strip() == note:
+                self._names.note.clear()
         super()._run_ended(status)
 
     def refresh_local_gates(self) -> None:
