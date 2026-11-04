@@ -427,6 +427,8 @@ QLineEdit:disabled, QComboBox:disabled {
     background: $disabled_fill; border-color: $disabled_line; color: $disabled_ink;
     placeholder-text-color: $disabled_ink; }
 QLineEdit[state="error"] { min-height: ${px_fld_in_err}px; padding: 0px ${px_fld_pad_err}px; border: 2px solid $err; }
+QLineEdit[state="error"]:disabled {
+    min-height: ${px_fld_in}px; padding: 0px ${px_fld_pad}px; border: 1px solid $disabled_line; }
 QComboBox { padding: 0px ${px_combo_r}px 0px ${px_combo_l}px; }
 QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: ${px_marker}px;
                        border: none; }

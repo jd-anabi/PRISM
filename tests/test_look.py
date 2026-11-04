@@ -1106,7 +1106,7 @@ def test_the_sheet_keeps_its_rules_and_only_the_named_interim_selectors_break_th
         for banned in ("$", "url(", "font-family", "letter-spacing", ":default", "::indicator", "*"):
             assert banned not in qss, (dark, banned)
         rules = _rules(qss)
-        assert len(rules) == 83, len(rules)
+        assert len(rules) == 84, len(rules)
         first = next(i for i, (selectors, _) in enumerate(rules) if selectors[0] in design.INTERIM_SELECTORS)
         final, interim = rules[:first], rules[first:]
         assert [s for selectors, _ in interim for s in selectors] == list(design.INTERIM_SELECTORS)
@@ -1156,7 +1156,7 @@ def test_the_sheets_lengths_follow_the_text_factor_and_its_line_weights_do_not()
         assert built[("QScrollBar::handle:horizontal",)]["min-width"] == "28px"
 
 
-SHEET_DIGEST = "4df6f1e344fea78bbe076ed24632a3a62b2028e3514046767dad7d9f92826ceb"
+SHEET_DIGEST = "a7d19c97267bda7bb3f8c407b3c03e6b9c7a961515650042a92ad6ee884cebd3"
 
 
 def test_every_rule_of_both_sheets_is_the_recorded_one():
@@ -6133,6 +6133,36 @@ def test_a_field_in_error_keeps_its_size_and_shows_a_two_pixel_outline():
                 assert rows == [err, err, inside]
                 field.set_error("")
                 assert seen() == ([line, inside, inside], plain)
+
+
+def test_a_field_in_error_is_greyed_to_the_greyed_outline_when_a_run_locks_the_page():
+    """A run greys the form it locks: a field in error greys with it to the greyed outline, one pixel of the greyed line
+    around the greyed fill, at the size it had, in both themes; given back, it is outlined in error again."""
+    QApplication.instance() or QApplication([])
+    from core.gui.widgets.labeled_inputs import FloatField, IntField
+    with text_size(1.0):
+        for dark in (False, True):
+            err, greyed, fill = (design.hex_colour(name, dark) for name in ("err", "disabled_line", "disabled_fill"))
+            for kind in (FloatField, IntField):
+                field = kind(5)
+                holder = _held_under_the_sheet(dark, field)
+
+                def seen():
+                    picture, x = _holder_picture(holder), field.x() + field.width() // 2
+                    rows = [_at(picture, x, field.y() + row) for row in range(3)]
+                    return rows, (field.sizeHint(), field.minimumSizeHint(), field.geometry())
+
+                field.set_error("Wrong.")
+                rows, outlined = seen()
+                assert rows[:2] == [err, err], rows
+                holder.setEnabled(False)
+                rows, locked = seen()
+                assert locked == outlined, "the field changed size as the run locked it"
+                assert rows == [greyed, fill, fill], rows
+                holder.setEnabled(True)
+                rows, again = seen()
+                assert (rows[:2], again) == ([err, err], outlined)
+                _gone(holder)
 
 
 def test_the_drop_down_paints_its_own_chevron_eight_inside_its_outline(monkeypatch):
