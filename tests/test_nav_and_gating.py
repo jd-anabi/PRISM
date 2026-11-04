@@ -1347,8 +1347,9 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
                          "Narrowing round."),
         # the consents and the dialogs quote their controls' own text (tsnpe_tab.py:102,
         # posterior_tab.py:232, infer_tab.py:150)
-        "new_run": ("Answer 'Start a new run anyway' in the dialog in step 3, Training, or tick 'Start a new "
-                    "simulation even if a cache one setting away exists' in step 6, Narrowing round."),
+        "new_run": ("Answer 'Start training on a new simulation set' in the question 'Start training' asks in step 3, "
+                    "Training, or tick 'Start a new simulation even if a cache one setting away exists' in step 6, "
+                    "Narrowing round."),
         "n_directions": "Set it in the 'Directions truncated' box in step 6, Narrowing round.",
         "hpd_level": "Set it in the 'HPD level' box in step 6, Narrowing round.",
         "observation": "Set it in the 'Observation' box in step 6, Narrowing round.",
@@ -3982,6 +3983,97 @@ def test_the_probe_planner_refuses_a_blank_t_obs_through_the_yellow_box(tmp_path
     plan()
     assert refused == [], refused
     assert lines and lines[0][0] == "error" and lines[0][1].startswith("Could not measure Ω₀ from"), lines
+
+
+def test_every_identity_entry_has_an_on_screen_name():
+    """STANDING. Every entry of a saved simulation set's identity, for each kind of observation, is ``model`` or stands
+    in exactly one row of the table of its names on screen, and no row names an entry the identity does not hold: an
+    entry added to the identity without a name on screen fails here. Each row names where a person changes it, a step of
+    the window or none."""
+    from core.artifacts.identity import SimulationIdentity
+    from core.gui import fields as gui_fields, keys
+    from tests._fixtures import _nad_cfg, prior_stub
+    entries = set()
+    for chi in (False, True):
+        entries |= set(SimulationIdentity.from_cfg(_nad_cfg(chi_mode=chi), prior_stub(), 8, 3).to_dict())
+    named = [key for row in gui_fields.IDENTITY_ROWS for key in row[0]]
+    assert len(named) == len(set(named)), "an entry stands in two rows"
+    assert set(named) | {"model"} == entries and "model" not in named, (
+        sorted(entries - set(named) - {"model"}), sorted(set(named) - entries))
+    assert all(place in {step.key for step in keys.STEPS} | {""} and shown for _keys, shown, place in
+               gui_fields.IDENTITY_ROWS)
+
+
+@pytest.mark.parametrize("fields, lines", [
+    ([("n_runs", 10000, 4000)], ["Batches: 10,000 here, 4,000 in this set"]),
+    ([("run_size", 2048, 1024)], ["Simulations per batch: 2,048 here, 1,024 in this set"]),
+    ([("prior_fingerprint", "f_held", "f_gone")],
+     ["Prior: retrain_prior here, a prior no longer in Records in this set"]),
+    ([("param_keys", ["k", "x_scale"], ["k", "t_scale"]), ("nd_lows", [0.1], [0.2])],
+     ["Bounds file: parameters: k, x_scale here, k, t_scale in this set"]),
+    ([("nd_lows", [0.1, 0.2, 0.3], [0.1, 0.25, 0.3]), ("nd_highs", [1.0, 2.0, 3.0], [1.0, 2.5, 3.0]),
+      ("rescale_lows", [1.0, 2.0], [1.5, 2.0])],
+     ["Bounds file: limits of the_second_parameter_whose_name_is_long_enough_to_be_cut_in_a_list: 0.2 to 2 here, 0.25 "
+      "to 2.5 in this set", "Bounds file: lower limit of x_scale: 1 here, 1.5 in this set"]),
+    ([("nd_highs", [1.0, 2.0, 3.0], [1.0, 2.0, 4.0])], ["Bounds file: upper limit of eta: 3 here, 4 in this set"]),
+    ([("spontaneous_only", True, False)], ["Bounds file: forcing section: none here, one in this set"]),
+    ([("chi_mode", True, False), ("mode", "chi", "forced")],
+     ["Kind of observation: a frequency response here, a spontaneous recording and one driven recording in this set"]),
+    ([("chi_mode", True, False)],
+     ["Kind of observation: a frequency response here, not a frequency response in this set"]),
+    ([("chi_k_pad", 12, None)], ["Slots for driven recordings: 12 here, none in this set"]),
+    ([("chi_max_cycles", 6.0, 4.5)], ["Lock-in limit: 6 here, 4.5 in this set"]),
+    ([("reparam_rotate", True, False)], ["Rotation: on here, off in this set"]),
+    ([("units_sha256", "a" * 64, "b" * 64), ("dt_exp", -3.0, -2.0), ("t_max_exp", 1.0, 2.0)],
+     ["Units: the units in use here are not those of this set"]),
+    ([("dt_nd_min", 0.001, 0.002), ("n_grid", 300000, 250000)],
+     ["Time grid: smallest step 0.001 here, smallest step 0.002 in this set; 300,000 points here, 250,000 points in "
+      "this "
+      "set"]),
+    ([("t_scale_bounds", [0.1, 1.0], [0.1, 2.0]), ("steady_idx", 500, 400)],
+     ["Time grid: t_scale from 0.1 to 1 here, t_scale from 0.1 to 2 in this set; steady part from point 500 here, "
+      "steady "
+      "part from point 400 in this set"]),
+    ([("log_params", ["k", "eta"], [])], ["Parameters on a logarithmic range: k, eta here, none in this set"]),
+    ([("chi_f0", 0.15, 0.2)], ["Drive amplitude in training: 0.15 here, 0.2 in this set"]),
+    ([("chi_freq_bounds", [0.03, 0.3], [0.05, 0.3])], ["Frequency band in training: 0.03 to 0.3 here, 0.05 to 0.3 in "
+                                                       "this set"]),
+    ([("truncation", None, {"level": 0.95})], ["Made by a narrowing round: a training never continues it."]),
+    ([("device", "cuda", "cpu"), ("dtype", "torch.float64", "torch.float32")],
+     ["This computer: made on the processor"]),
+    ([("device", "cpu", "cuda")], ["This computer: made on the graphics card"]),
+    ([("dtype", "torch.float64", "torch.float32")],
+     ["This computer: made with numbers of another precision (torch.float32)"]),
+    ([("format", 3, 2), ("summary_flags", ["a"], ["a", "b"]), ("feature_set_version", 5, 4)],
+     ["Made by another version of PRISM"]),
+    ([("chi_layout", "v2", "v1")], ["Made by another version of PRISM"]),
+    ([("model", "NADROWSKI", "HOPF")], []),
+    ([], ["No setting differs: its folder was renamed by hand, so a training does not find it."]),
+    ([("an_entry_of_a_later_version", 1, 2)], ["an_entry_of_a_later_version: 1 here, 2 in this set"]),
+    ([("reparam_rotate", True, False), ("chi_k_pad", 12, 8), ("n_runs", 10000, 4000),
+      ("prior_fingerprint", "f_other", "f_held")],
+     ["Batches: 10,000 here, 4,000 in this set", "Prior: other_prior here, retrain_prior in this set",
+      "Slots for driven recordings: 12 here, 8 in this set", "Rotation: on here, off in this set"]),
+], ids=["batches", "simulations per batch", "the prior", "the parameters", "limits by their parameters",
+        "an upper limit",
+        "the forcing section", "the kind of observation", "the frequency response alone", "the slots",
+        "the lock-in limit",
+        "the rotation", "the units", "the time grid's step and points", "the time grid's scale and steady part",
+        "the logarithmic range", "the drive amplitude", "the frequency band", "a narrowing round", "the computer",
+        "the computer, the other way", "the precision", "another version", "another version, by the layout",
+        "another model", "a folder renamed", "an entry no row names", "the rows' order"])
+def test_the_differences_read_by_their_on_screen_names(fields, lines):
+    """What a saved simulation set differs in, each entry of its identity by its row's name on screen and in the rows'
+    order: a number grouped, a list compared entry by entry and only the entries that differ said, a limit named by its
+    parameter and never cut short, a prior by its label in Records or as no longer there, the units with their times and
+    the time grid's entries each in one line, another version of PRISM said once, another model said nothing of, and a
+    set that differs in nothing said to be a folder renamed by hand."""
+    from core.gui import fields as gui_fields
+    labels = {"f_held": "retrain_prior", "f_other": "other_prior"}
+    names = ["k", "the_second_parameter_whose_name_is_long_enough_to_be_cut_in_a_list", "eta", "x_scale", "t_scale"]
+    said = gui_fields.difference_lines([{"field": key, "mine": mine, "theirs": theirs} for key, mine, theirs in fields],
+                                       prior_label=labels.get, param_keys=names)
+    assert list(said) == lines
 
 
 def test_the_gui_control_table_matches_the_tabs_labels():

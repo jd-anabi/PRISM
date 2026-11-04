@@ -238,36 +238,87 @@ def test_the_simulations_are_counted_for_each_kind_of_observation(kind, slots, e
     assert budget_words(0, 2048, kind, slots) == "" and budget_words(True, 2048, kind, slots) == ""
 
 
-@pytest.mark.parametrize("reading, said", [
-    (_reading(checkpoint="resume_partial", batches_done=3989),
+@pytest.mark.parametrize("reading, differences, said", [
+    (_reading(checkpoint="resume_partial", batches_done=3989), None,
      ("fine", "Continues the saved simulation set: 3,989 of 10,000 batches are done.")),
-    (_reading(checkpoint="resume_complete", batches_done=10000),
+    (_reading(checkpoint="resume_complete", batches_done=10000), None,
      ("fine", "No simulations this time: the saved 20,480,000 are used.")),
-    (_reading(checkpoint="resume_complete", batches_done=10000, width=None),
+    (_reading(checkpoint="resume_complete", batches_done=10000, width=None), None,
      ("fine", "No simulations this time: the saved 10,000 batches are used.")),
-    (_reading(), ("info", "Starts a new simulation set; none is saved for this model yet.")),
+    (_reading(), None, ("info", "Starts a new simulation set; none is saved for this model yet.")),
     (_reading(checkpoint="new_with_siblings", sibling_diffs=(_set(4000, ("n_runs", 10000, 4000)),)),
+     {"eda5c2a1e468": ("Batches: 10,000 here, 4,000 in this set",)},
      ("warn", "Starts a new simulation set. 1 saved set for this model does not match these settings: The set of 4,000 "
-              "batches (complete) differs in Batches: 10000 here, 4000 in that set.")),
+              "batches (complete) differs in Batches: 10,000 here, 4,000 in this set.")),
     (_reading(checkpoint="new_with_siblings", sibling_diffs=(
         _set(4000, ("n_runs", 10000, 4000), ("reparam_rotate", True, False), ("nd_lows", [0.1], [0.2])),
         _set(12, ("run_size", 2048, 1024), complete=False, name="b"))),
+     {"eda5c2a1e468": ("Batches: 10,000 here, 4,000 in this set", "Bounds file: lower limit of k: 0.1 here, 0.2 in "
+                       "this "
+                       "set", "Rotation: on here, off in this set")},
      ("warn", "Starts a new simulation set. 2 saved sets for this model do not match these settings: The set of 4,000 "
-              "batches (complete) differs in Batches: 10000 here, 4000 in that set; Rotation: True here, False in that "
-              "set; nd_lows: [0.1] here, [0.2] in that set. The set of 12 batches (partial) differs in Simulations per "
-              "batch: 2048 here, 1024 in that set.")),
-    (_reading(checkpoint="new_with_siblings", sibling_diffs=(_set(4000, ("model", "NADROWSKI", "HOPF")),)),
+              "batches (complete) differs in Batches: 10,000 here, 4,000 in this set; Bounds file: lower limit of k: "
+              "0.1 "
+              "here, 0.2 in this set; Rotation: on here, off in this set. The set of 12 batches (partial) differs in "
+              "run_size: 2048 here, 1024 in this set.")),
+    (_reading(checkpoint="new_with_siblings", sibling_diffs=(_set(4000),)),
+     {"eda5c2a1e468": ("No setting differs: its folder was renamed by hand, so a training does not find it.",)},
+     ("warn", "Starts a new simulation set. 1 saved set for this model does not match these settings: The set of 4,000 "
+              "batches (complete): No setting differs: its folder was renamed by hand, so a training does not find "
+              "it.")),
+    (_reading(checkpoint="new_with_siblings", sibling_diffs=(_set(4000, ("model", "NADROWSKI", "HOPF")),)), None,
      ("info", "Starts a new simulation set; none is saved for this model yet.")),
 ], ids=["continues a set", "a complete set", "a complete set of no known width", "none saved", "one set that differs",
-        "two sets", "a set of another model"])
-def test_continue_or_new_says_each_state(reading, said):
+        "two sets, the second unnamed by the page", "a set that differs in nothing", "a set of another model"])
+def test_continue_or_new_says_each_state(reading, differences, said):
     """What the training does with the saved simulation sets, as the reading at this budget found them, word for word: it
     continues the set of these settings, uses a complete one, or starts a new one beside none of this model, or beside
-    every set of this model that does not match, each with everything it differs in, by the names this step can give and
-    the identity's own else. A set of another model is not counted. None of these blocks."""
-    facts = training_facts(**{**TRAINING, "reading": reading})
+    every set of this model that does not match, each with everything it differs in, as the page names it by the set's
+    name, and by the identity's own names for a set it named nothing of. A set that differs in nothing says what the
+    page says of it. A set of another model is not counted. None of these blocks."""
+    facts = training_facts(**{**TRAINING, "reading": reading, "differences": differences})
     assert _said(facts) == [said, *FIT_KEPT]
     assert not any(fact.blocks for fact in facts)
+
+
+@pytest.mark.parametrize("never, own, sets, text, items, other", [
+    (False, "", [("Simulation set for retrain_prior (2 Oct 2026, 09:10; 10,000 batches, complete)",
+                  ("Batches: 4,000 here, 10,000 in this set", "Rotation: on here, off in this set")),
+                 ("Simulation set for a prior that is no longer here (12 batches, partial)",
+                  ("Prior: retrain_prior here, a prior no longer in Records in this set",))],
+     "This training will simulate 4,000 batches from zero. Saved simulation sets for this model exist, and none "
+     "matches "
+     "these settings.",
+     ("Simulation set for retrain_prior (2 Oct 2026, 09:10; 10,000 batches, complete) differs in:",
+      "Batches: 4,000 here, 10,000 in this set", "Rotation: on here, off in this set",
+      "Simulation set for a prior that is no longer here (12 batches, partial) differs in:",
+      "Prior: retrain_prior here, a prior no longer in Records in this set"),
+     "Start training on a new simulation set"),
+    (True, "Simulation set for retrain_prior (4,000 batches, partial)",
+     [("Simulation set for retrain_prior (2 Oct 2026, 09:10; 10,000 batches, complete)",
+       ("Batches: 4,000 here, 10,000 in this set",))],
+     "This training will simulate 4,000 batches from zero. Saved simulation sets for this model exist, and none "
+     "will be "
+     "continued.",
+     ("Simulation set for retrain_prior (4,000 batches, partial):",
+      "No setting differs. It is not continued because the simulations of this training are not saved.",
+      "Simulation set for retrain_prior (2 Oct 2026, 09:10; 10,000 batches, complete) differs in:",
+      "Batches: 4,000 here, 10,000 in this set"),
+     "Start training without saving the simulations"),
+], ids=["the sets saved", "with Never, the set it will not continue first"])
+def test_the_question_before_simulating_from_zero_names_each_set_and_what_it_differs_in(never, own, sets, text, items,
+                                                                                         other):
+    """The question asked before a training simulates from zero while saved sets of its model exist, as values: its
+    title, the batches it will simulate, each set by its label with when it was made, its batches and whether it is
+    whole, then what it differs in line by line; with "Never" the set these very settings would continue heads the list,
+    the sentence says none will be continued and the answer says the simulations are not saved."""
+    from core.gui.step_facts import new_set_question, set_words
+    assert set_words("Simulation set for retrain_prior", "2 Oct 2026, 09:10", 10000, True) == (
+        "Simulation set for retrain_prior (2 Oct 2026, 09:10; 10,000 batches, complete)")
+    assert set_words("Simulation set for retrain_prior", "", 12, False) == (
+        "Simulation set for retrain_prior (12 batches, partial)")
+    assert new_set_question(batches=4000, never=never, own=own, sets=sets) == (
+        "Start a new simulation set?", text, items, "To continue one of them, cancel and set these back.", other)
 
 
 def test_with_never_nothing_saved_is_continued_and_nothing_is_read():

@@ -9,7 +9,13 @@ the network, whether a saved simulation set is continued, and, folded, the fit's
 saved and the rotation's three. A setting a training will not read is shown as such and is neither judged nor passed:
 the rotation's three while the rotation is off or the saved set's own is reused. While the simulations are not saved the
 choice of continuing stands at its first choice, greyed, and that choice is what is passed. "Before you start" says what
-the run uses, what it makes, what it does with the saved sets, how long it should take and the memory it may use.
+the run uses, what it makes, what it does with the saved sets, each set of the model it would not continue with what it
+differs in by the names on screen, how long it should take and the memory it may use.
+
+A training that would simulate from zero while saved sets of its model exist asks first, "Cancel" preselected, listing
+each set with what it differs in; with "Never" a set these very settings would continue heads the list. A yes hands the
+stage the consent to start a new set; so does a yes to the same question asked again when the stage refuses a new set
+it finds one setting away from another, whose own sentence is then not shown.
 
 Nothing is read while a run is live: the saved simulation sets, the run history and the records of earlier trainings are
 read by the page's reading alone. The batches and the simulations per batch are remembered as the text of their boxes
@@ -17,13 +23,15 @@ once a training has started with them; the posterior that comes into use is reme
 """
 import math
 from dataclasses import replace
+from datetime import datetime
 
 from PySide6.QtWidgets import QWidget
 
 from core import config, orchestrator
+from core.artifacts import default_store
 from core.refusals import Refusal, default_clause, require_at_least, require_positive
 
-from ... import keys, record_words, settings
+from ... import fields, keys, record_words, settings, texts
 from ...chain import model_label
 from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...remembered import NUM_RUNS_KEY, RUN_SIZE_KEY, put_many
@@ -31,8 +39,10 @@ from ...reported import reported
 from ...run import ends, history
 from ...run.controller import controller
 from ...run.model import RunSpec
-from ...step_facts import (CONTINUING, NO_POSTERIOR_TEXT, START_WORDS, Fact, budget_words, how_long_words,
-                           pending_words, posterior_in_use, training_facts, uses_words)
+from ...step_facts import (CANCEL, CONTINUING, NO_POSTERIOR_TEXT, START_WORDS, Fact, budget_words, how_long_words,
+                           new_set_question, of_this_model, pending_words, posterior_in_use, set_words, training_facts,
+                           uses_words)
+from ...widgets.ask import ask
 from ...widgets.choice import Choice
 from ...widgets.form import NameAndNote, TickedField
 from ...widgets.labeled_inputs import FloatField, IntField
@@ -123,6 +133,14 @@ def _quietly(read, *args, **kwargs):
         return None
 
 
+def _made(created) -> str:
+    """When a record was made, as the window writes a moment: in local time; "" when its record says no moment."""
+    try:
+        return texts.date_text(datetime.fromisoformat(created).astimezone())
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+
+
 def _plain(value):
     """``value`` as a run's history holds it: a name, a number, a truth value or nothing as it is; a list of them as a
     list; anything else by its words."""
@@ -140,6 +158,9 @@ class PosteriorPanel(StepPage):
     def __init__(self, screen, parent=None):
         super().__init__(screen, TITLE, SENTENCE, step="training", parent=parent)
         self._reading = None                 # the saved simulation sets, as the last reading found them at its budget
+        self._never_reading = None           # with "Never", the same at the built-in cadence: which sets exist
+        self._sets_said: dict = {}           # each saved set the last reading found, by its name: its words
+        self._prior_labels: dict = {}        # each prior those sets were made with, by its fingerprint: its label
         self._per_batch = self._per_epoch = None  # the run history's paces, for this size
         self._expected = None                # the epochs the last finished training of this kind ran, and its words
         self._looked = False                 # whether the last reading looked for that training in Records
@@ -341,10 +362,18 @@ class PosteriorPanel(StepPage):
             memory = f"{memory} {ends.last_run_sentence(self._last, self._measured)}"
         field_facts = [Fact("err", line, SETTING_BLOCKS) for line, _said in found.values()]
         names = [fact for fact in (self._names.name_fact(), self._names.note_fact()) if fact]
+        differences = {one.name: self._differs(one) for one in of_this_model(getattr(reading, "sibling_diffs", ()))}
         return training_facts(needs_prior=prior is None, uses=uses, budget=budget, reading=reading,
-                              never=self._never(), resume=self._resume(), batches=batches, how_long=how_long,
-                              memory=memory, others_pending=self._others_pending(), name_facts=names,
-                              field_facts=field_facts)
+                              never=self._never(), resume=self._resume(), batches=batches, differences=differences,
+                              how_long=how_long, memory=memory, others_pending=self._others_pending(),
+                              name_facts=names, field_facts=field_facts)
+
+    def _differs(self, one) -> tuple:
+        """What the saved set ``one`` differs in, line by line, by the names on screen: its limits by the parameters of
+        the configuration held, its prior by the label the last reading found for it."""
+        cfg = self._held()[0]
+        names = [*(getattr(cfg, "params_dict", None) or {}), *(getattr(cfg, "rescale_params", None) or {})]
+        return fields.difference_lines(getattr(one, "fields", ()), prior_label=self._prior_labels.get, param_keys=names)
 
     def _others_pending(self) -> list:
         """The other steps whose page shows changes they have not applied, each with what this run uses of it."""
@@ -369,7 +398,8 @@ class PosteriorPanel(StepPage):
         folder, here = controller().folder(), computer()
         self._last, self._measured = history.last_on(folder, here), history.last_measured_on(folder, here)
         self._history_read = True
-        self._reading = self._per_batch = self._per_epoch = self._expected = None
+        self._reading = self._never_reading = self._per_batch = self._per_epoch = self._expected = None
+        self._sets_said, self._prior_labels = {}, {}
         self._looked = False
         cfg, prior = self._held()
         budget = self._budget()
@@ -378,6 +408,13 @@ class PosteriorPanel(StepPage):
         num_runs, cap, cadence = budget
         self._reading = orchestrator.training_reading(cfg, prior, num_runs=num_runs, run_size_cap=cap,
                                                       checkpoint_every=cadence)
+        if self._never():
+            # The simulations are not saved, so the reading reads no set: the sets that exist are read at the cadence
+            # the saves are usually made at, for the question a start asks.
+            self._never_reading = orchestrator.training_reading(
+                cfg, prior, num_runs=num_runs, run_size_cap=cap,
+                checkpoint_every=self.form.rows["checkpoint_every"].usual())
+        self._read_the_sets(prior)
         width = getattr(self._reading, "width", None)
         if width:
             self._per_batch = _quietly(history.estimate, folder, word="Training", per="batch",
@@ -393,6 +430,76 @@ class PosteriorPanel(StepPage):
         # The last finished training's alone: the epochs typed are the form's, read at each drawing.
         self._expected = controller().expected_epochs(replace(spec, expected_epochs=None))
         self._looked = True
+
+    def _read_the_sets(self, prior) -> None:
+        """How the question names each saved set of the model the readings found: by its label in Records, the prior it
+        was made with by that prior's label, with when it was made; and the label of each prior those sets differ in.
+        What cannot be read is named without it."""
+        held = getattr(prior, "fingerprint", None)
+        in_use = getattr(prior, "name", None) or record_words.label_of(prior)
+        labels = {held: in_use} if held else {}
+        sets = [*of_this_model(getattr(self._reading, "sibling_diffs", ())),
+                *of_this_model(getattr(self._never_reading, "sibling_diffs", ()))]
+        if not sets:
+            self._prior_labels = labels
+            return
+        store = default_store()
+        for one in sets:
+            for field in getattr(one, "fields", ()) or ():
+                if field.get("field") == "prior_fingerprint":
+                    for value in (field.get("mine"), field.get("theirs")):
+                        if value and value not in labels:
+                            labels[value] = self._prior_label(store, value)
+        self._prior_labels = labels
+        for one in sets:
+            made = ""
+            try:
+                made = _made(store.get("simulation", one.name).created)
+            except Exception:                # noqa: BLE001 -- a set whose record cannot be read is named without when
+                pass
+            theirs = next((field.get("theirs") for field in getattr(one, "fields", ()) or ()
+                           if field.get("field") == "prior_fingerprint"), held)
+            label = record_words.record_label("simulation", "", None, prior_label=labels.get(theirs))
+            self._sets_said[one.name] = set_words(label, made, one.batches, one.complete)
+
+    @staticmethod
+    def _prior_label(store, fingerprint) -> "str | None":
+        """The label in Records of the prior whose fingerprint is ``fingerprint``; None when no prior there has it."""
+        try:
+            found = store.find_prior_by_fingerprint(fingerprint)
+        except Exception:                    # noqa: BLE001 -- a store that cannot be read names no prior
+            return None
+        if found is None:
+            return None
+        try:
+            made = datetime.fromisoformat(found.created).astimezone()
+        except (TypeError, ValueError, OverflowError, OSError):
+            made = None
+        return record_words.record_label("prior", found.name, made)
+
+    def _from_zero(self) -> "tuple | None":
+        """The question a start asks before it simulates from zero while saved sets of its model exist, as
+        ``new_set_question`` gives it, from the last reading; None when it would continue its own set, or when no set of
+        its model is saved or could be read. With "Never" the reading at the usual cadence says which sets exist, and a
+        set these very settings would continue heads the list."""
+        never = self._never()
+        reading = self._never_reading if never else self._standing_reading()
+        if reading is None:
+            return None
+        state, own = getattr(reading, "checkpoint", None), ""
+        if state in CONTINUING:
+            if not never:
+                return None
+            held = self._held()[1]
+            in_use = getattr(held, "name", None) or record_words.label_of(held)
+            own = set_words(record_words.record_label("simulation", "", None, prior_label=in_use), "",
+                            reading.batches_done, state == "resume_complete")
+        sets = [(self._sets_said.get(one.name) or set_words(record_words.record_label("simulation", "", None), "",
+                                                             one.batches, one.complete), self._differs(one))
+                for one in of_this_model(getattr(reading, "sibling_diffs", ()))]
+        if not own and not sets:
+            return None
+        return new_set_question(batches=self.form.rows["num_runs"].value(), never=never, own=own, sets=sets)
 
     def _stage_values(self) -> dict:
         """The settings the stage would be handed now, as far as they pass their rules: for the run's facts."""
@@ -431,13 +538,49 @@ class PosteriorPanel(StepPage):
         except Refusal as refused:
             self._refusal(refused)
             return
+        new_run = False
+        question = self._from_zero()
+        if question is not None:
+            if not self._asked_from_zero(question):
+                return
+            new_run = True
+        self._start(knobs, new_run)
+
+    def _asked_from_zero(self, question) -> bool:
+        """Ask the question before simulating from zero, "Cancel" preselected; True for the answer that starts."""
+        title, sentence, items, beneath, other = question
+        return ask(self, title, sentence, CANCEL, other, items=items, beneath=beneath)
+
+    def _start(self, knobs: dict, new_run: bool) -> None:
+        """Start the training on the configuration and the prior held, with ``knobs`` and the consent to start a new
+        simulation set, ``new_run``; once it has started, the name and the note it was handed are kept, and the batches
+        and the simulations per batch remembered."""
+        cfg, prior = self._held()
         handed = (self._names.name_value(), self._names.note_value())
         started = self.dispatch(orchestrator.build_posterior, cfg, prior, None, True, name=handed[0], note=handed[1],
-                                resume=self._resume(), new_run=False, if_name_taken="unnamed", provide_fig_sink=True,
+                                resume=self._resume(), new_run=new_run, if_name_taken="unnamed", provide_fig_sink=True,
                                 on_result=self._on_posterior, **knobs)
         if started:
             self._handed = handed
             put_many([(NUM_RUNS_KEY, str(knobs["num_runs"])), (RUN_SIZE_KEY, str(knobs["run_size_cap"]))])
+
+    def _refusal(self, exc) -> None:
+        """A refusal, as every page tells one; but the stage's refusal of a new simulation set beside a saved one a
+        setting away is no box: the page reads again and asks the question before simulating from zero, the stage's
+        sentence unshown, and a yes starts the training again with the consent. A field that now breaks its rule is told
+        as any refusal is."""
+        if getattr(exc, "field", None) != "new_run" or controller().is_live() or self._held()[1] is None:
+            super()._refusal(exc)
+            return
+        self.read_facts()
+        try:
+            knobs = self._read_knobs()
+        except Refusal as refused:
+            super()._refusal(refused)
+            return
+        question = self._from_zero() or new_set_question(batches=knobs["num_runs"], never=self._never())
+        if self._asked_from_zero(question):
+            self._start(knobs, True)
 
     def run_spec(self, fn, *args, **kwargs) -> RunSpec:
         """A training, which writes a posterior, its simulation set and its kept training, and may be tried again: with

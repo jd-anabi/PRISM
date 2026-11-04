@@ -2491,6 +2491,297 @@ def _a_saved_set(page, batches, *, complete=False) -> None:
                          batches, complete=complete)
 
 
+def _a_set_beside(page, batches, *, complete=True, manifest=False, **changed) -> str:
+    """A saved simulation set in the store in use, made with the settings the Training page holds now but those
+    ``changed``, entry by entry of its identity, as the engine names it; with ``manifest`` its record too, as the engine
+    writes one. Returns its folder's name."""
+    from core import orchestrator
+    from core.artifacts import default_store, write_simulation_manifest
+    from tests._fixtures import write_simulation_set
+    cfg, prior = page.session.cfg, page.session.inf_prior
+    page.read_facts()
+    width, runs = page._reading.width, page.form.rows["num_runs"].value()
+    identity = {**orchestrator.training_identity(cfg, prior, width, runs), **changed}
+    folder = write_simulation_set(default_store().kind_dir("simulation"), identity, batches, complete=complete)
+    if manifest:
+        write_simulation_manifest(folder, identity, batches_done=batches, complete=complete)
+    return folder.name
+
+
+def _a_budget(page, runs="777", cap="32") -> None:
+    """The batches and the simulations per batch typed, so that a set's identity is the same at every width."""
+    rows = page.form.rows
+    rows["num_runs"].widget.setText(runs)
+    rows["run_size_cap"].widget.ticked_box.setChecked(False)
+    rows["run_size_cap"].widget.field.setText(cap)
+
+
+def _made_words(name) -> str:
+    """When the saved set ``name`` was made, as its record says it, in the window's words."""
+    from datetime import datetime
+    from core.artifacts import default_store
+    from core.gui import texts
+    return texts.date_text(datetime.fromisoformat(default_store().get("simulation", name).created).astimezone())
+
+
+def test_a_saved_set_of_this_model_asks_first_and_lists_every_difference(tmp_path, monkeypatch):
+    """A training that would simulate from zero while saved sets of its model exist asks first, "Cancel" preselected:
+    the batches it will simulate, then each set by its label in Records with when it was made where its record says,
+    what it holds and whether it is whole, the most batches first, each followed by every setting it differs in by its
+    name on screen with both values, a set made with another prior naming that prior by its label. A set of another
+    model is not listed. "Cancel" starts nothing; the other answer starts the training with the consent to start a new
+    set and every other argument as the press reads it. A reading that cannot read the saved sets says so among the
+    facts, blocks nothing and asks nothing, and the training then starts without the consent."""
+    from core.artifacts import default_store
+    from core.SBI import training_checkpoint
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        _a_budget(page)
+        rotate = bool(screen.session.cfg.reparam_rotate)
+        other = _prior_artifact(default_store(), _nad_cfg(), name="other_prior", seed=1).fingerprints["gmm"]
+        whole = _a_set_beside(page, 4000, manifest=True, n_runs=4000, run_size=1024, reparam_rotate=not rotate)
+        _a_set_beside(page, 12, complete=False, prior_fingerprint=other)
+        _a_set_beside(page, 900, model="HOPF")
+        page.read_facts()
+        page._main_clicked()
+        question = asked()
+        assert (question.title, question.answers, question.default) == (
+            "Start a new simulation set?", ("Start training on a new simulation set", "Cancel"), "Cancel")
+        assert question.sentence == ("This training will simulate 777 batches from zero. Saved simulation sets for "
+                                     "this "
+                                     "model exist, and none matches these settings.")
+        words = {True: "on", False: "off"}
+        assert question.items == (
+            f"Simulation set for retrain_prior ({_made_words(whole)}; 4,000 batches, complete) differs in:",
+            "Batches: 777 here, 4,000 in this set", "Simulations per batch: 32 here, 1,024 in this set",
+            f"Rotation: {words[rotate]} here, {words[not rotate]} in this set",
+            "Simulation set for other_prior (12 batches, partial) differs in:",
+            "Prior: retrain_prior here, other_prior in this set"), question.items
+        assert question.beneath == "To continue one of them, cancel and set these back."
+        assert stand_in.calls == [], "Cancel started the training"
+        choose(monkeypatch, words="Start training on a new simulation set")
+        page._main_clicked()
+        _the_call(stand_in, 1)
+        _args, kwargs = stand_in.calls[-1]
+        assert (kwargs["new_run"], kwargs["num_runs"], kwargs["run_size_cap"], kwargs["name"]) == (True, 777, 32,
+                                                                                                    "retrain_2")
+        stand_in.release(None)
+        _settle_the_run()
+        forget_asked()
+        monkeypatch.setattr(training_checkpoint, "peek",
+                            lambda path: (_ for _ in ()).throw(OSError("the disk said no")))
+        page.names.name.setText("retrain_3")
+        page.read_facts()
+        said = [row.sentence.plain_text() for row in page.foot.facts.rows()]
+        assert "Attention. The saved simulation sets could not be read: OSError: the disk said no." in said, said
+        assert page.foot.main_button.isEnabled()
+        page._main_clicked()
+        assert all_asked() == [], "a reading that could not read the sets asked a question"
+        _the_call(stand_in, 2)
+        assert stand_in.calls[-1][1]["new_run"] is False
+        stand_in.release(None)
+        _settle_the_run()
+
+
+def _the_call(stand_in, count) -> None:
+    """Turn the event loop until the stand-in stage has been called ``count`` times in all."""
+    from tests._runs import turn_until
+    turn_until(qt_app(), lambda: len(stand_in.calls) == count, 10.0)
+
+
+def _settle_the_run() -> None:
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    turn_until(qt_app(), lambda: not controller().is_live(), 10.0)
+
+
+def test_a_set_of_another_model_is_not_listed_and_a_rounds_set_says_so(tmp_path, monkeypatch):
+    """A saved set made for another model is that model's, and the question does not list it; with no other set saved
+    beside it, nothing is asked and the training starts without the consent. A set a narrowing round made is listed like
+    any other, and says that a training never continues it."""
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        _a_budget(page)
+        _a_set_beside(page, 900, model="HOPF")
+        page.read_facts()
+        page._main_clicked()
+        _the_call(stand_in, 1)
+        assert all_asked() == [] and stand_in.calls[-1][1]["new_run"] is False
+        stand_in.release(None)
+        _settle_the_run()
+        page.names.name.setText("retrain_3")
+        _a_set_beside(page, 40, truncation={"level": 0.95, "dims": [0, 1]})
+        page.read_facts()
+        page._main_clicked()
+        assert asked().items == ("Simulation set for retrain_prior (40 batches, complete) differs in:",
+                                 "Made by a narrowing round: a training never continues it."), asked().items
+        assert len(stand_in.calls) == 1, "Cancel started the training"
+
+
+def test_with_never_the_question_lists_the_set_it_will_not_continue(tmp_path, monkeypatch):
+    """With "Never" the simulations are not saved and nothing is continued, so the sets that exist are read once more at
+    the cadence the saves are usually made at, with the batches and the simulations per batch typed: a set these very
+    settings would continue heads the list, as one no setting differs from, and the question then says none will be
+    continued and its answer that the simulations are not saved; with no such set, the others of the model are listed.
+    The answer starts the training with no saves and the consent."""
+    from core import config, orchestrator
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        _a_budget(page)
+        own = _a_set_beside(page, 300, complete=False)
+        rows = page.form.rows
+        rows["checkpoint_every"].widget.field.setText("25")
+        rows["checkpoint_every"].widget.ticked_box.setChecked(True)
+        read, kept = [], orchestrator.training_reading
+        monkeypatch.setattr(orchestrator, "training_reading", lambda *args, **kwargs: (
+            read.append({key: kwargs[key] for key in ("num_runs", "run_size_cap", "checkpoint_every")}),
+            kept(*args, **kwargs))[1])
+        page.read_facts()
+        assert read == [{"num_runs": 777, "run_size_cap": 32, "checkpoint_every": 0},
+                        {"num_runs": 777, "run_size_cap": 32, "checkpoint_every": config.TRAINING_CHECKPOINT_EVERY}]
+        said = [row.sentence.plain_text() for row in page.foot.facts.rows()]
+        assert ("Attention. The simulations of this training are not saved, so no saved simulation set is continued."
+                in said), said
+        page._main_clicked()
+        question = asked()
+        assert question.sentence == ("This training will simulate 777 batches from zero. Saved simulation sets for "
+                                     "this "
+                                     "model exist, and none will be continued.")
+        assert question.items == (
+            "Simulation set for retrain_prior (300 batches, partial):",
+            "No setting differs. It is not continued because the simulations of this training are not saved.")
+        assert question.answers == ("Start training without saving the simulations", "Cancel")
+        assert question.default == "Cancel" and stand_in.calls == []
+        import shutil
+        from core.artifacts import default_store
+        shutil.rmtree(default_store().kind_dir("simulation") / own)
+        rows["checkpoint_every"].widget.ticked_box.setChecked(False)
+        _a_set_beside(page, 4000, n_runs=4000)
+        rows["checkpoint_every"].widget.ticked_box.setChecked(True)
+        page.read_facts()
+        choose(monkeypatch, words="Start training without saving the simulations")
+        page._main_clicked()
+        assert asked().items == ("Simulation set for retrain_prior (4,000 batches, complete) differs in:",
+                                 "Batches: 777 here, 4,000 in this set"), asked().items
+        _the_call(stand_in, 1)
+        _args, kwargs = stand_in.calls[-1]
+        assert (kwargs["checkpoint_every"], kwargs["new_run"], kwargs["resume"]) == (0, True, "auto")
+        stand_in.release(None)
+        _settle_the_run()
+
+
+#: The stage's own sentence when it refuses a new set beside a saved one a setting away, as it words it.
+NEAR_MISS = ("This run would start a NEW simulation cache from zero, but a committed cache ONE setting away exists. If "
+             "you meant to continue that cache, set n_runs back to 4000. To start a new cache anyway, pass "
+             "new_run=True.")
+
+
+def test_a_new_run_refusal_asks_the_question_and_shows_no_engine_sentence(tmp_path, monkeypatch):
+    """A set saved one setting away between the press and the stage's entry: the stage refuses the new set, and the
+    page, in place of a box, reads again and asks the question before simulating from zero, which lists that set; its
+    answer starts the training again, its call the first's with the consent. "Cancel" starts nothing. Either way, the
+    stage's sentence is in no box, no question and no fact."""
+    from core.refusals import Refusal
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        _a_budget(page)
+        page.read_facts()
+        for answer in ("Start training on a new simulation set", "Cancel"):
+            forget_asked()
+            choose(monkeypatch, words=answer)
+            before = len(stand_in.calls)
+            page._main_clicked()
+            _the_call(stand_in, before + 1)
+            assert all_asked() == []
+            first_args, first_kwargs = stand_in.calls[-1]
+            assert first_kwargs["new_run"] is False
+            name = _a_set_beside(page, 4000, n_runs=4000)
+            stand_in.fail(Refusal(NEAR_MISS, field="new_run"))
+            if answer == "Cancel":
+                _settle_the_run()
+                assert len(stand_in.calls) == before + 1, "Cancel started the training"
+            else:
+                from core.gui.run.controller import controller
+                from tests._runs import turn_until
+                turn_until(qt_app(), lambda: len(stand_in.calls) == before + 2 and controller().is_live(), 10.0)
+                assert stand_in.calls[-1] == (first_args, {**first_kwargs, "new_run": True})
+                stand_in.release(None)
+                _settle_the_run()
+            question, = all_asked()
+            assert question.title == "Start a new simulation set?" and question.items == (
+                "Simulation set for retrain_prior (4,000 batches, complete) differs in:",
+                "Batches: 777 here, 4,000 in this set"), (answer, question.items)
+            told = [question.sentence, question.beneath, *question.items, page.in_use.said.sentence.plain_text(),
+                    *(row.sentence.plain_text() for row in page.foot.facts.rows())]
+            assert not [words for words in told if "new_run" in words or "NEW simulation cache" in words], told
+            import shutil
+            from core.artifacts import default_store
+            shutil.rmtree(default_store().kind_dir("simulation") / name)
+            page.names.name.setText("retrain_3")
+            page.read_facts()
+
+
+def test_the_consent_to_a_new_set_travels_with_every_repeat_of_the_call(tmp_path, monkeypatch):
+    """A training started with the consent to start a new simulation set beside a saved one hands that consent on with
+    its own call: the window's try after the graphics card ran out of memory before a batch was saved repeats it, which
+    the stage would otherwise refuse beside that set, as the stand-in stage refuses it here; "Continue from batch N" and
+    "Resume the training" repeat it too, where it changes nothing the stage does."""
+    import torch
+    from core import orchestrator
+    from core.artifacts import default_store
+    from core.gui.run.controller import controller
+    from core.refusals import Refusal
+    from tests._fixtures import build_fit_record
+    from tests._runs import RunText, note, to_the_fit, to_the_simulation, turn_until
+    app = qt_app()
+    folder = tmp_path / "simulations" / "_unnamed__20261003T030211"
+    folder.mkdir(parents=True)
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        held, view = controller(), page.run_view
+        text = RunText(held)
+        _a_budget(page)
+        _a_set_beside(page, 4000, n_runs=4000)
+        refused = []
+
+        def stage(*args, **kwargs):
+            if not kwargs.get("new_run") and kwargs.get("resume") != "require" and kwargs.get("resume_fit") is None:
+                refused.append(kwargs)
+                raise Refusal(NEAR_MISS, field="new_run")
+            return stand_in(*args, **kwargs)
+
+        monkeypatch.setattr(orchestrator, "build_posterior", stage)
+        choose(monkeypatch, words="Start training on a new simulation set")
+        page.read_facts()
+        page._main_clicked()
+        _the_call(stand_in, 1)
+        first_args, first_kwargs = stand_in.calls[-1]
+        assert first_kwargs["new_run"] is True
+        lack = RuntimeError("the simulation of batch 1 failed")
+        lack.__cause__ = RuntimeError("CUDA error: out of memory")
+        stand_in.fail(lack)
+        turn_until(app, lambda: held.status.state == "retrying", 10.0)
+        held._clock.advance(60)
+        held.tick()
+        turn_until(app, lambda: len(stand_in.calls) == 2 and held.status.state == "running", 10.0)
+        assert stand_in.calls[-1] == (first_args, first_kwargs)
+        torch.save({"batches_done": 236, "complete": False}, folder / "state.pt")
+        to_the_simulation(app, stand_in, text, held, folder, 236)
+        stand_in.fail(OSError(28, "No space left on device"))
+        turn_until(app, lambda: not held.is_live(), 10.0)
+        view.continue_button.click()
+        turn_until(app, lambda: len(stand_in.calls) == 3)
+        assert stand_in.calls[-1] == (first_args, {**first_kwargs, "resume": "require"})
+        kept = build_fit_record(default_store(), passes=3)
+        stand_in.kept_fit = note(kept, passes=3)
+        to_the_fit(app, stand_in, text, held._clock, folder, ((1, 0), (2, 1), (3, 2)), again=False)
+        choose(monkeypatch, words="Stop training")
+        view.stop_button.click()
+        turn_until(app, lambda: not held.is_live(), 10.0)
+        view.resume_button.click()
+        turn_until(app, lambda: len(stand_in.calls) == 4)
+        assert stand_in.calls[-1] == (first_args, {**first_kwargs, "resume": "require", "resume_fit": kept})
+        assert refused == [], "a repeat of the call lost its consent"
+        stand_in.release(None)
+        turn_until(app, lambda: not held.is_live(), 10.0)
+
+
 def test_a_blank_rotation_setting_does_not_stop_a_training_that_will_not_read_it(tmp_path, monkeypatch):
     """The rotation's three are read only while the rotation is computed afresh. With the rotation off, or a saved set of
     these settings continued, whose own rotation is reused, they are greyed with the reason under them, are not judged,

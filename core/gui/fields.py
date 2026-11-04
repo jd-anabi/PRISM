@@ -30,6 +30,10 @@ Four settings stand only on the Training page, for its own run: the checkpoint c
 policy, the epoch limit and the expected epochs. A page of the old kind, whose run reads none of them
 from a box, names no box for them (``ON_TRAINING_ALONE``).
 
+A saved simulation set that a training would not continue is told by what it differs in, each entry of its identity
+by its name on screen (``IDENTITY_ROWS``, ``difference_lines``): a list compared entry by entry, each limit by its
+parameter's name, every value whole.
+
 A place is written in the words the rail's places are written in (``keys.place_words``), and several
 are joined as ``keys.places_words`` joins them, so a place is named in one table and its joining is
 written in one place. ``num_runs`` and ``run_size_cap`` sit in both training and the narrowing round
@@ -70,8 +74,9 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "run_size_cap": (("training", "narrowing"), "Simulations per batch"),
     "checkpoint_every": ("training", "Save the simulations every … batches"),
     "resume": ("training", "Continue or start new"),
-    "new_run": (f"Answer 'Start a new run anyway' in the dialog {_in('training')}, or tick 'Start a "
-                f"new simulation even if a cache one setting away exists' {_in('narrowing')}."),
+    "new_run": (f"Answer 'Start training on a new simulation set' in the question 'Start training' asks "
+                f"{_in('training')}, or tick 'Start a new simulation even if a cache one setting away exists' "
+                f"{_in('narrowing')}."),
     # the kept training to resume: no control yet, its Resume comes with the window's training page
     "resume_fit": None,
     # the narrowing round
@@ -212,6 +217,168 @@ ON_THIS_PAGE: dict[str, str] = {
     "name": "Choose another name in 'Name' on this page.",
     "note": "Change it in 'Note' on this page.",
 }
+
+
+#: A saved simulation set's identity as a person reads it, row by row: the entries a row folds into its one line, what
+#: the line is called, and the step where a person changes them ("" where no page of the window does). ``model`` stands
+#: in no row: a set of another model is that model's own, and is not listed.
+IDENTITY_ROWS: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (("n_runs",), "Batches", "training"),
+    (("run_size",), "Simulations per batch", "training"),
+    (("prior_fingerprint",), "Prior", "prior"),
+    (("param_keys", "nd_lows", "nd_highs", "rescale_lows", "rescale_highs"), "Bounds file", "prior"),
+    (("spontaneous_only",), "Bounds file: forcing section", "prior"),
+    (("chi_mode", "mode"), "Kind of observation", "model"),
+    (("chi_k_pad",), "Slots for driven recordings", "model"),
+    (("chi_max_cycles",), "Lock-in limit", "model"),
+    (("reparam_rotate",), "Rotation", "model"),
+    (("units_sha256", "dt_exp", "t_min_exp", "t_max_exp"), "Units", "model"),
+    (("t_scale_bounds", "dt_nd_min", "n_grid", "steady_idx"), "Time grid", "prior"),
+    (("log_params",), "Parameters on a logarithmic range", ""),
+    (("chi_f0",), "Drive amplitude in training", ""),
+    (("chi_freq_bounds",), "Frequency band in training", ""),
+    (("truncation",), "Made by a narrowing round: a training never continues it.", ""),
+    (("device", "dtype"), "This computer", ""),
+    (("format", "summary_flags", "feature_set_version", "chi_layout", "chi_elem_w"), "Made by another version of PRISM",
+     ""),
+)
+#: How a kind of observation reads in a difference.
+_KINDS = {"chi": "a frequency response", "forced": "a spontaneous recording and one driven recording",
+          "spontaneous": "a spontaneous recording only"}
+#: How each entry of the time grid reads on each side.
+_GRID = {"t_scale_bounds": "t_scale from {}", "dt_nd_min": "smallest step {}", "n_grid": "{} points",
+         "steady_idx": "steady part from point {}"}
+DIFFERS_TEXT = "{}: {} here, {} in this set"
+NO_DIFFERENCE_TEXT = "No setting differs: its folder was renamed by hand, so a training does not find it."
+NO_PRIOR_TEXT = "a prior no longer in Records"
+UNITS_TEXT = "Units: the units in use here are not those of this set"
+OTHER_VERSION_TEXT = "Made by another version of PRISM"
+MADE_ON_TEXT = "This computer: made on {}"
+PRECISION_TEXT = "This computer: made with numbers of another precision ({})"
+
+
+def _said(value) -> str:
+    """A value of an identity as a line says it, whole: a whole number grouped, a fraction as briefly as it can be
+    written exactly enough, a list entry by entry, nothing as "none"."""
+    if value is None:
+        return "none"
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    if isinstance(value, int):
+        return f"{value:,}"
+    if isinstance(value, float):
+        return f"{value:g}"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_said(one) for one in value) or "none"
+    return str(value)
+
+
+def _span(value) -> str:
+    """A pair of limits as "0.1 to 1"; anything else as ``_said`` says it."""
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return f"{_said(value[0])} to {_said(value[1])}"
+    return _said(value)
+
+
+def _limits(differs: dict, param_keys) -> list:
+    """The limits a set differs in, one line for each parameter whose limit differs, named from ``param_keys``, the
+    parameters of this training, the model's first and the scales after them: both limits when both differ, else the
+    one that does. A limit with no name to give is named by its place."""
+    keys, lines = list(param_keys or ()), []
+    for low, high in (("nd_lows", "nd_highs"), ("rescale_lows", "rescale_highs")):
+        ends = {name: differs[name] for name in (low, high) if name in differs}
+        if not ends:
+            continue
+        count = max(len(end.get(side) or ()) for end in ends.values() for side in ("mine", "theirs"))
+        start = 0 if low == "nd_lows" else max(len(keys) - count, 0)
+        for at in range(count):
+            said = {}
+            for name, end in ends.items():
+                mine, theirs = (end.get(side) or () for side in ("mine", "theirs"))
+                one, two = (values[at] if at < len(values) else None for values in (mine, theirs))
+                if one != two:
+                    said[name] = (one, two)
+            if not said:
+                continue
+            index = start + at
+            called = keys[index] if index < len(keys) else f"parameter {index + 1}"
+            if len(said) == 2:
+                lines.append(DIFFERS_TEXT.format(f"Bounds file: limits of {called}",
+                                                 *(f"{_said(said[low][side])} to {_said(said[high][side])}"
+                                                   for side in (0, 1))))
+            else:
+                (name, (one, two)), = said.items()
+                end = "lower" if name == low else "upper"
+                lines.append(DIFFERS_TEXT.format(f"Bounds file: {end} limit of {called}", _said(one), _said(two)))
+    return lines
+
+
+def difference_lines(fields, *, prior_label, param_keys=None) -> tuple:
+    """What a saved simulation set differs in, one line for each row of ``IDENTITY_ROWS`` it differs in, in the rows'
+    order, then any entry no row names, by its own name: ``fields`` holds one ``{"field", "mine", "theirs"}`` for each
+    entry of the identity that differs, as the engine lists them. A list is compared entry by entry, and only the
+    entries that differ are said; a limit is named by its parameter, from the parameter names this training holds,
+    ``param_keys`` (a limit is named by its place when they are not handed); a prior by its label, ``prior_label`` of
+    its fingerprint, or as no longer in Records when that answers nothing. Nothing is cut short. A set that differs in
+    nothing is a folder renamed by hand, and is said so. ``model`` gives no line."""
+    differs = {}
+    for one in fields or ():
+        if isinstance(one, dict) and isinstance(one.get("field"), str):
+            differs[one["field"]] = one
+    if not differs:
+        return (NO_DIFFERENCE_TEXT,)
+
+    def both(key):
+        return differs[key].get("mine"), differs[key].get("theirs")
+
+    lines, named = [], {"model"}
+    for keys_, shown, _place in IDENTITY_ROWS:
+        named |= set(keys_)
+        here = [key for key in keys_ if key in differs]
+        if not here:
+            continue
+        if keys_[0] in ("n_runs", "run_size", "chi_k_pad", "chi_max_cycles", "reparam_rotate", "chi_f0", "log_params"):
+            lines.append(DIFFERS_TEXT.format(shown, *(_said(value) for value in both(keys_[0]))))
+        elif keys_[0] == "prior_fingerprint":
+            lines.append(DIFFERS_TEXT.format(shown, *((prior_label(value) or NO_PRIOR_TEXT) for value in
+                                                      both("prior_fingerprint"))))
+        elif keys_[0] == "param_keys":
+            if "param_keys" in differs:
+                lines.append(DIFFERS_TEXT.format("Bounds file: parameters", *(_said(list(value or ())) for value in
+                                                                                both("param_keys"))))
+            else:
+                lines += _limits(differs, param_keys)
+        elif keys_[0] == "spontaneous_only":
+            lines.append(DIFFERS_TEXT.format(shown, *("none" if value else "one"
+                                                     for value in both("spontaneous_only"))))
+        elif keys_[0] == "chi_mode":
+            if "mode" in differs:
+                words = [_KINDS.get(value, _said(value)) for value in both("mode")]
+            else:
+                words = ["a frequency response" if value else "not a frequency response" for value in both("chi_mode")]
+            lines.append(DIFFERS_TEXT.format(shown, *words))
+        elif keys_[0] == "units_sha256":
+            lines.append(UNITS_TEXT)
+        elif keys_[0] == "t_scale_bounds":
+            lines.append(f"{shown}: " + "; ".join(
+                f"{_GRID[key].format(_span(differs[key].get('mine')))} here, "
+                f"{_GRID[key].format(_span(differs[key].get('theirs')))} in this set"
+                for key in keys_ if key in differs))
+        elif keys_[0] == "chi_freq_bounds":
+            lines.append(DIFFERS_TEXT.format(shown, *(_span(value) for value in both("chi_freq_bounds"))))
+        elif keys_[0] == "truncation":
+            lines.append(shown)
+        elif keys_[0] == "device":
+            if "device" in differs:
+                theirs = differs["device"].get("theirs")
+                lines.append(MADE_ON_TEXT.format("the graphics card" if theirs == "cuda" else "the processor"))
+            else:
+                lines.append(PRECISION_TEXT.format(_said(differs["dtype"].get("theirs"))))
+        else:
+            lines.append(OTHER_VERSION_TEXT)
+    for key in sorted(set(differs) - named):
+        lines.append(DIFFERS_TEXT.format(key, *(_said(value) for value in both(key))))
+    return tuple(lines)
 
 
 def label(key: str) -> str:

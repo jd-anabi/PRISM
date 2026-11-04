@@ -421,7 +421,8 @@ NONE_SAVED_SET_TEXT = "Starts a new simulation set; none is saved for this model
 ONE_NOT_MATCHING_TEXT = "Starts a new simulation set. 1 saved set for this model does not match these settings:"
 NOT_MATCHING_TEXT = "Starts a new simulation set. {} saved sets for this model do not match these settings:"
 SET_DIFFERS_TEXT = "the set of {:,} batches ({}) differs in {}"
-DIFFERENCE_TEXT = "{}: {} here, {} in that set"
+SET_SAID_TEXT = "the set of {:,} batches ({}): {}"
+DIFFERENCE_TEXT = "{}: {} here, {} in this set"
 NOT_SAVED_TEXT = "The simulations of this training are not saved, so no saved simulation set is continued."
 SETS_UNREAD_TEXT = "The saved simulation sets could not be read: {}."
 NOTHING_TO_CONTINUE_TEXT = "There is no saved simulation set to continue."
@@ -442,11 +443,6 @@ POSTERIOR_IN_USE_TEXT = "{:,} epochs, network {} by {}, on {:,} simulations, pri
 POSTERIOR_SAVED_TEXT = "Saved as a record."
 LIMIT_REACHED_TEXT = "The fit reached the epoch limit; the network kept is its last epoch's."
 NO_POSTERIOR_TEXT = "Start a training to make a posterior."
-#: The settings of a saved simulation set this step can name, by the entry of the set's identity: the others are named
-#: as the identity names them.
-DIFFERENCE_NAMES = {"n_runs": "Batches", "run_size": "Simulations per batch", "reparam_rotate": "Rotation",
-                    "chi_mode": "Kind of observation", "mode": "Kind of observation",
-                    "chi_k_pad": "Slots for driven recordings", "chi_max_cycles": "Lock-in limit", "prior_fingerprint": "Prior"}
 #: The states of the saved simulation sets in which a training continues the set of its own settings.
 CONTINUING = ("resume_partial", "resume_complete")
 
@@ -485,15 +481,14 @@ def budget_words(batches, width, kind, slots) -> str:
     return BUDGET_TEXT.format(batches, width, batches * width, each)
 
 
-def _difference(field) -> str:
-    """One setting a saved set differs in, by the name this step gives it, with both values as the set holds them."""
-    if not isinstance(field, dict):
-        return str(field)
-    key = field.get("field")
-    return DIFFERENCE_TEXT.format(DIFFERENCE_NAMES.get(key, str(key)), field.get("mine"), field.get("theirs"))
+def _raw_lines(fields) -> tuple:
+    """What a saved set differs in, by the names its identity gives the entries, for a set the page named no lines
+    of."""
+    return tuple(DIFFERENCE_TEXT.format(one.get("field"), one.get("mine"), one.get("theirs")) if isinstance(one, dict)
+                 else str(one) for one in (fields or ()))
 
 
-def _of_this_model(diffs) -> list:
+def of_this_model(diffs) -> list:
     """The saved sets of ``diffs`` made for the model in use: a set whose model differs is another model's."""
     try:
         held = list(diffs or ())
@@ -503,22 +498,28 @@ def _of_this_model(diffs) -> list:
             if not any(isinstance(field, dict) and field.get("field") == "model" for field in getattr(one, "fields", ()) or ())]
 
 
-def _unmatched_fact(sets) -> Fact:
-    """The saved sets of this model a new set is started beside, each with what it differs in."""
+def _unmatched_fact(sets, differences) -> Fact:
+    """The saved sets of this model a new set is started beside, each with what it differs in: the lines the page
+    named for it in ``differences``, by the set's name, else its identity's own names."""
     head = ONE_NOT_MATCHING_TEXT if len(sets) == 1 else NOT_MATCHING_TEXT.format(len(sets))
     said = []
     for one in sets:
         batches = getattr(one, "batches", None)
         count = batches if isinstance(batches, int) and not isinstance(batches, bool) else 0
-        differs = "; ".join(_difference(field) for field in (getattr(one, "fields", ()) or ())) or "nothing it says"
-        said.append(SET_DIFFERS_TEXT.format(count, "complete" if getattr(one, "complete", False) else "partial", differs))
-    return Fact("warn", " ".join((head, *(f"{one[:1].upper()}{one[1:]}." for one in said))))
+        state = "complete" if getattr(one, "complete", False) else "partial"
+        fields = getattr(one, "fields", ()) or ()
+        lines = differences.get(getattr(one, "name", None)) if isinstance(differences, dict) else None
+        lines = tuple(lines) if lines else _raw_lines(fields)
+        said.append(SET_DIFFERS_TEXT.format(count, state, "; ".join(lines)) if fields and lines
+                    else SET_SAID_TEXT.format(count, state, "; ".join(lines) or "nothing it says"))
+    return Fact("warn", " ".join((head, *(f"{one[:1].upper()}{one[1:].rstrip('.')}." for one in said))))
 
 
-def continue_facts(reading, *, never: bool, resume: str, batches) -> list:
+def continue_facts(reading, *, never: bool, resume: str, batches, differences=None) -> list:
     """What a training does with the saved simulation sets, as the last reading found them, ``reading`` (a training's
     reading of them, or None for none made); and what the choice "Continue or start new", ``resume``, stops. With
-    ``never`` the simulations are not saved, and nothing is read."""
+    ``never`` the simulations are not saved, and nothing is read. ``differences``: what each set of this model that
+    does not match differs in, as the page names it, by the set's name."""
     if never:
         return [Fact("warn", NOT_SAVED_TEXT)]
     if reading is None:
@@ -535,8 +536,8 @@ def continue_facts(reading, *, never: bool, resume: str, batches) -> list:
         facts.append(Fact("fine", NO_SIMULATIONS_TEXT.format(done * width) if width is not None
                           else NO_SIMULATIONS_BATCHES_TEXT.format(done)))
     elif state in ("new", "new_with_siblings"):
-        sets = _of_this_model(getattr(reading, "sibling_diffs", ()))
-        facts.append(_unmatched_fact(sets) if sets else Fact("info", NONE_SAVED_SET_TEXT))
+        sets = of_this_model(getattr(reading, "sibling_diffs", ()))
+        facts.append(_unmatched_fact(sets, differences) if sets else Fact("info", NONE_SAVED_SET_TEXT))
     if resume == "require" and state in ("new", "new_with_siblings"):
         facts.append(Fact("err", NOTHING_TO_CONTINUE_TEXT, NOTHING_TO_CONTINUE_BLOCKS))
     elif resume == "never" and state in CONTINUING:
@@ -597,21 +598,59 @@ def posterior_in_use(label: str, training, config, prior: str) -> tuple[str, str
     return label, said
 
 
+# ── the question before simulating from zero ──
+NEW_SET_TITLE = "Start a new simulation set?"
+NEW_SET_TEXT = ("This training will simulate {:,} batches from zero. Saved simulation sets for this model exist, and "
+                "none matches these settings.")
+NEW_SET_NEVER_TEXT = ("This training will simulate {:,} batches from zero. Saved simulation sets for this model exist, "
+                      "and none will be continued.")
+SET_BACK_TEXT = "To continue one of them, cancel and set these back."
+NEW_SET_ANSWER = "Start training on a new simulation set"
+NOT_SAVED_ANSWER = "Start training without saving the simulations"
+CANCEL = "Cancel"
+OWN_SET_TEXT = "No setting differs. It is not continued because the simulations of this training are not saved."
+SET_IS_TEXT = "{:,} batches, {}"
+
+
+def set_words(label: str, made: str, batches, complete: bool) -> str:
+    """A saved simulation set as the question names it, by its label in Records, then in brackets when it was made,
+    when that is known, the batches it holds and whether it is whole: "Simulation set for retrain_prior (2 Oct 2026,
+    09:10; 10,000 batches, complete)"."""
+    count = _whole(batches) or 0
+    held = SET_IS_TEXT.format(count, "complete" if complete else "partial")
+    return f"{label} ({made}; {held})" if made else f"{label} ({held})"
+
+
+def new_set_question(*, batches, never: bool, own: str = "", sets=()) -> tuple:
+    """The question asked before a training simulates from zero while saved sets of its model exist: its title, its
+    sentence, its items, the sentence beneath them, and the answer that starts it. ``own``: with ``never``, the set
+    these very settings would continue, as ``set_words`` names it, which heads the list; ``sets``: each other set as
+    ``set_words`` names it with what it differs in, line by line. Values in, values out."""
+    items = []
+    if own:
+        items += [f"{own}:", OWN_SET_TEXT]
+    for named, lines in sets:
+        items += [f"{named} differs in:", *lines]
+    text = (NEW_SET_NEVER_TEXT if never else NEW_SET_TEXT).format(_whole(batches) or 0)
+    return NEW_SET_TITLE, text, tuple(items), SET_BACK_TEXT, NOT_SAVED_ANSWER if never else NEW_SET_ANSWER
+
+
 def training_facts(*, needs_prior: bool = False, uses: str = "", budget: str = "", reading=None, never: bool = False,
-                   resume: str = "auto", batches=None, how_long: str = "", memory: str = "",
+                   resume: str = "auto", batches=None, differences=None, how_long: str = "", memory: str = "",
                    others_pending: Sequence[str] = (), name_facts: Sequence[Fact] = (),
                    field_facts: Sequence[Fact] = (), plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
     """The facts of the third step, in the order of its table, those that block first. ``needs_prior``: no prior is in
     use, so nothing can be trained. ``uses`` and ``budget``: what the run uses and how many simulations it makes, said
     when known. ``reading``: the last reading of the saved simulation sets for this budget, or None; ``never``: the
     simulations are not saved; ``resume``, the choice "Continue or start new", and ``batches``, the batches typed, for
-    what the sets say and what the choice stops. Then that the fit is saved and how a resume reads back, or that it
-    cannot be resumed; ``how_long`` and ``memory``, each one sentence or more; ``others_pending``, the sentences of the
-    other steps that hold changes not applied; the name's and the fields' facts; and what the plan in use says. Reads
-    nothing, and raises on nothing a reading or a session holds."""
+    what the sets say and what the choice stops; ``differences``, what each set that does not match differs in, by the
+    set's name, as the page names it. Then that the fit is saved and how a resume reads back, or that it cannot be
+    resumed; ``how_long`` and ``memory``, each one sentence or more; ``others_pending``, the sentences of the other
+    steps that hold changes not applied; the name's and the fields' facts; and what the plan in use says. Reads nothing,
+    and raises on nothing a reading or a session holds."""
     facts = [Fact("lock", NEEDS_A_PRIOR, NEEDS_A_PRIOR_BLOCKS)] if needs_prior else []
     facts += [Fact("info", said) for said in (uses, budget) if said]
-    facts += continue_facts(reading, never=never, resume=resume, batches=batches)
+    facts += continue_facts(reading, never=never, resume=resume, batches=batches, differences=differences)
     facts += [Fact("warn", FIT_LOST_TEXT)] if never else [Fact("info", FIT_SAVED_TEXT), Fact("info", READ_BACK_TEXT)]
     facts += [Fact("info", said) for said in (how_long, memory) if said]
     facts += [Fact("warn", said) for said in others_pending if said]
