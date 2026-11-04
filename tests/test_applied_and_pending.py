@@ -2304,8 +2304,9 @@ def test_the_training_page_built_during_a_run_says_it_has_read_nothing(tmp_path,
 def test_the_run_page_of_a_training_started_on_the_page_keeps_what_was_built_for_it(tmp_path, monkeypatch):
     """A training started by the page's own press has the run's page that a training has: failed during its simulation,
     "Continue from batch N" repeats the page's own call, its name and every setting, with the policy that must continue;
-    the graphics card running out of memory, the window's try a minute later repeats it so too; stopped in its fit, the run's page asks whether to keep the training and offers to resume it, the call then naming
-    the kept training; and both repeat only into the session the page's call was made with."""
+    the graphics card running out of memory, the window's try a minute later repeats it so too; stopped in its fit, the
+    run's page asks whether to keep the training and offers to resume it, the call then naming the kept training; and
+    both repeat only into the session the page's call was made with."""
     import torch
     from core.artifacts import default_store
     from core.gui.run import retry

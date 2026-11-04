@@ -179,7 +179,7 @@ def test_homes_records_row_opens_the_browser_and_the_window_saves_its_state():
     got = {k: qs.value(k) for k in qs.childKeys()}
     qs.endGroup()
     assert got.get("kind") == "posterior", got
-    assert not {"inference_config", "inference_prior", "inference_posterior"} & set(qs.childGroups()),         qs.childGroups()
+    assert not {"inference_config", "inference_prior", "inference_posterior"} & set(qs.childGroups()), qs.childGroups()
 
 
 def test_the_browser_remembers_the_kind_and_the_sort_but_never_the_selection(tmp_path):

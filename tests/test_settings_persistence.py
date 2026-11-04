@@ -1120,7 +1120,8 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
     it. The record holds what was built until the test ends, so a part the test itself dropped is still there
     until then, and goes with the rest on the window's thread: let go of by the collector of cycles, which runs on
     whichever thread is running Python when its turn comes, a window dropped by a test was deleted on a run's worker,
-    and the process ended without a word. The panel a
+    and the process ended without a word. The part dropped here is held in a cycle of its own, as a window is, so it
+    is gone at the second turn only because the record's end collects after its deletes. The panel a
     fixture of this module built is no test's own, and it is still there, still in the set. The two turns run
     together, in this order, in one process: the second alone always fails."""
     import shiboken6
@@ -1138,7 +1139,10 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
         gone = build_part(ReductionPanel)
         gone.deleteLater()
         QCoreApplication.sendPostedEvents(gone, QEvent.DeferredDelete)
-        alone = weakref.ref(build_part(QWidget))
+        dropped = build_part(QWidget)
+        dropped.me = dropped                 # a cycle: only a collection lets it go
+        alone = weakref.ref(dropped)
+        del dropped
         assert alone() is not None, "the record let go of a part its test dropped before the test ended"
         _DROPPED_IN_THE_FIRST_TURN[:] = [alone]
         watched = build_part(QWidget)

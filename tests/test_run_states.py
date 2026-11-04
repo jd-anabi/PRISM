@@ -5025,8 +5025,8 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
     whose end was in sight already is not scrolled again when Keep is answered; and with the full text shown at the
     least size, the Keep the keyboard goes to is brought into sight. Before the page's first run, out of sight, it asks
     for no width of its own, and the form beside the figures of a page that keeps one, the Narrowing round's, keeps its
-    least width; back at the form after its last run it asks for none again. The window is the whole program's, in the look, on a screen as large as this computer's, its
-    form and the run's page sharing the room as they do there."""
+    least width; back at the form after its last run it asks for none again. The window is the whole program's, in the
+    look, on a screen as large as this computer's, its form and the run's page sharing the room as they do there."""
     import torch
     from collections import Counter
     from types import SimpleNamespace

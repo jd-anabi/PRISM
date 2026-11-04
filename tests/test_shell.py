@@ -3807,8 +3807,8 @@ class _CannotBeBuilt(Exception):
 
 
 # What the first opening of a part asks of the card or starts, by name and how often: Parameter inference's six
-# steps are built together, four of them read the card as they are built, and their gates read it again. The list
-# may only shrink: a page that reads the card reads it at a moment of its own, never as it is built.
+# steps are built together, one of them, the Narrowing round, reads the card as it is built, and its gate reads it
+# again. The list may only shrink: a page that reads the card reads it at a moment of its own, never as it is built.
 _READ_AT_FIRST_OPENING = {"inference": {"the device check": 1, "the card's free memory": 2,
                                         "the card's memory held": 2, "the card's memory in use": 2}}
 
