@@ -338,13 +338,14 @@ def hold_open(monkeypatch, seen: list, *, during: Callable[[], None] | None = No
     monkeypatch.setattr(Ask, "exec", held)
 
 
-def held_enter(monkeypatch, seen: list, *, repeats: int = 5) -> None:
+def held_enter(monkeypatch, seen: list, *, repeats: int = 5, line: str | None = None, afresh: bool = True) -> None:
     """Answer every box or question from now until the test ends, or until the next ``choose``, ``hold_open`` or
     ``held_enter``, as a person who holds Enter down as it opens and then presses it again: it is recorded first and
-    shown, modal, by the toolkit's own loop; ``repeats`` repeats of Enter held down are sent where the keyboard is in
-    it, each a press and a release as Windows sends a held key's, and whether it still stands is noted; then Enter
-    pressed afresh, and whether it stands after that, as a pair in ``seen``. A box Enter pressed afresh does not close
-    is closed with nothing, as the guard leaves one. Undone with the test's ``monkeypatch``."""
+    shown, modal, by the toolkit's own loop; ``line``, when handed, is typed into a question that asks for one; then
+    ``repeats`` repeats of Enter held down are sent where the keyboard is in it, each a press and a release as Windows
+    sends a held key's, and whether it still stands is noted; then Enter pressed afresh, unless ``afresh`` is False, and
+    whether it stands after that, as a pair in ``seen``. A box still standing is closed with nothing, as the guard
+    leaves one. Undone with the test's ``monkeypatch``."""
     def held(box) -> int:
         from PySide6.QtCore import QEvent, Qt, QTimer
         from PySide6.QtGui import QKeyEvent
@@ -359,10 +360,13 @@ def held_enter(monkeypatch, seen: list, *, repeats: int = 5) -> None:
                                                          autorepeat))
 
         def held_down() -> None:
+            if line is not None and getattr(box, "field", None) is not None:
+                box.field.setText(line)
             for _ in range(repeats):
                 key(True)
             noted.append(box.isVisible())
-            key(False)
+            if afresh:
+                key(False)
             noted.append(box.isVisible())
             if box.isVisible():
                 box.done(0)

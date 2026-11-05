@@ -832,6 +832,10 @@ class PriorPanel(StepPage):
         self.waiting_line.setVisible(True)
         self.redraw()
 
+    def waiting_file(self) -> "str | None":
+        """The plan's bounds file that waits for step 1 to apply its model, by its name; None while none waits."""
+        return self._pending
+
     def let_the_plans_file_go(self) -> None:
         """Another model chosen on step 1's form lets the plan in use go, and its bounds file with it: the model step 1
         applies next has its own file."""

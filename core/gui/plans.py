@@ -29,7 +29,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QComboBox
+from PySide6.QtWidgets import QComboBox, QLineEdit
 
 from core import cli, config
 from core import plans as engine_plans
@@ -165,17 +165,14 @@ def bounds_key(name: str, folder) -> "str | None":
     return next((entry for entry in file_manager.list_dir(str(folder)) if entry.replace("\\", "/") == name), None)
 
 
-def read_checked(path, *, bounds_folder) -> engine_plans.Plan:
-    """The plan at ``path``, read whole by the engine's reader, then held to the two checks that take more than the
-    file: its bounds file stands in ``bounds_folder``, the model's own, and its units resolve. A ``PlanRefusal``, its
-    field ``plan``, for every problem at once: the reader's, or else the window's, in one list in the reader's form."""
-    path = Path(path)
-    plan = engine_plans.read_plan(path)
+def window_problems(values: dict, *, bounds_folder) -> list:
+    """The two checks that take more than a plan's text, on its ``values``: its bounds file stands in
+    ``bounds_folder``, the model's own, and its units resolve. Each problem in the reader's form, in that order."""
     problems = []
-    bounds = plan.values.get(("Prior", "bounds"))
+    bounds = values.get(("Prior", "bounds"))
     if bounds is not None and bounds_key(bounds, bounds_folder) is None:
         problems.append(engine_plans.PlanProblem(None, "Prior", "bounds", NOT_IN_FOLDER_TEXT.format(bounds)))
-    units = plan.values.get(("Model and options", "units"))
+    units = values.get(("Model and options", "units"))
     if units is not None:
         try:
             cli.units_to_factors(tuple(units.split()))
@@ -184,6 +181,16 @@ def read_checked(path, *, bounds_folder) -> engine_plans.Plan:
                                                      UNITS_TEXT.format(refused.message)))
         except Exception as error:           # noqa: BLE001 -- what a units library raises on a word it cannot read
             problems.append(engine_plans.PlanProblem(None, "Model and options", "units", UNITS_TEXT.format(error)))
+    return problems
+
+
+def read_checked(path, *, bounds_folder) -> engine_plans.Plan:
+    """The plan at ``path``, read whole by the engine's reader, then held to the window's two checks
+    (``window_problems``). A ``PlanRefusal``, its field ``plan``, for every problem at once: the reader's, or else the
+    window's, in one list in the reader's form."""
+    path = Path(path)
+    plan = engine_plans.read_plan(path)
+    problems = window_problems(plan.values, bounds_folder=bounds_folder)
     if problems:
         raise _refused(path, problems)
     return plan
@@ -278,6 +285,14 @@ def _number(value) -> str:
     return said[:-2] if said.endswith(".0") else said
 
 
+def typed_words(row) -> str:
+    """What stands in a row's field as a person typed it, "" for a list, a tick, an empty field or a row with none."""
+    widget = getattr(row, "widget", None)
+    if isinstance(widget, TickedField):
+        return "" if widget.is_ticked() else widget.field.text().strip()
+    return widget.text().strip() if isinstance(widget, QLineEdit) else ""
+
+
 def value_words(row, value) -> str:
     """``value`` of ``row`` as a sentence says it: a row's own words when it has a way of saying its values; a tick's
     words for the value it stands for; a list's item for its value, the first letter small; a number grouped, or
@@ -370,7 +385,8 @@ def would_replace(screen, values: dict) -> tuple[str, ...]:
             held = plan_value(source, heading, name)
             if same(now, new) or same(now, row.usual()) or (held is not None and same(now, held)):
                 continue
-            changed.append(f"{row.label_text()}: {value_words(row, now)} becomes {value_words(row, new)}")
+            said = typed_words(row) if now is None else ""
+            changed.append(f"{row.label_text()}: {said or value_words(row, now)} becomes {value_words(row, new)}")
     return tuple(changed)
 
 

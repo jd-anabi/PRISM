@@ -1721,8 +1721,8 @@ def test_the_foot_of_the_first_step_says_when_it_read_only_while_a_plan_is_in_us
 def test_a_held_enter_answers_neither_the_fill_nor_the_save(tmp_path, monkeypatch):
     """In the whole program, whose ring follows the keyboard as it does for a person: Enter held down as the fill's
     question or the save's dialog opens answers neither, each still standing after the repeats. Enter pressed afresh
-    then gives the question its preselected answer, "Keep what is there", which fills nothing; the save's dialog, whose
-    answer waits for a name, takes nothing from it, and nothing is saved."""
+    then gives the question its preselected answer, "Keep what is there", which fills nothing; the save's dialog, a good
+    name typed in it so that its answer stands ready, takes nothing from the repeats, and nothing is saved."""
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
     from tests._dialogs import all_asked, forget_asked, held_enter
@@ -1743,10 +1743,10 @@ def test_a_held_enter_answers_neither_the_fill_nor_the_save(tmp_path, monkeypatc
         page.redraw()
         _choose(page, "retrain")
         seen = []
-        held_enter(monkeypatch, seen)
         forget_asked()
         with in_front(window):
-            for button in (page.fill_button, page.save_button):
+            for button, held in ((page.fill_button, {}), (page.save_button, {"line": "zz_held", "afresh": False})):
+                held_enter(monkeypatch, seen, **held)
                 button.setFocus(Qt.TabFocusReason)
                 _arrive(button, Qt.TabFocusReason)
                 QTest.keyClick(button, Qt.Key_Return)
@@ -2077,6 +2077,126 @@ def test_a_plan_that_cannot_be_written_says_so_and_saves_nothing(tmp_path, monke
     assert told.sentence == "This plan cannot be saved: 1 problem" and "got 0" in told.items[0], told
     assert not folder.exists()
 
+
+def test_a_save_whose_write_fails_is_told_and_changes_nothing(tmp_path, monkeypatch, store):
+    """A plan whose file cannot be written is told in the save's own question, its file and the system's reason, as an
+    error with one answer; nothing changes: no plan comes into use, no line says a plan was saved, the forms stay, and
+    no part file is left. Both a write the system refuses for a file another program holds open and any other refusal
+    of the system are told so, never by the last-resort box."""
+    from core.gui import plans as window_plans
+    from tests._dialogs import all_asked, answer_in_turn
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    screen.posterior_panel.form.rows["num_runs"].set_value(7000)
+    _shown_again(window)
+    before, kept, writes = _values(screen), (folder / "retrain.txt").read_bytes(), window_plans.save_plan
+
+    def refused(*_args):
+        raise PermissionError("the disk said no")
+
+    monkeypatch.setattr(window_plans, "save_plan", refused)
+    answer_in_turn(monkeypatch, ("Save", "zz_saved"))
+    page.save_button.click()
+    told = all_asked()[-1]
+    assert (told.title, told.marker, told.sentence, told.answers) == (
+        "Save as a plan", "err", "This plan cannot be saved: zz_saved.txt could not be written (the disk said no).",
+        ("OK",)), told
+    assert screen.plan_source is None and page.in_use.said.isHidden() and _values(screen) == before
+    monkeypatch.setattr(window_plans, "save_plan", writes)
+    answer_in_turn(monkeypatch, ("Save", "retrain"), ("Replace it", None))
+    with open(folder / "retrain.txt", "rb"):
+        page.save_button.click()
+    told = all_asked()[-1]
+    assert (told.marker, told.sentence) == (
+        "err", "This plan cannot be saved: retrain.txt could not be written (Access is denied)."), told
+    assert screen.plan_source is None and page.in_use.said.isHidden() and _values(screen) == before
+    assert sorted(path.name for path in folder.iterdir()) == ["retrain.txt"], "a part file was left"
+    assert (folder / "retrain.txt").read_bytes() == kept
+
+
+def test_the_save_refuses_what_its_own_window_would_refuse(tmp_path, monkeypatch, store):
+    """Before it writes, the save holds what it would write to the window's two checks against the model shown: typed
+    units that do not resolve, and a bounds file not in the model's bounds folder (a plan's file removed since its
+    fill), are told in the save's refusal with the checks' own sentences, and nothing is written."""
+    import shutil
+    from core.config import BOUNDS_PATH
+    from core.gui.panels.inference import config_tab, prior_tab
+    from tests._dialogs import all_asked, answer_in_turn
+    bounds = tmp_path / BOUNDS_PATH.name
+    shutil.copytree(BOUNDS_PATH / "nadrowski", bounds / "nadrowski")
+    monkeypatch.setattr(config_tab, "BOUNDS_PATH", bounds)
+    monkeypatch.setattr(prior_tab, "BOUNDS_PATH", bounds)
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    page.units_choice.setCurrentIndex(page.units_choice.findData("typed"))
+    page.units_text.setText("nm notaunit")
+    answer_in_turn(monkeypatch, ("Save", "zz_saved"))
+    page.save_button.click()
+    told = all_asked()[-1]
+    assert (told.title, told.sentence) == ("Save as a plan", "This plan cannot be saved: 1 problem"), told
+    assert len(told.items) == 1 and told.items[0].startswith("The units are not usable: "), told.items
+    page.units_choice.setCurrentIndex(page.units_choice.findData(None))
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert screen.prior_panel.waiting_file() == "master_tier1.txt"
+    (bounds / "nadrowski" / "master_tier1.txt").unlink()
+    answer_in_turn(monkeypatch, ("Save", "zz_saved"))
+    page.save_button.click()
+    told = all_asked()[-1]
+    assert told.items == ("The bounds file master_tier1.txt is not in this model's bounds folder.",), told.items
+    assert sorted(path.name for path in folder.iterdir()) == ["retrain.txt"]
+
+
+def test_a_save_with_another_model_shown_writes_no_file_of_the_model_applied(tmp_path, monkeypatch, store):
+    """While the model shown on step 1 is not the one applied, step 2's list holds the applied model's files: the save
+    writes no bounds file from it, and its dialog says why. A plan's file of the model shown, waiting, is written."""
+    from tests._dialogs import all_asked, answer_in_turn
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    hopf = _a_plan_of_hopf(folder).parent
+    page.foot.main_button.click()
+    _set(screen, {("prior", "bounds"): "master.txt"})
+    page.model_combo.setCurrentText("HOPF")
+    screen.posterior_panel.form.rows["num_runs"].set_value(7000)
+    _shown_again(window)
+    answer_in_turn(monkeypatch, ("Save", "zz_hopf"))
+    page.save_button.click()
+    dialog = all_asked()[-1]
+    assert dialog.beneath == ("The bounds list holds the files of the model applied, not of the model shown, so this "
+                              "plan names no bounds file."), dialog.beneath
+    assert read_plan(hopf / "zz_hopf.txt").values == {("Training", "num_runs"): 7000}
+    _press_fill(page, monkeypatch, "hopf_bounds", answer="Fill the forms")
+    screen.posterior_panel.form.rows["num_runs"].set_value(7000)
+    _shown_again(window)
+    answer_in_turn(monkeypatch, ("Save", "zz_waiting"))
+    page.save_button.click()
+    assert all_asked()[-1].beneath == "", all_asked()[-1].beneath
+    assert read_plan(hopf / "zz_waiting.txt").values == {("Prior", "bounds"): "cell.txt",
+                                                         ("Training", "num_runs"): 7000}
+
+
+def test_a_field_that_does_not_read_is_said_as_such(tmp_path, monkeypatch, store):
+    """A number field that holds a text that does not read, a comma for the decimal point, is not blank: the save's
+    refusal says the row's own sentence, by its label, and the fill's question names the text as typed."""
+    from tests._dialogs import all_asked, answer_in_turn
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    screen.posterior_panel.form.rows["learning_rate"].widget.setText("1,5")
+    _shown_again(window)
+    answer_in_turn(monkeypatch, ("Save", "zz_saved"))
+    page.save_button.click()
+    assert all_asked()[-1].items == ("Learning rate: Use a point as the decimal sign.",), all_asked()[-1].items
+    asked = _press_fill(page, monkeypatch)
+    assert asked[-1].items == ("Learning rate: 1,5 becomes 0.0005",), asked[-1].items
+
+
+def test_the_saved_line_goes_at_the_next_plan_press(tmp_path, monkeypatch, store):
+    """Step 1's line that a plan was saved, and is to be committed, stands until the next press of the plans' row: a
+    fill takes it away."""
+    from tests._dialogs import answer_in_turn
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    screen.posterior_panel.form.rows["num_runs"].set_value(7000)
+    _shown_again(window)
+    answer_in_turn(monkeypatch, ("Save", "zz_saved"))
+    page.save_button.click()
+    assert not page.in_use.said.isHidden()
+    _press_fill(page, monkeypatch, "retrain", answer="Fill the forms")
+    assert page.in_use.said.isHidden(), page.in_use.said.sentence.plain_text()
 
 def test_a_models_plans_are_listed_and_a_taken_name_is_found_without_case(tmp_path):
     """The plans of a model's folder, one folder for each model in lower case, are its .txt files, a suffix in capitals

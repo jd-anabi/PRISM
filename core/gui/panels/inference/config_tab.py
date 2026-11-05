@@ -139,6 +139,8 @@ SAVE_LABEL = "Plan name"
 SAVE_ANSWER = "Save"
 WRITTEN_ITEM = "{} ({}): {}"
 TYPED_BOUNDS_TEXT = "The bounds were typed by hand, so this plan names no bounds file."
+OTHER_BOUNDS_TEXT = ("The bounds list holds the files of the model applied, not of the model shown, so this plan names "
+                     "no bounds file.")
 NOT_APPLIED_SAVED_TEXT = "Saved as the forms show them, though not applied: {}."
 REPLACE_TITLE = "Replace plan {}?"
 REPLACE_TEXT = "{} was last changed on {}. The earlier file cannot be brought back."
@@ -147,6 +149,7 @@ REPLACE_ANSWER = "Replace it"
 SAVED_TEXT = ("Saved as plan {}. Commit this file before a long run, or the run's records are marked as made from a "
               "changed tree.")
 CANNOT_SAVE_TEXT = "This plan cannot be saved: {}"
+NOT_WRITTEN_TEXT = "This plan cannot be saved: {} could not be written ({})."
 BLANK_TEXT = "{} is blank."
 OK_TEXT = "OK"
 MORE_ONE_TEXT = "And 1 more."
@@ -764,8 +767,8 @@ class ConfigPanel(StepPage):
         self.fill_button.setText(USUAL_WORDS if listed is None else FILL_WORDS)
         self.fill_button.setEnabled(not refused)
         self.fill_reason.setText(FILL_BLOCKED_TEXT if refused else "")
-        values, _remarks, blank = self._to_save()
-        nothing = not values and not blank
+        values, _remarks, wrong = self._to_save()
+        nothing = not values and not wrong
         self.save_button.setEnabled(not nothing)
         self.save_reason.setText(NOTHING_TO_SAVE_TEXT if nothing else "")
         self.open_button.setEnabled(self._folder_there)
@@ -813,14 +816,17 @@ class ConfigPanel(StepPage):
 
     def _to_save(self) -> tuple:
         """What a save would write, keyed as a plan's values are: every setting of steps 1 to 3 whose form differs from
-        its usual value, and the bounds file when one is selected; the driven recordings' settings only with the
-        frequency response. With each setting's remark: its label, and the words on the form where the file's differ.
-        And the settings with no value, by their labels."""
-        values, remarks, blank = {}, {}, []
+        its usual value, and the bounds file when one is selected in the folder of the model shown, or waits; the driven
+        recordings' settings only with the frequency response. With each setting's remark: its label, and the words on
+        the form where the file's differ. And what is wrong with the settings that hold no value: blank, or the row's
+        own sentence for a text that does not read."""
+        values, remarks, wrong = {}, {}, []
         for page in self._step_pages():
             heading = plans.HEADING_OF.get(page.step)
             for name, row in page.plan_fields().items():
                 if name in DRIVEN_HELD and page is self and not self._chi():
+                    continue
+                if name in plans.LEFT_ALONE and self._bounds_of_another_model():
                     continue
                 value = row.value()
                 if value is plans.TYPED or (name in plans.LEFT_ALONE and value is None):
@@ -828,12 +834,32 @@ class ConfigPanel(StepPage):
                 if name not in plans.LEFT_ALONE and plans.same(value, row.usual()):
                     continue
                 if value is None or value == "":
-                    blank.append(row.label_text())
+                    wrong.append(self._unread_words(row))
                     continue
                 values[(heading, name)] = value
                 shown = plans.shown_words(row, value)
                 remarks[(heading, name)] = row.label_text() if shown is None else f"{row.label_text()}: {shown}"
-        return values, remarks, blank
+        return values, remarks, wrong
+
+    @staticmethod
+    def _unread_words(row) -> str:
+        """Why a row holds no value a plan can write: blank, or the row's own sentence for a text that does not read,
+        named by the row's label where the sentence names none."""
+        label = row.label_text()
+        reading = getattr(row, "reading", None)
+        said = reading() if callable(reading) and plans.typed_words(row) else None
+        if not said:
+            return BLANK_TEXT.format(label)
+        return said if said.startswith(label) else f"{label}: {said}"
+
+    def _bounds_of_another_model(self) -> bool:
+        """Whether step 2's list selects a file in another model's folder than the model shown: while the model shown is
+        not the one applied, the list holds the applied model's files. A plan's file that waits is the shown model's."""
+        prior = getattr(self._screen, "prior_panel", None)
+        if prior is None or prior.waiting_file() is not None:
+            return False
+        shown = BOUNDS_PATH / self.model_combo.currentText().lower()
+        return bool(prior.bounds_picker.key()) and Path(prior.bounds_picker.base_path) != Path(shown)
 
     def _fill_pressed(self) -> None:
         """Fill the forms of steps 1 to 3 from the plan shown, read and checked again now, or return them to their usual
@@ -865,18 +891,22 @@ class ConfigPanel(StepPage):
 
     def _save_pressed(self) -> None:
         """Save the settings that differ from their usual values as a plan of the model shown, under a name typed and
-        judged as it is typed, never over a plan of that name without asking. The plan saved is then the plan in use,
-        and nothing on the forms changes. Nothing while a run is live."""
+        judged as it is typed, never over a plan of that name without asking, and never a plan the window's own checks
+        would refuse. The plan saved is then the plan in use, and nothing on the forms changes; a write that fails is
+        said, and changes nothing. Nothing while a run is live."""
         screen = self._screen
         if controller().is_live() or screen is None:
             return
         self.in_use.say(None)
-        values, remarks, blank = self._to_save()
+        values, remarks, wrong = self._to_save()
         try:
-            if blank:
-                raise engine_plans.PlanRefusal("", tuple(engine_plans.PlanProblem(None, None, None, BLANK_TEXT.format(
-                    label)) for label in blank))
+            if wrong:
+                raise engine_plans.PlanRefusal("", tuple(engine_plans.PlanProblem(None, None, None, said)
+                                                         for said in wrong))
             text = engine_plans.plan_text(values, "", remarks)
+            checked = plans.window_problems(values, bounds_folder=BOUNDS_PATH / self.model_combo.currentText().lower())
+            if checked:
+                raise engine_plans.PlanRefusal("", tuple(checked))
         except engine_plans.PlanRefusal as refused:
             count = f"{len(refused.problems)} problem{'' if len(refused.problems) == 1 else 's'}"
             ask(self, SAVE_TITLE, CANNOT_SAVE_TEXT.format(count), OK_TEXT, marker="err",
@@ -889,6 +919,8 @@ class ConfigPanel(StepPage):
         beneath = []
         if screen.prior_panel.plan_fields()["bounds"].value() is plans.TYPED:
             beneath.append(TYPED_BOUNDS_TEXT)
+        elif self._bounds_of_another_model():
+            beneath.append(OTHER_BOUNDS_TEXT)
         pending = [page.plan_fields()[selection.key].label_text() for page in screen.step_pages()
                    for selection in page.selection_rows()
                    if selection.key in page.plan_fields() and selection.changed()]
@@ -909,7 +941,12 @@ class ConfigPanel(StepPage):
             if not ask(self, REPLACE_TITLE.format(there.stem), REPLACE_TEXT.format(there.name, changed), KEEP_PLAN,
                        REPLACE_ANSWER, loses_work=True):
                 return
-        path = plans.save_plan(folder, name, text)
+        try:
+            path = plans.save_plan(folder, name, text)
+        except OSError as error:
+            reason = error.strerror or error
+            ask(self, SAVE_TITLE, NOT_WRITTEN_TEXT.format(f"{name}.txt", reason), OK_TEXT, marker="err")
+            return
         source = plans.PlanSource("plan", name, path, plans.file_sha(path, {}) or "", self.now(), dict(values))
         screen.take_plan(source)
         self._read_the_plans()
