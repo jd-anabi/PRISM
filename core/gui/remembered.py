@@ -28,6 +28,11 @@ PRIOR_KEY = "inference_prior/prior"
 POSTERIOR_KEY = "inference_posterior/posterior"
 NUM_RUNS_KEY = "inference_posterior/num_runs"
 RUN_SIZE_KEY = "inference_posterior/run_size_cap"
+#: The plan last used with a model, by its name, and when, each written with what comes into use or starts with it,
+#: blank when that had no plan: the hint beside the list of plans on step 1. The model's name in lower case completes
+#: each.
+LAST_USED_KEY = "plans/last_used/{}"
+LAST_USED_AT_KEY = "plans/last_used_at/{}"
 #: The window's log, when the settings file could not be written: the file, and why.
 NOT_WRITTEN_TEXT = "The settings file %s could not be written (%s): what was set holds until PRISM is closed."
 

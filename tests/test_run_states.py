@@ -5927,7 +5927,7 @@ def test_a_page_hands_its_run_plain_settings(tmp_path, monkeypatch):
             "NADROWSKI", "master.txt", prior.id, "retrain", "a note", "auto")
         rows = {row["name"]: row for row in entry["rows"]}
         assert rows["num_runs"] == {"step": "training", "name": "num_runs", "label": "Batches", "value": 1234,
-                                    "origin": "", "plan": None, "usual": config.TRAINING_NUM_RUNS}
+                                    "origin": "changed from the usual", "plan": None, "usual": config.TRAINING_NUM_RUNS}
         assert (rows["max_num_epochs"]["value"], rows["run_size_cap"]["value"]) == (None, 0)
         assert set(rows) == {"num_runs", "run_size_cap", "hidden_features", "num_transforms", "learning_rate",
                              "stop_after_epochs", "max_num_epochs", "expected_epochs", "checkpoint_every", "fisher_m",

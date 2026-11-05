@@ -613,13 +613,18 @@ def test_a_comma_in_the_lock_in_limit_greys_apply_with_its_sentence_under_the_fi
 # ── what is remembered ──
 def test_the_model_and_the_kind_come_back_kept_from_last_time_until_touched():
     """What was last applied is put back as a choice, each of the two rows saying it was kept from last time until it is
-    touched, and nothing is applied: the step holds nothing. Applying keeps the word on what was not touched."""
+    touched, and nothing is applied: the step holds nothing. Applying keeps the word on what was not touched. Every
+    other row a plan fills says it holds its usual value."""
     _remember(**{"inference_config/model": "HOPF", "inference_config/chi_mode": "true"})
     screen, page = _first_step()
     rows = page.form.rows
     assert (page.model_combo.currentText(), page.kind_choice.currentData()) == ("HOPF", True)
-    assert [key for key, row in rows.items() if row.origin.text()] == ["model", "chi_mode", "chi_f0", "chi_freq_bounds"]
+    assert [key for key, row in rows.items() if row.origin.text()] == [
+        "model", "chi_mode", "chi_n_freqs", "chi_k_pad", "chi_max_cycles", "chi_f0", "chi_freq_bounds",
+        "reparam_rotate", "units"]
     assert rows["model"].origin.text() == rows["chi_mode"].origin.text() == "kept from last time"
+    assert {rows[key].origin.text() for key in ("chi_n_freqs", "chi_k_pad", "chi_max_cycles", "reparam_rotate",
+                                                 "units")} == {"usual"}
     assert screen.session.draft is None and page.in_use.line_text() == "In use: nothing yet."
     assert page.in_use.sentence.plain_text() == "Choose the model and the kind of observation, then apply them."
     _pick(page.model_combo, "NADROWSKI")
@@ -628,7 +633,7 @@ def test_the_model_and_the_kind_come_back_kept_from_last_time_until_touched():
     assert rows["chi_mode"].origin.text() == "kept from last time" and rows["model"].origin.text() == ""
     _pick(page.kind_choice, False)
     _pick(page.kind_choice, True)
-    assert rows["chi_mode"].origin.text() == "", "a kind touched and put back is still said to be kept"
+    assert rows["chi_mode"].origin.text() == "changed from the usual", "a kind touched and put back is still kept"
 
 
 @pytest.mark.parametrize("written", ["false", "0"])
@@ -647,7 +652,7 @@ def test_what_cannot_be_put_back_opens_as_usual_and_is_not_said_to_be_kept(model
     _screen, page = _first_step()
     rows = page.form.rows
     assert (page.model_combo.currentText(), page.kind_choice.currentData()) == ("NADROWSKI", False)
-    assert rows["model"].origin.text() == rows["chi_mode"].origin.text() == ""
+    assert (rows["model"].origin.text(), rows["chi_mode"].origin.text()) == ("", "usual")
 
 
 def test_a_remembered_model_taken_from_the_list_is_no_longer_said_to_be_kept(tmp_path):
@@ -2375,10 +2380,11 @@ def test_the_batches_and_the_simulations_per_batch_come_back_kept_from_last_time
         assert (rows["num_runs"].value(), rows["run_size_cap"].value()) == (shown, cap), remembered
         kept = remembered[NUM_RUNS_KEY] == "1234"
         assert (rows["num_runs"].origin.text(), rows["run_size_cap"].origin.text()) == (
-            ("kept from last time", "kept from last time") if kept else ("", "")), remembered
+            ("kept from last time", "kept from last time") if kept else ("usual", "usual")), remembered
         if kept:
             rows["num_runs"].widget.setText("1235")
-            assert rows["num_runs"].origin.text() == "" and rows["run_size_cap"].origin.text() == "kept from last time"
+            assert (rows["num_runs"].origin.text(), rows["run_size_cap"].origin.text()) == (
+                "changed from the usual", "kept from last time")
 
 
 def test_the_training_page_reads_nothing_while_a_run_is_live(tmp_path, monkeypatch):

@@ -11,25 +11,43 @@ The drive amplitude and the frequency band used in training are measurements, sh
 every configuration takes core/config.py's. The three settings of the driven recordings stand only while the kind is the
 frequency response, and open at core/config.py's values at every launch. The model and the kind are put back as they
 were last applied, as choices; nothing else is read from the settings file, and nothing is written but by applying.
+
+Plans stand under "Model", since a plan belongs to a model: the list of the model's plans, read again each time it
+opens and at the page's readings; what the plan shown holds, or why it cannot be used; and the three presses. Choosing
+in the list changes nothing. "Fill the forms from this plan" fills steps 1 to 3, asking first when it would replace a
+value a person typed or that was put back; with "No plan" shown it returns them to the usual values. "Save as a plan…"
+writes the settings that differ from their usual values. The plan in use is the screen's, so it outlives the session
+applying replaces; a model chosen on the form leaves no plan in use and the values as they stand. Nothing of the folder
+is read while a run is live, and the choice in the list is never remembered: every launch opens on "No plan".
 """
 import math
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLineEdit
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from core import cli, config, registry
-from core.config import CHI_K_MAX, CHI_MIN_CYCLES, VALID_LABELS, VALID_MODELS
+from core import plans as engine_plans
+from core.config import BOUNDS_PATH, CHI_K_MAX, CHI_MIN_CYCLES, VALID_LABELS, VALID_MODELS
 from core.Helpers import file_manager
 from core.refusals import Refusal, default_clause
 
-from ... import chain, keys, settings, style
-from ...remembered import KIND_KEY, MODEL_KEY
+from ... import chain, design, fields, keys, plans, settings, style, texts
+from ...remembered import KIND_KEY, LAST_USED_AT_KEY, LAST_USED_KEY, MODEL_KEY
+from ...reported import reported
+from ...run.controller import controller
 from ...session import ConfigDraft
-from ...step_facts import NOT_HELD, Fact, SelectionRow, held_value, model_facts, model_in_use, units_words
-from ...widgets.ask import ask
+from ...step_facts import (CHANGED_TEXT, NOT_HELD, Fact, SelectionRow, held_value, model_facts, model_in_use,
+                           units_words)
+from ...widgets.artifact_picker import LIST_MOST
+from ...widgets.ask import ask, ask_text
 from ...widgets.choice import Choice
+from ...widgets.form import _may_wrap
 from ...widgets.labeled_inputs import FloatField, IntField
+from ...widgets.marker import painted_icon
+from ...widgets.message_row import MessageRow
+from ...widgets.rule_table import Column, RuleTable, TextCell
 from .help_text import HELP
 from .step_page import StepPage
 
@@ -76,6 +94,67 @@ LEAST_DRIVEN = 2
 RULED = ("chi_n_freqs", "chi_k_pad", "chi_max_cycles", "units")
 #: The settings of the frequency response: shown, and read, only while that kind is chosen.
 DRIVEN = ("chi_n_freqs", "chi_k_pad", "chi_max_cycles", "chi_f0", "chi_freq_bounds")
+#: The three of them a draft carries.
+DRIVEN_HELD = ("chi_n_freqs", "chi_k_pad", "chi_max_cycles")
+
+# ── plans ──
+PLAN_LABEL = "Plan"
+NO_PLAN_ITEM = "No plan"
+LAST_USED_TEXT = "Last used: {}, {}"
+LAST_USED_UNDATED_TEXT = "Last used: {}"
+LAST_USED_GONE_TEXT = "Last used: {} (the file is no longer there)"
+ONE_SETTING = "1 setting"
+SETTINGS = "{} settings"
+ONE_STEP = "1 step"
+STEPS = "{} steps"
+HOLDS_TEXT = "{} in {}"
+SHOW_HOLDS = "Show what it holds"
+HOLDS_COLUMNS = ("Step", "Setting", "In the plan", "Usual")
+NOT_APPLIED_YET = "not applied yet"
+IN_USE_TEXT = "In use: {}."
+PLAN_FILLED_WORDS = "plan {}, filled {}"
+SOURCE_FILLED_WORDS = "settings from {} {}, filled {}"
+NO_PLAN_WORDS = "no plan"
+FILL_WORDS = "Fill the forms from this plan"
+USUAL_WORDS = "Return the forms to the usual values"
+SAVE_WORDS = "Save as a plan…"
+OPEN_WORDS = "Open the plans folder"
+#: Beside the fill button while the plan shown cannot be used: the table's own sentence for a plan to correct.
+FILL_BLOCKED_TEXT = fields.CONTROL["plan"]
+NOTHING_TO_SAVE_TEXT = "Every setting is at its usual value, so there is nothing to save."
+FILL_TITLE = "Fill the forms from plan {}?"
+FILL_ONE_TEXT = ("Filling from plan {} sets every setting a plan can hold: 1 from the plan, the rest to their usual "
+                 "values.")
+FILL_TEXT = ("Filling from plan {} sets every setting a plan can hold: {} from the plan, the rest to their usual "
+             "values.")
+KEEP_WHAT_IS_THERE = "Keep what is there"
+FILL_ANSWER = "Fill the forms"
+USUAL_TITLE = "Return the forms to the usual values?"
+USUAL_TEXT = "This sets every setting a plan can hold to its usual value."
+USUAL_ANSWER = "Return to the usual values"
+SAVE_TITLE = "Save as a plan"
+SAVE_TEXT = ("Only the settings that differ from their usual values are written. A setting left out follows the usual "
+             "value.")
+SAVE_LABEL = "Plan name"
+SAVE_ANSWER = "Save"
+WRITTEN_ITEM = "{} ({}): {}"
+TYPED_BOUNDS_TEXT = "The bounds were typed by hand, so this plan names no bounds file."
+NOT_APPLIED_SAVED_TEXT = "Saved as the forms show them, though not applied: {}."
+REPLACE_TITLE = "Replace plan {}?"
+REPLACE_TEXT = "{} was last changed on {}. The earlier file cannot be brought back."
+KEEP_PLAN = "Keep the existing plan"
+REPLACE_ANSWER = "Replace it"
+SAVED_TEXT = ("Saved as plan {}. Commit this file before a long run, or the run's records are marked as made from a "
+              "changed tree.")
+CANNOT_SAVE_TEXT = "This plan cannot be saved: {}"
+BLANK_TEXT = "{} is blank."
+OK_TEXT = "OK"
+MORE_ONE_TEXT = "And 1 more."
+MORE_TEXT = "And {} more."
+#: How many of a plan's problems are shown under the list, and how much of each: a file of notes gives one a line, each
+#: echoing its line whole, and a page that grew with them would push every setting out of reach.
+PROBLEMS_SHOWN = 8
+PROBLEM_MOST = 300
 
 
 class _ModelChoice(Choice):
@@ -108,16 +187,82 @@ def _words_of(items, value) -> str:
     return next((words for words, held in items if held == value), str(value))
 
 
+def _counted(count: int, one: str, many: str) -> str:
+    return one if count == 1 else many.format(count)
+
+
+class _PlanChoice(Choice):
+    """The list of a model's plans, "No plan" first: as wide as its longest name up to the cap of a list of names, and
+    read again, by ``before_opening``, each time it opens."""
+
+    def __init__(self) -> None:
+        super().__init__(most=LIST_MOST)
+        self.before_opening = None
+
+    def showPopup(self):
+        if callable(self.before_opening):
+            self.before_opening()
+        super().showPopup()
+
+
+class _UnitsField:
+    """The units as a plan holds them, over the units row: the words typed here as one text, or None for the model's
+    units file."""
+
+    key = "units"
+
+    def __init__(self, page) -> None:
+        self._page, self._row = page, page.form.rows["units"]
+
+    @property
+    def kept(self) -> bool:
+        return self._row.kept
+
+    @kept.setter
+    def kept(self, on: bool) -> None:
+        self._row.kept = on
+
+    def value(self):
+        return " ".join(self._page.units_text.text().split()) if self._page._typed() else None
+
+    def set_value(self, value) -> None:
+        """The model's units file for None, else the words typed."""
+        choice = self._page.units_choice
+        if value is None:
+            choice.setCurrentIndex(choice.findData("file"))
+            return
+        choice.setCurrentIndex(choice.findData("typed"))
+        self._page.units_text.setText(str(value))
+
+    def usual(self):
+        return None
+
+    def label_text(self) -> str:
+        return self._row.label_text()
+
+    def set_origin(self, text: str) -> None:
+        self._row.set_origin(text)
+
+    def in_error(self) -> bool:
+        return self._row.in_error()
+
+    def words_of(self, value) -> str:
+        return THE_UNITS_FILE if value is None else units_words(str(value).split())
+
+
 class ConfigPanel(StepPage):
     """Step 1: a model and its options, held as a draft once applied. ``model_combo`` lists the models; ``kind_choice``,
-    ``rot_choice`` and ``units_choice`` are the other choices, and ``units_text`` the units typed here."""
-
-    reads_the_disk = False
+    ``rot_choice`` and ``units_choice`` are the other choices, and ``units_text`` the units typed here. ``plan_choice``
+    lists the model's plans, with ``fill_button``, ``save_button`` and ``open_button`` under it."""
 
     def __init__(self, screen, parent=None):
         super().__init__(screen, TITLE, SENTENCE, step="model", parent=parent)
         self._units_read: dict = {}
         self._seeded = ""                    # what the box of typed units was last filled with from a units file
+        self._shown_plan = None              # the plan the list shows, as it was last read, or why it cannot be used
+        self._listed_for = None              # the model whose folder the list of plans was last read for
+        self._folder_there = False           # whether that folder stood there at that reading
+        self._hint = ""                      # the plan last used with the model shown, beside the list
         self.model_combo = _ModelChoice()
         self.model_combo.addItems(VALID_MODELS)
         self.model_combo.setCurrentText("NADROWSKI")
@@ -132,6 +277,7 @@ class ConfigPanel(StepPage):
         self.units_text.setPlaceholderText("e.g. kHz ms nm pN")
         form = self.form
         form.add("model", self.model_combo, usual="NADROWSKI", help_text=HELP["model"])
+        self._build_the_plans_block()
         form.add("chi_mode", self.kind_choice, usual=False, help_text=HELP["chi_mode"])
         form.add_sentence(FREQUENCY_RESPONSE_TEXT, under="chi_mode")
         form.add_sentence(BOUNDS_FILE_TEXT, under="chi_mode")
@@ -153,10 +299,17 @@ class ConfigPanel(StepPage):
         units.hear(self.units_text)
         self.typed_note = form.add_sentence(TYPED_TEXT, under="units")
         self.units_choice.currentIndexChanged.connect(self._units_chosen)
+        self._units_field = _UnitsField(self)
         self.restore_settings(settings.settings())
         self._kind_chosen()
         self._units_chosen()
         self.refresh_local_gates()
+
+    @property
+    def reads_the_disk(self) -> bool:
+        """Whether a plan is in use, whose file the page reads: the line of when it read, and "Check again", stand only
+        then."""
+        return getattr(getattr(self._screen, "plan_source", None), "kind", None) == "plan"
 
     # ── what the step holds ──
     def _draft(self):
@@ -303,18 +456,37 @@ class ConfigPanel(StepPage):
                              lambda value: self._units_said(value, model) or THE_UNITS_FILE))
 
     def plan_fields(self) -> dict:
-        return {key: self.form.rows[key] for key in ("chi_mode", "chi_n_freqs", "chi_k_pad", "chi_max_cycles",
-                                                      "reparam_rotate", "units")}
+        rows = self.form.rows
+        return {**{key: rows[key] for key in ("chi_mode", *DRIVEN_HELD, "reparam_rotate")}, "units": self._units_field}
+
+    def plan_read(self, applied: bool) -> dict:
+        """What a run reads of this step: the draft applied, or the form as a draft would read it; the driven
+        recordings' settings only with the frequency response."""
+        if not applied:
+            fields_ = self.plan_fields()
+            return {key: fields_[key].value() for key in ("chi_mode", *(DRIVEN_HELD if self._chi() else ()),
+                                                          "reparam_rotate", "units")}
+        draft = self._draft()
+        if draft is None:
+            return {}
+        chi = getattr(draft, "chi_mode", None) is True
+        read = {"chi_mode": chi, **{key: getattr(draft, key, None) for key in (DRIVEN_HELD if chi else ())}}
+        rotate, units = getattr(draft, "reparam_rotate", None), getattr(draft, "units_override", None)
+        if isinstance(rotate, bool):
+            read["reparam_rotate"] = rotate
+        read["units"] = " ".join(str(unit) for unit in units) if isinstance(units, (tuple, list)) else None
+        return read
 
     def facts_from_form(self) -> tuple:
         """Each rule broken, under its field and as a fact; where a value put back came from; that the model cannot be
         used, when it cannot; and, for a model of your own it can use, that its checks are not tuned."""
         found = self.problems()
         for key, row in self.form.rows.items():
-            if row.widget is None:
+            if row.widget is None or key == "plan":
                 continue
             row.set_line("err" if key in found else "", found[key][0] if key in found else "")
             row.set_origin(KEPT if row.kept else "")
+        self._draw_the_plans_block()
         model = self.model_combo.currentText()
         own = ((Fact("info", CALIBRATION_TEXT.format(keys.place_words("checks"))),)
                if registry.is_user_model(model) and not self._unusable(model) else ())
@@ -346,6 +518,7 @@ class ConfigPanel(StepPage):
         while the box still holds what a file filled it with, so that typing them starts from the file in use. Units
         typed here are never written over."""
         self.form.rows["model"].kept = False
+        self._model_left()
         self._units_read.pop(model, None)
         words, where, trouble = self._units_of(model)
         self.units_line.set_text(UNITS_FROM.format(words, where) if words else NO_UNITS_FILE.format(trouble))
@@ -393,6 +566,367 @@ class ConfigPanel(StepPage):
         self._screen.new_draft(draft)
         if by_keyboard and not self.next_button.isHidden():
             self.next_button.setFocus(Qt.TabFocusReason)
+
+    # ── plans ──
+    def _build_the_plans_block(self) -> None:
+        """The row of the plans, under "Model": the list, the hint of the plan last used beside it, and under it what
+        the plan shown holds or why it cannot be used, what is in use, and the three presses. Nothing is read here: the
+        list holds "No plan" until the page's first reading."""
+        self.plan_choice = _PlanChoice()
+        self.plan_choice.addItem(NO_PLAN_ITEM, None)
+        self.plan_choice.before_opening = self._read_the_plans
+        self.plan_choice.currentIndexChanged.connect(self._plan_chosen)
+        row = self.form.add("plan", self.plan_choice, label=PLAN_LABEL)
+        self.plan_about = self.form.add_sentence("", under="plan")
+        self.plan_about.setVisible(False)
+        block = QWidget()
+        box = QVBoxLayout(block)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(design.scaled(design.GAP["field_message"]))
+        self.plan_trouble = MessageRow("err", "")
+        self.plan_problems = []
+        for _ in range(PROBLEMS_SHOWN + 1):
+            line = QLabel()
+            line.setTextFormat(Qt.PlainText)
+            line.setWordWrap(True)
+            line.setContentsMargins(design.scaled(design.SIZE["marker"]) + design.scaled(design.GAP["message_marker"]),
+                                    0, 0, 0)
+            self.plan_problems.append(line)
+        self.holds_button = style.set_class(QPushButton(SHOW_HOLDS), cls="fold")
+        self.holds_button.setIcon(painted_icon("chev_right"))
+        self.holds_button.setIconSize(QSize(*(design.scaled(n) for n in design.GAP["fold_icon"])))
+        self.holds_button.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.holds_button.clicked.connect(self._holds_pressed)
+        self.holds_table = RuleTable([Column(HOLDS_COLUMNS[0], "fit", wrap=True), Column(HOLDS_COLUMNS[1]),
+                                      Column(HOLDS_COLUMNS[2], "fit", wrap=True),
+                                      Column(HOLDS_COLUMNS[3], "fit", wrap=True)], selectable=False)
+        self.holds_table.setVisible(False)
+        self.fill_button = QPushButton(FILL_WORDS)
+        self.fill_button.clicked.connect(self._fill_pressed)
+        self.fill_reason = style.set_class(QLabel(), cls="small")
+        self.save_button = QPushButton(SAVE_WORDS)
+        self.save_button.clicked.connect(self._save_pressed)
+        self.save_reason = style.set_class(QLabel(), cls="small")
+        self.open_button = QPushButton(OPEN_WORDS)
+        self.open_button.clicked.connect(self._open_pressed)
+        for part in (self.plan_trouble, *self.plan_problems):
+            box.addWidget(part)
+            part.setVisible(False)
+        box.addWidget(self.holds_button, 0, Qt.AlignLeft)
+        box.addWidget(self.holds_table)
+        row.add_under(block)
+        self.plan_in_use = self.form.add_sentence("", under="plan")
+        buttons = QWidget()
+        box = QVBoxLayout(buttons)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(design.scaled(design.GAP["field_message"]))
+        for button, reason in ((self.fill_button, self.fill_reason), (self.save_button, self.save_reason),
+                               (self.open_button, None)):
+            line = QHBoxLayout()
+            line.setContentsMargins(0, 0, 0, 0)
+            line.setSpacing(design.scaled(design.SIZE["row_gap"]))
+            line.addWidget(button)
+            if reason is not None:
+                reason.setTextFormat(Qt.PlainText)
+                reason.setWordWrap(True)
+                line.addWidget(reason, 1)
+            line.addStretch(0 if reason is not None else 1)
+            box.addLayout(line)
+        row.add_under(buttons)
+
+    def _plans_folder(self) -> "Path | None":
+        """The folder of the plans of the model shown on the form; None on a page with no screen."""
+        held = getattr(self._screen, "plans_folder", None)
+        return None if held is None else plans.model_folder(held, self.model_combo.currentText())
+
+    def _step_pages(self) -> tuple:
+        """The steps a plan fills, as the screen holds them; none on a page with no screen."""
+        pages = getattr(self._screen, "step_pages", None)
+        return pages() if callable(pages) else ()
+
+    def _model_left(self) -> None:
+        """Another model shown on the form: its plans are not read yet, the list shows "No plan", and no plan is in use;
+        the values on the forms stay as they are."""
+        if not hasattr(self, "plan_choice"):
+            return
+        self.plan_choice.blockSignals(True)
+        try:
+            while self.plan_choice.count() > 1:
+                self.plan_choice.removeItem(1)
+            self.plan_choice.setCurrentIndex(0)
+        finally:
+            self.plan_choice.blockSignals(False)
+        self._shown_plan, self._listed_for, self._folder_there, self._hint = None, None, False, ""
+        screen = self._screen
+        if getattr(screen, "plan_source", None) is not None:
+            screen.take_plan(None)
+
+    def _read_the_plans(self) -> None:
+        """The model's plans listed again, the plan shown kept while it stands there, else "No plan"; whether the folder
+        stands there; the plan last used with the model, and whether its file is still there; and the plan shown read
+        again. Nothing while a run is live."""
+        folder = self._plans_folder()
+        if controller().is_live() or folder is None:
+            return
+        model = self.model_combo.currentText()
+        names = plans.list_plans(folder)
+        choice, shown = self.plan_choice, self.plan_choice.currentData()
+        choice.blockSignals(True)
+        try:
+            while choice.count() > 1:
+                choice.removeItem(1)
+            for name in names:
+                choice.addItem(name, name)
+                choice.setItemData(choice.count() - 1, name, Qt.ToolTipRole)
+            choice.setCurrentIndex(max(0, choice.findData(shown)) if shown is not None else 0)
+        finally:
+            choice.blockSignals(False)
+        choice.say_whole()
+        self._listed_for, self._folder_there = model, folder.is_dir()
+        last = settings.get_str(settings.settings(), LAST_USED_KEY.format(model.lower()), "").strip()
+        when = settings.get_str(settings.settings(), LAST_USED_AT_KEY.format(model.lower()), "").strip()
+        if not last:
+            self._hint = ""
+        elif last not in names:
+            self._hint = LAST_USED_GONE_TEXT.format(last)
+        else:
+            try:
+                self._hint = LAST_USED_TEXT.format(last, texts.date_text(datetime.fromisoformat(when).astimezone()))
+            except (TypeError, ValueError, OverflowError, OSError):
+                self._hint = LAST_USED_UNDATED_TEXT.format(last)
+        self._read_the_plan_shown()
+        self._draw_the_plans_block()
+
+    def _read_the_plan_shown(self) -> None:
+        """The plan the list shows, read and checked, or why it cannot be used; none for "No plan"."""
+        name, folder = self.plan_choice.currentData(), self._plans_folder()
+        if name is None or folder is None:
+            self._shown_plan = None
+            return
+        try:
+            self._shown_plan = plans.read_checked(plans.plan_path(folder, name),
+                                                  bounds_folder=BOUNDS_PATH / self.model_combo.currentText().lower())
+        except engine_plans.PlanRefusal as refused:
+            self._shown_plan = refused
+
+    def _plan_chosen(self, _index: int = 0) -> None:
+        """Another plan chosen in the list: it is read, so that what it holds or why it cannot be used is said. The
+        forms do not change."""
+        if not controller().is_live():
+            self._read_the_plan_shown()
+        self.redraw()
+
+    def _holds_pressed(self) -> None:
+        opening = self.holds_table.isHidden()
+        self.holds_table.setVisible(opening)
+        self.holds_button.setIcon(painted_icon("chev_down" if opening else "chev_right"))
+
+    def _draw_the_plans_block(self) -> None:
+        """What the row of the plans says, as the list, the plan shown, the source in use and the forms stand: reads
+        nothing."""
+        if not hasattr(self, "plan_choice"):
+            return
+        row, shown, screen = self.form.rows["plan"], self._shown_plan, self._screen
+        source = getattr(screen, "plan_source", None)
+        listed = self.plan_choice.currentData()
+        row.set_origin(self._hint if listed is None else "")
+        in_use = source.name if source is not None and source.kind == "plan" else None
+        held = self._in_use_words(source)
+        row.set_line("warn" if listed != in_use else "", CHANGED_TEXT.format(held) if listed != in_use else "")
+        self.plan_in_use.set_text(IN_USE_TEXT.format(held))
+        refused = isinstance(shown, engine_plans.PlanRefusal)
+        held = shown if isinstance(shown, engine_plans.Plan) else None
+        self.plan_about.set_text(self._about_words(held) if held is not None else "")
+        self.plan_about.setVisible(held is not None)
+        self.plan_trouble.set_sentence(shown.message if refused else "")
+        self.plan_trouble.setVisible(refused)
+        problems = list(shown.problems) if refused else []
+        for at, line in enumerate(self.plan_problems):
+            if at < PROBLEMS_SHOWN and at < len(problems):
+                said = problems[at].message
+                line.setText(_may_wrap(said if len(said) <= PROBLEM_MOST else said[:PROBLEM_MOST - 1] + "…"))
+                line.setVisible(True)
+            elif at == PROBLEMS_SHOWN and len(problems) > PROBLEMS_SHOWN:
+                line.setText(_counted(len(problems) - PROBLEMS_SHOWN, MORE_ONE_TEXT, MORE_TEXT))
+                line.setVisible(True)
+            else:
+                line.setVisible(False)
+        self.holds_button.setVisible(held is not None)
+        if held is not None:
+            self.holds_table.set_rows(self._holds_rows(held))
+        else:
+            self.holds_table.setVisible(False)
+            self.holds_button.setIcon(painted_icon("chev_right"))
+        self.fill_button.setText(USUAL_WORDS if listed is None else FILL_WORDS)
+        self.fill_button.setEnabled(not refused)
+        self.fill_reason.setText(FILL_BLOCKED_TEXT if refused else "")
+        values, _remarks, blank = self._to_save()
+        nothing = not values and not blank
+        self.save_button.setEnabled(not nothing)
+        self.save_reason.setText(NOTHING_TO_SAVE_TEXT if nothing else "")
+        self.open_button.setEnabled(self._folder_there)
+
+    @staticmethod
+    def _in_use_words(source) -> str:
+        """The source in use as "In use: …" names it: "no plan", "plan retrain, filled 6 Oct 2026, 12:04"."""
+        if source is None:
+            return NO_PLAN_WORDS
+        when = texts.date_text(source.at) if source.at is not None else ""
+        if source.kind == "plan":
+            return PLAN_FILLED_WORDS.format(source.name, when)
+        return SOURCE_FILLED_WORDS.format(source.kind, source.name, when)
+
+    @staticmethod
+    def _about_words(plan) -> str:
+        """What the plan shown says of itself, and how many settings it holds in how many steps."""
+        steps = {heading for heading, _name in plan.values}
+        counted = HOLDS_TEXT.format(_counted(len(plan.values), ONE_SETTING, SETTINGS),
+                                    _counted(len(steps), ONE_STEP, STEPS))
+        return f"{plan.about} {counted}.".strip() if plan.about else f"{counted}."
+
+    def _holds_rows(self, plan) -> list:
+        """What the plan shown holds, a row a setting in the file's order: the step, the setting by its label with its
+        name in the file beside it, the plan's value, and the usual one; a setting of a later step is not applied
+        yet."""
+        rows_of = {plans.HEADING_OF[page.step]: page.plan_fields() for page in self._step_pages()}
+        rows = []
+        for (heading, name), value in plan.values.items():
+            row = rows_of.get(heading, {}).get(name)
+            label = row.label_text() if row is not None else self._label_of(name)
+            plan_words = plans.value_words(row, value) if row is not None else plans.value_words(None, value)
+            usual = NOT_APPLIED_YET if row is None else (plans.NONE_WORDS if name in plans.LEFT_ALONE
+                                                         else plans.value_words(row, row.usual()))
+            rows.append([TextCell(heading, wrap=True), TextCell(f"{label} ({name})", wrap=True),
+                         TextCell(plan_words, wrap=True), TextCell(usual, wrap=True)])
+        return rows
+
+    @staticmethod
+    def _label_of(name: str) -> str:
+        try:
+            return fields.label(name)
+        except KeyError:
+            return name
+
+    def _to_save(self) -> tuple:
+        """What a save would write, keyed as a plan's values are: every setting of steps 1 to 3 whose form differs from
+        its usual value, and the bounds file when one is selected; the driven recordings' settings only with the
+        frequency response. With each setting's remark: its label, and the words on the form where the file's differ.
+        And the settings with no value, by their labels."""
+        values, remarks, blank = {}, {}, []
+        for page in self._step_pages():
+            heading = plans.HEADING_OF.get(page.step)
+            for name, row in page.plan_fields().items():
+                if name in DRIVEN_HELD and page is self and not self._chi():
+                    continue
+                value = row.value()
+                if value is plans.TYPED or (name in plans.LEFT_ALONE and value is None):
+                    continue
+                if name not in plans.LEFT_ALONE and plans.same(value, row.usual()):
+                    continue
+                if value is None or value == "":
+                    blank.append(row.label_text())
+                    continue
+                values[(heading, name)] = value
+                shown = plans.shown_words(row, value)
+                remarks[(heading, name)] = row.label_text() if shown is None else f"{row.label_text()}: {shown}"
+        return values, remarks, blank
+
+    def _fill_pressed(self) -> None:
+        """Fill the forms of steps 1 to 3 from the plan shown, read and checked again now, or return them to their usual
+        values with "No plan" shown: asked first when a value a person typed or that was put back would be replaced,
+        "Keep what is there" preselected. Nothing while a run is live."""
+        screen, name = self._screen, self.plan_choice.currentData()
+        if controller().is_live() or screen is None:
+            return
+        self.in_use.say(None)
+        if name is None:
+            values, source = {}, plans.PlanSource("usual", "", None, "", self.now(), {})
+            title, sentence, answer = USUAL_TITLE, USUAL_TEXT, USUAL_ANSWER
+        else:
+            self._read_the_plan_shown()
+            if not isinstance(self._shown_plan, engine_plans.Plan):
+                self.redraw()
+                return
+            plan = self._shown_plan
+            values = {pair: value for pair, value in plan.values.items() if pair[0] in plans.FILLED}
+            source = plans.PlanSource("plan", plan.name, plan.path, plan.sha256, self.now(), values)
+            title = FILL_TITLE.format(plan.name)
+            sentence = (FILL_ONE_TEXT.format(plan.name) if len(values) == 1
+                        else FILL_TEXT.format(plan.name, len(values)))
+            answer = FILL_ANSWER
+        replaced = plans.would_replace(screen, values)
+        if replaced and not ask(self, title, sentence, KEEP_WHAT_IS_THERE, answer, items=replaced):
+            return
+        plans.fill_forms(screen, values, source)
+
+    def _save_pressed(self) -> None:
+        """Save the settings that differ from their usual values as a plan of the model shown, under a name typed and
+        judged as it is typed, never over a plan of that name without asking. The plan saved is then the plan in use,
+        and nothing on the forms changes. Nothing while a run is live."""
+        screen = self._screen
+        if controller().is_live() or screen is None:
+            return
+        self.in_use.say(None)
+        values, remarks, blank = self._to_save()
+        try:
+            if blank:
+                raise engine_plans.PlanRefusal("", tuple(engine_plans.PlanProblem(None, None, None, BLANK_TEXT.format(
+                    label)) for label in blank))
+            text = engine_plans.plan_text(values, "", remarks)
+        except engine_plans.PlanRefusal as refused:
+            count = f"{len(refused.problems)} problem{'' if len(refused.problems) == 1 else 's'}"
+            ask(self, SAVE_TITLE, CANNOT_SAVE_TEXT.format(count), OK_TEXT, marker="err",
+                items=[problem.message for problem in refused.problems])
+            return
+        fields_of = {plans.HEADING_OF[page.step]: page.plan_fields() for page in screen.step_pages()}
+        items = [WRITTEN_ITEM.format(fields_of[heading][name].label_text(), name,
+                                     plans.value_words(fields_of[heading][name], value))
+                 for (heading, name), value in values.items()]
+        beneath = []
+        if screen.prior_panel.plan_fields()["bounds"].value() is plans.TYPED:
+            beneath.append(TYPED_BOUNDS_TEXT)
+        pending = [page.plan_fields()[selection.key].label_text() for page in screen.step_pages()
+                   for selection in page.selection_rows()
+                   if selection.key in page.plan_fields() and selection.changed()]
+        if pending:
+            beneath.append(NOT_APPLIED_SAVED_TEXT.format(", ".join(pending)))
+        name = ask_text(self, SAVE_TITLE, SAVE_TEXT, SAVE_LABEL, SAVE_ANSWER,
+                        check=lambda typed: None if plans.NAME_RULE.fullmatch(typed) else plans.NAME_TEXT,
+                        items=items, beneath=" ".join(beneath) or None)
+        if not name:
+            return
+        folder = self._plans_folder()
+        there = plans.taken(folder, name)
+        if there is not None:
+            try:
+                changed = texts.date_text(datetime.fromtimestamp(there.stat().st_mtime).astimezone())
+            except OSError:
+                changed = ""
+            if not ask(self, REPLACE_TITLE.format(there.stem), REPLACE_TEXT.format(there.name, changed), KEEP_PLAN,
+                       REPLACE_ANSWER, loses_work=True):
+                return
+        path = plans.save_plan(folder, name, text)
+        source = plans.PlanSource("plan", name, path, plans.file_sha(path, {}) or "", self.now(), dict(values))
+        screen.take_plan(source)
+        self._read_the_plans()
+        self.plan_choice.setCurrentIndex(max(0, self.plan_choice.findData(name)))
+        self.own_line(SAVED_TEXT.format(name))
+
+    def _open_pressed(self) -> None:
+        plans.open_folder(self._plans_folder())
+
+    def read_disk(self) -> None:
+        """The model's plans, listed again, and the plan the list shows, read again."""
+        self._read_the_plans()
+
+    @reported(QWidget.showEvent)
+    def showEvent(self, event):
+        """Shown again with nothing owed, the page is drawn again: a page of another step may have changed what a save
+        would write."""
+        reads = self.stale
+        super().showEvent(event)
+        if not reads:
+            self.redraw()
 
     # ── what is remembered ──
     def restore_settings(self, qs) -> None:

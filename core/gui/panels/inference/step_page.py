@@ -10,7 +10,9 @@ itself stale, and reads as it is shown. A constructor reads none of this and sta
 
 A page says what it supplies by answering ``main_words``, ``main_pressed``, ``nothing_to_apply``, ``read_disk``,
 ``facts_from_form`` and ``in_use_words``; it hands the keyboard its first setting through ``first_focus``; and it says
-``reads_the_disk`` when it has nothing saved to read. A page whose rows pick what its step holds names them in
+``reads_the_disk`` when it has nothing saved to read. A step a plan fills hands its rows through ``plan_fields`` and
+says through ``plan_read`` what its run reads: under each field stands where its value came from, and under the heading
+the plan in use, both drawn again at every drawing. A page whose rows pick what its step holds names them in
 ``selection_rows``: under each that differs from what the step holds the page says "Changed, not applied" and what is in
 use, wherever it says nothing of its own there, counts them in "In use" and on the fold's button those the fold holds,
 and tells the rail as soon as there come to be some, or none.
@@ -28,11 +30,11 @@ come back, and back to the main button once its failure has been told.
 from datetime import datetime
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QPushButton, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from core.refusals import Refusal
 
-from ... import design, fields, style
+from ... import design, fields, plans, style
 from ...reported import reported
 from ...run.controller import controller
 from ...run.retry import NOTED_TEXT
@@ -42,6 +44,7 @@ from ...widgets.ask import ask
 from ...widgets.facts import Foot
 from ...widgets.figure_stack import FigureStack
 from ...widgets.form import READ_AFTER_MS, Form
+from ...widgets.form import _may_wrap as form_words
 from ...widgets.in_use import InUse
 from ...widgets.marker import painted_icon
 from ...widgets.page import Page, PageHead, Scroller, _ring_room
@@ -141,6 +144,12 @@ class StepPage(RunHost, QWidget):
         self._body = QVBoxLayout(body)
         self._body.setContentsMargins(0, 0, 0, 0)
         self._body.setSpacing(design.scaled(design.GAP["block"]))
+        # The plan in use, under the heading, on a step a plan fills: small, as where a value came from is said.
+        self.plan_line = style.set_class(QLabel(), cls="small")
+        self.plan_line.setTextFormat(Qt.PlainText)
+        self.plan_line.setWordWrap(True)
+        self.plan_line.setVisible(step in plans.HEADING_OF)
+        self._body.addWidget(self.plan_line)
         self._body.addWidget(self.in_use)
         self._body.addWidget(self.run_view.how_link, 0, Qt.AlignLeft)
         self._body.addWidget(self.figure_stack)
@@ -230,6 +239,11 @@ class StepPage(RunHost, QWidget):
         """The rows a plan may fill, by field key."""
         return {}
 
+    def plan_read(self, applied: bool) -> dict:
+        """The settings of this step a run reads, by field key: what the form holds now, or with ``applied`` what the
+        step holds, for a run of a later step."""
+        return {}
+
     def selection_rows(self) -> tuple:
         """The rows that pick what the step holds."""
         return ()
@@ -294,6 +308,7 @@ class StepPage(RunHost, QWidget):
         facts = ordered(((self._head_fact,) if self._head_fact is not None else ()) + refused_facts(self.form.refused())
                         + tuple(self.facts_from_form()))
         self._say_changed()
+        self.say_the_plan()
         nothing = self.nothing_to_apply()
         self.foot.set_reads(self.reads_the_disk)
         self.foot.set_main_words(self.main_words())
@@ -321,6 +336,16 @@ class StepPage(RunHost, QWidget):
                 row.set_line("", "")
         self.in_use.set_pending(len(changed))
         self.form.fold.set_changed(changed)
+
+    def say_the_plan(self) -> None:
+        """Beside each row a plan fills, where its value came from; under the heading, the plan in use and how many of
+        the settings this step's run reads depart from it. Reads nothing."""
+        screen, heading = self._screen, plans.HEADING_OF.get(self.step)
+        if heading is None or screen is None or not hasattr(screen, "plan_source"):
+            return
+        for row in self.plan_fields().values():
+            row.set_origin(plans.origin(row, screen.plan_source, kept=row.kept, heading=heading))
+        self.plan_line.setText(form_words(plans.plan_line(screen, plans.headings_to(self.step))))
 
     def _tell_the_rail(self) -> None:
         """Work the steps' states out again when a choice has come to differ from what the step holds, or no longer

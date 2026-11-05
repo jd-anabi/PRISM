@@ -769,6 +769,47 @@ learning_rate = 0.0005         # Learning rate
 # Narrowing round
 num_transforms = 10            # Network depth
 """
+#: What RETRAIN fills, by the step and the field; every other row of the three steps takes its usual value.
+FILLED = {("model", "chi_mode"): True, ("model", "chi_n_freqs"): 5, ("prior", "bounds"): "master_tier1.txt",
+          ("prior", "num_iterations"): 40, ("training", "num_runs"): 10000, ("training", "hidden_features"): 256,
+          ("training", "learning_rate"): 0.0005}
+#: A value of every row of the three steps that is neither its usual one nor RETRAIN's (the kind of observation, which
+#: has two, takes the one RETRAIN does not hold), each as its field takes it.
+ELSEWHERE = {("model", "chi_mode"): False, ("model", "chi_n_freqs"): 7, ("model", "chi_k_pad"): 14,
+             ("model", "chi_max_cycles"): 25.0, ("model", "reparam_rotate"): False, ("model", "units"): "kHz ms nm pN",
+             ("prior", "bounds"): "master.txt", ("prior", "num_iterations"): 45, ("prior", "sweep_batch"): 64,
+             ("prior", "max_sets"): 1000, ("prior", "walk_step"): 0.02, ("prior", "stability_units"): 500.0,
+             ("prior", "min_cluster_size"): 60, ("prior", "min_samples"): 12, ("training", "num_runs"): 9500,
+             ("training", "run_size_cap"): 2048, ("training", "hidden_features"): 192,
+             ("training", "num_transforms"): 6, ("training", "learning_rate"): 0.002,
+             ("training", "stop_after_epochs"): 30, ("training", "max_num_epochs"): 300,
+             ("training", "expected_epochs"): 40, ("training", "checkpoint_every"): 25, ("training", "fisher_m"): 32,
+             ("training", "fisher_dz"): 0.2, ("training", "fisher_points"): 6}
+#: The places a line of the window may break at, which a sentence read back leaves out.
+BREAK = "​"
+
+
+def _usual() -> dict:
+    """The usual value of every row of the three steps but the bounds file, which has none: core/config.py's."""
+    from core import config
+    return {("model", "chi_mode"): False, ("model", "chi_n_freqs"): config.CHI_N_FREQS,
+            ("model", "chi_k_pad"): config.CHI_K_PAD, ("model", "chi_max_cycles"): config.CHI_MAX_CYCLES,
+            ("model", "reparam_rotate"): bool(config.REPARAM_ROTATE), ("model", "units"): None,
+            ("prior", "num_iterations"): config.PRIOR_SWEEP_ITERATIONS, ("prior", "sweep_batch"): 0,
+            ("prior", "max_sets"): config.PRIOR_SWEEP_MAX_SETS, ("prior", "walk_step"): config.PRIOR_SWEEP_STEP,
+            ("prior", "stability_units"): float(config.STABILITY_SWEEP_ND_UNITS),
+            ("prior", "min_cluster_size"): config.PRIOR_CLUSTER_MIN_SIZE,
+            ("prior", "min_samples"): config.PRIOR_CLUSTER_MIN_SAMPLES,
+            ("training", "num_runs"): config.TRAINING_NUM_RUNS, ("training", "run_size_cap"): config.TRAINING_RUN_SIZE,
+            ("training", "hidden_features"): config.NSF_HIDDEN_FEATURES,
+            ("training", "num_transforms"): config.NSF_NUM_TRANSFORMS,
+            ("training", "learning_rate"): config.TRAINING_LEARNING_RATE,
+            ("training", "stop_after_epochs"): config.TRAINING_STOP_AFTER_EPOCHS, ("training", "max_num_epochs"): None,
+            ("training", "expected_epochs"): None, ("training", "checkpoint_every"): config.TRAINING_CHECKPOINT_EVERY,
+            ("training", "fisher_m"): config.REPARAM_FISHER_M, ("training", "fisher_dz"): config.REPARAM_FISHER_DZ,
+            ("training", "fisher_points"): config.REPARAM_FISHER_POINTS}
+
+
 def _the_plans(tmp_path, monkeypatch, files=None, model="nadrowski") -> Path:
     """The test's own folder of plans, the one a window built from now on lists and writes, and in it the folder of
     ``model`` holding ``files``, each written byte for byte under its name; that folder, made only when files are
@@ -782,6 +823,432 @@ def _the_plans(tmp_path, monkeypatch, files=None, model="nadrowski") -> Path:
         for name, text in files.items():
             _plan(folder, text, name)
     return folder
+
+
+def _the_window(tmp_path, monkeypatch, files=None, *, clock=None):
+    """A whole window in sight, off the screen, on the test's own clock, with the test's own plans: step 1 shown and
+    read. (window, screen, the first step, the model's folder of plans, the clock)."""
+    from core.gui import design
+    from tests._fixtures import build_window, qt_app
+    from tests._look_helpers import _settle
+    from tests._runs import Clock, at, controller_on
+    from tests._window_helpers import shown_off_screen
+    folder = _the_plans(tmp_path, monkeypatch, files)
+    qt_app()
+    clock = clock or Clock(at(8, 12, 4))
+    controller_on(tmp_path, clock)
+    window = build_window()
+    design.set_room((3400, 1380))
+    window.setMinimumSize(1, 1)
+    shown_off_screen(window, 1300, 820)
+    window.go_to("inference", "model")
+    _settle()
+    screen = window.part("inference")
+    return window, screen, screen.config_panel, folder, clock
+
+
+def _listed(page) -> list:
+    """What the list of plans holds, as it reads now."""
+    return [page.plan_choice.itemText(at) for at in range(page.plan_choice.count())]
+
+
+def _opened(page) -> list:
+    """The list of plans opened, as a person opens it, and shut: what it then holds."""
+    page.plan_choice.showPopup()
+    page.plan_choice.hidePopup()
+    return _listed(page)
+
+
+def _choose(page, name) -> None:
+    """Open the list and choose ``name`` in it, "No plan" for None."""
+    _opened(page)
+    found = page.plan_choice.findData(name) if name is not None else 0
+    assert found >= 0, (name, _listed(page))
+    page.plan_choice.setCurrentIndex(found)
+
+
+def _pages(screen) -> dict:
+    """The three steps a plan fills, by their step."""
+    return {page.step: page for page in screen.step_pages()}
+
+
+def _values(screen) -> dict:
+    """Every row a plan fills, by its step and its field, as it reads now."""
+    return {(step, key): row.value() for step, page in _pages(screen).items()
+            for key, row in page.plan_fields().items()}
+
+
+def _origins(screen) -> dict:
+    """Where every row a plan fills says its value came from, by its step and its field."""
+    return {(step, key): page.form.rows[key].origin.text().replace(BREAK, "") for step, page in _pages(screen).items()
+            for key in page.plan_fields()}
+
+
+def _set(screen, values) -> None:
+    """Each row of ``values`` set as a person would leave it: a bounds file selected in its list."""
+    pages = _pages(screen)
+    for (step, key), value in values.items():
+        if key == "bounds":
+            pages[step].bounds_picker.refresh()
+            pages[step].bounds_picker.restore_key(value)
+        else:
+            pages[step].plan_fields()[key].set_value(value)
+
+
+def _press_fill(page, monkeypatch, name="retrain", *, answer=None) -> list:
+    """Choose ``name`` in the list ("No plan" for None) and press the fill button, answering a question with the answer
+    of the words ``answer``, or with nothing, as the guard does; every box asked."""
+    from tests._dialogs import all_asked, choose, forget_asked
+    _choose(page, name)
+    forget_asked()
+    if answer is not None:
+        choose(monkeypatch, words=answer)
+    assert page.fill_button.isEnabled(), page.fill_reason.text()
+    page.fill_button.click()
+    return all_asked()
+
+
+def _shown_again(window) -> None:
+    """Step 1 shown again from another step, as a person comes back to it: what another step's form changed is drawn."""
+    window.go_to("inference", "training")
+    window.go_to("inference", "model")
+
+
+def _said(line) -> str:
+    """What a label or a sentence of the window says, with the places a line may break at left out."""
+    text = line.plain_text() if hasattr(line, "plain_text") else line.text()
+    return text.replace(BREAK, "")
+
+
+def test_choosing_in_the_list_changes_nothing(tmp_path, monkeypatch, store):
+    """Choosing a plan in the list reads it and says what it holds; it changes no form, no origin, no plan line, nothing
+    in use, nothing remembered and no step's state: only the fill button fills."""
+    from PySide6.QtCore import QSettings
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    written = []
+    kept = QSettings.setValue
+    monkeypatch.setattr(QSettings, "setValue", lambda qs, key, value: (written.append(key), kept(qs, key, value))[1])
+
+    def held():
+        return (_values(screen), _origins(screen), screen.step_states(), screen.plan_source,
+                [_said(one.plan_line) for one in screen.step_pages()])
+
+    before = held()
+    _choose(page, "retrain")
+    assert page.plan_choice.currentText() == "retrain"
+    assert _said(page.plan_about) == f"{ABOUT_RETRAIN} 8 settings in 4 steps."
+    assert held() == before
+    assert _said(page.plan_in_use) == "In use: no plan."
+    assert page.form.rows["plan"].line.words == "Changed, not applied. In use: no plan."
+    assert written == [], written
+
+
+def test_the_folder_is_read_again_each_time_the_list_opens(tmp_path, monkeypatch, store):
+    """The list holds "No plan", then the model's plans by name in the order of the alphabet, read as it opens: a plan
+    written since comes in, one taken away goes, the plan shown stays while it is there. Open, it is at least as wide
+    as its longest name, which the box shows cut short in its middle, whole in its tip."""
+    long_name = "retrain_on_the_temperature_box_at_the_larger_network_second_try"
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    assert _opened(page) == ["No plan", "retrain"]
+    _plan(folder, RETRAIN, "Another")
+    _plan(folder, RETRAIN, long_name)
+    (folder / "Zeta.TXT").write_bytes(RETRAIN.encode("utf-8"))
+    assert _listed(page) == ["No plan", "retrain"], "the list was read before it opened"
+    assert _opened(page) == ["No plan", "Another", "retrain", long_name, "Zeta"]
+    (folder / "Zeta.TXT").unlink()
+    page.plan_choice.setCurrentIndex(page.plan_choice.findData(long_name))
+    page.plan_choice.showPopup()
+    try:
+        wide = page.plan_choice.fontMetrics().horizontalAdvance(long_name)
+        assert page.plan_choice.view().width() >= wide, (page.plan_choice.view().width(), wide)
+    finally:
+        page.plan_choice.hidePopup()
+    assert page.plan_choice.toolTip() == long_name and page.plan_choice.shown_text() != long_name
+    (folder / "Another.txt").unlink()
+    assert _opened(page) == ["No plan", "retrain", long_name] and page.plan_choice.currentText() == long_name
+    (folder / f"{long_name}.txt").unlink()
+    assert _opened(page) == ["No plan", "retrain"] and page.plan_choice.currentText() == "No plan"
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_a_long_plan_name_keeps_the_first_step_inside_the_least_window(factor, tmp_path, monkeypatch, store):
+    """A plan is named by hand, at any length. Shown in the list at the window's least size, with the fold open and the
+    plan's table open, its name is cut short in its middle in the box and whole in its tip, and the form stays inside
+    its viewport: the body never scrolls sideways. The program's font, set for the measure, is put back."""
+    from PySide6.QtGui import QFont
+    from core.gui import design, fonts
+    from tests._fixtures import build_window, qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import Clock, at, controller_on
+    from tests._window_helpers import shown_off_screen
+    name = "a_plan_named_at_length_for_the_retrain_measured_on_the_second_of_november_2026_by_hand"
+    _the_plans(tmp_path, monkeypatch, {name: RETRAIN})
+    app = qt_app()
+    kept = QFont(app.font())
+    try:
+        with text_size(factor), _the_look(False):
+            fonts.load_app_font(app)
+            controller_on(tmp_path, Clock(at(8, 12, 4)))
+            window = build_window()
+            design.set_room((3400, 1380))
+            window.setMinimumSize(1, 1)
+            page = window.part("inference").config_panel
+            shown_off_screen(window, design.scaled(900), design.scaled(600))
+            window.go_to("inference", "model")
+            _settle()
+            _choose(page, name)
+            page.holds_button.click()
+            page.form.fold.set_open(True)
+            _settle()
+            port = page.scroller.viewport()
+            assert page.scroller.body.minimumSizeHint().width() <= port.width(), (
+                page.scroller.body.minimumSizeHint().width(), port.width())
+            for part in (page.plan_choice, page.holds_table, page.plan_about, page.fill_button):
+                assert part.mapTo(port, part.rect().topRight()).x() < port.width(), type(part).__name__
+            assert page.plan_choice.shown_text() != name and "…" in page.plan_choice.shown_text()
+            assert page.plan_choice.toolTip() == name
+            window.hide()
+    finally:
+        app.setFont(kept)
+
+
+def test_a_hand_named_file_is_listed_and_a_plan_with_problems_fills_nothing(tmp_path, monkeypatch, store):
+    """Every .txt of the model's folder is listed, a hand-named one too. One with problems says so with each problem on
+    its line, greys the fill button with the reason beside it, and fills nothing, never a part of a plan, at a press
+    that reaches the page all the same. "Open the plans folder" is greyed until the folder exists, then opens it."""
+    from core.gui import plans as window_plans
+    opened = []
+    monkeypatch.setattr(window_plans, "open_folder", opened.append)
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch)
+    assert _opened(page) == ["No plan"] and not page.open_button.isEnabled()
+    broken = "# Training\nnum_runs = 9000\nnum_run = 5\n\n# Trainng\nhidden_features = 64\n"
+    folder.mkdir(parents=True)
+    _plan(folder, broken, "retrain v2")
+    (folder / "notes.md").write_text("not a plan", encoding="utf-8")
+    assert _opened(page) == ["No plan", "retrain v2"] and page.open_button.isEnabled()
+    before = _values(screen)
+    _choose(page, "retrain v2")
+    assert page.plan_trouble.sentence.plain_text() == "This plan cannot be used: 2 problems in retrain v2.txt"
+    shown = [_said(line) for line in page.plan_problems if not line.isHidden()]
+    assert shown == ["line 3: 'num_run' is not a setting PRISM has. The nearest is num_runs.",
+                     f"line 5: '# Trainng' is not a heading a plan has. {THE_HEADINGS}"]
+    assert not page.fill_button.isEnabled()
+    assert page.fill_reason.text() == "Correct the file, then choose the plan again."
+    assert page.holds_button.isHidden() and page.plan_about.isHidden()
+    page._fill_pressed()
+    assert _values(screen) == before and screen.plan_source is None
+    page.open_button.click()
+    assert opened == [folder]
+
+
+def test_a_plan_with_many_problems_says_eight_and_counts_the_rest_each_breaking_anywhere(tmp_path, monkeypatch, store):
+    """A file of notes is a plan with a problem on every line, each echoing its line whole: eight are said, each cut at
+    its length and breaking anywhere, so that a line of one long word does not widen the page, and the rest are
+    counted."""
+    notes = "\n".join(["# Training"] + [f"note {at}" for at in range(11)] + ["y" * 600])
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"notes": notes})
+    _choose(page, "notes")
+    assert page.plan_trouble.sentence.plain_text() == "This plan cannot be used: 12 problems in notes.txt"
+    shown = [_said(line) for line in page.plan_problems if not line.isHidden()]
+    assert len(shown) == 9 and shown[-1] == "And 4 more."
+    assert shown[0] == "line 2: 'note 0' is not a setting line. Write name = value under a heading."
+    long = page._shown_plan.problems[-1].message
+    assert len(long) > 300
+    page._shown_plan = type(page._shown_plan)("", (page._shown_plan.problems[-1],))
+    page.redraw()
+    said = page.plan_problems[0].text()
+    assert said.replace(BREAK, "") == long[:299] + "…" and BREAK in said
+    port = page.scroller.viewport()
+    assert page.scroller.body.minimumSizeHint().width() <= port.width()
+
+
+def test_the_picker_opens_on_no_plan_and_says_what_was_last_used(tmp_path, monkeypatch, store):
+    """At launch the list shows "No plan", never what was chosen before. Beside it while it shows "No plan", the plan
+    last used with the model shown and when, or that its file is gone; nothing when the last step applied, or the last
+    run started, had no plan, nor for another model's plan."""
+    from datetime import datetime
+    from core.gui import settings
+    from core.gui.remembered import LAST_USED_AT_KEY, LAST_USED_KEY
+    from tests._fixtures import build_window
+    from tests._look_helpers import _settle
+    from tests._window_helpers import shown_off_screen
+    used = datetime(2026, 10, 5, 14, 2).astimezone()
+    _the_plans(tmp_path, monkeypatch, {"retrain": RETRAIN})
+
+    def opened(remembered):
+        qs = settings.settings()
+        for key, value in remembered.items():
+            qs.setValue(key, value)
+        qs.sync()
+        window = build_window()
+        window.setMinimumSize(1, 1)
+        shown_off_screen(window, 1300, 820)
+        window.go_to("inference", "model")
+        _settle()
+        page = window.part("inference").config_panel
+        return page, page.form.rows["plan"].origin.text().replace(BREAK, "")
+
+    page, hint = opened({LAST_USED_KEY.format("nadrowski"): "retrain",
+                         LAST_USED_AT_KEY.format("nadrowski"): used.isoformat()})
+    assert (page.plan_choice.currentText(), hint) == ("No plan", "Last used: retrain, 5 Oct 2026, 14:02")
+    assert _said(page.plan_line) == "No plan"
+    _choose(page, "retrain")
+    assert page.form.rows["plan"].origin.text() == "", "the hint stood beside a plan chosen"
+    assert opened({LAST_USED_KEY.format("nadrowski"): "gone_plan"})[1] == (
+        "Last used: gone_plan (the file is no longer there)")
+    assert opened({LAST_USED_KEY.format("nadrowski"): "retrain", LAST_USED_AT_KEY.format("nadrowski"): "?"})[1] == (
+        "Last used: retrain")
+    assert opened({LAST_USED_KEY.format("nadrowski"): "", LAST_USED_AT_KEY.format("nadrowski"): ""})[1] == ""
+    assert opened({LAST_USED_KEY.format("hopf"): "retrain"})[1] == ""
+    page.model_combo.setCurrentText("HOPF")
+    page.read_facts()
+    assert page.form.rows["plan"].origin.text().replace(BREAK, "") == "Last used: retrain (the file is no longer there)"
+
+
+def test_one_press_fills_steps_one_to_three(tmp_path, monkeypatch, store):
+    """Every row of steps 1 to 3 that a plan fills takes the plan's value, else its usual one, from wherever each stood:
+    off its usual value and off the plan's, or put back from last time. The bounds file is selected in the model
+    applied, its limits no longer typed. Nothing is said to be kept any longer, and the plan line under each heading
+    names the plan, and once step 1 is applied, no change from it."""
+    from core.gui import plans as window_plans
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    page.foot.main_button.click()
+    _set(screen, ELSEWHERE)
+    prior, training = screen.prior_panel, screen.posterior_panel
+    prior.typed_tick.setChecked(True)
+    training.form.rows["num_runs"].kept = True
+    assert _values(screen) == {**ELSEWHERE, ("prior", "bounds"): window_plans.TYPED}
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    usual = _usual()
+    wanted = {pair: FILLED.get(pair, usual.get(pair)) for pair in ELSEWHERE}
+    assert _values(screen) == wanted
+    assert [pair for pair in ELSEWHERE if wanted[pair] == ELSEWHERE[pair]] == [], "a row was not moved by the fill"
+    assert not prior.typed_tick.isChecked() and prior.bounds_picker.key() == "master_tier1.txt"
+    assert not any(row.kept for one in screen.step_pages() for row in one.plan_fields().values())
+    assert (screen.plan_source.kind, screen.plan_source.name) == ("plan", "retrain")
+    assert [_said(one.plan_line) for one in screen.step_pages()] == [
+        "Plan: retrain", "Plan: retrain, 1 change", "Plan: retrain, 1 change"], "step 1 holds what it held"
+    page.foot.main_button.click()
+    assert [_said(one.plan_line) for one in screen.step_pages()] == ["Plan: retrain"] * 3
+
+
+def test_a_fill_that_would_replace_a_typed_value_asks_first(tmp_path, monkeypatch, store):
+    """A fill that would replace a value a person typed or that was put back from last time asks first: its title, its
+    sentence counting what the plan fills, and each value it would replace in full, "Keep what is there" preselected,
+    the answer of Escape. That answer leaves every field as it was, and fills nothing; the other fills. A value already
+    at its usual one, or at the plan's, is not asked about."""
+    from tests._dialogs import choose
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    page.foot.main_button.click()
+    training, prior = screen.posterior_panel, screen.prior_panel
+    _set(screen, {("training", "num_runs"): 9500, ("prior", "bounds"): "master.txt", ("model", "units"): "kHz ms",
+                  ("training", "hidden_features"): 256, ("training", "fisher_m"): 48})
+    training.form.rows["run_size_cap"].set_value(512)
+    training.form.rows["run_size_cap"].kept = True
+    before = _values(screen)
+    asked = _press_fill(page, monkeypatch)
+    assert len(asked) == 1, asked
+    question = asked[0]
+    assert (question.title, question.sentence) == (
+        "Fill the forms from plan retrain?",
+        "Filling from plan retrain sets every setting a plan can hold: 7 from the plan, the rest to their usual "
+        "values.")
+    assert question.items == ("Units: kHz ms becomes the model's units file", "Bounds file: master.txt becomes "
+                              "master_tier1.txt", "Batches: 9,500 becomes 10,000", "Simulations per batch: 512 becomes "
+                              "automatic")
+    assert (question.answers, question.default, question.safe, question.loses_work) == (
+        ("Fill the forms", "Keep what is there"), "Keep what is there", "Keep what is there", False)
+    assert _values(screen) == before and screen.plan_source is None
+    choose(monkeypatch, other=True)
+    page.fill_button.click()
+    assert _values(screen)[("training", "num_runs")] == 10000 and screen.plan_source.name == "retrain"
+    _plan(_folder, "# Training\nnum_runs = 7000\n", "fewer")
+    assert _press_fill(page, monkeypatch, "fewer") == [], "a value at the plan's in use was asked about"
+    assert _values(screen)[("training", "num_runs")] == 7000
+
+
+def test_return_to_the_usual_values_resets_steps_one_to_three(tmp_path, monkeypatch, store):
+    """With "No plan" shown the button returns every row of steps 1 to 3 to its usual value, asking first with its own
+    words when it would replace what was typed; the bounds file is left as it is, and no plan is in use after it."""
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    page.foot.main_button.click()
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    screen.posterior_panel.form.rows["num_runs"].set_value(9500)
+    assert page.fill_button.text() == "Fill the forms from this plan"
+    _choose(page, None)
+    assert page.fill_button.text() == "Return the forms to the usual values"
+    asked = _press_fill(page, monkeypatch, None, answer="Return to the usual values")
+    assert [(one.title, one.sentence, one.items, one.answers, one.default) for one in asked] == [(
+        "Return the forms to the usual values?", "This sets every setting a plan can hold to its usual value.",
+        ("Batches: 9,500 becomes 5,000",), ("Return to the usual values", "Keep what is there"),
+        "Keep what is there")]
+    usual = _usual()
+    assert _values(screen) == {**usual, ("prior", "bounds"): "master_tier1.txt"}
+    assert screen.plan_source is None and [_said(one.plan_line) for one in screen.step_pages()] == ["No plan"] * 3
+    assert _said(page.plan_in_use) == "In use: no plan."
+    assert _press_fill(page, monkeypatch, None) == [], "the forms at their usual values asked again"
+
+
+def test_the_later_headings_are_shown_not_applied_yet_and_counted(tmp_path, monkeypatch, store):
+    """What the plan holds is shown, folded, as a table of four columns, a row a setting in the file's order: its step,
+    its label with its name in the file, its value in the plan and its usual value; a setting of a step that is not
+    filled yet says "not applied yet". The count beside the plan's description counts every setting and every step;
+    the fill's question counts the settings it fills, and the facts and the fill leave the later ones alone."""
+    from core import config
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _choose(page, "retrain")
+    assert page.holds_button.text() == "Show what it holds" and page.holds_table.isHidden()
+    page.holds_button.click()
+    assert not page.holds_table.isHidden()
+    from PySide6.QtCore import Qt
+    model = page.holds_table.view.model()
+    header = [model.headerData(at, Qt.Horizontal) for at in range(4)]
+    rows = [[model.index(row, at).data() for at in range(4)] for row in range(model.rowCount())]
+    assert header == ["Step", "Setting", "In the plan", "Usual"]
+    assert rows == [
+        ["Model and options", "Kind of observation (chi_mode)", "frequency response", "set by the bounds file"],
+        ["Model and options", "Driven recordings per observation (chi_n_freqs)", "5", f"{config.CHI_N_FREQS}"],
+        ["Prior", "Bounds file (bounds)", "master_tier1.txt", "none"],
+        ["Prior", "Sweep rounds (num_iterations)", "40", f"{config.PRIOR_SWEEP_ITERATIONS}"],
+        ["Training", "Batches (num_runs)", "10,000", f"{config.TRAINING_NUM_RUNS:,}"],
+        ["Training", "Network width (hidden_features)", "256", f"{config.NSF_HIDDEN_FEATURES}"],
+        ["Training", "Learning rate (learning_rate)", "0.0005", f"{config.TRAINING_LEARNING_RATE}"],
+        ["Narrowing round", "Network depth (num_transforms)", "10", "not applied yet"]], rows
+    assert _said(page.plan_about) == f"{ABOUT_RETRAIN} 8 settings in 4 steps."
+    asked = _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert asked == [] or asked[0].sentence.startswith("Filling from plan retrain sets every setting a plan can hold: "
+                                                       "7 from the plan")
+    assert screen.posterior_panel.form.rows["num_transforms"].value() == config.NSF_NUM_TRANSFORMS
+    assert ("Narrowing round", "num_transforms") not in screen.plan_source.values
+
+
+def test_a_plans_bounds_file_waits_until_its_model_is_applied(tmp_path, monkeypatch, store):
+    """Filled while the model on step 1's form is not the one applied, a plan's bounds file is not selected in the list
+    of another model's folder: it waits, the limits typed by hand no longer read, and when step 1 applies a model the
+    file is selected by its name in that model's folder, said to be no longer there when it is not."""
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    prior = screen.prior_panel
+    prior.typed_tick.setChecked(True)
+    before = prior.bounds_picker.key()
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert screen.session.draft is None and prior.bounds_picker.key() == before
+    assert not prior.typed_tick.isChecked()
+    assert _said(prior.waiting_line) == "master_tier1.txt is selected when step 1, Model and options, is applied."
+    assert not prior.waiting_line.isHidden() and _origins(screen)[("prior", "bounds")] == "from plan retrain"
+    page.foot.main_button.click()
+    assert prior.bounds_picker.key() == "master_tier1.txt" and prior.gone_line.isHidden()
+    assert prior.waiting_line.isHidden() and _origins(screen)[("prior", "bounds")] == "from plan retrain"
+    assert not prior.form.rows["bounds"].kept
+    prior.pending_bounds("master.txt")
+    prior.bounds_picker.restore_key("master_spont.txt")
+    assert prior.waiting_line.isHidden(), "a file chosen in the list left a plan's file waiting"
+    page.foot.main_button.click()
+    assert prior.bounds_picker.key() == "master_spont.txt"
+    prior.pending_bounds("not_there.txt")
+    page.model_combo.setCurrentText("HOPF")
+    page.foot.main_button.click()
+    assert prior.bounds_picker.key() == "" and not prior.gone_line.isHidden()
+    assert _said(prior.gone_line) == "The bounds file used last time, not_there.txt, is no longer in the folder."
 
 
 def test_the_windows_two_checks_are_listed_as_the_readers_are(tmp_path, monkeypatch):
@@ -816,6 +1283,186 @@ def test_the_windows_two_checks_are_listed_as_the_readers_are(tmp_path, monkeypa
         "line 3: 'num_run' is not a setting PRISM has. The nearest is num_runs."], "the reader's problems stood alone"
 
 
+def test_a_model_changed_returns_the_list_to_no_plan(tmp_path, monkeypatch, store):
+    """The list follows the model shown on step 1's form: another model chosen there shows "No plan", lists that
+    model's own plans as it opens, and leaves no plan in use; the values on the forms stay as they are, and say they
+    are changed from the usual."""
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    hopf = folder.parent / "hopf"
+    hopf.mkdir()
+    _plan(hopf, "# Training\nnum_runs = 3000\n", "hopf_plan")
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert screen.plan_source.name == "retrain"
+    page.model_combo.setCurrentText("HOPF")
+    assert _listed(page) == ["No plan"] and screen.plan_source is None
+    assert _values(screen)[("training", "num_runs")] == 10000
+    assert _origins(screen)[("training", "num_runs")] == "changed from the usual"
+    assert [_said(one.plan_line) for one in screen.step_pages()] == ["No plan"] * 3
+    assert _opened(page) == ["No plan", "hopf_plan"]
+    page.model_combo.setCurrentText("NADROWSKI")
+    assert _listed(page) == ["No plan"] and _opened(page) == ["No plan", "retrain"]
+
+
+def test_the_origin_of_every_row_follows_the_source_in_use(tmp_path, monkeypatch, store):
+    """Beside every row a plan fills stands where its value came from, worked out after every edit, fill and apply: its
+    usual value, or changed from it; put back from last time; from the plan, or changed from it; and as a record's or a
+    run's when one filled the forms. A bounds file has no usual value, and says nothing until a source holds one."""
+    from core.gui import plans as window_plans
+    from tests._runs import at
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    training = screen.posterior_panel
+    row = training.form.rows["num_runs"]
+    assert set(_origins(screen).values()) == {"usual", ""}
+    assert _origins(screen)[("prior", "bounds")] == ""
+    row.set_value(7000)
+    assert _said(row.origin) == "changed from the usual"
+    row.kept = True
+    training.redraw()
+    assert _said(row.origin) == "kept from last time"
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert _said(row.origin) == "from plan retrain"
+    assert _origins(screen) == {pair: "from plan retrain" if pair in FILLED else "usual" for pair in _origins(screen)}
+    row.set_value(9500)
+    assert _said(row.origin) == "changed from the plan"
+    page.foot.main_button.click()
+    assert _said(row.origin) == "changed from the plan" and _said(page.form.rows["chi_mode"].origin) == (
+        "from plan retrain")
+    record = window_plans.PlanSource("record", "retrain_posterior", None, "", at(8, 12, 4),
+                                     {("Training", "num_runs"): 9500}, ident="20261008T120400")
+    screen.take_plan(record)
+    assert _said(row.origin) == "from record retrain_posterior"
+    assert _said(training.form.rows["hidden_features"].origin) == "changed from the usual"
+    row.set_value(9600)
+    assert _said(row.origin) == "changed from the record"
+    screen.take_plan(window_plans.PlanSource("run", "retrain_3", None, "", at(8, 12, 4),
+                                             {("Training", "num_runs"): 9600}, ident="20261008T130000"))
+    assert _said(row.origin) == "from run retrain_3"
+    assert [_said(one.plan_line) for one in screen.step_pages()][2].startswith("Settings from run retrain_3")
+
+
+def test_the_foot_of_the_first_step_says_when_it_read_only_while_a_plan_is_in_use(tmp_path, monkeypatch, store):
+    """Step 1 reads the file of the plan in use: while one is, the line of when it read and "Check again" stand, at the
+    next drawing, and "Check again" is a stop of the Tab key; with none they go, at the next drawing too."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from tests._look_helpers import _settle
+    from tests._window_helpers import in_front
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    foot = page.foot
+    assert page.reads_the_disk is False and foot.reading.isHidden() and foot.check_again.isHidden()
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert page.reads_the_disk is True and not foot.reading.isHidden() and not foot.check_again.isHidden()
+    page.read_facts()
+    assert foot.reading.text() == "The saved records were read at 12:04."
+    _settle()
+    with in_front(window):
+        page.open_button.setFocus(Qt.TabFocusReason)
+        stops = []
+        for _ in range(12):
+            QTest.keyClick(QApplication.focusWidget(), Qt.Key_Tab)
+            _settle()
+            stops.append(QApplication.focusWidget())
+        assert foot.check_again in stops and stops.index(foot.check_again) < stops.index(foot.main_button)
+    _press_fill(page, monkeypatch, None, answer="Return to the usual values")
+    assert page.reads_the_disk is False and foot.reading.isHidden() and foot.check_again.isHidden()
+
+
+def test_a_held_enter_answers_neither_the_fill_nor_the_save(tmp_path, monkeypatch):
+    """In the whole program, whose ring follows the keyboard as it does for a person: Enter held down as the fill's
+    question or the save's dialog opens answers neither, each still standing after the repeats. Enter pressed afresh
+    then gives the question its preselected answer, "Keep what is there", which fills nothing; the save's dialog, whose
+    answer waits for a name, takes nothing from it, and nothing is saved."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from tests._dialogs import all_asked, forget_asked, held_enter
+    from tests._fixtures import whole_program
+    from tests._look_helpers import _arrive, _settle
+    from tests._runs import Clock, at, controller_on
+    from tests._window_helpers import in_front, shown_off_screen
+    folder = _the_plans(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    with whole_program() as (_app, window):
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        shown_off_screen(window, 1300, 820)
+        window.go_to("inference", "model")
+        _settle()
+        screen = window.part("inference")
+        page = screen.config_panel
+        screen.posterior_panel.form.rows["num_runs"].set_value(9500)
+        page.redraw()
+        _choose(page, "retrain")
+        seen = []
+        held_enter(monkeypatch, seen)
+        forget_asked()
+        with in_front(window):
+            for button in (page.fill_button, page.save_button):
+                button.setFocus(Qt.TabFocusReason)
+                _arrive(button, Qt.TabFocusReason)
+                QTest.keyClick(button, Qt.Key_Return)
+        assert [one.title for one in all_asked()] == ["Fill the forms from plan retrain?", "Save as a plan"]
+        assert seen == [(True, False), (True, True)], "a held Enter answered a box, or Enter afresh did not"
+        assert screen.plan_source is None and _values(screen)[("training", "num_runs")] == 9500
+        assert sorted(path.name for path in folder.iterdir()) == ["retrain.txt"]
+        window.hide()
+
+
+def test_a_fill_with_what_was_put_back_kept_leaves_it_and_says_where_it_came_from(tmp_path, monkeypatch, store):
+    """Filled keeping what was put back, a value put back from last time and not touched since is left as it is: it
+    reads "changed from the plan" where the plan holds the setting and something else, and "kept from last time" where
+    the plan does not hold it. Every other row is filled."""
+    from core.config import BOUNDS_PATH
+    from core.gui import plans as window_plans
+    from core.gui import settings
+    from core.gui.remembered import NUM_RUNS_KEY, RUN_SIZE_KEY
+    from tests._runs import at
+    qs = settings.settings()
+    qs.setValue(NUM_RUNS_KEY, "4000")
+    qs.setValue(RUN_SIZE_KEY, "64")
+    qs.sync()
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    plan = window_plans.read_checked(folder / "retrain.txt", bounds_folder=BOUNDS_PATH / "nadrowski")
+    values = {pair: value for pair, value in plan.values.items() if pair[0] in window_plans.FILLED}
+    window_plans.fill_forms(screen, values, window_plans.PlanSource("plan", "retrain", plan.path, plan.sha256,
+                                                                    at(8, 12, 4), values), keep_remembered=True)
+    rows = screen.posterior_panel.form.rows
+    assert (rows["num_runs"].value(), rows["run_size_cap"].value()) == (4000, 64)
+    assert (rows["num_runs"].origin.text(), rows["run_size_cap"].origin.text()) == (
+        "changed from the plan", "kept from last time")
+    assert rows["hidden_features"].value() == 256 and rows["hidden_features"].origin.text() == "from plan retrain"
+
+
+def test_a_value_put_back_and_filled_over_with_the_same_number_is_the_plans(tmp_path, monkeypatch, store):
+    """Filled over, a value put back from last time is no longer said to be kept, even where the plan holds the same
+    number, which changes nothing in the field: it reads "from plan retrain"; and one the plan does not hold, set back
+    to its usual value, reads "usual"."""
+    from core.gui import settings
+    from core.gui.remembered import NUM_RUNS_KEY, RUN_SIZE_KEY
+    qs = settings.settings()
+    qs.setValue(NUM_RUNS_KEY, "10000")
+    qs.setValue(RUN_SIZE_KEY, "64")
+    qs.sync()
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    rows = screen.posterior_panel.form.rows
+    assert (rows["num_runs"].origin.text(), rows["run_size_cap"].origin.text()) == ("kept from last time",) * 2
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert (rows["num_runs"].value(), rows["num_runs"].kept, rows["num_runs"].origin.text()) == (
+        10000, False, "from plan retrain")
+    assert (rows["run_size_cap"].kept, rows["run_size_cap"].origin.text()) == (False, "usual")
+
+def test_a_fill_while_a_run_is_live_changes_nothing(tmp_path, monkeypatch, store):
+    """A fill asked for by code while a run is live changes no form and puts no plan in use."""
+    from core.gui import plans as window_plans
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._runs import running
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    before = _values(screen)
+    with running(window.panel(ReductionPanel)):
+        done = window_plans.fill_forms(screen, {("Training", "num_runs"): 10000},
+                                       window_plans.PlanSource("plan", "retrain", None, "", None, {}))
+    assert done is False and _values(screen) == before and screen.plan_source is None
+
+
 def test_the_process_holds_the_suites_own_folder_of_plans(tmp_path):
     """For the whole run of the suites the window's folder of plans is the session's own, not the real one beside the
     other inputs, and the process's state names it."""
@@ -824,6 +1471,208 @@ def test_the_process_holds_the_suites_own_folder_of_plans(tmp_path):
     from tests._fixtures import process_state, qt_app
     assert window_plans.PLAN_FOLDER != config.PLANS_PATH and window_plans.PLAN_FOLDER.is_dir()
     assert process_state(qt_app())["plans folder"] == window_plans.PLAN_FOLDER
+
+
+def _spontaneous(screen) -> None:
+    page = screen.config_panel
+    page.rot_choice.setCurrentIndex(page.rot_choice.findData(False))
+    page.form.rows["chi_n_freqs"].set_value(4)
+    screen.prior_panel.bounds_picker.restore_key("master.txt")
+    screen.posterior_panel.form.rows["num_runs"].set_value(7000)
+
+
+def _frequency_response(screen) -> None:
+    page = screen.config_panel
+    page.kind_choice.setCurrentIndex(page.kind_choice.findData(True))
+    for key, value in (("chi_n_freqs", 4), ("chi_k_pad", 10), ("chi_max_cycles", 30.5)):
+        page.form.rows[key].set_value(value)
+
+
+def _typed_units(screen) -> None:
+    screen.config_panel.plan_fields()["units"].set_value("pN nm ms kHz")
+
+
+def _typed_limits(screen) -> None:
+    prior = screen.prior_panel
+    prior.show_view("build")
+    prior.bounds_picker.restore_key("master.txt")
+    prior.typed_tick.setChecked(True)
+    prior.form.rows["num_iterations"].set_value(30)
+
+
+def _a_changed_row(screen) -> None:
+    page = screen.config_panel
+    page.foot.main_button.click()
+    page.kind_choice.setCurrentIndex(page.kind_choice.findData(True))
+
+
+SAVED = [
+    ("spontaneous", _spontaneous, {("Model and options", "reparam_rotate"): False, ("Prior", "bounds"): "master.txt",
+                                   ("Training", "num_runs"): 7000},
+     ["Rotation (reparam_rotate): off", "Bounds file (bounds): master.txt", "Batches (num_runs): 7,000"], ""),
+    ("frequency response", _frequency_response, {
+        ("Model and options", "chi_mode"): True, ("Model and options", "chi_n_freqs"): 4,
+        ("Model and options", "chi_k_pad"): 10, ("Model and options", "chi_max_cycles"): 30.5},
+     ["Kind of observation (chi_mode): frequency response", "Driven recordings per observation (chi_n_freqs): 4",
+      "Slots for driven recordings (chi_k_pad): 10", "Lock-in limit (chi_max_cycles): 30.5"], ""),
+    ("typed units", _typed_units, {("Model and options", "units"): "pN nm ms kHz"},
+     ["Units (units): kHz ms nm pN"], ""),
+    ("typed limits", _typed_limits, {("Prior", "num_iterations"): 30}, ["Sweep rounds (num_iterations): 30"],
+     "The bounds were typed by hand, so this plan names no bounds file."),
+    ("a changed row", _a_changed_row, {("Model and options", "chi_mode"): True},
+     ["Kind of observation (chi_mode): frequency response"],
+     "Saved as the forms show them, though not applied: Kind of observation."),
+]
+
+
+@pytest.mark.parametrize("set_up, values, items, beneath", [case[1:] for case in SAVED],
+                         ids=[case[0] for case in SAVED])
+def test_saving_writes_only_what_differs_and_every_file_it_can_write_reads_back(set_up, values, items, beneath,
+                                                                                tmp_path, monkeypatch, store):
+    """"Save as a plan…" writes every setting of steps 1 to 3 that differs from its usual value, each with its label as
+    its remark and the words the form shows where the file's differ, and the bounds file when one is selected, never
+    limits typed by hand; the driven recordings' three only with the frequency response. Its dialog lists what it will
+    write, and says when the bounds were typed and which settings it writes as the forms show them though not applied.
+    The file reads back as the values it was given."""
+    from tests._dialogs import all_asked, answer_in_turn
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch)
+    set_up(screen)
+    _shown_again(window)
+    answer_in_turn(monkeypatch, ("Save", "zz_saved"))
+    page.save_button.click()
+    dialog = all_asked()[-1]
+    assert (dialog.title, dialog.sentence, dialog.label, dialog.answers) == (
+        "Save as a plan", "Only the settings that differ from their usual values are written. A setting left out "
+        "follows the usual value.", "Plan name", ("Save", "Cancel"))
+    assert (list(dialog.items), dialog.beneath) == (items, beneath)
+    written = read_plan(folder / "zz_saved.txt")
+    assert written.values == values and written.about == ""
+    remarks = [line.split(" # ", 1)[1] for line in (folder / "zz_saved.txt").read_text(encoding="utf-8").splitlines()
+               if " = " in line]
+    if ("Model and options", "chi_mode") in values:
+        assert remarks[0] == "Kind of observation: Frequency response", remarks
+    else:
+        assert remarks == [item.split(" (", 1)[0] for item in items], remarks
+
+
+def test_saving_never_replaces_without_asking(tmp_path, monkeypatch, store):
+    """A name already in use, in any case, is never written over without asking: the question names the file and when it
+    was last changed, "Keep the existing plan" preselected, the other drawn as losing work. Kept, the file is as it was;
+    replaced, it holds the new plan."""
+    import os
+    from datetime import datetime
+    from tests._dialogs import all_asked, answer_in_turn, forget_asked
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    path = folder / "retrain.txt"
+    os.utime(path, (datetime(2026, 10, 3, 14, 2).timestamp(),) * 2)
+    kept = path.read_bytes()
+    screen.posterior_panel.form.rows["num_runs"].set_value(7000)
+    _shown_again(window)
+    answer_in_turn(monkeypatch, ("Save", "Retrain"), ("Keep the existing plan", None))
+    page.save_button.click()
+    question = all_asked()[-1]
+    assert (question.title, question.sentence, question.answers, question.default, question.loses_work) == (
+        "Replace plan retrain?", "retrain.txt was last changed on 3 Oct 2026, 14:02. The earlier file cannot be "
+        "brought back.", ("Replace it", "Keep the existing plan"), "Keep the existing plan", True)
+    assert path.read_bytes() == kept and screen.plan_source is None
+    forget_asked()
+    answer_in_turn(monkeypatch, ("Save", "retrain"), ("Replace it", None))
+    page.save_button.click()
+    assert [one.title for one in all_asked()] == ["Save as a plan", "Replace plan retrain?"]
+    assert sorted(entry.name for entry in folder.iterdir()) == ["retrain.txt"]
+    assert read_plan(path).values == {("Training", "num_runs"): 7000}
+
+
+def test_nothing_to_save_greys_the_button_with_its_reason(tmp_path, monkeypatch, store):
+    """With every setting at its usual value and no bounds file selected there is nothing to write: the button is greyed
+    and says why beside it, at once as the forms change on any step."""
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch)
+    assert not page.save_button.isEnabled()
+    assert page.save_reason.text() == "Every setting is at its usual value, so there is nothing to save."
+    screen.posterior_panel.form.rows["learning_rate"].set_value(0.002)
+    assert not page.save_button.isEnabled(), "step 1 not in sight was drawn"
+    _shown_again(window)
+    assert page.save_button.isEnabled() and page.save_reason.text() == ""
+    rate = screen.posterior_panel.form.rows["learning_rate"]
+    rate.set_value(rate.usual())
+    screen.prior_panel.bounds_picker.restore_key("master.txt")
+    _shown_again(window)
+    assert page.save_button.isEnabled(), "a bounds file selected is something to save"
+    screen.prior_panel.bounds_picker.restore_key("")
+    _shown_again(window)
+    assert not page.save_button.isEnabled()
+
+
+def test_a_plans_name_is_judged_as_it_is_typed(tmp_path, monkeypatch, store):
+    """The name is letters, digits, _ and -, at most 40 of them, judged as it is typed: a name that breaks the rule says
+    why under the line and greys "Save"; one that keeps it can be saved."""
+    from tests._dialogs import answer_in_turn
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch)
+    screen.posterior_panel.form.rows["num_runs"].set_value(7000)
+    _shown_again(window)
+    judged = []
+
+    def typed(dialog) -> None:
+        for name in ("retrain v2", "a" * 41, "retrain/2", "x" * 40, "retrain-2_b"):
+            dialog.field.setText(name)
+            judged.append((name, dialog.wrong, dialog.other_button.isEnabled()))
+
+    answer_in_turn(monkeypatch, typed)
+    page.save_button.click()
+    rule = "A plan's name is letters, digits, _ and -, at most 40 characters."
+    assert judged == [("retrain v2", rule, False), ("a" * 41, rule, False), ("retrain/2", rule, False),
+                      ("x" * 40, "", True), ("retrain-2_b", "", True)]
+    assert not folder.exists()
+
+
+def test_the_save_says_to_commit_the_file(tmp_path, monkeypatch, store):
+    """A plan saved becomes the plan in use, shown in the list, with no value changed, and the page says to commit the
+    file before a long run."""
+    from tests._dialogs import answer_in_turn
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch)
+    screen.posterior_panel.form.rows["num_runs"].set_value(7000)
+    _shown_again(window)
+    before = _values(screen)
+    answer_in_turn(monkeypatch, ("Save", "zz_saved"))
+    page.save_button.click()
+    assert _values(screen) == before
+    assert (screen.plan_source.kind, screen.plan_source.name, screen.plan_source.path) == (
+        "plan", "zz_saved", folder / "zz_saved.txt")
+    assert page.plan_choice.currentText() == "zz_saved" and page.open_button.isEnabled()
+    assert _said(page.plan_in_use) == "In use: plan zz_saved, filled 8 Oct 2026, 12:04."
+    assert page.in_use.said.sentence.plain_text() == (
+        "Information. Saved as plan zz_saved. Commit this file before a long run, or the run's records are marked as "
+        "made from a changed tree.")
+    assert [_said(one.plan_line) for one in screen.step_pages()] == ["Plan: zz_saved"] * 3
+    assert screen.posterior_panel.form.rows["num_runs"].origin.text() == "from plan zz_saved"
+
+
+def test_a_plan_that_cannot_be_written_says_so_and_saves_nothing(tmp_path, monkeypatch, store):
+    """What the forms hold that a plan cannot hold is told, every problem in its sentence, and nothing is saved: a value
+    left blank, a value its rule refuses, a text that holds a remark's mark."""
+    from core.refusals import _what
+    from tests._dialogs import all_asked, answer_in_turn
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch)
+    training = screen.posterior_panel.form.rows
+    training["num_runs"].widget.setText("")
+    _shown_again(window)
+    answer_in_turn(monkeypatch, ("Save", "zz_saved"), ("Save", "zz_saved"), ("Save", "zz_saved"))
+    page.save_button.click()
+    told = all_asked()[-1]
+    assert (told.title, told.sentence, told.marker, told.answers, told.items) == (
+        "Save as a plan", "This plan cannot be saved: 1 problem", "err", ("OK",), ("Batches is blank.",))
+    training["num_runs"].set_value(7000)
+    screen.config_panel.plan_fields()["units"].set_value("kHz #ms")
+    page.save_button.click()
+    told = all_asked()[-1]
+    assert (told.sentence, told.items) == ("This plan cannot be saved: 1 problem", (
+        f"{_what('units')} cannot hold ' #'; got 'kHz #ms'.",)), told
+    screen.config_panel.plan_fields()["units"].set_value(None)
+    training["hidden_features"].set_value(0)
+    page.save_button.click()
+    told = all_asked()[-1]
+    assert told.sentence == "This plan cannot be saved: 1 problem" and "got 0" in told.items[0], told
+    assert not folder.exists()
 
 
 def test_a_models_plans_are_listed_and_a_taken_name_is_found_without_case(tmp_path):
@@ -864,6 +1713,21 @@ def test_a_plan_files_hash_is_read_once_until_it_is_written_again(tmp_path, monk
     assert window_plans.file_sha(path, cache) is None and path not in cache
 
 
+def test_the_fill_reads_the_plan_again_at_its_press(tmp_path, monkeypatch, store):
+    """The press reads and checks the plan again: a plan written since it was chosen fills what it holds now, and one
+    that has come to have a problem fills nothing and says it."""
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _choose(page, "retrain")
+    _plan(folder, RETRAIN.replace("num_runs = 10000", "num_runs = 20000"))
+    asked = _press_fill(page, monkeypatch)
+    assert asked == [] and _values(screen)[("training", "num_runs")] == 20000
+    _plan(folder, RETRAIN.replace("num_runs = 10000", "num_runs = many"))
+    page.fill_button.click()
+    assert _values(screen)[("training", "num_runs")] == 20000
+    assert page.plan_trouble.sentence.plain_text() == "This plan cannot be used: 1 problem in retrain.txt"
+    assert not page.fill_button.isEnabled()
+
+
 def test_save_plan_writes_beside_its_file_and_moves_it_into_place(tmp_path, monkeypatch):
     """A plan is written into a file beside it, then moved into place in one step, so that it is never left half
     written; the folder is made when it is not there, and nothing is left beside the plan."""
@@ -883,3 +1747,63 @@ def test_save_plan_writes_beside_its_file_and_moves_it_into_place(tmp_path, monk
         window_plans.save_plan(folder, "retrain", "# Training\nnum_runs = 9000\n")
     assert sorted(entry.name for entry in folder.iterdir()) == ["retrain.txt"], "a file was left beside the plan"
     assert path.read_bytes() == b"# Training\nnum_runs = 7000\n"
+
+
+@pytest.mark.parametrize("factor", [1.85, 2.0])
+def test_what_a_plan_holds_is_drawn_whole_at_large_text(factor, tmp_path, monkeypatch, store):
+    """At 185 and 200 % text the table of what a plan holds draws every word whole: a column fitted to its words is as
+    wide as its widest word in the face it is drawn in, and a long name with no space, a sub-folder's path, breaks
+    inside onto lines of its own, its row as tall as its lines; the table stays inside the form, which stays inside its
+    viewport. The program's font, set for the measure, is put back."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFont, QFontMetricsF
+    from core import plans as engine_plans
+    from core.gui import design, fonts
+    from core.gui.widgets import rule_table
+    from tests._fixtures import build_window, qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import Clock, at, controller_on
+    from tests._window_helpers import shown_off_screen
+    _the_plans(tmp_path, monkeypatch)
+    long_path = "a_sub_folder_of_the_bounds_for_the_cell_of_the_second_of_november/" + "master_" * 10 + "tier1.txt"
+    plan = engine_plans.Plan("long", Path("long.txt"), "", "", {
+        ("Model and options", "chi_mode"): True, ("Prior", "bounds"): long_path, ("Training", "num_runs"): 10000,
+        ("Narrowing round", "hpd_level"): 0.999})
+    app = qt_app()
+    kept = QFont(app.font())
+    try:
+        with text_size(factor), _the_look(False):
+            fonts.load_app_font(app)
+            controller_on(tmp_path, Clock(at(8, 12, 4)))
+            window = build_window()
+            design.set_room((3400, 1380))
+            window.setMinimumSize(1, 1)
+            page = window.part("inference").config_panel
+            shown_off_screen(window, design.scaled(1000), design.scaled(700))
+            window.go_to("inference", "model")
+            _settle()
+            page.holds_table.set_rows(page._holds_rows(plan))
+            page.holds_table.setVisible(True)
+            _settle()
+            view, model = page.holds_table.view, page.holds_table.view.model()
+            line, pad = design.scaled(design.TYPE["body"][1]), design.scaled(design.SIZE["table_pad"])
+            for row in range(model.rowCount()):
+                for column in range(4):
+                    cell = model.index(row, column).data(Qt.UserRole)
+                    lead, gap = rule_table._pads(column, 4)
+                    room = view.columnWidth(column) - lead - gap
+                    layout, lines = rule_table._wrapped(cell.text, rule_table._face("text"), room, line)
+                    laid = sum(layout.lineAt(at).textLength() for at in range(lines))
+                    assert laid == len(layout.text()), (factor, row, column, cell.text)
+                    assert view.rowHeight(row) >= lines * line + 2 * pad, (factor, row, column)
+                    widest = max(QFontMetricsF(rule_table._face("text")).horizontalAdvance(word)
+                                 for word in cell.text.split())
+                    if column != 1 and len(cell.text) < 40:
+                        assert widest <= room + 0.5, (factor, column, cell.text, widest, room)
+            assert view.rowHeight(1) > 2 * line + 2 * pad, "the long path did not break onto lines of its own"
+            port = page.scroller.viewport()
+            assert page.holds_table.mapTo(port, page.holds_table.rect().topRight()).x() < port.width()
+            assert page.scroller.body.minimumSizeHint().width() <= port.width()
+            window.hide()
+    finally:
+        app.setFont(kept)

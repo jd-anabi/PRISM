@@ -13,7 +13,8 @@ read, its buttons greyed by its own gate. ``refresh_gates`` runs every step's ow
 step, then works out where each of the six steps stands, which the rail and Home show, and says so through
 ``states_changed``.
 
-The screen also holds the folder of plans the steps list, a test's own when it hands one.
+The screen also keeps the plan in use: where the forms of steps 1 to 3 were last filled from, which outlives the session
+that step 1 replaces as it is applied.
 """
 from pathlib import Path
 
@@ -53,6 +54,7 @@ class InferenceScreen(QWidget):
         self.pending_shown = frozenset()         # the steps the states last worked out read as changed and not applied
         # The folder of the plans, one folder for each model under it; a test hands its own.
         self.plans_folder = Path(plans) if plans is not None else Path(window_plans.PLAN_FOLDER)
+        self.plan_source = None                  # where the forms were last filled from: a plan, a record or a run
 
         self.config_panel = ConfigPanel(self)
         self.prior_panel = PriorPanel(self)
@@ -79,6 +81,12 @@ class InferenceScreen(QWidget):
     def panels(self):
         return [self.config_panel, self.prior_panel, self.posterior_panel,
                 self.validate_panel, self.infer_panel, self.tsnpe_panel]
+
+    def step_pages(self) -> tuple:
+        """The steps a plan fills, in their order: Model and options, Prior and Training; while the screen is being
+        built, those built so far."""
+        return tuple(getattr(self, name) for name in ("config_panel", "prior_panel", "posterior_panel")
+                     if hasattr(self, name))
 
     def set_small(self, on: bool) -> None:
         """The low window, or the ordinary one again: told to every step that offers it."""
@@ -205,8 +213,15 @@ class InferenceScreen(QWidget):
             remembered.put(remembered.POSTERIOR_KEY, ident)
         self.refresh_gates()
 
+    # ── the plan in use ──
+    def take_plan(self, source) -> None:
+        """The forms were filled from ``source``, or returned to their usual values (None): it is the plan in use, and
+        every step is drawn again, its origins and its plan line with it. Nothing is applied and nothing is read."""
+        self.plan_source = source
+        self.refresh_gates()
+
     def plan_entry(self) -> "dict | None":
-        """The plan in use, as a run's history keeps it: none, until a plan can be put in use."""
+        """The plan in use, as a run's history keeps it: none, until the next commit writes it."""
         return None
 
     def refresh_gates(self):

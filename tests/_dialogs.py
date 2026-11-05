@@ -278,6 +278,36 @@ def choose(monkeypatch, *, words: str | None = None, other: bool = False, defaul
     monkeypatch.setattr(Ask, "exec", answer_question)
 
 
+def answer_in_turn(monkeypatch, *answers) -> None:
+    """Answer each shared question in its turn, from now until the test ends or until the next ``choose``: the first
+    by the first of ``answers``, and so on. An answer is a pair, the words of the button to click and the line to type
+    first into a question that asks for one (None types nothing), or a function handed the question as it stands, which
+    reads it or types into it and clicks nothing. Every question is recorded first; one past the last answer, or whose
+    answer is greyed, is answered with nothing, as the session guard answers it. A message box is left to the guard.
+    Undone with the test's ``monkeypatch``."""
+    left = list(answers)
+
+    def answer(dialog) -> int:
+        record(dialog)
+        then = left.pop(0) if left else (None, None)
+        if callable(then):
+            then(dialog)
+            return 0
+        words, text = then
+        if text is not None and dialog.field is not None:
+            dialog.field.setText(text)
+        said = dialog.wording
+        target = (dialog.other_button if words is not None and words == said.other else
+                  dialog.safe_button if words is not None and words == said.safe else None)
+        if target is None or not target.isEnabled():
+            return 0
+        target.click()
+        return dialog.result()
+
+    from core.gui.widgets.ask import Ask
+    monkeypatch.setattr(Ask, "exec", answer)
+
+
 def hold_open(monkeypatch, seen: list, *, during: Callable[[], None] | None = None) -> None:
     """Leave every box or question open a while, from now until the test ends or until the next ``choose`` or
     ``hold_open``, as a person reading it leaves it: it is recorded first, shown as ``exec`` shows it, modal to the

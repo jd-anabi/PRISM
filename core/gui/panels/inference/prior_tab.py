@@ -14,6 +14,9 @@ came into use last are put back as choices at the next launch.
 
 Nothing is read while a run is live: a prior that comes back while its run is live is put in use, and the lists, the
 record's facts and the candidate are read again once the run has ended.
+
+A plan's bounds file is selected by its fill when the model on step 1's form is the one applied; else it waits, and the
+model step 1 applies next has it selected by name in that model's folder.
 """
 import math
 from datetime import datetime
@@ -29,7 +32,7 @@ from core.Helpers import file_manager
 from core.refusals import Refusal, default_clause, require_at_least, require_positive
 from core.SBI import training_checkpoint
 
-from ... import record_words, settings, style, texts
+from ... import plans, record_words, settings, style, texts
 from ...reported import reported
 from ...remembered import BOUNDS_KEY, BOUNDS_MODEL_KEY, MODEL_KEY, PRIOR_KEY
 from ...run import history
@@ -62,6 +65,8 @@ NO_PARAMETERS = "It names no parameter of the model."
 SETTING_BLOCKS = "a setting cannot be used"
 NEW_PRIOR = "The new prior"
 GONE_TEXT = "The bounds file used last time, {}, is no longer in the folder."
+#: Under the list while a plan's bounds file waits for step 1 to apply the model it belongs to.
+WAITING_TEXT = "{} is selected when step 1, Model and options, is applied."
 #: How the bounds file in use is named when the file has been written since its configuration was built on it.
 EDITED_IN_USE = "{}, as it was before it was edited"
 GO_TO_TRAINING = "Go to Training"
@@ -151,6 +156,52 @@ def _close(a: float, b: float) -> bool:
     return abs(a - b) <= 1e-8 + 1e-5 * abs(b)
 
 
+class _BoundsField:
+    """The bounds file as a plan holds it, over the bounds row: the file selected by its name with forward slashes, the
+    limits typed by hand while the build reads them, or None. Set from a plan, it selects that file, or holds it until
+    step 1 applies the model on its form."""
+
+    key = "bounds"
+
+    def __init__(self, page) -> None:
+        self._page, self._row = page, page.form.rows["bounds"]
+
+    @property
+    def kept(self) -> bool:
+        return self._row.kept
+
+    @kept.setter
+    def kept(self, on: bool) -> None:
+        self._row.kept = on
+
+    def value(self):
+        if self._page._pending is not None:
+            return self._page._pending
+        if self._page._typed():
+            return plans.TYPED
+        key = self._page.bounds_picker.key()
+        return _named(key) if key else None
+
+    def set_value(self, value) -> None:
+        self._page.take_plans_bounds(value)
+
+    def usual(self):
+        return None
+
+    def label_text(self) -> str:
+        return self._row.label_text()
+
+    def set_origin(self, text: str) -> None:
+        self._row.set_origin(text)
+
+    def in_error(self) -> bool:
+        return self._row.in_error()
+
+    @staticmethod
+    def words_of(value) -> str:
+        return plans.TYPED_WORDS if value is plans.TYPED else plans.NONE_WORDS if value is None else str(value)
+
+
 def _same_box(gmm, cfg) -> bool:
     """Whether a saved prior's parameters and their limits are a configuration's: the model's parameters, in their
     order, and the box over them."""
@@ -197,6 +248,7 @@ class PriorPanel(StepPage):
         self._kept_pick = None                   # the same, as the settings file gave it, until a model is applied
         self._grid_from = None                   # the bounds file the limits typed by hand were loaded from
         self._lists_wait = False                 # the reading after the typing stops reads neither list
+        self._pending = None                     # a plan's bounds file, waiting for step 1 to apply a model
         self.switch_button = QPushButton()
         self.switch_button.clicked.connect(self._switch)
         self.head.add_action(self.switch_button)
@@ -213,6 +265,8 @@ class PriorPanel(StepPage):
         form.add("bounds", self.bounds_picker.combo, help_text=HELP["bounds_source"])
         self.gone_line = form.add_sentence("", under="bounds")
         self.gone_line.setVisible(False)
+        self.waiting_line = form.add_sentence("", under="bounds")
+        self.waiting_line.setVisible(False)
         self.file_line = form.add_sentence("", under="bounds")
         self.file_line.setVisible(False)
         form.add("prior", self.prior_picker.combo, help_text=HELP["prior"])
@@ -236,6 +290,7 @@ class PriorPanel(StepPage):
                  usual=config.PRIOR_CLUSTER_MIN_SIZE, folded=True, help_text=HELP["cluster_size"])
         form.add("min_samples", IntField(config.PRIOR_CLUSTER_MIN_SAMPLES, grouped=True),
                  usual=config.PRIOR_CLUSTER_MIN_SAMPLES, folded=True, help_text=HELP["cluster_samples"])
+        self._bounds_field = _BoundsField(self)
         form.set_side_heading(NEW_PRIOR)
         self._names = NameAndNote("prior", required=True)
         self.use_names(self._names)
@@ -330,7 +385,20 @@ class PriorPanel(StepPage):
         return tuple(rows)
 
     def plan_fields(self) -> dict:
-        return {key: self.form.rows[key] for key in ("bounds", *(key for key, _ in _KNOB_RULES))}
+        return {"bounds": self._bounds_field, **{key: self.form.rows[key] for key, _ in _KNOB_RULES}}
+
+    def plan_read(self, applied: bool) -> dict:
+        """What a run reads of this step: the bounds of the configuration in use; or the bounds chosen, and in the build
+        view the seven settings, which a load does not read."""
+        if applied:
+            cfg, prior = self._held()
+            if prior is None:
+                return {}
+            key = bounds_in_use(cfg)
+            return {"bounds": plans.TYPED if key == "" else _named(key) if key else None}
+        fields_ = self.plan_fields()
+        keys = ("bounds", *(key for key, _ in _KNOB_RULES)) if self.view == "build" else ("bounds",)
+        return {key: fields_[key].value() for key in keys}
 
     def in_use_words(self) -> tuple:
         cfg, prior = self._held()
@@ -655,14 +723,19 @@ class PriorPanel(StepPage):
 
     # ── the choices ──
     def _bounds_chosen(self, _index: int = 0) -> None:
-        """Another bounds file selected: what was said of the last one goes, and the limits typed by hand follow it."""
+        """Another bounds file selected: what was said of the last one goes, a plan's file that waited is no longer
+        wanted, and the limits typed by hand follow it."""
         self.gone_line.setVisible(False)
         self.file_line.setVisible(False)
+        self._stop_waiting()
         if self.typed_tick.isChecked():
             self._load_the_grid()
 
     def _typed_toggled(self, _on: bool = False) -> None:
-        """The limits typed by hand, under the tick: loaded from the file selected the first time, and kept after."""
+        """The limits typed by hand, under the tick: loaded from the file selected the first time, and kept after; a
+        plan's file that waited is no longer wanted."""
+        if self.typed_tick.isChecked():
+            self._stop_waiting()
         if self.typed_tick.isChecked() and self._grid_from != self.bounds_picker.selected_path():
             self._load_the_grid()
         self._typed_shown()
@@ -687,24 +760,72 @@ class PriorPanel(StepPage):
 
     def on_draft_set(self, draft) -> None:
         """Step 1 applied: the list of bounds files points at the model's own folder, its selection kept where that
-        folder holds it, else the file that came into use last for this model, which is said when it has gone; the
+        folder holds it, else the file that came into use last for this model, which is said when it has gone; a plan's
+        bounds file that waits is selected by its name in that folder before either, and said when it is not there; the
         limits typed by hand follow."""
         model = getattr(draft, "model", None)
         folder = BOUNDS_PATH / str(model or "nadrowski").lower()
+        pending = self._pending
+        self._stop_waiting()
         key = self.bounds_picker.key() if Path(folder) == Path(self.bounds_picker.base_path) else ""
         if not key and self._bounds_pick[0] == model:
             key = self._bounds_pick[1]
         self.bounds_picker.repoint(folder, key)
+        if pending is not None:
+            key = self._entry_named(pending) or pending
+            self.bounds_picker.restore_key(self._entry_named(pending) or "")
         gone = bool(key) and self.bounds_picker.key() != key
         self.gone_line.set_text(GONE_TEXT.format(_named(key)) if gone else "")
         self.gone_line.setVisible(gone)
-        self.form.rows["bounds"].kept = not gone and bool(key) and self._kept_pick == (model, key)
+        self.form.rows["bounds"].kept = (pending is None and not gone and bool(key)
+                                         and self._kept_pick == (model, key))
         if self._kept_pick is not None and self._kept_pick[0] == model:
             self._kept_pick = None               # given back to its model: kept from last time until touched
         self._grid_from = None
         if self.typed_tick.isChecked():
             self._load_the_grid()
         self._edited()
+
+    # ── a plan's bounds file ──
+    def _entry_named(self, name: str) -> str:
+        """The list's entry whose name, with forward slashes, is ``name``; "" when it lists none."""
+        combo = self.bounds_picker.combo
+        return next((combo.itemData(at) for at in range(combo.count())
+                     if isinstance(combo.itemData(at), str) and _named(combo.itemData(at)) == name), "")
+
+    def take_plans_bounds(self, name: str) -> None:
+        """A plan's bounds file, filled: the limits typed by hand no longer read, and the file selected now when the
+        model on step 1's form is the one applied, else held until step 1 applies a model."""
+        self.typed_tick.setChecked(False)
+        screen = self._screen
+        shown = getattr(getattr(screen, "config_panel", None), "model_combo", None)
+        applied = getattr(self._draft(), "model", None)
+        if self._draft() is not None and shown is not None and applied == shown.currentText():
+            self._stop_waiting()
+            self.bounds_picker.refresh()
+            entry = self._entry_named(name)
+            self.bounds_picker.restore_key(entry)
+            self.gone_line.set_text("" if entry else GONE_TEXT.format(name))
+            self.gone_line.setVisible(not entry)
+        else:
+            self.pending_bounds(name)
+        self.form.rows["bounds"].kept = False
+
+    def pending_bounds(self, name: str) -> None:
+        """Hold a plan's bounds file, by its name with forward slashes, until step 1 applies a model: it is then
+        selected in that model's folder. Said under the list while it waits; a file chosen in the list, or limits typed
+        by hand, take its place."""
+        self._pending = name
+        self.waiting_line.set_text(WAITING_TEXT.format(name))
+        self.waiting_line.setVisible(True)
+        self.redraw()
+
+    def _stop_waiting(self) -> None:
+        """No plan's bounds file waits any longer."""
+        self._pending = None
+        line = getattr(self, "waiting_line", None)
+        if line is not None:
+            line.setVisible(False)
 
     # ── the press ──
     def _read_knobs(self) -> dict:

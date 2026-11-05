@@ -1,30 +1,43 @@
-"""Plans in the window: a model's plans listed, one read with the two checks its reader cannot make, and one
-saved.
+"""Plans in the window: a model's plans listed, one read with the two checks its reader cannot make, one saved, the
+forms of steps 1 to 3 filled from one, and where each field's value came from.
 
 The engine reads a plan and writes its text (``core/plans.py``); the window lists the folder, checks a plan against the
-model's own folders and writes the file. Every function here that lists, reads or
+model's own folders, writes the file, fills the forms and says what is in use. Every function here that lists, reads or
 writes takes its folder as an argument: the window hands the folder of the model shown on step 1 under ``PLAN_FOLDER``,
 and a test hands a folder of its own, so that no test lists or writes the real one.
 
-Nothing here reads the disk but ``list_plans``, ``read_checked``, ``save_plan``, ``taken`` and ``file_sha``, and a page
-calls them only at its readings and its presses, never while a run is live.
+Filling is the only thing a plan does. It never starts a run, never applies a step, never changes which record is
+picked, and never replaces the session: the forms change, and what the steps hold reads "Changed, not applied" where
+they now differ from it. The source of what was filled, a plan's name, path and hash and the values as filled, is kept
+by the inference screen, which outlives the session a step 1 applied replaces.
+
+A page hands the plan code its rows through ``plan_fields``, each with ``value``, ``set_value``, ``usual``,
+``set_origin``, ``label_text`` and ``kept``, and says through ``plan_read`` what its run reads: the values of its own
+form, or, for a step the page's run follows, what that step holds. Nothing here reads the disk but ``list_plans``,
+``read_checked``, ``save_plan``, ``taken`` and ``file_sha``, and a page calls them only at its readings and its presses,
+never while a run is live.
 """
 import hashlib
 import os
 import re
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import QComboBox
 
 from core import cli, config
 from core import plans as engine_plans
 from core.Helpers import file_manager
 from core.refusals import Refusal
 
+from .run.controller import controller
+from .step_facts import origin_words
+from .widgets.form import TickedField
 
 #: The folder whose sub-folders, one for each model, hold the plans. A test hands the screen a folder of its own, and
 #: the suites' session binds this one to a folder of their own.
@@ -39,6 +52,36 @@ NAME_RULE = re.compile(r"[A-Za-z0-9_-]{1,40}")
 NAME_TEXT = "A plan's name is letters, digits, _ and -, at most 40 characters."
 NOT_IN_FOLDER_TEXT = "The bounds file {} is not in this model's bounds folder."
 UNITS_TEXT = "The units are not usable: {}"
+#: What the plan line under each heading says.
+NO_PLAN = "No plan"
+PLAN_LINE = "Plan: {}"
+SOURCE_LINE = "Settings from {} {}"
+ONE_CHANGE = "{}, 1 change"
+CHANGES = "{}, {} changes"
+DEPARTURE = "{} {} ({} {})"
+#: How a value that has none of its own is said.
+BLANK = "blank"
+NONE_WORDS = "none"
+TYPED_WORDS = "limits typed by hand"
+
+
+class _Typed:
+    """The bounds a form or a configuration holds when its limits were typed by hand: no file, and no file's name."""
+
+    def __repr__(self) -> str:
+        return "TYPED"
+
+
+#: The value of the bounds row while its limits are typed by hand.
+TYPED = _Typed()
+
+
+#: What a plan's absence of a value is told apart from: a plan never holds None.
+_MISSING = object()
+#: The rows a fill leaves as they are when the plan holds nothing for them: a bounds file has no usual value.
+LEFT_ALONE = ("bounds",)
+
+
 @dataclass(frozen=True)
 class PlanSource:
     """Where what the forms were filled with came from: ``kind`` "plan", "record", "run", or "usual" for the press that
@@ -174,3 +217,184 @@ def file_sha(path, cache: dict) -> "str | None":
 def open_folder(folder) -> None:
     """Show ``folder`` in Windows' own file window."""
     QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+
+# ── values and their words ──
+def plan_value(source: "PlanSource | None", heading: str, name: str):
+    """The value the source in use holds for ``name`` under ``heading``, or None when it holds none."""
+    return None if source is None else source.values.get((heading, name))
+
+
+def same(one, other) -> bool:
+    """Whether two values of a setting are the same value: units by their words, a whole number and a number by what
+    they count, and nothing else by anything but equality. A truth value is never a number here."""
+    if isinstance(one, str) and isinstance(other, str):
+        return one.split() == other.split()
+    if isinstance(one, bool) or isinstance(other, bool):
+        return one is other
+    if one is TYPED or other is TYPED:
+        return one is other
+    try:
+        return bool(one == other)
+    except Exception:                        # noqa: BLE001 -- a value no comparison can be made with is another one
+        return False
+
+
+def _lowered(words: str) -> str:
+    return words[:1].lower() + words[1:]
+
+
+def _number(value) -> str:
+    """A number as a sentence says it, whole: grouped, or in the shortest form that is exactly it."""
+    if isinstance(value, int):
+        return f"{value:,}"
+    said = repr(value)
+    return said[:-2] if said.endswith(".0") else said
+
+
+def value_words(row, value) -> str:
+    """``value`` of ``row`` as a sentence says it: a row's own words when it has a way of saying its values; a tick's
+    words for the value it stands for; a list's item for its value, the first letter small; a number grouped, or
+    exactly; nothing as "blank"."""
+    said = getattr(row, "words_of", None)
+    if callable(said):
+        return said(value)
+    widget = getattr(row, "widget", None)
+    if isinstance(widget, TickedField) and value == widget.stands_for:
+        return _lowered(widget.ticked_box.text())
+    if isinstance(widget, QComboBox):
+        found = widget.findData(value)
+        if found >= 0:
+            return _lowered(widget.itemText(found))
+    if value is None:
+        return BLANK
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    if isinstance(value, (int, float)):
+        return _number(value)
+    return str(value)
+
+
+def shown_words(row, value) -> "str | None":
+    """The words the form shows for ``value`` where they differ from the file's: a list's item, a tick's words for the
+    value it stands for; None where the file writes what the form shows. A saved plan's remark carries them."""
+    widget = getattr(row, "widget", None)
+    if isinstance(widget, TickedField) and value == widget.stands_for:
+        return widget.ticked_box.text()
+    if isinstance(widget, QComboBox):
+        found = widget.findData(value)
+        written = "on" if value is True else "off" if value is False else str(value)
+        if found >= 0 and widget.itemText(found).lower() != written.lower():
+            return widget.itemText(found)
+    return None
+
+
+def origin(row, source: "PlanSource | None", *, kept: bool, heading: str) -> str:
+    """Where ``row``'s value came from, as the words beside it say: the source in use holds the setting and the form has
+    its value, or has another; else put back from the settings file and not touched since; else the form has the usual
+    value, or another. A bounds file has no usual value: one the source does not hold and nothing put back says
+    nothing."""
+    held = plan_value(source, heading, row.key)
+    if held is None and row.key in LEFT_ALONE and not kept:
+        return ""
+    return origin_words(held=held is not None, at_source=held is not None and same(row.value(), held),
+                        at_usual=same(row.value(), row.usual()), kept=kept,
+                        source=getattr(source, "kind", "plan"), name=getattr(source, "name", ""))
+
+
+# ── filling ──
+def fill_forms(screen, values: dict, source: PlanSource, keep_remembered: bool = False) -> bool:
+    """Fill the forms of steps 1 to 3: every row each page hands through ``plan_fields`` takes the value ``values``
+    holds for it under the page's heading, else its usual value; a bounds file the values do not name is left as it is.
+    With ``keep_remembered`` a row put back from the settings file and not touched since is left as it is. Nothing is
+    asked, nothing applied, nothing started, no record's pick changed, and no session replaced: the source is kept by
+    the screen, and the pages are drawn again. While a run is live nothing changes: False."""
+    if controller().is_live():
+        return False
+    for page in screen.step_pages():
+        heading = HEADING_OF.get(page.step)
+        for name, row in page.plan_fields().items():
+            if keep_remembered and row.kept:
+                continue
+            value = values.get((heading, name), _MISSING)
+            if value is _MISSING:
+                if name in LEFT_ALONE:
+                    continue
+                value = row.usual()
+            row.set_value(value)
+            row.kept = False
+    screen.take_plan(None if source.kind == "usual" else source)
+    return True
+
+
+def would_replace(screen, values: dict) -> tuple[str, ...]:
+    """What a fill with ``values`` would change that a person typed or that was put back: each row of steps 1 to 3 whose
+    value is neither its usual one nor the source's in use, and that the fill would set to another, as "Batches: 9,500
+    becomes 10,000", in the steps' order."""
+    source, changed = screen.plan_source, []
+    for page in screen.step_pages():
+        heading = HEADING_OF.get(page.step)
+        for name, row in page.plan_fields().items():
+            new = values.get((heading, name), _MISSING)
+            if new is _MISSING:
+                if name in LEFT_ALONE:
+                    continue
+                new = row.usual()
+            now = row.value()
+            held = plan_value(source, heading, name)
+            if same(now, new) or same(now, row.usual()) or (held is not None and same(now, held)):
+                continue
+            changed.append(f"{row.label_text()}: {value_words(row, now)} becomes {value_words(row, new)}")
+    return tuple(changed)
+
+
+# ── what is said ──
+def headings_to(step: str) -> tuple[str, ...]:
+    """The headings a step's run reads: its own and every earlier step's."""
+    order = list(HEADING_OF)
+    return tuple(HEADING_OF[key] for key in order[:order.index(step) + 1]) if step in HEADING_OF else ()
+
+
+def _departures(screen, headings: Sequence[str]) -> tuple[int, list]:
+    """How many of the settings the run reads the source in use holds, and every departure among them, in the steps'
+    order: against the source's value where it holds the setting, else against the usual one. The last heading is the
+    page's own, read from its form, where a row in error is said by its own line and is no departure; the others are
+    what their steps hold."""
+    source = screen.plan_source
+    pages = {HEADING_OF.get(page.step): page for page in screen.step_pages()}
+    held_count, departures = 0, []
+    for heading in headings:
+        page = pages.get(heading)
+        if page is None:
+            continue
+        fields = page.plan_fields()
+        for name, value in page.plan_read(applied=heading != headings[-1]).items():
+            row = fields.get(name)
+            if row is None or (heading == headings[-1] and _in_error(row)):
+                continue
+            held = plan_value(source, heading, name)
+            if held is None and name in LEFT_ALONE:
+                continue
+            against = held if held is not None else row.usual()
+            held_count += held is not None
+            if not same(value, against):
+                departures.append(DEPARTURE.format(row.label_text(), value_words(row, value),
+                                                   "usual" if held is None else source.kind, value_words(row, against)))
+    return held_count, departures
+
+
+def _in_error(row) -> bool:
+    """Whether the form's row breaks its rule: its own line says so, and it is no departure."""
+    ask = getattr(row, "in_error", None)
+    return bool(ask()) if callable(ask) else False
+
+
+def plan_line(screen, headings: Sequence[str]) -> str:
+    """The quiet line under a step's heading: "No plan", "Plan: retrain", or with the departures its "Before you start"
+    names, "Plan: retrain, 2 changes"."""
+    source = screen.plan_source
+    if source is None:
+        return NO_PLAN
+    head = PLAN_LINE.format(source.name) if source.kind == "plan" else SOURCE_LINE.format(source.kind, source.name)
+    count = len(_departures(screen, headings)[1])
+    return head if count == 0 else ONE_CHANGE.format(head) if count == 1 else CHANGES.format(head, count)

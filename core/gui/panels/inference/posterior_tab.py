@@ -332,6 +332,13 @@ class PosteriorPanel(StepPage):
     def plan_fields(self) -> dict:
         return {key: self.form.rows[key] for key, _ in _RULES}
 
+    def plan_read(self, applied: bool) -> dict:
+        """What a training reads of this step's form: its settings, the rotation's three only while they are read. A
+        load reads none of them."""
+        if applied or self.view == "load":
+            return {}
+        return {key: self.form.rows[key].value() for key, _ in self._ruled()}
+
     def in_use_words(self) -> tuple:
         posterior = getattr(self.session, "posterior", None)
         if posterior is None:

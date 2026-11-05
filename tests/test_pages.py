@@ -1661,11 +1661,12 @@ def test_a_rebuilt_page_stands_at_homes_distance_from_the_rail(tmp_path):
 
 
 def test_a_middle_begins_with_no_control(tmp_path):
-    """The first thing in the scrolling body is what is in use, which takes no key: a control there has no room for the top
-    of its ring."""
+    """The first things in the scrolling body are the plan in use and what is in use, neither of which takes a key: a
+    control there has no room for the top of its ring."""
     window, page, _clock = _a_page(tmp_path)
-    body = page.scroller.body
-    assert body.layout().itemAt(0).widget() is page.in_use and page.in_use.focusPolicy() == Qt.NoFocus
+    layout = page.scroller.body.layout()
+    assert [layout.itemAt(at).widget() for at in (0, 1)] == [page.plan_line, page.in_use]
+    assert page.plan_line.focusPolicy() == page.in_use.focusPolicy() == Qt.NoFocus
 
 
 def test_the_run_page_takes_the_place_of_the_form_and_gives_it_back(tmp_path):
@@ -2108,6 +2109,18 @@ WALKED_TRAINING = {
 }
 
 
+def _a_plan_shown(page) -> None:
+    """The first step with a plan of its model shown in the list and nothing filled: the plans folder the window lists,
+    with one plan in the model's folder."""
+    from core.gui import plans
+    folder = plans.model_folder(page.window().part("inference").plans_folder, "nadrowski")
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "walked.txt").write_text("# Training\nnum_runs = 7000\n", encoding="utf-8")
+    page.plan_choice.showPopup()
+    page.plan_choice.hidePopup()
+    page.plan_choice.setCurrentIndex(page.plan_choice.findData("walked"))
+
+
 #: The rebuilt pages of the window, by the step each stands on, and the shapes its walk is read in: by the name of the
 #: shape, what is done to the page after its first show; the heading's buttons and the way to the next step that stand
 #: in that shape; the controls of its main settings; those of the fold, while it is open, or None for a shape with no
@@ -2117,17 +2130,24 @@ WALKED_TRAINING = {
 WALKED = {
     "model": {
         "set by the bounds file": (lambda page: None, lambda page: [page.help_button],
-                                   lambda page: [page.model_combo, page.kind_choice],
+                                   lambda page: [page.model_combo, page.plan_choice, page.fill_button,
+                                                 page.kind_choice],
                                    lambda page: [page.rot_choice, page.units_choice], lambda page: [],
                                    lambda page, small: [page.foot.main_button]),
         "the frequency response, typed units, applied": (
             lambda page: (page.kind_choice.setCurrentIndex(page.kind_choice.findData(True)),
                           page.units_choice.setCurrentIndex(page.units_choice.findData("typed")),
-                          page.foot.main_button.click()),
+                          page.units_text.setText("kHz ms nm pN"), page.foot.main_button.click()),
             lambda page: [page.help_button, page.next_button],
-            lambda page: [page.model_combo, page.kind_choice],
+            lambda page: [page.model_combo, page.plan_choice, page.fill_button, page.save_button, page.kind_choice],
             lambda page: [*_driven(page), page.rot_choice, page.units_choice, page.units_text], lambda page: [],
             lambda page, small: []),
+        "a plan shown, its folder there": (
+            _a_plan_shown, lambda page: [page.help_button],
+            lambda page: [page.model_combo, page.plan_choice, page.holds_button, page.fill_button, page.open_button,
+                          page.kind_choice],
+            lambda page: [page.rot_choice, page.units_choice], lambda page: [],
+            lambda page, small: [page.foot.main_button]),
     },
     "prior": {
         "a saved prior to load": (
@@ -2153,14 +2173,16 @@ WALKED = {
 @pytest.mark.parametrize("step, shape", [(step, shape) for step, shapes in WALKED.items() for shape in shapes])
 @pytest.mark.parametrize("factor", [1.0, 1.5])
 @pytest.mark.parametrize("size", [(900, 600), (1300, 820)], ids=str)
-def test_tab_walks_the_page_in_view_at_every_size(size, factor, step, shape, fold_open, tmp_path):
+def test_tab_walks_the_page_in_view_at_every_size(size, factor, step, shape, fold_open, tmp_path, monkeypatch):
     """From the step's row of the rail the Tab key goes into the page and, with real keys, walks it as it is read: the
     heading's button, then the way to the next step once there is one, then the first setting, before any button that
     starts or applies anything; every field in reading order, the fold and what it holds, a row the page shows only for
     a choice made after its first show in its place among them; what scrolls; the foot; and back to the row of the rail
     it began from. Each stop in the scrolling body stands whole in its viewport as it takes the keyboard, at the window's
-    least size and a larger one, at both text sizes."""
+    least size and a larger one, at both text sizes. The window lists the test's own folder of plans."""
     from PySide6.QtTest import QTest
+    from core.gui import plans
+    monkeypatch.setattr(plans, "PLAN_FOLDER", tmp_path / "plans")
     with text_size(factor), _the_look(False):
         fonts.load_app_font(qt_app())
         controller_on(tmp_path, Clock(at(8, 12, 4)))
