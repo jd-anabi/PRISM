@@ -84,7 +84,7 @@ def check_plans_kept(folder: Path, held: "list[str] | None", kept: "dict[str, by
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _no_plans_written():
+def _no_plans_written(tmp_path_factory):
     """The folder of saved plans, ``Resources/Plans``, holds at the end of the session exactly what it held at its
     start: the same paths, and each file the same bytes. It sits beside _no_sbi_logs for the same reason: the suites
     leave the repository as they found it. A plan a test wrote there would be read by the next launch as one of the
@@ -92,13 +92,20 @@ def _no_plans_written():
     written over leaves the listing as it was and cannot be brought back. The folder may be absent (it is until a plan
     is saved), and a plan the person saved before the run is kept here as it stands and does no harm; a folder that
     appears fails the run, and so does a plan saved by hand while the run is going. The listing is
-    tests/_settings_folder.py's and the check is ``check_plans_kept`` above."""
+    tests/_settings_folder.py's and the check is ``check_plans_kept`` above. For the session the window's folder of
+    plans is one of the session's own, empty, so that a window built by any test lists and writes there, and the real
+    one is never read; it is put back at the end."""
     from core import config
+    from core.gui import plans
     from tests import _settings_folder
     folder = config.RESOURCES_ROOT / "Plans"
     held = _settings_folder.listing(folder)
     kept = {path: Path(path).read_bytes() for path in held or () if Path(path).is_file()}
-    yield
+    real, plans.PLAN_FOLDER = plans.PLAN_FOLDER, tmp_path_factory.mktemp("plans")
+    try:
+        yield
+    finally:
+        plans.PLAN_FOLDER = real
     check_plans_kept(folder, held, kept)
 
 

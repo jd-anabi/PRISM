@@ -3012,18 +3012,19 @@ def test_a_plan_written_into_the_real_folder_fails_the_run(request, tmp_path, mo
     plans = tmp_path / "inputs" / "Plans"
     plan = plans / "usual.txt"
     around_the_run = _guards(request)._no_plans_written.__wrapped__      # the function the fixture was made from
-    run = around_the_run()
+    session = request.getfixturevalue("tmp_path_factory")               # where it makes the window's folder of plans
+    run = around_the_run(session)
     next(run)                                                            # as the run begins, no folder
     plans.mkdir(parents=True)
     plan.write_text("the person's", encoding="utf-8")
     with pytest.raises(AssertionError, match=words):
         next(run)                                                        # as it ends, a plan in a new folder
     (plans / "older").mkdir()
-    run = around_the_run()
+    run = around_the_run(session)
     next(run)
     with pytest.raises(StopIteration):
         next(run)                                                        # nothing changed: the run passes
-    run = around_the_run()
+    run = around_the_run(session)
     next(run)
     plan.write_text("a test's", encoding="utf-8")
     with pytest.raises(AssertionError, match=words) as failed:

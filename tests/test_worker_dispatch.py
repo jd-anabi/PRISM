@@ -825,9 +825,10 @@ def _the_questions_let_go():
 
 def test_asked_reads_a_question_of_the_shared_class_into_the_same_record():
     """Each way of asking and telling, through the two calls every caller uses, read into the record a
-    message box is read into. The words are kept at opening, so they outlive the dialog; and each call
-    lets go of its dialog once it is answered, which in the window the next turn of the event loop
-    carries out and here a flush aimed at these five dialogs alone."""
+    message box is read into. The words are kept at opening, so they outlive the dialog, and a question
+    that asks for a line keeps its label and the line handed in too; and each call lets go of its dialog
+    once it is answered, which in the window the next turn of the event loop carries out and here a
+    flush aimed at these five dialogs alone."""
     from core.gui.widgets.ask import ask, ask_text
     from tests._fixtures import Asked, all_asked, asked, forget_asked
 
@@ -856,8 +857,8 @@ def test_asked_reads_a_question_of_the_shared_class_into_the_same_record():
         Asked(kind="error", title="Error", marker="err", sentence="it failed", **{**bare, "detail": tb}, **told),
         Asked(kind="notice", title="A run is live", marker="info", sentence="Wait for it to end.", **bare, **told),
         Asked(kind="question", title="Save as a plan", marker="info", sentence="Only what differs is written.",
-              answers=("Save this plan", "Cancel"), default="Save this plan", safe="Cancel",
-              **{**bare, "items": ("batches = 5,000",), "beneath": stays})]
+              answers=("Save this plan", "Cancel"), default="Save this plan", safe="Cancel", label="Plan name",
+              line="retrain", **{**bare, "items": ("batches = 5,000",), "beneath": stays})]
     assert all_asked()[0].text == "\n".join([*held, stays]) and asked().text.splitlines() == ["batches = 5,000", stays]
     forget_asked()                                # two more ways of asking, for the rules that tell the kinds apart:
     ask(None, "Cannot edit model", "It could not be loaded.", "OK")                # a warning that only tells,

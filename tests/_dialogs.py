@@ -69,7 +69,9 @@ class Asked:
     ``answers`` are the words on the buttons without their mnemonic marks, the safe one LAST;
     ``default`` is the answer Enter gives, None when the code set none on a box with several;
     ``safe`` is the answer Escape and the frame's close give, None when no single button rejects;
-    ``loses_work`` says that one of the answers discards something."""
+    ``loses_work`` says that one of the answers discards something. A question that asks for a line of
+    text also keeps its ``label``, the ``line`` handed in, and what was ``wrong`` with it as it opened;
+    every other box keeps None and two empty strings."""
     kind: str
     title: str
     marker: str
@@ -81,6 +83,9 @@ class Asked:
     default: str | None
     safe: str | None
     loses_work: bool
+    label: str | None = None
+    line: str = ""
+    wrong: str = ""
 
     @property
     def text(self) -> str:
@@ -169,7 +174,7 @@ def _read_question(box) -> Asked:
                  items=said.items, detail=said.detail,
                  answers=(said.safe,) if said.other is None else (said.other, said.safe),
                  default=said.other if said.label is not None else said.safe, safe=said.safe,
-                 loses_work=said.loses_work)
+                 loses_work=said.loses_work, label=said.label, line=said.text, wrong=box.wrong)
 
 
 def record(box) -> None:

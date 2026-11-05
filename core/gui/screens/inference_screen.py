@@ -12,11 +12,16 @@ back-reference and never cache it. No step is ever disabled: one that cannot sta
 read, its buttons greyed by its own gate. ``refresh_gates`` runs every step's own gate after every run of a
 step, then works out where each of the six steps stands, which the rail and Home show, and says so through
 ``states_changed``.
+
+The screen also holds the folder of plans the steps list, a test's own when it hands one.
 """
+from pathlib import Path
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from .. import chain, keys, record_words, remembered
+from .. import plans as window_plans
 from ..panels.inference.prior_tab import bounds_in_use
 from ..panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel,
                                      TSNPEPanel, ValidatePanel)
@@ -41,11 +46,13 @@ class InferenceScreen(QWidget):
     # A page's "Go to the run" was pressed.
     go_to_run = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, plans: "Path | None" = None):
         super().__init__(parent)
         self.session = SbiSession()
         self._states = ()
         self.pending_shown = frozenset()         # the steps the states last worked out read as changed and not applied
+        # The folder of the plans, one folder for each model under it; a test hands its own.
+        self.plans_folder = Path(plans) if plans is not None else Path(window_plans.PLAN_FOLDER)
 
         self.config_panel = ConfigPanel(self)
         self.prior_panel = PriorPanel(self)

@@ -993,7 +993,8 @@ def card_and_programs(monkeypatch) -> list:
 COUNTED_READINGS = {"orchestrator": ("training_preview", "training_reading", "matching_fits"),
                     "fit_state": ("kept_fits",), "training_checkpoint": ("checkpoints_using_prior", "peek"),
                     "history": ("read", "latest", "newest_unseen", "last_on", "last_measured_on", "duration",
-                                "estimate")}
+                                "estimate"),
+                    "plans": ("list_plans", "read_checked", "file_sha", "taken", "save_plan")}
 # What ``card_and_programs`` answers with a stand-in of its own, and the ways it names to start a program: a module of the
 # window that bound one of these at its own import would be read past. The other public functions of the card's package
 # it passes through are not listed here.
@@ -1010,13 +1011,16 @@ def readings_of_a_run(monkeypatch) -> list:
     every record of its kind; a list of the kept trainings or of the simulation sets, which reads every manifest of what
     a run may be writing; the epochs a run is expected to take, which reads the store's posteriors, counted only while
     a run is live, for a run's own start asks it just before; a record's manifest read whole, a posterior's, a prior's,
-    an observation's or a simulation set's, and the search for a prior by its fingerprint, which reads every prior's.
-    Each is passed through to the real call. Home, whose "Last runs" lists the live run, reads the history at every
-    opening, so a test that opens Home during a run finds ``latest`` and ``read`` here, and says so."""
+    an observation's or a simulation set's, and the search for a prior by its fingerprint, which reads every prior's;
+    and the plans: a model's folder listed, a plan read and checked, the file of the plan in use read for its hash, a
+    name looked for among the plans and a plan written. Each is passed through to the real call. Home, whose "Last
+    runs" lists the live run, reads the history at every opening, so a test that opens Home during a run finds
+    ``latest`` and ``read`` here, and says so."""
     import torch
     from core import orchestrator
     from core.artifacts import ArtifactStore
     from core.SBI import fit_state, training_checkpoint
+    from core.gui import plans
     from core.gui.run import history
     from core.gui.run.controller import RunController
     calls = card_and_programs(monkeypatch)
@@ -1032,7 +1036,7 @@ def readings_of_a_run(monkeypatch) -> list:
         monkeypatch.setattr(space, name, stand_in)
 
     spaces = {"orchestrator": orchestrator, "fit_state": fit_state, "training_checkpoint": training_checkpoint,
-              "history": history}
+              "history": history, "plans": plans}
     for home, names in COUNTED_READINGS.items():
         for name in names:
             counted(spaces[home], name, name)
@@ -1071,15 +1075,15 @@ def build_part(cls, **kwargs):
     return _built.keep(cls(**kwargs))
 
 
-def build_inference(*, session=None, cfg=None):
+def build_inference(*, session=None, cfg=None, plans=None):
     """The inference SCREEN, built anew at every call and let go when the test that built it ends; its
-    steps are reached from it, and they go with it. ``session`` is assigned when given, then ``cfg`` is
-    installed when given, and that is all: the gates are refreshed only as the constructor and
-    ``install_config`` refresh them themselves, so a test that writes to the session afterwards
-    refreshes them on its own line."""
+    steps are reached from it, and they go with it. ``plans`` is the folder of plans it is handed, its
+    own and no other; ``session`` is assigned when given, then ``cfg`` is installed when given, and that
+    is all: the gates are refreshed only as the constructor and ``install_config`` refresh them themselves,
+    so a test that writes to the session afterwards refreshes them on its own line."""
     qt_app()
     from core.gui.screens.inference_screen import InferenceScreen
-    screen = _built.keep(InferenceScreen())
+    screen = _built.keep(InferenceScreen(plans=plans))
     if session is not None:
         screen.session = session
     if cfg is not None:
@@ -1211,7 +1215,7 @@ def process_state(app) -> dict:
     from core import config, logging_root
     from core.artifacts import default_store
     from core.gui import __main__ as entry
-    from core.gui import design, fonts, one_instance, theming, this_computer
+    from core.gui import design, fonts, one_instance, plans, theming, this_computer
     from core.gui import style as small_style
     from core.gui.run.controller import controller
     gc.collect()
@@ -1264,6 +1268,8 @@ def process_state(app) -> dict:
         "quiet segment bar": config.QUIET_SEGMENT_BAR,
         # The memory limit remembered for this computer, which the whole program puts in force as it starts.
         "memory limit": config.SIM_VRAM_CEILING_GIB,
+        # The folder of plans a window built now lists and writes: the suites' own, which no test may leave another.
+        "plans folder": plans.PLAN_FOLDER,
         "root log handler": logging_root.installed(),
         "default store": default_store(),
         # The lock this process holds as the one PRISM, and the names its local servers listen under: either, left

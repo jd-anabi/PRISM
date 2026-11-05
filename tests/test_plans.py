@@ -1,8 +1,10 @@
-"""The plan reader: a hand-edited file of settings, read whole or refused with every problem named.
+"""The plan reader: a hand-edited file of settings, read whole or refused with every problem named; and the window's
+side of plans: the list on step 1, the fill of steps 1 to 3, where each value came from, the save and the run's
+history.
 
-No widget here, and nothing at the top of the file that reaches torch: ``core/plans.py`` is standard library
-on purpose, and the few tests that hold it against the rest of the program import what they compare inside
-the test. Every file is written byte for byte (``_plan``), since ``write_text`` would turn each line end
+Nothing at the top of the file reaches torch or builds a widget: ``core/plans.py`` is standard library on purpose,
+and the tests that hold it against the rest of the program, or build the window, import what they need inside the
+test. Every file is written byte for byte (``_plan``), since ``write_text`` would turn each line end
 into this computer's and hide the difference between one editor's file and another's.
 """
 import ast
@@ -741,3 +743,143 @@ def test_the_plan_key_names_the_file_to_correct_on_screen(tmp_path):
     refusal = _refused(tmp_path, "# Trainng\n")
     assert fields.fix_sentence(refusal.field) == "Correct the file, then choose the plan again."
     assert tool_fields.fix_sentence(refusal.field) == ""
+
+
+# ══ the window's side: the list, the fill, where each value came from, the save and the history ══
+# Each test below builds the window, so what it needs of the toolkit, the engine and the window is imported inside it;
+# and each hands the window a folder of plans of its own (``_the_plans``), so that no test lists or writes the real one.
+
+ABOUT_RETRAIN = "The larger network on the temperature box."
+RETRAIN = f"""# About this plan
+{ABOUT_RETRAIN}
+
+# Model and options
+chi_mode = on                  # Kind of observation: Frequency response
+chi_n_freqs = 5                # Driven recordings per observation
+
+# Prior
+bounds = master_tier1.txt      # Bounds file
+num_iterations = 40            # Sweep rounds
+
+# Training
+num_runs = 10000               # Batches
+hidden_features = 256          # Network width
+learning_rate = 0.0005         # Learning rate
+
+# Narrowing round
+num_transforms = 10            # Network depth
+"""
+def _the_plans(tmp_path, monkeypatch, files=None, model="nadrowski") -> Path:
+    """The test's own folder of plans, the one a window built from now on lists and writes, and in it the folder of
+    ``model`` holding ``files``, each written byte for byte under its name; that folder, made only when files are
+    handed."""
+    from core.gui import plans as window_plans
+    root = tmp_path / "plans"
+    monkeypatch.setattr(window_plans, "PLAN_FOLDER", root)
+    folder = root / model
+    if files:
+        folder.mkdir(parents=True)
+        for name, text in files.items():
+            _plan(folder, text, name)
+    return folder
+
+
+def test_the_windows_two_checks_are_listed_as_the_readers_are(tmp_path, monkeypatch):
+    """Two checks need more than the file: its bounds file is in the model's own folder, judged against that folder's
+    listing, so that a name in another case, which Windows would find, is refused as the list would not select it; and
+    its units resolve. Each is a problem of the plan, in the reader's own form, under the refusal's own sentence, its
+    field the plan. A plan the reader refuses is refused with the reader's problems alone."""
+    from core import plans as engine_plans
+    from core.config import BOUNDS_PATH
+    from core.gui import plans as window_plans
+    two = "# Model and options\nunits = kHz notaunit\n\n# Prior\nbounds = nothere.txt\n"
+    folder = _the_plans(tmp_path, monkeypatch, {"two": two, "case": "# Prior\nbounds = MASTER.TXT\n"})
+    bounds = BOUNDS_PATH / "nadrowski"
+    if sys.platform == "win32":
+        assert (bounds / "MASTER.TXT").is_file(), "Windows no longer finds a name in another case"
+    with pytest.raises(engine_plans.PlanRefusal) as refused:
+        window_plans.read_checked(folder / "two.txt", bounds_folder=bounds)
+    said = [(problem.key, problem.message) for problem in refused.value.problems]
+    assert refused.value.field == "plan" and refused.value.message == "This plan cannot be used: 2 problems in two.txt"
+    assert said[0] == ("bounds", "The bounds file nothere.txt is not in this model's bounds folder.")
+    assert said[1][0] == "units" and said[1][1].startswith("The units are not usable: ")
+    with pytest.raises(engine_plans.PlanRefusal) as refused:
+        window_plans.read_checked(folder / "case.txt", bounds_folder=bounds)
+    assert [problem.message for problem in refused.value.problems] == [
+        "The bounds file MASTER.TXT is not in this model's bounds folder."]
+    assert window_plans.read_checked(_plan(folder, "# Prior\nbounds = master.txt\n", "fine"),
+                                     bounds_folder=bounds).values == {("Prior", "bounds"): "master.txt"}
+    with pytest.raises(engine_plans.PlanRefusal) as refused:
+        window_plans.read_checked(_plan(folder, "# Prior\nbounds = nothere.txt\nnum_run = 5\n", "both"),
+                                  bounds_folder=bounds)
+    assert [problem.message for problem in refused.value.problems] == [
+        "line 3: 'num_run' is not a setting PRISM has. The nearest is num_runs."], "the reader's problems stood alone"
+
+
+def test_the_process_holds_the_suites_own_folder_of_plans(tmp_path):
+    """For the whole run of the suites the window's folder of plans is the session's own, not the real one beside the
+    other inputs, and the process's state names it."""
+    from core import config
+    from core.gui import plans as window_plans
+    from tests._fixtures import process_state, qt_app
+    assert window_plans.PLAN_FOLDER != config.PLANS_PATH and window_plans.PLAN_FOLDER.is_dir()
+    assert process_state(qt_app())["plans folder"] == window_plans.PLAN_FOLDER
+
+
+def test_a_models_plans_are_listed_and_a_taken_name_is_found_without_case(tmp_path):
+    """The plans of a model's folder, one folder for each model in lower case, are its .txt files, a suffix in capitals
+    too, by their names in the order of the alphabet without regard to case; a folder not there lists none. A plan's
+    file is the folder's own, and the plan a save would replace is found whatever the case of the name typed."""
+    from core.gui import plans as window_plans
+    folder = window_plans.model_folder(tmp_path, "NADROWSKI")
+    assert folder == tmp_path / "nadrowski"
+    assert window_plans.list_plans(folder) == () and window_plans.taken(folder, "retrain") is None
+    folder.mkdir()
+    for name in ("retrain.txt", "Zeta.TXT", "another.txt", "notes.md"):
+        (folder / name).write_bytes(b"# Training\n")
+    (folder / "sub.txt").mkdir()
+    assert window_plans.list_plans(folder) == ("another", "retrain", "Zeta")
+    assert window_plans.plan_path(folder, "Zeta") == folder / "Zeta.TXT"
+    assert window_plans.plan_path(folder, "gone") == folder / "gone.txt"
+    assert window_plans.taken(folder, "RETRAIN") == folder / "retrain.txt"
+    assert window_plans.taken(folder, "zeta") == folder / "Zeta.TXT" and window_plans.taken(folder, "notes") is None
+
+
+def test_a_plan_files_hash_is_read_once_until_it_is_written_again(tmp_path, monkeypatch):
+    """The hash of a plan's file is read once and kept until the file's moment of writing or its size changes: a write
+    that keeps the size and moves the moment is read again. A file gone has none, and nothing kept."""
+    import os
+    from core.gui import plans as window_plans
+    hashed = []
+    kept = window_plans._hash_of
+    monkeypatch.setattr(window_plans, "_hash_of", lambda path: (hashed.append(path), kept(path))[1])
+    path, cache = _plan(tmp_path, RETRAIN), {}
+    sha = hashlib.sha256(RETRAIN.encode("utf-8")).hexdigest()
+    assert [window_plans.file_sha(path, cache) for _ in range(3)] == [sha] * 3 and hashed == [path]
+    moment = os.stat(path).st_mtime_ns
+    path.write_bytes(RETRAIN.replace("10000", "20000").encode("utf-8"))
+    os.utime(path, ns=(moment + 5_000_000_000, moment + 5_000_000_000))
+    assert window_plans.file_sha(path, cache) not in (None, sha) and hashed == [path, path]
+    path.unlink()
+    assert window_plans.file_sha(path, cache) is None and path not in cache
+
+
+def test_save_plan_writes_beside_its_file_and_moves_it_into_place(tmp_path, monkeypatch):
+    """A plan is written into a file beside it, then moved into place in one step, so that it is never left half
+    written; the folder is made when it is not there, and nothing is left beside the plan."""
+    import os
+    from core.gui import plans as window_plans
+    moved = []
+    kept = os.replace
+    monkeypatch.setattr(os, "replace", lambda source, target: (moved.append((Path(source), Path(target))),
+                                                                kept(source, target))[1])
+    folder = tmp_path / "plans" / "nadrowski"
+    path = window_plans.save_plan(folder, "retrain", "# Training\nnum_runs = 7000\n")
+    assert path == folder / "retrain.txt" and path.read_bytes() == b"# Training\nnum_runs = 7000\n"
+    assert len(moved) == 1 and moved[0][1] == path and moved[0][0].parent == folder and moved[0][0] != path
+    assert sorted(entry.name for entry in folder.iterdir()) == ["retrain.txt"]
+    monkeypatch.setattr(os, "replace", lambda source, target: (_ for _ in ()).throw(OSError("the disk is full")))
+    with pytest.raises(OSError):
+        window_plans.save_plan(folder, "retrain", "# Training\nnum_runs = 9000\n")
+    assert sorted(entry.name for entry in folder.iterdir()) == ["retrain.txt"], "a file was left beside the plan"
+    assert path.read_bytes() == b"# Training\nnum_runs = 7000\n"

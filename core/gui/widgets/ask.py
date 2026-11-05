@@ -41,6 +41,7 @@ class Wording:
     beneath: str                   # "" for no closing lines
     detail: str                    # "" for no error
     label: str | None              # None, except in the form that asks for a line of text
+    text: str                      # the line handed in, in that form; "" in every other
 
 
 class Ask(QDialog):
@@ -61,8 +62,10 @@ class Ask(QDialog):
         super().__init__(parent)
         self.wording = Wording(title=title, sentence=sentence, safe=safe, other=other, loses_work=bool(loses_work),
                                marker=marker, items=tuple(str(item) for item in (items or ())),
-                               beneath=beneath or "", detail=detail or "", label=label)
+                               beneath=beneath or "", detail=detail or "", label=label,
+                               text=text if label is not None else "")
         self.answer_text = None                  # the line of text, kept when the other answer is taken
+        self.wrong = ""                          # what is wrong with the line as it stands, in plain words
         self._check = check
         scaled = design.scaled
         set_class(self, cls="ask")
@@ -216,7 +219,9 @@ class Ask(QDialog):
         return area
 
     def _line(self, label: str, text: str) -> QVBoxLayout:
-        """The one labelled field and, under it, the place for what is wrong with the line."""
+        """The one labelled field and, under it, the place for what is wrong with the line: as wide as the question's
+        text, so that a sentence wraps there and never widens the question, and holding its line's height while nothing
+        is wrong, so that the question does not jump as the line is judged."""
         scaled = design.scaled
         block = QVBoxLayout()
         block.setSpacing(scaled(design.GAP["field_message"]))
@@ -243,6 +248,9 @@ class Ask(QDialog):
         self.field_message.setTextFormat(Qt.TextFormat.PlainText)
         self.field_message.setWordWrap(True)
         wrong.addWidget(self.field_message, 1)
+        held = self._wrong.sizePolicy()
+        held.setRetainSizeWhenHidden(True)                   # its line's height is the question's from the start
+        self._wrong.setSizePolicy(held)
         self._wrong.setVisible(False)
         block.addWidget(self._wrong)
         return block
@@ -254,6 +262,7 @@ class Ask(QDialog):
         self.other_button.setEnabled(False)          # first: a rule that raises leaves the answer greyed
         text = text.strip()
         wrong = (self._check(text) if text and self._check is not None else None) or ""
+        self.wrong = wrong
         self.field_message.setText(wrong)
         self._wrong.setVisible(bool(wrong))
         set_class(self.field, state="error" if wrong else "")
