@@ -67,6 +67,9 @@ NEW_PRIOR = "The new prior"
 GONE_TEXT = "The bounds file used last time, {}, is no longer in the folder."
 #: Under the list while a plan's bounds file waits for step 1 to apply the model it belongs to.
 WAITING_TEXT = "{} is selected when step 1, Model and options, is applied."
+#: Under the list when a plan's bounds file is not in the model's folder as it would be selected: removed since the
+#: plan was filled.
+PLAN_GONE_TEXT = "The plan's bounds file, {}, is not in this model's bounds folder."
 #: How the bounds file in use is named when the file has been written since its configuration was built on it.
 EDITED_IN_USE = "{}, as it was before it was edited"
 GO_TO_TRAINING = "Go to Training"
@@ -177,10 +180,7 @@ class _BoundsField:
     def value(self):
         if self._page._pending is not None:
             return self._page._pending
-        if self._page._typed():
-            return plans.TYPED
-        key = self._page.bounds_picker.key()
-        return _named(key) if key else None
+        return self._page.bounds_built()
 
     def set_value(self, value) -> None:
         self._page.take_plans_bounds(value)
@@ -388,8 +388,8 @@ class PriorPanel(StepPage):
         return {"bounds": self._bounds_field, **{key: self.form.rows[key] for key, _ in _KNOB_RULES}}
 
     def plan_read(self, applied: bool) -> dict:
-        """What a run reads of this step: the bounds of the configuration in use; or the bounds chosen, and in the build
-        view the seven settings, which a load does not read."""
+        """What a run reads of this step: the bounds of the configuration in use; or the bounds the build reads, and in
+        the build view the seven settings, which a load does not read."""
         if applied:
             cfg, prior = self._held()
             if prior is None:
@@ -397,8 +397,17 @@ class PriorPanel(StepPage):
             key = bounds_in_use(cfg)
             return {"bounds": plans.TYPED if key == "" else _named(key) if key else None}
         fields_ = self.plan_fields()
-        keys = ("bounds", *(key for key, _ in _KNOB_RULES)) if self.view == "build" else ("bounds",)
-        return {key: fields_[key].value() for key in keys}
+        keys = (key for key, _ in _KNOB_RULES) if self.view == "build" else ()
+        return {"bounds": self.bounds_built(), **{key: fields_[key].value() for key in keys}}
+
+    def bounds_built(self):
+        """The bounds a build reads now: the limits typed by hand, the file the list selects by its name with forward
+        slashes, or None; never a plan's file that waits, which the build does not read until step 1 applies its
+        model."""
+        if self._typed():
+            return plans.TYPED
+        key = self.bounds_picker.key()
+        return _named(key) if key else None
 
     def in_use_words(self) -> tuple:
         cfg, prior = self._held()
@@ -761,8 +770,8 @@ class PriorPanel(StepPage):
     def on_draft_set(self, draft) -> None:
         """Step 1 applied: the list of bounds files points at the model's own folder, its selection kept where that
         folder holds it, else the file that came into use last for this model, which is said when it has gone; a plan's
-        bounds file that waits is selected by its name in that folder before either, and said when it is not there; the
-        limits typed by hand follow."""
+        bounds file that waits, which waits only for the model it was filled for, is selected by its name in that folder
+        before either, and said in the plan's words when it is not there; the limits typed by hand follow."""
         model = getattr(draft, "model", None)
         folder = BOUNDS_PATH / str(model or "nadrowski").lower()
         pending = self._pending
@@ -772,13 +781,16 @@ class PriorPanel(StepPage):
             key = self._bounds_pick[1]
         self.bounds_picker.repoint(folder, key)
         if pending is not None:
-            key = self._entry_named(pending) or pending
-            self.bounds_picker.restore_key(self._entry_named(pending) or "")
-        gone = bool(key) and self.bounds_picker.key() != key
-        self.gone_line.set_text(GONE_TEXT.format(_named(key)) if gone else "")
-        self.gone_line.setVisible(gone)
-        self.form.rows["bounds"].kept = (pending is None and not gone and bool(key)
-                                         and self._kept_pick == (model, key))
+            found = self._entry_named(pending)
+            self.bounds_picker.restore_key(found)
+            said, kept = ("" if found else PLAN_GONE_TEXT.format(pending)), False
+        else:
+            gone = bool(key) and self.bounds_picker.key() != key
+            said = GONE_TEXT.format(_named(key)) if gone else ""
+            kept = not gone and bool(key) and self._kept_pick == (model, key)
+        self.gone_line.set_text(said)
+        self.gone_line.setVisible(bool(said))
+        self.form.rows["bounds"].kept = kept
         if self._kept_pick is not None and self._kept_pick[0] == model:
             self._kept_pick = None               # given back to its model: kept from last time until touched
         self._grid_from = None
@@ -805,20 +817,25 @@ class PriorPanel(StepPage):
             self.bounds_picker.refresh()
             entry = self._entry_named(name)
             self.bounds_picker.restore_key(entry)
-            self.gone_line.set_text("" if entry else GONE_TEXT.format(name))
+            self.gone_line.set_text("" if entry else PLAN_GONE_TEXT.format(name))
             self.gone_line.setVisible(not entry)
         else:
             self.pending_bounds(name)
         self.form.rows["bounds"].kept = False
 
     def pending_bounds(self, name: str) -> None:
-        """Hold a plan's bounds file, by its name with forward slashes, until step 1 applies a model: it is then
-        selected in that model's folder. Said under the list while it waits; a file chosen in the list, or limits typed
-        by hand, take its place."""
+        """Hold a plan's bounds file, by its name with forward slashes, until step 1 applies the model on its form, the
+        model the plan was filled for: it is then selected in that model's folder. Said under the list while it waits;
+        a file chosen in the list, limits typed by hand, or another model chosen on step 1's form take its place."""
         self._pending = name
         self.waiting_line.set_text(WAITING_TEXT.format(name))
         self.waiting_line.setVisible(True)
         self.redraw()
+
+    def let_the_plans_file_go(self) -> None:
+        """Another model chosen on step 1's form lets the plan in use go, and its bounds file with it: the model step 1
+        applies next has its own file."""
+        self._stop_waiting()
 
     def _stop_waiting(self) -> None:
         """No plan's bounds file waits any longer."""

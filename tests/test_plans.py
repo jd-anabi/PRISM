@@ -925,6 +925,19 @@ def _facts(page) -> list:
     return [row.sentence.plain_text() for row in page.foot.facts.rows()]
 
 
+def _plan_fact(page) -> str:
+    """What "Before you start" says of the plan in use, as it reads now."""
+    return next(said for said in _facts(page)
+                if said.startswith(("Information. No plan", "Information. Plan ", "Information. Settings from")))
+
+
+def _a_plan_of_hopf(folder) -> Path:
+    """Beside the test's own folder of plans for Nadrowski, Hopf's, holding one plan that names its bounds file."""
+    hopf = folder.parent / "hopf"
+    hopf.mkdir()
+    return _plan(hopf, "# Prior\nbounds = cell.txt\n", "hopf_bounds")
+
+
 def test_choosing_in_the_list_changes_nothing(tmp_path, monkeypatch, store):
     """Choosing a plan in the list reads it and says what it holds; it changes no form, no origin, no plan line, nothing
     in use, nothing remembered and no step's state: only the fill button fills."""
@@ -1279,9 +1292,11 @@ def test_the_later_headings_are_shown_not_applied_yet_and_counted(tmp_path, monk
 
 def test_a_plans_bounds_file_waits_until_its_model_is_applied(tmp_path, monkeypatch, store):
     """Filled while the model on step 1's form is not the one applied, a plan's bounds file is not selected in the list
-    of another model's folder: it waits, the limits typed by hand no longer read, and when step 1 applies a model the
-    file is selected by its name in that model's folder, said to be no longer there when it is not."""
-    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    of another model's folder: it waits, the limits typed by hand no longer read, and when step 1 applies the model the
+    plan was filled for, the file is selected by its name in that model's folder. A file chosen in the list takes its
+    place."""
+    from tests._dialogs import choose
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
     prior = screen.prior_panel
     prior.typed_tick.setChecked(True)
     before = prior.bounds_picker.key()
@@ -1294,16 +1309,129 @@ def test_a_plans_bounds_file_waits_until_its_model_is_applied(tmp_path, monkeypa
     assert prior.bounds_picker.key() == "master_tier1.txt" and prior.gone_line.isHidden()
     assert prior.waiting_line.isHidden() and _origins(screen)[("prior", "bounds")] == "from plan retrain"
     assert not prior.form.rows["bounds"].kept
-    prior.pending_bounds("master.txt")
+    _a_plan_of_hopf(folder)
+    page.model_combo.setCurrentText("HOPF")
+    _press_fill(page, monkeypatch, "hopf_bounds", answer="Fill the forms")
+    assert _said(prior.waiting_line) == "cell.txt is selected when step 1, Model and options, is applied."
     prior.bounds_picker.restore_key("master_spont.txt")
     assert prior.waiting_line.isHidden(), "a file chosen in the list left a plan's file waiting"
+    _press_fill(page, monkeypatch, "hopf_bounds", answer="Fill the forms")
+    assert not prior.waiting_line.isHidden()
+    choose(monkeypatch, words="Apply and start a new session")
     page.foot.main_button.click()
-    assert prior.bounds_picker.key() == "master_spont.txt"
-    prior.pending_bounds("not_there.txt")
+    assert prior.bounds_picker.key() == "cell.txt" and prior.gone_line.isHidden() and prior.waiting_line.isHidden()
+
+
+def test_step_two_names_the_file_its_build_reads_while_a_plans_file_waits(tmp_path, monkeypatch, store):
+    """While a plan's bounds file waits for the model it was filled for, step 2's "Before you start" and its plan line
+    name the file the build reads, the one the list selects in the folder of the model applied, as a departure from the
+    plan's; the row still says its value came from the plan; and the press builds on the file selected."""
+    from core import orchestrator
+    from core.gui.run.controller import controller
+    from tests._fixtures import qt_app
+    from tests._runs import StandIn, turn_until
+    app = qt_app()
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _a_plan_of_hopf(folder)
+    page.foot.main_button.click()
+    prior = screen.prior_panel
+    _set(screen, {("prior", "bounds"): "master.txt"})
     page.model_combo.setCurrentText("HOPF")
+    _press_fill(page, monkeypatch, "hopf_bounds", answer="Fill the forms")
+    assert (prior._pending, prior.bounds_picker.key()) == ("cell.txt", "master.txt")
+    window.go_to("inference", "prior")
+    prior.show_view("build")
+    prior.read_facts()
+    assert _plan_fact(prior) == "Information. Plan hopf_bounds, with 1 change: Bounds file master.txt (plan cell.txt)."
+    assert _said(prior.plan_line) == "Plan: hopf_bounds, 1 change"
+    assert _origins(screen)[("prior", "bounds")] == "from plan hopf_bounds"
+    stand_in = StandIn(word="Prior build")
+    monkeypatch.setattr(orchestrator, "build_prior", stand_in)
+    prior.names.name.setText("a_prior")
+    prior._main_clicked()
+    assert controller().is_live() and stand_in.started.wait(5), prior.foot.reason.text()
+    built = stand_in.calls[-1][0][0]
+    stand_in.fail(RuntimeError("ended by the test"))
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+    assert Path(built.sources["bounds"]).name == "master.txt", built.sources
+
+
+def test_limits_typed_take_the_place_of_a_waiting_file(tmp_path, monkeypatch, store):
+    """Limits typed by hand take a waiting plan's file's place as a file chosen in the list does: the file waits no
+    longer, and step 1 applied leaves the list as it was, the limits typed still read."""
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    prior = screen.prior_panel
+    _set(screen, {("prior", "bounds"): "master.txt"})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert prior._pending == "master_tier1.txt" and prior.bounds_picker.key() == "master.txt", prior._pending
+    prior.show_view("build")
+    prior.typed_tick.setChecked(True)
+    assert prior._pending is None and prior.waiting_line.isHidden(), "limits typed left a plan's file waiting"
     page.foot.main_button.click()
-    assert prior.bounds_picker.key() == "" and not prior.gone_line.isHidden()
-    assert _said(prior.gone_line) == "The bounds file used last time, not_there.txt, is no longer in the folder."
+    assert (prior.bounds_picker.key(), prior.typed_tick.isChecked()) == ("master.txt", True), (
+        prior.bounds_picker.key(), prior.typed_tick.isChecked())
+
+
+def test_a_waiting_file_is_found_in_the_folder_of_the_model_applied(tmp_path, monkeypatch, store):
+    """A plan of another model than the one applied, filled with its model on the form, waits: its file is not looked
+    for in the folder the list shows. Step 1 applying that model selects the file in that model's own folder."""
+    from tests._dialogs import choose
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _a_plan_of_hopf(folder)
+    page.foot.main_button.click()
+    prior = screen.prior_panel
+    page.model_combo.setCurrentText("HOPF")
+    _press_fill(page, monkeypatch, "hopf_bounds", answer="Fill the forms")
+    waited = (prior._pending, prior.waiting_line.isHidden(), prior.gone_line.isHidden())
+    choose(monkeypatch, words="Apply and start a new session")
+    page.foot.main_button.click()
+    applied = (prior.bounds_picker.key(), prior.gone_line.isHidden(), _said(prior.gone_line))
+    assert waited == ("cell.txt", False, True), waited
+    assert applied[:2] == ("cell.txt", True), applied
+
+
+def test_a_waiting_file_goes_with_the_model_it_was_filled_for(tmp_path, monkeypatch, store):
+    """Another model chosen on step 1's form lets the plan in use go, and its waiting bounds file with it: the line
+    under the list goes, and the model applied next has its own file back, kept from last time, with nothing said of the
+    plan's."""
+    from core.gui import settings
+    from core.gui.remembered import BOUNDS_KEY, BOUNDS_MODEL_KEY
+    qs = settings.settings()
+    qs.setValue(BOUNDS_KEY, "cell.txt")
+    qs.setValue(BOUNDS_MODEL_KEY, "HOPF")
+    qs.sync()
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    prior = screen.prior_panel
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    before = (prior._pending, _said(prior.waiting_line), prior.waiting_line.isHidden())
+    page.model_combo.setCurrentText("HOPF")
+    chosen = (prior._pending, prior.waiting_line.isHidden(), screen.plan_source, _origins(screen)[("prior", "bounds")])
+    page.foot.main_button.click()
+    applied = (prior.bounds_picker.key(), prior.gone_line.isHidden(), prior.waiting_line.isHidden(),
+               _origins(screen)[("prior", "bounds")])
+    assert before[0] == "master_tier1.txt" and not before[2], before
+    assert chosen == (None, True, None, ""), chosen
+    assert applied == ("cell.txt", True, True, "kept from last time"), applied
+
+
+def test_a_plans_bounds_file_gone_by_the_apply_is_said_in_the_plans_words(tmp_path, monkeypatch, store):
+    """A plan's bounds file that is no longer in its model's folder when step 1 applies that model, removed since the
+    fill, is said in the plan's own words, never as the file used last time, and the list does not select it."""
+    import shutil
+    from core.config import BOUNDS_PATH
+    from core.gui.panels.inference import config_tab, prior_tab
+    bounds = tmp_path / BOUNDS_PATH.name
+    shutil.copytree(BOUNDS_PATH / "nadrowski", bounds / "nadrowski")
+    monkeypatch.setattr(config_tab, "BOUNDS_PATH", bounds)
+    monkeypatch.setattr(prior_tab, "BOUNDS_PATH", bounds)
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    prior = screen.prior_panel
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert prior._pending == "master_tier1.txt"
+    (bounds / "nadrowski" / "master_tier1.txt").unlink()
+    page.foot.main_button.click()
+    assert prior.bounds_picker.key() != "master_tier1.txt" and not prior.gone_line.isHidden()
+    assert _said(prior.gone_line) == "The plan's bounds file, master_tier1.txt, is not in this model's bounds folder."
 
 
 def test_the_windows_two_checks_are_listed_as_the_readers_are(tmp_path, monkeypatch):

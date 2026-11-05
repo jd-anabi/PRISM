@@ -646,8 +646,8 @@ class ConfigPanel(StepPage):
         return pages() if callable(pages) else ()
 
     def _model_left(self) -> None:
-        """Another model shown on the form: its plans are not read yet, the list shows "No plan", and no plan is in use;
-        the values on the forms stay as they are."""
+        """Another model shown on the form: its plans are not read yet, the list shows "No plan", and no plan is in use,
+        nor a plan's bounds file waiting on step 2; the values on the forms stay as they are."""
         if not hasattr(self, "plan_choice"):
             return
         self.plan_choice.blockSignals(True)
@@ -659,6 +659,9 @@ class ConfigPanel(StepPage):
             self.plan_choice.blockSignals(False)
         self._shown_plan, self._listed_for, self._folder_there, self._hint = None, None, False, ""
         screen = self._screen
+        prior = getattr(screen, "prior_panel", None)
+        if prior is not None:
+            prior.let_the_plans_file_go()
         if getattr(screen, "plan_source", None) is not None:
             screen.take_plan(None)
 
