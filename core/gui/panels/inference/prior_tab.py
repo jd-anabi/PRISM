@@ -389,8 +389,10 @@ class PriorPanel(StepPage):
 
     def plan_read(self, applied: bool) -> dict:
         """What a run reads of this step: the bounds of the configuration in use; or the bounds the build reads, and in
-        the build view the seven settings, which a load does not read. While a plan's file waits, the file the build
-        reads is named with its model's folder: it is then no plan's file, whatever its name."""
+        the build view the seven settings, which a load does not read. While a plan's file waits for another model
+        than the one whose folder the list stands in, the file the build reads is named with its model's folder: it is
+        then no plan's file, whatever its name. Standing in the plan's own model's folder, it is compared by its
+        name."""
         if applied:
             cfg, prior = self._held()
             if prior is None:
@@ -400,9 +402,15 @@ class PriorPanel(StepPage):
         fields_ = self.plan_fields()
         keys = (key for key, _ in _KNOB_RULES) if self.view == "build" else ()
         built = self.bounds_built()
-        if self._pending is not None and isinstance(built, str):
+        if self._pending is not None and isinstance(built, str) and not self._on_the_plans_folder():
             built = plans.FileIn(built, Path(self.bounds_picker.base_path).name)
         return {"bounds": built, **{key: fields_[key].value() for key in keys}}
+
+    def _on_the_plans_folder(self) -> bool:
+        """Whether the list stands in the folder of the model on step 1's form, the model a plan's file that waits was
+        filled for: with nothing applied the list stands in Nadrowski's."""
+        shown = getattr(getattr(self._screen, "config_panel", None), "model_combo", None)
+        return shown is not None and Path(self.bounds_picker.base_path) == BOUNDS_PATH / shown.currentText().lower()
 
     def bounds_built(self):
         """The bounds a build reads now: the limits typed by hand, the file the list selects by its name with forward

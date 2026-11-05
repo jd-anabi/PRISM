@@ -2239,6 +2239,7 @@ def test_with_nothing_applied_the_saves_sentence_names_no_model_applied(tmp_path
     assert read_plan(hopf / "zz_hopf.txt").values == {("Training", "num_runs"): 7000}
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows keeps one file for both spellings of a name")
 def test_a_plan_in_use_renamed_in_case_alone_stays_in_use(tmp_path, monkeypatch, store):
     """A plan in use whose file is renamed in its capitals alone is still the plan in use: the list shows it as the
     folder names it, nothing under it says it changed or is gone, and the fill button is the plan's."""
@@ -2250,6 +2251,73 @@ def test_a_plan_in_use_renamed_in_case_alone_stays_in_use(tmp_path, monkeypatch,
     assert (page.plan_choice.currentText(), row.line.words, page.fill_reason.text()) == ("Retrain", "", "")
     assert (page.fill_button.text(), page.fill_button.isEnabled()) == ("Fill the forms from this plan", True)
     assert screen.plan_source.name == "retrain" and not _facts(page)[-1].startswith("Attention."), _facts(page)
+
+
+def test_the_usual_values_pressed_with_the_plan_in_use_gone_look_for_it_no_more(tmp_path, monkeypatch, store):
+    """The plan in use's file removed, the forms returned to their usual values: when the file comes back the list stays
+    on "No plan", nothing under it, and no plan is in use."""
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    (folder / "retrain.txt").unlink()
+    page.read_facts()
+    assert page.fill_button.text() == "Return the forms to the usual values"
+    _press_fill(page, monkeypatch, None)
+    assert screen.plan_source is None
+    _plan(folder, RETRAIN, "retrain")
+    page.read_facts()
+    assert (page.plan_choice.currentText(), page.form.rows["plan"].line.words) == ("No plan", ""), (
+        page.plan_choice.currentText(), page.form.rows["plan"].line.words)
+    assert screen.plan_source is None
+
+
+def test_two_spellings_of_one_plan_listed_keep_the_plan_in_use_its_own(tmp_path, monkeypatch, store):
+    """A file system that keeps case may list two plans whose names differ in case alone: the plan in use is the one of
+    its own spelling, kept shown as the list is read again, and the other spelling chosen reads changed, not applied.
+    Where only the other spelling is listed, as Windows lists one file, the plan stands under it."""
+    from core.gui import plans as window_plans
+    from core.gui.panels.inference import config_tab
+    assert config_tab._listed_as(("Retrain", "retrain"), "retrain") == "retrain"
+    assert config_tab._listed_as(("Retrain", "retrain"), "Retrain") == "Retrain"
+    assert config_tab._listed_as(("Retrain",), "retrain") == "Retrain"
+    assert config_tab._listed_as(("other",), "retrain") is None and config_tab._listed_as(("retrain",), None) is None
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    listed = window_plans.list_plans
+    monkeypatch.setattr(window_plans, "list_plans", lambda where: ("Retrain", *listed(where)))
+    page.read_facts()
+    assert _listed(page) == ["No plan", "Retrain", "retrain"]
+    assert (page.plan_choice.currentData(), page.form.rows["plan"].line.words) == ("retrain", "")
+    page.plan_choice.setCurrentIndex(page.plan_choice.findData("Retrain"))
+    assert page.form.rows["plan"].line.words == "Changed, not applied. In use: plan retrain, filled 8 Oct 2026, 12:04."
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows keeps one file for both spellings of a name")
+def test_a_plan_in_use_renamed_in_case_then_removed_is_said_to_be_gone(tmp_path, monkeypatch, store):
+    """The plan in use renamed in its capitals alone, then removed: the list falls back to "No plan" with nothing under
+    it, and beside the fill button the plan in use is said to be no longer in the folder."""
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    (folder / "retrain.txt").rename(folder / "Retrain.txt")
+    page.read_facts()
+    assert page.plan_choice.currentText() == "Retrain"
+    (folder / "Retrain.txt").unlink()
+    page.read_facts()
+    assert (page.plan_choice.currentText(), page.form.rows["plan"].line.words, page.fill_reason.text()) == (
+        "No plan", "", "The plan in use is no longer in the plans folder.")
+
+
+def test_a_plans_bounds_file_waiting_in_the_folder_the_list_stands_in_is_no_change(tmp_path, monkeypatch, store):
+    """With nothing applied the list of bounds files stands in Nadrowski's folder: a plan of Nadrowski filled there, its
+    bounds file selected in the list, waits for step 1 and is the very file the build reads, so step 2 says the plan is
+    in use as written, and its plan line counts no change."""
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch,
+                                                       {"bounds": "# Prior\nbounds = master.txt\n"})
+    prior = screen.prior_panel
+    _set(screen, {("prior", "bounds"): "master.txt"})
+    _press_fill(page, monkeypatch, "bounds")
+    assert screen.session.draft is None and prior.waiting_file() == "master.txt"
+    assert _plan_fact(prior) == "Information. Plan bounds. Its 1 setting is in use as written.", _plan_fact(prior)
+    assert _said(prior.plan_line) == "Plan: bounds"
 
 
 def test_with_no_file_selected_the_save_says_nothing_of_the_bounds_list(tmp_path, monkeypatch, store):

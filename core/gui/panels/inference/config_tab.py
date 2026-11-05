@@ -203,6 +203,17 @@ def _one_plan(one, other) -> bool:
     return one == other or (one is not None and other is not None and one.casefold() == other.casefold())
 
 
+def _listed_as(names, name) -> "str | None":
+    """The name in ``names`` the plan ``name`` stands under: its own where it is listed, else the first listed in
+    another case, as Windows keeps one file for both; None for "No plan" and for a plan not listed. A file system that
+    keeps case may list both spellings, and the plan is then its own."""
+    if name is None:
+        return None
+    if name in names:
+        return name
+    return next((listed for listed in names if listed.casefold() == name.casefold()), None)
+
+
 def _counted(count: int, one: str, many: str) -> str:
     return one if count == 1 else many.format(count)
 
@@ -683,9 +694,10 @@ class ConfigPanel(StepPage):
             screen.take_plan(None)
 
     def _read_the_plans(self) -> None:
-        """The model's plans listed again, the plan shown kept while it stands there, else "No plan" until its file is
-        back; whether the folder stands there; the plan last used with the model, found without regard to case, and
-        whether its file is still there; and the plan shown read again. Nothing while a run is live."""
+        """The model's plans listed again, the plan shown kept while it stands there, under its own name or else under
+        the name the folder lists it by in another case, else "No plan" until its file is back; whether the folder
+        stands there; the plan last used with the model, found without regard to case, and whether its file is still
+        there; and the plan shown read again. Nothing while a run is live."""
         folder = self._plans_folder()
         if controller().is_live() or folder is None:
             return
@@ -694,7 +706,7 @@ class ConfigPanel(StepPage):
         choice, shown = self.plan_choice, self.plan_choice.currentData()
         if shown is None and self._gone is not None:
             shown = self._gone                   # the plan whose file went is shown again once its file is back
-        found = None if shown is None else next((name for name in names if _one_plan(name, shown)), None)
+        found = _listed_as(names, shown)
         choice.blockSignals(True)
         try:
             while choice.count() > 1:
@@ -710,16 +722,17 @@ class ConfigPanel(StepPage):
         self._listed_for, self._folder_there = model, folder.is_dir()
         last = settings.get_str(settings.settings(), LAST_USED_KEY.format(model.lower()), "").strip()
         when = settings.get_str(settings.settings(), LAST_USED_AT_KEY.format(model.lower()), "").strip()
-        found = next((name for name in names if name.casefold() == last.casefold()), None)
+        last_found = next((name for name in names if name.casefold() == last.casefold()), None)
         if not last:
             self._hint = ""
-        elif found is None:
+        elif last_found is None:
             self._hint = LAST_USED_GONE_TEXT.format(last)
         else:
             try:
-                self._hint = LAST_USED_TEXT.format(found, texts.date_text(datetime.fromisoformat(when).astimezone()))
+                self._hint = LAST_USED_TEXT.format(last_found,
+                                                   texts.date_text(datetime.fromisoformat(when).astimezone()))
             except (TypeError, ValueError, OverflowError, OSError):
-                self._hint = LAST_USED_UNDATED_TEXT.format(found)
+                self._hint = LAST_USED_UNDATED_TEXT.format(last_found)
         self._read_the_plan_shown()
         self._draw_the_plans_block()
 
@@ -759,7 +772,8 @@ class ConfigPanel(StepPage):
         row.set_origin(self._hint if listed is None else "")
         in_use = source.name if source is not None and source.kind == "plan" else None
         gone = in_use is not None and listed is None and _one_plan(self._gone, in_use)
-        held, changed = self._in_use_words(source), not _one_plan(listed, in_use) and not gone
+        in_the_list = _listed_as([self.plan_choice.itemData(at) for at in range(1, self.plan_choice.count())], in_use)
+        held, changed = self._in_use_words(source), listed != (in_the_list or in_use) and not gone
         row.set_line("warn" if changed else "", CHANGED_TEXT.format(held) if changed else "")
         self.plan_in_use.set_text(IN_USE_TEXT.format(held))
         refused = isinstance(shown, engine_plans.PlanRefusal)
@@ -881,8 +895,8 @@ class ConfigPanel(StepPage):
         return said if said.startswith(label) else f"{label}: {said}"
 
     def _bounds_of_another_model(self) -> bool:
-        """Whether step 2's list selects a file in another model's folder than the model shown: while the model shown is
-        not the one applied, the list holds the applied model's files. A plan's file that waits is the shown model's."""
+        """Whether step 2's list selects a file in another model's folder than the model shown: the list holds the files
+        of the model applied, or Nadrowski's while nothing is applied. A plan's file that waits is the shown model's."""
         prior = getattr(self._screen, "prior_panel", None)
         if prior is None or prior.waiting_file() is not None:
             return False
@@ -915,6 +929,7 @@ class ConfigPanel(StepPage):
         replaced = plans.would_replace(screen, values)
         if replaced and not ask(self, title, sentence, KEEP_WHAT_IS_THERE, answer, items=replaced):
             return
+        self._gone = None                        # the plan whose file went is no longer looked for
         plans.fill_forms(screen, values, source)
 
     def _save_pressed(self) -> None:
