@@ -1,5 +1,6 @@
 """Plans in the window: a model's plans listed, one read with the two checks its reader cannot make, one saved, the
-forms of steps 1 to 3 filled from one, and where each field's value came from.
+forms of steps 1 to 3 filled from one, where each field's value came from, and what "Before you start" says of the plan
+in use.
 
 The engine reads a plan and writes its text (``core/plans.py``); the window lists the folder, checks a plan against the
 model's own folders, writes the file, fills the forms and says what is in use. Every function here that lists, reads or
@@ -32,11 +33,13 @@ from PySide6.QtWidgets import QComboBox
 
 from core import cli, config
 from core import plans as engine_plans
+from core.artifacts.provenance import file_ref
 from core.Helpers import file_manager
 from core.refusals import Refusal
 
+from . import texts
 from .run.controller import controller
-from .step_facts import origin_words
+from .step_facts import Fact, origin_words
 from .widgets.form import TickedField
 
 #: The folder whose sub-folders, one for each model, hold the plans. A test hands the screen a folder of its own, and
@@ -58,7 +61,21 @@ PLAN_LINE = "Plan: {}"
 SOURCE_LINE = "Settings from {} {}"
 ONE_CHANGE = "{}, 1 change"
 CHANGES = "{}, {} changes"
+#: What "Before you start" says of the plan in use, the source's head first.
+PLAN_HEAD = "Plan {}"
+SOURCE_HEAD = "Settings from {} {}"
+NO_PLAN_USUAL_TEXT = "No plan. Every setting is at its usual value."
+NO_PLAN_ONE_TEXT = "No plan. 1 setting differs from the usual: {}."
+NO_PLAN_DIFFER_TEXT = "No plan. {} settings differ from the usual: {}."
+AS_WRITTEN_ONE_TEXT = "{}. Its 1 setting is in use as written."
+AS_WRITTEN_TEXT = "{}. Its {} settings are in use as written."
+NONE_READ_TEXT = "{}. This step reads none of its settings."
+ONE_CHANGE_TEXT = "{}, with 1 change: {}."
+CHANGES_TEXT = "{}, with {} changes: {}."
 DEPARTURE = "{} {} ({} {})"
+CHANGED_FILE_TEXT = ("{} has been changed since its settings were filled in on {}. The forms hold the earlier values; "
+                     "fill again to take the changes.")
+GONE_FILE_TEXT = "{} is no longer in the plans folder. The forms hold the values filled from it on {}."
 #: How a value that has none of its own is said.
 BLANK = "blank"
 NONE_WORDS = "none"
@@ -76,6 +93,15 @@ class _Typed:
 TYPED = _Typed()
 
 
+class _Unread:
+    """What the screen knows of the plan file in use before a reading has looked at it."""
+
+    def __repr__(self) -> str:
+        return "UNREAD"
+
+
+#: The state of the plan file in use while no reading has looked at it.
+UNREAD = _Unread()
 #: What a plan's absence of a value is told apart from: a plan never holds None.
 _MISSING = object()
 #: The rows a fill leaves as they are when the plan holds nothing for them: a bounds file has no usual value.
@@ -387,6 +413,39 @@ def _in_error(row) -> bool:
     """Whether the form's row breaks its rule: its own line says so, and it is no departure."""
     ask = getattr(row, "in_error", None)
     return bool(ask()) if callable(ask) else False
+
+
+def _head(source: PlanSource) -> str:
+    return PLAN_HEAD.format(source.name) if source.kind == "plan" else SOURCE_HEAD.format(source.kind, source.name)
+
+
+def plan_facts(screen, headings: Sequence[str]) -> tuple[Fact, ...]:
+    """What "Before you start" says of the plan in use for a run that reads ``headings``: the source, and every
+    departure among the settings the run reads, each named; and, for a plan, that its file has been changed or removed
+    since the fill, as the last reading found it. Reads nothing."""
+    source = screen.plan_source
+    held, departures = _departures(screen, headings)
+    listed = "; ".join(departures)
+    if source is None:
+        sentence = (NO_PLAN_USUAL_TEXT if not departures else NO_PLAN_ONE_TEXT.format(listed) if len(departures) == 1
+                    else NO_PLAN_DIFFER_TEXT.format(len(departures), listed))
+        return (Fact("info", sentence),)
+    head = _head(source)
+    if departures:
+        sentence = (ONE_CHANGE_TEXT.format(head, listed) if len(departures) == 1
+                    else CHANGES_TEXT.format(head, len(departures), listed))
+    else:
+        sentence = (NONE_READ_TEXT.format(head) if held == 0 else AS_WRITTEN_ONE_TEXT.format(head) if held == 1
+                    else AS_WRITTEN_TEXT.format(head, held))
+    facts = [Fact("info", sentence)]
+    state = getattr(screen, "plan_file", UNREAD)
+    if source.kind == "plan" and state is not UNREAD and source.path is not None:
+        when = texts.date_text(source.at) if source.at is not None else ""
+        if state is None:
+            facts.append(Fact("warn", GONE_FILE_TEXT.format(source.path.name, when)))
+        elif state != source.sha256:
+            facts.append(Fact("warn", CHANGED_FILE_TEXT.format(source.path.name, when)))
+    return tuple(facts)
 
 
 def plan_line(screen, headings: Sequence[str]) -> str:

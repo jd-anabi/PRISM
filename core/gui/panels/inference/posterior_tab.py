@@ -43,7 +43,7 @@ from core import config, orchestrator
 from core.artifacts import Accept, default_store
 from core.refusals import Refusal, default_clause, require_at_least, require_positive
 
-from ... import fields, keys, record_words, settings, style, texts
+from ... import fields, keys, plans, record_words, settings, style, texts
 from ...chain import model_label
 from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...remembered import NUM_RUNS_KEY, POSTERIOR_KEY, RUN_SIZE_KEY, put_many
@@ -440,7 +440,7 @@ class PosteriorPanel(StepPage):
         return training_facts(needs_prior=prior is None, uses=uses, budget=budget, reading=reading,
                               never=self._never(), resume=self._resume(), batches=batches, differences=differences,
                               how_long=how_long, memory=memory, others_pending=self._others_pending(),
-                              name_facts=names, field_facts=field_facts)
+                              name_facts=names, field_facts=field_facts, plan_lines=self.plan_lines())
 
     def _load_facts(self) -> tuple:
         """The facts of the load view: what blocks a load, and the prior the posterior selected was trained with
@@ -456,7 +456,7 @@ class PosteriorPanel(StepPage):
                           trained_with=record.get("trained_with"), trained_with_label=record.get("prior_label", ""),
                           in_use=getattr(prior, "id", None),
                           in_use_label=getattr(prior, "name", None) or record_words.label_of(prior),
-                          others_pending=self._others_pending())
+                          others_pending=self._others_pending(), plan_lines=self.plan_lines())
 
     def _differs(self, one) -> tuple:
         """What the saved set ``one`` differs in, line by line, by the names on screen: its limits by the parameters of
@@ -782,7 +782,8 @@ class PosteriorPanel(StepPage):
                                 on_result=self._on_posterior, **knobs)
         if started:
             self._handed = handed
-            put_many([(NUM_RUNS_KEY, str(knobs["num_runs"])), (RUN_SIZE_KEY, str(knobs["run_size_cap"]))])
+            put_many([(NUM_RUNS_KEY, str(knobs["num_runs"])), (RUN_SIZE_KEY, str(knobs["run_size_cap"]))]
+                     + self._screen.last_used(getattr(getattr(self.session, "draft", None), "model", None)))
 
     def _refusal(self, exc) -> None:
         """A refusal, as every page tells one; but the stage's refusal of a new simulation set beside a saved one a
@@ -821,16 +822,19 @@ class PosteriorPanel(StepPage):
     def settings_entry(self) -> dict:
         """What this training is started with, as its run's history keeps it: names and numbers only. The model and its
         options as step 1 holds them, the bounds file and the prior in use, the choice of continuing, the name and the
-        note, and one row for each setting the training reads, with its label, its value, where the value came from and
-        its usual one."""
+        note, and one row for each setting the training reads, with its label, its value, where the value came from, the
+        value the source in use holds for it and its usual one."""
         session = self.session
         draft = getattr(session, "draft", None)
         cfg, prior = self._held()
         options = {name: _plain(getattr(draft, name, None))
                    for name in ("chi_mode", "chi_n_freqs", "chi_k_pad", "chi_max_cycles", "reparam_rotate",
                                 "units_override")}
+        source = getattr(self._screen, "plan_source", None)
         rows = [{"step": "training", "name": key, "label": row.label_text(), "value": _plain(row.value()),
-                 "origin": row.origin.text(), "plan": None, "usual": _plain(row.usual())}
+                 "origin": plans.origin(row, source, kept=row.kept, heading=plans.HEADING_OF[self.step]),
+                 "plan": _plain(plans.plan_value(source, plans.HEADING_OF[self.step], key)),
+                 "usual": _plain(row.usual())}
                 for key, row in ((key, self.form.rows[key]) for key, _ in self._ruled())]
         return {"model": _plain(getattr(draft, "model", None)), "chi_mode": _plain(getattr(draft, "chi_mode", None)),
                 "options": options, "bounds": _plain(bounds_in_use(cfg)), "prior": _plain(getattr(prior, "id", None)),

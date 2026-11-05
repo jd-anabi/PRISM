@@ -819,9 +819,10 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
     """What the window writes of steps 1 to 3 into the settings file, each key at its moment and at no other: the model
     and the kind of observation as step 1 is applied; the bounds file, the model it came into use with and the prior as a
     prior's run returns it; the batches and the simulations per batch as a training starts, as the text of their boxes;
-    the posterior as a training's run returns it. Nothing is written as a choice is made or a button is pressed before a
-    run starts; and closing writes the window's size and place and the groups of the pages not rebuilt yet, never a key
-    of the three steps."""
+    the posterior as a training's run returns it; and at each of these moments the plan last used with the model and
+    when, blank with no plan in use. Nothing is written as a choice is made or a button is pressed before a run starts,
+    nor as a plan is filled; and closing writes the window's size and place and the groups of the pages not rebuilt yet,
+    never a key of the three steps nor of the plans."""
     from types import SimpleNamespace
     from PySide6.QtCore import QSettings
     from core import orchestrator
@@ -841,6 +842,7 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
         written.clear()
         return moment
 
+    plans = ["plans/last_used/nadrowski", "plans/last_used_at/nadrowski"]
     with use_store(ArtifactStore(tmp_path / "Artifacts")):
         controller_on(tmp_path, Clock(at(8, 12, 4)))
         window = build_window()
@@ -850,8 +852,11 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
         first, prior_page, page = screen.config_panel, screen.prior_panel, screen.posterior_panel
         first.kind_choice.setCurrentIndex(first.kind_choice.findData(False))
         assert at_the_moment() == [], "a choice of step 1 was written"
+        first.fill_button.click()
+        assert at_the_moment() == [], "a fill was written"
         first.foot.main_button.click()
-        assert at_the_moment() == ["inference_config/chi_mode", "inference_config/model"]
+        assert at_the_moment() == ["inference_config/chi_mode", "inference_config/model", *plans]
+        assert [st.settings().value(key) for key in plans] == ["", ""], "a plan was remembered with none in use"
         prior_page.show_view("build")
         prior_page.bounds_picker.restore_key("master.txt")
         prior_page.names.name.setText("retrain_prior")
@@ -863,7 +868,8 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
         made = _prior_artifact(default_store(), _nad_cfg(), name="retrain_prior").id
         built.release(default_store().load_prior(_nad_cfg(), made))
         turn_until(app, lambda: not controller().is_live(), 10.0)
-        assert at_the_moment() == ["inference_prior/bounds", "inference_prior/bounds_model", "inference_prior/prior"]
+        assert at_the_moment() == ["inference_prior/bounds", "inference_prior/bounds_model", "inference_prior/prior",
+                                   *plans]
         with running(build_run_host()):
             page.names.name.setText("refused_while_live")
             page.main_pressed()                      # another run is live: nothing starts, and nothing is written
@@ -876,20 +882,20 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
         monkeypatch.setattr(orchestrator, "build_posterior", trained)
         page._main_clicked()
         assert trained.started.wait(5)
-        assert at_the_moment() == ["inference_posterior/num_runs", "inference_posterior/run_size_cap"]
+        assert at_the_moment() == ["inference_posterior/num_runs", "inference_posterior/run_size_cap", *plans]
         held = st.settings()
         assert (held.value("inference_posterior/num_runs"), held.value("inference_posterior/run_size_cap")) == (
             "1234", "0"), "the training's boxes were not written as their text"
         trained.release(SimpleNamespace(kind="posterior", id="20261008T130000", name="retrain", manifest=None))
         turn_until(app, lambda: not controller().is_live(), 10.0)
-        assert at_the_moment() == ["inference_posterior/posterior"]
+        assert at_the_moment() == ["inference_posterior/posterior", *plans]
         window._save_state()
         closing = at_the_moment()
         groups = {key.split("/")[0] for key in closing}
         assert "window/geometry" in closing
         assert groups <= {"window", "layout", "inference_validate", "inference_infer", "inference_tsnpe", "fdt",
                           "crossval", "reduction", "simulate", "artifacts"}, sorted(groups)
-        assert not groups & {"inference_config", "inference_prior", "inference_posterior"}, closing
+        assert not groups & {"inference_config", "inference_prior", "inference_posterior", "plans"}, closing
 
 
 

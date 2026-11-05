@@ -920,6 +920,11 @@ def _said(line) -> str:
     return text.replace(BREAK, "")
 
 
+def _facts(page) -> list:
+    """What "Before you start" says, as it reads now."""
+    return [row.sentence.plain_text() for row in page.foot.facts.rows()]
+
+
 def test_choosing_in_the_list_changes_nothing(tmp_path, monkeypatch, store):
     """Choosing a plan in the list reads it and says what it holds; it changes no form, no origin, no plan line, nothing
     in use, nothing remembered and no step's state: only the fill button fills."""
@@ -1132,6 +1137,56 @@ def test_one_press_fills_steps_one_to_three(tmp_path, monkeypatch, store):
     assert [_said(one.plan_line) for one in screen.step_pages()] == ["Plan: retrain"] * 3
 
 
+def test_a_fill_starts_nothing_applies_nothing_and_replaces_no_session(tmp_path, monkeypatch, store):
+    """A fill asks nothing more than whether to replace what was typed, starts no run, applies no step and replaces no
+    session: what the steps hold are the very objects they were, and the records picked in the lists stay picked. The
+    forms the fill changed now differ from what step 1 and step 2 hold, and the rows that compare them say so: "Changed,
+    not applied" under the kind of observation and the bounds file, in the rail and on Home."""
+    from types import SimpleNamespace
+    from core.config import BOUNDS_PATH
+    from core.gui import chain
+    from core.gui.run.controller import RunController
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    page.foot.main_button.click()
+    cfg = SimpleNamespace(model="NADROWSKI", sources={"bounds": str(BOUNDS_PATH / "nadrowski" / "master.txt")},
+                          params_dict={}, rescale_params={}, force_params_dict={}, observation_mode="spontaneous",
+                          check_unit_consistency=lambda: [])
+    prior = SimpleNamespace(kind="prior", id="p_old", name="old_prior", manifest=None)
+    posterior = SimpleNamespace(kind="posterior", id="post_old", name="retrain", manifest=None)
+    observation = SimpleNamespace(kind="observation", id="obs_old", name="cell_a")
+    screen.session = session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior, posterior=posterior,
+                                          observation=observation)
+    screen.prior_panel.bounds_picker.restore_key("master.txt")
+    screen.refresh_gates()
+    held = (session.draft, session.cfg, session.inf_prior, session.posterior, session.observation)
+    picked = (screen.prior_panel.prior_picker.key(), screen.posterior_panel.post_picker.key())
+    assert screen.pending() == frozenset()
+    started, drafted = [], []
+    monkeypatch.setattr(RunController, "dispatch", lambda held_, *args, **kwargs: started.append(args))
+    monkeypatch.setattr(InferenceScreen, "new_draft", lambda screen_, draft: drafted.append(draft))
+    asked = _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert [one.title for one in asked] == ["Fill the forms from plan retrain?"] and started == drafted == []
+    assert screen.session is session and (session.draft, session.cfg, session.inf_prior, session.posterior,
+                                          session.observation) == held
+    assert all(now is then for now, then in zip((session.draft, session.cfg, session.inf_prior, session.posterior,
+                                                  session.observation), held))
+    assert (screen.prior_panel.prior_picker.key(), screen.posterior_panel.post_picker.key()) == picked
+    assert screen.pending() == {"model", "prior"}
+    states = screen.step_states()
+    assert states[0].pending and states[1].pending
+    for step in ("model", "prior"):
+        assert "not applied" in window.shell.rail.row(step).accessibleName(), step
+    assert chain.step_in_hand(states) not in ("model", "prior"), "Home's next step went back to a step that holds"
+    assert page.form.rows["chi_mode"].line.words == "Changed, not applied. In use: Set by the bounds file."
+    assert screen.prior_panel.form.rows["bounds"].line.words == "Changed, not applied. In use: master.txt."
+    training = _facts(screen.posterior_panel)[-1]
+    assert training.startswith("Information. Plan retrain, with 2 changes: ") and training.endswith(
+        "Kind of observation set by the bounds file (plan frequency response); Bounds file master.txt (plan "
+        "master_tier1.txt)."), training
+
+
 def test_a_fill_that_would_replace_a_typed_value_asks_first(tmp_path, monkeypatch, store):
     """A fill that would replace a value a person typed or that was put back from last time asks first: its title, its
     sentence counting what the plan fills, and each value it would replace in full, "Keep what is there" preselected,
@@ -1340,6 +1395,173 @@ def test_the_origin_of_every_row_follows_the_source_in_use(tmp_path, monkeypatch
     assert [_said(one.plan_line) for one in screen.step_pages()][2].startswith("Settings from run retrain_3")
 
 
+def test_the_hash_is_read_once_until_the_file_changes(tmp_path, monkeypatch, store):
+    """The file of the plan in use is read for its hash at the steps' readings, once until it is written again: a
+    reading after a write that keeps its size and moves its moment reads it again, and so does one that changes its
+    size."""
+    import os
+    from core.gui import plans as window_plans
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    hashed = []
+    kept = window_plans._hash_of
+    monkeypatch.setattr(window_plans, "_hash_of", lambda path: (hashed.append(path), kept(path))[1])
+    path = folder / "retrain.txt"
+    for _ in range(3):
+        page.read_facts()
+        screen.posterior_panel.read_facts()
+    assert hashed == [path] and screen.plan_file == screen.plan_source.sha256
+    moment = os.stat(path).st_mtime_ns
+    path.write_bytes(RETRAIN.replace("10000", "20000").encode("utf-8"))
+    os.utime(path, ns=(moment + 5_000_000_000, moment + 5_000_000_000))
+    assert len(path.read_bytes()) == len(RETRAIN.encode("utf-8"))
+    page.read_facts()
+    page.read_facts()
+    assert hashed == [path, path] and screen.plan_file not in (None, screen.plan_source.sha256)
+    path.write_bytes(RETRAIN.replace("10000", "200000").encode("utf-8"))
+    os.utime(path, ns=(moment + 5_000_000_000, moment + 5_000_000_000))
+    page.read_facts()
+    assert hashed == [path, path, path]
+
+
+def _a_training_starts(screen, monkeypatch, tmp_path, during=None) -> dict:
+    """A prior and its configuration put in use, the Training page shown, a name typed and its press made, the stage a
+    stand-in run that is released at once, ``during`` called while it is live: the run's history as it was first
+    written."""
+    from core import orchestrator
+    from core.artifacts import default_store
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from core.gui.session import SbiSession
+    from tests._fixtures import _nad_cfg, _prior_artifact, qt_app
+    from tests._runs import StandIn, turn_until
+    app = qt_app()
+    page = screen.posterior_panel
+    if screen.session.inf_prior is None:
+        cfg = _nad_cfg()
+        made = _prior_artifact(default_store(), cfg, name=f"retrain_prior_{len(default_store().list('prior'))}").id
+        screen.session = SbiSession(draft=screen.session.draft, cfg=cfg,
+                                    inf_prior=default_store().load_prior(cfg, made))
+        screen.refresh_gates()
+    screen.window().go_to("inference", "training")
+    page.names.name.setText("retrain_3")
+    page.read_facts()
+    stand_in = StandIn(word="Training")
+    monkeypatch.setattr(orchestrator, "build_posterior", stand_in)
+    page._main_clicked()
+    assert controller().is_live() and stand_in.started.wait(5), page.foot.reason.text()
+    first = history.read(tmp_path / "runs" / f"{controller().status.run}.json")
+    if during is not None:
+        during()
+    stand_in.release()
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+    return first
+
+
+def test_a_plan_changed_or_removed_after_the_fill_is_said_and_stops_nothing(tmp_path, monkeypatch, store):
+    """A plan written again after its fill is said at the next reading, the forms keeping what was filled; one taken
+    away is said too; neither stops the start, and the run's history says which: the file's hash then, changed, or
+    "missing" with none."""
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    page.foot.main_button.click()
+    filled = screen.plan_source.sha256
+    path = folder / "retrain.txt"
+    path.write_bytes((RETRAIN + "max_num_epochs = 300\n").encode("utf-8"))
+    screen.posterior_panel.read_facts()
+    changed = ("Attention. retrain.txt has been changed since its settings were filled in on 8 Oct 2026, 12:04. The "
+               "forms hold the earlier values; fill again to take the changes.")
+    assert changed in _facts(screen.posterior_panel)
+    assert screen.posterior_panel.form.rows["max_num_epochs"].value() is None
+    entry = _a_training_starts(screen, monkeypatch, tmp_path)["plan"]
+    assert (entry["changed"], entry["filled_sha256"], entry["sha256"] != filled) == (True, filled, True), entry
+    path.unlink()
+    screen.posterior_panel.read_facts()
+    assert ("Attention. retrain.txt is no longer in the plans folder. The forms hold the values filled from it on 8 "
+            "Oct 2026, 12:04.") in _facts(screen.posterior_panel)
+    entry = _a_training_starts(screen, monkeypatch, tmp_path)["plan"]
+    assert (entry["changed"], entry["sha256"], entry["name"]) == ("missing", None, "retrain"), entry
+
+
+def test_the_run_history_records_the_plan(tmp_path, monkeypatch, store):
+    """A training's history keeps the plan in use as the run starts: its name, its file and its hash then, the hash and
+    the moment of the fill, and whether the file changed since; for each setting the run reads, where its value came
+    from and the plan's value where the plan holds it. With no plan in use it keeps none; with a record as the source,
+    its kind, id and name. Names and numbers only."""
+    import json
+    from core.gui import plans as window_plans
+    from tests._runs import at
+    from core.gui import settings
+    from core.gui.remembered import LAST_USED_KEY
+    from tests._dialogs import choose
+    long_name = "retrain_on_the_temperature_box"
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {long_name: RETRAIN})
+    assert _a_training_starts(screen, monkeypatch, tmp_path)["plan"] is None
+    window.go_to("inference", "model")
+    _press_fill(page, monkeypatch, long_name, answer="Fill the forms")
+    screen.posterior_panel.form.rows["hidden_features"].set_value(192)
+    first = _a_training_starts(screen, monkeypatch, tmp_path)
+    sha = screen.plan_source.sha256
+    assert first["plan"] == {"kind": "plan", "name": long_name, "path": str((folder / f"{long_name}.txt").resolve()),
+                             "sha256": sha, "filled_sha256": sha, "filled_at": at(8, 12, 4).isoformat(),
+                             "changed": False}, first["plan"]
+    rows = {row["name"]: row for row in first["settings"]["rows"]}
+    assert {key: (rows[key]["value"], rows[key]["origin"], rows[key]["plan"], rows[key]["usual"])
+            for key in ("num_runs", "hidden_features", "learning_rate", "stop_after_epochs")} == {
+        "num_runs": (10000, f"from plan {long_name}", 10000, 5000),
+        "hidden_features": (192, "changed from the plan", 256, 128),
+        "learning_rate": (0.0005, f"from plan {long_name}", 0.0005, 0.001),
+        "stop_after_epochs": (20, "usual", None, 20)}
+    json.dumps(first["plan"]), json.dumps(first["settings"])
+    window.go_to("inference", "model")
+    choose(monkeypatch, words="Apply and start a new session")
+    page.foot.main_button.click()
+    qs = settings.settings()
+    qs.sync()
+    assert qs.value(LAST_USED_KEY.format("nadrowski")) == long_name
+    screen.take_plan(window_plans.PlanSource("record", "retrain_posterior", None, "", at(8, 12, 4),
+                                             {("Training", "num_runs"): 10000}, ident="20261008T120400"))
+    assert _a_training_starts(screen, monkeypatch, tmp_path)["plan"] == {
+        "kind": "record", "id": "20261008T120400", "name": "retrain_posterior"}
+    qs.sync()
+    assert qs.value(LAST_USED_KEY.format("nadrowski")) == "", "a record was remembered as the plan last used"
+
+
+def test_the_last_used_keys_follow_what_was_applied_or_started(tmp_path, monkeypatch, store):
+    """The plan last used with the model, and when, is written as step 1 is applied, a prior or a posterior comes into
+    use, or a training starts with it in use, never as it is filled; a step applied or a run started with no plan in use
+    writes both blank, which takes the hint away."""
+    from core.gui import settings
+    from core.gui.remembered import LAST_USED_AT_KEY, LAST_USED_KEY
+    from tests._runs import at
+
+    def remembered():
+        qs = settings.settings()
+        qs.sync()
+        return qs.value(LAST_USED_KEY.format("nadrowski")), qs.value(LAST_USED_AT_KEY.format("nadrowski"))
+
+    window, screen, page, _folder, clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert remembered() == (None, None), "a plan was remembered as it was filled"
+    clock.advance(60)
+    page.foot.main_button.click()
+    assert remembered() == ("retrain", at(8, 12, 5).isoformat())
+    clock.advance(60)
+    started = []
+    _a_training_starts(screen, monkeypatch, tmp_path, during=lambda: started.append(remembered()))
+    assert started == [("retrain", at(8, 12, 6).isoformat())], "the training's start did not remember the plan"
+    assert remembered() == ("retrain", at(8, 12, 6).isoformat())
+    window.go_to("inference", "model")
+    _press_fill(page, monkeypatch, None, answer="Return to the usual values")
+    assert screen.plan_source is None
+    assert remembered() == ("retrain", at(8, 12, 6).isoformat()), "a return to the usual values was remembered"
+    _a_training_starts(screen, monkeypatch, tmp_path, during=lambda: started.append(remembered()))
+    assert started[1:] == [("", "")] and remembered() == ("", "")
+    window.go_to("inference", "model")
+    page.read_facts()
+    assert page.form.rows["plan"].origin.text() == ""
+
+
 def test_the_foot_of_the_first_step_says_when_it_read_only_while_a_plan_is_in_use(tmp_path, monkeypatch, store):
     """Step 1 reads the file of the plan in use: while one is, the line of when it read and "Check again" stand, at the
     next drawing, and "Check again" is a stop of the Tab key; with none they go, at the next drawing too."""
@@ -1407,6 +1629,46 @@ def test_a_held_enter_answers_neither_the_fill_nor_the_save(tmp_path, monkeypatc
         window.hide()
 
 
+def test_no_plan_is_read_while_a_run_is_live(tmp_path, monkeypatch, store):
+    """While a run is live, another page's, nothing of the plans is read: the list opened, a plan chosen, the presses
+    reached by code, the readings, "Check again" and the store's change read no folder and no file, and no press asks a
+    question. The run's end reads the file of the plan in use once."""
+    from core.gui import plans as window_plans
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.run.controller import controller
+    from tests._dialogs import all_asked, forget_asked
+    from tests._fixtures import qt_app, readings_of_a_run
+    from tests._runs import StandIn, start_run, turn_until
+    app = qt_app()
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    _plan(folder, RETRAIN, "another")
+    listed = _listed(page)
+    calls = readings_of_a_run(monkeypatch)
+    stand_in = StandIn(word="Reduction")
+    start_run(window.panel(ReductionPanel), stand_in)
+    forget_asked()
+    page.plan_choice.showPopup()
+    page.plan_choice.hidePopup()
+    page._plan_chosen()
+    page._fill_pressed()
+    page._save_pressed()
+    assert all_asked() == [], "a press asked a question while a run was live"
+    page._read_the_plans()
+    for one in screen.step_pages():
+        one.read_facts()
+        one.foot.check_again.click()
+        one.read_timer.timeout.emit()
+        one.stale_store()
+        one.redraw()
+    screen.read_plan_file()
+    assert calls == [] and _listed(page) == listed, calls
+    stand_in.release()
+    turn_until(app, lambda: not controller().is_live())
+    assert calls.count("file_sha") >= 1 and "list_plans" in calls and "save_plan" not in calls, calls
+    assert window_plans.PLAN_FOLDER == tmp_path / "plans"
+
+
 def test_a_fill_with_what_was_put_back_kept_leaves_it_and_says_where_it_came_from(tmp_path, monkeypatch, store):
     """Filled keeping what was put back, a value put back from last time and not touched since is left as it is: it
     reads "changed from the plan" where the plan holds the setting and something else, and "kept from last time" where
@@ -1461,6 +1723,19 @@ def test_a_fill_while_a_run_is_live_changes_nothing(tmp_path, monkeypatch, store
         done = window_plans.fill_forms(screen, {("Training", "num_runs"): 10000},
                                        window_plans.PlanSource("plan", "retrain", None, "", None, {}))
     assert done is False and _values(screen) == before and screen.plan_source is None
+
+
+def test_a_plans_number_of_batches_has_no_ceiling_and_is_filled_as_it_is(tmp_path, monkeypatch, store):
+    """The reader sets no ceiling on the batches: a plan's 1,000,000,000 is filled as it is, said grouped, read by the
+    page's rule as a whole number of at least 1, and named in "Before you start"."""
+    huge = "# Training\nnum_runs = 1000000000\n"
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"huge": huge})
+    _press_fill(page, monkeypatch, "huge")
+    training = screen.posterior_panel
+    row = training.form.rows["num_runs"]
+    assert (row.value(), row.widget.text(), row.in_error()) == (1_000_000_000, "1,000,000,000", False)
+    assert "num_runs" not in training.problems()
+    assert _facts(training)[-1] == "Information. Plan huge. Its 1 setting is in use as written."
 
 
 def test_the_process_holds_the_suites_own_folder_of_plans(tmp_path):
@@ -1749,6 +2024,24 @@ def test_save_plan_writes_beside_its_file_and_moves_it_into_place(tmp_path, monk
     assert path.read_bytes() == b"# Training\nnum_runs = 7000\n"
 
 
+def test_the_load_view_says_the_plan_and_reads_none_of_the_training(tmp_path, monkeypatch, store):
+    """The load view's "Before you start" says the plan in use too, of the settings a load reads: step 1's and step 2's
+    as they are held, never the training's form, which a load does not read."""
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    page.foot.main_button.click()
+    training = screen.posterior_panel
+    training.form.rows["num_runs"].set_value(9500)
+    assert _facts(training)[-1] == ("Information. No plan. 1 setting differs from the usual: Batches 9,500 (usual "
+                                   "5,000).")
+    training.show_view("load")
+    assert _facts(training)[-1] == "Information. No plan. Every setting is at its usual value."
+    page.kind_choice.setCurrentIndex(page.kind_choice.findData(True))
+    page.foot.main_button.click()
+    training.redraw()
+    assert _facts(training)[-1] == ("Information. No plan. 1 setting differs from the usual: Kind of observation "
+                                   "frequency response (usual set by the bounds file).")
+
+
 @pytest.mark.parametrize("factor", [1.85, 2.0])
 def test_what_a_plan_holds_is_drawn_whole_at_large_text(factor, tmp_path, monkeypatch, store):
     """At 185 and 200 % text the table of what a plan holds draws every word whole: a column fitted to its words is as
@@ -1807,3 +2100,4 @@ def test_what_a_plan_holds_is_drawn_whole_at_large_text(factor, tmp_path, monkey
             window.hide()
     finally:
         app.setFont(kept)
+

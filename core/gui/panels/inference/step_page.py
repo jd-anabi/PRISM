@@ -337,6 +337,14 @@ class StepPage(RunHost, QWidget):
         self.in_use.set_pending(len(changed))
         self.form.fold.set_changed(changed)
 
+    def plan_lines(self) -> tuple:
+        """What "Before you start" says of the plan in use for this step's run: the plan, or no plan, and every
+        departure among the settings the run reads. Reads nothing."""
+        screen = self._screen
+        if plans.HEADING_OF.get(self.step) is None or not hasattr(screen, "plan_source"):
+            return ()
+        return plans.plan_facts(screen, plans.headings_to(self.step))
+
     def say_the_plan(self) -> None:
         """Beside each row a plan fills, where its value came from; under the heading, the plan in use and how many of
         the settings this step's run reads depart from it. Reads nothing."""
@@ -367,6 +375,9 @@ class StepPage(RunHost, QWidget):
         if not controller().is_live():
             self.form.ease()
             self.read_disk()
+            read_plan = getattr(self._screen, "read_plan_file", None)
+            if callable(read_plan):
+                read_plan()
             if self.names is not None:
                 self.names.check_now()
             self._read_at, self._head_fact, self.stale = self.now(), None, False

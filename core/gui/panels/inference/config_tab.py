@@ -491,7 +491,8 @@ class ConfigPanel(StepPage):
         own = ((Fact("info", CALIBRATION_TEXT.format(keys.place_words("checks"))),)
                if registry.is_user_model(model) and not self._unusable(model) else ())
         return model_facts(usable_reason=self._unusable(model),
-                           field_facts=(*(Fact("err", line, SETTING_BLOCKS) for line, _said in found.values()), *own))
+                           field_facts=(*(Fact("err", line, SETTING_BLOCKS) for line, _said in found.values()), *own),
+                           plan_lines=self.plan_lines())
 
     def in_use_words(self) -> tuple:
         draft = self._draft()

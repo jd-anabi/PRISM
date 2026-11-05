@@ -1,5 +1,5 @@
 """What a step says in "Before you start", as values: each row of the step's table, its sentence word for word, and what
-blocks. No widget is built here."""
+blocks; and what it says of the plan in use, read off stand-ins of the steps. No widget is built here."""
 import math
 
 import pytest
@@ -639,3 +639,132 @@ def test_what_the_step_holds_says_its_training(training, config, said):
     network, and one that ran as many epochs as the limit ended by itself; what the record does not hold is left out."""
     assert posterior_in_use("retrain_posterior", training, config, "retrain_prior") == ("retrain_posterior", said)
     assert posterior_in_use("", training, config, "retrain_prior") == ("", "")
+
+
+# ── the plan in use ──
+class _Row:
+    """A row a plan fills, as the plan's sentences read it: its key, its label, its usual value and its value now."""
+
+    def __init__(self, key, label, usual, value, *, wrong=False):
+        self.key, self._label, self._usual, self._value, self._wrong = key, label, usual, value, wrong
+        self.kept = False
+
+    def label_text(self):
+        return self._label
+
+    def usual(self):
+        return self._usual
+
+    def value(self):
+        return self._value
+
+    def in_error(self):
+        return self._wrong
+
+
+class _Step:
+    """A step a plan fills, as the plan's sentences read it: its rows, what its form holds and what it holds applied."""
+
+    def __init__(self, step, rows, applied=None):
+        self.step, self._rows, self._applied = step, {row.key: row for row in rows}, applied
+
+    def plan_fields(self):
+        return self._rows
+
+    def plan_read(self, applied):
+        if applied:
+            return dict(self._applied or {})
+        return {key: row.value() for key, row in self._rows.items()}
+
+
+def _screen(source=None, *, batches=10000, width=256, rotate=True, applied_rotate=True, state="unread"):
+    """A screen of the three steps as the plan's sentences read it: the batches and the network width typed on Training,
+    the rotation chosen on step 1 and applied there, ``source`` in use and ``state`` the plan file's last reading: its
+    hash, None for a file gone, or not read yet."""
+    from types import SimpleNamespace
+    from core.gui import plans
+    model = _Step("model", [_Row("reparam_rotate", "Rotation", True, rotate)], {"reparam_rotate": applied_rotate})
+    prior = _Step("prior", [_Row("bounds", "Bounds file", None, "master.txt")], {"bounds": "master.txt"})
+    training = _Step("training", [_Row("num_runs", "Batches", 5000, batches),
+                                  _Row("hidden_features", "Network width", 128, width)])
+    return SimpleNamespace(plan_source=source, plan_file=plans.UNREAD if state == "unread" else state,
+                           step_pages=lambda: (model, prior, training))
+
+
+def _source(kind="plan", name="retrain", values=None):
+    from datetime import datetime
+    from pathlib import Path
+    from core.gui import plans
+    held = values if values is not None else {("Training", "num_runs"): 10000, ("Training", "hidden_features"): 256,
+                                              ("Prior", "bounds"): "master.txt"}
+    return plans.PlanSource(kind, name, Path("plans/nadrowski/retrain.txt") if kind == "plan" else None, "a" * 64,
+                            datetime(2026, 10, 6, 12, 4), held)
+
+
+def _plan_said(screen, headings=("Model and options", "Prior", "Training")):
+    from core.gui import plans
+    return [(fact.kind, fact.sentence) for fact in plans.plan_facts(screen, headings)]
+
+
+def test_plan_facts_say_each_sentence():
+    """What "Before you start" says of the plan, word for word: no plan with every setting usual, or with each departure
+    from the usual named; a plan whose settings are in use as written, counted, or each departure from it named, against
+    the plan's value; a record or a run as the source; a plan file changed or removed since its fill. Every departure
+    named, none cut, in the steps' order; only the changed file's is "Attention.", and none blocks."""
+    assert _plan_said(_screen(batches=5000, width=128)) == [("info", "No plan. Every setting is at its usual value.")]
+    assert _plan_said(_screen(rotate=False, applied_rotate=False)) == [
+        ("info", "No plan. 3 settings differ from the usual: Rotation off (usual on); Batches 10,000 (usual 5,000); "
+                 "Network width 256 (usual 128).")]
+    assert _plan_said(_screen(batches=5000, width=128, applied_rotate=False)) == [
+        ("info", "No plan. 1 setting differs from the usual: Rotation off (usual on).")]
+    assert _plan_said(_screen(_source())) == [("info", "Plan retrain. Its 3 settings are in use as written.")]
+    assert _plan_said(_screen(_source(values={("Training", "num_runs"): 10000}), width=128)) == [
+        ("info", "Plan retrain. Its 1 setting is in use as written.")]
+    assert _plan_said(_screen(_source(values={("Calibration", "n_cal"): 100}), batches=5000, width=128)) == [
+        ("info", "Plan retrain. This step reads none of its settings.")]
+    assert _plan_said(_screen(_source(), batches=9500, width=128, applied_rotate=False)) == [
+        ("info", "Plan retrain, with 3 changes: Rotation off (usual on); Batches 9,500 (plan 10,000); Network width "
+                 "128 (plan 256).")]
+    assert _plan_said(_screen(_source(), batches=9500)) == [
+        ("info", "Plan retrain, with 1 change: Batches 9,500 (plan 10,000).")]
+    assert _plan_said(_screen(_source("record", "retrain_posterior"), batches=9500)) == [
+        ("info", "Settings from record retrain_posterior, with 1 change: Batches 9,500 (record 10,000).")]
+    assert _plan_said(_screen(_source("run", "retrain_3"))) == [
+        ("info", "Settings from run retrain_3. Its 3 settings are in use as written.")]
+    assert _plan_said(_screen(_source(), state="b" * 64)) == [
+        ("info", "Plan retrain. Its 3 settings are in use as written."),
+        ("warn", "retrain.txt has been changed since its settings were filled in on 6 Oct 2026, 12:04. The forms hold "
+                 "the earlier values; fill again to take the changes.")]
+    assert _plan_said(_screen(_source(), state=None)) == [
+        ("info", "Plan retrain. Its 3 settings are in use as written."),
+        ("warn", "retrain.txt is no longer in the plans folder. The forms hold the values filled from it on 6 Oct "
+                 "2026, 12:04.")]
+    assert _plan_said(_screen(_source(), state="a" * 64)) == [
+        ("info", "Plan retrain. Its 3 settings are in use as written.")]
+    from dataclasses import replace
+    from pathlib import Path
+    record = replace(_source("record", "retrain_posterior"), path=Path("retrain_posterior.json"))
+    assert _plan_said(_screen(record, state="b" * 64))[1:] == [], "a record's source was said to be a changed file"
+
+
+def test_plan_facts_read_the_form_of_their_own_step_and_what_the_others_hold():
+    """A step's run reads its own form and what the earlier steps hold: the last of the headings handed is read from its
+    form, each earlier one from what its step holds; a step the run does not read says nothing; a setting in error on
+    the form is no departure, its own line says it; a bounds file the source does not hold has no usual to depart
+    from."""
+    from core.gui import plans
+    screen = _screen(rotate=False, applied_rotate=True, batches=5000, width=128)
+    assert _plan_said(screen) == [("info", "No plan. Every setting is at its usual value.")]
+    assert _plan_said(screen, ("Model and options",)) == [
+        ("info", "No plan. 1 setting differs from the usual: Rotation off (usual on).")]
+    wrong = _screen(batches=0, width=128)
+    wrong.step_pages()[2].plan_fields()["num_runs"]._wrong = True
+    assert _plan_said(wrong) == [("info", "No plan. Every setting is at its usual value.")]
+    assert plans.plan_line(_screen(_source(), batches=9500), ("Model and options", "Prior", "Training")) == (
+        "Plan: retrain, 1 change")
+    assert plans.plan_line(_screen(_source(), batches=9500, width=64), ("Model and options", "Prior", "Training")) == (
+        "Plan: retrain, 2 changes")
+    assert plans.plan_line(_screen(_source()), ("Model and options",)) == "Plan: retrain"
+    assert plans.plan_line(_screen(), ("Model and options",)) == "No plan"
+    assert plans.plan_line(_screen(_source("record", "retrain_posterior")), ("Model and options",)) == (
+        "Settings from record retrain_posterior")

@@ -14,12 +14,14 @@ step, then works out where each of the six steps stands, which the rail and Home
 ``states_changed``.
 
 The screen also keeps the plan in use: where the forms of steps 1 to 3 were last filled from, which outlives the session
-that step 1 replaces as it is applied.
+that step 1 replaces as it is applied, and what the steps' last reading found of that plan's file.
 """
 from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+from core import config
 
 from .. import chain, keys, record_words, remembered
 from .. import plans as window_plans
@@ -55,6 +57,8 @@ class InferenceScreen(QWidget):
         # The folder of the plans, one folder for each model under it; a test hands its own.
         self.plans_folder = Path(plans) if plans is not None else Path(window_plans.PLAN_FOLDER)
         self.plan_source = None                  # where the forms were last filled from: a plan, a record or a run
+        self.plan_file = window_plans.UNREAD     # the plan file in use as the last reading found it: its hash, or None
+        self._plan_hashes: dict = {}             # each plan file's hash, kept until the file is written again
 
         self.config_panel = ConfigPanel(self)
         self.prior_panel = PriorPanel(self)
@@ -166,6 +170,7 @@ class InferenceScreen(QWidget):
         model, kind = getattr(draft, "model", None), getattr(draft, "chi_mode", None)
         picks = [(key, value) for key, value, fits in ((remembered.MODEL_KEY, model, isinstance(model, str)),
                                                        (remembered.KIND_KEY, kind, isinstance(kind, bool))) if fits]
+        picks += self.last_used(model)
         if picks:
             remembered.put_many(picks)
         self.refresh_gates()
@@ -196,7 +201,8 @@ class InferenceScreen(QWidget):
         picks = [(remembered.PRIOR_KEY, getattr(loaded, "id", None))]
         if key:
             picks[:0] = [(remembered.BOUNDS_KEY, key), (remembered.BOUNDS_MODEL_KEY, getattr(cfg, "model", None))]
-        remembered.put_many([(name, value) for name, value in picks if isinstance(value, str) and value])
+        remembered.put_many([(name, value) for name, value in picks if isinstance(value, str) and value]
+                            + self.last_used(getattr(getattr(session, "draft", None), "model", None)))
         self.refresh_gates()
 
     def take_posterior(self, loaded) -> None:
@@ -209,8 +215,8 @@ class InferenceScreen(QWidget):
         session.reset_downstream("posterior")
         session.posterior = loaded
         ident = getattr(loaded, "id", None)
-        if isinstance(ident, str) and ident:
-            remembered.put(remembered.POSTERIOR_KEY, ident)
+        picks = [(remembered.POSTERIOR_KEY, ident)] if isinstance(ident, str) and ident else []
+        remembered.put_many(picks + self.last_used(getattr(getattr(session, "draft", None), "model", None)))
         self.refresh_gates()
 
     # ── the plan in use ──
@@ -218,11 +224,42 @@ class InferenceScreen(QWidget):
         """The forms were filled from ``source``, or returned to their usual values (None): it is the plan in use, and
         every step is drawn again, its origins and its plan line with it. Nothing is applied and nothing is read."""
         self.plan_source = source
+        self.plan_file = source.sha256 if source is not None and source.kind == "plan" else window_plans.UNREAD
         self.refresh_gates()
 
+    def read_plan_file(self) -> None:
+        """What the plan file in use holds now, read at each step's reading: its hash, read again only when the file has
+        been written since, or None when it is no longer there. Nothing while a run is live."""
+        source = self.plan_source
+        if source is not None and source.kind == "plan" and source.path is not None and not controller().is_live():
+            self.plan_file = window_plans.file_sha(source.path, self._plan_hashes)
+
+    def last_used(self, model) -> list:
+        """The two remembered keys of the plan last used with ``model``: its name and when, or both blank when no plan
+        is in use, which takes the hint away. Written with what comes into use or starts, never as a plan is filled;
+        nothing for no model."""
+        if not isinstance(model, str) or not model:
+            return []
+        source = self.plan_source
+        used = source is not None and source.kind == "plan"
+        return [(remembered.LAST_USED_KEY.format(model.lower()), source.name if used else ""),
+                (remembered.LAST_USED_AT_KEY.format(model.lower()), controller().now().isoformat() if used else "")]
+
     def plan_entry(self) -> "dict | None":
-        """The plan in use, as a run's history keeps it: none, until the next commit writes it."""
-        return None
+        """The plan in use, as a run's history keeps it, read as the run starts: none; for a plan, its name, its file
+        and that file's hash now, the hash and the moment of the fill, and whether the file has changed since,
+        "missing" when it is no longer there, which stops nothing; for a record or a run, its kind, id and name. Names
+        and numbers only."""
+        source = self.plan_source
+        if source is None:
+            return None
+        if source.kind != "plan":
+            return {"kind": source.kind, "id": source.ident, "name": source.name}
+        now = window_plans.file_ref(source.path, relative_to=config.RESOURCES_ROOT, missing_ok=True)
+        changed = "missing" if now["sha256"] is None else now["sha256"] != source.sha256
+        return {"kind": "plan", "name": source.name, "path": now["path"], "sha256": now["sha256"],
+                "filled_sha256": source.sha256, "filled_at": source.at.isoformat() if source.at is not None else None,
+                "changed": changed}
 
     def refresh_gates(self):
         """Run every step's own gate, which greys the buttons of a step that cannot start yet (no step is ever

@@ -17,6 +17,9 @@ from tests._fixtures import build_inference, build_window, qt_app
 
 #: The pages of Parameter inference built on the step page, by their files beside it.
 REBUILT = ("config_tab.py", "prior_tab.py", "posterior_tab.py")
+#: What every step's "Before you start" says last while no plan is in use and every setting it reads is at its usual
+#: value.
+NO_PLAN = "Information. No plan. Every setting is at its usual value."
 
 
 def _first_step(session=None):
@@ -332,7 +335,7 @@ def test_a_model_inference_cannot_take_greys_apply_with_its_reason(monkeypatch):
         assert screen.session.draft is None and all_asked() == []
         assert screen.step_states()[0].rail_words == "Now: choose a model"
         _pick(page.model_combo, "NADROWSKI")
-        assert foot.main_button.isEnabled() and foot.facts.rows() == []
+        assert foot.main_button.isEnabled() and [row.sentence.plain_text() for row in foot.facts.rows()] == [NO_PLAN]
 
 
 # ── the question before records are let go ──
@@ -488,7 +491,10 @@ def test_each_rule_says_its_line_greys_apply_and_refuses_the_press_alike(typed, 
     assert row.in_error() and row.line.words.startswith(line), (row.line.words, line)
     assert [name for name, other in page.form.rows.items() if other.in_error()] == [key]
     assert not foot.main_button.isEnabled() and foot.reason.text() == "Cannot start yet: a setting cannot be used."
-    assert [(fact.kind, fact.sentence.plain_text()) for fact in foot.facts.rows()] == [("err", f"Error. {row.line.words}")]
+    facts = [(fact.kind, fact.sentence.plain_text()) for fact in foot.facts.rows()]
+    assert facts[0] == ("err", f"Error. {row.line.words}") and [kind for kind, _said in facts[1:]] == ["info"], facts
+    assert facts[1][1].startswith("Information. No plan.") and row.label_text() not in facts[1][1], (
+        "a setting in error was said as a departure from the usual")
     page._build_config()
     assert screen.session.draft is None and len(refused) == 1 and isinstance(refused[0], Refusal)
     assert refused[0].field == key and refused[0].message.startswith(line.rstrip(".")), refused[0].message
@@ -671,8 +677,9 @@ def test_a_remembered_model_taken_from_the_list_is_no_longer_said_to_be_kept(tmp
 
 
 def test_applying_remembers_the_model_and_the_kind_and_nothing_else(monkeypatch):
-    """The two keys are written when the step is applied, by the one writer, together; a draft that is not the window's
-    own writes nothing it could not read back; and the step writes nothing as the window closes."""
+    """The two keys are written when the step is applied, by the one writer, together, with the plan last used with the
+    model, blank with no plan in use; a draft that is not the window's own writes nothing it could not read back; and
+    the step writes nothing as the window closes."""
     from core.gui import remembered, settings
     written = []
     real = remembered.put_many
@@ -683,7 +690,8 @@ def test_applying_remembers_the_model_and_the_kind_and_nothing_else(monkeypatch)
     _pick(page.rot_choice, False)
     assert written == []
     _apply(page)
-    assert written == [[("inference_config/model", "HOPF"), ("inference_config/chi_mode", True)]]
+    assert written == [[("inference_config/model", "HOPF"), ("inference_config/chi_mode", True),
+                        ("plans/last_used/hopf", ""), ("plans/last_used_at/hopf", "")]]
     qs = settings.settings()
     assert (qs.value("inference_config/model"), settings.get_bool(qs, "inference_config/chi_mode", False)) == (
         "HOPF", True)
@@ -696,11 +704,14 @@ def test_applying_remembers_the_model_and_the_kind_and_nothing_else(monkeypatch)
             return "bp"
 
     screen.new_draft(SimpleNamespace(model=NoName(), chi_mode=True))
-    assert written[1:] == [[("inference_config/model", "BP")], [("inference_config/chi_mode", True)]], written
+    assert written[1:] == [
+        [("inference_config/model", "BP"), ("plans/last_used/bp", ""), ("plans/last_used_at/bp", "")],
+        [("inference_config/chi_mode", True)]], written
     page.save_settings(qs)
     qs.sync()
     again = settings.settings()
-    assert sorted(again.allKeys()) == ["inference_config/chi_mode", "inference_config/model"]
+    assert sorted(again.allKeys()) == ["inference_config/chi_mode", "inference_config/model", "plans/last_used/bp",
+                                       "plans/last_used/hopf", "plans/last_used_at/bp", "plans/last_used_at/hopf"]
     assert settings.get_bool(again, "inference_config/chi_mode", False) is True
 
 
@@ -749,13 +760,13 @@ def test_a_model_of_your_own_says_its_checks_are_not_tuned(monkeypatch):
     rows = page.foot.facts.rows()
     assert [(row.kind, row.sentence.plain_text()) for row in rows] == [
         ("info", "Information. The checks are not tuned for a model of your own: read their results in step 4, Checks, "
-                 "before you rely on its posterior.")]
+                 "before you rely on its posterior."), ("info", NO_PLAN)]
     assert page.foot.main_button.isEnabled() and page.foot.reason.text() == ""
     usable[0] = False
     page.redraw()
-    assert [row.kind for row in page.foot.facts.rows()] == ["err"]
+    assert [row.kind for row in page.foot.facts.rows()] == ["err", "info"]
     _pick(page.model_combo, "NADROWSKI")
-    assert page.foot.facts.rows() == []
+    assert [row.sentence.plain_text() for row in page.foot.facts.rows()] == [NO_PLAN]
 
 
 @contextlib.contextmanager
@@ -1360,7 +1371,7 @@ def test_a_load_by_the_keyboard_hands_it_on_to_training_and_one_by_the_mouse_doe
         assert said.startswith("Made ") and said.endswith(", for Nadrowski: 13 parameters, built on master.txt."), said
         assert [row.sentence.plain_text() for row in page.foot.facts.rows()] == [
             "Fine. Built on master.txt, the bounds file selected.",
-            "Information. No saved simulation set was made with this prior."]
+            "Information. No saved simulation set was made with this prior.", NO_PLAN]
         page.bounds_picker.restore_key("master_tier1.txt")
         page.read_facts()
         assert page.foot.facts.rows()[0].sentence.plain_text() == (
@@ -1528,7 +1539,10 @@ def test_before_you_start_reads_the_history_the_sets_and_the_settings_in_the_bui
             "until 100 stable sets are collected.",
             "Information. About a minute and a half: the last build on this computer took 1 min 32 s.",
             "Information. A new prior cannot continue a saved simulation set: the saved set for this model was made "
-            "with another prior."], said
+            "with another prior.",
+            "Information. No plan. 4 settings differ from the usual: Sweep rounds 3 (usual 50); Candidates per round "
+            "64 (usual automatic); Stable sets to collect 100 (usual 175,000); Stability test length 2 (usual "
+            "1000)."], said
         assert page.foot.main_button.text() == "&Build a new prior (about a minute and a half)"
 
 
@@ -1559,7 +1573,7 @@ def test_before_you_start_reads_the_record_and_its_sets_in_the_saved_view(tmp_pa
         assert said == [
             "Attention. Built on master.txt as it was then; the file has been edited since. Its parameters or their "
             "limits have changed with it, so PRISM will refuse the load.",
-            "Information. 1 saved simulation set was made with this prior; it holds 4 batches."], said
+            "Information. 1 saved simulation set was made with this prior; it holds 4 batches.", NO_PLAN], said
 
 
 @pytest.mark.parametrize("way", ["Back to the form", "the past view's way back"])
@@ -2243,7 +2257,9 @@ def test_before_you_start_reads_each_input_where_the_page_reads_it(tmp_path, mon
         assert paces == [("batch", {"per_batch": 32}), ("epoch", {"network": (64, 3), "simulations": 777 * 32})]
 
         def said():
-            return [row.sentence.plain_text() for row in page.foot.facts.rows()]
+            """The facts but the plan's, which its own tests read input by input."""
+            return [row.sentence.plain_text() for row in page.foot.facts.rows()
+                    if not row.sentence.plain_text().startswith("Information. No plan.")]
 
         assert said() == [
             "Information. Model Nadrowski; bounds file master.txt; prior retrain_prior; a spontaneous recording and one "
@@ -2947,10 +2963,10 @@ def test_the_load_views_facts_read_the_record_selected(tmp_path, monkeypatch):
         assert seen[with_other] == (
             ["Attention. Trained with other_prior; the prior in use is retrain_prior. Calibration and a narrowing "
              "round "
-             "will refuse this pair. Load other_prior in step 2 first."], True, ""), seen[with_other]
-        assert seen[for_hopf] == (["Error. This posterior was made for the model Hopf."], False,
+             "will refuse this pair. Load other_prior in step 2 first.", NO_PLAN], True, ""), seen[with_other]
+        assert seen[for_hopf] == (["Error. This posterior was made for the model Hopf.", NO_PLAN], False,
                                   "Cannot start yet: this posterior is for another model."), seen[for_hopf]
-        assert seen[unread] == (["Error. The posterior cannot be read: OSError: the disk said no"], False,
+        assert seen[unread] == (["Error. The posterior cannot be read: OSError: the disk said no", NO_PLAN], False,
                                 "Cannot start yet: the posterior cannot be read."), seen[unread]
 
 

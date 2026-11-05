@@ -490,7 +490,7 @@ class PriorPanel(StepPage):
             rounds=values["num_iterations"] if cost_ok else None, batch=batch if cost_ok else None,
             stable=values["max_sets"] if cost_ok else None, steps=steps, took=self._took,
             sets_for_model=read.get("sets_for_model", 0), attention=self._attention(), name_facts=names,
-            field_facts=field_facts)
+            field_facts=field_facts, plan_lines=self.plan_lines())
 
     def _candidate_row(self) -> str:
         return "bounds_typed" if self._typed() else "bounds"

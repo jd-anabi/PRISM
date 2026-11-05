@@ -2105,7 +2105,8 @@ WALKED_TRAINING = {
         lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again, page.foot.main_button]),
     "a saved posterior to load": (
         _to_load, lambda page: [page.help_button, page.switch_button], lambda page: [page.post_picker.combo],
-        lambda page: None, lambda page: [], lambda page, small: [page.foot.check_again]),
+        lambda page: None, lambda page: [],
+        lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again]),
 }
 
 
@@ -2133,7 +2134,7 @@ WALKED = {
                                    lambda page: [page.model_combo, page.plan_choice, page.fill_button,
                                                  page.kind_choice],
                                    lambda page: [page.rot_choice, page.units_choice], lambda page: [],
-                                   lambda page, small: [page.foot.main_button]),
+                                   lambda page, small: [*([page.foot.more] if small else []), page.foot.main_button]),
         "the frequency response, typed units, applied": (
             lambda page: (page.kind_choice.setCurrentIndex(page.kind_choice.findData(True)),
                           page.units_choice.setCurrentIndex(page.units_choice.findData("typed")),
@@ -2141,20 +2142,20 @@ WALKED = {
             lambda page: [page.help_button, page.next_button],
             lambda page: [page.model_combo, page.plan_choice, page.fill_button, page.save_button, page.kind_choice],
             lambda page: [*_driven(page), page.rot_choice, page.units_choice, page.units_text], lambda page: [],
-            lambda page, small: []),
+            lambda page, small: [*([page.foot.more] if small else [])]),
         "a plan shown, its folder there": (
             _a_plan_shown, lambda page: [page.help_button],
             lambda page: [page.model_combo, page.plan_choice, page.holds_button, page.fill_button, page.open_button,
                           page.kind_choice],
             lambda page: [page.rot_choice, page.units_choice], lambda page: [],
-            lambda page, small: [page.foot.main_button]),
+            lambda page, small: [*([page.foot.more] if small else []), page.foot.main_button]),
     },
     "prior": {
         "a saved prior to load": (
             lambda page: (_applied(page), page.show_view("saved")),
             lambda page: [page.help_button, page.switch_button],
             lambda page: [page.bounds_picker.combo, page.prior_picker.combo], lambda page: None, lambda page: [],
-            lambda page, small: [page.foot.check_again]),
+            lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again]),
         "a new prior to build": (
             _to_build, lambda page: [page.help_button, page.switch_button], lambda page: [page.bounds_picker.combo],
             lambda page: [page.typed_tick, *_knobs(page)], lambda page: [page.names.name, page.names.note],
