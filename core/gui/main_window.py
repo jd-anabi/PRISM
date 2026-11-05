@@ -989,10 +989,12 @@ class MainWindow(QMainWindow):
 
         A close accepted, with no run live, first takes the keyboard from whatever holds it, so that what is being typed
         in a field is judged as leaving the field would judge it: the window's X takes no keyboard, and otherwise a limit
-        typed in Settings would be kept or lost by the order of Windows' messages. It then writes the window's own
-        settings, closes every other window of the program (the figure windows the pages opened among them), so that the
-        program's event loop ends, and lets go of the one-PRISM claim last, in a ``finally``: after the run's last history
-        write, and also when the settings cannot be written, since a window that has closed must not keep the claim.
+        typed in Settings would be kept or lost by the order of Windows' messages. A chain of loads waiting between two
+        loads, as no run is live then, is ended, so that no load starts on a window that has closed. It then writes the
+        window's own settings, closes every other window of the program (the figure windows the pages opened among
+        them), so that the program's event loop ends, and lets go of the one-PRISM claim last, in a ``finally``: after
+        the run's last history write, and also when the settings cannot be written, since a window that has closed must
+        not keep the claim.
         Windows' end of a session takes no such care: it may give the window no time, and nothing is judged inside its
         message."""
         held = controller()
@@ -1016,6 +1018,9 @@ class MainWindow(QMainWindow):
         held_keyboard = self.focusWidget()
         if held_keyboard is not None and not self._session_ending:
             held_keyboard.clearFocus()
+        loads = getattr(self._built.get("inference"), "loads", None)
+        if loads is not None:
+            loads.stop()                         # a chain of loads waiting for its next load starts no more of them
         try:
             self._save_state()
         finally:

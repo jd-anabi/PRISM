@@ -7522,3 +7522,162 @@ def test_a_panel_with_a_problem_says_the_problem_while_a_run_is_live(tmp_path):
         page._sync_budget()
         assert page.budget_total.text() == f"{label('num_runs')} is blank."
         assert (page.budget_mem.text(), page.budget_ckpt.text()) == ("", "")
+
+
+# ══ a chain of loads in the whole window ══
+def _a_launch_before(store, tmp_path, monkeypatch, *, kind=False, plan=None, narrowed=False, **changed):
+    """What a launch before this one left, for Home to read as this one opens: a prior retrain_prior made for Nadrowski
+    on master.txt and a posterior zz_trained trained with it, of the frequency response when ``kind`` says so, from a
+    narrowing round when ``narrowed`` does, both in the test's store; each remembered as in use last time with that
+    kind; and, with ``plan``, the plan zz_last holding that text in the test's own folder of plans, remembered as last
+    used. ``changed`` writes keys of the settings file otherwise (None leaves one out). The records' ids and the
+    model's folder of plans."""
+    from core.gui import plans as window_plans
+    from core.gui import remembered
+    from core.SBI import reparam, truncate
+    from core.SBI.training_checkpoint import bijection_probe
+    from tests._fixtures import _nad_cfg, _posterior_artifact, _prior_artifact
+    cfg = _nad_cfg()
+    prior = _prior_artifact(store, cfg, name="retrain_prior").id
+    region = None
+    if narrowed:
+        count = len(cfg.params_dict) + len(cfg.rescale_params)
+        probe = bijection_probe(reparam.build_inferred_bijection(cfg, log_params=[]), count)
+        region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=count, V=None, probe=probe,
+                                           x_obs_digest="d" * 16)
+    posterior = _posterior_artifact(store, cfg, name="zz_trained", parents={"prior": prior}, amortized=not narrowed,
+                                    region=region, over={("mode",): "chi"} if kind else None).id
+    root = tmp_path / "plans"
+    monkeypatch.setattr(window_plans, "PLAN_FOLDER", root)
+    if plan is not None:
+        (root / "nadrowski").mkdir(parents=True)
+        (root / "nadrowski" / "zz_last.txt").write_bytes(plan.encode("utf-8"))
+    written = {remembered.MODEL_KEY: "NADROWSKI", remembered.KIND_KEY: "true" if kind else "false",
+               remembered.BOUNDS_KEY: "master.txt", remembered.BOUNDS_MODEL_KEY: "NADROWSKI",
+               remembered.PRIOR_KEY: prior, remembered.POSTERIOR_KEY: posterior,
+               remembered.LAST_USED_KEY.format("nadrowski"): "zz_last" if plan is not None else None}
+    written.update(changed)
+    remembered.put_many([(key, value) for key, value in written.items() if value is not None])
+    return SimpleNamespace(prior=prior, posterior=posterior, folder=root / "nadrowski")
+
+
+def _the_loads(monkeypatch, store, held, *, release=True):
+    """The stages of a prior's load and a posterior's load replaced by stand-in runs, each released with the record of
+    last time as it would come back, unless ``release`` is False: the test then ends each. (prior's, posterior's)."""
+    from core import orchestrator
+    prior, posterior = StandIn(word="Prior load"), StandIn(word="Posterior load")
+    if release:
+        prior.release(SimpleNamespace(kind="prior", id=held.prior, name="retrain_prior",
+                                      manifest=store.get("prior", held.prior)))
+        posterior.release(SimpleNamespace(kind="posterior", id=held.posterior, name="zz_trained",
+                                          manifest=store.get("posterior", held.posterior),
+                                          posterior=SimpleNamespace(truncation=None)))
+    monkeypatch.setattr(orchestrator, "build_prior", prior)
+    monkeypatch.setattr(orchestrator, "build_posterior", posterior)
+    return prior, posterior
+
+
+def _home_of_last_time(tmp_path):
+    """The whole window on the test's own clock and folder of runs, shown where no screen shows it: (window, Home)."""
+    _on_the_runs_clock(tmp_path)
+    window = build_window()
+    _shown_off_screen(window, 1300, 820)
+    return window, window.part("home")
+
+
+def test_one_chain_of_loads_goes_at_a_time(store, tmp_path, monkeypatch):
+    """A chain asked for while another goes starts nothing, applies nothing and says its link did not start; the chain
+    that goes goes on to its end."""
+    from core.gui.load_chain import NOT_STARTED
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held, release=False)
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.load_chain("NADROWSKI", {"chi_mode": False}, "master.txt", held.prior, held.posterior)
+    turn_until(app, prior_load.started.is_set)
+    from tests._fixtures import readings_of_a_run
+    calls = readings_of_a_run(monkeypatch)
+    going, heard = inference.loads, []
+    second = inference.load_chain("HOPF", {"chi_mode": False}, None, None)
+    second.stopped.connect(heard.append)
+    turn_until(app, lambda: bool(heard))
+    assert (heard, inference.loads is going, going.is_going()) == ([NOT_STARTED], True, True), heard
+    assert inference.session.draft.model == "NADROWSKI" and inference.config_panel.model_combo.currentText() == (
+        "NADROWSKI")
+    for _ in range(3):
+        app.processEvents()
+    assert calls == [], f"a chain read while one of its loads was live: {calls}"
+    prior_load.release(SimpleNamespace(kind="prior", id=held.prior, name="retrain_prior",
+                                       manifest=store.get("prior", held.prior)))
+    turn_until(app, posterior_load.started.is_set)
+    posterior_load.release(SimpleNamespace(kind="posterior", id=held.posterior, name="zz_trained",
+                                           manifest=store.get("posterior", held.posterior),
+                                           posterior=SimpleNamespace(truncation=None)))
+    turn_until(app, lambda: not going.is_going() and not controller().is_live())
+    assert going.why == "" and inference.session.posterior.id == held.posterior
+
+
+def test_the_window_closed_between_two_loads_starts_no_later_load(store, tmp_path, monkeypatch):
+    """The window closed while the chain waits a turn for its next load, the prior's having ended: the chain ends there
+    and says so once, and no load starts on a window that has closed."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    closed, heard = [], []
+
+    def close_at_the_end(status):
+        if not closed:
+            closed.append(window.close())
+
+    inference = window.part("inference")
+    loads = inference.load_chain("NADROWSKI", {"chi_mode": False}, "master.txt", held.prior, held.posterior)
+    loads.finished.connect(lambda: heard.append("finished"))
+    loads.stopped.connect(heard.append)
+    controller().run_ended.connect(close_at_the_end)          # heard after the chain, which then waits for its turn
+    try:
+        turn_until(app, lambda: bool(closed) and bool(heard) and not controller().is_live())
+        for _ in range(5):
+            app.processEvents()
+    finally:
+        controller().run_ended.disconnect(close_at_the_end)
+    assert (closed, len(prior_load.calls), heard) == ([True], 1, ["closed"]), heard
+    assert not controller().is_live() and posterior_load.calls == [], "a load started on a window that had closed"
+
+
+def test_a_chain_loads_no_posterior_without_its_prior(store, tmp_path, monkeypatch):
+    """A chain handed a posterior and no prior applies step 1 and loads nothing: a posterior is loaded only once the prior
+    it was trained with has come back, and the Training step is left as it was."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    loads = inference.load_chain("NADROWSKI", {"chi_mode": False}, "master.txt", None, held.posterior)
+    turn_until(app, lambda: not loads.is_going())
+    assert (loads.why, prior_load.calls, posterior_load.calls) == ("", [], [])
+    assert inference.session.draft.model == "NADROWSKI" and inference.posterior_panel.view == "training"
+
+
+def test_a_chain_asked_for_during_another_run_applies_nothing(store, tmp_path, monkeypatch):
+    """A chain asked for while a run of another page is live applies nothing and loads nothing: the session and step 1's
+    form are as they were, and the chain says its link did not start."""
+    from core.gui.load_chain import NOT_STARTED
+    from core.gui.panels.reduction_panel import ReductionPanel
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    first = inference.config_panel
+    first.model_combo.setCurrentText("HOPF")
+    session = inference.session
+    with running(window.panel(ReductionPanel)):
+        loads = inference.load_chain("NADROWSKI", {"chi_mode": True}, "master.txt", held.prior, held.posterior)
+        heard = []
+        loads.stopped.connect(heard.append)
+        turn_until(app, lambda: bool(heard))
+        assert heard == [NOT_STARTED] and inference.session is session and session.draft is None
+        assert (first.model_combo.currentText(), first.form.rows["chi_mode"].value()) == ("HOPF", False)
+    assert (prior_load.calls, posterior_load.calls) == ([], [])

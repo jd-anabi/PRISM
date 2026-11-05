@@ -15,6 +15,9 @@ step, then works out where each of the six steps stands, which the rail and Home
 
 The screen also keeps the plan in use: where the forms of steps 1 to 3 were last filled from, which outlives the session
 that step 1 replaces as it is applied, and what the steps' last reading found of that plan's file.
+
+And it runs a chain of loads: step 1 applied with a model and its options, then each later step's own "Load this …" of
+a saved record, one after the other, each once the one before has returned its record.
 """
 from pathlib import Path
 
@@ -25,6 +28,7 @@ from core import config
 
 from .. import chain, keys, record_words, remembered
 from .. import plans as window_plans
+from ..load_chain import LoadChain
 from ..panels.inference.prior_tab import bounds_in_use
 from ..panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel,
                                      TSNPEPanel, ValidatePanel)
@@ -59,6 +63,7 @@ class InferenceScreen(QWidget):
         self.plan_source = None                  # where the forms were last filled from: a plan, a record or a run
         self.plan_file = window_plans.UNREAD     # the plan file in use as the last reading found it: its hash, or None
         self._plan_hashes: dict = {}             # each plan file's hash, kept until the file is written again
+        self.loads = None                        # the last chain of loads started, going or ended
 
         self.config_panel = ConfigPanel(self)
         self.prior_panel = PriorPanel(self)
@@ -218,6 +223,31 @@ class InferenceScreen(QWidget):
         picks = [(remembered.POSTERIOR_KEY, ident)] if isinstance(ident, str) and ident else []
         remembered.put_many(picks + self.last_used(getattr(getattr(session, "draft", None), "model", None)))
         self.refresh_gates()
+
+    # ── a chain of loads ──
+    def load_chain(self, model, options, bounds_file, prior, posterior=None, observation=None, *, fill=None):
+        """Step 1 applied with ``model`` and ``options``, asking nothing (``ConfigPanel.apply_quietly``, which calls
+        ``fill`` once the model stands on the form), ``bounds_file`` then selected in step 2's list when one is named,
+        and the saved ``prior`` loaded by step 2's own "Load this prior", then, once it has returned its record, the saved
+        ``posterior`` by step 3's: a chain of loads, started and handed back. A load that does not start or does not
+        finish ends the chain, and what came before it stays. A step 1 that cannot be applied, or a chain asked for while
+        another goes, starts nothing, and the chain stops at once. An observation's link is not built yet."""
+        if observation is not None:
+            raise ValueError("a chain of loads takes no observation yet")
+        loads = LoadChain(self)
+        going = self.loads is not None and self.loads.is_going()
+        if not going:
+            self.loads = loads
+        applied = not going and self.config_panel.apply_quietly(model, options, fill=fill)
+        if applied and bounds_file:
+            self.prior_panel.bounds_picker.restore_key(bounds_file)
+        links = [] if applied else [lambda: False]
+        if applied and prior:
+            links.append(lambda: self.prior_panel.load_record(prior))
+            if posterior:
+                links.append(lambda: self.posterior_panel.load_record(posterior))
+        loads.start(links)
+        return loads
 
     # ── the plan in use ──
     def take_plan(self, source) -> None:

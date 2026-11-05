@@ -584,17 +584,50 @@ class ConfigPanel(StepPage):
         except Refusal as refused:
             self._refusal(refused)
             return
-        draft = ConfigDraft(
-            model=model, labels=VALID_LABELS[VALID_MODELS.index(model)], state_dep_drift=registry.state_dep_drift(model),
-            units_override=values["units"], chi_mode=self._chi(), chi_n_freqs=values["chi_n_freqs"], chi_f0=None,
-            chi_freq_bounds=None, chi_k_pad=values["chi_k_pad"], chi_max_cycles=values["chi_max_cycles"],
-            reparam_rotate=self.rot_choice.currentData())
+        draft = self._draft_of(model, values)
         held = self._screen.session_contents()
         if held and not ask(self, QUESTION, QUESTION_TEXT.format("; ".join(held)), KEEP, APPLY_ANSWER):
             return
         self._screen.new_draft(draft)
         if by_keyboard and not self.next_button.isHidden():
             self.next_button.setFocus(Qt.TabFocusReason)
+
+    def _draft_of(self, model: str, values: dict) -> ConfigDraft:
+        """The draft of ``model`` from what the rules read, with the kind and the rotation the form shows."""
+        return ConfigDraft(
+            model=model, labels=VALID_LABELS[VALID_MODELS.index(model)], state_dep_drift=registry.state_dep_drift(model),
+            units_override=values["units"], chi_mode=self._chi(), chi_n_freqs=values["chi_n_freqs"], chi_f0=None,
+            chi_freq_bounds=None, chi_k_pad=values["chi_k_pad"], chi_max_cycles=values["chi_max_cycles"],
+            reparam_rotate=self.rot_choice.currentData())
+
+    def apply_quietly(self, model: str, options: dict, *, fill=None) -> bool:
+        """Apply ``model`` with ``options`` as "Apply model and options" does, asking nothing, for a caller that asked
+        its own question first or lets go of nothing held: the model on the form; then ``fill``, when handed, which
+        fills the forms once the model stands, since a model chosen on the form lets the plan in use go and a fill made
+        before would go with it; then each setting of ``options`` by its name in a draft (``chi_mode``, the three of the
+        driven recordings, ``reparam_rotate``, and ``units_override``, the units typed or None for the model's file),
+        every other setting of the step, and one ``options`` gives as None, at its usual value; then the rules read the
+        form as a press reads it, and a value one refuses is told as a press's refusal is and nothing is applied. True
+        when the draft is held. Nothing while a run is live, for a model the list does not hold, or for one parameter
+        inference cannot take."""
+        if controller().is_live() or self.model_combo.findData(model) < 0 or self._unusable(model):
+            return False
+        self.model_combo.setCurrentText(model)
+        if fill is not None:
+            fill()
+        rows = self.form.rows
+        for key in ("chi_mode", *DRIVEN_HELD, "reparam_rotate"):
+            value = options.get(key)
+            rows[key].set_value(rows[key].usual() if value is None else value)
+        units = options.get("units_override")
+        self._units_field.set_value(None if units is None else " ".join(str(unit) for unit in units))
+        try:
+            values = self._read()
+        except Refusal as refused:
+            self._refusal(refused)
+            return False
+        self._screen.new_draft(self._draft_of(model, values))
+        return True
 
     # ── plans ──
     def _build_the_plans_block(self) -> None:

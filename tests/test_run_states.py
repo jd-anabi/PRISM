@@ -6234,3 +6234,224 @@ def test_nothing_of_the_run_page_is_hidden_after_a_move_to_another_screen(factor
         _the_two_share_the_width(window, host, (factor, screen))
         stand_in.release()
         turn_until(app, lambda: not controller().is_live())
+
+
+# ══ a chain of loads ══
+def _a_load(host, stand_in, said=None, n=0, on_result=None):
+    """A link of a chain of loads: the stand-in run started through ``host``'s own ``dispatch`` as a load, which keeps
+    no file, leaves nothing to acknowledge and stops without asking; the link answers what the dispatch answers. With
+    ``said``, the link notes as it starts which link it is and whether a run is live then."""
+    from core.gui.run.controller import controller
+    spec = RunSpec("Prior load", None, stop_button="Stop loading", loads_only=True, keeps_files=False, stop_asks=False)
+
+    def link() -> bool:
+        if said is not None:
+            said.append(("link", n, controller().is_live()))
+        host.run_spec = lambda fn, *args, **kwargs: spec
+        try:
+            return host.dispatch(stand_in, on_result=on_result)
+        finally:
+            del host.run_spec
+    return link
+
+
+def _heard(chain) -> list:
+    """What a chain says as it ends, in order: "finished", or why it stopped."""
+    heard = []
+    chain.finished.connect(lambda: heard.append("finished"))
+    chain.stopped.connect(heard.append)
+    return heard
+
+
+def _turns(app, rounds=3) -> None:
+    """A few rounds of the event loop's zero-time timers."""
+    from PySide6.QtCore import QTimer
+    from tests._runs import turn_until
+    for _ in range(rounds):
+        done = []
+        QTimer.singleShot(0, lambda: done.append(True))
+        turn_until(app, lambda: bool(done))
+
+
+def test_a_chain_goes_on_only_when_its_load_has_finished(tmp_path):
+    """Three loads, each started only once the run of the one before has ended having returned its record: a turn of
+    the event loop after that end has been said and its page has heard it, never inside it, with no run live as it
+    starts. The chain says it finished, once, a turn after the last end, and hears no run after it: a load started
+    afterwards on the same page starts no link."""
+    from core.gui.load_chain import LoadChain
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 12, 4)))
+    host = build_run_host()
+    said, loaded = [], []
+    over = host._run_over
+    host._run_over = lambda status: (said.append(("page", status.outcome)), over(status))[1]
+
+    def ended(status) -> None:
+        said.append(("ended", status.outcome, held.is_live()))
+
+    from PySide6.QtCore import SIGNAL
+    hearing = held.receivers(SIGNAL("run_ended(PyObject)"))
+    held.run_ended.connect(ended)
+    try:
+        stand_ins = [StandIn(word="Prior load") for _ in range(3)]
+        for n, stand_in in enumerate(stand_ins):
+            stand_in.release(f"record {n}")
+        chain = LoadChain(host)
+        heard = _heard(chain)
+        chain.start([_a_load(host, stand_in, said, n, loaded.append) for n, stand_in in enumerate(stand_ins)])
+        assert said == [("link", 0, False)] and chain.is_going() and heard == []
+        turn_until(app, lambda: not chain.is_going())
+        assert heard == [], "the chain said its end before a turn had passed"
+        _turns(app)
+        assert said == [("link", 0, False), ("ended", "finished", False), ("page", "finished"),
+                        ("link", 1, False), ("ended", "finished", False), ("page", "finished"),
+                        ("link", 2, False), ("ended", "finished", False), ("page", "finished")], said
+        assert (heard, loaded, chain.why) == (["finished"], ["record 0", "record 1", "record 2"], ""), heard
+        assert held.receivers(SIGNAL("run_ended(PyObject)")) == hearing + 1, "a chain that ended still hears the runs"
+        again = StandIn(word="Prior load")
+        again.release()
+        start_run(host, again, spec=RunSpec("Prior load", None, loads_only=True, keeps_files=False, stop_asks=False))
+        turn_until(app, lambda: not controller().is_live())
+        _turns(app)
+        assert len(said) == 11 and heard == ["finished"], "a chain that had ended heard another run"
+        with pytest.raises(RuntimeError):
+            chain.start([])
+    finally:
+        held.run_ended.disconnect(ended)
+
+
+@pytest.mark.parametrize("ending", ["refused", "failed", "stopped", "not started"])
+def test_a_chain_ends_at_a_refusal_a_failure_or_a_stop_and_keeps_what_it_loaded(ending, tmp_path):
+    """The second of three loads refused before it began, failed, stopped, or starting no run: the chain stops there and
+    says why, the third link never runs, what the first returned stays where its page put it, and no panel is left
+    locked."""
+    from core.gui.load_chain import LoadChain
+    from core.gui.panels.base_panel import BasePanel
+    from core.refusals import Refusal
+    from tests._dialogs import forget_asked
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 12, 4)))
+    host = build_run_host()
+    first, second, third = (StandIn(word="Prior load") for _ in range(3))
+    first.release("record 0")
+    said, loaded = [], []
+    links = [_a_load(host, first, said, 0, loaded.append), _a_load(host, second, said, 1, loaded.append),
+             _a_load(host, third, said, 2, loaded.append)]
+    if ending == "not started":
+        links[1] = lambda: (said.append(("link", 1, held.is_live())), False)[1]
+    forget_asked()
+    chain = LoadChain(host)
+    heard = _heard(chain)
+    chain.start(links)
+    if ending != "not started":
+        turn_until(app, second.started.is_set)
+        if ending == "refused":
+            second.fail(Refusal("The prior cannot be loaded here.", field="prior"))
+        elif ending == "failed":
+            second.fail(OSError("prior.pt cannot be read"))
+        else:
+            held.request_stop()
+    turn_until(app, lambda: not chain.is_going() and not held.is_live())
+    _turns(app)
+    assert heard == [ending], heard
+    assert [entry[1] for entry in said] == [0, 1] and third.calls == [] and loaded == ["record 0"], said
+    assert all(panel.controls.isEnabled() for panel in BasePanel._instances if hasattr(panel, "controls")), (
+        "a panel was left locked")
+
+
+def test_a_chain_pressed_while_a_run_is_live_says_so(tmp_path):
+    """A chain whose first load would start while a run is live starts nothing: the page says a run is live, the chain
+    says its link did not start, and the live run goes on."""
+    from core.gui.load_chain import NOT_STARTED, LoadChain
+    from core.gui.step_facts import LIVE_TEXT
+    from tests._fixtures import build_run_host, page_lines, qt_app
+    from tests._runs import Clock, StandIn, running
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 12, 4)))
+    host = build_run_host()
+    lines = page_lines(host)
+    load = StandIn(word="Prior load")
+    with running(build_run_host()) as live:
+        chain = LoadChain(host)
+        heard = _heard(chain)
+        chain.start([_a_load(host, load)])
+        _turns(app)
+        assert (heard, load.calls, held.is_live()) == ([NOT_STARTED], [], True), heard
+        assert lines.lines == [("warning", LIVE_TEXT)], lines.lines
+        assert not live.stopped.is_set()
+
+
+def test_a_chain_under_an_end_waiting_to_be_seen_goes_through(tmp_path):
+    """An end nobody has seen stands as the chain starts: every load still goes, the chain finishes, and the same end
+    waits to be seen after it."""
+    from core.gui.load_chain import LoadChain
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 12, 4)))
+    host = build_run_host()
+    reduction = StandIn(word="Reduction")
+    reduction.release()
+    start_run(build_run_host(), reduction, spec=RunSpec("Reduction", ("reduction", None), stop_button="Stop…"))
+    turn_until(app, lambda: not held.is_live())
+    waiting = held.status
+    assert waiting.unacknowledged_end and waiting.run is not None
+    stand_ins = [StandIn(word="Prior load") for _ in range(3)]
+    for stand_in in stand_ins:
+        stand_in.release()
+    chain = LoadChain(host)
+    heard = _heard(chain)
+    chain.start([_a_load(host, stand_in) for stand_in in stand_ins])
+    turn_until(app, lambda: not chain.is_going())
+    _turns(app)
+    assert heard == ["finished"] and all(len(stand_in.calls) == 1 for stand_in in stand_ins)
+    assert held.status.unacknowledged_end and held.status.run == waiting.run, held.status
+    held.acknowledge(waiting.run)
+
+
+def test_a_chain_says_its_end_while_a_refusals_box_stands_open(tmp_path, monkeypatch):
+    """A load refused before it began: its page tells the refusal in a box after the run's end has been said, and the
+    chain says it stopped while that box stands open, its loop turning, so that nothing waits on the box's answer."""
+    from PySide6.QtWidgets import QApplication
+    from core.gui.load_chain import REFUSED, LoadChain
+    from core.refusals import Refusal
+    from tests._dialogs import hold_open
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 12, 4)))
+    host = build_run_host()
+    seen, under_the_box = [], []
+    hold_open(monkeypatch, seen)
+    load = StandIn(word="Prior load")
+    load.fail(Refusal("The prior cannot be loaded here.", field="prior"))
+    chain = LoadChain(host)
+    chain.stopped.connect(lambda why: under_the_box.append((why, QApplication.activeModalWidget() is not None)))
+    chain.start([_a_load(host, load)])
+    turn_until(app, lambda: bool(seen) and not held.is_live())
+    assert under_the_box == [(REFUSED, True)], under_the_box
+
+
+def test_a_chain_whose_first_link_raises_ends_and_raises(tmp_path):
+    """A link that raises as it starts ends the chain, which says so a turn later, and the error goes on to its caller,
+    where every error goes: no chain is left going and no run is live."""
+    from core.gui.load_chain import RAISED, LoadChain
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 12, 4)))
+    chain = LoadChain(build_run_host())
+    heard = _heard(chain)
+
+    def raises() -> bool:
+        raise RuntimeError("the page could not be read")
+
+    with pytest.raises(RuntimeError, match="the page could not be read"):
+        chain.start([raises, lambda: True])
+    _turns(app)
+    assert (heard, chain.is_going(), held.is_live()) == ([RAISED], False, False), heard
