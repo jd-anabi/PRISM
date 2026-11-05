@@ -884,6 +884,7 @@ def test_the_sentence_names_what_the_press_applies_and_leaves_out_what_is_gone(p
     assert chain.last_time_sentence(SimpleNamespace(**held)) == (
         f"Last time: {said}. Nothing is loaded until you press the button.")
 
+
 # what a record is called
 def test_a_record_is_called_by_its_name_or_by_its_kind_and_date(tmp_path):
     """A name when it has one; with none, its kind and when it was made, or for a simulation set the prior it

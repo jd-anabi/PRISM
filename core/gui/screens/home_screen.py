@@ -129,6 +129,14 @@ def _block(heading: QHBoxLayout, *parts: QWidget) -> QWidget:
     return block
 
 
+class _MainButton(QPushButton):
+    """Home's main button. A double-click presses it once: the second press of a double-click would land on the button
+    Home has drawn again by then, which says something else, since "Continue with these" keeps the person on Home."""
+
+    def mouseDoubleClickEvent(self, event):
+        event.accept()
+
+
 class _Body(QWidget):
     """The middle of Home: the next step, or the four choices, over two columns. It hands the width the page gives
     it on to the columns, which stand one above the other on a narrow page."""
@@ -180,7 +188,7 @@ class HomeScreen(QWidget):
         # the next step: its heading over a rule, a sentence, and the main button
         self.next_heading = SectionHead("")
         self._next_sentence = Sentence()
-        self.next_button = style.set_class(QPushButton(), cls="primary")
+        self.next_button = style.set_class(_MainButton(), cls="primary")
         self.next_button.clicked.connect(self._next_pressed)
         self._next_block = QWidget()
         lines = QVBoxLayout(self._next_block)
@@ -268,7 +276,8 @@ class HomeScreen(QWidget):
         self.page.set_small(on)
 
     def first_focus(self) -> QWidget | None:
-        """The control the keyboard starts at: the main button, which opens a page and starts nothing."""
+        """The control the keyboard starts at: the main button, which opens a page, or, for what was in use last time,
+        applies it and loads it."""
         return self.choices[0] if self._first else self.next_button
 
     @reported(QWidget.showEvent)

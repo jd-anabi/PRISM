@@ -89,7 +89,10 @@ class LoadChain(QObject):
             self._end(outcome or REFUSED)
 
     def _end(self, why: str) -> None:
-        """The chain ends: it hears the controller no more, and says how a turn later."""
+        """The chain ends, once: it hears the controller no more, and says how a turn later. A chain that has ended
+        already is left as it ended."""
+        if not self._going:
+            return
         self._going, self._links, self.why = False, deque(), why
         controller().run_ended.disconnect(self._ended)
         QTimer.singleShot(0, self, self._say_the_end)

@@ -288,6 +288,14 @@ def open_folder(folder) -> None:
 
 
 # ── values and their words ──
+def source_of(plan: engine_plans.Plan, at: datetime) -> PlanSource:
+    """The source a fill from ``plan`` leaves in use: the plan's name and file, its file's hash as the plan was read,
+    the moment ``at``, and its values of the headings a fill reaches. Every fill from a plan takes its source from
+    here."""
+    values = {pair: value for pair, value in plan.values.items() if pair[0] in FILLED}
+    return PlanSource("plan", plan.name, plan.path, plan.sha256, at, values)
+
+
 def plan_value(source: "PlanSource | None", heading: str, name: str):
     """The value the source in use holds for ``name`` under ``heading``, or None when it holds none."""
     return None if source is None else source.values.get((heading, name))

@@ -259,17 +259,19 @@ class InferenceScreen(QWidget):
         last time and asking nothing, the press being the person's own; step 1 applied with the model, the kind of
         observation remembered and the plan's other settings of that step, every other at its usual value; then the
         bounds file selected and the prior and the posterior loaded, each by its own step. A plan gone, or with problems,
-        since Home read it is left out, and the rest goes on. The chain of loads is handed back."""
+        since Home read it is left out, and the rest goes on. The chain of loads is handed back. While a run is live it
+        reads nothing, neither the plan nor its folder, changes nothing, and hands back a chain that stops at once."""
+        if controller().is_live():
+            return self.load_chain(picks.model, {}, None, None)
         plan = remembered.last_plan(picks.model, picks.plan, plans_folder=self.plans_folder) if picks.plan else None
         options, fill = {}, None
         if plan is not None:
-            values = {pair: value for pair, value in plan.values.items() if pair[0] in window_plans.FILLED}
-            source = window_plans.PlanSource("plan", plan.name, plan.path, plan.sha256, controller().now(), values)
-            options = {_DRAFT_NAMES.get(name, name): value for (heading, name), value in values.items()
+            source = window_plans.source_of(plan, controller().now())
+            options = {_DRAFT_NAMES.get(name, name): value for (heading, name), value in source.values.items()
                        if heading == window_plans.HEADING_OF["model"]}
 
             def fill() -> None:
-                window_plans.fill_forms(self, values, source, keep_remembered=True)
+                self.config_panel.fill_with(source, keep_remembered=True)
 
         options["chi_mode"] = picks.chi_mode is True
         if options.get("units_override") is not None:

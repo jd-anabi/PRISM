@@ -1258,6 +1258,33 @@ def test_a_fill_that_would_replace_a_typed_value_asks_first(tmp_path, monkeypatc
     assert _values(screen)[("training", "num_runs")] == 7000
 
 
+def test_the_fill_holds_the_plans_hash_as_read_and_the_moment_of_the_press(tmp_path, monkeypatch, store):
+    """The plan in use after "Fill the forms from this plan" holds the hash of its file as the press read it and the
+    moment of the press on the window's clock."""
+    window, screen, page, _folder, clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    clock.advance(90)
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    source = screen.plan_source
+    assert (source.name, source.sha256, source.at) == (
+        "retrain", hashlib.sha256(RETRAIN.encode("utf-8")).hexdigest(), clock.now), source
+
+
+def test_keep_what_is_there_keeps_looking_for_the_gone_plan(tmp_path, monkeypatch, store):
+    """The plan in use's file removed, a value typed, the usual values pressed and answered "Keep what is there":
+    nothing is filled and the plan is still looked for, so it is shown again when its file comes back."""
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    (folder / "retrain.txt").unlink()
+    page.read_facts()
+    screen.posterior_panel.form.rows["num_runs"].set_value(9500)
+    asked = _press_fill(page, monkeypatch, None, answer="Keep what is there")
+    assert [one.title for one in asked] == ["Return the forms to the usual values?"], asked
+    assert screen.plan_source.name == "retrain"
+    _plan(folder, RETRAIN, "retrain")
+    page.read_facts()
+    assert page.plan_choice.currentData() == "retrain", page.plan_choice.currentText()
+
+
 def test_return_to_the_usual_values_resets_steps_one_to_three(tmp_path, monkeypatch, store):
     """With "No plan" shown the button returns every row of steps 1 to 3 to its usual value, asking first with its own
     words when it would replace what was typed; the bounds file is left as it is, and no plan is in use after it."""

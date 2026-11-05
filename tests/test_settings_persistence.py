@@ -1437,9 +1437,11 @@ _PICKS_CASES = ["everything", "a model of your own whose file was deleted", "a m
                 "the bounds file of another model", "the bounds file remembered with no model", "the prior deleted",
                 "a prior made on another bounds file", "a prior made for another model", "a posterior of another prior",
                 "a posterior that names no prior, with no prior",
-                "a posterior of another kind", "the frequency response with a posterior of it", "a kind not read",
+                "a posterior of another kind", "the frequency response with a posterior of it",
+                "a posterior of other slots", "a posterior of another lock-in limit",
+                "the plan's slots with a posterior of them", "a kind not read",
                 "the plan gone", "the plan with a problem", "the plan the window's checks refuse",
-                "the plan under another spelling", "the plan of another model"]
+                "the plan under another spelling", "the plan of another model", "Hopf, from its own places"]
 
 
 @pytest.mark.parametrize("case", _PICKS_CASES)
@@ -1448,9 +1450,11 @@ def test_the_picks_leave_out_what_can_no_longer_be_found(case, store, tmp_path, 
     list of models holds it and parameter inference can take it, else nothing at all; the bounds file, while its model
     is the model's and the model's folder lists it by exactly that name; the prior, while the bounds file stands and
     its record, made for the model on that very file, can be read; the posterior, while the prior stands and its record
-    names that prior and is of the kind of observation; the plan, while its file is there, found without regard to case
-    and named as the folder lists it, and has no problem. Records and the plan differ from what a session would
-    hold."""
+    names that prior and is of the kind of observation, and, of the frequency response, was trained with the slots and
+    the lock-in limit the press applies, the plan's where it holds them; the plan, while its file is there, found
+    without regard to case and named as the folder lists it, and has no problem. Each is read from the model's own
+    places: its folder of bounds files, its records and its folder of plans. Records and the plan differ from what a
+    session would hold."""
     from core import config, registry
     from core.gui import remembered
     from tests._fixtures import _nad_cfg, _posterior_artifact, _prior_artifact
@@ -1502,11 +1506,30 @@ def test_the_picks_leave_out_what_can_no_longer_be_found(case, store, tmp_path, 
         manifest["parents"] = {}
         written.write_text(json.dumps(manifest), encoding="utf-8")
         remembered.put(remembered.PRIOR_KEY, "")
-    elif case == "the frequency response with a posterior of it":
+    elif case in ("the frequency response with a posterior of it", "a posterior of other slots",
+                  "a posterior of another lock-in limit", "the plan's slots with a posterior of them"):
+        slots = {"a posterior of other slots": 16, "the plan's slots with a posterior of them": 14}.get(case,
+                                                                                                       config.CHI_K_PAD)
+        ceiling = 25.0 if case == "a posterior of another lock-in limit" else config.CHI_MAX_CYCLES
         chi = _posterior_artifact(store, _nad_cfg(), name="zz_chi", parents={"prior": held["prior"]},
-                                  over={("mode",): "chi"}).id
+                                  over={("mode",): "chi", ("conditioning", "chi_k_pad"): slots,
+                                        ("conditioning", "chi_max_cycles"): ceiling}).id
         remembered.put_many([(remembered.KIND_KEY, "true"), (remembered.POSTERIOR_KEY, chi)])
         held["posterior"] = chi
+        if case == "the plan's slots with a posterior of them":
+            (folder / "zz_last.txt").write_bytes(f"# Model and options\nchi_mode = on\nchi_k_pad = 14\n\n"
+                                                 f"{_LAST_PLAN}".encode("utf-8"))
+    elif case == "Hopf, from its own places":
+        hopf = _nad_cfg()
+        hopf.sources = {**hopf.sources, "bounds": str(config.BOUNDS_PATH / "hopf" / "cell.txt")}
+        held["prior"] = _prior_artifact(store, hopf, name="", model="HOPF").id
+        held["posterior"] = _posterior_artifact(store, hopf, name="zz_hopf", parents={"prior": held["prior"]}).id
+        (held["plans"] / "hopf").mkdir()
+        (held["plans"] / "hopf" / "zz_hopf.txt").write_bytes(b"# Training\nnum_runs = 7000\n")
+        remembered.put_many([(remembered.MODEL_KEY, "HOPF"), (remembered.BOUNDS_KEY, "cell.txt"),
+                             (remembered.BOUNDS_MODEL_KEY, "HOPF"), (remembered.PRIOR_KEY, held["prior"]),
+                             (remembered.POSTERIOR_KEY, held["posterior"]),
+                             (remembered.LAST_USED_KEY.format("hopf"), "zz_hopf")])
     elif case == "the plan with a problem":
         (folder / "zz_last.txt").write_bytes(b"# Training\nnum_runs = many\n")
     elif case == "the plan the window's checks refuse":
@@ -1541,6 +1564,13 @@ def test_the_picks_leave_out_what_can_no_longer_be_found(case, store, tmp_path, 
         "the frequency response with a posterior of it": remembered.Picks(
             "NADROWSKI", True, "master.txt", prior, posterior, "zz_last", _phrase(store, "prior", prior),
             "the posterior zz_chi"),
+        "a posterior of other slots": remembered.Picks("NADROWSKI", True, "master.txt", prior, plan="zz_last",
+                                                       prior_words=_phrase(store, "prior", prior)),
+        "a posterior of another lock-in limit": remembered.Picks("NADROWSKI", True, "master.txt", prior, plan="zz_last",
+                                                                 prior_words=_phrase(store, "prior", prior)),
+        "the plan's slots with a posterior of them": remembered.Picks(
+            "NADROWSKI", True, "master.txt", prior, posterior, "zz_last", _phrase(store, "prior", prior),
+            "the posterior zz_chi"),
         "a kind not read": remembered.Picks("NADROWSKI", None, "master.txt", prior, posterior, "zz_last",
                                             _phrase(store, "prior", prior), "the posterior zz_retrain"),
         "the plan gone": remembered.Picks("NADROWSKI", False, "master.txt", prior, posterior, None,
@@ -1555,6 +1585,8 @@ def test_the_picks_leave_out_what_can_no_longer_be_found(case, store, tmp_path, 
                                                             "the posterior zz_retrain"),
         "the plan of another model": remembered.Picks("NADROWSKI", False, "master.txt", prior, posterior, None,
                                                       _phrase(store, "prior", prior), "the posterior zz_retrain"),
+        "Hopf, from its own places": remembered.Picks("HOPF", False, "cell.txt", prior, posterior, "zz_hopf",
+                                                      _phrase(store, "prior", prior), "the posterior zz_hopf"),
     }[case]
     assert found == expected, (case, found)
     assert whole.prior_words.startswith("the unnamed prior, "), "the prior of last time has a name"

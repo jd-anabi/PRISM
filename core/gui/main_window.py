@@ -947,17 +947,21 @@ class MainWindow(QMainWindow):
             manager.cancel()
 
     def session_ending(self, will_end: bool) -> None:
-        """Windows' answer, inside its end message. "Cancel" (``will_end`` False): the window's close asks its
-        questions again, which the window's log says. "Shut down anyway": the live run is asked to stop, as a stop
-        asked by the person, its history saying that Windows shut down (a training saving its posterior is not
-        stopped: the save goes on); then the window's thread waits for the run's end, the event loop turning, with
-        no limit of its own: Windows decides how long it lets PRISM live. Heard again, during the wait or after it,
-        it stops nothing more: a stop asked again of a stopping run asks nothing."""
+        """Windows' answer, inside its end message. "Cancel" (``will_end`` False): the window's close asks its questions
+        again, which the window's log says. "Shut down anyway": a chain of loads starts no more of them, as when the
+        window closes; the live run is asked to stop, as a stop asked by the person, its history saying that Windows
+        shut down (a training saving its posterior is not stopped: the save goes on); then the window's thread waits for
+        the run's end, the event loop turning, with no limit of its own: Windows decides how long it lets PRISM live.
+        Heard again, during the wait or after it, it stops nothing more: a stop asked again of a stopping run asks
+        nothing."""
         if not will_end:
             self._session_ending = False
             log.info(SESSION_CANCELLED_TEXT)
             return
         self._session_ending = True
+        loads = getattr(self._built.get("inference"), "loads", None)
+        if loads is not None:
+            loads.stop()                         # no load starts on a window Windows is ending
         held = controller()
         if held.is_live():
             held.request_stop(reason=questions.SHUT_DOWN_REASON)

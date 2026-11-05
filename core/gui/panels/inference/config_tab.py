@@ -726,17 +726,18 @@ class ConfigPanel(StepPage):
         if getattr(screen, "plan_source", None) is not None:
             screen.take_plan(None)
 
-    def _read_the_plans(self) -> None:
+    def _read_the_plans(self, show: "str | None" = None) -> None:
         """The model's plans listed again, the plan shown kept while it stands there, under its own name or else under
         the name the folder lists it by in another case, else "No plan" until its file is back; whether the folder
         stands there; the plan last used with the model, found without regard to case, and whether its file is still
-        there; and the plan shown read again. Nothing while a run is live."""
+        there; and the plan shown read again. With ``show``, that plan is the one the list stands on. Nothing while a
+        run is live."""
         folder = self._plans_folder()
         if controller().is_live() or folder is None:
             return
         model = self.model_combo.currentText()
         names = plans.list_plans(folder)
-        choice, shown = self.plan_choice, self.plan_choice.currentData()
+        choice, shown = self.plan_choice, show if show is not None else self.plan_choice.currentData()
         if shown is None and self._gone is not None:
             shown = self._gone                   # the plan whose file went is shown again once its file is back
         found = _listed_as(names, shown)
@@ -953,8 +954,8 @@ class ConfigPanel(StepPage):
                 self.redraw()
                 return
             plan = self._shown_plan
-            values = {pair: value for pair, value in plan.values.items() if pair[0] in plans.FILLED}
-            source = plans.PlanSource("plan", plan.name, plan.path, plan.sha256, self.now(), values)
+            source = plans.source_of(plan, self.now())
+            values = source.values
             title = FILL_TITLE.format(plan.name)
             sentence = (FILL_ONE_TEXT.format(plan.name) if len(values) == 1
                         else FILL_TEXT.format(plan.name, len(values)))
@@ -963,7 +964,23 @@ class ConfigPanel(StepPage):
         if replaced and not ask(self, title, sentence, KEEP_WHAT_IS_THERE, answer, items=replaced):
             return
         self._gone = None                        # the plan whose file went is no longer looked for
-        plans.fill_forms(screen, values, source)
+        if source.kind == "plan":
+            self.fill_with(source)
+        else:
+            plans.fill_forms(screen, values, source)
+
+    def fill_with(self, source, *, keep_remembered: bool = False) -> bool:
+        """Fill steps 1 to 3 with ``source``, a plan's (``plans.source_of``), as "Fill the forms from this plan" does
+        and as Home's "Continue with these" does: the forms filled, then the list of plans read again and standing on
+        the plan, which it holds as the plan shown, and the row drawn again, so that it says the plan shown is the plan
+        in use. ``keep_remembered`` leaves a value put back from last time as it is. False, and nothing changed, while a
+        run is live."""
+        if not plans.fill_forms(self._screen, source.values, source, keep_remembered=keep_remembered):
+            return False
+        self._gone = None
+        self._read_the_plans(show=source.name)
+        self.redraw()
+        return True
 
     def _save_pressed(self) -> None:
         """Save the settings that differ from their usual values as a plan of the model shown, under a name typed and
