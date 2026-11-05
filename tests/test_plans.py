@@ -931,6 +931,25 @@ def _plan_fact(page) -> str:
                 if said.startswith(("Information. No plan", "Information. Plan ", "Information. Settings from")))
 
 
+#: Under the save's list while step 2's list stands in another model's folder than the model shown.
+OTHER_BOUNDS = ("The bounds list holds another model's files, not those of the model shown, so this plan names no "
+                "bounds file.")
+
+
+def _bounds_of_your_own(tmp_path, monkeypatch) -> Path:
+    """A folder of bounds files of the test's own, Nadrowski's copied, bound where both pages read it: so that a test
+    can remove a file, or give two models a file of one name, and no real file changes. Bound before the window is
+    built."""
+    import shutil
+    from core.config import BOUNDS_PATH
+    from core.gui.panels.inference import config_tab, prior_tab
+    bounds = tmp_path / BOUNDS_PATH.name
+    shutil.copytree(BOUNDS_PATH / "nadrowski", bounds / "nadrowski")
+    monkeypatch.setattr(config_tab, "BOUNDS_PATH", bounds)
+    monkeypatch.setattr(prior_tab, "BOUNDS_PATH", bounds)
+    return bounds
+
+
 def _a_plan_of_hopf(folder) -> Path:
     """Beside the test's own folder of plans for Nadrowski, Hopf's, holding one plan that names its bounds file."""
     hopf = folder.parent / "hopf"
@@ -1328,8 +1347,9 @@ def test_a_plans_bounds_file_waits_until_its_model_is_applied(tmp_path, monkeypa
 
 def test_step_two_names_the_file_its_build_reads_while_a_plans_file_waits(tmp_path, monkeypatch, store):
     """While a plan's bounds file waits for the model it was filled for, step 2's "Before you start" and its plan line
-    name the file the build reads, the one the list selects in the folder of the model applied, as a departure from the
-    plan's; the row still says its value came from the plan; and the press builds on the file selected."""
+    name the file the build reads, the one the list selects in the folder of the model applied, with that folder, as a
+    departure from the plan's; the row still says its value came from the plan; and the press builds on the file
+    selected."""
     from core import orchestrator
     from core.gui.run.controller import controller
     from tests._fixtures import qt_app
@@ -1346,7 +1366,8 @@ def test_step_two_names_the_file_its_build_reads_while_a_plans_file_waits(tmp_pa
     window.go_to("inference", "prior")
     prior.show_view("build")
     prior.read_facts()
-    assert _plan_fact(prior) == "Information. Plan hopf_bounds, with 1 change: Bounds file master.txt (plan cell.txt)."
+    assert _plan_fact(prior) == (
+        "Information. Plan hopf_bounds, with 1 change: Bounds file master.txt in nadrowski (plan cell.txt).")
     assert _said(prior.plan_line) == "Plan: hopf_bounds, 1 change"
     assert _origins(screen)[("prior", "bounds")] == "from plan hopf_bounds"
     stand_in = StandIn(word="Prior build")
@@ -1358,6 +1379,46 @@ def test_step_two_names_the_file_its_build_reads_while_a_plans_file_waits(tmp_pa
     stand_in.fail(RuntimeError("ended by the test"))
     turn_until(app, lambda: not controller().is_live(), 10.0)
     assert Path(built.sources["bounds"]).name == "master.txt", built.sources
+
+
+def test_a_waiting_file_is_a_departure_though_the_file_selected_has_its_name(tmp_path, monkeypatch, store):
+    """Two models' folders each hold a bounds file of one name. With one model applied and that file selected, a plan of
+    the other model naming its own file of that name is filled: the file the build reads is the applied model's, named
+    with its folder, so "Before you start" and the plan line count it as a change, and the press builds on it."""
+    import shutil
+    from core import orchestrator
+    from core.gui.run.controller import controller
+    from tests._fixtures import qt_app
+    from tests._runs import StandIn, turn_until
+    app = qt_app()
+    bounds = _bounds_of_your_own(tmp_path, monkeypatch)
+    (bounds / "hopf").mkdir()
+    shutil.copy(bounds / "nadrowski" / "master.txt", bounds / "hopf" / "master.txt")
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    (folder.parent / "hopf").mkdir()
+    _plan(folder.parent / "hopf", "# Prior\nbounds = master.txt\n", "same_name")
+    page.foot.main_button.click()
+    prior = screen.prior_panel
+    _set(screen, {("prior", "bounds"): "master.txt"})
+    page.model_combo.setCurrentText("HOPF")
+    _press_fill(page, monkeypatch, "same_name", answer="Fill the forms")
+    assert (prior.waiting_file(), prior.bounds_picker.key()) == ("master.txt", "master.txt")
+    window.go_to("inference", "prior")
+    prior.show_view("build")
+    prior.read_facts()
+    assert _plan_fact(prior) == (
+        "Information. Plan same_name, with 1 change: Bounds file master.txt in nadrowski (plan master.txt).")
+    assert _said(prior.plan_line) == "Plan: same_name, 1 change"
+    assert _origins(screen)[("prior", "bounds")] == "from plan same_name"
+    stand_in = StandIn(word="Prior build")
+    monkeypatch.setattr(orchestrator, "build_prior", stand_in)
+    prior.names.name.setText("a_prior")
+    prior._main_clicked()
+    assert controller().is_live() and stand_in.started.wait(5), prior.foot.reason.text()
+    built = stand_in.calls[-1][0][0]
+    stand_in.fail(RuntimeError("ended by the test"))
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+    assert Path(built.sources["bounds"]).parent.name == "nadrowski", built.sources
 
 
 def test_limits_typed_take_the_place_of_a_waiting_file(tmp_path, monkeypatch, store):
@@ -2119,6 +2180,75 @@ def test_a_save_whose_write_fails_is_told_and_changes_nothing(tmp_path, monkeypa
     assert (folder / "retrain.txt").read_bytes() == kept
 
 
+def test_with_its_only_plan_gone_the_forms_can_still_return_to_the_usual_values(tmp_path, monkeypatch, store):
+    """A folder whose only plan is the plan in use: its file removed, the list holds "No plan" alone, and the button
+    still returns the forms to their usual values, asking first, as it does, when a value typed would be replaced, the
+    sentence that the plan is gone beside it."""
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    (folder / "retrain.txt").unlink()
+    page.read_facts()
+    assert _listed(page) == ["No plan"]
+    assert (page.fill_button.text(), page.fill_button.isEnabled(), page.fill_reason.text()) == (
+        "Return the forms to the usual values", True, "The plan in use is no longer in the plans folder.")
+    from tests._dialogs import all_asked, choose, forget_asked
+    screen.posterior_panel.form.rows["num_runs"].set_value(9500)
+    forget_asked()
+    choose(monkeypatch, words="Return to the usual values")
+    page.fill_button.click()
+    assert [(one.title, one.items) for one in all_asked()] == [
+        ("Return the forms to the usual values?", ("Batches: 9,500 becomes 5,000",))]
+    assert screen.plan_source is None and screen.posterior_panel.form.rows["num_runs"].value() == 5000
+
+
+def test_a_field_that_does_not_read_is_said_as_such_in_a_view_that_hides_it(tmp_path, monkeypatch, store):
+    """Step 2's seven settings are hidden in its view of a saved prior, and the save still writes them: a field there
+    that holds a text that does not read is told by its own sentence, never as blank, a whole number's and a
+    decimal's."""
+    from tests._dialogs import all_asked, answer_in_turn
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    prior = screen.prior_panel
+    prior.form.rows["num_iterations"].widget.setText("1,5")
+    prior.form.rows["walk_step"].widget.setText("1,5")
+    prior.show_view("saved")
+    assert not prior.form.rows["num_iterations"].is_shown()
+    _shown_again(window)
+    answer_in_turn(monkeypatch, ("Save", "zz_saved"))
+    page.save_button.click()
+    assert all_asked()[-1].items == ("Sweep rounds must be a number; got '1,5'.",
+                                     "Random-walk step: Use a point as the decimal sign."), all_asked()[-1].items
+
+
+def test_with_nothing_applied_the_saves_sentence_names_no_model_applied(tmp_path, monkeypatch, store):
+    """With nothing applied, step 2's list stands on Nadrowski's folder: a file chosen there and another model shown,
+    the save writes no bounds file and says why without naming a model applied."""
+    from tests._dialogs import all_asked, answer_in_turn
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    hopf = _a_plan_of_hopf(folder).parent
+    assert screen.session.draft is None
+    _set(screen, {("prior", "bounds"): "master.txt"})
+    page.model_combo.setCurrentText("HOPF")
+    screen.posterior_panel.form.rows["num_runs"].set_value(7000)
+    _shown_again(window)
+    answer_in_turn(monkeypatch, ("Save", "zz_hopf"))
+    page.save_button.click()
+    assert all_asked()[-1].beneath == OTHER_BOUNDS, all_asked()[-1].beneath
+    assert read_plan(hopf / "zz_hopf.txt").values == {("Training", "num_runs"): 7000}
+
+
+def test_a_plan_in_use_renamed_in_case_alone_stays_in_use(tmp_path, monkeypatch, store):
+    """A plan in use whose file is renamed in its capitals alone is still the plan in use: the list shows it as the
+    folder names it, nothing under it says it changed or is gone, and the fill button is the plan's."""
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    (folder / "retrain.txt").rename(folder / "Retrain.txt")
+    page.read_facts()
+    row = page.form.rows["plan"]
+    assert (page.plan_choice.currentText(), row.line.words, page.fill_reason.text()) == ("Retrain", "", "")
+    assert (page.fill_button.text(), page.fill_button.isEnabled()) == ("Fill the forms from this plan", True)
+    assert screen.plan_source.name == "retrain" and not _facts(page)[-1].startswith("Attention."), _facts(page)
+
+
 def test_the_save_refuses_what_its_own_window_would_refuse(tmp_path, monkeypatch, store):
     """Before it writes, the save holds what it would write to the window's two checks against the model shown: typed
     units that do not resolve, and a bounds file not in the model's bounds folder (a plan's file removed since its
@@ -2164,8 +2294,7 @@ def test_a_save_with_another_model_shown_writes_no_file_of_the_model_applied(tmp
     answer_in_turn(monkeypatch, ("Save", "zz_hopf"))
     page.save_button.click()
     dialog = all_asked()[-1]
-    assert dialog.beneath == ("The bounds list holds the files of the model applied, not of the model shown, so this "
-                              "plan names no bounds file."), dialog.beneath
+    assert dialog.beneath == OTHER_BOUNDS, dialog.beneath
     assert read_plan(hopf / "zz_hopf.txt").values == {("Training", "num_runs"): 7000}
     _press_fill(page, monkeypatch, "hopf_bounds", answer="Fill the forms")
     screen.posterior_panel.form.rows["num_runs"].set_value(7000)
@@ -2206,9 +2335,9 @@ def test_the_saved_line_goes_at_the_next_plan_press(tmp_path, monkeypatch, store
 
 def test_a_plan_in_use_whose_file_is_gone_is_said_by_its_fact_alone(tmp_path, monkeypatch, store):
     """The plan in use's file removed, the list falls back to "No plan" at its next reading, and no line says the list
-    was changed: the Attention fact says why, and the fill button stays the plan's, greyed with its reason. The file
-    back, the list shows the plan again. A choice the person makes in the list, with the list shut too, is said as
-    before."""
+    was changed: the Attention fact says why, and beside the button, which returns the forms to their usual values as it
+    does with "No plan" chosen, a sentence says the plan is gone. The file back, the list shows the plan again. A choice
+    the person makes in the list, with the list shut too, is said as before."""
     window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN, "another": RETRAIN})
     _press_fill(page, monkeypatch, answer="Fill the forms")
     kept = (folder / "retrain.txt").read_bytes()
@@ -2217,7 +2346,7 @@ def test_a_plan_in_use_whose_file_is_gone_is_said_by_its_fact_alone(tmp_path, mo
     row = page.form.rows["plan"]
     assert (page.plan_choice.currentText(), row.line.words) == ("No plan", ""), row.line.words
     assert (page.fill_button.text(), page.fill_button.isEnabled(), page.fill_reason.text()) == (
-        "Fill the forms from this plan", False, "The plan in use is no longer in the plans folder.")
+        "Return the forms to the usual values", True, "The plan in use is no longer in the plans folder.")
     assert _facts(page)[-1].startswith("Attention. retrain.txt is no longer in the plans folder."), _facts(page)
     (folder / "retrain.txt").write_bytes(kept)
     page.read_facts()

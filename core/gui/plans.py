@@ -86,6 +86,8 @@ GONE_UNDATED_TEXT = "{} is no longer in the plans folder. The forms hold the val
 BLANK = "blank"
 NONE_WORDS = "none"
 TYPED_WORDS = "limits typed by hand"
+#: A bounds file named with the folder of the model it stands in.
+FILE_IN_WORDS = "{} in {}"
 
 
 class _Typed:
@@ -142,6 +144,18 @@ def _plan_files(folder: Path) -> dict:
     except OSError:
         return {}
     return {entry.stem: entry for entry in files}
+
+
+@dataclass(frozen=True)
+class FileIn:
+    """A bounds file named with the folder of the model it stands in: what step 2's build reads while a plan's file
+    waits for another model. It equals no plan's value, a plan naming its file by its name alone, and is said with its
+    folder, so that two files of one name in two models' folders read apart."""
+    name: str
+    folder: str
+
+    def __str__(self) -> str:
+        return FILE_IN_WORDS.format(self.name, self.folder)
 
 
 def list_plans(folder) -> tuple[str, ...]:

@@ -389,7 +389,8 @@ class PriorPanel(StepPage):
 
     def plan_read(self, applied: bool) -> dict:
         """What a run reads of this step: the bounds of the configuration in use; or the bounds the build reads, and in
-        the build view the seven settings, which a load does not read."""
+        the build view the seven settings, which a load does not read. While a plan's file waits, the file the build
+        reads is named with its model's folder: it is then no plan's file, whatever its name."""
         if applied:
             cfg, prior = self._held()
             if prior is None:
@@ -398,7 +399,10 @@ class PriorPanel(StepPage):
             return {"bounds": plans.TYPED if key == "" else _named(key) if key else None}
         fields_ = self.plan_fields()
         keys = (key for key, _ in _KNOB_RULES) if self.view == "build" else ()
-        return {"bounds": self.bounds_built(), **{key: fields_[key].value() for key in keys}}
+        built = self.bounds_built()
+        if self._pending is not None and isinstance(built, str):
+            built = plans.FileIn(built, Path(self.bounds_picker.base_path).name)
+        return {"bounds": built, **{key: fields_[key].value() for key in keys}}
 
     def bounds_built(self):
         """The bounds a build reads now: the limits typed by hand, the file the list selects by its name with forward

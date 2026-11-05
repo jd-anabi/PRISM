@@ -40,10 +40,11 @@ from ...run.controller import controller
 from ...session import ConfigDraft
 from ...step_facts import (CHANGED_TEXT, NOT_HELD, Fact, SelectionRow, held_value, model_facts, model_in_use,
                            units_words)
+from ...widgets import labeled_inputs
 from ...widgets.artifact_picker import LIST_MOST
 from ...widgets.ask import ask, ask_text
 from ...widgets.choice import Choice
-from ...widgets.form import _may_wrap
+from ...widgets.form import TickedField, _may_wrap
 from ...widgets.labeled_inputs import FloatField, IntField
 from ...widgets.marker import painted_icon
 from ...widgets.message_row import MessageRow
@@ -124,7 +125,8 @@ SAVE_WORDS = "Save as a plan…"
 OPEN_WORDS = "Open the plans folder"
 #: Beside the fill button while the plan shown cannot be used: the table's own sentence for a plan to correct.
 FILL_BLOCKED_TEXT = fields.CONTROL["plan"]
-#: Beside the fill button while the plan in use is no longer in the folder: the list fell back to "No plan".
+#: Beside the fill button while the plan in use is no longer in the folder: the list fell back to "No plan", and the
+#: button returns the forms to their usual values, as it does with "No plan" chosen.
 FILL_GONE_TEXT = "The plan in use is no longer in the plans folder."
 NOTHING_TO_SAVE_TEXT = "Every setting is at its usual value, so there is nothing to save."
 FILL_TITLE = "Fill the forms from plan {}?"
@@ -144,8 +146,8 @@ SAVE_LABEL = "Plan name"
 SAVE_ANSWER = "Save"
 WRITTEN_ITEM = "{} ({}): {}"
 TYPED_BOUNDS_TEXT = "The bounds were typed by hand, so this plan names no bounds file."
-OTHER_BOUNDS_TEXT = ("The bounds list holds the files of the model applied, not of the model shown, so this plan names "
-                     "no bounds file.")
+OTHER_BOUNDS_TEXT = ("The bounds list holds another model's files, not those of the model shown, so this plan names no "
+                     "bounds file.")
 NOT_APPLIED_SAVED_TEXT = "Saved as the forms show them, though not applied: {}."
 REPLACE_TITLE = "Replace plan {}?"
 REPLACE_TEXT = "{} was last changed on {}. The earlier file cannot be brought back."
@@ -193,6 +195,12 @@ def _choice(items) -> Choice:
 def _words_of(items, value) -> str:
     """The words a list shows for ``value``, or the value itself when no item holds it."""
     return next((words for words, held in items if held == value), str(value))
+
+
+def _one_plan(one, other) -> bool:
+    """Whether two names are the one plan: the same, or the same without regard to case, as Windows keeps one file for
+    both; None is "No plan"."""
+    return one == other or (one is not None and other is not None and one.casefold() == other.casefold())
 
 
 def _counted(count: int, one: str, many: str) -> str:
@@ -686,6 +694,7 @@ class ConfigPanel(StepPage):
         choice, shown = self.plan_choice, self.plan_choice.currentData()
         if shown is None and self._gone is not None:
             shown = self._gone                   # the plan whose file went is shown again once its file is back
+        found = None if shown is None else next((name for name in names if _one_plan(name, shown)), None)
         choice.blockSignals(True)
         try:
             while choice.count() > 1:
@@ -693,11 +702,11 @@ class ConfigPanel(StepPage):
             for name in names:
                 choice.addItem(name, name)
                 choice.setItemData(choice.count() - 1, name, Qt.ToolTipRole)
-            choice.setCurrentIndex(max(0, choice.findData(shown)) if shown is not None else 0)
+            choice.setCurrentIndex(max(0, choice.findData(found)) if found is not None else 0)
         finally:
             choice.blockSignals(False)
         choice.say_whole()
-        self._gone = shown if shown is not None and shown not in names else None
+        self._gone = shown if shown is not None and found is None else None
         self._listed_for, self._folder_there = model, folder.is_dir()
         last = settings.get_str(settings.settings(), LAST_USED_KEY.format(model.lower()), "").strip()
         when = settings.get_str(settings.settings(), LAST_USED_AT_KEY.format(model.lower()), "").strip()
@@ -749,8 +758,8 @@ class ConfigPanel(StepPage):
         listed = self.plan_choice.currentData()
         row.set_origin(self._hint if listed is None else "")
         in_use = source.name if source is not None and source.kind == "plan" else None
-        gone = in_use is not None and listed is None and self._gone == in_use
-        held, changed = self._in_use_words(source), listed != in_use and not gone
+        gone = in_use is not None and listed is None and _one_plan(self._gone, in_use)
+        held, changed = self._in_use_words(source), not _one_plan(listed, in_use) and not gone
         row.set_line("warn" if changed else "", CHANGED_TEXT.format(held) if changed else "")
         self.plan_in_use.set_text(IN_USE_TEXT.format(held))
         refused = isinstance(shown, engine_plans.PlanRefusal)
@@ -777,8 +786,8 @@ class ConfigPanel(StepPage):
         else:
             self.holds_table.setVisible(False)
             self.holds_button.setIcon(painted_icon("chev_right"))
-        self.fill_button.setText(USUAL_WORDS if listed is None and not gone else FILL_WORDS)
-        self.fill_button.setEnabled(not refused and not gone)
+        self.fill_button.setText(USUAL_WORDS if listed is None else FILL_WORDS)
+        self.fill_button.setEnabled(not refused)
         self.fill_reason.setText(FILL_BLOCKED_TEXT if refused else FILL_GONE_TEXT if gone else "")
         values, _remarks, wrong = self._to_save()
         nothing = not values and not wrong
@@ -861,10 +870,12 @@ class ConfigPanel(StepPage):
     @staticmethod
     def _unread_words(row) -> str:
         """Why a row holds no value a plan can write: blank, or the row's own sentence for a text that does not read,
-        named by the row's label where the sentence names none."""
-        label = row.label_text()
-        reading = getattr(row, "reading", None)
-        said = reading() if callable(reading) and plans.typed_words(row) else None
+        named by the row's label where the sentence names none; read from the field itself, so that a row a view hides
+        says it too."""
+        label, widget = row.label_text(), getattr(row, "widget", None)
+        field = widget.field if isinstance(widget, TickedField) else widget
+        typed = plans.typed_words(row)
+        said = labeled_inputs.reading(field, label) if typed and isinstance(field, (FloatField, IntField)) else None
         if not said:
             return BLANK_TEXT.format(label)
         return said if said.startswith(label) else f"{label}: {said}"
