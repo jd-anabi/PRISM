@@ -114,6 +114,9 @@ NOT_APPLIED_YET = "not applied yet"
 IN_USE_TEXT = "In use: {}."
 PLAN_FILLED_WORDS = "plan {}, filled {}"
 SOURCE_FILLED_WORDS = "settings from {} {}, filled {}"
+#: The two, for a source that keeps no moment of its fill.
+PLAN_WORDS = "plan {}"
+SOURCE_WORDS = "settings from {} {}"
 NO_PLAN_WORDS = "no plan"
 FILL_WORDS = "Fill the forms from this plan"
 USUAL_WORDS = "Return the forms to the usual values"
@@ -121,6 +124,8 @@ SAVE_WORDS = "Save as a plan…"
 OPEN_WORDS = "Open the plans folder"
 #: Beside the fill button while the plan shown cannot be used: the table's own sentence for a plan to correct.
 FILL_BLOCKED_TEXT = fields.CONTROL["plan"]
+#: Beside the fill button while the plan in use is no longer in the folder: the list fell back to "No plan".
+FILL_GONE_TEXT = "The plan in use is no longer in the plans folder."
 NOTHING_TO_SAVE_TEXT = "Every setting is at its usual value, so there is nothing to save."
 FILL_TITLE = "Fill the forms from plan {}?"
 FILL_ONE_TEXT = ("Filling from plan {} sets every setting a plan can hold: 1 from the plan, the rest to their usual "
@@ -152,10 +157,10 @@ CANNOT_SAVE_TEXT = "This plan cannot be saved: {}"
 NOT_WRITTEN_TEXT = "This plan cannot be saved: {} could not be written ({})."
 BLANK_TEXT = "{} is blank."
 OK_TEXT = "OK"
-MORE_ONE_TEXT = "And 1 more."
 MORE_TEXT = "And {} more."
 #: How many of a plan's problems are shown under the list, and how much of each: a file of notes gives one a line, each
-#: echoing its line whole, and a page that grew with them would push every setting out of reach.
+#: echoing its line whole, and a page that grew with them would push every setting out of reach. One more is said
+#: whole in the line that would count it.
 PROBLEMS_SHOWN = 8
 PROBLEM_MOST = 300
 
@@ -266,6 +271,7 @@ class ConfigPanel(StepPage):
         self._listed_for = None              # the model whose folder the list of plans was last read for
         self._folder_there = False           # whether that folder stood there at that reading
         self._hint = ""                      # the plan last used with the model shown, beside the list
+        self._gone = None                    # the plan the list showed until its file went, "No plan" shown since
         self.model_combo = _ModelChoice()
         self.model_combo.addItems(VALID_MODELS)
         self.model_combo.setCurrentText("NADROWSKI")
@@ -660,7 +666,7 @@ class ConfigPanel(StepPage):
             self.plan_choice.setCurrentIndex(0)
         finally:
             self.plan_choice.blockSignals(False)
-        self._shown_plan, self._listed_for, self._folder_there, self._hint = None, None, False, ""
+        self._shown_plan, self._listed_for, self._folder_there, self._hint, self._gone = None, None, False, "", None
         screen = self._screen
         prior = getattr(screen, "prior_panel", None)
         if prior is not None:
@@ -669,15 +675,17 @@ class ConfigPanel(StepPage):
             screen.take_plan(None)
 
     def _read_the_plans(self) -> None:
-        """The model's plans listed again, the plan shown kept while it stands there, else "No plan"; whether the folder
-        stands there; the plan last used with the model, and whether its file is still there; and the plan shown read
-        again. Nothing while a run is live."""
+        """The model's plans listed again, the plan shown kept while it stands there, else "No plan" until its file is
+        back; whether the folder stands there; the plan last used with the model, found without regard to case, and
+        whether its file is still there; and the plan shown read again. Nothing while a run is live."""
         folder = self._plans_folder()
         if controller().is_live() or folder is None:
             return
         model = self.model_combo.currentText()
         names = plans.list_plans(folder)
         choice, shown = self.plan_choice, self.plan_choice.currentData()
+        if shown is None and self._gone is not None:
+            shown = self._gone                   # the plan whose file went is shown again once its file is back
         choice.blockSignals(True)
         try:
             while choice.count() > 1:
@@ -689,18 +697,20 @@ class ConfigPanel(StepPage):
         finally:
             choice.blockSignals(False)
         choice.say_whole()
+        self._gone = shown if shown is not None and shown not in names else None
         self._listed_for, self._folder_there = model, folder.is_dir()
         last = settings.get_str(settings.settings(), LAST_USED_KEY.format(model.lower()), "").strip()
         when = settings.get_str(settings.settings(), LAST_USED_AT_KEY.format(model.lower()), "").strip()
+        found = next((name for name in names if name.casefold() == last.casefold()), None)
         if not last:
             self._hint = ""
-        elif last not in names:
+        elif found is None:
             self._hint = LAST_USED_GONE_TEXT.format(last)
         else:
             try:
-                self._hint = LAST_USED_TEXT.format(last, texts.date_text(datetime.fromisoformat(when).astimezone()))
+                self._hint = LAST_USED_TEXT.format(found, texts.date_text(datetime.fromisoformat(when).astimezone()))
             except (TypeError, ValueError, OverflowError, OSError):
-                self._hint = LAST_USED_UNDATED_TEXT.format(last)
+                self._hint = LAST_USED_UNDATED_TEXT.format(found)
         self._read_the_plan_shown()
         self._draw_the_plans_block()
 
@@ -719,6 +729,7 @@ class ConfigPanel(StepPage):
     def _plan_chosen(self, _index: int = 0) -> None:
         """Another plan chosen in the list: it is read, so that what it holds or why it cannot be used is said. The
         forms do not change."""
+        self._gone = None
         if not controller().is_live():
             self._read_the_plan_shown()
         self.redraw()
@@ -738,8 +749,9 @@ class ConfigPanel(StepPage):
         listed = self.plan_choice.currentData()
         row.set_origin(self._hint if listed is None else "")
         in_use = source.name if source is not None and source.kind == "plan" else None
-        held = self._in_use_words(source)
-        row.set_line("warn" if listed != in_use else "", CHANGED_TEXT.format(held) if listed != in_use else "")
+        gone = in_use is not None and listed is None and self._gone == in_use
+        held, changed = self._in_use_words(source), listed != in_use and not gone
+        row.set_line("warn" if changed else "", CHANGED_TEXT.format(held) if changed else "")
         self.plan_in_use.set_text(IN_USE_TEXT.format(held))
         refused = isinstance(shown, engine_plans.PlanRefusal)
         held = shown if isinstance(shown, engine_plans.Plan) else None
@@ -748,13 +760,14 @@ class ConfigPanel(StepPage):
         self.plan_trouble.set_sentence(shown.message if refused else "")
         self.plan_trouble.setVisible(refused)
         problems = list(shown.problems) if refused else []
+        whole = len(problems) if len(problems) <= PROBLEMS_SHOWN + 1 else PROBLEMS_SHOWN
         for at, line in enumerate(self.plan_problems):
-            if at < PROBLEMS_SHOWN and at < len(problems):
+            if at < whole:
                 said = problems[at].message
                 line.setText(_may_wrap(said if len(said) <= PROBLEM_MOST else said[:PROBLEM_MOST - 1] + "…"))
                 line.setVisible(True)
-            elif at == PROBLEMS_SHOWN and len(problems) > PROBLEMS_SHOWN:
-                line.setText(_counted(len(problems) - PROBLEMS_SHOWN, MORE_ONE_TEXT, MORE_TEXT))
+            elif at == PROBLEMS_SHOWN and len(problems) > whole:
+                line.setText(MORE_TEXT.format(len(problems) - whole))
                 line.setVisible(True)
             else:
                 line.setVisible(False)
@@ -764,9 +777,9 @@ class ConfigPanel(StepPage):
         else:
             self.holds_table.setVisible(False)
             self.holds_button.setIcon(painted_icon("chev_right"))
-        self.fill_button.setText(USUAL_WORDS if listed is None else FILL_WORDS)
-        self.fill_button.setEnabled(not refused)
-        self.fill_reason.setText(FILL_BLOCKED_TEXT if refused else "")
+        self.fill_button.setText(USUAL_WORDS if listed is None and not gone else FILL_WORDS)
+        self.fill_button.setEnabled(not refused and not gone)
+        self.fill_reason.setText(FILL_BLOCKED_TEXT if refused else FILL_GONE_TEXT if gone else "")
         values, _remarks, wrong = self._to_save()
         nothing = not values and not wrong
         self.save_button.setEnabled(not nothing)
@@ -775,10 +788,14 @@ class ConfigPanel(StepPage):
 
     @staticmethod
     def _in_use_words(source) -> str:
-        """The source in use as "In use: …" names it: "no plan", "plan retrain, filled 6 Oct 2026, 12:04"."""
+        """The source in use as "In use: …" names it: "no plan", "plan retrain, filled 6 Oct 2026, 12:04", with no
+        moment for a source that keeps none."""
         if source is None:
             return NO_PLAN_WORDS
-        when = texts.date_text(source.at) if source.at is not None else ""
+        if source.at is None:
+            return PLAN_WORDS.format(source.name) if source.kind == "plan" else SOURCE_WORDS.format(source.kind,
+                                                                                                    source.name)
+        when = texts.date_text(source.at)
         if source.kind == "plan":
             return PLAN_FILLED_WORDS.format(source.name, when)
         return SOURCE_FILLED_WORDS.format(source.kind, source.name, when)

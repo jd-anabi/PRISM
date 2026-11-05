@@ -221,7 +221,8 @@ class Ask(QDialog):
     def _line(self, label: str, text: str) -> QVBoxLayout:
         """The one labelled field and, under it, the place for what is wrong with the line: as wide as the question's
         text, so that a sentence wraps there and never widens the question, and holding its line's height while nothing
-        is wrong, so that the question does not jump as the line is judged."""
+        is wrong, so that the question does not jump as the line is judged, at the text sizes where a rule's sentence
+        takes one line."""
         scaled = design.scaled
         block = QVBoxLayout()
         block.setSpacing(scaled(design.GAP["field_message"]))

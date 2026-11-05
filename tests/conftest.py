@@ -93,8 +93,10 @@ def _no_plans_written(tmp_path_factory):
     is saved), and a plan the person saved before the run is kept here as it stands and does no harm; a folder that
     appears fails the run, and so does a plan saved by hand while the run is going. The listing is
     tests/_settings_folder.py's and the check is ``check_plans_kept`` above. For the session the window's folder of
-    plans is one of the session's own, empty, so that a window built by any test lists and writes there, and the real
-    one is never read; it is put back at the end."""
+    plans is one of the session's own, empty, so that a window built by any test lists there, and the real one is never
+    read; it is put back at the end, and it must hold nothing then: a test that writes a plan binds a folder of its own
+    with ``monkeypatch``, which puts this one back as the test ends, and ``_streams_put_back`` fails a test that left
+    another bound."""
     from core import config
     from core.gui import plans
     from tests import _settings_folder
@@ -102,11 +104,14 @@ def _no_plans_written(tmp_path_factory):
     held = _settings_folder.listing(folder)
     kept = {path: Path(path).read_bytes() for path in held or () if Path(path).is_file()}
     real, plans.PLAN_FOLDER = plans.PLAN_FOLDER, tmp_path_factory.mktemp("plans")
+    session = plans.PLAN_FOLDER
     try:
         yield
     finally:
         plans.PLAN_FOLDER = real
     check_plans_kept(folder, held, kept)
+    written = sorted(str(path.relative_to(session)) for path in session.rglob("*"))
+    assert not written, f"the suites' own folder of plans was written to: {written}"
 
 
 @pytest.fixture
@@ -344,15 +349,21 @@ def _streams_put_back():
     """A test that binds the standard streams to a window's log, as the entry point does when PRISM starts with no
     console, and leaves them bound FAILS here, once they are put back and the streams the test began with are in
     force again: left bound, every later test's output, the toolkit's messages among it, would go to that test's
-    file."""
+    file. So does a test that leaves the window's folder of plans bound to another than the one it began with, the
+    session's, once that one is put back: left bound, every later window would list and write the plans there."""
     import sys
     from core.gui import __main__ as entry
     began = (sys.stdout, sys.stderr)
+    plans = sys.modules.get("core.gui.plans")
+    folder = None if plans is None else plans.PLAN_FOLDER
     yield
     if getattr(entry, "_bound", None) is not None:
         entry.unbind_streams()
         sys.stdout, sys.stderr = began
         pytest.fail("the test ended with the standard streams bound to a window's log, now put back")
+    if plans is not None and plans.PLAN_FOLDER != folder:
+        plans.PLAN_FOLDER = folder
+        pytest.fail("the test ended with the window's folder of plans bound to another, now put back")
 
 
 @pytest.fixture(autouse=True)

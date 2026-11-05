@@ -1118,6 +1118,10 @@ def test_the_picker_opens_on_no_plan_and_says_what_was_last_used(tmp_path, monke
         "Last used: retrain")
     assert opened({LAST_USED_KEY.format("nadrowski"): "", LAST_USED_AT_KEY.format("nadrowski"): ""})[1] == ""
     assert opened({LAST_USED_KEY.format("hopf"): "retrain"})[1] == ""
+    plans_of = tmp_path / "plans" / "nadrowski"
+    (plans_of / "retrain.txt").rename(plans_of / "Retrain.txt")
+    assert opened({LAST_USED_KEY.format("nadrowski"): "retrain", LAST_USED_AT_KEY.format("nadrowski"): used.isoformat()
+                   })[1] == "Last used: Retrain, 5 Oct 2026, 14:02", "a plan renamed in another case was said gone"
     page.model_combo.setCurrentText("HOPF")
     page.read_facts()
     assert page.form.rows["plan"].origin.text().replace(BREAK, "") == "Last used: retrain (the file is no longer there)"
@@ -1154,7 +1158,7 @@ def test_a_fill_starts_nothing_applies_nothing_and_replaces_no_session(tmp_path,
     """A fill asks nothing more than whether to replace what was typed, starts no run, applies no step and replaces no
     session: what the steps hold are the very objects they were, and the records picked in the lists stay picked. The
     forms the fill changed now differ from what step 1 and step 2 hold, and the rows that compare them say so: "Changed,
-    not applied" under the kind of observation and the bounds file, in the rail and on Home."""
+    not applied" under the kind of observation and the bounds file, in the rail and in the chain Home reads."""
     from types import SimpleNamespace
     from core.config import BOUNDS_PATH
     from core.gui import chain
@@ -1436,9 +1440,10 @@ def test_a_plans_bounds_file_gone_by_the_apply_is_said_in_the_plans_words(tmp_pa
 
 def test_the_windows_two_checks_are_listed_as_the_readers_are(tmp_path, monkeypatch):
     """Two checks need more than the file: its bounds file is in the model's own folder, judged against that folder's
-    listing, so that a name in another case, which Windows would find, is refused as the list would not select it; and
-    its units resolve. Each is a problem of the plan, in the reader's own form, under the refusal's own sentence, its
-    field the plan. A plan the reader refuses is refused with the reader's problems alone."""
+    listing, so that a name in another case, which Windows would find, is refused as the list would not select it, and
+    said to stand there in other capitals; and its units resolve. Each is a problem of the plan, in the reader's own
+    form, under the refusal's own sentence, its field the plan. A plan the reader refuses is refused with the reader's
+    problems alone."""
     from core import plans as engine_plans
     from core.config import BOUNDS_PATH
     from core.gui import plans as window_plans
@@ -1456,7 +1461,8 @@ def test_the_windows_two_checks_are_listed_as_the_readers_are(tmp_path, monkeypa
     with pytest.raises(engine_plans.PlanRefusal) as refused:
         window_plans.read_checked(folder / "case.txt", bounds_folder=bounds)
     assert [problem.message for problem in refused.value.problems] == [
-        "The bounds file MASTER.TXT is not in this model's bounds folder."]
+        "The bounds file MASTER.TXT is not in this model's bounds folder; master.txt is. A plan names its file with "
+        "the same capitals."]
     assert window_plans.read_checked(_plan(folder, "# Prior\nbounds = master.txt\n", "fine"),
                                      bounds_folder=bounds).values == {("Prior", "bounds"): "master.txt"}
     with pytest.raises(engine_plans.PlanRefusal) as refused:
@@ -1793,7 +1799,7 @@ def test_no_plan_is_read_while_a_run_is_live(tmp_path, monkeypatch, store):
     assert calls == [] and _listed(page) == listed, calls
     stand_in.release()
     turn_until(app, lambda: not controller().is_live())
-    assert calls.count("file_sha") >= 1 and "list_plans" in calls and "save_plan" not in calls, calls
+    assert (calls.count("file_sha"), calls.count("list_plans"), calls.count("save_plan")) == (1, 1, 0), calls
     assert window_plans.PLAN_FOLDER == tmp_path / "plans"
 
 
@@ -1988,7 +1994,7 @@ def test_saving_never_replaces_without_asking(tmp_path, monkeypatch, store):
 
 def test_nothing_to_save_greys_the_button_with_its_reason(tmp_path, monkeypatch, store):
     """With every setting at its usual value and no bounds file selected there is nothing to write: the button is greyed
-    and says why beside it, at once as the forms change on any step."""
+    and says why beside it, as the forms change on step 1, and on another step when step 1 is shown again."""
     window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch)
     assert not page.save_button.isEnabled()
     assert page.save_reason.text() == "Every setting is at its usual value, so there is nothing to save."
@@ -2197,6 +2203,174 @@ def test_the_saved_line_goes_at_the_next_plan_press(tmp_path, monkeypatch, store
     assert not page.in_use.said.isHidden()
     _press_fill(page, monkeypatch, "retrain", answer="Fill the forms")
     assert page.in_use.said.isHidden(), page.in_use.said.sentence.plain_text()
+
+def test_a_plan_in_use_whose_file_is_gone_is_said_by_its_fact_alone(tmp_path, monkeypatch, store):
+    """The plan in use's file removed, the list falls back to "No plan" at its next reading, and no line says the list
+    was changed: the Attention fact says why, and the fill button stays the plan's, greyed with its reason. The file
+    back, the list shows the plan again. A choice the person makes in the list, with the list shut too, is said as
+    before."""
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN, "another": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    kept = (folder / "retrain.txt").read_bytes()
+    (folder / "retrain.txt").unlink()
+    page.read_facts()
+    row = page.form.rows["plan"]
+    assert (page.plan_choice.currentText(), row.line.words) == ("No plan", ""), row.line.words
+    assert (page.fill_button.text(), page.fill_button.isEnabled(), page.fill_reason.text()) == (
+        "Fill the forms from this plan", False, "The plan in use is no longer in the plans folder.")
+    assert _facts(page)[-1].startswith("Attention. retrain.txt is no longer in the plans folder."), _facts(page)
+    (folder / "retrain.txt").write_bytes(kept)
+    page.read_facts()
+    assert (page.plan_choice.currentText(), row.line.words, page.fill_button.isEnabled()) == ("retrain", "", True)
+    (folder / "retrain.txt").unlink()
+    page.read_facts()
+    page.plan_choice.setCurrentIndex(page.plan_choice.findData("another"))   # with the arrow keys, the list shut
+    page.plan_choice.setCurrentIndex(0)
+    assert row.line.words.startswith("Changed, not applied. In use: plan retrain"), row.line.words
+    assert (page.fill_button.text(), page.fill_button.isEnabled()) == ("Return the forms to the usual values", True)
+
+
+def test_nine_problems_are_said_whole_and_ten_counted_after_eight(tmp_path, monkeypatch, store):
+    """A plan of nine problems has them all said: a line that would count one more says it instead. Ten are eight said
+    and the rest counted."""
+    nine = "\n".join(["# Training"] + [f"note {at}" for at in range(9)])
+    ten = "\n".join(["# Training"] + [f"note {at}" for at in range(10)])
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"nine": nine, "ten": ten})
+    _choose(page, "nine")
+    shown = [_said(line) for line in page.plan_problems if not line.isHidden()]
+    assert len(shown) == 9 and shown[-1] == (
+        "line 10: 'note 8' is not a setting line. Write name = value under a heading."), shown
+    _choose(page, "ten")
+    shown = [_said(line) for line in page.plan_problems if not line.isHidden()]
+    assert len(shown) == 9 and shown[-1] == "And 2 more.", shown
+
+
+def test_a_source_with_no_moment_says_none(tmp_path, monkeypatch, store):
+    """A source that keeps no moment of its fill is named without one: "In use", the line under the list, and the
+    Attention fact of its file removed say no ", filled …" and no "on …"."""
+    from core.gui import plans as window_plans
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    path = folder / "retrain.txt"
+    screen.take_plan(window_plans.PlanSource("plan", "retrain", path, window_plans.file_sha(path, {}), None,
+                                             {("Training", "num_runs"): 10000}))
+    page.redraw()
+    assert _said(page.plan_in_use) == "In use: plan retrain.", _said(page.plan_in_use)
+    assert page.form.rows["plan"].line.words == "Changed, not applied. In use: plan retrain."
+    changed = window_plans.PlanSource("record", "retrain_posterior", None, "", None, {}, ident="20261008T120400")
+    screen.take_plan(changed)
+    page.redraw()
+    assert _said(page.plan_in_use) == "In use: settings from record retrain_posterior."
+    screen.take_plan(window_plans.PlanSource("plan", "retrain", path, "a" * 64, None,
+                                             {("Training", "num_runs"): 10000}))
+    path.unlink()
+    page.read_facts()
+    assert _facts(page)[-1] == (
+        "Attention. retrain.txt is no longer in the plans folder. The forms hold the values filled from it.")
+    path.write_text("# Training\nnum_runs = 9000\n", encoding="utf-8")
+    page.read_facts()
+    assert _facts(page)[-1] == ("Attention. retrain.txt has been changed since its settings were filled in. The forms "
+                                "hold the earlier values; fill again to take the changes.")
+
+
+def test_the_training_reads_the_rotation_step_one_holds(tmp_path, monkeypatch, store):
+    """Training's "Before you start" reads step 1 as step 1 holds it: the rotation and the units changed on step 1's
+    form, not applied, are no departure of the training's run."""
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    page.foot.main_button.click()
+    training = screen.posterior_panel
+    training.redraw()
+    held = _plan_fact(training)
+    page.rot_choice.setCurrentIndex(page.rot_choice.findData(False))
+    page.units_choice.setCurrentIndex(page.units_choice.findData("typed"))
+    page.units_text.setText("kHz ms nm pN")
+    training.redraw()
+    assert held.startswith("Information. Plan retrain"), held
+    assert _plan_fact(training) == held, (held, _plan_fact(training))
+
+
+def test_the_rotations_three_are_no_departure_while_unused(tmp_path, monkeypatch, store):
+    """With the rotation off in the configuration held, Training's run reads none of the rotation's three settings: one
+    set off its usual value is no departure."""
+    from types import SimpleNamespace
+    from core.config import BOUNDS_PATH
+    from core.gui.session import SbiSession
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch)
+    page.foot.main_button.click()
+    cfg = SimpleNamespace(model="NADROWSKI", sources={"bounds": str(BOUNDS_PATH / "nadrowski" / "master.txt")},
+                          params_dict={}, rescale_params={}, force_params_dict={}, observation_mode="spontaneous",
+                          check_unit_consistency=lambda: [], reparam_rotate=False)
+    prior = SimpleNamespace(kind="prior", id="p_old", name="old_prior", manifest=None)
+    screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior)
+    screen.refresh_gates()
+    training = screen.posterior_panel
+    training.form.rows["fisher_m"].set_value(32)
+    training.redraw()
+    assert _plan_fact(training) == "Information. No plan. Every setting is at its usual value.", _plan_fact(training)
+
+
+def test_the_driven_three_are_no_departure_with_the_kind_off(tmp_path, monkeypatch, store):
+    """With the spontaneous kind on step 1's form, a run reads none of the driven recordings' settings: one set off its
+    usual value is no departure."""
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch)
+    page.form.rows["chi_n_freqs"].set_value(4)
+    page.redraw()
+    assert page.form.rows["chi_n_freqs"].value() == 4 and page.kind_choice.currentData() is False
+    assert _plan_fact(page) == "Information. No plan. Every setting is at its usual value.", _plan_fact(page)
+
+
+def test_the_saved_view_of_step_two_reads_none_of_the_seven(tmp_path, monkeypatch, store):
+    """Step 2's build reads its seven settings and a load reads none: one set off its usual value is a departure in the
+    build view and none in the saved view."""
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch)
+    page.foot.main_button.click()
+    prior = screen.prior_panel
+    prior.show_view("build")
+    prior.form.rows["num_iterations"].set_value(30)
+    prior.redraw()
+    built = _plan_fact(prior)
+    prior.show_view("saved")
+    prior.redraw()
+    assert built.startswith("Information. No plan. 1 setting differs from the usual: Sweep rounds 30"), built
+    assert _plan_fact(prior) == "Information. No plan. Every setting is at its usual value.", _plan_fact(prior)
+
+
+def test_a_plan_under_the_inputs_is_recorded_by_its_path_under_them(tmp_path, monkeypatch, store):
+    """A plan that stands under the inputs is recorded by its path there, as the other inputs are."""
+    from core import config
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    monkeypatch.setattr(config, "RESOURCES_ROOT", tmp_path)
+    assert screen.plan_entry()["path"] == "plans/nadrowski/retrain.txt", screen.plan_entry()
+
+
+def test_a_trainings_start_writes_the_keys_of_the_model_held(tmp_path, monkeypatch, store):
+    """A training's start writes the plan last used with the model step 1 holds, never the model the form shows: with
+    another model shown, that model's hint is left as it was."""
+    from core.gui import settings
+    from core.gui.remembered import LAST_USED_KEY
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    page.foot.main_button.click()
+    page.model_combo.setCurrentText("HOPF")
+    _a_training_starts(screen, monkeypatch, tmp_path)
+    qs = settings.settings()
+    qs.sync()
+    assert (qs.value(LAST_USED_KEY.format("nadrowski")), qs.value(LAST_USED_KEY.format("hopf"))) == ("", None), (
+        qs.value(LAST_USED_KEY.format("nadrowski")), qs.value(LAST_USED_KEY.format("hopf")))
+
+
+def test_two_plans_alike_in_moment_and_size_keep_their_own_hashes(tmp_path):
+    """Two plan files of the same moment and size, as a copy on a coarse file system makes them, are read for their own
+    hashes."""
+    import os
+    from core.gui import plans as window_plans
+    one = _plan(tmp_path, "# Training\nnum_runs = 7000\n", "one")
+    two = _plan(tmp_path, "# Training\nnum_runs = 8000\n", "two")
+    moment = os.stat(one).st_mtime_ns
+    os.utime(two, ns=(moment, moment))
+    cache = {}
+    assert window_plans.file_sha(one, cache) != window_plans.file_sha(two, cache)
 
 def test_a_models_plans_are_listed_and_a_taken_name_is_found_without_case(tmp_path):
     """The plans of a model's folder, one folder for each model in lower case, are its .txt files, a suffix in capitals

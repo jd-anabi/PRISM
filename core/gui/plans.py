@@ -15,8 +15,8 @@ by the inference screen, which outlives the session a step 1 applied replaces.
 A page hands the plan code its rows through ``plan_fields``, each with ``value``, ``set_value``, ``usual``,
 ``set_origin``, ``label_text`` and ``kept``, and says through ``plan_read`` what its run reads: the values of its own
 form, or, for a step the page's run follows, what that step holds. Nothing here reads the disk but ``list_plans``,
-``read_checked``, ``save_plan``, ``taken`` and ``file_sha``, and a page calls them only at its readings and its presses,
-never while a run is live.
+``read_checked``, ``save_plan``, ``taken`` and ``file_sha``, and ``plan_path`` and ``bounds_key``, which only those and
+the page's readings call; a page calls them only at its readings and its presses, never while a run is live.
 """
 import hashlib
 import os
@@ -54,6 +54,8 @@ FILLED = tuple(HEADING_OF.values())
 NAME_RULE = re.compile(r"[A-Za-z0-9_-]{1,40}")
 NAME_TEXT = "A plan's name is letters, digits, _ and -, at most 40 characters."
 NOT_IN_FOLDER_TEXT = "The bounds file {} is not in this model's bounds folder."
+OTHER_CASE_TEXT = ("The bounds file {} is not in this model's bounds folder; {} is. A plan names its file with the "
+                   "same capitals.")
 UNITS_TEXT = "The units are not usable: {}"
 #: What the plan line under each heading says.
 NO_PLAN = "No plan"
@@ -76,6 +78,10 @@ DEPARTURE = "{} {} ({} {})"
 CHANGED_FILE_TEXT = ("{} has been changed since its settings were filled in on {}. The forms hold the earlier values; "
                      "fill again to take the changes.")
 GONE_FILE_TEXT = "{} is no longer in the plans folder. The forms hold the values filled from it on {}."
+#: The two, for a source that keeps no moment of its fill.
+CHANGED_UNDATED_TEXT = ("{} has been changed since its settings were filled in. The forms hold the earlier values; "
+                        "fill again to take the changes.")
+GONE_UNDATED_TEXT = "{} is no longer in the plans folder. The forms hold the values filled from it."
 #: How a value that has none of its own is said.
 BLANK = "blank"
 NONE_WORDS = "none"
@@ -165,13 +171,26 @@ def bounds_key(name: str, folder) -> "str | None":
     return next((entry for entry in file_manager.list_dir(str(folder)) if entry.replace("\\", "/") == name), None)
 
 
+def _in_another_case(name: str, folder) -> "str | None":
+    """The one file of the folder's listing whose name differs from ``name`` only in case, with forward slashes; None
+    when there is none, or more than one."""
+    folder = Path(folder)
+    if not folder.is_dir():
+        return None
+    found = [entry.replace("\\", "/") for entry in file_manager.list_dir(str(folder))
+             if entry.replace("\\", "/").casefold() == name.casefold()]
+    return found[0] if len(found) == 1 else None
+
+
 def window_problems(values: dict, *, bounds_folder) -> list:
     """The two checks that take more than a plan's text, on its ``values``: its bounds file stands in
     ``bounds_folder``, the model's own, and its units resolve. Each problem in the reader's form, in that order."""
     problems = []
     bounds = values.get(("Prior", "bounds"))
     if bounds is not None and bounds_key(bounds, bounds_folder) is None:
-        problems.append(engine_plans.PlanProblem(None, "Prior", "bounds", NOT_IN_FOLDER_TEXT.format(bounds)))
+        other = _in_another_case(bounds, bounds_folder)
+        said = NOT_IN_FOLDER_TEXT.format(bounds) if other is None else OTHER_CASE_TEXT.format(bounds, other)
+        problems.append(engine_plans.PlanProblem(None, "Prior", "bounds", said))
     units = values.get(("Model and options", "units"))
     if units is not None:
         try:
@@ -456,11 +475,13 @@ def plan_facts(screen, headings: Sequence[str]) -> tuple[Fact, ...]:
     facts = [Fact("info", sentence)]
     state = getattr(screen, "plan_file", UNREAD)
     if source.kind == "plan" and state is not UNREAD and source.path is not None:
-        when = texts.date_text(source.at) if source.at is not None else ""
+        when, name = (texts.date_text(source.at) if source.at is not None else None), source.path.name
         if state is None:
-            facts.append(Fact("warn", GONE_FILE_TEXT.format(source.path.name, when)))
+            facts.append(Fact("warn", GONE_UNDATED_TEXT.format(name) if when is None
+                              else GONE_FILE_TEXT.format(name, when)))
         elif state != source.sha256:
-            facts.append(Fact("warn", CHANGED_FILE_TEXT.format(source.path.name, when)))
+            facts.append(Fact("warn", CHANGED_UNDATED_TEXT.format(name) if when is None
+                              else CHANGED_FILE_TEXT.format(name, when)))
     return tuple(facts)
 
 
