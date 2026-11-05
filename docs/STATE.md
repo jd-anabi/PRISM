@@ -1,7 +1,41 @@
 # PRISM — state
 
-**Last updated:** 2026-11-05, just after midnight (00:43 by the clock; the weekly bar 73 %, resetting on 8 November at 04:00 UTC):
-STAGE 4'S BUILD STANDS WITH TASKS 0 TO 12 COMPLETE. The session started on 3 November from
+**Last updated:** 2026-11-05, the afternoon (15:54 by the clock; the weekly bar 80 %, resetting on 8 November at 04:00 UTC,
+20:00 on 7 November PST): STAGE 4'S BUILD STANDS WITH TASKS 0 TO 13 COMPLETE. The session started on 5 November at 09:26 from
+`docs/superpowers/prompts/2026-11-05-window-redesign-stage-4-build-from-task-13.md` and built Task 13. It stopped before Task 14
+by the usage rule: Task 14 is the stage's largest (four commits) and at Task 13's cost would end near 90 % of the weekly bar.
+
+- **Task 13, Home's "Continue with these":** `b01da9f`..`b51a27f` (departures `b01da9f`; the build `aa11212`, `5487921`,
+  `e7508da`; the fix round's departures `748cd4f`, the round `e631d8a` and `b51a27f`, a blank line the round's commit had left
+  out, by ruling a commit of its own rather than an amend). The first commit carried Task 12's last reader's seven Minors (the
+  usual values let a gone plan go; a plan's waiting file in its own folder is no change). Then a chain of loads that goes on
+  only when each load has ended (`core/gui/load_chain.py`), step 1 applied by code with the plan filled once the model stands,
+  and Home's "Continue with these": what was in use last time read from the settings file, each pick left out when its load
+  would be refused, named in one sentence, loaded with one press while Home stays in sight. Departures 287 to 306.
+- **The reviews found:** seat two, one Important (after the press filled a plan, step 1's list stood on "No plan" under
+  "Changed, not applied"); seat three, five Important test gaps (eleven of its fourteen faults green: every reading and press
+  tested with Nadrowski alone; the model on the form never read back; the press's plan source unpinned; one chain at a time
+  pinned only while a load was live; step 1's list never read after the press). One fix round built them all, with a
+  posterior of other slots or lock-in limit no longer named, Windows' end of a session ending a chain, and a double-click on
+  Home's main button pressing it once; its reader CLEAN.
+- **The gate:** 3317 passed, 10 skipped, 5 deselected, 3332 collected, 34 min 2 s, at `b51a27f`. The real-screen set: 10 passed
+  at `e7508da`; at `b51a27f` 9 passed and 1 skipped (the keep-awake check skips by design while another program keeps the
+  computer awake; its suite untouched). No engine file opened; `FIT_CODE` untouched; `Artifacts/` 428 entries, the listing
+  identical before and after every gate; no `Resources/Plans`; `PRISM.ini` unchanged. The carried-over list: 1530 rows,
+  missing 0, gone 59.
+- **For the owner at the exit, new from Task 13** (`.superpowers/.../stage-4/briefs/task-14-carried.md` lists each): proposal 1,
+  ask before the press sets values typed and not applied (it touches the owner's "the press asks nothing"); the new words of
+  289 and 292; what a person meets in 288, 291, 293, 295, 297, 298, 301 to 304; a prior on a bounds file of another name left
+  out though it would load; Enter pressed twice on Home's button opens the run page; G11's Home half.
+- **Measured:** Task 13 about 7 points of the weekly bar (73 % to 80 %). Two slips, each a python of milliseconds while a
+  suite ran (the controller's ledger script, the skeptic's `print(1)`), each harmless and in the ledger.
+
+NEXT: Task 14, Continue and Resume after a reopening, in a new chat the owner starts after the weekly reset from
+`docs/superpowers/prompts/2026-11-05-window-redesign-stage-4-build-from-task-14.md`; its skeptic's dispatch is written
+(`stage-4/briefs/task-14-skeptic-dispatch.md`). Then the last review, then Task 15, the exit.
+
+What follows is the head as the early hours of 5 November left it (00:43 by the clock; the weekly bar 73 %):
+STAGE 4'S BUILD STOOD WITH TASKS 0 TO 12 COMPLETE. The session started on 3 November from
 `docs/superpowers/prompts/2026-11-03-window-redesign-stage-4-build-from-task-10.md` and built Tasks 10, 11 and 12.
 
 - **Task 10, step 3, "Training", its form and "Before you start":** `c5fb62a`..`f672835` (the build `87b2b59`, `436e31b`,
@@ -38,9 +72,9 @@ STAGE 4'S BUILD STANDS WITH TASKS 0 TO 12 COMPLETE. The session started on 3 Nov
   19 to 21. The next prompt lists each.
 - **Measured:** Task 10 about 8 points of the weekly bar, Task 11 about 8, Task 12 about 7 (two fix rounds).
 
-NEXT: Task 13, Home's "Continue with these", then Task 14, Continue and Resume after a reopening, in a new chat the owner starts from
-`docs/superpowers/prompts/2026-11-05-window-redesign-stage-4-build-from-task-13.md`. That prompt lists what is carried to each
-task. The ledger's section "Stage 4 — … (build of …)" is the record.
+NEXT then: Task 13, Home's "Continue with these", then Task 14, Continue and Resume after a reopening, in a new chat the owner
+started from `docs/superpowers/prompts/2026-11-05-window-redesign-stage-4-build-from-task-13.md`. That prompt lists what is
+carried to each task. The ledger's section "Stage 4 — … (build of …)" is the record.
 
 What follows is the head as the afternoon of 3 November left it (15:32 by the clock; the weekly bar 50 %):
 STAGE 4'S BUILD STOOD WITH TASKS 0 TO 9 COMPLETE. The session started on 2 November from
