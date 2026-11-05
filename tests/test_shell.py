@@ -8146,6 +8146,7 @@ def test_a_double_click_on_continue_with_these_does_what_one_click_does(store, t
             held_down = Qt.NoButton if kind == QEvent.MouseButtonRelease else Qt.LeftButton
             QApplication.sendEvent(button, QMouseEvent(kind, inside, QPointF(button.mapToGlobal(inside.toPoint())),
                                                        Qt.LeftButton, held_down, Qt.NoModifier))
+
     assert button.text() == "&Continue with these"
     mouse(QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick, QEvent.MouseButtonRelease)
     turn_until(app, prior_load.started.is_set)
