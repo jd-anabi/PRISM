@@ -1,7 +1,49 @@
 # PRISM — state
 
-**Last updated:** 2026-11-03, afternoon (15:32 by the clock; the weekly bar 50 %, resetting on 8 November at 04:00 UTC):
-STAGE 4'S BUILD STANDS WITH TASKS 0 TO 9 COMPLETE. The session started on 2 November from
+**Last updated:** 2026-11-05, just after midnight (00:43 by the clock; the weekly bar 73 %, resetting on 8 November at 04:00 UTC):
+STAGE 4'S BUILD STANDS WITH TASKS 0 TO 12 COMPLETE. The session started on 3 November from
+`docs/superpowers/prompts/2026-11-03-window-redesign-stage-4-build-from-task-10.md` and built Tasks 10, 11 and 12.
+
+- **Task 10, step 3, "Training", its form and "Before you start":** `c5fb62a`..`f672835` (the build `87b2b59`, `436e31b`,
+  `afa8eeb`, `8475e49`; one fix round `6573078`..`f672835`). The first commit closed Task 9's three test gaps on Prior and held
+  every window a test drops until the test ends (a run's worker had met a window the collector of cycles deleted). The page
+  reads each of its inputs where the run reads it, a resume hands "auto" where the call held "never", and "In use" judges by
+  the call's name. Departures 232 to 246. The owner's answer during its gate, "Yes, ignore it": a box that opens after a press
+  ignores a held Enter (247).
+- **Task 11, step 3 finished:** `079ff50`..`f34d7df` (the build `896a418`, `620612a`, `d5ab84c`, `cea1b75`; one fix round
+  `e3ae6ef`, `06de3d5`, `f34d7df`). A box answers only Enter pressed afresh (in the focus ring's follower), a saved set's
+  differences by name on screen and the question before simulating from zero, the load view, the choice of a kept training
+  before a new one starts (the owner's 153), step 3 following a posterior a narrowing round puts in use. Departures 247 to 262.
+  The owner's answer "Yes, with Records": Windows' own Save window waits for Enter to be let go, built with Records' rebuild in
+  stage 6 (256).
+- **Task 12, plans in the window:** `ea8e93d`..`a911572` (the build `08ce687`, `875c7d8`, `3f02212`; a fix round `dac96d3`,
+  `531a7f3`, `bfaa3c0`; a second `ef4a9f5`, `a911572`). Step 1's list of plans (read as it opens, never while a run is live,
+  capped, a notes file's problems capped at eight), the fill of steps 1 to 3 that changes the forms and nothing else, where each
+  value came from beside every row, the plan line, the plan's fact in each step's "Before you start", the save (only what
+  differs, read back, held to the window's checks, a failing write told), the run's history and the plan last used, a plan's
+  bounds file that waits for its model and goes with its plan, names matched as Windows' are said as such. Departures 263 to 286.
+- **The reviews found:** Task 12's three seats found 8 Important points (step 2's facts naming a waiting file the build would
+  not read; a failing write reaching the last-resort box; a name in another case refused with a sentence Explorer contradicts;
+  a waiting file outliving its plan; and four sets of test gaps: twelve of seat three's sixteen faults green, because every plan
+  the tests wrote matched what the forms held); the fix round's reader found one more (two models' files of one name). Each
+  was built in a fix round of its own.
+- **The gate:** 3226 passed, 10 skipped, 5 deselected, 3241 collected, 33 min 5 s, at `a911572`. No engine file was opened; `FIT_CODE` untouched; `Artifacts/` 428 entries, the listing
+  identical before and after every gate, no `fits/`; no `Resources/Plans`; `PRISM.ini` unchanged. The real-screen set reads 10;
+  none was owed in Tasks 10 to 12 (no display-marked test, no start-up path). The carried-over list: 1488 rows, missing 0.
+- **For the owner at the exit, new from these tasks:** the new words of departures 233, 234, 249 to 251, 264, 265, 268, 269 and
+  279 to 282; pictures of "usual" beside every row a plan fills and of "Show all" on each of steps 1 to 3 in the low window;
+  "Cannot start yet:" on a block no waiting lifts; A to B to A on step 1's form lets the plan go; a session guard on opening a
+  folder (a small task on the owner's yes); three `CLAUDE.md` clauses (the plan picker is never stored; `_no_plans_written`
+  among the guards; `_streams_put_back` also fails a test that left the plans folder bound). The code audit's list gains items
+  19 to 21. The next prompt lists each.
+- **Measured:** Task 10 about 8 points of the weekly bar, Task 11 about 8, Task 12 about 7 (two fix rounds).
+
+NEXT: Task 13, Home's "Continue with these", then Task 14, Continue and Resume after a reopening, in a new chat the owner starts from
+`docs/superpowers/prompts/2026-11-05-window-redesign-stage-4-build-from-task-13.md`. That prompt lists what is carried to each
+task. The ledger's section "Stage 4 — … (build of …)" is the record.
+
+What follows is the head as the afternoon of 3 November left it (15:32 by the clock; the weekly bar 50 %):
+STAGE 4'S BUILD STOOD WITH TASKS 0 TO 9 COMPLETE. The session started on 2 November from
 `docs/superpowers/prompts/2026-11-02-window-redesign-stage-4-build-from-task-7.md` and built Tasks 7, 8 and 9.
 
 - **Task 7, the page's pieces:** `2480058`..`d72b3b8` (the build to `4db67b0`, two fix rounds). The step page, the form with its
