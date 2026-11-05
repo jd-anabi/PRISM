@@ -2924,6 +2924,23 @@ def test_a_test_that_began_with_no_application_is_held_to_a_new_ones_font(reques
         app.setFont(_font(began))
 
 
+def test_a_test_that_leaves_the_folder_of_plans_bound_to_another_fails(request, tmp_path):
+    """A test whose body binds the window's folder of plans to another by assignment, and leaves it so, fails at its
+    end, once the folder it began with is in force again."""
+    from core.gui import plans
+    began = plans.PLAN_FOLDER
+    around_a_test = _guards(request)._streams_put_back.__wrapped__     # the function the fixture was made from
+    test = around_a_test()
+    next(test)
+    plans.PLAN_FOLDER = tmp_path
+    try:
+        with pytest.raises(pytest.fail.Exception, match="the window's folder of plans bound to another, now put back"):
+            next(test)
+        assert plans.PLAN_FOLDER == began, "the folder the test began with is not in force again"
+    finally:
+        plans.PLAN_FOLDER = began
+
+
 def _font(words: str):
     """A font as its words say it."""
     from PySide6.QtGui import QFont
@@ -2989,6 +3006,24 @@ def test_a_test_that_ends_with_a_windows_request_standing_fails(request):
              for path in sorted((REPO / "core").rglob("*.py"))}
     assert {path: calls for path, calls in named.items() if calls} == {
         "core/gui/this_computer.py": list(_WINDOWS_CALLS)}, "a file under core/ but this_computer.py calls Windows"
+
+
+def test_a_plan_written_into_the_suites_own_folder_fails_the_session(request, tmp_path, monkeypatch):
+    """The folder of plans the session binds for every window holds nothing at the session's end: a plan written there
+    while the run went fails it, by its path, once the folder bound before is in force again."""
+    from core import config
+    from core.gui import plans
+    monkeypatch.setattr(config, "RESOURCES_ROOT", tmp_path / "inputs")
+    began = plans.PLAN_FOLDER
+    around_the_run = _guards(request)._no_plans_written.__wrapped__      # the function the fixture was made from
+    run = around_the_run(request.getfixturevalue("tmp_path_factory"))
+    next(run)
+    bound = plans.PLAN_FOLDER
+    (bound / "nadrowski").mkdir()
+    (bound / "nadrowski" / "left.txt").write_text("# Training\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="the suites' own folder of plans was written to") as failed:
+        next(run)
+    assert "left.txt" in str(failed.value) and plans.PLAN_FOLDER == began, failed.value
 
 
 def test_a_plan_written_into_the_real_folder_fails_the_run(request, tmp_path, monkeypatch):

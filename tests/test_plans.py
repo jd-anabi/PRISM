@@ -1907,6 +1907,7 @@ def test_a_value_put_back_and_filled_over_with_the_same_number_is_the_plans(tmp_
         10000, False, "from plan retrain")
     assert (rows["run_size_cap"].kept, rows["run_size_cap"].origin.text()) == (False, "usual")
 
+
 def test_a_fill_while_a_run_is_live_changes_nothing(tmp_path, monkeypatch, store):
     """A fill asked for by code while a run is live changes no form and puts no plan in use."""
     from core.gui import plans as window_plans
@@ -2148,8 +2149,8 @@ def test_a_plan_that_cannot_be_written_says_so_and_saves_nothing(tmp_path, monke
 def test_a_save_whose_write_fails_is_told_and_changes_nothing(tmp_path, monkeypatch, store):
     """A plan whose file cannot be written is told in the save's own question, its file and the system's reason, as an
     error with one answer; nothing changes: no plan comes into use, no line says a plan was saved, the forms stay, and
-    no part file is left. Both a write the system refuses for a file another program holds open and any other refusal
-    of the system are told so, never by the last-resort box."""
+    no part file is left. Both a write the system refuses for a file another program holds open, on Windows, and any
+    other refusal of the system are told so, never by the last-resort box."""
     from core.gui import plans as window_plans
     from tests._dialogs import all_asked, answer_in_turn
     window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
@@ -2169,6 +2170,8 @@ def test_a_save_whose_write_fails_is_told_and_changes_nothing(tmp_path, monkeypa
         ("OK",)), told
     assert screen.plan_source is None and page.in_use.said.isHidden() and _values(screen) == before
     monkeypatch.setattr(window_plans, "save_plan", writes)
+    if sys.platform != "win32":
+        return                                   # a file held open is replaced elsewhere: the refusal is Windows'
     answer_in_turn(monkeypatch, ("Save", "retrain"), ("Replace it", None))
     with open(folder / "retrain.txt", "rb"):
         page.save_button.click()
@@ -2247,6 +2250,48 @@ def test_a_plan_in_use_renamed_in_case_alone_stays_in_use(tmp_path, monkeypatch,
     assert (page.plan_choice.currentText(), row.line.words, page.fill_reason.text()) == ("Retrain", "", "")
     assert (page.fill_button.text(), page.fill_button.isEnabled()) == ("Fill the forms from this plan", True)
     assert screen.plan_source.name == "retrain" and not _facts(page)[-1].startswith("Attention."), _facts(page)
+
+
+def test_with_no_file_selected_the_save_says_nothing_of_the_bounds_list(tmp_path, monkeypatch, store):
+    """With another model shown than the one applied and no file selected in step 2's list, the save has no bounds file
+    to leave out, and says nothing of the list."""
+    from tests._dialogs import all_asked, answer_in_turn
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _a_plan_of_hopf(folder)
+    page.foot.main_button.click()
+    _set(screen, {("prior", "bounds"): ""})
+    assert screen.prior_panel.bounds_picker.key() == ""
+    page.model_combo.setCurrentText("HOPF")
+    screen.posterior_panel.form.rows["num_runs"].set_value(7000)
+    _shown_again(window)
+    answer_in_turn(monkeypatch, ("Save", "zz_hopf"))
+    page.save_button.click()
+    assert all_asked()[-1].beneath == "", all_asked()[-1].beneath
+
+
+def test_a_gone_plan_is_not_chosen_again_in_another_models_list(tmp_path, monkeypatch, store):
+    """The plan in use's file removed, another model chosen on step 1's form lets the plan go: a plan of that model of
+    the same name is not chosen in its list unasked."""
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    hopf = folder.parent / "hopf"
+    hopf.mkdir()
+    _plan(hopf, "# Prior\nbounds = cell.txt\n", "retrain")
+    (folder / "retrain.txt").unlink()
+    page.read_facts()
+    page.model_combo.setCurrentText("HOPF")
+    page.read_facts()
+    assert (page.plan_choice.currentText(), screen.plan_source) == ("No plan", None), page.plan_choice.currentText()
+
+
+def test_a_name_in_two_other_cases_is_said_not_to_be_there(tmp_path, monkeypatch):
+    """A folder that lists two files whose names differ from the plan's only in case, as a file system that keeps case
+    may, names neither: the plain sentence stands."""
+    from core.gui import plans as window_plans
+    monkeypatch.setattr(window_plans.file_manager, "list_dir", lambda folder: ["MASTER.txt", "Master.TXT"])
+    assert [problem.message for problem in window_plans.window_problems(
+        {("Prior", "bounds"): "master.txt"}, bounds_folder=tmp_path)] == [
+        "The bounds file master.txt is not in this model's bounds folder."]
 
 
 def test_the_save_refuses_what_its_own_window_would_refuse(tmp_path, monkeypatch, store):
@@ -2332,6 +2377,7 @@ def test_the_saved_line_goes_at_the_next_plan_press(tmp_path, monkeypatch, store
     assert not page.in_use.said.isHidden()
     _press_fill(page, monkeypatch, "retrain", answer="Fill the forms")
     assert page.in_use.said.isHidden(), page.in_use.said.sentence.plain_text()
+
 
 def test_a_plan_in_use_whose_file_is_gone_is_said_by_its_fact_alone(tmp_path, monkeypatch, store):
     """The plan in use's file removed, the list falls back to "No plan" at its next reading, and no line says the list
@@ -2500,6 +2546,7 @@ def test_two_plans_alike_in_moment_and_size_keep_their_own_hashes(tmp_path):
     os.utime(two, ns=(moment, moment))
     cache = {}
     assert window_plans.file_sha(one, cache) != window_plans.file_sha(two, cache)
+
 
 def test_a_models_plans_are_listed_and_a_taken_name_is_found_without_case(tmp_path):
     """The plans of a model's folder, one folder for each model in lower case, are its .txt files, a suffix in capitals

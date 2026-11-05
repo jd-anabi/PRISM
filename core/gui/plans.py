@@ -15,8 +15,10 @@ by the inference screen, which outlives the session a step 1 applied replaces.
 A page hands the plan code its rows through ``plan_fields``, each with ``value``, ``set_value``, ``usual``,
 ``set_origin``, ``label_text`` and ``kept``, and says through ``plan_read`` what its run reads: the values of its own
 form, or, for a step the page's run follows, what that step holds. Nothing here reads the disk but ``list_plans``,
-``read_checked``, ``save_plan``, ``taken`` and ``file_sha``, and ``plan_path`` and ``bounds_key``, which only those and
-the page's readings call; a page calls them only at its readings and its presses, never while a run is live.
+``read_checked``, ``save_plan``, ``taken`` and ``file_sha``, and ``plan_path``, ``bounds_key``, ``window_problems`` and
+``_in_another_case``, which only those, the page's readings and the save's press call, the press reaching
+``bounds_key`` through ``window_problems``; a page calls them only at its readings and its presses, never while a run
+is live.
 """
 import hashlib
 import os

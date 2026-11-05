@@ -811,7 +811,8 @@ class PriorPanel(StepPage):
 
     def take_plans_bounds(self, name: str) -> None:
         """A plan's bounds file, filled: the limits typed by hand no longer read, and the file selected now when the
-        model on step 1's form is the one applied, else held until step 1 applies a model."""
+        model on step 1's form is the one applied, else held for the model it was filled for until step 1 applies it,
+        and let go when another model is chosen on the form."""
         self.typed_tick.setChecked(False)
         screen = self._screen
         shown = getattr(getattr(screen, "config_panel", None), "model_combo", None)
