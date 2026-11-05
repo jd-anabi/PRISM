@@ -56,6 +56,13 @@ for session, options in ((some, dict(live="prior", ended=3, pending=frozenset({"
     for status in runs:
         chain.next_step(session, states, run=status)
     chain.first_time(has_records=False, has_runs=False, session=session)
+last = held(model="NADROWSKI", chi_mode=True, bounds="sub\\\\master.txt", prior="p", prior_words="the prior p",
+            posterior="q", posterior_words="the posterior q", plan="retrain")
+for picks in (last, held(model="SHM", chi_mode=None, bounds=None, prior=None, posterior=None, plan=None), None):
+    for session in (None, some):
+        chain.next_step(session, chain.step_states(session), picks=picks)
+    if picks is not None:
+        chain.last_time_sentence(picks)
 said = [chain.model_label("HOPF"), keys.places_words(("training", "narrowing")), keys.place_words("inference/infer")]
 early = held(draft=held(model=""), cfg=None, inf_prior=held(name="p"), posterior=None, observation=None)
 chain.step_states(early, ended=9500, label=str)
@@ -706,18 +713,35 @@ def test_the_built_in_models_are_written_as_the_window_names_them():
 # Home
 _LIVE = ("and no other run can start until it ends. You can still move around and read results. Keep PRISM open; "
          "you can minimise it.")
+# What was in use last time, read by its attributes as Home reads the settings file's picks, and the sentence Home says.
+_LAST = SimpleNamespace(model="NADROWSKI", chi_mode=True, bounds="master_tier1.txt", prior="20261001T222900",
+                        prior_words="the prior retrain_prior", posterior="20261003T031200",
+                        posterior_words="the posterior retrain", plan="retrain")
+_LAST_SAID = ("Last time: the model Nadrowski, the frequency response as the kind of observation, the bounds file "
+              "master_tier1.txt, the prior retrain_prior, the posterior retrain, the plan retrain. Nothing is loaded "
+              "until you press the button.")
 
 
 def test_home_picks_its_one_next_step_in_order():
     """A live run first, wherever it runs, named by its word and its name; a run with no place leads nowhere and
-    is passed over, as nothing running is; then the steps in their order: no model, no prior, no posterior, no
-    observation; otherwise nothing is waiting, with the narrowing round offered, or Records once narrowed."""
+    is passed over, as nothing running is; then, with no model chosen, what was in use last time, when a model was;
+    then the steps in their order: no model, no prior, no posterior, no observation; otherwise nothing is waiting, with
+    the narrowing round offered, or Records once narrowed. Only what was in use last time does something in place of
+    opening a place."""
     from core.gui.run.model import IDLE, RunStatus
     training = RunStatus(state="running", word="Training", name="retrain_3", place=("inference", "training"))
     cases = [
         (_EMPTY, {}, training,
          ("Next: nothing until the training ends", f"Training retrain_3 is running, {_LIVE}", "Go to the run",
           "inference", "training", None)),
+        (_EMPTY, {"picks": _LAST}, training,
+         ("Next: nothing until the training ends", f"Training retrain_3 is running, {_LIVE}", "Go to the run",
+          "inference", "training", None)),
+        (_EMPTY, {"picks": _LAST}, IDLE,
+         ("Next: continue with what was in use last time", _LAST_SAID, "Continue with these", "home", None, None)),
+        (_EMPTY, {"picks": _LAST}, RunStatus(state="running", word="Run"),
+         ("Next: continue with what was in use last time", _LAST_SAID, "Continue with these", "home", None, None)),
+        (_MODEL, {"picks": _LAST}, None, ("Next: build or load a prior", "", "Open Prior", "inference", "prior", None)),
         (_OBSERVED, {}, RunStatus(state="running", word="Sweep study", place=("temperature", "sweep")),
          ("Next: nothing until the sweep study ends", f"Sweep study is running, {_LIVE}", "Go to the run",
           "temperature", "sweep", None)),
@@ -749,10 +773,12 @@ def test_home_picks_its_one_next_step_in_order():
           "Open Records", "records", None, None)),
     ]
     for held, options, run, expected in cases:
-        session = _session(**held)
-        found = chain.next_step(session, chain.step_states(session, **options), run=run)
+        session, options = _session(**held), dict(options)
+        picks = options.pop("picks", None)
+        found = chain.next_step(session, chain.step_states(session, **options), run=run, picks=picks)
         assert (found.heading, found.sentence, found.button, found.part, found.page, found.run) == expected, (
             held, run)
+        assert found.action == ("continue_with_these" if found.button == "Continue with these" else None), (held, run)
 
 
 def test_the_first_time_holds_only_with_nothing_on_disk_and_nothing_loaded():
@@ -765,6 +791,98 @@ def test_the_first_time_holds_only_with_nothing_on_disk_and_nothing_loaded():
     with pytest.raises(TypeError):
         chain.first_time(False, False, _session())
 
+
+def test_home_offers_what_was_in_use_last_time_only_with_nothing_chosen():
+    """With no model chosen, Home's next step is what was in use last time when a model was: one button that does
+    something in place of opening a place, and stays on Home. With nothing read, or no model in it, Home says to choose
+    a model; with a model chosen, changed on its page or not, the step in hand. The first time, which reads the session
+    alone, is as it was."""
+    choose = ("Next: choose a model", "Nothing is loaded: PRISM starts every launch with nothing loaded.",
+              "Open Model and options", "inference", "model", None, None)
+    for picks in (None, SimpleNamespace(model=None), SimpleNamespace(model=""), SimpleNamespace(model=object())):
+        found = chain.next_step(_session(), chain.step_states(_session()), picks=picks)
+        assert (found.heading, found.sentence, found.button, found.part, found.page, found.run, found.action) == (
+            choose), picks
+    found = chain.next_step(_session(), chain.step_states(_session()), picks=_LAST)
+    assert (found.heading, found.sentence, found.button, found.part, found.page, found.run, found.action) == (
+        "Next: continue with what was in use last time", _LAST_SAID, "Continue with these", "home", None, None,
+        "continue_with_these")
+    for held, heading in ((_MODEL, "Next: build or load a prior"), (_WITH_PRIOR, "Next: start a training"),
+                          (_TRAINED, "Next: run the posterior on a cell or on your recordings")):
+        session = _session(**held)
+        found = chain.next_step(session, chain.step_states(session), picks=_LAST)
+        assert (found.heading, found.action) == (heading, None), held
+    pending = _session(**_MODEL)
+    found = chain.next_step(pending, chain.step_states(pending, pending=frozenset({"model"})), picks=_LAST)
+    assert found.action is None, "a model held and changed on its page was taken for nothing chosen"
+    assert chain.first_time(has_records=False, has_runs=False, session=_session()) is True
+
+
+def test_a_live_run_and_an_unseen_end_come_before_continue_with_these():
+    """A live run, a load among them, one that needs someone, and an end nobody has seen, finished, stopped, failed or
+    not seen to end, each come before what was in use last time; a run with no place leads nowhere, as nothing running
+    does."""
+    from core.gui.run.model import RunStatus
+    run = "20261008T190211-training"
+    place = ("inference", "training")
+    for status, heading in (
+            (RunStatus(state="running", word="Training", name="retrain_3", place=place),
+             "Next: nothing until the training ends"),
+            (RunStatus(state="running", word="Prior load", place=("inference", "prior")),
+             "Next: nothing until the prior load ends"),
+            (RunStatus(state="running", word="Training", place=place, needs_you="Nothing heard."),
+             "Next: look at the training"),
+            (RunStatus(state="ended", word="Training", outcome="finished", run=run, place=place),
+             "Next: see the training"),
+            (RunStatus(state="ended", word="Training", outcome="stopped", run=run, place=place),
+             "Next: see what happened to the training"),
+            (RunStatus(state="ended", word="Training", outcome="failed", run=run, place=place),
+             "Next: see what happened to the training"),
+            (RunStatus(state="not_seen", word="Training", outcome="not seen to end", run=run, place=place),
+             "Next: see what happened to the training"),
+            (RunStatus(state="running", word="Run"), "Next: continue with what was in use last time")):
+        found = chain.next_step(_session(), chain.step_states(_session()), run=status, picks=_LAST)
+        assert found.heading == heading, status
+        assert found.action == ("continue_with_these" if heading.startswith("Next: continue") else None), status
+
+
+@pytest.mark.parametrize("picks, said", [
+    (dict(), "the model Nadrowski, the kind of observation set by the bounds file"),
+    (dict(chi_mode=True), "the model Nadrowski, the frequency response as the kind of observation"),
+    (dict(chi_mode=False), "the model Nadrowski, the kind of observation set by the bounds file"),
+    (dict(model="SHM"), "the model SHM, the kind of observation set by the bounds file"),
+    (dict(model="HOPF", chi_mode=True, bounds="cell.txt"),
+     "the model Hopf, the frequency response as the kind of observation, the bounds file cell.txt"),
+    (dict(bounds="sub\\master_tier1.txt"),
+     "the model Nadrowski, the kind of observation set by the bounds file, the bounds file sub/master_tier1.txt"),
+    (dict(bounds="master.txt", prior="p1", prior_words="the prior retrain_prior"),
+     "the model Nadrowski, the kind of observation set by the bounds file, the bounds file master.txt, the prior "
+     "retrain_prior"),
+    (dict(bounds="master.txt", prior="p1", prior_words="the unnamed prior, 1 Oct 2026, 22:29", posterior="q1",
+          posterior_words="the unnamed posterior, 3 Oct 2026, 03:12"),
+     "the model Nadrowski, the kind of observation set by the bounds file, the bounds file master.txt, the unnamed "
+     "prior, 1 Oct 2026, 22:29, the unnamed posterior, 3 Oct 2026, 03:12"),
+    (dict(plan="retrain"), "the model Nadrowski, the kind of observation set by the bounds file, the plan retrain"),
+    (dict(chi_mode=True, bounds="master_tier1.txt", prior="p1", prior_words="the prior retrain_prior",
+          posterior="q1", posterior_words="the posterior retrain", plan="retrain"),
+     "the model Nadrowski, the frequency response as the kind of observation, the bounds file master_tier1.txt, the "
+     "prior retrain_prior, the posterior retrain, the plan retrain"),
+    (dict(prior="p1", prior_words=""), "the model Nadrowski, the kind of observation set by the bounds file"),
+    (dict(posterior_words="the posterior retrain"),
+     "the model Nadrowski, the kind of observation set by the bounds file"),
+], ids=["model alone", "frequency response", "set by the bounds file", "a model of your own", "Hopf's file",
+        "a sub-folder", "a prior", "unnamed records", "a plan", "everything", "a prior with no words",
+        "words with no posterior"])
+def test_the_sentence_names_what_the_press_applies_and_leaves_out_what_is_gone(picks, said):
+    """Home's sentence names, by the names the window shows, exactly what one press applies and loads: the model, the
+    kind of observation it is applied with, which is the bounds file's when the settings file holds none it can read,
+    the bounds file with forward slashes, the prior and the posterior by the words a sentence names a record by, and
+    the plan; each left out when it is gone."""
+    held = dict(model="NADROWSKI", chi_mode=None, bounds=None, prior=None, prior_words="", posterior=None,
+                posterior_words="", plan=None)
+    held.update(picks)
+    assert chain.last_time_sentence(SimpleNamespace(**held)) == (
+        f"Last time: {said}. Nothing is loaded until you press the button.")
 
 # what a record is called
 def test_a_record_is_called_by_its_name_or_by_its_kind_and_date(tmp_path):

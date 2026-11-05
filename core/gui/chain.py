@@ -27,6 +27,11 @@ _IN_HAND = ("model", "prior", "training", "infer")
 # the built-in models, as the window names them; a model of your own keeps the name it was stored under
 _MODEL_NAMES = {"NADROWSKI": "Nadrowski", "HOPF": "Hopf", "BP": "BP"}
 
+# the kind of observation applied, as Home's sentence of what was in use last time says it, and its last words
+_FREQUENCY_RESPONSE = "the frequency response as the kind of observation"
+_SET_BY_THE_FILE = "the kind of observation set by the bounds file"
+_NOTHING_UNTIL_PRESSED = "Nothing is loaded until you press the button."
+
 
 @dataclass(frozen=True)
 class StepState:
@@ -163,13 +168,15 @@ def step_in_hand(states) -> str | None:
 class Next:
     """Home's one next step: its heading, the sentence under it (none when the heading says it all), its main
     button's words, and the part and page the button opens; for a run whose end has not been seen, the run, whose
-    page the button opens and whose end it acknowledges."""
+    page the button opens and whose end it acknowledges; and for a button that does something in place of opening a
+    place, what it does (``"continue_with_these"``: apply and load what was in use last time)."""
     heading: str
     sentence: str
     button: str
     part: str
     page: str | None
     run: str | None = None
+    action: str | None = None
 
 
 # the next step while a step is in hand, by the step
@@ -184,16 +191,18 @@ _NEXT = {
 }
 
 
-def next_step(session, states, *, run=None) -> Next:
+def next_step(session, states, *, run=None, picks=None) -> Next:
     """The one next step Home offers. ``run`` is the run's status (read by its attributes: its state, word and name,
-    place, the reason it needs someone and how it ended, in words), None for none. The first that holds decides, for
+    place, the reason it needs someone and how it ended, in words), None for none; ``picks`` what was in use last time
+    (read by its attributes, as ``last_time_sentence`` reads them), None for nothing. The first that holds decides, for
     a run with a place: a live run needs someone (its reason, and the button goes to it); a run is live (nothing
     until it ends: it is running, stopping or waiting to be tried again); a run has ended and nobody has seen how
     (how and when it ended and what it kept, and the button opens its page and acknowledges it: "See the result"
     for a finished run, "Go to the run" for a stopped one, "See what happened" for a failure or a run not seen to
-    end). Then the step in hand among ``states``, which reads the steps in their order (no model, no prior, no
-    posterior, no observation); otherwise nothing is waiting, and the narrowing round is offered, or Records once
-    the posterior in use is a narrowed one."""
+    end). Then, with no model chosen and a model in use last time, what was in use last time, which the button
+    applies and loads, staying on Home. Then the step in hand among ``states``, which reads the steps in their order
+    (no model, no prior, no posterior, no observation); otherwise nothing is waiting, and the narrowing round is
+    offered, or Records once the posterior in use is a narrowed one."""
     place = getattr(run, "place", None)
     if place is not None:
         part, page = place
@@ -211,6 +220,9 @@ def next_step(session, states, *, run=None) -> Next:
                 return Next(f"Next: see the {what}", run.sentence, "See the result", part, page, run.run)
             return Next(f"Next: see what happened to the {what}", run.sentence,
                         "Go to the run" if run.outcome == "stopped" else "See what happened", part, page, run.run)
+    if getattr(session, "draft", None) is None and isinstance(getattr(picks, "model", None), str) and picks.model:
+        return Next("Next: continue with what was in use last time", last_time_sentence(picks), "Continue with these",
+                    "home", None, action="continue_with_these")
     in_hand = step_in_hand(states)
     if in_hand is not None:
         return _NEXT[in_hand]
@@ -219,6 +231,25 @@ def next_step(session, states, *, run=None) -> Next:
                     "one.", "Open Records", "records", None)
     return Next("Next: nothing is waiting", "A narrowing round is optional: it trains a second posterior that is "
                 "valid only near one observation.", "Open Narrowing round", "inference", "narrowing")
+
+
+def last_time_sentence(picks) -> str:
+    """What was in use last time, in one sentence, by the names the window shows, exactly what one press applies and
+    loads: the model, the kind of observation the press applies with it, the bounds file, the prior, the posterior and
+    the plan, each left out when ``picks`` holds none (read by its attributes: ``model``, ``chi_mode``, ``bounds``,
+    ``prior`` with ``prior_words``, ``posterior`` with ``posterior_words``, ``plan``). A kind that could not be read is
+    applied as the bounds file's, and named so."""
+    said = [f"the model {model_label(picks.model)}",
+            _FREQUENCY_RESPONSE if getattr(picks, "chi_mode", None) is True else _SET_BY_THE_FILE]
+    bounds = getattr(picks, "bounds", None)
+    if bounds:
+        said.append("the bounds file " + str(bounds).replace("\\", "/"))
+    for record, words in (("prior", "prior_words"), ("posterior", "posterior_words")):
+        if getattr(picks, record, None) and getattr(picks, words, ""):
+            said.append(getattr(picks, words))
+    if getattr(picks, "plan", None):
+        said.append(f"the plan {picks.plan}")
+    return f"Last time: {', '.join(said)}. {_NOTHING_UNTIL_PRESSED}"
 
 
 def first_time(*, has_records: bool, has_runs: bool, session) -> bool:

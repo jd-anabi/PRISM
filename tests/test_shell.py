@@ -7681,3 +7681,398 @@ def test_a_chain_asked_for_during_another_run_applies_nothing(store, tmp_path, m
         assert heard == [NOT_STARTED] and inference.session is session and session.draft is None
         assert (first.model_combo.currentText(), first.form.rows["chi_mode"].value()) == ("HOPF", False)
     assert (prior_load.calls, posterior_load.calls) == ([], [])
+
+
+# ══ Home: what was in use last time ══
+#: Home's sentence for what ``_a_launch_before`` leaves, without the plan, and its last words.
+_LAST_TIME = ("Last time: the model Nadrowski, the kind of observation set by the bounds file, the bounds file master.txt, "
+              "the prior retrain_prior, the posterior zz_trained")
+_UNTIL_PRESSED = ". Nothing is loaded until you press the button."
+#: A plan last used with Nadrowski: the frequency response with settings of its own, the rotation off, another bounds
+#: file than the one in use last time, and a setting of each later step that differs from its usual value.
+_ZZ_LAST = ("# Model and options\nchi_mode = on\nchi_n_freqs = 5\nreparam_rotate = off\nunits = kHz ms nm pN\n\n"
+            "# Prior\nbounds = master_tier1.txt\nnum_iterations = 40\n\n"
+            "# Training\nnum_runs = 7000\nhidden_features = 192\n")
+
+
+def _press_continue(window, home) -> None:
+    """Home's "Continue with these" pressed, and the event loop turned until the chain of loads it starts has ended and
+    a few turns more."""
+    from PySide6.QtCore import QTimer
+    app = qt_app()
+    assert home.next_button.text() == "&Continue with these", home.next_button.text()
+    home.next_button.click()
+    inference = window.part("inference")
+    turn_until(app, lambda: inference.loads is not None and not inference.loads.is_going() and not controller().is_live())
+    for _ in range(3):
+        done = []
+        QTimer.singleShot(0, lambda: done.append(True))
+        turn_until(app, lambda: bool(done))
+
+
+def test_nothing_is_loaded_before_the_press(store, tmp_path, monkeypatch):
+    """A launch with what was in use last time remembered: Home names it and offers one press, and nothing is applied,
+    loaded or started before that press. The launch asks the card nothing and starts no program; Parameter inference,
+    opened, holds nothing, "Prior" reading "In use: nothing yet."; and Home, opened again, offers the same."""
+    from core.gui.run.controller import RunController
+    from core.gui.screens.inference_screen import InferenceScreen
+    held = _a_launch_before(store, tmp_path, monkeypatch, plan=_ZZ_LAST)
+    calls = _card_and_programs(monkeypatch)
+    chains, started = [], []
+    monkeypatch.setattr(InferenceScreen, "load_chain", lambda self, *args, **kwargs: chains.append(args))
+    monkeypatch.setattr(RunController, "dispatch", lambda self, *args, **kwargs: started.append(args) or False)
+    window, home = _home_of_last_time(tmp_path)
+    assert (home.next_heading.label.text(), home._next_sentence.plain_text(), home.next_button.text()) == (
+        "Next: continue with what was in use last time", f"{_LAST_TIME}, the plan zz_last{_UNTIL_PRESSED}",
+        "&Continue with these")
+    assert calls == [] and "inference" not in window.built_parts()
+    window.go_to("inference", "prior")
+    inference = window.part("inference")
+    prior = inference.prior_panel
+    assert prior.in_use.line.text() == "In use: nothing yet."
+    assert (inference.session.draft, inference.session.inf_prior, inference.session.posterior) == (None, None, None)
+    assert inference.plan_source is None and prior.prior_picker.key() == held.prior
+    window.go_to("home")
+    assert home.next_button.text() == "&Continue with these"
+    assert (chains, started) == ([], []), "something was loaded or started before the press"
+
+
+def test_one_press_applies_step_one_and_loads_the_prior_and_the_posterior(store, tmp_path, monkeypatch):
+    """One press applies step 1 with the model and the kind of last time, selects the bounds file, and loads the prior
+    and then the posterior, each by its own step's load: the configuration in use is the one the Prior step built on
+    the bounds file, the prior and the posterior the records of last time. A load writes no history, leaves nothing to
+    acknowledge, and Home shows the real next step. What comes into use is remembered as it comes."""
+    from pathlib import Path
+    from core.gui import remembered, settings
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    window, home = _home_of_last_time(tmp_path)
+    assert home._next_sentence.plain_text() == f"{_LAST_TIME}{_UNTIL_PRESSED}"
+    _press_continue(window, home)
+    inference = window.part("inference")
+    session = inference.session
+    assert (session.draft.model, session.draft.chi_mode) == ("NADROWSKI", False)
+    assert session.inf_prior.id == held.prior and session.posterior.id == held.posterior
+    assert Path(session.cfg.sources["bounds"]).name == "master.txt" and session.cfg.model == "NADROWSKI"
+    (cfg, ref, build), _kwargs = prior_load.calls[0]
+    assert (cfg is session.cfg, ref, build, len(prior_load.calls)) == (True, held.prior, False, 1)
+    (cfg, prior, ref, train), kwargs = posterior_load.calls[0]
+    assert (cfg is session.cfg, prior is session.inf_prior, ref, train) == (True, True, held.posterior, False)
+    assert len(posterior_load.calls) == 1
+    status = controller().status
+    assert (status.live, status.unacknowledged_end, status.state) == (False, False, "idle"), status
+    assert not (tmp_path / "runs").exists() or list((tmp_path / "runs").iterdir()) == [], "a load wrote a history"
+    assert (home.next_heading.label.text(), home.next_button.text()) == (
+        "Next: run the posterior on a cell or on your recordings", "&Open Inference")
+    qs = settings.settings()
+    assert {key: settings.get_str(qs, key, "").lower() if key == remembered.KIND_KEY else settings.get_str(qs, key, "")
+            for key in (
+        remembered.MODEL_KEY, remembered.KIND_KEY, remembered.BOUNDS_KEY, remembered.BOUNDS_MODEL_KEY,
+        remembered.PRIOR_KEY, remembered.POSTERIOR_KEY, remembered.LAST_USED_KEY.format("nadrowski"))} == {
+        remembered.MODEL_KEY: "NADROWSKI", remembered.KIND_KEY: "false", remembered.BOUNDS_KEY: "master.txt",
+        remembered.BOUNDS_MODEL_KEY: "NADROWSKI", remembered.PRIOR_KEY: held.prior,
+        remembered.POSTERIOR_KEY: held.posterior, remembered.LAST_USED_KEY.format("nadrowski"): ""}
+
+
+@pytest.mark.parametrize("kind, plan", [(True, None), (True, _ZZ_LAST), (False, _ZZ_LAST)],
+                         ids=["no plan", "a plan of the same kind", "a plan of another kind"])
+def test_the_remembered_kind_is_passed_and_every_other_option_is_usual_or_the_plans(kind, plan, store, tmp_path,
+                                                                                    monkeypatch):
+    """Step 1 is applied with the kind of observation of last time, and every other setting at its usual value, or at the
+    plan's when a plan was last used, whatever step 1's form held before the press: a plan's own kind gives way to the
+    kind remembered, and reads as changed from the plan. The plan's other steps are filled, but for the batches, which
+    were remembered and are kept."""
+    from core import config
+    from core.gui import remembered
+    held = _a_launch_before(store, tmp_path, monkeypatch, kind=kind, plan=plan,
+                            **{remembered.NUM_RUNS_KEY: "6000"})
+    _the_loads(monkeypatch, store, held)
+    window, home = _home_of_last_time(tmp_path)
+    inference = window.part("inference")
+    first = inference.config_panel
+    rows = first.form.rows
+    rows["chi_n_freqs"].set_value(11)
+    rows["chi_k_pad"].set_value(14)
+    rows["reparam_rotate"].set_value(not config.REPARAM_ROTATE)
+    first.units_choice.setCurrentIndex(first.units_choice.findData("typed"))
+    first.units_text.setText("kHz ms nm pN")
+    _press_continue(window, home)
+    draft = inference.session.draft
+    assert (draft.chi_mode, draft.units_override) == (kind, None if plan is None else ("kHz", "ms", "nm", "pN"))
+    if kind:
+        assert (draft.chi_k_pad, draft.chi_max_cycles) == (config.CHI_K_PAD, config.CHI_MAX_CYCLES)
+    if plan is None:
+        assert (draft.chi_n_freqs, draft.reparam_rotate, inference.plan_source) == (
+            config.CHI_N_FREQS, bool(config.REPARAM_ROTATE), None)
+        assert inference.posterior_panel.form.rows["num_runs"].value() == 6000
+        return
+    assert (draft.chi_n_freqs, draft.reparam_rotate, inference.plan_source.name) == (
+        5 if kind else None, False, "zz_last")
+    kind_origin = rows["chi_mode"].origin.text().replace("​", "")
+    assert kind_origin == ("from plan zz_last" if kind else "changed from the plan"), kind_origin
+    assert inference.prior_panel.form.rows["num_iterations"].value() == 40
+    training = inference.posterior_panel.form.rows
+    assert (training["num_runs"].value(), training["hidden_features"].value()) == (6000, 192)
+    assert training["num_runs"].origin.text().replace("​", "") == "changed from the plan"
+
+
+@pytest.mark.parametrize("bounds", ["master.txt", None], ids=["a bounds file of last time", "none"])
+def test_the_plans_values_its_waiting_bounds_file_and_its_line_survive_the_press(bounds, store, tmp_path, monkeypatch):
+    """Step 1's form shows another model than last time's as the press comes: the model of last time is put on the form
+    first, which lets any plan in use go, and only then is the plan filled, so that its values, its bounds file and its
+    line stand after the press. The bounds file of last time is selected over the plan's, which reads as changed from
+    the plan; with none of last time, the plan's own file is selected once step 1 is applied, and no prior is loaded.
+    The kind of last time, not the plan's, is one change from the plan on each step's line."""
+    from core.gui import remembered
+    held = _a_launch_before(store, tmp_path, monkeypatch, plan=_ZZ_LAST, **{remembered.BOUNDS_KEY: bounds})
+    prior_load, _posterior_load = _the_loads(monkeypatch, store, held)
+    window, home = _home_of_last_time(tmp_path)
+    inference = window.part("inference")
+    inference.config_panel.model_combo.setCurrentText("HOPF")
+    _press_continue(window, home)
+    prior = inference.prior_panel
+    assert inference.plan_source.name == "zz_last" and inference.session.draft.model == "NADROWSKI"
+    assert inference.prior_panel.form.rows["num_iterations"].value() == 40
+    origin = prior.form.rows["bounds"].origin.text().replace("​", "")
+    if bounds is None:
+        assert (prior.bounds_picker.key(), origin, prior_load.calls) == ("master_tier1.txt", "from plan zz_last", [])
+        assert prior.plan_line.text().replace("​", "") == "Plan: zz_last, 1 change"
+    else:
+        assert (prior.bounds_picker.key(), origin) == ("master.txt", "changed from the plan"), origin
+        assert prior.plan_line.text().replace("​", "") == "Plan: zz_last, 2 changes"
+    assert inference.config_panel.plan_line.text().replace("​", "") == "Plan: zz_last, 1 change"
+
+
+@pytest.mark.parametrize("failing", ["prior", "posterior"])
+def test_a_load_that_fails_ends_the_chain_and_that_step_is_homes_next(failing, store, tmp_path, monkeypatch):
+    """A load that fails ends the chain: what came before stays in use, the failure is told in the shared question, a
+    load leaves nothing to acknowledge, and Home's next step is the step whose load failed."""
+    from tests._dialogs import all_asked, forget_asked
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held, release=False)
+    loaded = SimpleNamespace(kind="prior", id=held.prior, name="retrain_prior", manifest=store.get("prior", held.prior))
+    if failing == "prior":
+        prior_load.fail(OSError("prior.pt cannot be read"))
+    else:
+        prior_load.release(loaded)
+        posterior_load.fail(OSError("posterior.pt cannot be read"))
+    window, home = _home_of_last_time(tmp_path)
+    forget_asked()
+    _press_continue(window, home)
+    session = window.part("inference").session
+    assert session.draft.model == "NADROWSKI" and session.posterior is None
+    assert [(one.title, one.sentence) for one in all_asked()] == [("Error", f"{failing}.pt cannot be read")]
+    assert not controller().status.unacknowledged_end
+    if failing == "prior":
+        assert session.inf_prior is None and posterior_load.calls == []
+        assert home.next_heading.label.text() == "Next: build or load a prior"
+    else:
+        assert session.inf_prior.id == held.prior
+        assert home.next_heading.label.text() == "Next: start a training"
+
+
+@pytest.mark.parametrize("when", ["before Home reads", "between Home's reading and the press"])
+@pytest.mark.parametrize("cause", ["gone", "a problem"])
+def test_a_plan_gone_or_with_problems_is_left_out_and_the_press_goes_on(cause, when, store, tmp_path, monkeypatch):
+    """A plan whose file is gone, or has a problem, when Home reads is not named; one that goes, or breaks, between Home's
+    reading and the press is read again at the press: either way it is not filled, and the rest goes on."""
+    held = _a_launch_before(store, tmp_path, monkeypatch, plan=_ZZ_LAST)
+    _the_loads(monkeypatch, store, held)
+    plan = held.folder / "zz_last.txt"
+
+    def spoil() -> None:
+        if cause == "gone":
+            plan.unlink()
+        else:
+            plan.write_bytes(b"# Training\nnum_runs = many\n")
+
+    if when == "before Home reads":
+        spoil()
+    window, home = _home_of_last_time(tmp_path)
+    named = "" if when == "before Home reads" else ", the plan zz_last"
+    assert home._next_sentence.plain_text() == f"{_LAST_TIME}{named}{_UNTIL_PRESSED}"
+    if when != "before Home reads":
+        spoil()
+    _press_continue(window, home)
+    inference = window.part("inference")
+    assert inference.plan_source is None and inference.session.posterior.id == held.posterior
+    assert inference.prior_panel.form.rows["num_iterations"].value() != 40
+    assert home.next_heading.label.text() == "Next: run the posterior on a cell or on your recordings"
+
+
+def test_the_person_stays_on_home_through_the_first_press(store, tmp_path, monkeypatch):
+    """The first press builds Parameter inference with Home in sight, under the wait cursor, which is gone once the press
+    returns; Home stays in sight through every load, the keyboard on its main button, the rail's foot saying each
+    load; and the first opening of Parameter inference afterwards opens at the step in hand."""
+    from PySide6.QtCore import Qt
+    from core.gui.screens.inference_screen import InferenceScreen
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    window, home = _home_of_last_time(tmp_path)
+    home.next_button.setFocus(Qt.TabFocusReason)
+    under, places, feet = [], [], []
+    real = InferenceScreen.continue_with
+
+    def continue_with(self, picks):
+        cursor = QApplication.overrideCursor()
+        under.append(None if cursor is None else cursor.shape())
+        return real(self, picks)
+
+    monkeypatch.setattr(InferenceScreen, "continue_with", continue_with)
+    controller().status_changed.connect(home_watch := (lambda status: (places.append(window.current_place()),
+                                                                        feet.append(status.state_word))))
+    try:
+        _press_continue(window, home)
+    finally:
+        controller().status_changed.disconnect(home_watch)
+    assert under == [Qt.WaitCursor] and QApplication.overrideCursor() is None
+    assert set(places) == {("home", None)} and "loading" in feet, (places, feet)
+    assert window.current_place() == ("home", None) and window.focusWidget() is home.next_button
+    assert window._inference_opened is False
+    window.go_to("inference")
+    assert window.current_place() == ("inference", "infer")
+
+
+def test_home_reads_the_picks_once_until_something_changes(store, tmp_path, monkeypatch):
+    """Home reads what was in use last time once, as it is built, and again only after a run has ended, as it is opened
+    with no run live, when the store changes, and when a chain of loads has ended: never at a change of the run's
+    status, and not when it is opened during a run, which keeps the last reading and reads no plan and no record's
+    manifest for it."""
+    from core.gui import remembered
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from tests._fixtures import readings_of_a_run
+    app = qt_app()
+    held = _a_launch_before(store, tmp_path, monkeypatch, plan=_ZZ_LAST)
+    _the_loads(monkeypatch, store, held)
+    reads, real = [], remembered.remembered_picks
+    monkeypatch.setattr(remembered, "remembered_picks",
+                        lambda **kwargs: (reads.append("picks"), real(**kwargs))[1])
+    window, home = _home_of_last_time(tmp_path)
+    runner = window.panel(ReductionPanel)
+    assert reads == ["picks"]
+    with running(runner) as stand_in:
+        calls = readings_of_a_run(monkeypatch)
+        stand_in.say("a line of the run")
+        window.go_to("reduction")
+        window.go_to("home")
+        assert reads == ["picks"] and home.next_button.text() == "&Go to the run"
+        assert not {"read_checked", "taken", "a record's manifest"} & set(calls), calls
+        window._action("continue_with_these")
+        assert "inference" not in window.built_parts(), "a press by code during a run built Parameter inference"
+    turn_until(app, lambda: not controller().is_live())
+    assert reads == ["picks", "picks"], reads
+    controller().acknowledge(controller().status.run)
+    assert reads == ["picks", "picks"], "Home read what was in use last time at a change of the run's status"
+    window._store_changed()
+    window.go_to("reduction")
+    window.go_to("home")
+    assert reads == ["picks"] * 4, reads
+    _press_continue(window, home)
+    assert reads[-1] == "picks" and len(reads) >= 5
+    assert home.next_heading.label.text() == "Next: run the posterior on a cell or on your recordings"
+
+
+@pytest.mark.parametrize("why", ["the prior deleted since Home read", "the posterior deleted during the prior's load",
+                                 "a narrowed posterior answered Cancel", "a narrowed posterior answered Load"])
+def test_a_link_that_does_not_start_leaves_home_on_its_step(why, store, tmp_path, monkeypatch):
+    """A load that starts no run ends the chain, and what came before stays: a prior deleted since Home read it is no
+    longer in the Prior step's list; a posterior deleted while the prior loads is no longer in the Training step's; a
+    posterior from a narrowing round asks its question over Home, inside its link, and "Cancel" starts nothing. Home's
+    next step is that step's, and the step says why it waits."""
+    from tests._dialogs import all_asked, choose, forget_asked
+    narrowed = why.startswith("a narrowed")
+    held = _a_launch_before(store, tmp_path, monkeypatch, narrowed=narrowed)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held, release=why != "the posterior deleted during "
+                                                                                  "the prior's load")
+    window, home = _home_of_last_time(tmp_path)
+    forget_asked()
+    if why == "the prior deleted since Home read":
+        store.delete("prior", held.prior, force=True)
+    elif why == "a narrowed posterior answered Load":
+        choose(monkeypatch, words="Load this posterior")
+    app = qt_app()
+    if why == "the posterior deleted during the prior's load":
+        home.next_button.click()
+        turn_until(app, prior_load.started.is_set)
+        store.delete("posterior", held.posterior)
+        prior_load.release(SimpleNamespace(kind="prior", id=held.prior, name="retrain_prior",
+                                           manifest=store.get("prior", held.prior)))
+        inference = window.part("inference")
+        turn_until(app, lambda: not inference.loads.is_going() and not controller().is_live())
+        window.go_to("reduction")
+        window.go_to("home")
+    else:
+        _press_continue(window, home)
+    session = window.part("inference").session
+    heading = home.next_heading.label.text()
+    if why == "the prior deleted since Home read":
+        assert (session.inf_prior, prior_load.calls, heading) == (None, [], "Next: build or load a prior")
+    elif why == "a narrowed posterior answered Load":
+        assert session.posterior.id == held.posterior
+        assert all_asked()[-1].title == "Load a posterior from a narrowing round?"
+    else:
+        assert session.inf_prior.id == held.prior and session.posterior is None and posterior_load.calls == []
+        assert heading == "Next: start a training", heading
+        if narrowed:
+            assert all_asked()[-1].title == "Load a posterior from a narrowing round?", all_asked()
+
+
+@pytest.mark.parametrize("plan", [None, _ZZ_LAST], ids=["no plan", "a plan"])
+def test_what_was_typed_before_the_press_is_what_the_press_sets(plan, store, tmp_path, monkeypatch):
+    """The press asks nothing, so what a person typed on the forms before it and did not apply is set as the press sets
+    it: on step 1 every setting is put back to its usual value, or the plan's; on steps 2 and 3, with a plan, every
+    setting the plan holds takes its value and every other its usual one, and with none they stay as typed. A value
+    put back from last time and not touched since is kept, with a plan or without."""
+    from core.gui import remembered
+    held = _a_launch_before(store, tmp_path, monkeypatch, plan=plan, **{remembered.NUM_RUNS_KEY: "6000"})
+    _the_loads(monkeypatch, store, held)
+    window, home = _home_of_last_time(tmp_path)
+    inference = window.part("inference")
+    first, prior, training = inference.config_panel, inference.prior_panel, inference.posterior_panel
+    first.form.rows["reparam_rotate"].set_value(False)
+    prior.form.rows["num_iterations"].set_value(45)
+    training.form.rows["hidden_features"].set_value(128)
+    _press_continue(window, home)
+    typed = (inference.session.draft.reparam_rotate, prior.form.rows["num_iterations"].value(),
+             training.form.rows["hidden_features"].value(), training.form.rows["num_runs"].value())
+    if plan is None:
+        from core import config
+        assert typed == (bool(config.REPARAM_ROTATE), 45, 128, 6000), typed
+    else:
+        assert typed == (False, 40, 192, 6000), typed
+
+
+def test_an_error_inside_the_press_goes_where_every_error_goes(store, tmp_path, monkeypatch):
+    """An error raised inside the press goes to the program's last resort, as every error does, and the wait cursor goes
+    with the press."""
+    import sys
+    from core.gui.screens.inference_screen import InferenceScreen
+    _a_launch_before(store, tmp_path, monkeypatch)
+    window, home = _home_of_last_time(tmp_path)
+    shown = []
+    monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: shown.append((kind, str(error))))
+
+    def raises(self, picks):
+        raise RuntimeError("the forms could not be filled")
+
+    monkeypatch.setattr(InferenceScreen, "continue_with", raises)
+    home.next_button.click()
+    assert shown == [(RuntimeError, "the forms could not be filled")], shown
+    assert QApplication.overrideCursor() is None and not controller().is_live()
+
+
+def test_the_first_time_page_stands_before_what_was_in_use_last_time(store, tmp_path, monkeypatch):
+    """A model applied last time and nothing made since, no record and no run: Home opens on its first-time page, its four
+    choices, and offers no "Continue with these"; with one record made, it offers it."""
+    from core.gui import remembered
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    remembered.put_many([(remembered.MODEL_KEY, "NADROWSKI"), (remembered.KIND_KEY, "true")])
+    window, home = _home_of_last_time(tmp_path)
+    assert home.is_first_time() and not home._next_block.isVisibleTo(home)
+    _prior_artifact(store, _nad_cfg(), name="zz_made")
+    window.go_to("reduction")
+    window.go_to("home")
+    assert not home.is_first_time() and home.next_button.text() == "&Continue with these"
+    assert home._next_sentence.plain_text() == (
+        "Last time: the model Nadrowski, the frequency response as the kind of observation. Nothing is loaded until you "
+        "press the button.")

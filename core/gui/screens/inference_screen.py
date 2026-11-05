@@ -17,7 +17,8 @@ The screen also keeps the plan in use: where the forms of steps 1 to 3 were last
 that step 1 replaces as it is applied, and what the steps' last reading found of that plan's file.
 
 And it runs a chain of loads: step 1 applied with a model and its options, then each later step's own "Load this …" of
-a saved record, one after the other, each once the one before has returned its record.
+a saved record, one after the other, each once the one before has returned its record; Home's "Continue with these"
+is one.
 """
 from pathlib import Path
 
@@ -35,6 +36,9 @@ from ..panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, Pr
 from ..run.controller import controller
 from ..session import SbiSession
 from ..widgets.adaptive_stack import AdaptiveStack
+
+#: A plan's setting of step 1 by its name in a draft, where the two differ.
+_DRAFT_NAMES = {"units": "units_override"}
 
 
 class InferenceScreen(QWidget):
@@ -248,6 +252,29 @@ class InferenceScreen(QWidget):
                 links.append(lambda: self.posterior_panel.load_record(posterior))
         loads.start(links)
         return loads
+
+    def continue_with(self, picks):
+        """What was in use last time, applied and loaded as one press of Home's "Continue with these" asks: the plan last
+        used, read and checked again now, filled into the forms once the model stands, keeping the values put back from
+        last time and asking nothing, the press being the person's own; step 1 applied with the model, the kind of
+        observation remembered and the plan's other settings of that step, every other at its usual value; then the
+        bounds file selected and the prior and the posterior loaded, each by its own step. A plan gone, or with problems,
+        since Home read it is left out, and the rest goes on. The chain of loads is handed back."""
+        plan = remembered.last_plan(picks.model, picks.plan, plans_folder=self.plans_folder) if picks.plan else None
+        options, fill = {}, None
+        if plan is not None:
+            values = {pair: value for pair, value in plan.values.items() if pair[0] in window_plans.FILLED}
+            source = window_plans.PlanSource("plan", plan.name, plan.path, plan.sha256, controller().now(), values)
+            options = {_DRAFT_NAMES.get(name, name): value for (heading, name), value in values.items()
+                       if heading == window_plans.HEADING_OF["model"]}
+
+            def fill() -> None:
+                window_plans.fill_forms(self, values, source, keep_remembered=True)
+
+        options["chi_mode"] = picks.chi_mode is True
+        if options.get("units_override") is not None:
+            options["units_override"] = tuple(str(options["units_override"]).split())
+        return self.load_chain(picks.model, options, picks.bounds, picks.prior, picks.posterior, fill=fill)
 
     # ── the plan in use ──
     def take_plan(self, source) -> None:

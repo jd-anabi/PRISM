@@ -70,13 +70,15 @@ class RunRow:
 class HomeFacts:
     """What Home states, read at one moment: the inference session, its six steps' states, the run's status (None
     for none: nothing runs, and no end waits to be seen), every record of the store in use, whether the records
-    folder in use has a run in its history or a run is live, and the latest runs of that folder, newest first."""
+    folder in use has a run in its history or a run is live, the latest runs of that folder, newest first, and what
+    was in use last time (None for nothing read)."""
     session: object
     states: tuple
     run: object
     records: tuple[RecordRow, ...]
     has_runs: bool = False
     runs: tuple[RunRow, ...] = ()
+    picks: object = None
 
 
 def _capital(words: str) -> str:
@@ -151,10 +153,12 @@ class HomeScreen(QWidget):
     """Home. ``read`` gives what Home states, as a ``HomeFacts``; ``navigate(part, page)`` asks for a place to be
     opened: a part and one of its pages, a step of parameter inference as ("inference", step), or the records of
     one kind as ("records", kind); ``open_run(run)`` asks for a run's page to be opened, by the run's id: a row of
-    "Last runs", or the next step of a run whose end has not been seen."""
+    "Last runs", or the next step of a run whose end has not been seen; ``action_pressed(action)`` asks for what the
+    main button does in place of opening a place, "continue_with_these" for what was in use last time."""
 
     navigate = Signal(str, object)
     open_run = Signal(str)
+    action_pressed = Signal(str)
 
     def __init__(self, read: Callable[[], HomeFacts], parent=None) -> None:
         super().__init__(parent)
@@ -285,7 +289,7 @@ class HomeScreen(QWidget):
         self._choices_block.setVisible(self._first)
         self._next_block.setVisible(not self._first)
         self._left.setVisible(not self._first)
-        self._next = chain.next_step(facts.session, facts.states, run=facts.run)
+        self._next = chain.next_step(facts.session, facts.states, run=facts.run, picks=facts.picks)
         self.next_heading.set_text(self._next.heading)
         self._next_sentence.set_text(self._next.sentence)
         self._next_sentence.setVisible(bool(self._next.sentence))
@@ -327,7 +331,9 @@ class HomeScreen(QWidget):
 
     # what Home opens
     def _next_pressed(self) -> None:
-        if self._next is not None and self._next.run is not None:
+        if self._next is not None and self._next.action is not None:
+            self.action_pressed.emit(self._next.action)
+        elif self._next is not None and self._next.run is not None:
             self.open_run.emit(self._next.run)
         elif self._next is not None:
             self.navigate.emit(self._next.part, self._next.page)

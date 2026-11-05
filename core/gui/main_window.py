@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplicat
 from core.artifacts import KIND_DIRS, StoreError, default_store
 from core.config import VALID_MODELS
 
-from . import chain, design, keys, one_instance, record_words, settings, style, this_computer
+from . import chain, design, keys, one_instance, record_words, remembered, settings, style, this_computer
 from .panels.base_panel import BasePanel
 from .panels.crossval_panel import CrossValPanel
 from .panels.fdt_panel import FdtPanel
@@ -262,9 +262,12 @@ class MainWindow(QMainWindow):
         # What the steps' states read of the run's status, as they were last worked out from it: worked out again
         # only when it changes.
         self._run_key = None
-        # Every record of the store in use and the latest runs of its records folder, as Home last read them: read
-        # again only after a run has ended, as Home is opened and when the store changes (None: at Home's next reading).
+        # Every record of the store in use, the latest runs of its records folder and what was in use last time, as Home
+        # last read them: read again only after a run has ended, as Home is opened and when the store changes (None: at
+        # Home's next reading). What was in use last time is not read while a run is live: the last reading stands, none
+        # before the first.
         self._stored = None
+        self._picks = None
         self._hears_the_screen = False           # whether the native window's changes of screen are heard yet
         self._close_at_end = False               # the close was asked for: the window closes once the run has ended
         self._ends_tries = False                 # ... asked while the run waited to be tried again: it ended the tries
@@ -452,6 +455,7 @@ class MainWindow(QMainWindow):
         if name == "home":
             widget.navigate.connect(self.go_to)
             widget.open_run.connect(self._open_run)
+            widget.action_pressed.connect(self._action)
         elif name == "inference":
             widget.navigate.connect(self.go_to)
             widget.go_to_run.connect(self.go_to_run)
@@ -571,19 +575,40 @@ class MainWindow(QMainWindow):
     def _home_facts(self) -> HomeFacts:
         """What Home states, read now: Parameter inference's session and its six steps as last worked out (before
         it is built, a session that holds nothing) and the run's status; and, as last read, every record of the store
-        in use and the latest runs of its records folder, which are read again only after a run has ended, as Home
-        is opened and when the store changes, never at a change of the run's status, which comes at every save and
-        every epoch of a training. A run in the history of the records folder in use, or a run live, ends the
-        first-time page."""
+        in use, the latest runs of its records folder and what was in use last time, which are read again only after a
+        run has ended, as Home is opened and when the store changes, never at a change of the run's status, which comes
+        at every save and every epoch of a training. What was in use last time is not
+        read while a run is live: the last reading stands, and none before the first. A run in the history of the
+        records folder in use, or a run live, ends the first-time page."""
         inference = self._built.get("inference")
         session = inference.session if inference is not None else SbiSession()
         if self._stored is None:
             store = default_store()
-            self._stored = (_home_records(store), _last_runs(controller().folder(), str(store.root)))
-        records, runs = self._stored
+            if not controller().is_live():
+                folder = getattr(inference, "plans_folder", None)
+                self._picks = remembered.remembered_picks(store=store, plans_folder=folder)
+            self._stored = (_home_records(store), _last_runs(controller().folder(), str(store.root)), self._picks)
+        records, runs, picks = self._stored
         status = controller().status
         return HomeFacts(session, self._step_states(), status, records, has_runs=bool(runs) or status.live,
-                         runs=runs)
+                         runs=runs, picks=picks)
+
+    def _action(self, action: str) -> None:
+        """Home's main button pressed for what it does in place of opening a place: "Continue with these" applies and
+        loads what was in use last time, as Home last read it. The person stays on Home, under the wait cursor while
+        Parameter inference is built and step 1 applied; each load then shows at the rail's foot. Home is drawn again as
+        step 1 is applied, and reads again at each load's end, as at every run's. Nothing while a run is live, with
+        nothing read, or for an action this window does not know."""
+        picks = self._picks
+        if action != "continue_with_these" or controller().is_live() or getattr(picks, "model", None) is None:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            inference = self.part("inference")
+            if isinstance(inference, InferenceScreen):
+                inference.continue_with(picks)
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def _states_changed(self, states) -> None:
         """The six steps' states were worked out again: the rail shows them, and Home reads now while it is

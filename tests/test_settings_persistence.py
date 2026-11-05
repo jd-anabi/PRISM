@@ -1395,6 +1395,190 @@ def test_the_saved_prior_of_last_time_is_put_back_at_launch(store):
         assert page.form.rows["prior"].origin.text() == origin, remembered
 
 
+# ── what was in use last time, as Home reads it ──
+#: The plan a launch before this one used last with Nadrowski, its bounds file another than the prior's.
+_LAST_PLAN = "# Prior\nbounds = master_tier1.txt\n\n# Training\nnum_runs = 7000\n"
+
+
+def _last_time(store, tmp_path, monkeypatch, **changed) -> dict:
+    """What a launch before this one left: an unnamed prior made for Nadrowski on master.txt, a posterior named
+    zz_retrain trained with it, a plan zz_last in the test's own folder of plans, each remembered as in use last time
+    with the kind the bounds file sets. ``changed`` names keys of the settings file to write otherwise (None leaves one
+    out). The records, the plans folder and what was written, by key."""
+    from core.gui import remembered
+    from tests._fixtures import _nad_cfg, _posterior_artifact, _prior_artifact
+    cfg = _nad_cfg()
+    prior = _prior_artifact(store, cfg, name="").id
+    posterior = _posterior_artifact(store, cfg, name="zz_retrain", parents={"prior": prior}).id
+    plans = tmp_path / "plans"
+    (plans / "nadrowski").mkdir(parents=True)
+    (plans / "nadrowski" / "zz_last.txt").write_bytes(_LAST_PLAN.encode("utf-8"))
+    written = {remembered.MODEL_KEY: "NADROWSKI", remembered.KIND_KEY: "false", remembered.BOUNDS_KEY: "master.txt",
+               remembered.BOUNDS_MODEL_KEY: "NADROWSKI", remembered.PRIOR_KEY: prior,
+               remembered.POSTERIOR_KEY: posterior, remembered.LAST_USED_KEY.format("nadrowski"): "zz_last"}
+    written.update(changed)
+    remembered.put_many([(key, value) for key, value in written.items() if value is not None])
+    return {"prior": prior, "posterior": posterior, "plans": plans, "written": written}
+
+
+def _phrase(store, kind, ident) -> str:
+    """The words a sentence names a record by, worked out here from its manifest: by its name, or, unnamed, by its kind
+    and when it was made in local time."""
+    from datetime import datetime
+    from core.gui import design
+    manifest = store.get(kind, ident)
+    if manifest.name:
+        return f"the {kind} {manifest.name}"
+    return f"the unnamed {kind}, {design.date_text(datetime.fromisoformat(manifest.created).astimezone())}"
+
+
+_PICKS_CASES = ["everything", "a model of your own whose file was deleted", "a model inference cannot take",
+                "no model", "the bounds file gone", "the bounds file renamed in case alone",
+                "the bounds file of another model", "the bounds file remembered with no model", "the prior deleted",
+                "a prior made on another bounds file", "a prior made for another model", "a posterior of another prior",
+                "a posterior that names no prior, with no prior",
+                "a posterior of another kind", "the frequency response with a posterior of it", "a kind not read",
+                "the plan gone", "the plan with a problem", "the plan the window's checks refuse",
+                "the plan under another spelling", "the plan of another model"]
+
+
+@pytest.mark.parametrize("case", _PICKS_CASES)
+def test_the_picks_leave_out_what_can_no_longer_be_found(case, store, tmp_path, monkeypatch):
+    """What was in use last time, each left out when it can no longer be found as it was used: the model, while the
+    list of models holds it and parameter inference can take it, else nothing at all; the bounds file, while its model
+    is the model's and the model's folder lists it by exactly that name; the prior, while the bounds file stands and
+    its record, made for the model on that very file, can be read; the posterior, while the prior stands and its record
+    names that prior and is of the kind of observation; the plan, while its file is there, found without regard to case
+    and named as the folder lists it, and has no problem. Records and the plan differ from what a session would
+    hold."""
+    from core import config, registry
+    from core.gui import remembered
+    from tests._fixtures import _nad_cfg, _posterior_artifact, _prior_artifact
+    changed, plans_written = {}, {}
+    if case == "a model of your own whose file was deleted":
+        changed[remembered.MODEL_KEY] = "OWN_GONE"
+    elif case == "a model inference cannot take":
+        monkeypatch.setattr(config, "VALID_MODELS", [*config.VALID_MODELS, "OWN_FORCED"])
+        monkeypatch.setattr(registry, "is_user_model", lambda name: name == "OWN_FORCED")
+        monkeypatch.setattr(registry, "is_sbi_user_model", lambda name: False)
+        changed[remembered.MODEL_KEY] = "OWN_FORCED"
+    elif case == "no model":
+        changed[remembered.MODEL_KEY] = None
+    elif case == "the bounds file gone":
+        changed[remembered.BOUNDS_KEY] = "zz_gone.txt"
+    elif case == "the bounds file renamed in case alone":
+        changed[remembered.BOUNDS_KEY] = "MASTER.TXT"
+    elif case == "the bounds file of another model":
+        changed[remembered.BOUNDS_MODEL_KEY] = "HOPF"
+    elif case == "the bounds file remembered with no model":
+        changed[remembered.BOUNDS_MODEL_KEY] = None
+    elif case == "the prior deleted":
+        changed[remembered.PRIOR_KEY] = "20200101T000000"
+    elif case == "a posterior of another kind":
+        changed[remembered.KIND_KEY] = "true"
+    elif case == "a kind not read":
+        changed[remembered.KIND_KEY] = "maybe"
+    elif case == "the plan gone":
+        changed[remembered.LAST_USED_KEY.format("nadrowski")] = "zz_gone"
+    elif case == "the plan of another model":
+        changed[remembered.LAST_USED_KEY.format("nadrowski")] = "zz_hopf"
+    held = _last_time(store, tmp_path, monkeypatch, **changed)
+    folder = held["plans"] / "nadrowski"
+    if case == "a prior made on another bounds file":
+        tier1 = _nad_cfg()
+        tier1.sources = {**tier1.sources, "bounds": str(config.BOUNDS_PATH / "nadrowski" / "master_tier1.txt")}
+        other = _prior_artifact(store, tier1, name="zz_tier1").id
+        remembered.put(remembered.PRIOR_KEY, other)
+    elif case == "a prior made for another model":
+        other = _prior_artifact(store, _nad_cfg(), name="zz_hopf", model="HOPF").id
+        remembered.put(remembered.PRIOR_KEY, other)
+    elif case == "a posterior of another prior":
+        other = _posterior_artifact(store, _nad_cfg(), name="zz_other", parents={"prior": "20200101T000000"}).id
+        remembered.put(remembered.POSTERIOR_KEY, other)
+    elif case == "a posterior that names no prior, with no prior":
+        import json
+        written = store.path("posterior", held["posterior"]) / "manifest.json"
+        manifest = json.loads(written.read_text(encoding="utf-8"))
+        manifest["parents"] = {}
+        written.write_text(json.dumps(manifest), encoding="utf-8")
+        remembered.put(remembered.PRIOR_KEY, "")
+    elif case == "the frequency response with a posterior of it":
+        chi = _posterior_artifact(store, _nad_cfg(), name="zz_chi", parents={"prior": held["prior"]},
+                                  over={("mode",): "chi"}).id
+        remembered.put_many([(remembered.KIND_KEY, "true"), (remembered.POSTERIOR_KEY, chi)])
+        held["posterior"] = chi
+    elif case == "the plan with a problem":
+        (folder / "zz_last.txt").write_bytes(b"# Training\nnum_runs = many\n")
+    elif case == "the plan the window's checks refuse":
+        (folder / "zz_last.txt").write_bytes(b"# Prior\nbounds = zz_gone.txt\n")
+    elif case == "the plan under another spelling":
+        (folder / "zz_last.txt").rename(folder / "ZZ_Last.txt")
+    elif case == "the plan of another model":
+        (held["plans"] / "hopf").mkdir()
+        (held["plans"] / "hopf" / "zz_hopf.txt").write_bytes(b"# Training\nnum_runs = 7000\n")
+    found = remembered.remembered_picks(store=store, plans_folder=held["plans"])
+    prior, posterior = held["prior"], held["posterior"]
+    whole = remembered.Picks("NADROWSKI", False, "master.txt", prior, posterior, "zz_last",
+                             _phrase(store, "prior", prior), _phrase(store, "posterior", posterior))
+    expected = {
+        "everything": whole,
+        "a model of your own whose file was deleted": remembered.Picks(),
+        "a model inference cannot take": remembered.Picks(),
+        "no model": remembered.Picks(),
+        "the bounds file gone": remembered.Picks("NADROWSKI", False, plan="zz_last"),
+        "the bounds file renamed in case alone": remembered.Picks("NADROWSKI", False, plan="zz_last"),
+        "the bounds file of another model": remembered.Picks("NADROWSKI", False, plan="zz_last"),
+        "the bounds file remembered with no model": whole,
+        "the prior deleted": remembered.Picks("NADROWSKI", False, "master.txt", plan="zz_last"),
+        "a prior made on another bounds file": remembered.Picks("NADROWSKI", False, "master.txt", plan="zz_last"),
+        "a prior made for another model": remembered.Picks("NADROWSKI", False, "master.txt", plan="zz_last"),
+        "a posterior of another prior": remembered.Picks("NADROWSKI", False, "master.txt", prior, plan="zz_last",
+                                                         prior_words=_phrase(store, "prior", prior)),
+        "a posterior that names no prior, with no prior": remembered.Picks("NADROWSKI", False, "master.txt",
+                                                                           plan="zz_last"),
+        "a posterior of another kind": remembered.Picks("NADROWSKI", True, "master.txt", prior, plan="zz_last",
+                                                        prior_words=_phrase(store, "prior", prior)),
+        "the frequency response with a posterior of it": remembered.Picks(
+            "NADROWSKI", True, "master.txt", prior, posterior, "zz_last", _phrase(store, "prior", prior),
+            "the posterior zz_chi"),
+        "a kind not read": remembered.Picks("NADROWSKI", None, "master.txt", prior, posterior, "zz_last",
+                                            _phrase(store, "prior", prior), "the posterior zz_retrain"),
+        "the plan gone": remembered.Picks("NADROWSKI", False, "master.txt", prior, posterior, None,
+                                          _phrase(store, "prior", prior), "the posterior zz_retrain"),
+        "the plan with a problem": remembered.Picks("NADROWSKI", False, "master.txt", prior, posterior, None,
+                                                    _phrase(store, "prior", prior), "the posterior zz_retrain"),
+        "the plan the window's checks refuse": remembered.Picks("NADROWSKI", False, "master.txt", prior, posterior,
+                                                                None, _phrase(store, "prior", prior),
+                                                                "the posterior zz_retrain"),
+        "the plan under another spelling": remembered.Picks("NADROWSKI", False, "master.txt", prior, posterior,
+                                                            "ZZ_Last", _phrase(store, "prior", prior),
+                                                            "the posterior zz_retrain"),
+        "the plan of another model": remembered.Picks("NADROWSKI", False, "master.txt", prior, posterior, None,
+                                                      _phrase(store, "prior", prior), "the posterior zz_retrain"),
+    }[case]
+    assert found == expected, (case, found)
+    assert whole.prior_words.startswith("the unnamed prior, "), "the prior of last time has a name"
+
+
+def test_a_picks_reading_writes_nothing(store, tmp_path, monkeypatch):
+    """Reading what was in use last time, however often and whatever it finds, writes nothing: the settings file's
+    bytes and the moment it was last written are as they were, and no key is set."""
+    import os
+    from PySide6.QtCore import QSettings
+    from core.gui import remembered, settings
+    held = _last_time(store, tmp_path, monkeypatch, **{remembered.KIND_KEY: "maybe"})
+    path = Path(settings.settings().fileName())
+    before = (path.read_bytes(), os.stat(path).st_mtime_ns)
+    written = []
+    kept = QSettings.setValue
+    monkeypatch.setattr(QSettings, "setValue", lambda qs, key, value: (written.append(key), kept(qs, key, value))[1])
+    for _ in range(3):
+        assert remembered.remembered_picks(store=store, plans_folder=held["plans"]).model == "NADROWSKI"
+    (held["plans"] / "nadrowski" / "zz_last.txt").unlink()
+    assert remembered.remembered_picks(store=store, plans_folder=held["plans"]).plan is None
+    assert (path.read_bytes(), os.stat(path).st_mtime_ns) == before and written == []
+
+
 def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
     """On the Prior, Posterior, Validate and TSNPE pages (the Config tab is pinned the same way by
     test_the_config_tab_science_knobs_open_at_config_and_are_not_written), every SCIENCE KNOB opens at
