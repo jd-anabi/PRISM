@@ -8169,7 +8169,8 @@ def test_home_reads_the_picks_once_until_something_changes(store, tmp_path, monk
     """Home reads what was in use last time once, as it is built, and again only after a run has ended, as it is opened
     with no run live, when the store changes, and when a chain of loads has ended: never at a change of the run's
     status, and not when it is opened during a run, which keeps the last reading and reads no plan and no record's
-    manifest for it."""
+    manifest for it. The readings of a run are counted during the run alone: their stand-ins answer as a card would,
+    and the press after the run makes the Prior step's configuration on the device the computer really has."""
     from core.gui import remembered
     from core.gui.panels.reduction_panel import ReductionPanel
     from tests._fixtures import readings_of_a_run
@@ -8182,8 +8183,8 @@ def test_home_reads_the_picks_once_until_something_changes(store, tmp_path, monk
     window, home = _home_of_last_time(tmp_path)
     runner = window.panel(ReductionPanel)
     assert reads == ["picks"]
-    with running(runner) as stand_in:
-        calls = readings_of_a_run(monkeypatch)
+    with running(runner) as stand_in, pytest.MonkeyPatch.context() as during:
+        calls = readings_of_a_run(during)
         stand_in.say("a line of the run")
         window.go_to("reduction")
         window.go_to("home")

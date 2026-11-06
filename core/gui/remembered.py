@@ -72,8 +72,6 @@ def put_many(pairs: Iterable[tuple[str, object]]) -> bool:
 # ── what was in use last time ──
 #: The kind of observation as the settings file holds it: the words a truth value is written as.
 _KINDS = {"1": True, "true": True, "0": False, "false": False}
-#: The heading of a plan's settings of step 1.
-_STEP_ONE = "Model and options"
 
 
 @dataclass(frozen=True)
@@ -113,13 +111,16 @@ def _words_of(word: str, manifest) -> str:
 def _conditioned_as_applied(manifest, plan) -> bool:
     """Whether a posterior's record holds the settings of step 1 its load compares with the configuration the press
     makes: for the frequency response, the slots and the lock-in limit, as the press applies them, the plan's where
-    ``plan`` holds them, else the usual ones. A posterior of the kind the bounds file sets holds none of them."""
+    ``plan`` holds them, under the heading of step 1 as the plans' table names it, else the usual ones. A posterior of
+    the kind the bounds file sets holds none of them."""
+    from .plans import HEADING_OF
     body = manifest.body or {}
     if body.get("mode") != "chi":
         return True
     held, conditioning = getattr(plan, "values", None) or {}, body.get("conditioning") or {}
-    slots = held.get((_STEP_ONE, "chi_k_pad"), config.CHI_K_PAD)
-    ceiling = held.get((_STEP_ONE, "chi_max_cycles"), config.CHI_MAX_CYCLES)
+    step_one = HEADING_OF["model"]
+    slots = held.get((step_one, "chi_k_pad"), config.CHI_K_PAD)
+    ceiling = held.get((step_one, "chi_max_cycles"), config.CHI_MAX_CYCLES)
     try:
         return (int(conditioning.get("chi_k_pad")) == int(slots)
                 and abs(float(conditioning.get("chi_max_cycles")) - float(ceiling)) <= 1e-9)

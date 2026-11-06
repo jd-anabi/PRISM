@@ -1611,6 +1611,23 @@ def test_a_picks_reading_writes_nothing(store, tmp_path, monkeypatch):
     assert (path.read_bytes(), os.stat(path).st_mtime_ns) == before and written == []
 
 
+def test_the_picks_read_step_ones_heading_where_the_plans_name_it(monkeypatch):
+    """A posterior of the frequency response is held to the slots and the lock-in limit of the plan last used under the
+    heading the window's table of plans gives step 1, read from that table and written nowhere else: renamed there, the
+    plan's values under the new heading are the ones compared."""
+    from types import SimpleNamespace
+    from core import config
+    from core.gui import plans, remembered
+    monkeypatch.setitem(plans.HEADING_OF, "model", "Step one")
+    slots, ceiling = config.CHI_K_PAD + 3, config.CHI_MAX_CYCLES + 2.0
+    manifest = SimpleNamespace(body={"mode": "chi", "conditioning": {"chi_k_pad": slots, "chi_max_cycles": ceiling}})
+    renamed = SimpleNamespace(values={("Step one", "chi_k_pad"): slots, ("Step one", "chi_max_cycles"): ceiling})
+    old = SimpleNamespace(values={("Model and options", "chi_k_pad"): slots,
+                                  ("Model and options", "chi_max_cycles"): ceiling})
+    assert remembered._conditioned_as_applied(manifest, renamed) is True
+    assert remembered._conditioned_as_applied(manifest, old) is False
+
+
 def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
     """On the Prior, Posterior, Validate and TSNPE pages (the Config tab is pinned the same way by
     test_the_config_tab_science_knobs_open_at_config_and_are_not_written), every SCIENCE KNOB opens at

@@ -22,7 +22,7 @@ NOT_STARTED = "not started"
 REFUSED = "refused"
 #: Why a chain stopped when a link raised as it started: the error goes where every error goes.
 RAISED = "raised"
-#: Why a chain stopped when its window closed while it went.
+#: Why a chain stopped when its window closed while it went, or Windows ended the session.
 CLOSED = "closed"
 
 
@@ -57,7 +57,7 @@ class LoadChain(QObject):
 
     def stop(self, why: str = CLOSED) -> None:
         """End the chain where it stands, while it goes: no later link starts, and a link's run that is live goes on to
-        its own end. Its window closing ends it so."""
+        its own end. Its window closing, or Windows ending the session, ends it so."""
         if self._going:
             self._end(why)
 
