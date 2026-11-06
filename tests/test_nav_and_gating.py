@@ -1433,6 +1433,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "fps": "Set it in the 'Max FPS' box in Live simulation.",
         # the thing to correct is the file, so the sentence names no box
         "plan": "Correct the file, then choose the plan again.",
+        # a kept training refused: where the kept trainings are listed, each with why it cannot be resumed
+        "resume_fit": "Look at the kept trainings in step 3, Training.",
     }
     rendered = {key: gui_fields.fix_sentence(key) for key in gui_fields.CONTROL if gui_fields.fix_sentence(key)}
     differ = {key: (rendered.get(key), sentences.get(key)) for key in sorted(rendered.keys() | sentences.keys())
@@ -1459,9 +1461,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "mask_num_runs", "mask_run_size", "drive_t_obs", "drive_repeats", "drive_detune", "drive_strengths",
         "free_min", "captured_max", "drive_peak_window", "clarity_min",
         # the five FDT settings neither front end exposes
-        "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd",
-        # the kept training to resume: the window's Resume comes with its training page
-        "resume_fit"}
+        "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd"}
+    assert gui_fields.CONTROL["resume_fit"] == "Look at the kept trainings in step 3, Training."
 
     # (e) the drive labels, as the Infer tab builds them
     for key, name in (("drive_amplitude", "amp"), ("drive_frequency", "freq"), ("drive_phase", "phase")):
@@ -4259,9 +4260,8 @@ def _refusal_keys(*names) -> set:
 def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
     """STANDING. Every refusal key a stage started from the three rebuilt pages can give, read off the engine's own
     text, has a row or a sentence on the page that started it: what a refusal says under its message there is never
-    empty, but for the device, which the window never exposes, and the kept training to resume, whose Resume after a
-    reopening is the Training page's yet to come. The key set read is held to the keys each stage is known to give, so
-    that a walk that reads too little fails here too."""
+    empty, but for the device, which the window never exposes. The key set read is held to the keys each stage is known
+    to give, so that a walk that reads too little fails here too."""
     from core.gui import fields as gui_fields
     from core.refusals import FIELDS
     built, trained = _refusal_keys("build_prior"), _refusal_keys("build_posterior")
@@ -4270,7 +4270,7 @@ def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
     assert {"num_runs", "run_size_cap", "checkpoint_every", "hidden_features", "num_transforms", "learning_rate",
             "stop_after_epochs", "max_num_epochs", "fisher_m", "fisher_dz", "fisher_points", "resume", "new_run",
             "posterior", "accept_truncated", "prior", "name", "resume_fit"} <= trained, sorted(trained)
-    unanswered = {"device", "resume_fit"}
+    unanswered = {"device"}
     for step, keys_ in (("prior", built), ("training", trained)):
         assert keys_ <= set(FIELDS), sorted(keys_ - set(FIELDS))
         silent = sorted(key for key in keys_ - unanswered if not gui_fields.fix_sentence(key, here=step))

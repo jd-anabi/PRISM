@@ -4894,7 +4894,7 @@ def test_the_loss_curve_never_widens_the_run_pages_column(tmp_path):
 
 
 # a training's name as long as a person may give it, and a bounds file a person keeps in a folder of a long name, as
-# the command that resumes a training names it
+# the command that resumes a narrowing round names it
 _LONG_NAME = "retrain_of_the_october_box_with_its_twin_cell_and_a_wider_prior"
 _LONG_BOUNDS = (r"C:\Users\J\OneDrive - Hair Bundle Lab\PRISM inputs\Bounds\nadrowski"
                 r"\master_tier1_spontaneous_and_driven_wide_box_october_retrain.txt")
@@ -5048,8 +5048,8 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
     end firm; in its fit, with the fit's range named after a training of a long name, the health and the loss curve;
     stopping, with three buttons on one row at the ordinary text size; asking whether to keep the training
     its stop kept; failed in its fit, its own name longer than the head's row, cut at its end with "…" and drawn so,
-    then with the error's kind and traceback shown; failed so that only reopening PRISM can help, its command naming a
-    long path; waiting to try again, with "Stop trying"; saving its posterior while the window waits to close, with
+    then with the error's kind and traceback shown; a narrowing round failed so that only reopening PRISM can help, its
+    command naming a long path; waiting to try again, with "Stop trying"; saving its posterior while the window waits to close, with
     "Keep PRISM open"; and finished, its page brought back. A short name is whole in each. With the full text shown and
     its find field opened at the least size, each of its tools is at least as wide as it asks and stands inside the
     column, at once and after the window was made larger, where the field and its buttons stand on one row again, and
@@ -5106,8 +5106,8 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
         room = column.width()                                  # what the window's least size gives the run's page
         window.resize(*opening)
 
-        def begin(stand_in, *args, run_name="retrain_3", retries=False, **kwargs):
-            host.run_spec = lambda fn, *a, **k: _training(name=run_name, stop_button="Stop training…",
+        def begin(stand_in, *args, run_name="retrain_3", retries=False, word="Training", **kwargs):
+            host.run_spec = lambda fn, *a, **k: _training(word, name=run_name, stop_button="Stop training…",
                                                            retries=retries)
             try:
                 assert host.dispatch(stand_in, *args, **kwargs), "the stand-in run was not started"
@@ -5256,12 +5256,15 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
         at(least, "failed in the fit, its error's kind and traceback shown", whole=False)
         view.back_button.click()
 
-        reopening = StandIn()
+        reopening = StandIn(word="Narrowing round")
         reopening.kept_fit = kept(2)
         cfg = SimpleNamespace(sources={"bounds": _LONG_BOUNDS}, chi_mode=True,
                               hw=SimpleNamespace(device=SimpleNamespace(type="cuda")))
         prior = SimpleNamespace(kind="prior", id="20261001T150211", name="retrain_prior")
-        begin(reopening, cfg, prior, None, True, name="retrain_11")
+        parent = SimpleNamespace(kind="posterior", id="20261002T120000", name="retrain",
+                                 posterior=SimpleNamespace(truncation=None))
+        observation = SimpleNamespace(kind="observation", id="20261002T130000", name="cell_a")
+        begin(reopening, cfg, parent, prior, observation, name="retrain_11", word="Narrowing round")
         fitted(reopening, 2)
         clock.advance(900)
         reopening.fail(torch.AcceleratorError("CUDA error: an illegal memory access was encountered\nCUDA kernel "
@@ -6455,3 +6458,106 @@ def test_a_chain_whose_first_link_raises_ends_and_raises(tmp_path):
         chain.start([raises, lambda: True])
     _turns(app)
     assert (heard, chain.is_going(), held.is_live()) == ([RAISED], False, False), heard
+
+
+def _kept_many(store, count=12):
+    """``count`` kept trainings in ``store``, each that can be resumed (its set whole, its code, constants and libraries
+    this process's): the first named with a name of more than sixty characters, the second a narrowing round whose
+    command names a bounds file by a long path. Their ids."""
+    from types import SimpleNamespace
+    from core.artifacts import write_fit_manifest
+    from core.SBI import fit_state
+    from tests._fixtures import _fit_body, write_simulation_set
+    made = []
+    for at in range(count):
+        folder = write_simulation_set(store.kind_dir("simulation"), {"kept": at}, 4, complete=True)
+        identity = {"simulation": {"kept": at}, "batches": 4, "settings": {}, "code": fit_state.loaded_code(),
+                    "constants": fit_state.constants(), "libraries": fit_state.libraries(), "network": "0" * 16}
+        body = {**_fit_body(passes=at + 1, posterior_name=_LONG_NAME if at == 0 else f"retrain_{at}",
+                            identity=identity), "region": {"lo": [0.0]} if at == 1 else None}
+        cfg = SimpleNamespace(model="NADROWSKI", sources={"bounds": _LONG_BOUNDS})
+        path = store.new_fit_dir()
+        path.mkdir(parents=True)
+        made.append(write_fit_manifest(path, body=body, cfg=cfg, config={"model": "NADROWSKI", "chi_mode": True},
+                                       parents={"prior": "p", "simulation": folder.name,
+                                                "parent_posterior": "20261002T120000",
+                                                "observation": "20261002T130000"}).id)
+    return made
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_list_of_kept_trainings_fits_its_column_at_the_windows_least_size(factor, tmp_path, monkeypatch, store):
+    """The Training step listing twelve kept trainings, one named with more than sixty characters and one a narrowing
+    round whose command names a long path, at the window's least size, at the ordinary text size and at one and a half
+    times it: no row, sentence or command is wider than the step's column, each wrapping inside a long name or path
+    where it must, and each as tall as its lines; the step asks for no more width than without the list; the Tab key,
+    from the heading's last button, reaches each "Resume" and "Delete", and each comes whole into the body's view, the
+    last row's among them; and with a run live from that page, the run's page fits its column as it does on every
+    page."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+    from core.gui import design
+    from tests._fixtures import build_window, qt_app
+    from tests._look_helpers import _settle, _the_look, text_size
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    from tests._window_helpers import in_front, shown_off_screen
+    app = qt_app()
+    with text_size(factor), _the_look(False):
+        held = _controller_on(tmp_path, Clock(_at(9, 18, 0)))
+        window = build_window()
+        design.set_room((3400, 1380))                          # what this computer's screen offers the window
+        window.setMinimumSize(1, 1)
+        opening, least = (design.scaled(1300), design.scaled(820)), (design.scaled(900), design.scaled(600))
+        shown_off_screen(window, *opening)
+        window.go_to("inference", "training")
+        host = window.part("inference").posterior_panel
+        window.resize(*least)
+        _settle()
+        without = host.minimumSizeHint().width()
+        # At the ordinary text size the step's own body stands wider than its column at this size (its form asks for
+        # more), so the list is held to the column, or to what stands above it where that is wider, both read BEFORE
+        # the list is drawn: a list that widened the body would widen what stands above it too.
+        column, body = host.results, host.scroller.widget()
+        wide = max(column.width(), host.in_use.mapTo(column, QPoint(host.in_use.width(), 0)).x())
+        body_without = body.width()
+        ids = _kept_many(store)
+        host.foot.check_again.click()
+        _settle()
+        rows = host._kept_rows
+        assert [offer.kept for offer, _parts in rows] and set(ids) == {offer.kept for offer, _parts in rows}
+        out = [(type(part).__name__, part.mapTo(column, QPoint(0, 0)).x(), part.width())
+               for part in [host.kept_block] + host.kept_block.findChildren(QWidget) if part.isVisibleTo(host)]
+        out = [(name, x, x + width) for name, x, width in out if x < 0 or x + width > wide]
+        assert out == [], ("parts of the list stand outside the step's column", wide, out[:8])
+        assert body.width() <= body_without, ("the list widens the step's body", body_without, body.width())
+        low = [(label.text()[:40], label.height(), label.heightForWidth(label.width()))
+               for label in host.kept_block.findChildren(QLabel) if label.isVisibleTo(host)
+               and label.hasHeightForWidth() and label.height() < label.heightForWidth(label.width())]
+        assert low == [], ("lines of the list lower than their words", low)
+        assert host.minimumSizeHint().width() <= without, ("the list widens the step", without,
+                                                          host.minimumSizeHint().width())
+        buttons = [part for _offer, parts in rows for part in (parts["resume"], parts["delete"])
+                   if part.isVisibleTo(host)]
+        assert rows[-1][1]["delete"] in buttons
+        view, seen = host.scroller.viewport(), []
+        with in_front(window):
+            host.head.findChildren(QPushButton)[-1].setFocus(Qt.TabFocusReason)
+            for _ in range(200):
+                QTest.keyClick(QApplication.focusWidget(), Qt.Key_Tab)
+                _settle()
+                now = QApplication.focusWidget()
+                if now in buttons and now not in seen:
+                    seen.append(now)
+                    top = now.mapTo(view, QPoint(0, 0)).y()
+                    assert 0 <= top and top + now.height() <= view.height(), (
+                        "a button the Tab key reached is not whole in view", now.text(), top, view.height())
+                if len(seen) == len(buttons):
+                    break
+        assert seen == buttons, ("the Tab key does not reach each Resume and Delete in order", len(seen), len(buttons))
+        stand_in = StandIn()
+        start_run(host, stand_in, spec=_training(stop_button="Stop training…"))
+        _settle()
+        _in_its_column(host.run_view, column, "a training's run started from the step that lists the kept trainings")
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live())

@@ -228,11 +228,12 @@ def _failing(batches: int, model) -> int:
 
 
 def reopen_command(status, model) -> str:
-    """The command line that the page of a training only reopening PRISM can help sets off on its own beneath its
-    sentence, in the fixed-width face, so that it is copied whole with nothing of the sentence: the training it kept
-    resumed outside the window (``resume_command``). "" for every other page."""
+    """The command line that the page of a narrowing round only reopening PRISM can help sets off on its own beneath its
+    sentence, in the fixed-width face, so that it is copied whole with nothing of the sentence: the round it kept
+    resumed outside the window (``resume_command``), until the round's page offers it. "" for every other page: a
+    training's kept training is offered by Home and the Training step after the reopening."""
     spec = model.spec
-    if (not status.reopen or status.kept_fit is None or spec.word not in TRAINING_WORDS
+    if (not status.reopen or status.kept_fit is None or spec.word != "Narrowing round"
             or model.stage_kind() not in ("fit", "saving")):
         return ""
     return resume_command(spec, status.kept_fit.id)
@@ -310,15 +311,21 @@ def _quoted(word: str) -> str:
 
 def _reopening(spec, kind, note, batches: int, opening: str) -> str:
     """The page of a training that only reopening PRISM can help: ``opening``, which says why, then that PRISM is
-    closed and opened again, and how the training goes on after it: the kept training resumed, until its page offers
-    it, from the command line, with the command the page sets off beneath the sentence (``reopen_command``); or the
-    same training started again, which continues the simulation set from the batches it holds."""
+    closed and opened again, and how the training goes on after it: a training's kept training resumed from Home or
+    the Training step, a narrowing round's from the command line, with the command the page sets off beneath the
+    sentence (``reopen_command``), until its page offers it; a training's saved simulations continued from Home; or the
+    same run started again."""
     word = spec.word
     if note is not None and kind in ("fit", "saving"):
+        if word == "Training":
+            return (f"{opening} {AGAIN_TEXT}; Home and the Training step will offer to resume the training, kept up "
+                    f"to epoch {number_text(note.passes)}.")
         given = untold(spec)
         tail = f", given the same {given} it was trained with" if given else ""
         return (f"{opening} {AGAIN_TEXT}. The training is kept up to epoch {number_text(note.passes)}; until the "
                 f"{word} page offers to resume it, it is resumed from the command line with the command below{tail}.")
+    if batches and word == "Training":
+        return f"{opening} {AGAIN_TEXT}; Home will offer '{CONTINUE_TEXT.format(number_text(batches))}'."
     if batches:
         return (f"{opening} {AGAIN_TEXT}, then start the same {word.lower()}: it continues the saved simulations from "
                 f"batch {number_text(batches)}.")

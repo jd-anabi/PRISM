@@ -576,6 +576,12 @@ class _Lines(_Wrapped):
             QApplication.clipboard().setText(self.selectedText())
 
 
+#: Words wrapped within a page, inside a word wider than the line where they must, for a page's own rows; and the same in
+#: the fixed-width face, selectable and copied as one line, for a command a page sets off.
+WrappedWords = _Wrapped
+SelectableLines = _Lines
+
+
 class RunView(QWidget):
     """The page of one run. ``back`` is said when "Back to the form" is pressed. ``how_link``, "How the run went",
     is the page's own but stands above the figures of the page that started the run, which places it there."""
@@ -591,6 +597,7 @@ class RunView(QWidget):
         self._closing = False
         self._close_saves = False                # the close that waits began with no stop asked: it waits for a save
         self._run: str | None = None             # the run's id, as its status names it
+        self._past_offer = None                  # on the past view, what a reopened window offers for its run
         self._answered = False                   # whether Keep or Discard was answered for the training it kept
         self._failed = False                     # whether the page says its run's failure
         self._quoted = False                     # whether the error's own message adds to what its failure's block says
@@ -696,11 +703,13 @@ class RunView(QWidget):
         # (a path) is wrapped inside it, never let widen the page.
         self.failure_message = _Lines()
         self.failure_message.setFont(fonts.fixed())
+        self.failure_message.setFocusPolicy(Qt.StrongFocus)          # read and copied with the keys too
         # The command line a page sets off beneath its sentence (a kept training resumed outside the window): on a line
         # of its own, in the fixed-width face given at build, selectable, so that it is copied whole and nothing of
         # the sentence with it; wrapped within the page, inside a long path where it must, and copied as one line.
         self.command_line = _Lines()
         self.command_line.setFont(fonts.fixed())
+        self.command_line.setFocusPolicy(Qt.StrongFocus)
         self.noted = style.set_class(QLabel(retry.NOTED_TEXT), cls="quiet")
         self.file_line = style.set_class(QLabel(retry.FILE_TEXT), cls="quiet")
         for label in (self.noted, self.file_line):
@@ -737,8 +746,12 @@ class RunView(QWidget):
         self.continue_button.clicked.connect(self._continue)
         self.resume_button = style.set_class(QPushButton(retry.RESUME_TEXT), cls="primary")
         self.resume_button.clicked.connect(self._resume)
+        # on the past view of a run whose kept training is offered: the training deleted, as "Discard" deletes one
+        self.discard_kept_button = style.set_class(QPushButton(questions.DISCARD_TEXT), cls="danger")
+        self.discard_kept_button.clicked.connect(self._discard)
         offers.addWidget(self.continue_button)
         offers.addWidget(self.resume_button)
+        offers.addWidget(self.discard_kept_button)
         offers.addStretch(1)
         self.said = QWidget()
         self._said = QVBoxLayout(self.said)
@@ -865,7 +878,7 @@ class RunView(QWidget):
         page is live, in its compact form for a run with a view of its own."""
         self._mode, self._compact, self._model, self._stopping = "live", spec.own_view, None, False
         self._place_the_end()
-        self._closing, self._run, self._answered = False, None, False
+        self._closing, self._run, self._answered, self._past_offer = False, None, False, None
         self._failed = self._noted = self._error_shown = self._resumable = self._close_saves = self._quoted = False
         self._retrying = self._refused = self._ended_words = ""
         self._continue_from = None
@@ -933,8 +946,9 @@ class RunView(QWidget):
         """What the Tab key stops at on this page before its figures, as it is read: the buttons at its head, what its end
         offers, and what scrolls."""
         return [self.text_button, self.stop_button, self.withdraw_button, self.keep_open_button, self.stop_trying_button,
-                self.back_button, self.keep_button, self.discard_button, self.full_error_button, self.full_error,
-                self.continue_button, self.resume_button, self.body]
+                self.back_button, self.keep_button, self.discard_button, self.command_line, self.failure_message,
+                self.full_error_button, self.full_error, self.continue_button, self.resume_button,
+                self.discard_kept_button, self.body]
 
     def say(self, text: str) -> None:
         """Say ``text`` on the page, under its sentence, in place of what it said before ("" says nothing)."""
@@ -974,6 +988,16 @@ class RunView(QWidget):
             self.continue_button.setText(retry.CONTINUE_TEXT.format(design.number_text(continue_from)))
         self._arrange()
 
+    def offer_past(self, offer) -> None:
+        """What the past view of a run offers after a reopening (``offer``, as ``core.gui.continuing.Offer`` holds it;
+        None for nothing): "Continue from batch N" or "Fit again on the saved simulations", or "Resume the training"
+        with "Discard" beside it for the training the run kept. A press hands the offer to the window, as Home's button
+        does; "Discard" deletes the kept training. Until the page draws another run."""
+        self._past_offer = offer if offer is not None and not getattr(offer, "why_not", "") else None
+        if getattr(self._past_offer, "kind", None) in ("continue", "fit_again"):
+            self.continue_button.setText(self._past_offer.button)
+        self._arrange()
+
     def refused(self, sentence: str) -> None:
         """The run the page started from one of its offers was refused before anything was spent: ``sentence``, the
         refusal's own, is the page's sentence, with "Back to the form" beside it."""
@@ -1007,6 +1031,7 @@ class RunView(QWidget):
         self.full_text.append_lines([(said, level) for _moment, level, said in entries[-LINES_KEPT:]])
         self._ended_words = ends.words({**record, "outcome": model.outcome}, self._clock())[0]
         self._model, self._mode, self._stopping = model, "past", False
+        self._run = record.get("id") if isinstance(record.get("id"), str) else None
         self._draw()
 
     def show_unreadable(self) -> None:
@@ -1128,8 +1153,10 @@ class RunView(QWidget):
         keeps_open = closing and not self._stopping          # a close that waits for a save, no stop asked
         self.closing_line.setText(questions.CLOSING_SAVED_TEXT if keeps_open else questions.CLOSING_TEXT)
         failed = self._failed and self._mode == "ended"
-        continues = self._mode == "ended" and full and self._continue_from is not None
-        resumes = self._mode == "ended" and full and self._resumable
+        past = getattr(self._past_offer, "kind", None) if self._mode == "past" and full else None
+        continues = (self._mode == "ended" and full and self._continue_from is not None) or past in ("continue",
+                                                                                                    "fit_again")
+        resumes = (self._mode == "ended" and full and self._resumable) or past == "resume"
         main = "" if keeps else "primary"        # while Keep is asked, Keep is the main button and Resume beside it
         if self.resume_button.property("cls") != main:
             style.set_class(self.resume_button, cls=main)
@@ -1141,7 +1168,8 @@ class RunView(QWidget):
                  (self.file_line, failed and bool(self.file_line.text())),
                  (self._error_holder, failed and self._error_shown), (self.keep_block, keeps),
                  (self.offers, continues or resumes), (self.continue_button, continues),
-                 (self.resume_button, resumes), (self.stop_button, live and not retrying),
+                 (self.resume_button, resumes), (self.discard_kept_button, past == "resume"),
+                 (self.stop_button, live and not retrying),
                  (self.withdraw_button, withdraws), (self.keep_open_button, keeps_open),
                  (self.stop_trying_button, retrying), (self.back_button, not live and full))
         comes = ended and full and self.end.isHidden()       # what the run's end leaves to say comes into sight
@@ -1155,7 +1183,8 @@ class RunView(QWidget):
         focus = QApplication.focusWidget()
         going = ((self.stop_button, stops), (self.withdraw_button, withdraws), (self.keep_open_button, keeps_open),
                  (self.keep_button, keeps), (self.discard_button, keeps), (self.stop_trying_button, retrying),
-                 (self.continue_button, continues), (self.resume_button, resumes))
+                 (self.continue_button, continues), (self.resume_button, resumes),
+                 (self.discard_kept_button, past == "resume"))
         if any(focus is widget and not stays for widget, stays in going):
             self._hand_on(stops, withdraws, keeps, retrying)
         for widget, on in shown:
@@ -1289,6 +1318,9 @@ class RunView(QWidget):
         """"Continue from batch N": the run's own call again, continuing its simulation set, as the page's next run;
         while another run is live, nothing starts and the page says so."""
         from .controller import controller
+        if self._mode == "past" and self._past_offer is not None:
+            controller().offer_pressed.emit(self._past_offer)
+            return
         self._after_press(controller().continue_run(self._run))
 
     def _resume(self) -> None:
@@ -1297,6 +1329,9 @@ class RunView(QWidget):
         and the run resumes it), and it is drawn then as a secondary button beside "Keep", the main one; a press that
         starts nothing leaves the question asked. While another run is live, nothing starts and the page says so."""
         from .controller import controller
+        if self._mode == "past" and self._past_offer is not None:
+            controller().offer_pressed.emit(self._past_offer)
+            return
         self._after_press(controller().resume_training(self._run))
 
     def _after_press(self, started: bool) -> None:
@@ -1328,6 +1363,8 @@ class RunView(QWidget):
         gone, words, ended = answer
         if gone:
             self._answered, self._resumable = True, False      # nothing kept is left to resume
+            if self._mode == "past":
+                self._past_offer = None
             if ended:
                 self._ended_words = ended
                 self._draw()

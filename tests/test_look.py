@@ -749,7 +749,8 @@ CLASSES_WITH_A_FONT = ("QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu
                        "QStatusBar")
 CLASSES_WITH_EQUAL_DIGITS = ("QAbstractItemView", "QHeaderView")      # where numbers stand under one another
 FIXED_FACE_CALLERS = {"screens/artifact_screen.py", "screens/shell.py", "widgets/ask.py",
-                      "run/view.py"}   # the record's text, a part's and a question's full error, a run's full text; each later caller joins by name
+                      "run/view.py",   # the record's text, a part's and a question's full error, a run's full text
+                      "panels/inference/posterior_tab.py"}   # a kept narrowing round's command; each later caller joins by name
 
 
 def _tabular():

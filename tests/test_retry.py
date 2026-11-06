@@ -542,18 +542,17 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     once after a failure in which the graphics card failed in a way that is no lack of memory, a first failure as
     well as a try's, in the simulation, where the card's error comes under the simulator's own, as in the fit, which
     is never tried again, and whose history says the card failed. The page names the cause: that trying again did
-    not help, or that the card failed, quoting the first line of its error. It says how the training goes on: started
-    again once PRISM is open again, it continues the simulation set from the batches it holds; a training kept in its
-    fit is resumed from the command line, the command set off on its own beneath the sentence. Neither "Continue from
-    batch N" nor "Resume the training" is offered: either would run in this copy of PRISM."""
+    not help, or that the card failed, quoting the first line of its error. It says how the training goes on once PRISM
+    is open again: Home offers to continue the simulation set from the batches it holds; Home and the Training step
+    offer to resume a training kept in its fit, and no command line stands beneath the sentence. Neither "Continue
+    from batch N" nor "Resume the training" is offered on the page: either would run in this copy of PRISM."""
     from core.gui.run import history
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
     text, view = RunText(held), host.run_view
     folder = _set(tmp_path, 236)
-    again = ("Close PRISM and open it again, then start the same training: it continues the saved simulations from "
-             "batch 236.")
+    again = "Close PRISM and open it again; Home will offer 'Continue from batch 236'."
     simulated = f"{_SOLVER}: AcceleratorError: {_ILLEGAL}"
     device_opening = _DEVICE.format(simulated.splitlines()[0])
 
@@ -610,11 +609,10 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     in_the_fit.fail(_device_failure(in_the_simulation=False))
     _ended(app, held)
     assert (len(in_the_fit.calls), held.status.reopen, _failure(view), _said_alone(view),
-            view.resume_button.isVisibleTo(view), view.continue_button.isVisibleTo(view)) == (
-        1, True, f"{_DEVICE.format(_ILLEGAL.splitlines()[0])} Close PRISM and open it again. The training is kept "
-                 f"up to epoch 2; until the Training page offers to resume it, it is resumed from the command line "
-                 f"with the command below, given the same --bounds, --prior and --chi it was trained with.",
-        f"python -m core train --resume-fit {kept}", False, False), _failure(view)
+            view.command_line.isVisibleTo(view), view.resume_button.isVisibleTo(view),
+            view.continue_button.isVisibleTo(view)) == (
+        1, True, f"{_DEVICE.format(_ILLEGAL.splitlines()[0])} Close PRISM and open it again; Home and the Training step "
+                 f"will offer to resume the training, kept up to epoch 2.", "", False, False, False), _failure(view)
 
 
 def _laid_out(label):
@@ -689,8 +687,9 @@ def _menu_of(label) -> tuple:
 
 def test_a_long_command_and_a_long_message_wrap_within_a_narrow_page_and_the_command_is_copied_whole(tmp_path,
                                                                                                     store, monkeypatch):
-    """On a run page 326 px wide, as at the window's least size, the command that resumes a training only reopening
-    PRISM can help, naming its bounds file by a long path, takes as many lines as it needs, broken inside the path
+    """On a run page 326 px wide, as at the window's least size, the command that resumes a narrowing round only
+    reopening PRISM can help (a training's is offered by Home and the Training step instead), naming its bounds file by
+    a long path, takes as many lines as it needs, broken inside the path
     where it must: its label is as tall as those lines. A person selects it with the mouse, pressing at its first
     character and letting go at the end of its last line: the press gives it the keyboard, and the keyboard's copy,
     sent where the keyboard is, copies the command exactly, one line with nothing added. Neither the move of the drag
@@ -719,16 +718,21 @@ def test_a_long_command_and_a_long_message_wrap_within_a_narrow_page_and_the_com
     cfg = SimpleNamespace(sources={"bounds": bounds}, chi_mode=True,
                           hw=SimpleNamespace(device=SimpleNamespace(type="cuda")))
     prior = SimpleNamespace(kind="prior", id="20261001T150211", name="retrain_prior")
+    parent = SimpleNamespace(kind="posterior", id="20261002T120000", name="retrain",
+                             posterior=SimpleNamespace(truncation=None))
+    observation = SimpleNamespace(kind="observation", id="20261002T130000", name="cell_a")
     kept = build_fit_record(store, passes=2)
-    in_the_fit = StandIn()
+    in_the_fit = StandIn(word="Narrowing round")
     in_the_fit.kept_fit = _note(kept, 2)
-    _start_with(host, in_the_fit, _training(), cfg, prior, None, True, name="retrain_3")
+    _start_with(host, in_the_fit, _training("Narrowing round", place=("inference", "narrowing")), cfg, parent, prior,
+                observation, name="retrain_3")
     _to_the_fit(app, in_the_fit, text, clock, _set(tmp_path, 10_000, complete=True), [(1, 0), (2, 1)])
     in_the_fit.fail(_device_failure(in_the_simulation=False))
     _ended(app, held)
     _settle()
     line = view.command_line
-    command = f'python -m core train --resume-fit {kept} --bounds "{bounds}" --prior retrain_prior --chi'
+    command = (f'python -m core tsnpe --resume-fit {kept} --bounds "{bounds}" --posterior retrain --observation cell_a '
+               f'--chi')
     lines, needed = _lines_needed(line)
     assert (line.text(), line.isVisibleTo(view)) == (command, True), line.text()
     assert lines > 1 and line.width() <= view.width() and line.height() >= needed - 1, (
@@ -955,8 +959,9 @@ def test_resume_the_training_repeats_the_runs_own_call_with_the_kept_training_na
     assert (all_asked(), view.mode, view.sentence.text(), view.back_button.isVisibleTo(view),
             view.failure.isVisibleTo(view), host.results.currentWidget() is view) == (
         [box for box in all_asked() if box.title == "Stop training?"], "ended",
-        f"The kept training {kept} cannot be resumed: the code that builds or trains the network has changed since.",
-        True, False, True), "a refused resume was told in a box, or not on its page"
+        f"The kept training {kept} cannot be resumed: the code that builds or trains the network has changed since. "
+        f"{fix_sentence('resume_fit')}", True, False, True), "a refused resume was told in a box, or not on its page"
+    assert fix_sentence("resume_fit") == "Look at the kept trainings in step 3, Training."
     view.back_button.click()
     assert host.results.currentWidget() is host.figures
     host.figure_stack.add_figure("opened after the refusal", b"")       # a figure of no run: a saved record's
@@ -1266,16 +1271,9 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
             _waiting(app, held)
             assert view.sentence.text() == waits(*after, 4)
     _ended(app, held)
-    command = (f"python -m core train --resume-fit {kept} --bounds Resources/Bounds/nadrowski/master.txt --prior "
-               f"retrain_prior --chi")
     assert (held.status.reopen, _failure(view), _said_alone(view), view.resume_button.isVisibleTo(view)) == (
-        True, f"{_REOPEN} Close PRISM and open it again. The training is kept up to epoch 4; until the Training page "
-              f"offers to resume it, it is resumed from the command line with the command below.", command, False), (
-        _failure(view))
-    args, said = _parsed(_said_alone(view))
-    assert (args is not None and (args.cmd, args.resume_fit, args.bounds, args.prior, args.chi_mode)) == (
-        "train", kept, "Resources/Bounds/nadrowski/master.txt", "retrain_prior", True), (
-        "the command copied off the page is not one the command-line tool takes", said)
+        True, f"{_REOPEN} Close PRISM and open it again; Home and the Training step will offer to resume the training, "
+              f"kept up to epoch 4.", "", False), _failure(view)
     assert stand_in.calls[1:] == [(called, {**base, "resume_fit": kept})] * 4, stand_in.calls
 
     narrowing = StandIn(word="Narrowing round")
@@ -1664,6 +1662,32 @@ def test_a_kept_training_is_rebuilt_as_its_set_was_made(case, store, monkeypatch
     assert rebuilt == made, {key: (made[key], rebuilt.get(key)) for key in made if made[key] != rebuilt.get(key)}
     units = options.get("units_override")
     assert resume_draft(kept).units_override == (tuple(units) if units else None)
+
+
+def test_the_reopening_page_says_what_home_will_offer(tmp_path, store):
+    """A narrowing round that only reopening PRISM can help sets off the command that resumes it beneath its sentence,
+    and the command and the failure's own message are each a stop of the Tab key on the run's page, taking the keyboard
+    from the keys as a person reads and copies them; a training's page sets off no command."""
+    app = qt_app()
+    clock = Clock(_at(3, 3, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    kept = build_fit_record(store, passes=2)
+    narrowing = StandIn(word="Narrowing round")
+    narrowing.kept_fit = _note(kept, 2)
+    typed = SimpleNamespace(sources={}, chi_mode=True, hw=None)
+    parent, observation = SimpleNamespace(name="retrain_3", id="p1"), SimpleNamespace(name="", id="o1")
+    prior = SimpleNamespace(kind="prior", id="20261001T150211", name="retrain_prior")
+    _start_with(host, narrowing, _training("Narrowing round", place=("inference", "narrowing")), typed, parent, prior,
+                observation)
+    _to_the_fit(app, narrowing, text, clock, _set(tmp_path, 10_000, complete=True), [(1, 0), (2, 1)])
+    narrowing.fail(_device_failure(in_the_simulation=False))
+    _ended(app, held)
+    stops = view.stops()
+    for label in (view.command_line, view.failure_message):
+        assert label.isVisibleTo(view) and label in stops and bool(label.focusPolicy() & Qt.TabFocus), label.text()
+    assert view.command_line.text() == f"python -m core tsnpe --resume-fit {kept}"
+    assert stops.index(view.command_line) < stops.index(view.failure_message) < stops.index(view.full_error_button)
 
 
 def test_home_and_the_steps_take_the_newest_offer_each_can_say():

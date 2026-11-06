@@ -308,6 +308,8 @@ class MainWindow(QMainWindow):
         # foot runs no clock: it says what the run's status says, at each change of it. Every move is looked at for
         # an end whose page has come into sight.
         controller().status_changed.connect(self._on_status)
+        controller().offer_pressed.connect(self.offer_pressed)
+        controller().kept_changed.connect(self._kept_changed)
         controller().use_window(self)
         self.place_changed.connect(self._seen)
 
@@ -626,11 +628,20 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
 
+    def _kept_changed(self) -> None:
+        """A kept training was deleted by "Discard": what is offered is read again, and Home reads again."""
+        self._stored = None
+        inference = self._built.get("inference")
+        if inference is not None:
+            inference.read_offers()
+        else:
+            self._states_changed(self._step_states())
+
     def offer_pressed(self, offer) -> None:
-        """An offer taken, from Home's button. For a training of this launch whose page still offers it, that page opened
-        and its own button pressed. Else "Continue from batch N" or "Fit again" fills the forms from the run's history
-        and continues it, and "Resume" resumes the kept training on its own record, each through Parameter inference,
-        which opens at the Training step. Nothing while a run is live, or for no offer."""
+        """An offer taken, from Home's button or a past view's. For a training of this launch whose page still offers it,
+        that page opened and its own button pressed. Else "Continue from batch N" or "Fit again" fills the forms from the
+        run's history and continues it, and "Resume" resumes the kept training on its own record, each through Parameter
+        inference, which opens at the Training step. Nothing while a run is live, or for no offer."""
         if controller().is_live() or offer is None or getattr(offer, "kind", None) not in ("continue", "fit_again",
                                                                                           "resume"):
             return
@@ -741,6 +752,12 @@ class MainWindow(QMainWindow):
             return
         panel = next((panel for panel, at in self._places.items() if at == tuple(place)), None)
         shown = panel is None or held.show_past(run, panel)
+        past = getattr(panel, "_past_view", None)
+        if shown and past is not None and panel.results.currentWidget() is past:
+            inference = self._built.get("inference")
+            offers = inference.offers() if inference is not None else self._offers
+            past.offer_past(next((offer for offer in offers if offer.run == run and not offer.why_not
+                                  and offer.kind in ("continue", "fit_again", "resume")), None))
         if shown and ended:
             held.acknowledge(run)
 

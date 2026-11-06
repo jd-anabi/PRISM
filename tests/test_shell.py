@@ -8394,6 +8394,11 @@ def _settle(app, inference, then=None) -> None:
         turn_until(app, lambda: bool(done))
 
 
+def _row_of(page, kept):
+    """The widgets of the kept training ``kept``'s row in the Training step's list."""
+    return next(parts for offer, parts in page._kept_rows if offer.kept == kept)
+
+
 def test_home_offers_continue_from_batch_n_in_a_fresh_window(store, tmp_path, monkeypatch):
     """A training that failed with its simulation set unfinished, after a reopening: Home's next step is to continue
     it from the batch its set holds, named in the button, and the rail's Training row says the batch; while nobody has
@@ -8574,6 +8579,37 @@ def test_a_kept_training_whose_files_have_moved_says_why_before_anything_is_read
         [], [], False, None), "something was read, applied or started"
 
 
+def test_a_torn_kept_training_is_refused_and_offers_delete(store, tmp_path, monkeypatch):
+    """A kept training the listing finds resumable whose saved passes cannot be read: its Resume is refused by the
+    stage before anything is spent, the refusal is said on its row with "Delete" beside it and no Resume, and "Delete",
+    asked first with "Keep it" preselected, removes the record and the list is read again."""
+    from core import orchestrator
+    from core.refusals import Refusal
+    from tests._fixtures import asked, choose
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held)
+    torn = StandIn(word="Training")
+    sentence = (f"The kept training {kept} cannot be resumed now: its header cannot be read; nothing of it was changed, "
+                f"and it can be tried again or deleted.")
+    torn.fail(Refusal(sentence, field="resume_fit"))
+    monkeypatch.setattr(orchestrator, "build_posterior", torn)
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    window.go_to("inference", "training")
+    inference = window.part("inference")
+    page = inference.posterior_panel
+    _row_of(page, kept)["resume"].click()
+    _settle(app, inference, torn)
+    row = _row_of(page, kept)
+    assert (row["why"].text(), row["resume"].isVisibleTo(page.kept_block), row["delete"].isVisibleTo(page.kept_block)) \
+        == (sentence, False, True)
+    choose(monkeypatch, words="Delete it")
+    row["delete"].click()
+    assert (asked().title, asked().safe, asked().loses_work) == ("Delete this kept training?", "Keep it", True)
+    assert [k for k in store.list("fit") if k.id == kept] == [] and not page.kept_block.isVisibleTo(page)
+
+
 def test_resume_sends_only_the_kept_training_and_rebuilds_from_its_record(store, tmp_path, monkeypatch):
     """A Resume, with step 1's form on Hopf and the Training page's settings at other values:
     step 1 applied with the record's model and options, its prior loaded on the configuration its record rebuilds, and
@@ -8685,6 +8721,131 @@ def test_the_training_steps_list_reads_once_and_never_while_a_run_is_live(store,
         assert len(reads) == first + 1, "the kept trainings were read while a run was live"
     turn_until(app, lambda: not controller().is_live())
     assert len(reads) > first + 1, "the run's end did not read the kept trainings"
+
+
+def test_a_run_of_this_window_lists_as_running_and_offers_nothing(store, tmp_path, monkeypatch):
+    """While a Resume's run trains a kept training, its row says a run of this window trains it and offers neither
+    Resume nor Delete, and every other row's buttons are greyed."""
+    from core import orchestrator
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    kept, other = _a_kept_training(store, held, name="retrain_3"), _a_kept_training(store, held, name="retrain_5")
+    training = StandIn(word="Training")
+    monkeypatch.setattr(orchestrator, "build_posterior", training)
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    window.go_to("inference", "training")
+    inference = window.part("inference")
+    page = inference.posterior_panel
+    _row_of(page, kept)["resume"].click()
+    turn_until(app, training.started.is_set)
+    page.redraw()
+    row, beside = _row_of(page, kept), _row_of(page, other)
+    assert beside["uses"].text() == "It uses the settings it was kept with." and beside["uses"].isVisibleTo(page.kept_block)
+    assert (row["why"].text(), row["resume"].isVisibleTo(page.kept_block), row["delete"].isVisibleTo(page.kept_block),
+            beside["resume"].isEnabled(), beside["delete"].isEnabled()) == (
+        "Running: a run of this window is training it.", False, False, False, False)
+    training.release(SimpleNamespace(kind="posterior", id="made", name="retrain_3", manifest=None,
+                                     posterior=SimpleNamespace(truncation=None)))
+    turn_until(app, lambda: not controller().is_live())
+
+
+def test_the_past_view_offers_what_the_run_can_do_and_discard_deletes_the_kept_training(store, tmp_path, monkeypatch):
+    """The page of a training that failed in its fit, opened from "Last runs" after a reopening, offers "Resume the
+    training" and "Discard": "Discard" deletes the training it kept, and Home offers it no more; the page of a training
+    to continue offers "Continue from batch N", whose press is Home's."""
+    from tests._fixtures import choose
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held)
+    _a_failed_training(store, tmp_path, held, batches=10_000, kept=kept)
+    window, home = _home_of_last_time(tmp_path)
+    assert home.next_button.text() == "&Resume"
+    window._open_run(_REOPENED)
+    page = window.part("inference").posterior_panel
+    past = page._past_view
+    assert page.results.currentWidget() is past
+    assert (past.resume_button.isVisibleTo(past), past.discard_kept_button.isVisibleTo(past),
+            past.continue_button.isVisibleTo(past)) == (True, True, False)
+    pressed = []
+    controller().offer_pressed.disconnect(window.offer_pressed)          # heard here alone: no Resume is started
+    controller().offer_pressed.connect(pressed.append)
+    past.resume_button.click()
+    controller().offer_pressed.disconnect(pressed.append)
+    assert [(offer.kind, offer.kept) for offer in pressed] == [("resume", kept)], "the past view's Resume is not Home's"
+    assert window.shell.rail.row("training").accessibleName() == "Step 3, Training. Unfinished: training kept after epoch 7"
+    choose(monkeypatch, words="Discard")
+    past.discard_kept_button.click()
+    assert [row.id for row in store.list("fit")] == [] and not past.resume_button.isVisibleTo(past)
+    assert "Unfinished" not in window.shell.rail.row("training").accessibleName(), (
+        "the kept training a Discard deleted is still said, until something reads again")
+    window.go_to("home")
+    assert home.next_button.text() != "&Resume"
+
+
+def test_a_page_never_offers_resume_where_the_record_says_it_cannot_be_resumed(store, tmp_path, monkeypatch):
+    """A kept training that cannot be resumed (its simulation set no longer whole) is offered nowhere: not on Home,
+    not by a Resume on its row in the Training step's list, which says why and keeps "Delete", and not on the past
+    view of the run that kept it."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    kept = _a_kept_training(store, held, set_whole=False)
+    _a_failed_training(store, tmp_path, held, batches=10_000, kept=kept)
+    window, home = _home_of_last_time(tmp_path)
+    assert home.next_button.text() not in ("&Resume", "&Continue from batch 236")
+    window.go_to("inference", "training")
+    page = window.part("inference").posterior_panel
+    row = _row_of(page, kept)
+    assert ("is not in the store any more" in row["why"].text() or "committed batches" in row["why"].text(),
+            row["resume"].isVisibleTo(page.kept_block), row["delete"].isVisibleTo(page.kept_block)) == (True, False, True)
+    window._open_run(_REOPENED)
+    past = page._past_view
+    assert not past.resume_button.isVisibleTo(past) and not past.discard_kept_button.isVisibleTo(past)
+
+
+def test_a_kept_training_another_program_writes_reaches_home_at_its_next_opening(store, tmp_path, monkeypatch):
+    """A kept training written while the window is open, by another program (the command-line tool's training stopped
+    at a pass), is offered by Home at its next opening, and by the Training step at its next reading; nothing watches
+    the store's folder in between."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    window, home = _home_of_last_time(tmp_path)
+    window.go_to("inference", "training")
+    page = window.part("inference").posterior_panel
+    assert not page.kept_block.isVisibleTo(page)
+    kept = _a_kept_training(store, held, name="from_the_tool")
+    assert not page.kept_block.isVisibleTo(page), "the list read the store with nobody asking"
+    window.go_to("home")
+    assert (home.next_heading.label.text(), home.next_button.text()) == ("Next: resume the training from_the_tool",
+                                                                         "&Resume")
+    window.go_to("inference", "training")
+    assert [offer.kept for offer in page.kept_offers()] == [kept] and page.kept_block.isVisibleTo(page)
+
+
+def test_a_kept_rounds_command_is_listed_in_the_fixed_face_and_a_tab_stop(store, tmp_path, monkeypatch):
+    """A kept narrowing round is listed with the command that resumes it, in the fixed-width face, selectable and a
+    stop of the Tab key after the heading's buttons, and no Resume; "Delete" stands beside it."""
+    from core.gui import fonts
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    kept = _a_kept_training(store, held, name="round_1", region={"lo": [0.0]})
+    window, _home = _home_of_last_time(tmp_path)
+    window.go_to("inference", "training")
+    page = window.part("inference").posterior_panel
+    row = _row_of(page, kept)
+    command = row["command"]
+    assert command.text().startswith(f"python -m core tsnpe --resume-fit {kept} ")
+    from core.gui.run.view import SelectableLines
+    assert (command.font().family(), bool(command.focusPolicy() & Qt.TabFocus), isinstance(command, SelectableLines))         == (fonts.fixed().family(), True, True)
+    assert not row["resume"].isVisibleTo(page.kept_block) and row["delete"].isVisibleTo(page.kept_block)
+    assert not row["uses"].isVisibleTo(page.kept_block), "a kept round's row says it uses its settings, with no Resume"
+    assert page.region_stops()[:3] == [command, row["resume"], row["delete"]]
+    start = page.head.findChildren(QPushButton)[-1]
+    at, chain = start.nextInFocusChain(), []
+    while at is not start and len(chain) < 500:
+        chain.append(at)
+        at = at.nextInFocusChain()
+    first = page.form.first_control()
+    assert command in chain and row["delete"] in chain and first in chain, "the round's row is no stop of the Tab key"
+    assert chain.index(command) < chain.index(row["delete"]) < chain.index(first), (
+        "the round's row does not come between the heading and the form")
 
 
 def _set_of(tmp_path, batches, *, complete=False):
@@ -8831,6 +8992,27 @@ def test_a_resumes_repeat_keeps_the_kept_training_and_sends_nothing_of_the_forms
     training.release(SimpleNamespace(kind="posterior", id="made", name="retrain_3", manifest=None,
                                      posterior=SimpleNamespace(truncation=None)))
     turn_until(app, lambda: not controller().is_live())
+
+
+def test_a_resume_refused_before_anything_is_read_is_said_on_its_row_until_the_next_reading(store, tmp_path,
+                                                                                            monkeypatch):
+    """What stops a Resume before anything is read is said on the kept training's row in the Training step's list, in
+    place of its "Resume", with "Delete" kept beside it, until the list is next read, which asks again."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held, release=False)
+    kept = _a_kept_training(store, held)
+    store.delete("prior", held.prior, force=True)
+    window, _home = _home_of_last_time(tmp_path)
+    window.go_to("inference", "training")
+    inference = window.part("inference")
+    page = inference.posterior_panel
+    _row_of(page, kept)["resume"].click()
+    row = _row_of(page, kept)
+    assert (row["why"].text(), row["resume"].isVisibleTo(page.kept_block), row["delete"].isVisibleTo(page.kept_block)) \
+        == ("The prior it was trained with is no longer in Records.", False, True)
+    page.foot.check_again.click()
+    assert page._said_on_row == {} and _row_of(page, kept)["resume"].isVisibleTo(page.kept_block), (
+        "what was said on the row outlived the list's next reading")
 
 
 def test_a_store_that_keeps_no_training_is_never_asked_for_its_kept_trainings(store, tmp_path, monkeypatch):

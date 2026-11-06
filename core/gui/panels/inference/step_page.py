@@ -262,7 +262,8 @@ class StepPage(RunHost, QWidget):
         sight, and again as a row joins the form or a figure joins the stack. A part that is a stop only at times has its
         place all the same. A control that makes its own fields again after that, as a grid does, calls this when it
         has."""
-        stops = [*self.head.findChildren(QPushButton), *self.run_view.stops(), self.run_view.how_link,
+        stops = [*self.head.findChildren(QPushButton), *self.run_view.stops(), *self.region_stops(),
+                 self.run_view.how_link,
                  *self.figure_stack.stops(), self.next_button, *self.form.stops(), self.scroller, self.foot.facts.scroller,
                  *self.foot.stops()]
         policies = [(stop, stop.focusPolicy()) for stop in stops]
@@ -272,6 +273,11 @@ class StepPage(RunHost, QWidget):
             QWidget.setTabOrder(before, after)
         for stop, policy in policies:
             stop.setFocusPolicy(policy)
+
+    def region_stops(self) -> list:
+        """The stops a page stands under what the step holds, in their order: none, but on a page that lists something
+        there."""
+        return []
 
     def _a_stop_joined(self) -> None:
         """A row or a figure joined the page: it takes its place in the order, once there is one."""

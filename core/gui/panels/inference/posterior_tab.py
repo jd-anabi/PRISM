@@ -37,13 +37,14 @@ import math
 from dataclasses import replace
 from datetime import datetime
 
-from PySide6.QtWidgets import QPushButton, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from core import config, orchestrator
 from core.artifacts import Accept, default_store
 from core.refusals import Refusal, default_clause, require_at_least, require_positive
 
-from ... import continuing, fields, keys, plans, record_words, settings, style, texts
+from ... import continuing, design, fields, fonts, keys, plans, record_words, settings, style, texts
 from ...chain import model_label
 from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...remembered import NUM_RUNS_KEY, POSTERIOR_KEY, RUN_SIZE_KEY, put_many
@@ -51,6 +52,7 @@ from ...reported import reported
 from ...run import ends, history
 from ...run.controller import controller
 from ...run.model import RunSpec
+from ...run.view import SelectableLines, WrappedWords
 from ...step_facts import (CANCEL, CONTINUING, LOAD_POSTERIOR_WORDS, NO_POSTERIOR_TEXT, NO_PRIOR_WORDS, START_WORDS,
                            Fact, SelectionRow, budget_words, held_value, how_long_words, kept_words, load_facts,
                            narrowed_question, new_set_question, new_training_question, of_this_model, pending_words,
@@ -102,6 +104,16 @@ EARLIER_NAME_TEXT = "The earlier run was named {}."
 #: The name a kept training with none is asked for at Resume.
 NAME_TITLE = "Name this training"
 NAME_TEXT = "This kept training has no name yet. A posterior needs one."
+#: The list of kept trainings: its heading, its two buttons, what a row says of a training a run of this window trains,
+#: and Delete's question.
+KEPT_HEAD = "Kept trainings"
+RESUME_WORDS = "Resume"
+DELETE_WORDS = "Delete"
+RUNNING_TEXT = "Running: a run of this window is training it."
+USES_TEXT = "It uses the settings it was kept with."
+DELETE_TITLE = "Delete this kept training?"
+DELETE_TEXT = "The {} epochs kept are deleted; the next training starts from its first epoch."
+KEEP_IT, DELETE_IT = "Keep it", "Delete it"
 
 # THE SETTINGS A TRAINING READS, in the order the stage checks them: the field key, which is also build_posterior's
 # keyword but for the expected epochs, which only the run's page reads; and the rule's floor, an int for
@@ -212,6 +224,7 @@ class PosteriorPanel(StepPage):
         self._lists_wait = False             # the reading after the typing stops reads no kept training
         self._resuming = None                # the kept training a Resume is starting, until its run is dispatched
         self._last_resumed = None            # the id of the kept training this page's last Resume started
+        self._kept_rows: list = []           # the list's rows as drawn: (offer, its widgets)
         self._said_on_row: dict = {}         # a refusal said on a kept training's row, by its id, until the next reading
         self.switch_button = QPushButton()
         self.switch_button.clicked.connect(self._switch)
@@ -265,6 +278,15 @@ class PosteriorPanel(StepPage):
         self._names = NameAndNote("posterior", required=True)
         self.use_names(self._names)
         self.prior_row = form.add_text("prior", "", "", side=True)
+        self.kept_block = QWidget()
+        self._kept_lines = QVBoxLayout(self.kept_block)
+        self._kept_lines.setContentsMargins(0, 0, 0, 0)
+        self._kept_lines.setSpacing(design.scaled(design.GAP["head_table"]))
+        self.kept_head = style.set_class(QLabel(KEPT_HEAD), cls="head")
+        self.kept_head.setFont(fonts.inter("head"))
+        self._kept_lines.addWidget(self.kept_head)
+        self.kept_block.setVisible(False)
+        self._body.insertWidget(self._body.indexOf(self.in_use) + 1, self.kept_block)
         self.restore_settings(settings.settings())
         self._apply_view("training")
         self.refresh_local_gates()
@@ -563,6 +585,106 @@ class PosteriorPanel(StepPage):
             super()._timer_fired()
         finally:
             self._lists_wait = False
+
+    def kept_offers(self) -> tuple:
+        """The kept trainings the list shows, as the screen last read them, newest first."""
+        return tuple(offer for offer in (getattr(self._screen, "offers", tuple)() or ())
+                     if offer.kind in ("resume", "round"))
+
+    def redraw(self) -> None:
+        """What every page draws, then the list of kept trainings as last read."""
+        super().redraw()
+        self._draw_the_kept()
+
+    def _draw_the_kept(self) -> None:
+        """One row for each kept training: its label, what it says, why it cannot be resumed or the command that resumes
+        a kept narrowing round, then "Resume" and "Delete"; a kept training a live run of this window trains reads
+        "running" and offers nothing. Reads nothing; rows made again only when the list's trainings change, and the Tab
+        key's order then with them."""
+        offers, live = self.kept_offers(), controller().is_live()
+        training = (getattr(getattr(controller().model, "spec", None), "kwargs", None) or {}).get("resume_fit") \
+            if live else None
+        if [offer for offer, _parts in self._kept_rows] != list(offers):
+            for _offer, parts in self._kept_rows:
+                parts["row"].setParent(None)
+                parts["row"].deleteLater()
+            self._kept_rows = [(offer, self._kept_row(offer)) for offer in offers]
+            for _offer, parts in self._kept_rows:
+                self._kept_lines.addWidget(parts["row"])
+            self._a_stop_joined()
+        for offer, parts in self._kept_rows:
+            running = offer.kept == training
+            said = self._said_on_row.get(offer.kept, "")
+            parts["why"].setText(RUNNING_TEXT if running else said or offer.why_not)
+            parts["why"].setVisible(running or bool(said or offer.why_not))
+            parts["resume"].setVisible(offer.kind == "resume" and not offer.why_not and not running and not said)
+            parts["resume"].setEnabled(not live)
+            parts["delete"].setVisible(not running)
+            parts["delete"].setEnabled(not live)
+        self.kept_block.setVisible(bool(self._kept_rows))
+
+    def _kept_row(self, offer) -> dict:
+        """The widgets of one row of the list."""
+        row = QWidget()
+        lines = QVBoxLayout(row)
+        lines.setContentsMargins(0, 0, 0, 0)
+        lines.setSpacing(design.scaled(design.GAP["field_message"]))
+        # Every line wraps within the column, inside a long name or path where it must, so that no row widens the page.
+        label, sentence = WrappedWords(), WrappedWords()
+        why, uses = style.set_class(WrappedWords(), cls="quiet"), style.set_class(WrappedWords(), cls="quiet")
+        label.setText(f"{offer.label}: {offer.how}")
+        sentence.setText(offer.sentence)
+        # Whatever the forms hold: a Resume runs on the kept training's own record.
+        uses.setText(USES_TEXT if offer.kind == "resume" and not offer.why_not else "")
+        uses.setVisible(bool(uses.text()))
+        parts = {"row": row, "label": label, "sentence": sentence, "why": why, "uses": uses}
+        for part in (label, sentence, uses, why):
+            lines.addWidget(part)
+        if offer.command:
+            command = SelectableLines()
+            command.setFont(fonts.fixed())
+            command.setText(offer.command)
+            command.setFocusPolicy(Qt.StrongFocus)
+            lines.addWidget(command)
+            parts["command"] = command
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        parts["resume"] = QPushButton(RESUME_WORDS)
+        parts["resume"].clicked.connect(lambda _checked=False, ident=offer.kept: self.resume_pressed(ident))
+        parts["delete"] = QPushButton(DELETE_WORDS)
+        parts["delete"].clicked.connect(lambda _checked=False, ident=offer.kept: self.delete_pressed(ident))
+        buttons.addWidget(parts["resume"])
+        buttons.addWidget(parts["delete"])
+        buttons.addStretch(1)
+        lines.addLayout(buttons)
+        return parts
+
+    def region_stops(self) -> list:
+        """The list's own stops, in its order: each row's command, then its two buttons."""
+        stops = []
+        for _offer, parts in self._kept_rows:
+            stops += [part for part in (parts.get("command"), parts["resume"], parts["delete"]) if part is not None]
+        return stops
+
+    def delete_pressed(self, ident: str) -> None:
+        """"Delete" on a kept training's row: asked first, "Keep it" preselected; deleted from Records, and the list read
+        again. Nothing while a run is live."""
+        if controller().is_live():
+            return
+        offer = next((offer for offer in self.kept_offers() if offer.kept == ident), None)
+        epochs = getattr(offer, "epoch", None)
+        if not ask(self, DELETE_TITLE, DELETE_TEXT.format(texts.number_text(epochs or 0)), KEEP_IT, DELETE_IT,
+                   loses_work=True):
+            return
+        try:
+            default_store().delete("fit", ident)
+        except Exception as error:           # noqa: BLE001 -- said on the row, as any refusal of the store is
+            self._said_on_row[ident] = str(getattr(error, "message", None) or error)
+        self._screen.read_offers()
+
+    def resume_pressed(self, ident: str) -> None:
+        """"Resume" on a kept training's row: the screen's Resume, the same as Home's and a past view's."""
+        self._screen.resume_kept(ident)
 
     def resume(self, kept, name: str = "") -> bool:
         """Start the kept training ``kept`` again, on its own record: the configuration and the prior the session holds,

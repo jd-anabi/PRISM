@@ -247,6 +247,10 @@ class RunController(QObject):
     status_changed = Signal(object)
     run_ended = Signal(object)
     lines = Signal(object)
+    # An offer of a reopened window taken on a past view's page, for the window to carry out; and a kept training
+    # deleted by "Discard", for what reads the kept trainings to read them again.
+    offer_pressed = Signal(object)
+    kept_changed = Signal()
     # A stop asked for, heard on the window's thread, from whichever thread asked; one asked for too late; and one
     # asked of a training saving its posterior.
     _stopping = Signal()
@@ -670,7 +674,9 @@ class RunController(QObject):
             store.delete("fit", kept)
         except Refusal as refused:
             return False, refused.message, ""
-        return True, questions.DISCARDED_TEXT, self._gone(run)
+        ended = self._gone(run)
+        self.kept_changed.emit()
+        return True, questions.DISCARDED_TEXT, ended
 
     def _gone(self, run: str | None) -> str:
         """The training the run ``run`` kept is gone: its page offers to resume it no more, and the run's call goes
