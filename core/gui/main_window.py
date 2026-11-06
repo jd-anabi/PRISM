@@ -606,10 +606,17 @@ class MainWindow(QMainWindow):
         """Home's main button pressed for what it does in place of opening a place: "Continue with these" applies and
         loads what was in use last time, as Home last read it. The person stays on Home, under the wait cursor while
         Parameter inference is built and step 1 applied; each load then shows at the rail's foot. Home is drawn again as
-        step 1 is applied, and reads again at each load's end, as at every run's. Nothing while a run is live, with
-        nothing read, or for an action this window does not know."""
+        step 1 is applied, and reads again at each load's end, as at every run's. "continue_run" and "resume" take the
+        offer Home's next step names (``offer_pressed``). Nothing while a run is live, with nothing read, or for an action
+        this window does not know."""
+        if controller().is_live():
+            return
+        if action in ("continue_run", "resume"):
+            home = self._built.get("home")
+            self.offer_pressed(getattr(getattr(home, "next", None), "offer", None))
+            return
         picks = self._picks
-        if action != "continue_with_these" or controller().is_live() or getattr(picks, "model", None) is None:
+        if action != "continue_with_these" or getattr(picks, "model", None) is None:
             return
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
@@ -618,6 +625,25 @@ class MainWindow(QMainWindow):
                 inference.continue_with(picks)
         finally:
             QApplication.restoreOverrideCursor()
+
+    def offer_pressed(self, offer) -> None:
+        """An offer taken, from Home's button. For a training of this launch whose page still offers it, that page opened
+        and its own button pressed. Else "Continue from batch N" or "Fit again" fills the forms from the run's history
+        and continues it, through Parameter inference, which opens at the Training step. Nothing while a run is live, or
+        for no offer."""
+        if controller().is_live() or offer is None or getattr(offer, "kind", None) not in ("continue", "fit_again"):
+            return
+        held = controller()
+        if getattr(offer, "run", None) and held.offered(offer.run):
+            # A training of this launch whose page still holds its own call: its page opened and its own button pressed,
+            # the exact call into the session as it stands, with nothing applied, loaded or asked again.
+            self._open_run(offer.run)
+            held.continue_run(offer.run)
+            return
+        inference = self.part("inference")
+        if not isinstance(inference, InferenceScreen):
+            return
+        inference.continue_from(offer)
 
     def _states_changed(self, states) -> None:
         """The six steps' states were worked out again: the rail shows them, and Home reads now while it is

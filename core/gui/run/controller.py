@@ -744,6 +744,12 @@ class RunController(QObject):
         for run in list(self._offers):
             self._withdraw_offer(run)
 
+    def offered(self, run) -> bool:
+        """Whether the page of the run ``run`` still offers to continue or resume it with the run's own call kept: a
+        training of this launch that failed or was stopped, until its page starts its next run or goes."""
+        held = self._offers.get(run)
+        return held is not None and _alive(held.host)
+
     def continue_run(self, run: str) -> bool:
         """"Continue from batch N" on the page of the training ``run``, which failed or was stopped with batches in
         its unfinished simulation set: its own call again, as its page's next run, the policy that must continue

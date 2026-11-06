@@ -40,6 +40,11 @@ from ..widgets.adaptive_stack import AdaptiveStack
 
 #: A plan's setting of step 1 by its name in a draft, where the two differ.
 _DRAFT_NAMES = {"units": "units_override"}
+#: The question a Continue or a Resume asks when the session holds a record.
+CONTINUE_TITLE = "{}?"
+CONTINUE_LETS_GO_TEXT = "This lets go of {}. Nothing is deleted: each stays in Records."
+KEEP_SESSION = "Keep this session"
+CONTINUE_OTHER = "Continue and start a new session"
 
 
 class InferenceScreen(QWidget):
@@ -247,6 +252,53 @@ class InferenceScreen(QWidget):
         self._offers = resuming.read_offers(default_store(), controller().folder())
         self.recompute_states()
         self.posterior_panel.redraw()
+
+    def _lets_go(self, title: str, other: str) -> bool:
+        """Whether what the session holds may be let go for a Continue or a Resume: asked first, "Keep this session"
+        preselected, when the session holds a record; True with nothing held."""
+        held = self.session_contents()
+        if not held:
+            return True
+        from ..widgets.ask import ask
+        return ask(self, title, CONTINUE_LETS_GO_TEXT.format(", ".join(held)), KEEP_SESSION, other)
+
+    def continue_from(self, offer) -> "LoadChain | None":
+        """"Continue from batch N", or "Fit again on the saved simulations", for the training of the run ``offer`` names,
+        after a reopening: its history read again, asked first when the session holds a record, then step 1 applied with
+        the model and the options the run was started with, the Training step's forms filled from its settings once the
+        model stands, its bounds file selected and its prior loaded by step 2's own load, and, once the prior is loaded,
+        the Training step set to continue: "Only continue", the name and the note blank with the earlier name as the
+        hint. The chain of loads is handed back; None when nothing started: a run live, a history gone or no longer
+        naming its settings, or the question answered "Keep this session"."""
+        from ..run import history
+        if controller().is_live() or offer is None or not offer.run:
+            return None
+        record = history.read(controller().folder() / f"{offer.run}.json") or {}
+        settings_ = record.get("settings")
+        if not isinstance(settings_, dict) or not isinstance(settings_.get("bounds"), str) or not settings_["bounds"]:
+            return None
+        model = settings_.get("model")
+        if not isinstance(model, str) or not model:
+            return None
+        if not self._lets_go(CONTINUE_TITLE.format(offer.button), CONTINUE_OTHER):
+            return None
+        rows = settings_.get("rows") if isinstance(settings_.get("rows"), list) else []
+        values = {(window_plans.HEADING_OF["training"], row["name"]): row.get("value") for row in rows
+                  if isinstance(row, dict) and isinstance(row.get("name"), str)}
+        source = window_plans.PlanSource("run", str(record.get("name") or offer.run), None, "", controller().now(),
+                                         values, ident=offer.run)
+        options = settings_.get("options") if isinstance(settings_.get("options"), dict) else {}
+        options = {**options, "chi_mode": settings_.get("chi_mode") is True}
+        units = options.get("units_override")
+        options["units_override"] = tuple(str(unit) for unit in units) if isinstance(units, list) else None
+
+        def fill() -> None:
+            self.config_panel.fill_with(source)
+
+        loads = self.load_chain(model, options, settings_["bounds"], settings_.get("prior"), fill=fill)
+        loads.finished.connect(lambda: self.posterior_panel.continue_run(offer, settings_))
+        self.navigate.emit("inference", "training")
+        return loads
 
     # ── a chain of loads ──
     def load_chain(self, model, options, bounds_file, prior, posterior=None, observation=None, *, fill=None):

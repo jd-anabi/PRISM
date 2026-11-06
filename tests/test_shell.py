@@ -8380,6 +8380,20 @@ def _a_kept_training(store, held, *, name="retrain_3", passes=7, stopped="on_pur
                               parents={"prior": held.prior, "simulation": folder.name}, hw=cfg.hw).id
 
 
+def _settle(app, inference, then=None) -> None:
+    """The event loop turned until the chain of loads the press started has ended and no run is live, and a few turns
+    more; with ``then``, the stand-in run the chain's end starts, until it has been called and its run has ended."""
+    from PySide6.QtCore import QTimer
+    turn_until(app, lambda: inference.loads is not None and not inference.loads.is_going()
+               and not controller().is_live())
+    if then is not None:
+        turn_until(app, lambda: then.started.is_set() and not controller().is_live())
+    for _ in range(3):
+        done = []
+        QTimer.singleShot(0, lambda: done.append(True))
+        turn_until(app, lambda: bool(done))
+
+
 def test_home_offers_continue_from_batch_n_in_a_fresh_window(store, tmp_path, monkeypatch):
     """A training that failed with its simulation set unfinished, after a reopening: Home's next step is to continue
     it from the batch its set holds, named in the button, and the rail's Training row says the batch; while nobody has
@@ -8420,6 +8434,74 @@ def test_older_files_are_read_as_holding_no_settings(store, tmp_path, monkeypatc
     assert "Unfinished" not in window.shell.rail.row("training").accessibleName()
 
 
+def test_the_page_it_opens_has_name_and_note_blank_and_the_earlier_name_as_a_hint(store, tmp_path, monkeypatch):
+    """"Continue from batch N" pressed after a reopening: step 1 applied with the run's model and options, its bounds
+    file selected and its prior loaded by step 2's own load, then the Training step shown with the values the run was
+    started with (a value its history holds as text stays text, and the field's own rule says so), "Only continue"
+    chosen, the name and the note blank and the earlier name as the hint; step 1's list of plans stands on "No plan"
+    and says the run's settings are in use, though a plan of the run's name stands in the model's folder; the plan
+    line names the run. Nothing is asked."""
+    from tests._fixtures import all_asked, forget_asked
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    _a_failed_training(store, tmp_path, held)
+    held.folder.mkdir(parents=True)
+    (held.folder / "retrain_3.txt").write_bytes(b"# Training\nnum_runs = 9000\n")     # a plan named as the run
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    forget_asked()
+    home.next_button.click()
+    inference = window.part("inference")
+    _settle(app, inference)
+    page, step_one = inference.posterior_panel, inference.config_panel
+    rows = page.form.rows
+    assert (window.current_place(), inference.loads.why, inference.session.draft.model,
+            inference.session.inf_prior.id) == (("inference", "training"), "", "NADROWSKI", held.prior)
+    assert ([rows[key].widget.text() for key in ("num_runs", "hidden_features", "learning_rate")],
+            rows["max_num_epochs"].widget.ticked_box.isChecked()) == (["7,000", "64", "1,5e-3"], True)
+    assert "Use a point as the decimal sign." in [fact.sentence for fact in page.facts_from_form()]
+    assert (page.resume_choice.currentData(), page._names.name_value(), page._names.note_value(),
+            page._names.hint.text()) == ("require", "", "", "The earlier run was named retrain_3.")
+    assert (step_one.plan_choice.currentText(), step_one.form.rows["plan"].line.words) == ("No plan", "")
+    assert "In use: settings from run retrain_3, filled 8 Oct 2026, 19:02." in step_one.plan_in_use.text()
+    assert (inference.plan_source.kind, inference.plan_source.ident) == ("run", _REOPENED)
+    assert page.plan_line.text().startswith("Settings from run retrain_3")
+    assert all_asked() == [], "the Continue asked a question with nothing held"
+
+
+def test_continue_passes_the_must_continue_policy_and_asks_no_consent(store, tmp_path, monkeypatch):
+    """Once the forms are filled, the Training page's button says "Continue from batch 236" at the batches its reading
+    finds (the choice of "Only continue" and an unfinished set of these settings), and its press, with a name typed,
+    hands the stage "Only continue" and no consent to start a new set, and asks nothing."""
+    from core import orchestrator
+    from tests._fixtures import all_asked, forget_asked
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    _a_failed_training(store, tmp_path, held, rows=({"name": "num_runs", "value": 7_000},))
+    reading = SimpleNamespace(checkpoint="resume_partial", batches_done=236, siblings="", sibling_diffs=(),
+                              cadence=50, checkpoint_error=None, width=2048)
+    monkeypatch.setattr(orchestrator, "training_reading", lambda *args, **kwargs: reading)
+    monkeypatch.setattr(orchestrator, "matching_fits", lambda *args, **kwargs: ())
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    home.next_button.click()
+    inference = window.part("inference")
+    _settle(app, inference)
+    page = inference.posterior_panel
+    page._names.name.setText("retrain_4")
+    page._names.check_now()
+    page.read_facts()
+    assert page.foot.main_button.text() == "&Continue from batch 236"
+    forget_asked()
+    calls = len(posterior_load.calls)
+    page.foot.main_button.click()
+    turn_until(app, lambda: len(posterior_load.calls) > calls and not controller().is_live())
+    args, kwargs = posterior_load.calls[-1]
+    assert (args[2:], kwargs["resume"], kwargs["new_run"], kwargs["name"]) == ((None, True), "require", False,
+                                                                                 "retrain_4")
+    assert all_asked() == [], "the press asked a question"
+
+
 def test_the_training_steps_list_reads_once_and_never_while_a_run_is_live(store, tmp_path, monkeypatch):
     """The kept trainings are read with the Training step's own readings (as it is shown and at "Check again"), never
     at the reading after the typing stops, and never while a run is live, whatever is opened or changed then; the run's
@@ -8449,6 +8531,118 @@ def test_the_training_steps_list_reads_once_and_never_while_a_run_is_live(store,
         assert len(reads) == first + 1, "the kept trainings were read while a run was live"
     turn_until(app, lambda: not controller().is_live())
     assert len(reads) > first + 1, "the run's end did not read the kept trainings"
+
+
+def _set_of(tmp_path, batches, *, complete=False):
+    """A simulation set's folder of the test's own whose state, as the engine writes it, holds ``batches``."""
+    import torch
+    folder = tmp_path / "simulations" / "_unnamed__20261008T190211"
+    folder.mkdir(parents=True, exist_ok=True)
+    torch.save({"batches_done": batches, "complete": complete}, folder / "state.pt")
+    return folder
+
+
+def _out_of_memory():
+    """The error a simulation fails with when the graphics card runs out of memory, as the engine chains it."""
+    try:
+        raise RuntimeError("CUDA error: out of memory")
+    except RuntimeError as card:
+        try:
+            raise RuntimeError("the simulation of batch 237 failed") from card
+        except RuntimeError as raised:
+            return raised
+
+
+def test_home_presses_the_pages_own_offer_for_a_training_of_this_launch(store, tmp_path, monkeypatch):
+    """A training of this launch that fails with batches saved, a posterior held: Home's "Continue from batch N" opens
+    the run's page and presses its own button, which repeats the run's own call into the session as it stands, the
+    one new argument the policy that must continue; no step is applied anew, the posterior held stays, and no name is
+    asked."""
+    from core import orchestrator
+    from tests._fixtures import all_asked, forget_asked
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.continue_with(window._picks)
+    _settle(app, inference)
+    posterior, session = inference.session.posterior, inference.session
+    assert posterior is not None
+    reading = SimpleNamespace(checkpoint="new", batches_done=0, siblings="", sibling_diffs=(), cadence=50,
+                              checkpoint_error=None, width=2048)
+    monkeypatch.setattr(orchestrator, "training_reading", lambda *args, **kwargs: reading)
+    monkeypatch.setattr(orchestrator, "matching_fits", lambda *args, **kwargs: ())
+    training = StandIn()
+    monkeypatch.setattr(orchestrator, "build_posterior", training)
+    window.go_to("inference", "training")
+    page = inference.posterior_panel
+    page.show_view("training")                          # the posterior's load left the step on its load view
+    page._names.name.setText("retrain_7")
+    page._names.check_now()
+    page.read_facts()
+    page.foot.main_button.click()
+    turn_until(app, training.started.is_set)
+    for line in (_BUDGET, _ROTATING, _ROTATED, _writing(_set_of(tmp_path, 236))):
+        training.say(line)
+    training.fail(RuntimeError("the disk is full"))
+    turn_until(app, lambda: not controller().is_live())
+    window.go_to("home")
+    assert (home.next_button.text(), home.next_link.isVisibleTo(home)) == ("&Continue from batch 236", True)
+    forget_asked()
+    home.next_button.click()
+    turn_until(app, lambda: len(training.calls) == 2)
+    (args, kwargs), (again, given) = training.calls
+    assert (again, given) == (args, {**kwargs, "resume": "require"}), "Home's press did not repeat the run's own call"
+    assert (inference.session is session, inference.session.posterior is posterior, all_asked(),
+            window.current_place()) == (True, True, [], ("inference", "training"))
+    training.release(SimpleNamespace(kind="posterior", id="made", name="retrain_7", manifest=None,
+                                     posterior=SimpleNamespace(truncation=None)))
+    turn_until(app, lambda: not controller().is_live())
+
+
+def test_the_repeats_of_a_continue_after_a_reopening_send_its_own_call(store, tmp_path, monkeypatch):
+    """"Continue from batch N" after a reopening, a name typed: its call holds the policy that must continue, the name
+    and no consent to a new set; when it fails with batches saved, the page's own "Continue from batch N" repeats that
+    call, and a try after the graphics card ran out of memory repeats it again, each with the same keywords."""
+    from core import orchestrator
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    _a_failed_training(store, tmp_path, held, rows=({"name": "num_runs", "value": 7_000},))
+    reading = SimpleNamespace(checkpoint="resume_partial", batches_done=236, siblings="", sibling_diffs=(),
+                              cadence=50, checkpoint_error=None, width=2048)
+    monkeypatch.setattr(orchestrator, "training_reading", lambda *args, **kwargs: reading)
+    monkeypatch.setattr(orchestrator, "matching_fits", lambda *args, **kwargs: ())
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    home.next_button.click()
+    inference = window.part("inference")
+    _settle(app, inference)
+    training = StandIn()
+    monkeypatch.setattr(orchestrator, "build_posterior", training)
+    page = inference.posterior_panel
+    page._names.name.setText("retrain_4")
+    page._names.check_now()
+    page.read_facts()
+    page.foot.main_button.click()
+    turn_until(app, training.started.is_set)
+    for line in (_BUDGET, _ROTATING, _ROTATED, _writing(_set_of(tmp_path, 300))):
+        training.say(line)
+    training.fail(RuntimeError("the disk is full"))
+    turn_until(app, lambda: not controller().is_live())
+    page.run_view.continue_button.click()
+    turn_until(app, lambda: len(training.calls) == 2)
+    training.fail(_out_of_memory())
+    turn_until(app, lambda: controller().status.state == "retrying")
+    controller()._clock.advance(60)
+    controller().tick()
+    turn_until(app, lambda: len(training.calls) == 3)
+    first = training.calls[0]
+    assert (first[1]["resume"], first[1]["new_run"], first[1]["name"]) == ("require", False, "retrain_4")
+    assert training.calls[1] == first and training.calls[2] == first, training.calls
+    training.release(SimpleNamespace(kind="posterior", id="made", name="retrain_4", manifest=None,
+                                     posterior=SimpleNamespace(truncation=None)))
+    turn_until(app, lambda: not controller().is_live())
 
 
 def test_a_store_that_keeps_no_training_is_never_asked_for_its_kept_trainings(store, tmp_path, monkeypatch):

@@ -973,12 +973,19 @@ class ConfigPanel(StepPage):
         """Fill steps 1 to 3 with ``source``, a plan's (``plans.source_of``), as "Fill the forms from this plan" does
         and as Home's "Continue with these" does: the forms filled, then the list of plans read again and standing on
         the plan, which it holds as the plan shown, and the row drawn again, so that it says the plan shown is the plan
-        in use. ``keep_remembered`` leaves a value put back from last time as it is. False, and nothing changed, while a
+        in use. A source that is no plan (a run's settings, as "Continue from batch N" fills them) leaves the list on "No
+        plan". ``keep_remembered`` leaves a value put back from last time as it is. False, and nothing changed, while a
         run is live."""
         if not plans.fill_forms(self._screen, source.values, source, keep_remembered=keep_remembered):
             return False
         self._gone = None
-        self._read_the_plans(show=source.name)
+        if source.kind != "plan":
+            self.plan_choice.blockSignals(True)
+            try:
+                self.plan_choice.setCurrentIndex(0)
+            finally:
+                self.plan_choice.blockSignals(False)
+        self._read_the_plans(show=source.name if source.kind == "plan" else None)
         self.redraw()
         return True
 

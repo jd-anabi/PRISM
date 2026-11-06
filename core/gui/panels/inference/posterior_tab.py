@@ -43,7 +43,7 @@ from core import config, orchestrator
 from core.artifacts import Accept, default_store
 from core.refusals import Refusal, default_clause, require_at_least, require_positive
 
-from ... import fields, keys, plans, record_words, settings, style, texts
+from ... import continuing, fields, keys, plans, record_words, settings, style, texts
 from ...chain import model_label
 from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...remembered import NUM_RUNS_KEY, POSTERIOR_KEY, RUN_SIZE_KEY, put_many
@@ -96,6 +96,8 @@ EPOCHS = "epochs"
 SAVED_WITHOUT_NAME = "It was saved without its name: '{}' was taken while the run was going."
 #: The words beside the main button while a field breaks a rule of the page.
 SETTING_BLOCKS = "a setting cannot be used"
+#: The hint under "Name" after "Continue from batch N" filled the forms.
+EARLIER_NAME_TEXT = "The earlier run was named {}."
 
 # THE SETTINGS A TRAINING READS, in the order the stage checks them: the field key, which is also build_posterior's
 # keyword but for the expected epochs, which only the run's page reads; and the rule's floor, an int for
@@ -309,7 +311,19 @@ class PosteriorPanel(StepPage):
 
     # ── what a page answers ──
     def main_words(self) -> str:
-        return LOAD_POSTERIOR_WORDS if self.view == "load" else START_WORDS
+        """"Load this posterior"; or, with "Only continue" and the saved set of these settings unfinished, "Continue from
+        batch N" at the batches the reading found, and with it whole "Fit again on the saved simulations"; else "Start
+        training"."""
+        if self.view == "load":
+            return LOAD_POSTERIOR_WORDS
+        reading = self._standing_reading()
+        if not self._never() and self._resume() == "require" and reading is not None:
+            state = getattr(reading, "checkpoint", None)
+            if state == "resume_partial":
+                return continuing.CONTINUE_BUTTON.format(texts.number_text(getattr(reading, "batches_done", 0) or 0))
+            if state == "resume_complete":
+                return continuing.FIT_AGAIN_BUTTON
+        return START_WORDS
 
     def nothing_to_apply(self) -> bool:
         """The load view holds the posterior selected: a load would change nothing."""
@@ -541,6 +555,20 @@ class PosteriorPanel(StepPage):
             super()._timer_fired()
         finally:
             self._lists_wait = False
+
+    def continue_run(self, offer, settings_: dict) -> None:
+        """The forms filled from a training's history, for "Continue from batch N" or "Fit again on the saved
+        simulations": "Only continue" chosen, the name and the note blank, the earlier run's name as the hint, and the
+        page read, so that its main button says what the press does."""
+        self.show_view("training")
+        index = self.resume_choice.findData("require")
+        if index >= 0:
+            self.resume_choice.setCurrentIndex(index)
+        self._names.name.clear()
+        self._names.note.clear()
+        earlier = settings_.get("name") if isinstance(settings_.get("name"), str) else ""
+        self._names.set_hint(EARLIER_NAME_TEXT.format(earlier) if earlier else "")
+        self.read_facts()
 
     def _read_the_record(self) -> None:
         """The saved posteriors listed again, keeping the one selected; and its record as the line under the list says
