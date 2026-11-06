@@ -1431,6 +1431,193 @@ def test_closing_the_window_during_a_pause_ends_the_tries_and_then_closes_it(tmp
             "stayed open as it closed")
 
 
+# ── what a reopened window can offer ──
+_ROOT = "C:/records/here"
+_SETTINGS = {"model": "NADROWSKI", "chi_mode": True, "bounds": "master.txt", "prior": "20261002T101500",
+             "options": {"chi_mode": True}, "rows": []}
+
+
+def _history(run, day, outcome, *, root=_ROOT, word="Training", folder="eda5c2a1e468", batches=10_000,
+             settings=_SETTINGS, kept=None, **more):
+    """A run's history as the window writes it, of the records folder ``root``, started on ``day`` of October 2026 at
+    noon and ended an hour later, its simulation set ``folder`` of ``batches`` in all; its two counts of the set left
+    at numbers no reading should take for the set's own (the set's count at the start and at the end)."""
+    return {"id": run, "word": word, "name": f"{word.lower()}_{day}", "records_root": root, "outcome": outcome,
+            "started": _at(day, 12, 0).isoformat(), "ended": _at(day, 13, 0).isoformat(),
+            "simulation_set": {"folder": folder, "batches": batches, "at_start": 7, "at_end": 9},
+            "settings": settings, "fit": None if kept is None else {"kept_id": kept}, **more}
+
+
+def _kept(ident, *, state="stopped unexpectedly", can_resume=True, why_not=None, simulation="eda5c2a1e468",
+          region=None, saved="2026-10-04T10:00:00+00:00", passes=41, name="retrain_3", on_purpose=None, reason=None,
+          prior="20261002T101500", config=None, inputs=None, parents=None):
+    """A kept training as the store's listing hands it (``fit_state.KeptFit``), saved at ``saved``."""
+    from pathlib import Path
+    from core.SBI.fit_state import KeptFit
+    return KeptFit(id=ident, path=Path("kept") / ident, created="2026-10-03T08:00:00+00:00", posterior_name=name,
+                   note="", state=state, passes=passes, best_validation_loss=-3.1, passes_since_best=2, saved_at=saved,
+                   parents=parents or {"prior": prior, "simulation": simulation}, inputs=inputs or {}, identity={},
+                   region=region, config=config or {"chi_mode": True, "device": "cuda"}, can_resume=can_resume,
+                   why_not=why_not, stopped_on_purpose=on_purpose, stopped_at=None, stop_reason=reason)
+
+
+def _offered(histories=(), kept=(), *, sets=None, root=_ROOT):
+    """The offers of ``histories`` and ``kept``, each set holding what ``sets`` says by its folder's name (none: no set);
+    and the folders whose count was read."""
+    from core.gui import continuing
+    read, sets = [], sets or {}
+    found = continuing.offers(histories, kept, records_root=root,
+                              set_batches=lambda folder: (read.append(folder), sets.get(folder))[1],
+                              prior_label=lambda ident: "retrain_prior" if ident == "20261002T101500" else None)
+    return found, read
+
+
+@pytest.mark.parametrize("case, want", [
+    ("failed", ("continue", 6150)), ("not seen to end", ("continue", 6150)), ("stopped", ("stopped", 6150)),
+    ("finished", None), ("running", None), ("a later training", None), ("a later training of another folder", ("continue", 6150)),
+    ("a later prior build", ("continue", 6150)), ("complete with no kept training", ("fit_again", 10_000)),
+    ("complete with a kept training on it", ("resume", None)), ("complete, stopped", None), ("set gone", None),
+    ("set empty", None), ("another records folder", None), ("no settings", None), ("settings not a dict", None),
+    ("settings naming no bounds file", None), ("a narrowing round", None)])
+def test_the_offers_follow_the_rule_of_each_end(case, want):
+    """The newest training of the records folder in use offers, by how it ended and what its simulation set holds now:
+    failed or not seen to end with its set unfinished and its settings recorded, "Continue from batch N" at the set's
+    own count, whatever the history's two counts say; its set whole and no kept training to resume on it, "Fit again";
+    stopped with its set unfinished, what only the steps say. A later training of that folder leaves it nothing; a later
+    run of another kind or another folder does not count. A history with no settings, or settings that name no bounds
+    file, a set gone or empty, another records folder and a narrowing round offer nothing to press."""
+    outcome = case if case in ("failed", "not seen to end", "stopped", "finished", "running") else "failed"
+    sets = {"eda5c2a1e468": 6150}
+    histories = [_history("20261003T120000-training", 3, outcome)]
+    kept = []
+    if case == "a later training":
+        histories.append(_history("20261005T120000-training", 5, "finished", folder="0a1b2c3d4e5f"))
+    elif case == "a later training of another folder":
+        histories.append(_history("20261005T120000-training", 5, "running", root="C:/records/elsewhere"))
+    elif case == "a later prior build":
+        histories.append(_history("20261005T120000-prior-build", 5, "finished", word="Prior build"))
+    elif case.startswith("complete"):
+        sets = {"eda5c2a1e468": 10_000}
+        if case == "complete, stopped":
+            histories = [_history("20261003T120000-training", 3, "stopped")]
+        if case == "complete with a kept training on it":
+            kept = [_kept("20261003T130500", saved="2026-10-03T19:30:00+00:00")]    # kept during the run, before its end
+    elif case == "set gone":
+        sets = {}
+    elif case == "set empty":
+        sets = {"eda5c2a1e468": 0}
+    elif case == "another records folder":
+        histories = [_history("20261003T120000-training", 3, "failed", root="C:/records/elsewhere")]
+    elif case == "no settings":
+        histories = [_history("20261003T120000-training", 3, "failed", settings=None)]
+    elif case == "settings not a dict":
+        histories = [_history("20261003T120000-training", 3, "failed", settings="master.txt")]
+    elif case == "settings naming no bounds file":
+        histories = [_history("20261003T120000-training", 3, "failed", settings={**_SETTINGS, "bounds": ""})]
+    elif case == "a narrowing round":
+        histories = [_history("20261003T120000-narrowing-round", 3, "failed", word="Narrowing round")]
+    found, _read = _offered(histories, kept, sets=sets)
+    pressable = [(offer.kind, offer.batch) for offer in found if not offer.why_not]
+    assert (pressable[0] if pressable else None) == want, found
+
+
+def test_the_offers_read_only_the_newest_trainings_set_and_name_it_by_its_end():
+    """Only the set of the newest training of the folder in use is read, and only for an end that can offer something;
+    the offer names that run, its batch is the set's own count, and its sentence says how and when it ended and what is
+    saved, at the set's count."""
+    histories = [_history("20261003T120000-training", 3, "failed", folder="older"),
+                 _history("20261004T120000-training", 4, "not seen to end"),
+                 _history("20261005T120000-training", 5, "running", root="C:/records/elsewhere", folder="other")]
+    found, read = _offered(histories, sets={"eda5c2a1e468": 236, "older": 5})
+    assert read == ["eda5c2a1e468"], read
+    offer, = found
+    assert (offer.kind, offer.run, offer.batch, offer.button, offer.how) == (
+        "continue", "20261004T120000-training", 236, "Continue from batch 236", "not seen to end")
+    assert offer.sentence == ("The training training_4 not seen to end on 4 Oct 2026, 13:00. The simulations up to "
+                              "batch 236 are saved."), offer.sentence
+    _found, read = _offered([_history("20261004T120000-training", 4, "finished")], sets={"eda5c2a1e468": 236})
+    assert read == [], "a set was read for an end that offers nothing"
+
+
+def test_a_training_kept_on_purpose_is_offered_as_one_cut_off_is_saying_how():
+    """Every kept training is offered, newest first, whether it was stopped unexpectedly, kept when stopped, or stopped
+    by an error, which is quoted as its record words it; its sentence says after which epoch and when it was last
+    saved, its best loss and how long ago, the set and the prior it trains on, and that a resume reads the set back
+    first; one whose fit is finished says resuming writes the posterior alone; and one that cannot be resumed says why
+    and offers no button. The run that kept it is named when a history says so."""
+    from core.gui import continuing
+    kept = [_kept("20261003T130500", state="kept when stopped", on_purpose=True, reason="KeyboardInterrupt",
+                  saved="2026-10-04T10:00:00+00:00"),
+            _kept("20261003T140500", reason="RuntimeError: the card ran out of memory", on_purpose=False,
+                  saved="2026-10-05T10:00:00+00:00", name=""),
+            _kept("20261003T150500", state="finished", saved="2026-10-03T10:00:00+00:00", prior="gone"),
+            _kept("20261003T160500", can_resume=False, why_not="its simulation set eda5c2a1e468 is not in the store",
+                  saved="2026-10-06T10:00:00+00:00")]
+    histories = [_history("20261003T120000-training", 3, "stopped", kept="20261003T130500")]
+    found, _read = _offered(histories, kept, sets={"eda5c2a1e468": 10_000})
+    assert [offer.kept for offer in found] == ["20261003T160500", "20261003T140500", "20261003T130500",
+                                               "20261003T150500"], found
+    gone, error, purpose, finished = found
+    assert (gone.why_not, gone.button, continuing.for_home(found)) == (
+        "its simulation set eda5c2a1e468 is not in the store", "", error)
+    assert purpose.how == "kept when stopped" and purpose.run == "20261003T120000-training"
+    assert purpose.sentence.startswith("It was kept when stopped after epoch 41, last saved "), purpose.sentence
+    assert error.how == "stopped unexpectedly after the error 'RuntimeError: the card ran out of memory'"
+    assert error.label.startswith("Unnamed unfinished training, ") and error.sentence.endswith(
+        ", after the error 'RuntimeError: the card ran out of memory'. Best validation loss -3.10, 2 epochs ago. It "
+        "trains on the simulation set eda5c2a1e468 and the prior retrain_prior. Resuming first reads the simulation "
+        "set back, about four minutes at full size."), error.sentence
+    assert finished.sentence.endswith("It trains on the simulation set eda5c2a1e468 and a prior no longer in Records. "
+                                      "Its fit is finished; resuming writes the posterior without training again.")
+
+
+def test_a_kept_round_is_listed_with_its_command_and_no_resume():
+    """A kept narrowing round offers the command line that resumes it, which the tool's own parser takes, naming the
+    kept training, the bounds file, the parent posterior, the observation and the kind of observation as its record
+    holds them, the processor when it trained there; Home names it, the steps' state does not."""
+    from core.gui import continuing
+    kept = _kept("20261003T130500", region={"lo": [0.0]}, config={"chi_mode": False, "device": "cpu"},
+                 inputs={"bounds": {"path": "Bounds/nadrowski/master weak.txt", "sha256": "0" * 64}},
+                 parents={"prior": "p", "simulation": "s", "parent_posterior": "20261002T120000",
+                          "observation": "20261002T130000"})
+    found, _read = _offered((), [kept])
+    offer, = found
+    assert (offer.kind, offer.button, continuing.for_home(found), continuing.for_the_steps(found)) == (
+        "round", "Open Training", offer, None)
+    assert offer.command == ('python -m core tsnpe --resume-fit 20261003T130500 --bounds "Resources/Bounds/nadrowski/'
+                             'master weak.txt" --posterior 20261002T120000 --observation 20261002T130000 --no-chi '
+                             '--device cpu'), offer.command
+    args, refused = _parsed(offer.command)
+    assert refused == "" and (args.resume_fit, args.posterior, args.observation) == (
+        "20261003T130500", "20261002T120000", "20261002T130000"), refused
+    assert offer.sentence.endswith("It is resumed from the command line until its page offers it: ")
+
+
+def test_of_two_trainings_started_in_one_second_the_later_is_the_newest():
+    """Two trainings of one records folder started in one second: the second's id carries its count ("-2"), and it is
+    the newest, whatever order their files are listed in, so a stop of the second is said and the first's finished end
+    offers nothing."""
+    first = _history("20261003T120000-training", 3, "finished")
+    second = {**_history("20261003T120000-training-2", 3, "stopped"), "started": first["started"]}
+    for histories in ([first, second], [second, first]):
+        found, _read = _offered(histories, sets={"eda5c2a1e468": 300})
+        assert [(offer.kind, offer.run) for offer in found] == [("stopped", "20261003T120000-training-2")], found
+
+
+def test_home_and_the_steps_take_the_newest_offer_each_can_say():
+    """Home names the newest offer that can be taken, passing over a training stopped with its set unfinished; the
+    steps' state says the newest kept training to resume, training to continue, or stopped one, never a set to fit
+    again or a kept round."""
+    from core.gui import continuing
+    stopped = _history("20261005T120000-training", 5, "stopped")
+    found, _read = _offered([stopped], [_kept("20261003T130500", saved="2026-10-04T10:00:00+00:00")],
+                            sets={"eda5c2a1e468": 300})
+    assert [offer.kind for offer in found] == ["stopped", "resume"]
+    assert (continuing.for_home(found).kind, continuing.for_the_steps(found).kind) == ("resume", "stopped")
+    again, _read = _offered([_history("20261005T120000-training", 5, "failed")], sets={"eda5c2a1e468": 10_000})
+    assert (continuing.for_home(again).kind, continuing.for_the_steps(again)) == ("fit_again", None)
+
+
 class _Unsaid(RuntimeError):
     """An error whose message cannot be had: asked for its words, it raises."""
 

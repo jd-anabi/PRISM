@@ -49,8 +49,8 @@ A file that cannot be read whole, or that holds a name in a shape no run's histo
 run's history the window can read: every reader passes it over, as though it were not there, and the window's log
 says which file, once.
 
-No torch at import: the one reading that needs it (``continuable``'s, of a simulation set's state) imports it when
-it is asked.
+No torch: what a simulation set holds is read by the window's reading of what a reopened window can offer, never
+here.
 """
 import json
 import logging
@@ -245,30 +245,10 @@ def newest_unseen(folder: Path, *, records_root: str) -> dict | None:
     return None
 
 
-def continuable(record: dict, *, store, folder: Path) -> int | None:
-    """The batch a failed training or narrowing round can be continued from, or None.
-
-    A number only for a run of the records folder in use (``store``'s) that failed or was not seen to end, whose
-    simulation set is unfinished and holds a saved batch, while no later run of its word in that records folder has
-    started (``folder`` holds the history). The number is the set's own count of saved batches, read from the set's
-    folder, and only once the run has ended: the engine rewrites that state as it goes. A run that was stopped is
-    not offered here (its own page offers it)."""
-    if record.get("outcome") not in ("failed", "not seen to end"):
-        return None
-    name = (record.get("simulation_set") or {}).get("folder")
-    started = _time(record.get("started"))
-    root = str(store.root)
-    if not name or started is None or not _same_folder(record.get("records_root"), root):
-        return None
-    for other in _records(folder):
-        if (other.get("id") != record.get("id") and other.get("word") == record.get("word")
-                and _same_folder(other.get("records_root"), root) and _time(other.get("started")) > started):
-            return None
-    from core.SBI.training_checkpoint import peek
-    state = peek(store.kind_dir("simulation") / name)
-    if not state or state.get("complete"):
-        return None
-    return int(state.get("batches_done") or 0) or None
+def runs_of(folder: Path, *, records_root: str) -> list[dict]:
+    """Every run of the records folder ``records_root``, oldest start first: what a reopened window can offer is worked
+    out from them (``core/gui/continuing.py``). A run of another records folder is not counted."""
+    return [record for record in _records(folder) if _same_folder(record.get("records_root"), records_root)]
 
 
 def estimate(folder: Path, *, word: str, per: str, size: dict) -> tuple[float, str] | None:

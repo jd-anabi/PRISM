@@ -275,7 +275,6 @@ class RunController(QObject):
         self._awake_since: datetime | None = None  # when it took the request standing now
         self._awake_refused = False                # it did not take the request standing now
         self._reason: tuple | None = None          # the live run's stage and the reason registered for it
-        self._training_kept: int | None = None     # the batch the latest training of this process kept
 
     # ── what the shell and the pages read ──
     @property
@@ -304,11 +303,6 @@ class RunController(QObject):
     def folder(self) -> Path:
         """The folder of runs in use: the one a test handed in, else the one beside the settings file in use."""
         return self._folder if self._folder is not None else history.runs_folder()
-
-    def training_kept(self) -> int | None:
-        """The batch the latest training of this process kept in its simulation set when it was stopped or failed,
-        which it can be continued from; None when it finished, kept no batch, or no training has ended."""
-        return self._training_kept
 
     def keep_awake_wish(self) -> bool:
         """Whether a run keeps the computer awake: the switch as it stands."""
@@ -746,11 +740,9 @@ class RunController(QObject):
 
     def forget_offers(self) -> None:
         """Every call kept for a page's offer let go, and each offer withdrawn from its page, as though each such page
-        had started its next run: no page offers to continue or resume a run any more, and the steps no longer say
-        the batch the latest training kept."""
+        had started its next run: no page offers to continue or resume a run any more."""
         for run in list(self._offers):
             self._withdraw_offer(run)
-        self._training_kept = None
 
     def continue_run(self, run: str) -> bool:
         """"Continue from batch N" on the page of the training ``run``, which failed or was stopped with batches in
@@ -1190,8 +1182,6 @@ class RunController(QObject):
                 sentence, kept = model.sentence(), ""
             last = replace(last, sentence=sentence if page is None else said, kept=kept)
         run.last = last
-        if spec.word == "Training" and not refused_early:
-            self._training_kept = run.continue_from if run.outcome in ("stopped", "failed") else None
         offers = (not refused_early and not idle and spec.simulation_set and run.outcome in ("failed", "stopped")
                   and not run.reopen and (run.continue_from is not None or run.kept_fit is not None)
                   and _alive(run.host))

@@ -80,22 +80,23 @@ def _state(key: str, marker: str, detail: str, rail_words: str, can_start: bool,
                      marker == "done", pending)
 
 
-def step_states(session, *, live: str | None = None, stopping: bool = False, ended: int | None = None,
-                pending: frozenset = frozenset(), checks=None, observation_on_offer: bool = False,
-                label: Callable[[object], str] | None = None, retrying: bool = False) -> tuple[StepState, ...]:
+def step_states(session, *, live: str | None = None, stopping: bool = False, pending: frozenset = frozenset(),
+                checks=None, observation_on_offer: bool = False, label: Callable[[object], str] | None = None,
+                retrying: bool = False, kept=None) -> tuple[StepState, ...]:
     """The six steps' states, in the steps' order, from what ``session`` holds.
 
     ``live`` is the key of the step whose run is live, ``stopping`` whether that run is stopping, and ``retrying``
-    whether it waits to be tried again;
-    ``ended`` the batch the latest training of this launch kept when it was stopped or failed; ``pending``
-    the keys of the steps whose choice was changed and not applied; ``observation_on_offer`` whether the
-    narrowing round has an observation to choose. ``label`` names a record the session holds; with none, a
-    record is named by its own ``name``, or "unnamed" when it has none. ``checks`` is accepted and not read
-    while the checks are not counted.
+    whether it waits to be tried again; ``pending`` the keys of the steps whose choice was changed and not applied;
+    ``observation_on_offer`` whether the narrowing round has an observation to choose. ``label`` names a record the
+    session holds; with none, a record is named by its own ``name``, or "unnamed" when it has none. ``checks`` is
+    accepted and not read while the checks are not counted. ``kept`` is what the run history and the kept trainings
+    offer step 3 (read by its attributes, as ``core.gui.continuing.Offer`` holds them; None for nothing): a kept
+    training to resume, after the epoch it holds, or a training to continue, or stopped, with the batches its
+    simulation set holds; anything else it offers changes no step.
 
-    For each step the first rule that holds decides: a live run, a change not applied, what the step holds,
-    what it needs first, a training that ended early (step 3), and last "Now" for the step in hand or "To
-    come" for any other."""
+    For each step the first rule that holds decides: a live run, a change not applied, what the step holds, for step
+    3 what is offered to it, which needs no prior since a kept training names its own and a continuation loads one,
+    what the step needs first, and last "Now" for the step in hand or "To come" for any other."""
     draft = getattr(session, "draft", None)
     prior = getattr(session, "inf_prior", None)
     posterior = getattr(session, "posterior", None)
@@ -137,12 +138,10 @@ def step_states(session, *, live: str | None = None, stopping: bool = False, end
                                  holds[key] is not None))
         elif holds[key] is not None:
             states.append(_state(key, "done", holds[key], f"Done: {holds[key]}", can_start))
+        elif key == "training" and _unfinished(kept) is not None:
+            states.append(_state(key, "half", *_unfinished(kept), True))
         elif not can_start:
             states.append(_state(key, "later", needs[key], needs[key], False))
-        elif key == "training" and ended is not None:
-            batch = format(ended, ",")
-            states.append(_state(key, "half", f"Simulations saved to batch {batch}", f"Unfinished: batch {batch}",
-                                 True))
         else:
             states.append(_state(key, "later", "", "To come", True))
             waiting.add(key)
@@ -151,6 +150,18 @@ def step_states(session, *, live: str | None = None, stopping: bool = False, end
         doing = _DOING[in_hand]
         states[keys.step_number(in_hand) - 1] = _state(in_hand, "now", doing, f"Now: {doing.lower()}", True)
     return tuple(states)
+
+
+def _unfinished(kept) -> "tuple[str, str] | None":
+    """What step 3 says of what is offered to it, its detail and its words in the rail; None for nothing it says."""
+    kind = getattr(kept, "kind", None)
+    if kind == "resume" and isinstance(getattr(kept, "epoch", None), int):
+        epoch = format(kept.epoch, ",")
+        return f"Training kept after epoch {epoch}", f"Unfinished: epoch {epoch}"
+    if kind in ("continue", "stopped") and isinstance(getattr(kept, "batch", None), int):
+        batch = format(kept.batch, ",")
+        return f"Simulations saved to batch {batch}", f"Unfinished: batch {batch}"
+    return None
 
 
 def step_in_hand(states) -> str | None:
@@ -169,7 +180,10 @@ class Next:
     """Home's one next step: its heading, the sentence under it (none when the heading says it all), its main
     button's words, and the part and page the button opens; for a run whose end has not been seen, the run, whose
     page the button opens and whose end it acknowledges; and for a button that does something in place of opening a
-    place, what it does (``"continue_with_these"``: apply and load what was in use last time)."""
+    place, what it does (``"continue_with_these"``: apply and load what was in use last time;
+    ``"continue_run"``: fill the forms from a training's history and continue it, or fit it again; ``"resume"``: resume
+    a kept training) and the offer it takes (``offer``); and ``link``, the words of a link beside the button that opens
+    the run's page, for a run whose end has not been seen and whose offer the button takes."""
     heading: str
     sentence: str
     button: str
@@ -177,6 +191,8 @@ class Next:
     page: str | None
     run: str | None = None
     action: str | None = None
+    link: str | None = None
+    offer: object = None
 
 
 # the next step while a step is in hand, by the step
@@ -191,18 +207,23 @@ _NEXT = {
 }
 
 
-def next_step(session, states, *, run=None, picks=None) -> Next:
+def next_step(session, states, *, run=None, picks=None, offers=()) -> Next:
     """The one next step Home offers. ``run`` is the run's status (read by its attributes: its state, word and name,
     place, the reason it needs someone and how it ended, in words), None for none; ``picks`` what was in use last time
-    (read by its attributes, as ``last_time_sentence`` reads them), None for nothing. The first that holds decides, for
-    a run with a place: a live run needs someone (its reason, and the button goes to it); a run is live (nothing
-    until it ends: it is running, stopping or waiting to be tried again); a run has ended and nobody has seen how
-    (how and when it ended and what it kept, and the button opens its page and acknowledges it: "See the result"
-    for a finished run, "Go to the run" for a stopped one, "See what happened" for a failure or a run not seen to
-    end). Then, with no model chosen and a model in use last time, what was in use last time, which the button
-    applies and loads, staying on Home. Then the step in hand among ``states``, which reads the steps in their order
-    (no model, no prior, no posterior, no observation); otherwise nothing is waiting, and the narrowing round is
-    offered, or Records once the posterior in use is a narrowed one."""
+    (read by its attributes, as ``last_time_sentence`` reads them), None for nothing; ``offers`` what the run history
+    and the kept trainings offer, newest first (each read by its attributes, as ``core.gui.continuing.Offer`` holds
+    it). The first that holds decides, for a run with a place: a live run needs someone (its reason, and the button
+    goes to it); a run is live (nothing until it ends: it is running, stopping or waiting to be tried again); a run has
+    ended and nobody has seen how (how and when it ended and what it kept, and the button opens its page and
+    acknowledges it: "See the result" for a finished run, "Go to the run" for a stopped one, "See what happened" for a
+    failure or a run not seen to end; but for a failure or a run not seen to end that something is offered for, the
+    button takes the offer and "See what happened" stands beside it). Then the newest offer that can be taken, a
+    training stopped with its set unfinished passed over: continue a training, fit it again, resume a kept training, or
+    for a kept narrowing round its command and the step that shows it. Then, with no model chosen and a model in use
+    last time, what was in use last time, which the button applies and loads, staying on Home. Then the step in hand
+    among ``states``, which reads the steps in their order (no model, no prior, no posterior, no observation);
+    otherwise nothing is waiting, and the narrowing round is offered, or Records once the posterior in use is a
+    narrowed one."""
     place = getattr(run, "place", None)
     if place is not None:
         part, page = place
@@ -218,8 +239,16 @@ def next_step(session, states, *, run=None, picks=None) -> Next:
         if run.unacknowledged_end:
             if run.outcome == "finished":
                 return Next(f"Next: see the {what}", run.sentence, "See the result", part, page, run.run)
+            own = next((offer for offer in offers if getattr(offer, "run", None) == run.run and _takes(offer)), None)
+            if own is not None and run.outcome in ("failed", "not seen to end"):
+                return Next(f"Next: see what happened to the {what}", run.sentence, own.button, part, page, run.run,
+                            action=_ACTIONS[own.kind], link=SEE_WHAT_HAPPENED, offer=own)
             return Next(f"Next: see what happened to the {what}", run.sentence,
-                        "Go to the run" if run.outcome == "stopped" else "See what happened", part, page, run.run)
+                        "Go to the run" if run.outcome == "stopped" else SEE_WHAT_HAPPENED, part, page, run.run)
+    offer = next((offer for offer in offers if _takes(offer) or (getattr(offer, "kind", None) == "round"
+                                                                 and not getattr(offer, "why_not", ""))), None)
+    if offer is not None:
+        return _offered(offer)
     if getattr(session, "draft", None) is None and isinstance(getattr(picks, "model", None), str) and picks.model:
         return Next("Next: continue with what was in use last time", last_time_sentence(picks), "Continue with these",
                     "home", None, action="continue_with_these")
@@ -231,6 +260,28 @@ def next_step(session, states, *, run=None, picks=None) -> Next:
                     "one.", "Open Records", "records", None)
     return Next("Next: nothing is waiting", "A narrowing round is optional: it trains a second posterior that is "
                 "valid only near one observation.", "Open Narrowing round", "inference", "narrowing")
+
+
+#: The words of the link beside the button that takes the offer of a run whose end has not been seen.
+SEE_WHAT_HAPPENED = "See what happened"
+#: What the button does for each kind of offer it takes.
+_ACTIONS = {"continue": "continue_run", "fit_again": "continue_run", "resume": "resume"}
+
+
+def _takes(offer) -> bool:
+    """Whether Home's button can take ``offer``: one to continue, fit again or resume that nothing stops."""
+    return getattr(offer, "kind", None) in _ACTIONS and not getattr(offer, "why_not", "")
+
+
+def _offered(offer) -> Next:
+    """Home's next step for the offer ``offer``."""
+    if offer.kind == "round":
+        return Next("Next: resume the narrowing round", f"{offer.sentence}{offer.command}", "Open Training",
+                    "inference", "training", offer=offer)
+    heading = (f"Next: resume the training {offer.label}".rstrip() if offer.kind == "resume"
+               else "Next: continue the training")
+    return Next(heading, offer.sentence, offer.button, "inference", "training", action=_ACTIONS[offer.kind],
+                offer=offer)
 
 
 def last_time_sentence(picks) -> str:

@@ -48,7 +48,8 @@ runs = (RunStatus(state="running", word="Sweep study", place=("temperature", "sw
 some = held(draft=held(model="NADROWSKI"), cfg=None, inf_prior=None, posterior=None, observation=None)
 every = held(draft=held(model="SHM"), cfg=None, inf_prior=held(name="p"), observation=held(name="o"),
              posterior=held(name="q", posterior=held(truncation=1)))
-for session, options in ((some, dict(live="prior", ended=3, pending=frozenset({"model"}))), (every, {}), (None, {}),
+for session, options in ((some, dict(live="prior", kept=held(kind="continue", batch=3, epoch=None),
+                                     pending=frozenset({"model"}))), (every, {}), (None, {}),
                          (some, dict(live="training", retrying=True))):
     states = chain.step_states(session, observation_on_offer=True, **options)
     said = [state.spoken for state in states]
@@ -65,7 +66,7 @@ for picks in (last, held(model="SHM", chi_mode=None, bounds=None, prior=None, po
         chain.last_time_sentence(picks)
 said = [chain.model_label("HOPF"), keys.places_words(("training", "narrowing")), keys.place_words("inference/infer")]
 early = held(draft=held(model=""), cfg=None, inf_prior=held(name="p"), posterior=None, observation=None)
-chain.step_states(early, ended=9500, label=str)
+chain.step_states(early, kept=held(kind="resume", epoch=9500, batch=None), label=str)
 whole = held(draft=held(model="BP"), cfg=None, inf_prior=held(name="p"), observation=held(name="o"),
              posterior=held(name="q", posterior=None))
 chain.next_step(whole, chain.step_states(whole, observation_on_offer=True))
@@ -330,17 +331,19 @@ def _reaching(names, forbidden) -> list:
 
 
 def test_the_rules_and_tables_import_no_toolkit_and_no_engine():
-    """The places, the keys and the steps' rules load neither the toolkit nor the engine, and the record words
-    load no engine (they write a date as the look does). Every import statement of each module is read, wherever
+    """The places, the keys, the steps' rules and what a reopened window can offer load neither the toolkit nor the
+    engine, and the record words load no engine (they write a date as the look does). Every import statement of each module is read, wherever
     it stands, and so is every statement of each module of this repository it imports, since a call can miss an
     import inside a branch it does not take. In a pytest process both are loaded already, so the proof is a
     fresh interpreter for each, which imports every module those statements name, from this repository or not,
     and calls the rules down every branch."""
     for module, forbidden in (("core.gui.keys", _RULES_FORBIDDEN), ("core.gui.chain", _RULES_FORBIDDEN),
-                              ("core.gui.step_facts", _RULES_FORBIDDEN), ("core.gui.record_words", _WORDS_FORBIDDEN)):
+                              ("core.gui.step_facts", _RULES_FORBIDDEN), ("core.gui.continuing", _RULES_FORBIDDEN),
+                              ("core.gui.record_words", _WORDS_FORBIDDEN)):
         found = _reaching(_imports(module), forbidden)
         assert not found, f"{module} imports {found}, itself or through a module of this repository it imports"
-    rules = _imports("core.gui.keys") | _imports("core.gui.chain") | _imports("core.gui.step_facts")
+    rules = (_imports("core.gui.keys") | _imports("core.gui.chain") | _imports("core.gui.step_facts")
+             | _imports("core.gui.continuing"))
     for code, named, forbidden in ((_FRESH_RULES, rules, _RULES_FORBIDDEN),
                                    (_FRESH_WORDS, _imports("core.gui.record_words"), _WORDS_FORBIDDEN)):
         r = subprocess.run([sys.executable, "-c", code, ",".join(forbidden), ",".join(sorted(named))],
@@ -548,7 +551,7 @@ _RULE_TABLE = {
         ("done", "Done", "retrain_round, narrowed", "Done: retrain_round, narrowed", True, True),
         "Step 3, Training. Done: retrain_round, narrowed"),
     "step 3, a posterior before a training that ended early": (
-        _TRAINED, {"ended": 4}, "training",
+        _TRAINED, {"kept": SimpleNamespace(kind="continue", batch=4)}, "training",
         ("done", "Done", "retrain", "Done: retrain", True, True), "Step 3, Training. Done: retrain"),
     "step 3, a posterior with no prior in use": (
         {"draft": _DRAFT, "posterior": _POSTERIOR}, {}, "training",
@@ -558,11 +561,11 @@ _RULE_TABLE = {
         ("later", "To come", "Needs a prior", "Needs a prior", False, False),
         "Step 3, Training. To come: needs a prior"),
     "step 3, a training that ended early": (
-        _WITH_PRIOR, {"ended": 4}, "training",
+        _WITH_PRIOR, {"kept": SimpleNamespace(kind="continue", batch=4)}, "training",
         ("half", "Unfinished", "Simulations saved to batch 4", "Unfinished: batch 4", True, False),
         "Step 3, Training. Unfinished: simulations saved to batch 4"),
     "step 3, a training that ended early, its batch a large number": (
-        _WITH_PRIOR, {"ended": 9500}, "training",
+        _WITH_PRIOR, {"kept": SimpleNamespace(kind="stopped", batch=9500)}, "training",
         ("half", "Unfinished", "Simulations saved to batch 9,500", "Unfinished: batch 9,500", True, False),
         "Step 3, Training. Unfinished: simulations saved to batch 9,500"),
     "step 3, in hand": (
@@ -684,7 +687,7 @@ def test_the_step_in_hand_is_the_first_open_step_and_never_the_narrowing_round()
         assert [s.key for s in states if s.marker == "now"] == ([in_hand] if in_hand else []), held
     states = chain.step_states(_session(**_WITH_PRIOR), live="training")
     assert chain.step_in_hand(states) == "training"
-    states = chain.step_states(_session(**_WITH_PRIOR), ended=4)
+    states = chain.step_states(_session(**_WITH_PRIOR), kept=SimpleNamespace(kind="continue", batch=4))
     assert chain.step_in_hand(states) == "training" and states[2].marker == "half"
     states = chain.step_states(_session(**_MODEL), pending=frozenset({"model"}))
     assert states[0].pending and [s.marker for s in states[:2]] == ["warn", "now"], (
@@ -758,7 +761,7 @@ def test_home_picks_its_one_next_step_in_order():
         (_WITH_PRIOR, {}, None,
          ("Next: start a training", "The Training page says what it will cost before it starts.", "Set up training",
           "inference", "training", None)),
-        (_WITH_PRIOR, {"ended": 4}, None,
+        (_WITH_PRIOR, {"kept": SimpleNamespace(kind="continue", batch=4)}, None,
          ("Next: start a training", "The Training page says what it will cost before it starts.", "Set up training",
           "inference", "training", None)),
         (_TRAINED, {}, None,
@@ -779,6 +782,100 @@ def test_home_picks_its_one_next_step_in_order():
         assert (found.heading, found.sentence, found.button, found.part, found.page, found.run) == expected, (
             held, run)
         assert found.action == ("continue_with_these" if found.button == "Continue with these" else None), (held, run)
+
+
+def _offer(kind, **held):
+    """An offer of a reopened window as the chain reads it: by its attributes, as ``continuing.Offer`` holds them."""
+    from core.gui.continuing import Offer
+    return Offer(kind, held.pop("run", None), held.pop("kept", None), held.pop("batch", None),
+                 held.pop("sentence", f"what the {kind} says"), held.pop("why_not", ""), **held)
+
+
+def test_a_resumable_kept_training_makes_step_three_unfinished_with_no_prior():
+    """A kept training that can be resumed turns step 3 to "Unfinished" after the epoch it holds, before any prior is
+    in use, since a Resume puts its own in use; a training to continue or stopped says the batch its set holds; a set to
+    fit again and a kept narrowing round change no step; and step 3 holding a posterior says that first."""
+    for kind, held, want in (("resume", dict(epoch=41), ("Training kept after epoch 41", "Unfinished: epoch 41")),
+                             ("continue", dict(batch=236), ("Simulations saved to batch 236", "Unfinished: batch 236")),
+                             ("stopped", dict(batch=9500), ("Simulations saved to batch 9,500",
+                                                            "Unfinished: batch 9,500"))):
+        for session in (_session(), _session(**_MODEL)):
+            state = chain.step_states(session, kept=_offer(kind, **held))[2]
+            assert (state.marker, state.detail, state.rail_words, state.can_start, state.done) == (
+                "half", *want, True, False), (kind, state)
+    for kind in ("fit_again", "round"):
+        state = chain.step_states(_session(**_MODEL), kept=_offer(kind, batch=10_000, epoch=3))[2]
+        assert (state.marker, state.detail) == ("later", "Needs a prior"), kind
+    state = chain.step_states(_session(**_TRAINED), kept=_offer("resume", epoch=41))[2]
+    assert (state.marker, state.detail) == ("done", "retrain")
+
+
+def test_home_names_the_newest_offer_above_what_was_in_use_last_time():
+    """The newest offer that can be taken stands above "Continue with these" and the step in hand: a training to
+    continue, a set to fit again, a kept training to resume by its name, a kept narrowing round with its command and
+    the step that lists it; a training stopped with its set unfinished, and a kept training that cannot be resumed, are
+    passed over, so Home stays ordinary after a stop."""
+    last = SimpleNamespace(model="NADROWSKI", chi_mode=False, bounds=None, prior=None, posterior=None, plan=None,
+                           prior_words="", posterior_words="")
+    session = _session()
+    states = chain.step_states(session)
+    for offer, want in (
+            (_offer("continue", run="r", batch=236), ("Next: continue the training", "what the continue says",
+                                                      "Continue from batch 236", "inference", "training",
+                                                      "continue_run")),
+            (_offer("fit_again", run="r", batch=10_000), ("Next: continue the training", "what the fit_again says",
+                                                          "Fit again on the saved simulations", "inference",
+                                                          "training", "continue_run")),
+            (_offer("resume", kept="k", epoch=41, label="retrain_3"), ("Next: resume the training retrain_3",
+                                                                       "what the resume says", "Resume", "inference",
+                                                                       "training", "resume")),
+            (_offer("round", kept="k", command="python -m core tsnpe --resume-fit k"),
+             ("Next: resume the narrowing round", "what the round sayspython -m core tsnpe --resume-fit k",
+              "Open Training", "inference", "training", None))):
+        found = chain.next_step(session, states, picks=last, offers=(offer,))
+        assert (found.heading, found.sentence, found.button, found.part, found.page, found.action) == want, offer.kind
+        assert found.offer is offer and found.link is None
+    passed = (_offer("stopped", run="r", batch=236), _offer("resume", kept="k", why_not="its set is gone"))
+    found = chain.next_step(session, states, picks=last, offers=passed)
+    assert (found.button, found.action, found.offer) == ("Continue with these", "continue_with_these", None)
+    found = chain.next_step(session, states, offers=passed)
+    assert (found.heading, found.offer) == ("Next: choose a model", None)
+
+
+def test_the_next_step_of_a_failure_offers_the_button_and_a_link():
+    """A failure, or a run not seen to end, whose end nobody has seen and whose own run something is offered for: the
+    button takes the offer and "See what happened" stands beside it, opening the run's page; an offer of another run
+    leaves the row as it was; a stopped run's row and a finished one's take no offer."""
+    from core.gui.run.model import RunStatus
+    run = "20261003T030211-training"
+    for outcome, state in (("failed", "ended"), ("not seen to end", "not_seen")):
+        status = RunStatus(state=state, word="Training", name="retrain_3", outcome=outcome, run=run,
+                           place=("inference", "training"), sentence="It failed.")
+        own = _offer("continue", run=run, batch=236)
+        found = chain.next_step(_session(), chain.step_states(_session()), run=status,
+                                offers=(_offer("resume", kept="k", run="another"), own))
+        assert (found.heading, found.button, found.action, found.link, found.run, found.offer) == (
+            "Next: see what happened to the training", "Continue from batch 236", "continue_run", "See what happened",
+            run, own), outcome
+        found = chain.next_step(_session(), chain.step_states(_session()), run=status,
+                                offers=(_offer("continue", run="another", batch=5),))
+        assert (found.button, found.link, found.action) == ("See what happened", None, None), outcome
+    for outcome, button in (("stopped", "Go to the run"), ("finished", "See the result")):
+        status = RunStatus(state="ended", word="Training", outcome=outcome, run=run, place=("inference", "training"))
+        found = chain.next_step(_session(), chain.step_states(_session()), run=status,
+                                offers=(_offer("continue", run=run, batch=236),))
+        assert (found.button, found.link) == (button, None), outcome
+
+
+def test_a_stopped_training_reads_unfinished_and_home_stays_ordinary():
+    """A training stopped with its set unfinished: step 3 reads "Unfinished: batch 236", and Home names the step in
+    hand, as after any stop."""
+    session = _session(**_WITH_PRIOR)
+    offers = (_offer("stopped", run="r", batch=236),)
+    states = chain.step_states(session, kept=offers[0])
+    assert states[2].rail_words == "Unfinished: batch 236"
+    found = chain.next_step(session, states, offers=offers)
+    assert (found.heading, found.button, found.offer) == ("Next: start a training", "Set up training", None)
 
 
 def test_the_first_time_holds_only_with_nothing_on_disk_and_nothing_loaded():

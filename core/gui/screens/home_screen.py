@@ -79,6 +79,7 @@ class HomeFacts:
     has_runs: bool = False
     runs: tuple[RunRow, ...] = ()
     picks: object = None
+    offers: tuple = ()
 
 
 def _capital(words: str) -> str:
@@ -190,13 +191,25 @@ class HomeScreen(QWidget):
         self._next_sentence = Sentence()
         self.next_button = style.set_class(_MainButton(), cls="primary")
         self.next_button.clicked.connect(self._next_pressed)
+        # beside the button that takes the offer of a run whose end has not been seen: the way to its page
+        self.next_link = style.set_class(QPushButton(), cls="link")
+        self.next_link.setCursor(Qt.PointingHandCursor)
+        self.next_link.setFixedHeight(design.scaled(design.SIZE["line_h"]))
+        self.next_link.setVisible(False)
+        self.next_link.clicked.connect(self._link_pressed)
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(design.scaled(design.GAP["action"]))
+        buttons.addWidget(self.next_button)
+        buttons.addWidget(self.next_link, 0, Qt.AlignVCenter)
+        buttons.addStretch(1)
         self._next_block = QWidget()
         lines = QVBoxLayout(self._next_block)
         lines.setContentsMargins(0, 0, 0, 0)
         lines.setSpacing(design.scaled(design.SIZE["row_gap"]))    # one space between those shown: a next
         lines.addWidget(self.next_heading)                         # step with no sentence keeps no room for one
         lines.addWidget(self._next_sentence)
-        lines.addWidget(self.next_button, 0, Qt.AlignLeft)
+        lines.addLayout(buttons)
 
         # the first opening: four buttons, each with its sentence beside it
         self._choices_block = QWidget()
@@ -298,11 +311,14 @@ class HomeScreen(QWidget):
         self._choices_block.setVisible(self._first)
         self._next_block.setVisible(not self._first)
         self._left.setVisible(not self._first)
-        self._next = chain.next_step(facts.session, facts.states, run=facts.run, picks=facts.picks)
+        self._next = chain.next_step(facts.session, facts.states, run=facts.run, picks=facts.picks,
+                                     offers=facts.offers)
         self.next_heading.set_text(self._next.heading)
         self._next_sentence.set_text(self._next.sentence)
         self._next_sentence.setVisible(bool(self._next.sentence))
         self.next_button.setText(style.access_key(self._next.button))
+        self.next_link.setText(self._next.link or "")
+        self.next_link.setVisible(bool(self._next.link))
         self._set_rows(self.steps_table,
                        [[TextCell(f"{state.number} {keys.step(state.key).name}"), StateCell(state.marker, state.word),
                          TextCell(state.detail, wrap=True)] for state in facts.states],
@@ -346,6 +362,16 @@ class HomeScreen(QWidget):
             self.open_run.emit(self._next.run)
         elif self._next is not None:
             self.navigate.emit(self._next.part, self._next.page)
+
+    @property
+    def next(self):
+        """Home's next step as it last read it (``chain.Next``), None before the first reading."""
+        return self._next
+
+    def _link_pressed(self) -> None:
+        """The link beside the button: the page of the run whose end has not been seen."""
+        if self._next is not None and self._next.run is not None:
+            self.open_run.emit(self._next.run)
 
     def _choice_pressed(self) -> None:
         for button, (_words, _sentence, part, page) in zip(self.choices, _CHOICES):

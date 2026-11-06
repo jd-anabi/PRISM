@@ -1325,7 +1325,6 @@ def test_shut_down_anyway_stops_the_run_once_and_cancel_never(tmp_path, monkeypa
     try then holding the moment it ended. Such a run counts as stopped by the person: Home offers to continue it no more
     than it offers a stop's."""
     from PySide6.QtCore import QTimer
-    from core.artifacts import ArtifactStore
     from core.gui.panels.reduction_panel import ReductionPanel
     from core.gui.run import history
     from tests._runs import STOP_LINE
@@ -1380,7 +1379,9 @@ def test_shut_down_anyway_stops_the_run_once_and_cancel_never(tmp_path, monkeypa
     assert ("stopped", True, True) in heard and (record["last_heard"], heard[-1]) == (
         None, ("stopped", False, False)), (
         "while the stop waited the history did not hold when the run was last heard, or the end kept it")
-    assert history.continuable(record, store=ArtifactStore(tmp_path / "records"), folder=folder) is None
+    from core.gui import continuing
+    offered = continuing.offers([record], (), records_root=record["records_root"], set_batches=lambda _name: 6_150)
+    assert continuing.for_home(offered) is None, "a run Windows shut down is offered on Home"
 
 
 def test_shut_down_anyway_while_the_posterior_is_saved_stops_nothing_and_waits_for_the_save(tmp_path, monkeypatch):

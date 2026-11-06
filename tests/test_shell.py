@@ -1803,8 +1803,8 @@ def test_the_chain_says_stopping_and_the_batch_a_stopped_training_kept(tmp_path,
     assert spoken("training") == kept and _cells(home.steps_table)[2] == [
         "3 Training", ("half", "Unfinished"), "Simulations saved to batch 6,150"]
     held.forget_offers()                              # as the end of every test does
-    inference.recompute_states()
-    assert spoken("training") == ["Step 3, Training. Now: setting up"], "the batch outlived the offers"
+    inference.read_offers()
+    assert spoken("training") == kept, "the batch is the history's and the set's, not the page's offer"
     window.hide()
 
 
@@ -8323,3 +8323,152 @@ def test_the_first_time_page_stands_before_what_was_in_use_last_time(store, tmp_
     assert home._next_sentence.plain_text() == (
         "Last time: the model Nadrowski, the frequency response as the kind of observation. Nothing is loaded until you "
         "press the button.")
+
+
+# ── after a reopening: Continue and Resume ──
+_REOPENED = "20261003T030211-training"
+#: The rows of the Training page a failed training's history holds, each off its usual value.
+_HISTORY_ROWS = ({"name": "num_runs", "value": 7_000}, {"name": "hidden_features", "value": 64},
+                 {"name": "learning_rate", "value": "1,5e-3"}, {"name": "max_num_epochs", "value": None})
+
+
+def _a_failed_training(store, tmp_path, held, *, batches=236, outcome="failed", acknowledged=True, rows=_HISTORY_ROWS,
+                       settings=True, kept=None):
+    """A training of the records folder in use that ended ``outcome`` at 09:00 on 3 October, its history in the test's
+    folder of runs and its simulation set in the test's store holding ``batches`` of its 10,000; its settings those the
+    Training page hands (Nadrowski, its options, master.txt, the prior of ``held``, its name and note and ``rows``),
+    or none (``settings=False``), as a history written before they were kept; ``kept`` the kept training it names."""
+    from tests._fixtures import write_history, write_simulation_set
+    folder = write_simulation_set(store.kind_dir("simulation"), {"reopened": "continue"}, batches,
+                                  complete=batches >= 10_000)
+    handed = {"model": "NADROWSKI", "chi_mode": False,
+              "options": {"chi_mode": False, "reparam_rotate": False, "units_override": None},
+              "bounds": "master.txt", "prior": held.prior, "resume": "auto", "name": "retrain_3", "note": "a note",
+              "rows": [{"step": "training", "label": "", "origin": "", "plan": None, "usual": None, **row}
+                       for row in rows]}
+    return write_history(tmp_path / "runs", id=_REOPENED, word="Training", name="retrain_3",
+                         place=["inference", "training"], records_root=str(store.root), started=_at(3, 3, 2, 11),
+                         ended=_at(3, 9, 0), outcome=outcome, acknowledged=acknowledged,
+                         simulation_set={"folder": folder.name, "batches": 10_000, "at_start": 0, "at_end": 5},
+                         settings=handed if settings else None, fit=None if kept is None else {"kept_id": kept})
+
+
+def _a_kept_training(store, held, *, name="retrain_3", passes=7, stopped="on_purpose", cfg=None, config=None,
+                     identity=None, set_whole=True, region=None):
+    """A kept training of ``held``'s prior written as the training stage writes one: its record's configuration block
+    and inputs those of ``cfg`` (Nadrowski on master.txt, the processor, unless one is handed) with the fit's settings,
+    an identity whose code, constants and libraries are this process's, on a simulation set of its 4 batches, whole
+    unless ``set_whole`` is False; ``config`` and ``identity`` change what they name; a narrowing round's with a
+    ``region``. Its id."""
+    from core.artifacts import write_fit_manifest
+    from core.artifacts.manifest import config_from_cfg
+    from core.SBI import fit_state
+    from tests._fixtures import _fit_body, _nad_cfg, write_simulation_set
+    cfg = cfg if cfg is not None else _nad_cfg()
+    folder = write_simulation_set(store.kind_dir("simulation"), {"reopened": "kept", "name": name}, 4,
+                                  complete=set_whole)
+    block = {**config_from_cfg(cfg), "num_runs": 4, "run_size": 64, "run_size_cap": 0, "hidden_features": 8,
+             "num_transforms": 2, "learning_rate": 5e-4, "stop_after_epochs": 3, "max_num_epochs": None,
+             "checkpoint_every": 1, **(config or {})}
+    whole = {"simulation": {"reopened": "kept"}, "batches": 4, "settings": {}, "code": fit_state.loaded_code(),
+             "constants": fit_state.constants(), "libraries": fit_state.libraries(), "network": "0" * 16,
+             **(identity or {})}
+    path = store.new_fit_dir()
+    path.mkdir(parents=True)
+    body = {**_fit_body(passes=passes, stopped=stopped, posterior_name=name, identity=whole), "region": region}
+    return write_fit_manifest(path, body=body, cfg=cfg, config=block,
+                              parents={"prior": held.prior, "simulation": folder.name}, hw=cfg.hw).id
+
+
+def test_home_offers_continue_from_batch_n_in_a_fresh_window(store, tmp_path, monkeypatch):
+    """A training that failed with its simulation set unfinished, after a reopening: Home's next step is to continue
+    it from the batch its set holds, named in the button, and the rail's Training row says the batch; while nobody has
+    seen how it ended, the same button stands under its end's sentence with "See what happened" beside it, which opens
+    its page and sees its end. A Training history written before its settings were kept offers neither."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    _a_failed_training(store, tmp_path, held)
+    window, home = _home_of_last_time(tmp_path)
+    assert (home.next_heading.label.text(), home._next_sentence.plain_text(), home.next_button.text(),
+            home.next_link.isVisibleTo(home)) == (
+        "Next: continue the training", "The training retrain_3 failed on 3 Oct 2026, 09:00. The simulations up to "
+        "batch 236 are saved.", "&Continue from batch 236", False)
+    assert window.shell.rail.row("training").accessibleName() == (
+        "Step 3, Training. Unfinished: simulations saved to batch 236")
+    window.close()
+    _a_failed_training(store, tmp_path, held, acknowledged=False)
+    window, home = _home_of_last_time(tmp_path)
+    assert (home.next_heading.label.text(), home.next_button.text(), home.next_link.isVisibleTo(home),
+            home.next_link.text()) == ("Next: see what happened to the training", "&Continue from batch 236", True,
+                                       "See what happened")
+    home.next_link.click()
+    assert window.current_place() == ("inference", "training") and not controller().status.unacknowledged_end
+
+
+def test_older_files_are_read_as_holding_no_settings(store, tmp_path, monkeypatch):
+    """A failed training whose history holds no settings, as one written before they were kept: Home says how it ended
+    and offers to see it, with no link beside; once seen, Home's next step is the ordinary one, and the rail's Training
+    row says nothing of its batches."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _a_failed_training(store, tmp_path, held, acknowledged=False, settings=False)
+    window, home = _home_of_last_time(tmp_path)
+    assert (home.next_heading.label.text(), home.next_button.text(), home.next_link.isVisibleTo(home)) == (
+        "Next: see what happened to the training", "&See what happened", False)
+    controller().acknowledge(_REOPENED)
+    window.go_to("home")
+    assert home.next_button.text() == "&Continue with these"
+    assert "Unfinished" not in window.shell.rail.row("training").accessibleName()
+
+
+def test_the_training_steps_list_reads_once_and_never_while_a_run_is_live(store, tmp_path, monkeypatch):
+    """The kept trainings are read with the Training step's own readings (as it is shown and at "Check again"), never
+    at the reading after the typing stops, and never while a run is live, whatever is opened or changed then; the run's
+    end reads them."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.SBI import fit_state
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _a_kept_training(store, held)
+    reads, real = [], fit_state.kept_fits
+    monkeypatch.setattr(fit_state, "kept_fits", lambda kept_store: (reads.append(1), real(kept_store))[1])
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    window.go_to("inference", "training")
+    page = window.part("inference").posterior_panel
+    first = len(reads)
+    assert first >= 1 and window.part("inference").offers()
+    page._timer_fired()
+    assert len(reads) == first, "the reading after the typing stops read the kept trainings"
+    page.foot.check_again.click()
+    assert len(reads) == first + 1
+    with running(window.panel(ReductionPanel)):
+        window.go_to("home")
+        window._store_changed()
+        window.go_to("inference", "training")
+        assert not page.foot.check_again.isEnabled(), "Check again can be pressed during a run"
+        page.foot.check_again.click()
+        assert len(reads) == first + 1, "the kept trainings were read while a run was live"
+    turn_until(app, lambda: not controller().is_live())
+    assert len(reads) > first + 1, "the run's end did not read the kept trainings"
+
+
+def test_a_store_that_keeps_no_training_is_never_asked_for_its_kept_trainings(store, tmp_path, monkeypatch):
+    """With no kept training in the store, no reading asks for the kept trainings: the Training step shown and its
+    "Check again", Home's opening, a store change and a run's end each list the kind and stop there."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.SBI import fit_state
+    _a_launch_before(store, tmp_path, monkeypatch)
+    reads, real = [], fit_state.kept_fits
+    monkeypatch.setattr(fit_state, "kept_fits", lambda kept_store: (reads.append(1), real(kept_store))[1])
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    window.go_to("inference", "training")
+    page = window.part("inference").posterior_panel
+    page.foot.check_again.click()
+    window.go_to("home")
+    window._store_changed()
+    with running(window.panel(ReductionPanel)):
+        pass
+    turn_until(app, lambda: not controller().is_live())
+    window.go_to("inference", "training")
+    assert reads == [] and window.part("inference").offers() == (), (
+        "the kept trainings were read from a store that keeps none")

@@ -203,6 +203,7 @@ class PosteriorPanel(StepPage):
         self._made = None                    # the posterior a run of this page returned, until the run has ended
         self._handed = None                  # the name and the note this page's last training was handed
         self._moved_to = ""                  # the posterior the list was last moved to at a run's end, by its id
+        self._lists_wait = False             # the reading after the typing stops reads no kept training
         self.switch_button = QPushButton()
         self.switch_button.clicked.connect(self._switch)
         self.head.add_action(self.switch_button)
@@ -485,6 +486,8 @@ class PosteriorPanel(StepPage):
         """The run history (the last run on this computer and the last that measured its batches); and, while a prior is
         held and the budget passes its rules, the saved simulation sets at this budget, the run history's paces for this
         size, and the epochs the last finished training of this kind ran: only then has it looked for one."""
+        if not self._lists_wait and self._screen is not None and hasattr(self._screen, "read_offers"):
+            self._screen.read_offers()
         if self.view == "load":
             self._read_the_record()
             return
@@ -530,6 +533,14 @@ class PosteriorPanel(StepPage):
         # The last finished training's alone: the epochs typed are the form's, read at each drawing.
         self._expected = controller().expected_epochs(replace(spec, expected_epochs=None))
         self._looked = True
+
+    def _timer_fired(self) -> None:
+        """The reading after the typing stops reads no kept training: typing makes none."""
+        self._lists_wait = True
+        try:
+            super()._timer_fired()
+        finally:
+            self._lists_wait = False
 
     def _read_the_record(self) -> None:
         """The saved posteriors listed again, keeping the one selected; and its record as the line under the list says

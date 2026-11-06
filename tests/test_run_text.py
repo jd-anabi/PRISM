@@ -808,56 +808,20 @@ print(sorted(name for name in ("torch", "core.SBI.training_checkpoint") if name 
 """
 
 
-def test_a_failed_training_can_be_continued_from_its_sets_last_saved_batch(tmp_path, monkeypatch):
-    """A training of the records folder in use that failed or was not seen to end can be continued while its
-    simulation set is unfinished: from the set's last saved batch, read off the set's folder once the run has
-    ended. Not a run that was stopped (its own page offers that), nor one still running (the engine rewrites the
-    set's state as it goes), nor one whose set is complete or holds no saved batch, nor once a later training of
-    the records folder in use has started, nor a run of another records folder. The set's state is read by a module
-    that loads torch, imported only when it is asked for: the history itself loads no torch, as a fresh interpreter
-    shows."""
-    from core.SBI import training_checkpoint
-    from core.artifacts.store import ArtifactStore
+def test_the_runs_of_a_records_folder_are_read_oldest_first_and_the_history_loads_no_torch(tmp_path):
+    """What a reopened window can offer is worked out from every run of the records folder in use, oldest start
+    first: a run of another records folder is not among them, and a file that is no run's history is passed over. The
+    history itself loads no torch and no reading of a simulation set, as a fresh interpreter shows."""
     from core.gui.run import history
-
-    states = {"eda5c2a1e468": {"batches_done": 6150, "complete": False},
-              "0a1b2c3d4e5f": {"batches_done": 10000, "complete": True},
-              "5f4e3d2c1b0a": {"batches_done": 0, "complete": False}}
-    read = []
-
-    def peek(path):
-        read.append(Path(path))
-        return states.get(Path(path).name)
-
-    monkeypatch.setattr(training_checkpoint, "peek", peek)
-    store, folder = ArtifactStore(tmp_path / "records"), tmp_path / "runs"
-
-    def training(run, day, outcome, set_folder="eda5c2a1e468", root=None):
-        record = {"id": run, "word": "Training", "started": _at(day), "outcome": outcome,
-                  "records_root": str(root or store.root), "simulation_set": {"folder": set_folder}}
-        history.write(folder, record)
-        return record
-
-    failed = training("20261003T120000-training", 3, "failed")
-    assert history.continuable(failed, store=store, folder=folder) == 6150
-    assert read == [store.kind_dir("simulation") / "eda5c2a1e468"], read
-    assert history.continuable({**failed, "outcome": "not seen to end"}, store=store, folder=folder) == 6150
-    read.clear()
-    for outcome in ("stopped", "finished", "running"):
-        assert history.continuable({**failed, "outcome": outcome}, store=store, folder=folder) is None, outcome
-    assert history.continuable({**failed, "records_root": str(tmp_path / "elsewhere")}, store=store,
-                               folder=folder) is None
-    assert read == [], f"the set was read for a run that cannot be continued: {read}"
-    for set_folder in ("0a1b2c3d4e5f", "5f4e3d2c1b0a", "ffffffffffff"):
-        assert history.continuable({**failed, "simulation_set": {"folder": set_folder}}, store=store,
-                                   folder=folder) is None, set_folder
-    training("20261004T120000-training", 4, "running", root=tmp_path / "elsewhere")
-    history.write(folder, {"id": "20261004T130000-prior", "word": "Prior", "started": _at(4, 13),
-                           "outcome": "finished", "records_root": str(store.root)})
-    assert history.continuable(failed, store=store, folder=folder) == 6150, "a later run of another kind or folder"
-    training("20261005T120000-training", 5, "finished", set_folder="0a1b2c3d4e5f")
-    assert history.continuable(failed, store=store, folder=folder) is None, "a later training has started"
-
+    folder, root = tmp_path / "runs", str(tmp_path / "records")
+    for run, day, records in (("20261005T120000-training", 5, root), ("20261003T120000-training", 3, root),
+                              ("20261004T120000-training", 4, str(tmp_path / "elsewhere")),
+                              ("20261006T120000-prior-build", 6, root)):
+        history.write(folder, {"id": run, "word": "Training", "started": _at(day), "outcome": "failed",
+                               "records_root": records})
+    (folder / "20261007T120000-training.json").write_bytes(b"not a history")
+    assert [record["id"] for record in history.runs_of(folder, records_root=root)] == [
+        "20261003T120000-training", "20261005T120000-training", "20261006T120000-prior-build"]
     fresh = subprocess.run([sys.executable, "-c", _LOADS, str(REPO)], cwd=REPO, capture_output=True, text=True,
                            timeout=120)
     assert (fresh.returncode, fresh.stdout.strip()) == (0, "[]"), fresh.stdout + fresh.stderr

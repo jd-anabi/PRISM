@@ -27,9 +27,10 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from core import config
 
-from .. import chain, keys, record_words, remembered
+from .. import chain, continuing, keys, record_words, remembered
 from .. import plans as window_plans
 from ..load_chain import LoadChain
+from ..panels.inference import resume as resuming
 from ..panels.inference.prior_tab import bounds_in_use
 from ..panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel,
                                      TSNPEPanel, ValidatePanel)
@@ -68,6 +69,9 @@ class InferenceScreen(QWidget):
         self.plan_file = window_plans.UNREAD     # the plan file in use as the last reading found it: its hash, or None
         self._plan_hashes: dict = {}             # each plan file's hash, kept until the file is written again
         self.loads = None                        # the last chain of loads started, going or ended
+        # What the run history and the kept trainings offer, as last read: none before the first reading, and the last
+        # kept while a run is live.
+        self._offers: tuple = ()
 
         self.config_panel = ConfigPanel(self)
         self.prior_panel = PriorPanel(self)
@@ -228,6 +232,22 @@ class InferenceScreen(QWidget):
         remembered.put_many(picks + self.last_used(getattr(getattr(session, "draft", None), "model", None)))
         self.refresh_gates()
 
+    # ── what a reopened window offers ──
+    def offers(self) -> tuple:
+        """What the run history and the kept trainings offer, newest first, as last read (``read_offers``)."""
+        return self._offers
+
+    def read_offers(self) -> None:
+        """Read what the run history and the kept trainings offer, and work out the steps' states again; the Training
+        step draws its list of kept trainings from it. While a run is live nothing is read and the last reading
+        stands."""
+        if controller().is_live():
+            return
+        from core.artifacts import default_store
+        self._offers = resuming.read_offers(default_store(), controller().folder())
+        self.recompute_states()
+        self.posterior_panel.redraw()
+
     # ── a chain of loads ──
     def load_chain(self, model, options, bounds_file, prior, posterior=None, observation=None, *, fill=None):
         """Step 1 applied with ``model`` and ``options``, asking nothing (``ConfigPanel.apply_quietly``, which calls
@@ -330,19 +350,19 @@ class InferenceScreen(QWidget):
 
     def recompute_states(self) -> None:
         """Work out again where each of the six steps stands, from the session, the step the live run is in
-        (its place, as the run's status gives it) and whether it is stopping or waits to be tried again, the batch
-        the latest training of this launch kept in its simulation set when it was stopped or failed, and whether
-        the narrowing round has an observation to choose, and say so through ``states_changed``. No panel's gate is
-        run: ``refresh_gates`` runs them first."""
+        (its place, as the run's status gives it) and whether it is stopping or waits to be tried again, what the run
+        history and the kept trainings offer step 3 as last read, and whether the narrowing round has an observation to
+        choose, and say so through ``states_changed``. No panel's gate is run: ``refresh_gates`` runs them first."""
         held = controller()
         status = held.status
         place = status.place if status.live else None
         live = place[1] if place is not None and place[0] == "inference" else None
         self.pending_shown = self.pending()
         self._states = chain.step_states(self.session, live=live, stopping=status.state == "stopping",
-                                         ended=held.training_kept(), pending=self.pending_shown,
+                                         pending=self.pending_shown,
                                          observation_on_offer=self.tsnpe_panel.obs_picker.has_entries(),
-                                         label=record_words.label_of, retrying=status.state == "retrying")
+                                         label=record_words.label_of, retrying=status.state == "retrying",
+                                         kept=continuing.for_the_steps(self._offers))
         self.states_changed.emit(self._states)
 
     def step_states(self) -> tuple:

@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplicat
 from core.artifacts import KIND_DIRS, StoreError, default_store
 from core.config import VALID_MODELS
 
-from . import chain, design, keys, one_instance, record_words, remembered, settings, style, this_computer
+from . import chain, continuing, design, keys, one_instance, record_words, remembered, settings, style, this_computer
 from .panels.base_panel import BasePanel
 from .panels.crossval_panel import CrossValPanel
 from .panels.fdt_panel import FdtPanel
@@ -31,6 +31,7 @@ from .run.controller import controller
 from .screens.artifact_screen import ArtifactScreen
 from .screens.help_screen import HelpScreen
 from .screens.home_screen import LAST_RUNS, HomeFacts, HomeScreen, RecordRow, RunRow
+from .panels.inference.resume import read_offers
 from .screens.inference_screen import InferenceScreen
 from .screens.models_screen import PAGES as MODEL_PAGES, ModelsScreen
 from .screens.settings_screen import SettingsScreen
@@ -268,6 +269,7 @@ class MainWindow(QMainWindow):
         # before the first.
         self._stored = None
         self._picks = None
+        self._offers: tuple = ()                 # what the run history and the kept trainings offered at Home's last reading
         self._hears_the_screen = False           # whether the native window's changes of screen are heard yet
         self._close_at_end = False               # the close was asked for: the window closes once the run has ended
         self._ends_tries = False                 # ... asked while the run waited to be tried again: it ended the tries
@@ -536,6 +538,7 @@ class MainWindow(QMainWindow):
         self._stored = None
         inference = self._built.get("inference")
         if inference is not None:
+            inference.read_offers()
             inference.refresh_gates()
             inference.stale_store()
         else:
@@ -566,11 +569,12 @@ class MainWindow(QMainWindow):
     # ── Home ──────────────────────────────────────────────────────────────────
     def _step_states(self) -> tuple:
         """The six steps' states as Parameter inference last worked them out; before it is built, those of a
-        session that holds nothing, which is the session it is built with."""
+        session that holds nothing, which is the session it is built with, with what Home last read was offered."""
         inference = self._built.get("inference")
         if inference is not None:
             return inference.step_states()
-        return chain.step_states(SbiSession(), label=record_words.label_of)
+        return chain.step_states(SbiSession(), label=record_words.label_of,
+                                 kept=continuing.for_the_steps(getattr(self, "_offers", ())))
 
     def _home_facts(self) -> HomeFacts:
         """What Home states, read now: Parameter inference's session and its six steps as last worked out (before
@@ -587,11 +591,16 @@ class MainWindow(QMainWindow):
             if not controller().is_live():
                 folder = getattr(inference, "plans_folder", None)
                 self._picks = remembered.remembered_picks(store=store, plans_folder=folder)
+                if inference is None:
+                    self._offers = read_offers(store, controller().folder())
+                    self.shell.rail.set_step_states(self._step_states())
             self._stored = (_home_records(store), _last_runs(controller().folder(), str(store.root)), self._picks)
         records, runs, picks = self._stored
         status = controller().status
+        # Once Parameter inference is built it holds what is offered, read at its own moments; before, Home's reading.
+        offers = inference.offers() if inference is not None else self._offers
         return HomeFacts(session, self._step_states(), status, records, has_runs=bool(runs) or status.live,
-                         runs=runs, picks=picks)
+                         runs=runs, picks=picks, offers=offers)
 
     def _action(self, action: str) -> None:
         """Home's main button pressed for what it does in place of opening a place: "Continue with these" applies and
@@ -729,6 +738,9 @@ class MainWindow(QMainWindow):
         home = self._built.get("home")
         if part == "home" and home is not None:
             self._stored = None                      # opened: Home reads the store and the runs again
+            inference = self._built.get("inference")
+            if inference is not None:
+                inference.read_offers()              # and what is offered, which nothing else reads here
             if self.shell.stack.currentWidget() is home:
                 home.refresh()                       # in sight already: read now (nothing while the window is hidden)
             else:
@@ -873,6 +885,9 @@ class MainWindow(QMainWindow):
                 panel.figure_stack.hold(status.live)
         if ended:
             self._stored = None                  # what the run wrote: Home reads the store and the runs again
+            inference = self._built.get("inference")
+            if inference is not None:
+                inference.read_offers()          # what the run wrote may be offered now
         key = (status.live, status.state, status.place, status.outcome)
         if key != self._run_key:
             self._run_key = key

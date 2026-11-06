@@ -7242,7 +7242,8 @@ def test_a_step_row_draws_its_marker_its_line_and_its_words(monkeypatch):
     kit = _rail_kit()
     states = kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI")))
     held = kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI"),
-                                         inf_prior=SimpleNamespace(name="retrain_prior")), ended=4)
+                                         inf_prior=SimpleNamespace(name="retrain_prior")),
+                                 kept=SimpleNamespace(kind="continue", batch=4))
     shown = [states[0], states[1], states[2],
              kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI")),
                                    pending=frozenset({"checks"}))[3],
