@@ -1,5 +1,31 @@
 # PRISM — state
 
+**Last updated:** 2026-11-05, the evening (19:32 by the clock; the weekly bar 84 %, resetting on 8 November at 04:00 UTC,
+20:00 on 7 November PST): TASK 14'S SKEPTIC'S TRIAL IS DONE AND ITS BRIEF IS FINAL; NOTHING OF TASK 14 IS IN THE REPOSITORY
+YET. The session started at 16:06 from `docs/superpowers/prompts/2026-11-05-window-redesign-stage-4-build-from-task-14.md`
+with the bar at 80 %. The owner chose to spend the room left this week on the skeptic's trial and the controller's rulings,
+and to leave the build for after the reset.
+
+- **The trial** (the ledger's build section, from "TASK 14 SKEPTIC'S TRIAL"): the brief `stage-4/briefs/task-14-brief.md`,
+  five commits walked to the same trees on a CRLF clone; the whole fast suite on the skeptic's copy 3,383 passed, 0 failed;
+  +36 test functions, 1 retired; 48 faults, each red. What it found that the plan had wrong: a training kept from a units
+  file would have been refused at every Resume (the card test found it, a processor measurement had hidden it); a kept
+  training is rebuilt on its own device and at its own width; two runs started in one second broke the history's order.
+  Rulings R1 to R15 in `stage-4/briefs/task-14-rulings.md`; departures 307 to 324 and the code audit's item 22 written in
+  `stage-4/briefs/task-14-departures.md`, not yet applied.
+- **For the owner at the exit, new:** Task 13's proposal 2 widened to Continue and Resume (R4); the Training page's main
+  button follows "Only continue" (R2); a training kept by another program while PRISM is open shows at the Training step's
+  next showing or "Check again", and on Home at its next opening (R3); the Training step's right edge cut by 33 px at the
+  least size with text 1.0, already so before Task 14, to be cured in its fix round (R15).
+- **Measured:** the trial and the rulings about 4 points (80 % to 84 %). The skeptic slipped twice against the no-python rule
+  (`print(1)`, an empty heredoc), each beside its own background suite, which it ran again alone.
+
+NEXT: after the reset, Task 14's departures commit, its implementer from the brief alone, the gate and the three readers, its
+fix round with R15; then the last review, then Task 15, the exit. In this chat, or in a new one from the 5 November prompt
+read with the ledger's five "TASK 14" lines.
+
+What follows is the head as the afternoon of 5 November left it:
+
 **Last updated:** 2026-11-05, the afternoon (15:54 by the clock; the weekly bar 80 %, resetting on 8 November at 04:00 UTC,
 20:00 on 7 November PST): STAGE 4'S BUILD STANDS WITH TASKS 0 TO 13 COMPLETE. The session started on 5 November at 09:26 from
 `docs/superpowers/prompts/2026-11-05-window-redesign-stage-4-build-from-task-13.md` and built Task 13. It stopped before Task 14
