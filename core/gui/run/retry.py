@@ -313,8 +313,8 @@ def _reopening(spec, kind, note, batches: int, opening: str) -> str:
     """The page of a training that only reopening PRISM can help: ``opening``, which says why, then that PRISM is
     closed and opened again, and how the training goes on after it: a training's kept training resumed from Home or
     the Training step, a narrowing round's from the command line, with the command the page sets off beneath the
-    sentence (``reopen_command``), until its page offers it; a training's saved simulations continued from Home; or the
-    same run started again."""
+    sentence (``reopen_command``), until its page offers it; a training's saved simulations continued from Home, when
+    its settings name the bounds file Home fills the forms from; or the same run started again."""
     word = spec.word
     if note is not None and kind in ("fit", "saving"):
         if word == "Training":
@@ -324,7 +324,9 @@ def _reopening(spec, kind, note, batches: int, opening: str) -> str:
         tail = f", given the same {given} it was trained with" if given else ""
         return (f"{opening} {AGAIN_TEXT}. The training is kept up to epoch {number_text(note.passes)}; until the "
                 f"{word} page offers to resume it, it is resumed from the command line with the command below{tail}.")
-    if batches and word == "Training":
+    settings = spec.settings if isinstance(spec.settings, dict) else {}
+    if batches and word == "Training" and isinstance(settings.get("bounds"), str) and settings["bounds"]:
+        # Home offers to continue only a training whose settings name a bounds file, the one its forms fill from.
         return f"{opening} {AGAIN_TEXT}; Home will offer '{CONTINUE_TEXT.format(number_text(batches))}'."
     if batches:
         return (f"{opening} {AGAIN_TEXT}, then start the same {word.lower()}: it continues the saved simulations from "

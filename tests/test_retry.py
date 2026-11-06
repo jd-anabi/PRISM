@@ -543,15 +543,18 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     well as a try's, in the simulation, where the card's error comes under the simulator's own, as in the fit, which
     is never tried again, and whose history says the card failed. The page names the cause: that trying again did
     not help, or that the card failed, quoting the first line of its error. It says how the training goes on once PRISM
-    is open again: Home offers to continue the simulation set from the batches it holds; Home and the Training step
-    offer to resume a training kept in its fit, and no command line stands beneath the sentence. Neither "Continue
-    from batch N" nor "Resume the training" is offered on the page: either would run in this copy of PRISM."""
+    is open again: Home offers to continue the simulation set from the batches it holds, for a training whose settings
+    name the bounds file Home fills the forms from, and one of limits typed by hand is started again; Home and the
+    Training step offer to resume a training kept in its fit, and no command line stands beneath the sentence. Neither
+    "Continue from batch N" nor "Resume the training" is offered on the page: either would run in this copy of
+    PRISM."""
     from core.gui.run import history
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
     text, view = RunText(held), host.run_view
     folder = _set(tmp_path, 236)
+    named = {"model": "NADROWSKI", "bounds": "master.txt"}                 # the settings a training's page hands
     again = "Close PRISM and open it again; Home will offer 'Continue from batch 236'."
     simulated = f"{_SOLVER}: AcceleratorError: {_ILLEGAL}"
     device_opening = _DEVICE.format(simulated.splitlines()[0])
@@ -564,7 +567,7 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
             "ended", "failed", True, [], f"{opening} {again}", message, True, False, False, False)
 
     stand_in = StandIn()
-    start_run(host, stand_in, spec=_training())
+    start_run(host, stand_in, spec=_training(settings=named))
     _to_the_simulation(app, stand_in, text, held, folder, 236)
     stand_in.fail(_out_of_memory())
     for pause, calls in ((60, 2), (180, 3), (600, 4)):  # three tries in a row that keep nothing more
@@ -579,7 +582,7 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     assert (record["failure"]["reopen"], len(record["tries"])) == (True, 4)
 
     device = StandIn()
-    start_run(host, device, spec=_training())
+    start_run(host, device, spec=_training(settings=named))
     _to_the_simulation(app, device, text, held, folder, 236)
     device.fail(_out_of_memory())
     _waiting(app, held)
@@ -591,7 +594,7 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     assert (len(device.calls), reopened(simulated, device_opening)) == (2, True), _failure(view)
 
     first = StandIn()
-    start_run(host, first, spec=_training())
+    start_run(host, first, spec=_training(settings=named))
     _to_the_simulation(app, first, text, held, folder, 236)
     first.fail(_device_failure())
     _ended(app, held)
@@ -600,6 +603,14 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
         "page named another cause", _failure(view))
     assert history.read(tmp_path / "runs" / f"{held.status.run}.json")["failure"]["kind"] == "device", (
         "the history does not say the graphics card failed")
+
+    typed = StandIn()                                   # limits typed by hand: no bounds file for Home to fill from
+    start_run(host, typed, spec=_training(settings={**named, "bounds": ""}))
+    _to_the_simulation(app, typed, text, held, folder, 236)
+    typed.fail(_device_failure())
+    _ended(app, held)
+    assert _failure(view) == (f"{device_opening} Close PRISM and open it again, then start the same training: it "
+                              f"continues the saved simulations from batch 236."), _failure(view)
 
     kept = build_fit_record(store, passes=2)
     in_the_fit = StandIn()
@@ -1438,11 +1449,13 @@ _SETTINGS = {"model": "NADROWSKI", "chi_mode": True, "bounds": "master.txt", "pr
 def _history(run, day, outcome, *, root=_ROOT, word="Training", folder="eda5c2a1e468", batches=10_000,
              settings=_SETTINGS, kept=None, **more):
     """A run's history as the window writes it, of the records folder ``root``, started on ``day`` of October 2026 at
-    noon and ended an hour later, its simulation set ``folder`` of ``batches`` in all; its two counts of the set left
-    at numbers no reading should take for the set's own (the set's count at the start and at the end)."""
+    noon and ended an hour later, its simulation set ``folder`` of ``batches`` in all, named as the run's own line
+    names it, by its whole path in the store's folder of sets; its two counts of the set left at numbers no reading
+    should take for the set's own (the set's count at the start and at the end)."""
     return {"id": run, "word": word, "name": f"{word.lower()}_{day}", "records_root": root, "outcome": outcome,
             "started": _at(day, 12, 0).isoformat(), "ended": _at(day, 13, 0).isoformat(),
-            "simulation_set": {"folder": folder, "batches": batches, "at_start": 7, "at_end": 9},
+            "simulation_set": {"folder": f"{root}/simulations/{folder}", "batches": batches, "at_start": 7,
+                               "at_end": 9},
             "settings": settings, "fit": None if kept is None else {"kept_id": kept}, **more}
 
 
@@ -1459,14 +1472,22 @@ def _kept(ident, *, state="stopped unexpectedly", can_resume=True, why_not=None,
                    why_not=why_not, stopped_on_purpose=on_purpose, stopped_at=None, stop_reason=reason)
 
 
-def _offered(histories=(), kept=(), *, sets=None, root=_ROOT):
-    """The offers of ``histories`` and ``kept``, each set holding what ``sets`` says by its folder's name (none: no set);
-    and the folders whose count was read."""
+def _offered(histories=(), kept=(), *, sets=None, root=_ROOT, narrowed=()):
+    """The offers of ``histories`` and ``kept``, each set holding what ``sets`` says by its folder's name (none: no
+    set), the posteriors ``narrowed`` names narrowed; and the folders' names whose count was read."""
+    import os
     from core.gui import continuing
     read, sets = [], sets or {}
-    found = continuing.offers(histories, kept, records_root=root,
-                              set_batches=lambda folder: (read.append(folder), sets.get(folder))[1],
-                              prior_label=lambda ident: "retrain_prior" if ident == "20261002T101500" else None)
+
+    def counted(folder):
+        name = os.path.basename(folder)
+        read.append(name)
+        return sets.get(name)
+
+    found = continuing.offers(histories, kept, records_root=root, set_batches=counted,
+                              prior_label=lambda ident: ("the prior retrain_prior" if ident == "20261002T101500"
+                                                         else None),
+                              parent_narrowed=lambda ident: ident in narrowed)
     return found, read
 
 
@@ -1474,7 +1495,10 @@ def _offered(histories=(), kept=(), *, sets=None, root=_ROOT):
     ("failed", ("continue", 6150)), ("not seen to end", ("continue", 6150)), ("stopped", ("stopped", 6150)),
     ("finished", None), ("running", None), ("a later training", None), ("a later training of another folder", ("continue", 6150)),
     ("a later prior build", ("continue", 6150)), ("complete with no kept training", ("fit_again", 10_000)),
-    ("complete with a kept training on it", ("resume", None)), ("complete, stopped", None), ("set gone", None),
+    ("complete with a kept training on it", ("resume", None)),
+    ("complete with a kept training on another set", ("fit_again", 10_000)),
+    ("complete with a kept training on it that cannot be resumed", ("fit_again", 10_000)),
+    ("complete, stopped", None), ("set gone", None),
     ("set empty", None), ("another records folder", None), ("no settings", None), ("settings not a dict", None),
     ("settings naming no bounds file", None), ("a narrowing round", None)])
 def test_the_offers_follow_the_rule_of_each_end(case, want):
@@ -1483,7 +1507,8 @@ def test_the_offers_follow_the_rule_of_each_end(case, want):
     own count, whatever the history's two counts say; its set whole and no kept training to resume on it, "Fit again";
     stopped with its set unfinished, what only the steps say. A later training of that folder leaves it nothing; a later
     run of another kind or another folder does not count. A history with no settings, or settings that name no bounds
-    file, a set gone or empty, another records folder and a narrowing round offer nothing to press."""
+    file, a set gone or empty, another records folder and a narrowing round offer nothing to press. A kept training on
+    another set, or one on that set that cannot be resumed, leaves "Fit again" standing."""
     outcome = case if case in ("failed", "not seen to end", "stopped", "finished", "running") else "failed"
     sets = {"eda5c2a1e468": 6150}
     histories = [_history("20261003T120000-training", 3, outcome)]
@@ -1500,6 +1525,11 @@ def test_the_offers_follow_the_rule_of_each_end(case, want):
             histories = [_history("20261003T120000-training", 3, "stopped")]
         if case == "complete with a kept training on it":
             kept = [_kept("20261003T130500", saved="2026-10-03T19:30:00+00:00")]    # kept during the run, before its end
+        elif case == "complete with a kept training on another set":
+            kept = [_kept("20261003T130500", saved="2026-10-03T12:30:00+00:00", simulation="0a1b2c3d4e5f")]
+        elif case == "complete with a kept training on it that cannot be resumed":
+            kept = [_kept("20261003T130500", saved="2026-10-03T12:30:00+00:00", can_resume=False,
+                          why_not="its simulation set eda5c2a1e468 has 9 committed batches, not 10")]
     elif case == "set gone":
         sets = {}
     elif case == "set empty":
@@ -1530,9 +1560,9 @@ def test_the_offers_read_only_the_newest_trainings_set_and_name_it_by_its_end():
     assert read == ["eda5c2a1e468"], read
     offer, = found
     assert (offer.kind, offer.run, offer.batch, offer.button, offer.how) == (
-        "continue", "20261004T120000-training", 236, "Continue from batch 236", "not seen to end")
-    assert offer.sentence == ("The training training_4 not seen to end on 4 Oct 2026, 13:00. The simulations up to "
-                              "batch 236 are saved."), offer.sentence
+        "continue", "20261004T120000-training", 236, "Continue from batch 236", "was not seen to end")
+    assert offer.sentence == ("The training training_4 was not seen to end on 4 Oct 2026, 13:00. The simulations up "
+                              "to batch 236 are saved."), offer.sentence
     _found, read = _offered([_history("20261004T120000-training", 4, "finished")], sets={"eda5c2a1e468": 236})
     assert read == [], "a set was read for an end that offers nothing"
 
@@ -1542,7 +1572,8 @@ def test_a_training_kept_on_purpose_is_offered_as_one_cut_off_is_saying_how():
     by an error, which is quoted as its record words it; its sentence says after which epoch and when it was last
     saved, its best loss and how long ago, the set and the prior it trains on, and that a resume reads the set back
     first; one whose fit is finished says resuming writes the posterior alone; and one that cannot be resumed says why
-    and offers no button. The run that kept it is named when a history says so."""
+    and offers no button, the engine's reason written as a sentence. The run that kept it is named when a history says
+    so."""
     from core.gui import continuing
     kept = [_kept("20261003T130500", state="kept when stopped", on_purpose=True, reason="KeyboardInterrupt",
                   saved="2026-10-04T10:00:00+00:00"),
@@ -1557,7 +1588,7 @@ def test_a_training_kept_on_purpose_is_offered_as_one_cut_off_is_saying_how():
                                                "20261003T150500"], found
     gone, error, purpose, finished = found
     assert (gone.why_not, gone.button, continuing.for_home(found)) == (
-        "its simulation set eda5c2a1e468 is not in the store", "", error)
+        "Its simulation set eda5c2a1e468 is not in the store.", "", error)
     assert purpose.how == "kept when stopped" and purpose.run == "20261003T120000-training"
     assert purpose.sentence.startswith("It was kept when stopped after epoch 41, last saved "), purpose.sentence
     assert error.how == "stopped unexpectedly after the error 'RuntimeError: the card ran out of memory'"
@@ -1572,7 +1603,8 @@ def test_a_training_kept_on_purpose_is_offered_as_one_cut_off_is_saying_how():
 def test_a_kept_round_is_listed_with_its_command_and_no_resume():
     """A kept narrowing round offers the command line that resumes it, which the tool's own parser takes, naming the
     kept training, the bounds file, the parent posterior, the observation and the kind of observation as its record
-    holds them, the processor when it trained there; Home names it, the steps' state does not."""
+    holds them, the processor when it trained there, and the acceptance of a parent posterior that is itself narrowed
+    when it is; Home names it, the steps' state does not."""
     from core.gui import continuing
     kept = _kept("20261003T130500", region={"lo": [0.0]}, config={"chi_mode": False, "device": "cpu"},
                  inputs={"bounds": {"path": "Bounds/nadrowski/master weak.txt", "sha256": "0" * 64}},
@@ -1589,6 +1621,11 @@ def test_a_kept_round_is_listed_with_its_command_and_no_resume():
     assert refused == "" and (args.resume_fit, args.posterior, args.observation) == (
         "20261003T130500", "20261002T120000", "20261002T130000"), refused
     assert offer.sentence.endswith("It is resumed from the command line until its page offers it: ")
+    assert not args.accept_truncated
+    (narrowed,), _read = _offered((), [kept], narrowed=("20261002T120000",))
+    args, refused = _parsed(narrowed.command)
+    assert narrowed.command.endswith(" --no-chi --accept-truncated --device cpu") and refused == "" and (
+        args.accept_truncated is True), (narrowed.command, refused)
 
 
 def test_of_two_trainings_started_in_one_second_the_later_is_the_newest():
@@ -1615,16 +1652,18 @@ _REBUILT = {
     "Hopf's first file": ("HOPF", None, dict(chi_mode=False)),
     "limits typed by hand with no forcing section": ("NADROWSKI", "typed", dict(chi_mode=False)),
     "Nadrowski master.txt, a width of its own": ("NADROWSKI", "master.txt", dict(chi_mode=False)),
+    "Nadrowski master.txt, a units file of its own": ("NADROWSKI", "master.txt",
+                                                      dict(chi_mode=False, units_override="a file of its own")),
 }
 
 
 @pytest.mark.parametrize("case", list(_REBUILT))
-def test_a_kept_training_is_rebuilt_as_its_set_was_made(case, store, monkeypatch):
+def test_a_kept_training_is_rebuilt_as_its_set_was_made(case, store, monkeypatch, tmp_path):
     """A kept training's configuration is rebuilt from its record alone as its simulation set was made: the identity
     the training stage reads off it, the fingerprint of its units and its width among it, is the one the configuration
-    it was made with gives, for each configuration (a units file or units typed; a bounds file or limits typed by hand
-    with no forcing section; Nadrowski's and Hopf's), on the device it was kept on whatever the device check says now,
-    and its batch as wide as its set's."""
+    it was made with gives, for each configuration (the model's units file, a units file of its own whose bytes are not
+    the model's, or units typed; a bounds file or limits typed by hand with no forcing section; Nadrowski's and
+    Hopf's), on the device it was kept on whatever the device check says now, and its batch as wide as its set's."""
     from pathlib import Path
     from types import SimpleNamespace as held
     import torch
@@ -1637,6 +1676,10 @@ def test_a_kept_training_is_rebuilt_as_its_set_was_made(case, store, monkeypatch
     from core.gui.panels.inference.resume import resume_config, resume_draft
     from tests._fixtures import _fit_body
     model, bounds, options = _REBUILT[case]
+    if options.get("units_override") == "a file of its own":    # the model's units, a line of its own added
+        own = tmp_path / "units of its own.txt"
+        own.write_bytes(Path(cli.resolve_units_file(model)).read_bytes() + b"\n# the units of the lab's own rig\n")
+        options = {**options, "units_override": str(own)}
     folder = config.BOUNDS_PATH / model.lower()
     labels, drift = config.VALID_LABELS[config.VALID_MODELS.index(model)], registry.state_dep_drift(model)
     if bounds == "typed":
@@ -1661,7 +1704,7 @@ def test_a_kept_training_is_rebuilt_as_its_set_was_made(case, store, monkeypatch
     rebuilt = SimulationIdentity.from_cfg(again, prior, again.hw.batch_size, 4).to_dict()
     assert rebuilt == made, {key: (made[key], rebuilt.get(key)) for key in made if made[key] != rebuilt.get(key)}
     units = options.get("units_override")
-    assert resume_draft(kept).units_override == (tuple(units) if units else None)
+    assert resume_draft(kept).units_override == (units if isinstance(units, str) else tuple(units) if units else None)
 
 
 def test_the_reopening_page_says_what_home_will_offer(tmp_path, store):

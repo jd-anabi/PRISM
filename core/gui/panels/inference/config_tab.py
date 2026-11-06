@@ -21,6 +21,7 @@ applying replaces; a model chosen on the form leaves no plan in use and the valu
 is read while a run is live, and the choice in the list is never remembered: every launch opens on "No plan".
 """
 import math
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -285,6 +286,7 @@ class ConfigPanel(StepPage):
     def __init__(self, screen, parent=None):
         super().__init__(screen, TITLE, SENTENCE, step="model", parent=parent)
         self._units_read: dict = {}
+        self._file_units: dict = {}          # each units file other than the model's a draft held, by path: its words
         self._seeded = ""                    # what the box of typed units was last filled with from a units file
         self._shown_plan = None              # the plan the list shows, as it was last read, or why it cannot be used
         self._listed_for = None              # the model whose folder the list of plans was last read for
@@ -370,13 +372,24 @@ class ConfigPanel(StepPage):
         return self._units_read[model]
 
     def _units_said(self, override, model) -> str:
-        """Units held as a sentence names them, and where they come from: "kHz ms nm pN, from the model's file"."""
+        """Units held as a sentence names them, and where they come from: "kHz ms nm pN, from the model's file"; a units
+        file other than the model's, by its name."""
         if override is None:
             words = self._units_of(model)[0]
             return UNITS_FROM.format(words, "the model's file") if words else ""
         if isinstance(override, (tuple, list)):
             return f"{units_words(override)}, {TYPED_HERE}"
+        if isinstance(override, (str, Path)) and str(override) in self._file_units:
+            return UNITS_FROM.format(units_words(self._file_units[str(override)]), f"the file {Path(override).name}")
         return ""
+
+    def _held_units(self, draft):
+        """The units a draft holds as the form compares them: a units file other than the model's by the words it was
+        read with as the draft was applied, which the form shows typed; else as held."""
+        held = held_value(draft, "units_override")
+        if isinstance(held, (str, Path)) and str(held) in self._file_units:
+            return self._file_units[str(held)]
+        return held
 
     def _unusable(self, model) -> str:
         """Why parameter inference cannot take ``model``, or "" when it can."""
@@ -480,7 +493,7 @@ class ConfigPanel(StepPage):
                   for key in ("chi_n_freqs", "chi_k_pad", "chi_max_cycles")),
                 SelectionRow("reparam_rotate", rotation, self.rot_choice.currentData,
                              lambda value: _words_of(ROTATIONS, value)),
-                SelectionRow("units", held("units_override"), self._units_override,
+                SelectionRow("units", lambda: self._held_units(draft), self._units_override,
                              lambda value: self._units_said(value, model) or THE_UNITS_FILE))
 
     def plan_fields(self) -> dict:
@@ -605,7 +618,8 @@ class ConfigPanel(StepPage):
         its own question first or lets go of nothing held: the model on the form; then ``fill``, when handed, which
         fills the forms once the model stands, since a model chosen on the form lets the plan in use go and a fill made
         before would go with it; then each setting of ``options`` by its name in a draft (``chi_mode``, the three of the
-        driven recordings, ``reparam_rotate``, and ``units_override``, the units typed or None for the model's file),
+        driven recordings, ``reparam_rotate``, and ``units_override``, the units typed, None for the model's file, or
+        the path of another units file, which the form shows typed, with its words, and the draft holds as the file),
         every other setting of the step, and one ``options`` gives as None, at its usual value; then the rules read the
         form as a press reads it, and a value one refuses is told as a press's refusal is and nothing is applied. True
         when the draft is held. Nothing while a run is live, for a model the list does not hold, or for one parameter
@@ -620,13 +634,25 @@ class ConfigPanel(StepPage):
             value = options.get(key)
             rows[key].set_value(rows[key].usual() if value is None else value)
         units = options.get("units_override")
+        units_file = str(units) if isinstance(units, (str, Path)) and str(units) else None
+        if units_file is not None:
+            try:
+                units = self._file_units[units_file] = tuple(str(unit) for unit in
+                                                             file_manager.parse_units_file(units_file))
+            except Exception as error:       # noqa: BLE001 -- a units file that cannot be read applies nothing
+                self._refusal(Refusal(f"The units file {Path(units_file).name} cannot be read: {error}",
+                                      field="units"))
+                return False
         self._units_field.set_value(None if units is None else " ".join(str(unit) for unit in units))
         try:
             values = self._read()
         except Refusal as refused:
             self._refusal(refused)
             return False
-        self._screen.new_draft(self._draft_of(model, values))
+        draft = self._draft_of(model, values)
+        if units_file is not None:
+            draft = replace(draft, units_override=units_file)
+        self._screen.new_draft(draft)
         return True
 
     # ── plans ──

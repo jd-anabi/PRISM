@@ -463,8 +463,10 @@ class MainWindow(QMainWindow):
         elif name == "inference":
             widget.navigate.connect(self.go_to)
             widget.go_to_run.connect(self.go_to_run)
-            # The six steps' states go to the rail and to Home each time they are worked out again.
+            # The six steps' states go to the rail and to Home each time they are worked out again, from the start with
+            # what the window last read on offer, which the screen holds until it reads again.
             widget.states_changed.connect(self._states_changed)
+            widget.seed_offers(self._offers)
         elif name == "temperature":
             # A page chosen by its name is said as a move: connected after the part's own handler, which shows the
             # page.
@@ -754,8 +756,9 @@ class MainWindow(QMainWindow):
         shown = panel is None or held.show_past(run, panel)
         past = getattr(panel, "_past_view", None)
         if shown and past is not None and panel.results.currentWidget() is past:
+            # Nothing is offered while a run is live: what is offered was read before it, and is read again after it.
             inference = self._built.get("inference")
-            offers = inference.offers() if inference is not None else self._offers
+            offers = () if held.is_live() else inference.offers() if inference is not None else self._offers
             past.offer_past(next((offer for offer in offers if offer.run == run and not offer.why_not
                                   and offer.kind in ("continue", "fit_again", "resume")), None))
         if shown and ended:

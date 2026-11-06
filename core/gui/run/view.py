@@ -1319,7 +1319,7 @@ class RunView(QWidget):
         while another run is live, nothing starts and the page says so."""
         from .controller import controller
         if self._mode == "past" and self._past_offer is not None:
-            controller().offer_pressed.emit(self._past_offer)
+            self._press_the_past()
             return
         self._after_press(controller().continue_run(self._run))
 
@@ -1330,9 +1330,18 @@ class RunView(QWidget):
         starts nothing leaves the question asked. While another run is live, nothing starts and the page says so."""
         from .controller import controller
         if self._mode == "past" and self._past_offer is not None:
-            controller().offer_pressed.emit(self._past_offer)
+            self._press_the_past()
             return
         self._after_press(controller().resume_training(self._run))
+
+    def _press_the_past(self) -> None:
+        """The past view's offer pressed: handed to the window, as Home's button hands one; while a run is live nothing
+        is handed and the page says a run is live."""
+        from .controller import LIVE_TEXT, controller
+        if controller().is_live():
+            self.say(LIVE_TEXT)
+            return
+        controller().offer_pressed.emit(self._past_offer)
 
     def _after_press(self, started: bool) -> None:
         """An offer pressed: nothing more when its run ``started``; else, while another run is live, the page says a
@@ -1355,10 +1364,12 @@ class RunView(QWidget):
     def _discard(self) -> None:
         """"Discard": the training the stop kept is deleted, or found gone already, and the page says which, asking
         no more, and its sentence says how its run ended again, the training gone, in the words the run's controller
-        hands back; or the page says why it was not deleted, and the question stays."""
-        from .controller import controller
+        hands back; or the page says why it was not deleted, and the question stays. While a run is live nothing is read
+        or deleted, and the page says a run is live."""
+        from .controller import LIVE_TEXT, controller
         answer = controller().discard(self._run)
         if answer is None:
+            self.say(LIVE_TEXT)
             return
         gone, words, ended = answer
         if gone:

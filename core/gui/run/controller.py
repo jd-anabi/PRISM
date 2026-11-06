@@ -651,12 +651,13 @@ class RunController(QObject):
         ended)``: whether the training is gone, what the run's page says of it -- deleted, or no longer held by those
         records (both gone); not found, its run's history unreadable; or the store's own sentence of why it was not
         deleted (both kept) -- and, once it is gone, how the run ended and what it kept, as its page says it from
-        then on ("" when the page's words stay as they are, ``_gone``). None while the run is live."""
+        then on ("" when the page's words stay as they are, ``_gone``). None while a run is live: nothing is read or
+        deleted then, for the run the controller holds or any other."""
         from core.artifacts import ArtifactStore, StoreError, default_store
+        if self.is_live():
+            return None
         held = self._run
         if held is not None and held.id == run:
-            if self.is_live():
-                return None
             store, kept = held.store, getattr(held.kept_fit, "id", None)
         else:
             folder = self._folder if self._folder is not None else history.runs_folder()
@@ -751,10 +752,12 @@ class RunController(QObject):
             self._withdraw_offer(run)
 
     def offered(self, run) -> bool:
-        """Whether the page of the run ``run`` still offers to continue or resume it with the run's own call kept: a
-        training of this launch that failed or was stopped, until its page starts its next run or goes."""
+        """Whether the page of the run ``run`` still offers to continue or resume it with the run's own call kept, and
+        that call can still start: a training of this launch that failed or was stopped, until its page starts its next
+        run or goes, while the page's session holds the configuration and the prior the call was made with."""
         held = self._offers.get(run)
-        return held is not None and _alive(held.host)
+        return (held is not None and _alive(held.host)
+                and retry.made_in(held.spec, getattr(held.host, "session", None)))
 
     def continue_run(self, run: str) -> bool:
         """"Continue from batch N" on the page of the training ``run``, which failed or was stopped with batches in

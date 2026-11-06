@@ -45,8 +45,22 @@ CONTINUE_TITLE = "{}?"
 CONTINUE_LETS_GO_TEXT = "This lets go of {}. Nothing is deleted: each stays in Records."
 KEEP_SESSION = "Keep this session"
 CONTINUE_OTHER = "Continue and start a new session"
+FIT_AGAIN_OTHER = "Fit again and start a new session"
 RESUME_TITLE = "Resume this training?"
 RESUME_OTHER = "Resume and start a new session"
+
+
+def _name_trouble(store, typed: str) -> "str | None":
+    """Why the store would refuse ``typed`` as a posterior's name, in its own words; None when it is free, or when the
+    store cannot be read now (the training stage reads it again at its entry)."""
+    from core.refusals import Refusal
+    try:
+        store.assert_name_free("posterior", typed.strip())
+    except Refusal as refused:
+        return refused.message
+    except OSError:
+        return None
+    return None
 
 
 class InferenceScreen(QWidget):
@@ -244,6 +258,12 @@ class InferenceScreen(QWidget):
         """What the run history and the kept trainings offer, newest first, as last read (``read_offers``)."""
         return self._offers
 
+    def seed_offers(self, offers) -> None:
+        """What the run history and the kept trainings offered at the window's last reading, held as the screen's own
+        until it reads again, and the steps' states worked out with it. Nothing is read."""
+        self._offers = tuple(offers or ())
+        self.recompute_states()
+
     def read_offers(self) -> None:
         """Read what the run history and the kept trainings offer, and work out the steps' states again; the Training
         step draws its list of kept trainings from it. While a run is live nothing is read and the last reading
@@ -282,7 +302,8 @@ class InferenceScreen(QWidget):
         model = settings_.get("model")
         if not isinstance(model, str) or not model:
             return None
-        if not self._lets_go(CONTINUE_TITLE.format(offer.button), CONTINUE_OTHER):
+        other = FIT_AGAIN_OTHER if offer.kind == "fit_again" else CONTINUE_OTHER
+        if not self._lets_go(CONTINUE_TITLE.format(offer.button), other):
             return None
         rows = settings_.get("rows") if isinstance(settings_.get("rows"), list) else []
         values = {(window_plans.HEADING_OF["training"], row["name"]): row.get("value") for row in rows
@@ -292,7 +313,9 @@ class InferenceScreen(QWidget):
         options = settings_.get("options") if isinstance(settings_.get("options"), dict) else {}
         options = {**options, "chi_mode": settings_.get("chi_mode") is True}
         units = options.get("units_override")
-        options["units_override"] = tuple(str(unit) for unit in units) if isinstance(units, list) else None
+        # Units typed are a list of words in the history; a units file other than the model's, its path.
+        options["units_override"] = (tuple(str(unit) for unit in units) if isinstance(units, list)
+                                     else units if isinstance(units, str) and units else None)
 
         def fill() -> None:
             self.config_panel.fill_with(source)
@@ -321,7 +344,7 @@ class InferenceScreen(QWidget):
             self.navigate.emit("inference", "training")
             self.posterior_panel.say_on_row(ident, str(getattr(error, "message", None) or error))
             return None
-        problems = (kept.why_not,) if not kept.can_resume else resuming.resume_problems(
+        problems = (continuing.as_sentence(kept.why_not),) if not kept.can_resume else resuming.resume_problems(
             kept, device=prism_config.detect_device(), store=store)
         if problems:
             # Shown first: the step's reading as it comes into sight reads the list again, which says no sentence.
@@ -331,15 +354,17 @@ class InferenceScreen(QWidget):
         name = ""
         if not kept.posterior_name:
             from ..panels.inference.posterior_tab import NAME_TEXT, NAME_TITLE
-            name = ask_text(self, NAME_TITLE, NAME_TEXT, "Name", "Resume") or ""
+            name = ask_text(self, NAME_TITLE, NAME_TEXT, "Name", "Resume",
+                            check=lambda typed: _name_trouble(store, typed)) or ""
             if not name:
                 return None
         if not self._lets_go(RESUME_TITLE, RESUME_OTHER):
             return None
         record = kept.config or {}
+        # The units as its record names them: the model's file (None), another file by its path, or the units typed.
         options = {"chi_mode": bool(record.get("chi_mode")), "chi_k_pad": record.get("chi_k_pad"),
                    "chi_max_cycles": record.get("chi_max_cycles"), "reparam_rotate": record.get("reparam_rotate"),
-                   "units_override": tuple(record["units"]) if isinstance(record.get("units"), list) else None}
+                   "units_override": resuming.resume_draft(kept).units_override}
         cfg = resuming.resume_config(kept)
         loads = self.load_chain(record.get("model"), options, resuming.bounds_key(kept), kept.parents.get("prior"),
                                 candidate=cfg)
@@ -365,8 +390,9 @@ class InferenceScreen(QWidget):
         if not going:
             self.loads = loads
         applied = not going and self.config_panel.apply_quietly(model, options, fill=fill)
-        if applied and bounds_file:
-            self.prior_panel.bounds_picker.restore_key(bounds_file)
+        if applied and (bounds_file or candidate is not None):
+            # A configuration handed in stands for bounds the list may not hold: the list then selects none.
+            self.prior_panel.bounds_picker.restore_key(bounds_file or "")
         links = [] if applied else [lambda: False]
         if applied and prior:
             links.append(lambda: self.prior_panel.load_record(prior, candidate=candidate))

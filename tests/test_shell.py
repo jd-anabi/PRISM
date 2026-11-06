@@ -8170,13 +8170,16 @@ def test_home_reads_the_picks_once_until_something_changes(store, tmp_path, monk
     with no run live, when the store changes, and when a chain of loads has ended: never at a change of the run's
     status, and not when it is opened during a run, which keeps the last reading and reads no plan and no record's
     manifest for it. The readings of a run are counted during the run alone: their stand-ins answer as a card would,
-    and the press after the run makes the Prior step's configuration on the device the computer really has."""
+    and the press after the run makes the Prior step's configuration on the device the computer really has. With a
+    kept training in the store, Home opened during the run reads neither the kept trainings, nor the run history, nor a
+    simulation set for what it offers."""
     from core.gui import remembered
     from core.gui.panels.reduction_panel import ReductionPanel
     from tests._fixtures import readings_of_a_run
     app = qt_app()
     held = _a_launch_before(store, tmp_path, monkeypatch, plan=_ZZ_LAST)
     _the_loads(monkeypatch, store, held)
+    _a_kept_training(store, held, set_whole=False)            # in the store, offered by no button
     reads, real = [], remembered.remembered_picks
     monkeypatch.setattr(remembered, "remembered_picks",
                         lambda **kwargs: (reads.append("picks"), real(**kwargs))[1])
@@ -8189,7 +8192,7 @@ def test_home_reads_the_picks_once_until_something_changes(store, tmp_path, monk
         window.go_to("reduction")
         window.go_to("home")
         assert reads == ["picks"] and home.next_button.text() == "&Go to the run"
-        assert not {"read_checked", "taken", "a record's manifest"} & set(calls), calls
+        assert not {"read_checked", "taken", "a record's manifest", "kept_fits", "runs_of", "peek"} & set(calls), calls
         window._action("continue_with_these")
         assert "inference" not in window.built_parts(), "a press by code during a run built Parameter inference"
     turn_until(app, lambda: not controller().is_live())
@@ -8333,49 +8336,53 @@ _HISTORY_ROWS = ({"name": "num_runs", "value": 7_000}, {"name": "hidden_features
 
 
 def _a_failed_training(store, tmp_path, held, *, batches=236, outcome="failed", acknowledged=True, rows=_HISTORY_ROWS,
-                       settings=True, kept=None):
-    """A training of the records folder in use that ended ``outcome`` at 09:00 on 3 October, its history in the test's
-    folder of runs and its simulation set in the test's store holding ``batches`` of its 10,000; its settings those the
-    Training page hands (Nadrowski, its options, master.txt, the prior of ``held``, its name and note and ``rows``),
-    or none (``settings=False``), as a history written before they were kept; ``kept`` the kept training it names."""
+                       settings=True, kept=None, handed=None, folder=None, ident=_REOPENED, day=3):
+    """A training of the records folder in use that ended ``outcome`` at 09:00 on ``day`` October, its history in the
+    test's folder of runs and its simulation set in the test's store holding ``batches`` of its 10,000, or the set
+    ``folder`` when one is handed, named as the run's own line names it, by its whole path; its settings those the
+    Training page hands (Nadrowski, its options, master.txt, the prior of ``held``, its name and note and ``rows``, each
+    of ``handed`` replacing its own), or none (``settings=False``), as a history written before they were kept; ``kept``
+    the kept training it names."""
     from tests._fixtures import write_history, write_simulation_set
-    folder = write_simulation_set(store.kind_dir("simulation"), {"reopened": "continue"}, batches,
-                                  complete=batches >= 10_000)
-    handed = {"model": "NADROWSKI", "chi_mode": False,
-              "options": {"chi_mode": False, "reparam_rotate": False, "units_override": None},
-              "bounds": "master.txt", "prior": held.prior, "resume": "auto", "name": "retrain_3", "note": "a note",
-              "rows": [{"step": "training", "label": "", "origin": "", "plan": None, "usual": None, **row}
-                       for row in rows]}
-    return write_history(tmp_path / "runs", id=_REOPENED, word="Training", name="retrain_3",
-                         place=["inference", "training"], records_root=str(store.root), started=_at(3, 3, 2, 11),
-                         ended=_at(3, 9, 0), outcome=outcome, acknowledged=acknowledged,
-                         simulation_set={"folder": folder.name, "batches": 10_000, "at_start": 0, "at_end": 5},
-                         settings=handed if settings else None, fit=None if kept is None else {"kept_id": kept})
+    if folder is None:
+        folder = write_simulation_set(store.kind_dir("simulation"), {"reopened": "continue"}, batches,
+                                      complete=batches >= 10_000)
+    given = {"model": "NADROWSKI", "chi_mode": False,
+             "options": {"chi_mode": False, "reparam_rotate": False, "units_override": None},
+             "bounds": "master.txt", "prior": held.prior, "resume": "auto", "name": "retrain_3", "note": "a note",
+             "rows": [{"step": "training", "label": "", "origin": "", "plan": None, "usual": None, **row}
+                      for row in rows], **(handed or {})}
+    return write_history(tmp_path / "runs", id=ident, word="Training", name="retrain_3",
+                         place=["inference", "training"], records_root=str(store.root), started=_at(day, 3, 2, 11),
+                         ended=_at(day, 9, 0), outcome=outcome, acknowledged=acknowledged,
+                         simulation_set={"folder": str(folder), "batches": 10_000, "at_start": 0, "at_end": 5},
+                         settings=given if settings else None, fit=None if kept is None else {"kept_id": kept})
 
 
 def _a_kept_training(store, held, *, name="retrain_3", passes=7, stopped="on_purpose", cfg=None, config=None,
-                     identity=None, set_whole=True, region=None):
+                     identity=None, set_whole=True, region=None, batches=4, saved_at=None):
     """A kept training of ``held``'s prior written as the training stage writes one: its record's configuration block
     and inputs those of ``cfg`` (Nadrowski on master.txt, the processor, unless one is handed) with the fit's settings,
-    an identity whose code, constants and libraries are this process's, on a simulation set of its 4 batches, whole
-    unless ``set_whole`` is False; ``config`` and ``identity`` change what they name; a narrowing round's with a
-    ``region``. Its id."""
+    an identity whose code, constants and libraries are this process's, on a simulation set of its ``batches``, whole
+    unless ``set_whole`` is False, last saved at ``saved_at`` (now for None); ``config`` and ``identity`` change what
+    they name; a narrowing round's with a ``region``. Its id."""
     from core.artifacts import write_fit_manifest
     from core.artifacts.manifest import config_from_cfg
     from core.SBI import fit_state
     from tests._fixtures import _fit_body, _nad_cfg, write_simulation_set
     cfg = cfg if cfg is not None else _nad_cfg()
-    folder = write_simulation_set(store.kind_dir("simulation"), {"reopened": "kept", "name": name}, 4,
+    folder = write_simulation_set(store.kind_dir("simulation"), {"reopened": "kept", "name": name}, batches,
                                   complete=set_whole)
     block = {**config_from_cfg(cfg), "num_runs": 4, "run_size": 64, "run_size_cap": 0, "hidden_features": 8,
              "num_transforms": 2, "learning_rate": 5e-4, "stop_after_epochs": 3, "max_num_epochs": None,
              "checkpoint_every": 1, **(config or {})}
-    whole = {"simulation": {"reopened": "kept"}, "batches": 4, "settings": {}, "code": fit_state.loaded_code(),
+    whole = {"simulation": {"reopened": "kept"}, "batches": batches, "settings": {}, "code": fit_state.loaded_code(),
              "constants": fit_state.constants(), "libraries": fit_state.libraries(), "network": "0" * 16,
              **(identity or {})}
     path = store.new_fit_dir()
     path.mkdir(parents=True)
-    body = {**_fit_body(passes=passes, stopped=stopped, posterior_name=name, identity=whole), "region": region}
+    body = {**_fit_body(passes=passes, stopped=stopped, posterior_name=name, identity=whole, saved_at=saved_at),
+            "region": region}
     return write_fit_manifest(path, body=body, cfg=cfg, config=block,
                               parents={"prior": held.prior, "simulation": folder.name}, hw=cfg.hw).id
 
@@ -8509,16 +8516,19 @@ def test_continue_passes_the_must_continue_policy_and_asks_no_consent(store, tmp
 
 @pytest.mark.parametrize("cause", ["bounds edited", "bounds gone", "bounds renamed in its capitals", "units gone",
                                    "units changed", "typed limits with a forcing section", "prior deleted",
-                                   "card gone", "a library changed"])
+                                   "card gone", "a library changed", "model gone"])
 def test_a_kept_training_whose_files_have_moved_says_why_before_anything_is_read(cause, store, tmp_path, monkeypatch):
     """A kept training whose world has moved since it was kept, after a reopening, each cause alone: its Resume says
-    why on its row, in words, and nothing is read, applied, loaded or started; nothing raises. A library changed is the
-    record's own reason, said before any Resume is offered: Home offers it not. A bounds file renamed in its capitals
-    alone is the same file on Windows: nothing is said, and the press goes on."""
+    why on its row, in words, and nothing is read, applied, loaded or started; nothing raises. What is said is the
+    cause's sentence and nothing more. A library changed is the record's own reason, said before any Resume is offered:
+    Home offers it not. A bounds file renamed in its capitals alone is the same file on Windows: nothing is said, and
+    the press goes on."""
     import shutil
     import sys
     from core import cli, config, registry
+    from core.gui import continuing
     from core.Helpers import file_manager
+    from core.SBI import fit_state
     if cause == "bounds renamed in its capitals" and sys.platform != "win32":
         pytest.skip("a name in other capitals is the same file only where the file system ignores case")
     held = _a_launch_before(store, tmp_path, monkeypatch)
@@ -8536,7 +8546,9 @@ def test_a_kept_training_whose_files_have_moved_says_why_before_anything_is_read
     else:
         cfg = cli.make_sim_config("NADROWSKI", labels, drift, str(copy), hw=config.cpu_device(),
                                   units_override=str(units) if cause.startswith("units") else None)
-    kept = _a_kept_training(store, held, cfg=cfg, config={"device": "cuda"} if cause == "card gone" else None,
+    kept = _a_kept_training(store, held, cfg=cfg,
+                            config={"device": "cuda"} if cause == "card gone" else {"model": "GONE"}
+                            if cause == "model gone" else None,
                             identity={"libraries": {"torch": "0.0"}} if cause == "a library changed" else None)
     said = {"bounds edited": "The bounds file master copy.txt has changed since this training began.",
             "bounds gone": "The bounds file master copy.txt is no longer there.",
@@ -8547,7 +8559,11 @@ def test_a_kept_training_whose_files_have_moved_says_why_before_anything_is_read
                                                     "forcing section, which its record cannot rebuild."),
             "prior deleted": "The prior it was trained with is no longer in Records.",
             "card gone": "It was trained on the graphics card; this computer has none now.",
-            "a library changed": "torch was 0.0 when this training was kept, and is"}[cause]
+            "a library changed": None,
+            "model gone": "Its model, GONE, is no longer one PRISM can train."}[cause]
+    if cause == "a library changed":
+        said = continuing.as_sentence(fit_state.kept_fit(store, kept).why_not)
+        assert said.startswith("Torch was 0.0 when this training was kept, and is"), said
     if cause == "bounds edited":
         copy.write_bytes(copy.read_bytes() + b"\n# edited\n")
     elif cause == "bounds gone":
@@ -8574,7 +8590,7 @@ def test_a_kept_training_whose_files_have_moved_says_why_before_anything_is_read
         assert posterior_load.calls[-1][1] == {"resume_fit": kept, "if_name_taken": "unnamed"}
         return
     assert inference.resume_kept(kept) is None
-    assert page._said_on_row.get(kept, "").startswith(said), page._said_on_row
+    assert page._said_on_row.get(kept, "") == said, page._said_on_row
     assert (prior_load.calls, posterior_load.calls, controller().is_live(), inference.session.draft) == (
         [], [], False, None), "something was read, applied or started"
 
@@ -8739,7 +8755,6 @@ def test_a_run_of_this_window_lists_as_running_and_offers_nothing(store, tmp_pat
     page = inference.posterior_panel
     _row_of(page, kept)["resume"].click()
     turn_until(app, training.started.is_set)
-    page.redraw()
     row, beside = _row_of(page, kept), _row_of(page, other)
     assert beside["uses"].text() == "It uses the settings it was kept with." and beside["uses"].isVisibleTo(page.kept_block)
     assert (row["why"].text(), row["resume"].isVisibleTo(page.kept_block), row["delete"].isVisibleTo(page.kept_block),
@@ -8833,7 +8848,8 @@ def test_a_kept_rounds_command_is_listed_in_the_fixed_face_and_a_tab_stop(store,
     command = row["command"]
     assert command.text().startswith(f"python -m core tsnpe --resume-fit {kept} ")
     from core.gui.run.view import SelectableLines
-    assert (command.font().family(), bool(command.focusPolicy() & Qt.TabFocus), isinstance(command, SelectableLines))         == (fonts.fixed().family(), True, True)
+    assert (command.font().family(), bool(command.focusPolicy() & Qt.TabFocus), isinstance(command, SelectableLines)) \
+        == (fonts.fixed().family(), True, True)
     assert not row["resume"].isVisibleTo(page.kept_block) and row["delete"].isVisibleTo(page.kept_block)
     assert not row["uses"].isVisibleTo(page.kept_block), "a kept round's row says it uses its settings, with no Resume"
     assert page.region_stops()[:3] == [command, row["resume"], row["delete"]]
@@ -9036,3 +9052,514 @@ def test_a_store_that_keeps_no_training_is_never_asked_for_its_kept_trainings(st
     window.go_to("inference", "training")
     assert reads == [] and window.part("inference").offers() == (), (
         "the kept trainings were read from a store that keeps none")
+
+
+def _a_configuration(model, bounds, tmp_path, **options):
+    """A configuration as the training stage is handed one, on the processor: ``model`` on its bounds file ``bounds``
+    of its own folder (Hopf's first file for None), on ``bounds`` itself when it is a path, or on the limits of
+    master.txt typed by hand with no forcing section ("typed"), with ``options``."""
+    from pathlib import Path
+    from core import cli, config, registry
+    from core.Helpers import file_manager
+    folder = config.BOUNDS_PATH / model.lower()
+    labels, drift = config.VALID_LABELS[config.VALID_MODELS.index(model)], registry.state_dep_drift(model)
+    if bounds == "typed":
+        params, rescale, _forcing, _ = file_manager.parse_bounds_file(str(folder / "master.txt"))
+        return cli.make_sim_config(model, labels, drift, bounds_dicts=(params, rescale, {}), hw=config.cpu_device(),
+                                   **options)
+    path = Path(bounds) if isinstance(bounds, Path) else folder / bounds if bounds else sorted(folder.glob("*.txt"))[0]
+    return cli.make_sim_config(model, labels, drift, str(path), hw=config.cpu_device(), **options)
+
+
+#: The kept trainings and the runs a Resume and a Continue put back on the steps: the model, its bounds (a file of its
+#: folder, Hopf's first file, "typed" limits, or a file of another folder), its options, and a units file of its own.
+_PUT_BACK = {
+    "Nadrowski master.txt": ("NADROWSKI", "master.txt", dict(chi_mode=False, reparam_rotate=False), False),
+    "Hopf's first file": ("HOPF", None, dict(chi_mode=False, reparam_rotate=True), False),
+    "master_tier1.txt, units typed, slots 14, lock-in 6.5, the frequency response": (
+        "NADROWSKI", "master_tier1.txt", dict(chi_mode=True, chi_k_pad=14, chi_max_cycles=6.5, reparam_rotate=True,
+                                              units_override=("nm", "ms", "pN", "kHz")), False),
+    "a units file of its own": ("NADROWSKI", "master.txt", dict(chi_mode=False, reparam_rotate=False), True),
+    "limits typed by hand": ("NADROWSKI", "typed", dict(chi_mode=False, reparam_rotate=False), False),
+    "a bounds file of another folder": ("NADROWSKI", "elsewhere", dict(chi_mode=False, reparam_rotate=False), False),
+}
+
+
+def _put_back(case, store, tmp_path):
+    """The configuration of ``case`` of ``_PUT_BACK``, a prior of its own made on it, and the units file of its own when
+    the case has one: (configuration, prior's id, model, the bounds file step 2's list names, the units file or None,
+    the units typed or None)."""
+    import shutil
+    from core import cli, config
+    from tests._fixtures import _prior_artifact
+    model, bounds, options, own_units = _PUT_BACK[case]
+    units = None
+    if own_units:
+        units = tmp_path / "units" / "units of the rig.txt"
+        units.parent.mkdir()
+        units.write_bytes(open(cli.resolve_units_file(model), "rb").read() + b"\n# the units of the lab's own rig\n")
+        options = {**options, "units_override": str(units)}
+    if bounds == "elsewhere":
+        bounds = tmp_path / "bounds" / "master of the rig.txt"
+        bounds.parent.mkdir()
+        shutil.copyfile(config.BOUNDS_PATH / "nadrowski" / "master.txt", bounds)
+    cfg = _a_configuration(model, bounds, tmp_path, **options)
+    prior = _prior_artifact(store, cfg, name=f"prior_of_{model.lower()}").id
+    listed = (bounds if isinstance(bounds, str) and bounds != "typed" else
+              sorted((config.BOUNDS_PATH / model.lower()).glob("*.txt"))[0].name if bounds is None else "")
+    typed = options.get("units_override") if isinstance(options.get("units_override"), tuple) else None
+    return cfg, prior, model, listed, units, typed
+
+
+def _on_the_steps(inference):
+    """What steps 1 and 2 show after a Resume or a Continue: the model, the kind, the slots and the lock-in limit of the
+    frequency response, the rotation, the units' choice and the units typed, and the bounds file step 2's list
+    selects."""
+    step_one, rows = inference.config_panel, inference.config_panel.form.rows
+    chi = step_one.kind_choice.currentData() is True
+    return (step_one.model_combo.currentText(), step_one.kind_choice.currentData(),
+            rows["chi_k_pad"].value() if chi else None, rows["chi_max_cycles"].value() if chi else None,
+            step_one.rot_choice.currentData(), step_one.units_choice.currentData(),
+            step_one.units_text.text() if step_one.units_choice.currentData() == "typed" else "",
+            inference.prior_panel.bounds_picker.key())
+
+
+def _as_made(cfg, model, listed, units_words):
+    """What steps 1 and 2 should show for a configuration ``cfg`` of ``model``: its options, the units typed for units
+    a record names as typed or as a file of its own (``units_words``), the model's file else, and ``listed``."""
+    chi = bool(cfg.chi_mode)
+    return (model, chi, cfg.chi_k_pad if chi else None, cfg.chi_max_cycles if chi else None, bool(cfg.reparam_rotate),
+            "typed" if units_words else "file", units_words, listed)
+
+
+@pytest.mark.parametrize("case", list(_PUT_BACK))
+def test_resume_puts_the_records_settings_on_the_steps_and_loads_its_prior_on_its_record(case, store, tmp_path,
+                                                                                         monkeypatch):
+    """A Resume after a reopening, the device check standing in for a graphics card, of a training kept on the
+    processor: step 1 shows the record's model, kind, slots, lock-in limit and rotation, and its units as the record
+    names them (the model's file; units typed; a units file of its own shown typed with its words, the step holding the
+    file itself); step 2's list selects the record's bounds file, or none for limits typed by hand or a file of another
+    folder, which the configuration handed in stands for; no step reads as changed; the prior is loaded on the
+    configuration its record rebuilds, on the processor at the width its set was made with, whose identity is the
+    record's own; the stage is handed the kept training alone, and the Resume's history keeps the units as step 1 holds
+    them. Nothing stops between the question and the stage."""
+    import torch
+    from core import config
+    from core.artifacts.identity import SimulationIdentity
+    from core.Helpers import file_manager
+    from core.gui.step_facts import units_words
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    cfg, prior, model, listed, units, typed_units = _put_back(case, store, tmp_path)
+    kept = _a_kept_training(store, SimpleNamespace(prior=prior), cfg=cfg)
+    card = config.DeviceConfig(device=torch.device("cuda"), dtype=torch.float32, batch_size=2 ** 11)
+    monkeypatch.setattr(config, "detect_device", lambda: card)
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.read_offers()
+    inference.resume_kept(kept)
+    _settle(app, inference, posterior_load)
+    assert inference.loads.why == "" and posterior_load.calls[-1][1] == {"resume_fit": kept, "if_name_taken": "unnamed"}
+    typed = (" ".join(typed_units) if typed_units else
+             " ".join(file_manager.parse_units_file(str(units))) if units is not None else "")
+    assert _on_the_steps(inference) == _as_made(cfg, model, listed, typed), _on_the_steps(inference)
+    held_units = str(units) if units is not None else typed_units
+    assert inference.session.draft.units_override == held_units, inference.session.draft.units_override
+    assert controller().model.spec.settings["options"]["units_override"] == (
+        list(held_units) if isinstance(held_units, tuple) else held_units), "the history keeps other units"
+    assert inference.config_panel.nothing_to_apply(), "step 1 shows other settings than it holds"
+    assert inference.pending() == frozenset(), ("a step reads as changed after the Resume", inference.pending())
+    if units is not None:
+        assert inference.config_panel.in_use_words()[1].count(units_words(file_manager.parse_units_file(str(units))))
+        assert "units of the rig.txt" in inference.config_panel.in_use_words()[1]
+    handed = prior_load.calls[-1][0][0]
+    stub = SimpleNamespace(fingerprint="0" * 16)
+    assert (handed.hw.device.type, handed.hw.batch_size) == ("cpu", 64)
+    assert SimulationIdentity.from_cfg(handed, stub, 64, 4).to_dict() == SimulationIdentity.from_cfg(
+        cfg, stub, 64, 4).to_dict()
+
+
+@pytest.mark.parametrize("case", list(_PUT_BACK)[:3])
+def test_continue_puts_the_runs_own_settings_on_the_steps(case, store, tmp_path, monkeypatch):
+    """"Continue from batch N" after a reopening, for a training of Nadrowski on master.txt, of Hopf's first file, and
+    of the tier-1 box with units typed, slots 14, lock-in 6.5 and the frequency response: step 1 shows the run's model,
+    kind, slots, lock-in limit, rotation and units; step 2's list selects its bounds file; the prior is loaded on the
+    configuration step 2 builds of them, which is the run's own."""
+    from core.artifacts.manifest import config_from_cfg
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, _posterior_load = _the_loads(monkeypatch, store, held)
+    cfg, prior, model, listed, _units, typed_units = _put_back(case, store, tmp_path)
+    options = {"chi_mode": bool(cfg.chi_mode), "reparam_rotate": bool(cfg.reparam_rotate),
+               "chi_k_pad": cfg.chi_k_pad if cfg.chi_mode else None,
+               "chi_max_cycles": cfg.chi_max_cycles if cfg.chi_mode else None,
+               "units_override": list(typed_units) if typed_units else None}
+    _a_failed_training(store, tmp_path, held, handed={"model": model, "chi_mode": bool(cfg.chi_mode),
+                                                       "options": options, "bounds": listed, "prior": prior})
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    assert home.next_button.text() == "&Continue from batch 236"
+    home.next_button.click()
+    inference = window.part("inference")
+    _settle(app, inference)
+    typed = " ".join(typed_units) if typed_units else ""
+    assert (inference.loads.why, _on_the_steps(inference)) == ("", _as_made(cfg, model, listed, typed))
+    handed = prior_load.calls[-1][0][0]
+    machine = ("device", "dtype", "run_size")             # the computer's, which step 2 builds on as it stands now
+    made = {key: value for key, value in config_from_cfg(cfg).items() if key not in machine}
+    loaded = {key: value for key, value in config_from_cfg(handed).items() if key not in machine}
+    assert loaded == made, {key: (made[key], loaded.get(key)) for key in made if made[key] != loaded.get(key)}
+
+
+def test_home_presses_the_pages_own_resume_for_a_training_of_this_launch(store, tmp_path, monkeypatch):
+    """A training of this launch that fails in its fit, its set whole and its training kept, a posterior held: Home
+    offers to resume it, not to fit again on the set its kept training trains on (the run's history names the set by
+    its whole path), and its press opens the run's page and repeats the run's own call with the kept training named, no
+    name asked, the session and its posterior as they were."""
+    from core import orchestrator
+    from core.SBI import fit_state
+    from tests._fixtures import all_asked, forget_asked
+    from tests._runs import note, to_the_fit
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held, name="retrain_7", batches=10_000)
+    the_set = store.kind_dir("simulation") / fit_state.kept_fit(store, kept).parents["simulation"]
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.continue_with(window._picks)
+    _settle(app, inference)
+    posterior, session = inference.session.posterior, inference.session
+    reading = SimpleNamespace(checkpoint="new", batches_done=0, siblings="", sibling_diffs=(), cadence=50,
+                              checkpoint_error=None, width=2048)
+    monkeypatch.setattr(orchestrator, "training_reading", lambda *args, **kwargs: reading)
+    monkeypatch.setattr(orchestrator, "matching_fits", lambda *args, **kwargs: ())
+    training = StandIn()
+    training.kept_fit = note(kept, 8)
+    monkeypatch.setattr(orchestrator, "build_posterior", training)
+    window.go_to("inference", "training")
+    page = inference.posterior_panel
+    page.show_view("training")
+    page._names.name.setText("retrain_7")
+    page._names.check_now()
+    page.read_facts()
+    page.foot.main_button.click()
+    turn_until(app, training.started.is_set)
+    to_the_fit(app, training, RunText(controller()), controller()._clock, the_set, [(8, 0)])
+    training.fail(RuntimeError("the disk is full"))
+    turn_until(app, lambda: not controller().is_live())
+    window.go_to("home")
+    assert (home.next_button.text(), home.next_link.isVisibleTo(home)) == ("&Resume", True)
+    assert [offer.kind for offer in inference.offers() if not offer.why_not] == ["resume"], inference.offers()
+    forget_asked()
+    home.next_button.click()
+    turn_until(app, lambda: len(training.calls) == 2)
+    (args, kwargs), (again, given) = training.calls
+    assert (again, given) == (args, {**kwargs, "resume_fit": kept}), "Home's press did not repeat the run's own call"
+    assert (inference.session is session, inference.session.posterior is posterior, all_asked(),
+            window.current_place()) == (True, True, [], ("inference", "training"))
+    training.release(SimpleNamespace(kind="posterior", id="made", name="retrain_7", manifest=None,
+                                     posterior=SimpleNamespace(truncation=None)))
+    turn_until(app, lambda: not controller().is_live())
+
+
+def test_a_whole_set_with_a_resumable_kept_training_on_it_is_resumed_not_fitted_again(store, tmp_path, monkeypatch):
+    """After a reopening, a training that failed with its set whole, its history naming the set by its whole path as
+    the run's own line does, and a kept training on that set saved before the run's end: Home offers to resume the kept
+    training, and nothing offers "Fit again"."""
+    from core.SBI import fit_state
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    kept = _a_kept_training(store, held, batches=10_000, saved_at="2026-10-02T10:00:00+00:00")
+    the_set = store.kind_dir("simulation") / fit_state.kept_fit(store, kept).parents["simulation"]
+    _a_failed_training(store, tmp_path, held, batches=10_000, folder=the_set)
+    window, home = _home_of_last_time(tmp_path)
+    assert (home.next_heading.label.text(), home.next_button.text()) == ("Next: resume the training retrain_3",
+                                                                         "&Resume")
+    assert "fit_again" not in [offer.kind for offer in window.part("inference").offers()]
+
+
+def test_the_past_view_of_a_training_to_continue_offers_its_continue_and_a_finished_run_offers_nothing(
+        store, tmp_path, monkeypatch):
+    """The page of a training to continue, opened from "Last runs" after a reopening, says "Continue from batch 236",
+    and its press hands the window the offer to continue that run, as Home's button does; the page of an earlier run of
+    the same records folder that finished offers nothing while that offer stands."""
+    from tests._fixtures import write_history
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _a_failed_training(store, tmp_path, held)
+    finished = "20261002T030211-training"
+    write_history(tmp_path / "runs", id=finished, word="Training", name="retrain_2", place=["inference", "training"],
+                  records_root=str(store.root), started=_at(2, 3, 2, 11), ended=_at(2, 9, 0), outcome="finished",
+                  acknowledged=True)
+    window, home = _home_of_last_time(tmp_path)
+    assert home.next_button.text() == "&Continue from batch 236"
+    window._open_run(_REOPENED)
+    page = window.part("inference").posterior_panel
+    past = page._past_view
+    assert (past.continue_button.isVisibleTo(past), past.continue_button.text(), past.resume_button.isVisibleTo(past)) \
+        == (True, "Continue from batch 236", False)
+    pressed = []
+    controller().offer_pressed.disconnect(window.offer_pressed)          # heard here alone: nothing is started
+    controller().offer_pressed.connect(pressed.append)
+    past.continue_button.click()
+    controller().offer_pressed.disconnect(pressed.append)
+    assert [(offer.kind, offer.run, offer.batch) for offer in pressed] == [("continue", _REOPENED, 236)], pressed
+    window._open_run(finished)
+    assert not any(button.isVisibleTo(past) for button in (past.continue_button, past.resume_button,
+                                                           past.discard_kept_button)), "a finished run offers another's"
+
+
+def test_fit_again_on_the_saved_simulations_from_home_and_the_training_page(store, tmp_path, monkeypatch):
+    """A training that failed with its simulation set whole and no kept training on it: Home's button reads "Fit again
+    on the saved simulations"; its press fills the forms from the run with "Only continue" chosen, the Training page's
+    button reads the same once its reading finds the set of these settings whole, and that press hands the stage the
+    policy that must continue."""
+    from core import orchestrator
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    _a_failed_training(store, tmp_path, held, batches=10_000, rows=({"name": "num_runs", "value": 10_000},))
+    reading = SimpleNamespace(checkpoint="resume_complete", batches_done=10_000, siblings="", sibling_diffs=(),
+                              cadence=50, checkpoint_error=None, width=2048)
+    monkeypatch.setattr(orchestrator, "training_reading", lambda *args, **kwargs: reading)
+    monkeypatch.setattr(orchestrator, "matching_fits", lambda *args, **kwargs: ())
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    assert (home.next_heading.label.text(), home.next_button.text()) == ("Next: continue the training",
+                                                                         "&Fit again on the saved simulations")
+    home.next_button.click()
+    inference = window.part("inference")
+    _settle(app, inference)
+    page = inference.posterior_panel
+    page._names.name.setText("retrain_4")
+    page._names.check_now()
+    page.read_facts()
+    assert (page.resume_choice.currentData(), page.foot.main_button.text()) == (
+        "require", "&Fit again on the saved simulations")
+    calls = len(posterior_load.calls)
+    page.foot.main_button.click()
+    turn_until(app, lambda: len(posterior_load.calls) > calls and not controller().is_live())
+    assert posterior_load.calls[-1][1]["resume"] == "require"
+
+
+def test_the_list_and_home_say_a_kept_training_in_whole_sentences(store, tmp_path, monkeypatch):
+    """A kept training's row says its label and how it stopped, and its sentence names the prior it trains on, as Home's
+    sentence of its Resume does; the Delete question counts the epochs it deletes, "1 epoch" for one, and none for a
+    record that names no count; an unnamed prior is named as Records names it, by when it was made; Home's heading
+    for an unnamed kept training reads as a sentence; a Fit again that lets the session go says so on its button;
+    after a Delete the keyboard is on the next row's Resume, else the row's before, else the step's heading."""
+    from dataclasses import replace
+    from PySide6.QtWidgets import QApplication
+    from core.gui import continuing
+    from tests._fixtures import _nad_cfg, _prior_artifact, asked, choose
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held)
+    window, home = _home_of_last_time(tmp_path)
+    window.go_to("inference", "training")
+    inference = window.part("inference")
+    page = inference.posterior_panel
+    row = _row_of(page, kept)
+    assert row["label"].text() == "retrain_3: kept when stopped"
+    assert "It trains on the simulation set " in row["sentence"].text() and row["sentence"].text().count(
+        " and the prior retrain_prior. ") == 1, row["sentence"].text()
+    window.go_to("home")
+    assert home._next_sentence.plain_text() == row["sentence"].text()
+    window.go_to("inference", "training")
+    choose(monkeypatch, words="Keep it")
+    row["delete"].click()
+    assert asked().sentence == "The 7 epochs kept are deleted; the next training starts from its first epoch."
+    one = _a_kept_training(store, held, name="one_pass", passes=1)
+    page.foot.check_again.click()
+    _row_of(page, one)["delete"].click()
+    assert asked().sentence == "The 1 epoch kept is deleted; the next training starts from its first epoch."
+    listed = page.kept_offers
+    with monkeypatch.context() as uncounted:             # a record that names no count of its epochs
+        uncounted.setattr(page, "kept_offers", lambda: tuple(replace(offer, epoch=None) for offer in listed()))
+        _row_of(page, one)["delete"].click()
+    assert asked().sentence == "The epochs kept are deleted; the next training starts from its first epoch."
+    unnamed_prior = _prior_artifact(store, _nad_cfg(), name="").id
+    nameless = _a_kept_training(store, SimpleNamespace(prior=unnamed_prior), name="")
+    page.foot.check_again.click()
+    said = _row_of(page, nameless)["sentence"].text()
+    assert " and the unnamed prior, " in said and "Unnamed prior" not in said, said
+    window.go_to("home")
+    newest = continuing.for_home(inference.offers())
+    assert newest.kept == nameless and home.next_heading.label.text() == (
+        f"Next: resume the {newest.label[:1].lower()}{newest.label[1:]}"), home.next_heading.label.text()
+    assert home.next_heading.label.text().startswith("Next: resume the unnamed unfinished training, ")
+    with _in_front(window):
+        window.go_to("inference", "training")
+        choose(monkeypatch, words="Delete it")
+        order = [offer.kept for offer, _parts in page._kept_rows]
+        _row_of(page, order[1])["delete"].click()
+        turn_until(qt_app(), lambda: QApplication.focusWidget() is _row_of(page, order[2])["resume"])
+        rest = [offer.kept for offer, _parts in page._kept_rows]
+        _row_of(page, rest[-1])["delete"].click()
+        turn_until(qt_app(), lambda: QApplication.focusWidget() is _row_of(page, rest[-2])["resume"])
+        for ident in [offer.kept for offer, _parts in page._kept_rows]:
+            _row_of(page, ident)["delete"].click()
+        turn_until(qt_app(), lambda: QApplication.focusWidget() is page.help_button)
+
+
+def test_fit_again_asks_with_its_own_words_before_it_lets_the_session_go(store, tmp_path, monkeypatch):
+    """"Fit again on the saved simulations" while the session holds a record asks first, the answer that lets it go
+    saying "Fit again and start a new session"."""
+    from core.gui import continuing
+    from tests._fixtures import asked, choose
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    _a_failed_training(store, tmp_path, held, batches=10_000)
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.continue_with(window._picks)
+    _settle(app, inference)
+    inference.read_offers()
+    offer = continuing.for_home(inference.offers())
+    choose(monkeypatch, words="Keep this session")
+    assert offer.kind == "fit_again" and inference.continue_from(offer) is None
+    assert (asked().title, set(asked().answers)) == ("Fit again on the saved simulations?",
+                                                    {"Keep this session", "Fit again and start a new session"})
+
+
+def test_a_delete_the_store_refuses_and_a_kept_training_gone_since_the_list_are_said_on_the_row(store, tmp_path,
+                                                                                               monkeypatch):
+    """A Delete the store refuses is said on the kept training's row in the store's own words, the training kept; a
+    Resume of a kept training deleted since the list was read is said on its row, and nothing is applied or loaded."""
+    from core.artifacts import ArtifactStore
+    from core.refusals import Refusal
+    from tests._fixtures import choose
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held, release=False)
+    kept, other = _a_kept_training(store, held), _a_kept_training(store, held, name="retrain_5")
+    window, _home = _home_of_last_time(tmp_path)
+    window.go_to("inference", "training")
+    inference = window.part("inference")
+    page = inference.posterior_panel
+    refused = "the kept training is being trained by a running process; it is not deleted"
+
+    def held_by_another(self, kind, ident, **kwargs):
+        raise Refusal(refused, field="resume_fit")
+
+    choose(monkeypatch, words="Delete it")
+    with monkeypatch.context() as during:
+        during.setattr(ArtifactStore, "delete", held_by_another)
+        _row_of(page, kept)["delete"].click()
+    assert (_row_of(page, kept)["why"].text(), _row_of(page, kept)["why"].isVisibleTo(page.kept_block)) == (
+        refused, True)
+    assert kept in [row.id for row in store.list("fit")]
+    store.delete("fit", other)
+    _row_of(page, other)["resume"].click()
+    said = page._said_on_row.get(other, "")
+    assert said and _row_of(page, other)["why"].text() == said, page._said_on_row
+    assert (prior_load.calls, posterior_load.calls, inference.session.draft) == ([], [], None)
+
+
+def test_the_name_asked_at_resume_is_checked_as_the_store_checks_a_posteriors_name(store, tmp_path, monkeypatch):
+    """The name a Resume asks for an unnamed kept training is checked as it is typed, by the store's own rule: one with
+    a space, one shaped like a record's id and one a posterior holds each keep the question open with the store's
+    reason under the line and its "Resume" greyed, so the question is left as "Cancel" leaves it: nothing starts and
+    the session is kept."""
+    from tests._dialogs import answer_in_turn
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held, name="")
+    window, _home = _home_of_last_time(tmp_path)
+    inference = window.part("inference")
+    inference.read_offers()
+    before = inference.session
+    for typed, reason in (("retrain 9", "letters, digits, _ . - and at most 64 characters"),
+                          ("20261003T030211", "shaped like an artifact id"),
+                          ("zz_trained", "a posterior named 'zz_trained' already exists")):
+        seen = []
+
+        def typed_in(dialog, typed=typed, seen=seen):
+            dialog.field.setText(typed)
+            seen.append((dialog.wrong, dialog.other_button.isEnabled()))
+
+        answer_in_turn(monkeypatch, typed_in)                # the line typed, then left as "Cancel" leaves it
+        assert inference.resume_kept(kept) is None, typed
+        (wrong, enabled), = seen
+        assert (reason in wrong, enabled) == (True, False), (typed, wrong, enabled)
+        assert (prior_load.calls, posterior_load.calls, inference.session is before) == ([], [], True)
+
+
+def test_home_takes_the_reopenings_path_once_the_pages_call_can_no_longer_start(store, tmp_path, monkeypatch):
+    """A training of this launch that failed with batches saved, whose page offers "Continue from batch N": once step 1
+    has been applied again, the page's own call can no longer start, the run is no longer offered as the page's, and
+    Home's press takes the reopening's path at once."""
+    from core import orchestrator
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.continue_with(window._picks)
+    _settle(app, inference)
+    reading = SimpleNamespace(checkpoint="new", batches_done=0, siblings="", sibling_diffs=(), cadence=50,
+                              checkpoint_error=None, width=2048)
+    monkeypatch.setattr(orchestrator, "training_reading", lambda *args, **kwargs: reading)
+    monkeypatch.setattr(orchestrator, "matching_fits", lambda *args, **kwargs: ())
+    training = StandIn()
+    monkeypatch.setattr(orchestrator, "build_posterior", training)
+    window.go_to("inference", "training")
+    page = inference.posterior_panel
+    page.show_view("training")
+    page._names.name.setText("retrain_7")
+    page._names.check_now()
+    page.read_facts()
+    page.foot.main_button.click()
+    turn_until(app, training.started.is_set)
+    for line in (_BUDGET, _ROTATING, _ROTATED, _writing(_set_of(tmp_path, 236))):
+        training.say(line)
+    training.fail(RuntimeError("the disk is full"))
+    turn_until(app, lambda: not controller().is_live())
+    run = controller().status.run
+    assert controller().offered(run)
+    assert inference.config_panel.apply_quietly("NADROWSKI", {"chi_mode": False})
+    assert not controller().offered(run), "a call that can no longer start is offered as the page's"
+    taken = []
+    monkeypatch.setattr(type(inference), "continue_from", lambda screen, offer: taken.append(offer.kind))
+    window.go_to("home")
+    home.next_button.click()
+    assert (taken, len(training.calls)) == (["continue"], 1)
+
+
+def test_a_past_view_offers_nothing_while_a_run_is_live(store, tmp_path, monkeypatch):
+    """While a run of another part is live, a past view opened offers nothing; one opened before it began hands the
+    window nothing at its press and says a run is live, and its "Discard" deletes nothing and says the same."""
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.step_facts import LIVE_TEXT
+    from tests._fixtures import choose
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held)
+    _a_failed_training(store, tmp_path, held, batches=10_000, kept=kept)
+    window, _home = _home_of_last_time(tmp_path)
+    window._open_run(_REOPENED)
+    page = window.part("inference").posterior_panel
+    past = page._past_view
+    assert past.resume_button.isVisibleTo(past) and past.discard_kept_button.isVisibleTo(past)
+    pressed = []
+    controller().offer_pressed.connect(pressed.append)
+    choose(monkeypatch, words="Discard")
+    with running(window.panel(ReductionPanel)):
+        past.resume_button.click()
+        assert (pressed, past.notice.text()) == ([], LIVE_TEXT)
+        past.discard_kept_button.click()
+        assert kept in [row.id for row in store.list("fit")] and past.notice.text() == LIVE_TEXT
+        window._open_run(_REOPENED)
+        assert not past.resume_button.isVisibleTo(past) and not past.discard_kept_button.isVisibleTo(past)
+    controller().offer_pressed.disconnect(pressed.append)
+    turn_until(qt_app(), lambda: not controller().is_live())
+
+
+def test_the_rail_keeps_a_kept_training_when_parameter_inference_opens_at_another_step(store, tmp_path, monkeypatch):
+    """A kept training read by Home: Parameter inference opened first at step 1, from the rail, keeps the Training row's
+    "Unfinished" from the window's reading, before the screen reads for itself."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _a_kept_training(store, held)
+    window, _home = _home_of_last_time(tmp_path)
+    said = "Step 3, Training. Unfinished: training kept after epoch 7"
+    assert window.shell.rail.row("training").accessibleName() == said
+    window.go_to("inference", "model")
+    assert window.shell.rail.row("training").accessibleName() == said

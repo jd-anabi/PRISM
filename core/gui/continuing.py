@@ -35,8 +35,10 @@ READ_BACK_TEXT = "Resuming first reads the simulation set back, about four minut
 FINISHED_TEXT = "Its fit is finished; resuming writes the posterior without training again."
 GONE_PRIOR = "a prior no longer in Records"
 ROUND_TEXT = "It is resumed from the command line until its page offers it: "
-#: How a history's training ended, as an offer says it.
-HOW = {"failed": "failed", "not seen to end": "not seen to end", "stopped": "stopped"}
+#: How a history's training ended, as an offer's sentence says it.
+HOW = {"failed": "failed", "not seen to end": "was not seen to end", "stopped": "stopped"}
+#: The flag a kept narrowing round's command gains when its parent posterior is itself narrowed.
+ACCEPT_TRUNCATED = "--accept-truncated"
 
 
 @dataclass(frozen=True)
@@ -46,7 +48,8 @@ class Offer:
     training's id; ``batch`` the batches its simulation set holds, read from the set; ``epoch`` the epochs a kept
     training holds; ``sentence`` what Home and the Training step say of it; ``why_not`` why a kept training cannot be
     resumed now, "" when it can; ``label`` its name, or a kept training's label; ``how`` how it stopped, in words;
-    ``command`` the command line that resumes a kept narrowing round; ``at`` the moment it is ordered by."""
+    ``command`` the command line that resumes a kept narrowing round; ``at`` the moment it is ordered by; ``named``
+    whether a kept training has a name of its own."""
     kind: str
     run: "str | None"
     kept: "str | None"
@@ -58,6 +61,7 @@ class Offer:
     how: str = ""
     command: str = ""
     at: "datetime | None" = None
+    named: bool = True
 
     @property
     def button(self) -> str:
@@ -124,10 +128,20 @@ def kept_label(kept) -> str:
     return f"{UNNAMED}, {_when(made)}" if made is not None else UNNAMED
 
 
+def as_sentence(clause) -> str:
+    """A clause as a sentence: its first letter a capital, a full stop at its end; "" for none."""
+    clause = str(clause or "").strip()
+    if not clause:
+        return ""
+    return clause[:1].upper() + clause[1:] + ("" if clause.endswith((".", "!", "?")) else ".")
+
+
 def resume_sentence(kept, prior_label: "str | None" = None) -> str:
     """What Home and the Training step say of a kept training: how it stopped, after which epoch and when it was last
     saved, its best validation loss and how many epochs ago, the simulation set and the prior it trains on, and that a
-    resume reads the set back first; for one whose fit is finished, that resuming writes the posterior alone."""
+    resume reads the set back first; for one whose fit is finished, that resuming writes the posterior alone.
+    ``prior_label`` is how a sentence names the prior ("the prior retrain_prior", or an unnamed one by when it was
+    made), None for one no longer in Records."""
     state = getattr(kept, "state", "") or ""
     passes = _whole(getattr(kept, "passes", None))
     saved = _when(_moment(getattr(kept, "saved_at", None)))
@@ -153,16 +167,15 @@ def resume_sentence(kept, prior_label: "str | None" = None) -> str:
     simulation = parents.get("simulation") if isinstance(parents, dict) else None
     prior = prior_label or GONE_PRIOR
     if isinstance(simulation, str) and simulation:
-        said.append(f"It trains on the simulation set {simulation} and the prior {prior}."
-                    if prior_label else f"It trains on the simulation set {simulation} and {prior}.")
+        said.append(f"It trains on the simulation set {simulation} and {prior}.")
     said.append(FINISHED_TEXT if state == "finished" else READ_BACK_TEXT)
     return " ".join(said)
 
 
-def round_command(kept) -> str:
+def round_command(kept, *, narrowed_parent: bool = False) -> str:
     """The command line that resumes the kept narrowing round ``kept``, given the bounds file, the parent posterior,
-    the observation and the kind of observation it was trained with, as its record holds them, and the processor
-    when it trained there."""
+    the observation and the kind of observation it was trained with, as its record holds them, the acceptance of a
+    parent posterior that is itself narrowed (``narrowed_parent``), and the processor when it trained there."""
     inputs = getattr(kept, "inputs", None) or {}
     parents = getattr(kept, "parents", None) or {}
     config = getattr(kept, "config", None) or {}
@@ -179,6 +192,8 @@ def round_command(kept) -> str:
     chi = config.get("chi_mode") if isinstance(config, dict) else None
     if isinstance(chi, bool):
         words.append("--chi" if chi else "--no-chi")
+    if narrowed_parent:
+        words.append(ACCEPT_TRUNCATED)
     if isinstance(config, dict) and config.get("device") == "cpu":
         words.append("--device cpu")
     return " ".join(words)
@@ -188,23 +203,29 @@ def _quoted(word: str) -> str:
     return f'"{word}"' if " " in word else word
 
 
-def _kept_offer(kept, runs: dict, prior_label) -> Offer:
-    """A kept training as an offer: a narrowing round's or another's, with why it cannot be resumed where it cannot."""
+def _kept_offer(kept, runs: dict, prior_label, parent_narrowed) -> Offer:
+    """A kept training as an offer: a narrowing round's or another's, with why it cannot be resumed where it cannot, as
+    a sentence."""
     region = getattr(kept, "region", None)
-    why = "" if getattr(kept, "can_resume", False) else str(getattr(kept, "why_not", None) or "it cannot be resumed")
+    why = "" if getattr(kept, "can_resume", False) else as_sentence(getattr(kept, "why_not", None)
+                                                                   or "it cannot be resumed")
     ident = getattr(kept, "id", None)
     parents = getattr(kept, "parents", None) or {}
     prior = parents.get("prior") if isinstance(parents, dict) else None
     label = prior_label(prior) if isinstance(prior, str) and prior else None
-    command = round_command(kept) if region is not None else ""
+    parent = parents.get("parent_posterior") if isinstance(parents, dict) else None
+    narrowed = isinstance(parent, str) and bool(parent) and bool(parent_narrowed(parent))
+    command = round_command(kept, narrowed_parent=narrowed) if region is not None else ""
     sentence = resume_sentence(kept, label)
     if region is not None:
         sentence = f"{sentence} {ROUND_TEXT}"
     how = stopped_words(getattr(kept, "state", None), getattr(kept, "stopped_on_purpose", None),
                         getattr(kept, "stop_reason", None))
     at = _moment(getattr(kept, "saved_at", None)) or _moment(getattr(kept, "created", None))
+    name = getattr(kept, "posterior_name", "")
     return Offer("round" if region is not None else "resume", runs.get(ident), ident, None, sentence, why,
-                 epoch=_whole(getattr(kept, "passes", None)), label=kept_label(kept), how=how, command=command, at=at)
+                 epoch=_whole(getattr(kept, "passes", None)), label=kept_label(kept), how=how, command=command, at=at,
+                 named=isinstance(name, str) and bool(name))
 
 
 def _history_offer(record: dict, kept_on: set, set_batches) -> "Offer | None":
@@ -235,7 +256,8 @@ def _history_offer(record: dict, kept_on: set, set_batches) -> "Offer | None":
     if not isinstance(bounds, str) or not bounds:
         return None                              # nothing to fill the forms from: Home says how it ended
     if whole:
-        if folder in kept_on:
+        # The history holds the set's folder as the run's line names it, its whole path; a kept training, its name.
+        if os.path.basename(os.path.normpath(folder)) in kept_on:
             return None                          # its kept training is resumed instead
         return Offer("fit_again", run, None, done, _ended_sentence(name, how, at, done, whole=True), "", label=name,
                      how=how, at=at)
@@ -254,7 +276,8 @@ def _ended_sentence(name: str, how: str, at, done: int, *, whole: bool) -> str:
 
 def offers(histories: Iterable[dict], kept_rows: Iterable, *, records_root: str,
            set_batches: Callable[[str], "int | None"],
-           prior_label: Callable[[str], "str | None"] = lambda _ident: None) -> tuple[Offer, ...]:
+           prior_label: Callable[[str], "str | None"] = lambda _ident: None,
+           parent_narrowed: Callable[[str], bool] = lambda _ident: False) -> tuple[Offer, ...]:
     """Every offer, newest first: each kept training (``kept_rows``, read by their attributes as ``KeptFit`` holds them),
     resumable or not, a narrowing round's with its command; and the newest training of the history of the records
     folder ``records_root`` (``histories``, as ``history.read`` gives them, of any records folder and any order), which,
@@ -262,7 +285,8 @@ def offers(histories: Iterable[dict], kept_rows: Iterable, *, records_root: str,
     batch its set holds (``set_batches``, the set's own count by its folder's name, None for no set), or, its set whole
     and no kept training on that set to resume, to fit again; stopped with its set unfinished, it offers what the steps
     alone say. A later training of that folder, whatever its end, leaves an earlier one nothing. ``prior_label`` names a
-    kept training's prior by its id, None for one no longer in Records."""
+    kept training's prior by its id, as a sentence names it, None for one no longer in Records; ``parent_narrowed``
+    says whether a kept narrowing round's parent posterior, by its id, is itself narrowed."""
     records = [record for record in histories if isinstance(record, dict)]
     kept_rows = list(kept_rows)
     trainings = sorted(((moment, record) for record in records
@@ -274,7 +298,7 @@ def offers(histories: Iterable[dict], kept_rows: Iterable, *, records_root: str,
         fit = record.get("fit") if isinstance(record.get("fit"), dict) else {}
         if isinstance(fit.get("kept_id"), str) and isinstance(record.get("id"), str):
             runs[fit["kept_id"]] = record["id"]
-    kept = [_kept_offer(row, runs, prior_label) for row in kept_rows]
+    kept = [_kept_offer(row, runs, prior_label, parent_narrowed) for row in kept_rows]
     kept_on = {getattr(row, "parents", {}).get("simulation") for row in kept_rows
                if getattr(row, "can_resume", False) and isinstance(getattr(row, "parents", None), dict)}
     found = list(kept)

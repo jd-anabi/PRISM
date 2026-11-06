@@ -278,8 +278,13 @@ def _offered(offer) -> Next:
     if offer.kind == "round":
         return Next("Next: resume the narrowing round", f"{offer.sentence}{offer.command}", "Open Training",
                     "inference", "training", offer=offer)
-    heading = (f"Next: resume the training {offer.label}".rstrip() if offer.kind == "resume"
-               else "Next: continue the training")
+    label = offer.label
+    if offer.kind != "resume":
+        heading = "Next: continue the training"
+    elif getattr(offer, "named", True):
+        heading = f"Next: resume the training {label}".rstrip()
+    else:                                        # Records' label of an unnamed one, read as part of the sentence
+        heading = f"Next: resume the {label[:1].lower()}{label[1:]}"
     return Next(heading, offer.sentence, offer.button, "inference", "training", action=_ACTIONS[offer.kind],
                 offer=offer)
 

@@ -16,14 +16,33 @@ class Choice(QComboBox):
 
     ``most`` caps that width, in the look's pixels at the ordinary text size, for a list whose items a person names, as a
     file's or a record's name: the item shown is cut short in its middle, with the whole of it in the tip, and the list
-    opens as wide as its longest item. A page never scrolls sideways for a long name."""
+    opens as wide as its longest item. A page never scrolls sideways for a long name. A form that has not the room for
+    a list's longest item beside its label holds it to the room it has (``hold_to``), cut short the same way."""
 
     def __init__(self, parent=None, *, most: "int | None" = None) -> None:
         super().__init__(parent)
         self._most = most
+        self._room: "int | None" = None          # the room a form holds the box to, in pixels; None for no hold
         self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        if most is not None:
-            self.currentIndexChanged.connect(self.say_whole)
+        self.currentIndexChanged.connect(self._said_whole)
+
+    def hold_to(self, room: "int | None") -> None:
+        """Hold the box to ``room`` pixels, the item shown cut short in its middle where it needs more, the whole of it
+        in the tip and in the open list; None lets it go."""
+        if room == self._room:
+            return
+        self._room = room
+        self._said_whole()
+        self.updateGeometry()
+        self.update()
+
+    def _cut(self) -> bool:
+        """Whether the box may be narrower than its longest item: capped, or held by its form."""
+        return self._most is not None or self._room is not None
+
+    def _said_whole(self, _index: int = 0) -> None:
+        if self._cut():
+            self.say_whole()
 
     def _whole_width(self) -> int:
         """As wide as the longest item, with the chevron's room: what the toolkit gives with no cap."""
@@ -34,6 +53,8 @@ class Choice(QComboBox):
         hint = super().sizeHint()
         if self._most is not None:
             hint.setWidth(min(hint.width(), design.scaled(self._most)))
+        if self._room is not None:
+            hint.setWidth(min(hint.width(), self._room))
         return hint
 
     @reported(QComboBox.minimumSizeHint)
@@ -47,13 +68,13 @@ class Choice(QComboBox):
         self.setToolTip(self.currentText())
 
     def showPopup(self):
-        if self._most is not None:
+        if self._cut():
             self.view().setMinimumWidth(self._whole_width())  # the open list shows every name whole
         super().showPopup()
 
     @reported()
     def paintEvent(self, event):
-        if self._most is None:
+        if not self._cut():
             super().paintEvent(event)                    # the box itself, as the toolkit draws it
         else:
             self._paint_cut_short()

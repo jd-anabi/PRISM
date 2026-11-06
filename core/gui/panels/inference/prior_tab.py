@@ -238,6 +238,9 @@ class PriorPanel(StepPage):
         self.view = "build"
         self._view_chosen = False                # the view is chosen as the page first comes into sight
         self._candidate, self._candidate_key, self._candidate_error = None, None, ""
+        # A configuration a caller hands a load (a kept training's, rebuilt from its record), while that load reads its
+        # facts: it stands for the bounds, which the list may not hold (limits typed by hand, a file of another folder).
+        self._standing = None
         self._read: dict = {}                    # what the last reading found
         self._took = None                        # the run history's last build, as the last reading found it
         self._dispatched = None                  # the candidate handed to the run in hand
@@ -314,10 +317,14 @@ class PriorPanel(StepPage):
 
     def _bounds_chosen_value(self) -> tuple:
         """What the bounds row shows now: the file selected, with when it was written as the last reading found it, or
-        the limits typed by hand. The moment is compared only with a moment the step holds."""
+        the limits typed by hand. The moment is compared only with a moment the step holds. With no file selected while
+        the step holds bounds the list cannot select (limits typed by hand, a file of another folder), nothing on the
+        form says otherwise: what is held."""
         if self._typed():
             return "typed", self._grid_limits()
         key, held = self.bounds_picker.key(), self._bounds_held_value()
+        if not key and held is not NOT_HELD and (held[0] == "typed" or Path(held[1]).is_absolute()):
+            return held
         if held is NOT_HELD or held[0] != "file" or held[2] is None:
             return "file", key, None
         built = self._candidate_key
@@ -506,7 +513,8 @@ class PriorPanel(StepPage):
             view=self.view, needs=self._draft() is None, bounds_error=bounds_error, bounds_blocks=bounds_blocks,
             prior_error=prior_error, prior_blocks=prior_blocks, record_model=read.get("record_model"),
             model=getattr(self._draft(), "model", None), built_on=read.get("built_on"),
-            selected=_named(self.bounds_picker.key()), edited=read.get("edited", False),
+            selected=_named(self.bounds_picker.key() or (bounds_in_use(self._standing) or "")),
+            edited=read.get("edited", False),
             same_box=read.get("same_box", True), sets_of_prior=read.get("sets_of_prior"),
             rounds=values["num_iterations"] if cost_ok else None, batch=batch if cost_ok else None,
             stable=values["max_sets"] if cost_ok else None, steps=steps, took=self._took,
@@ -517,8 +525,9 @@ class PriorPanel(StepPage):
         return "bounds_typed" if self._typed() else "bounds"
 
     def _bounds_trouble(self) -> tuple:
-        """Why the bounds chosen cannot be used, and the words beside the button; ``("", "")`` when they can."""
-        if self._draft() is None:
+        """Why the bounds chosen cannot be used, and the words beside the button; ``("", "")`` when they can, and while
+        a configuration handed to a load stands for them: the page's own is not the one that load hands the run."""
+        if self._draft() is None or self._standing is not None:
             return "", ""
         if not self._typed() and not self.bounds_picker.key():
             return NO_BOUNDS_TEXT, NO_BOUNDS_BLOCKS
@@ -666,7 +675,8 @@ class PriorPanel(StepPage):
                                         and selected["sha256"] != recorded.get("sha256"))
             except Exception:                # noqa: BLE001 -- a file gone since it was listed
                 self._read["edited"] = False
-        self._read["same_box"] = self._candidate is not None and _same_box(gmm, self._candidate)
+        against = self._candidate if self._standing is None else self._standing
+        self._read["same_box"] = against is not None and _same_box(gmm, against)
         try:
             self._read["sets_of_prior"] = [batches for _name, batches in
                                            training_checkpoint.checkpoints_using_prior(manifest.fingerprints.get("gmm"))]
@@ -914,21 +924,26 @@ class PriorPanel(StepPage):
         its own question first: the saved view shown and read, so that the list holds a record saved since by another
         program, ``ref`` selected, the facts read, and the load started unless they block it. ``candidate`` is the
         configuration the caller holds for it (a kept training's, rebuilt from its record), handed the load in place of
-        the page's own and put in use with the prior. True when its run was started. While a run is live it changes
-        nothing: neither the view, nor the list, nor what is held."""
+        the page's own and put in use with the prior: it stands for the bounds while the load reads its facts, so that
+        limits typed by hand, or a file the list does not hold, need no file chosen. True when its run was started.
+        While a run is live it changes nothing: neither the view, nor the list, nor what is held."""
         if controller().is_live():
             return False
         self._by_keyboard = False                # no key pressed this load
-        self.show_view("saved")
-        self.read_facts()
-        self.prior_picker.restore_key(ref)
-        self.read_facts()
-        cfg = self._candidate if candidate is None else candidate
-        if self.prior_picker.key() != ref or not self.foot.main_button.isEnabled() or cfg is None:
-            return False
-        self._dispatched, self._dispatched_key = cfg, self._candidate_key
-        return self.dispatch(orchestrator.build_prior, cfg, ref, False, provide_fig_sink=True,
-                             on_result=self._on_prior)
+        self._standing = candidate              # what the load reads stands for the bounds, every other check kept
+        try:
+            self.show_view("saved")
+            self.read_facts()
+            self.prior_picker.restore_key(ref)
+            self.read_facts()
+            cfg = self._candidate if candidate is None else candidate
+            if self.prior_picker.key() != ref or not self.foot.main_button.isEnabled() or cfg is None:
+                return False
+            self._dispatched, self._dispatched_key = cfg, self._candidate_key if candidate is None else None
+            return self.dispatch(orchestrator.build_prior, cfg, ref, False, provide_fig_sink=True,
+                                 on_result=self._on_prior)
+        finally:
+            self._standing = None
 
     def run_spec(self, fn, *args, **kwargs) -> RunSpec:
         """The prior's build, which writes a prior; or its load, which writes nothing, keeps no file and stops

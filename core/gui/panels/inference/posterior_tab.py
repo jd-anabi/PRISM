@@ -37,7 +37,7 @@ import math
 from dataclasses import replace
 from datetime import datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from core import config, orchestrator
@@ -66,7 +66,7 @@ from ...widgets.labeled_inputs import FloatField, IntField
 from .base import training_spec
 from .help_text import HELP
 from .prior_tab import bounds_in_use, recorded_file
-from .resume import resume_call
+from .resume import resume_call, resume_draft
 from .step_page import StepPage
 
 TITLE = "Training"
@@ -113,6 +113,8 @@ RUNNING_TEXT = "Running: a run of this window is training it."
 USES_TEXT = "It uses the settings it was kept with."
 DELETE_TITLE = "Delete this kept training?"
 DELETE_TEXT = "The {} epochs kept are deleted; the next training starts from its first epoch."
+DELETE_ONE_TEXT = "The 1 epoch kept is deleted; the next training starts from its first epoch."
+DELETE_UNCOUNTED_TEXT = "The epochs kept are deleted; the next training starts from its first epoch."
 KEEP_IT, DELETE_IT = "Keep it", "Delete it"
 
 # THE SETTINGS A TRAINING READS, in the order the stage checks them: the field key, which is also build_posterior's
@@ -606,7 +608,10 @@ class PosteriorPanel(StepPage):
             if live else None
         if [offer for offer, _parts in self._kept_rows] != list(offers):
             for _offer, parts in self._kept_rows:
-                parts["row"].setParent(None)
+                # Hidden and taken out of the list, never set loose: a row set loose stands in no window, and the
+                # keyboard could be handed on to its buttons until it is deleted.
+                parts["row"].hide()
+                self._kept_lines.removeWidget(parts["row"])
                 parts["row"].deleteLater()
             self._kept_rows = [(offer, self._kept_row(offer)) for offer in offers]
             for _offer, parts in self._kept_rows:
@@ -667,20 +672,39 @@ class PosteriorPanel(StepPage):
         return stops
 
     def delete_pressed(self, ident: str) -> None:
-        """"Delete" on a kept training's row: asked first, "Keep it" preselected; deleted from Records, and the list read
-        again. Nothing while a run is live."""
+        """"Delete" on a kept training's row: asked first, "Keep it" preselected; deleted from Records, the list read
+        again, and the keyboard on the next row's "Resume", else the row's before, else the step's heading. Nothing
+        while a run is live."""
         if controller().is_live():
             return
         offer = next((offer for offer in self.kept_offers() if offer.kept == ident), None)
         epochs = getattr(offer, "epoch", None)
-        if not ask(self, DELETE_TITLE, DELETE_TEXT.format(texts.number_text(epochs or 0)), KEEP_IT, DELETE_IT,
-                   loses_work=True):
+        sentence = (DELETE_UNCOUNTED_TEXT if not isinstance(epochs, int) or epochs <= 0 else
+                    DELETE_ONE_TEXT if epochs == 1 else DELETE_TEXT.format(texts.number_text(epochs)))
+        if not ask(self, DELETE_TITLE, sentence, KEEP_IT, DELETE_IT, loses_work=True):
             return
+        at = next((index for index, (row, _parts) in enumerate(self._kept_rows) if row.kept == ident), 0)
         try:
             default_store().delete("fit", ident)
         except Exception as error:           # noqa: BLE001 -- said on the row, as any refusal of the store is
             self._said_on_row[ident] = str(getattr(error, "message", None) or error)
         self._screen.read_offers()
+        if ident not in self._said_on_row:
+            # A turn later: the rows the reading made again come into sight first.
+            QTimer.singleShot(0, self, lambda: self._keyboard_after_delete(at))
+
+    def _keyboard_after_delete(self, at: int) -> None:
+        """The keyboard after a row's training was deleted, the row at ``at`` gone: on the "Resume" of the row now in
+        its place, else of the row before (or its "Delete", for a row that offers no Resume), else on the step's
+        heading."""
+        for index in (at, at - 1):
+            if 0 <= index < len(self._kept_rows):
+                parts = self._kept_rows[index][1]
+                for button in (parts["resume"], parts["delete"]):
+                    if not button.isHidden() and button.isEnabled():
+                        button.setFocus(Qt.OtherFocusReason)
+                        return
+        self.help_button.setFocus(Qt.OtherFocusReason)
 
     def resume_pressed(self, ident: str) -> None:
         """"Resume" on a kept training's row: the screen's Resume, the same as Home's and a past view's."""
@@ -1033,7 +1057,8 @@ class PosteriorPanel(StepPage):
                 for key, _ in _RULES if key in record]
         options = {name: _plain(record.get(name)) for name in ("chi_mode", "chi_k_pad", "chi_max_cycles",
                                                                "reparam_rotate")}
-        options["units_override"] = _plain(record.get("units"))
+        # The units as the kept training's record names them: its units file, by path when not the model's own.
+        options["units_override"] = _plain(resume_draft(kept).units_override)
         return {"model": _plain(record.get("model")), "chi_mode": _plain(record.get("chi_mode")), "options": options,
                 "bounds": _plain(bounds_in_use(cfg)), "prior": _plain(getattr(prior, "id", None)), "resume": None,
                 "name": getattr(kept, "posterior_name", "") or "", "note": getattr(kept, "note", "") or "",

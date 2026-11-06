@@ -17,6 +17,7 @@ import pytest
 from core.gui import this_computer
 from core.gui.run import questions
 from core.gui.run.model import SILENCE_NEEDS_YOU_S, RunSpec
+from core.gui.step_facts import LIVE_TEXT
 from tests._fixtures import (all_asked, asked, build_fit_record, build_run_host, build_window, choose,
                              forget_asked, hold_open, qt_app)
 from tests import _runs
@@ -421,8 +422,9 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
     whatever records are in use now, and its end's words then say so on its page; and in the status, the foot and
     Home's next step whenever that end is the status again, given back by a run that ended into idle since (a load of
     the page's own, which leaves the page and its offer as they were, or a run that keeps no file, ended before the
-    Discard or still live at it). When that history cannot be read, or the records refuse to delete the training,
-    nothing is deleted, the page says why, and the question stays."""
+    Discard). While a run of another page is live the Discard reads and deletes nothing and the page says a run is live;
+    once it has ended, the Discard deletes as before. When that history cannot be read, or the records refuse to delete
+    the training, nothing is deleted, the page says why, and the question stays."""
     from core.artifacts import ArtifactStore, StoreError, use_store
     from core.gui import chain
     from core.gui.run import ends, history
@@ -539,11 +541,13 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
     later = StandIn()
     start_run(build_run_host(), later, spec=RunSpec("Check", ("inference", "checks"), keeps_files=False))
     view.discard_button.click()                                      # while a run of another page is live
+    assert (meanwhile in kept(), view.notice.text()) == (True, LIVE_TEXT), "a Discard during a run read or deleted"
     later.release()
     _ended(app, held)
+    view.discard_button.click()
     assert (sorted(kept()), view.sentence.text(), held.status.sentence) == (
         sorted([second, fourth]), discarded("Fri 9 Oct, 02:23"), discarded("Fri 9 Oct, 02:23")), (
-        "a run live at the Discard gave back, as it ended, the end's words that say the training is kept")
+        "a Discard after a run of another page ended left the end's words saying the training is kept")
 
     fifth = build_fit_record(store, passes=62)
     stopped_in_the_fit(_note(fifth))

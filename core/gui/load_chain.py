@@ -41,6 +41,7 @@ class LoadChain(QObject):
         self._links: deque = deque()
         self._going = False
         self._started = False
+        self._said = False
         self.why: "str | None" = None
 
     def is_going(self) -> bool:
@@ -57,9 +58,12 @@ class LoadChain(QObject):
 
     def stop(self, why: str = CLOSED) -> None:
         """End the chain where it stands, while it goes: no later link starts, and a link's run that is live goes on to
-        its own end. Its window closing, or Windows ending the session, ends it so."""
+        its own end. Its window closing, or Windows ending the session, ends it so. A chain that has ended in this turn,
+        its end not yet said, is stopped too: it says the stop, and ``finished`` never comes."""
         if self._going:
             self._end(why)
+        elif self._started and not self._said:
+            self.why = why
 
     def _next(self) -> None:
         """The next link, or the end when none is left."""
@@ -98,6 +102,7 @@ class LoadChain(QObject):
         QTimer.singleShot(0, self, self._say_the_end)
 
     def _say_the_end(self) -> None:
+        self._said = True
         if self.why:
             self.stopped.emit(self.why)
         else:

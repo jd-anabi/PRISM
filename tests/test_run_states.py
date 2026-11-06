@@ -5046,12 +5046,12 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
     """At the window's least size, 900 x 600 grown with the text, a training's page fits the column it stands in, at the
     ordinary text size and at one and a half times it, in each state where it holds the most: starting; simulating, its
     end firm; in its fit, with the fit's range named after a training of a long name, the health and the loss curve;
-    stopping, with three buttons on one row at the ordinary text size; asking whether to keep the training
-    its stop kept; failed in its fit, its own name longer than the head's row, cut at its end with "…" and drawn so,
-    then with the error's kind and traceback shown; a narrowing round failed so that only reopening PRISM can help, its
-    command naming a long path; waiting to try again, with "Stop trying"; saving its posterior while the window waits to close, with
-    "Keep PRISM open"; and finished, its page brought back. A short name is whole in each. With the full text shown and
-    its find field opened at the least size, each of its tools is at least as wide as it asks and stands inside the
+    stopping, with three buttons on one row at the ordinary text size; asking whether to keep the training its stop
+    kept; failed in its fit, its own name longer than the head's row, cut at its end with "…" and drawn so, then with
+    the error's kind and traceback shown; a narrowing round failed so that only reopening PRISM can help, its command
+    naming a long path; waiting to try again, with "Stop trying"; saving its posterior while the window waits to close,
+    with "Keep PRISM open"; and finished, its page brought back. A short name is whole in each. With the full text shown
+    and its find field opened at the least size, each of its tools is at least as wide as it asks and stands inside the
     column, at once and after the window was made larger, where the field and its buttons stand on one row again, and
     least again. At the opening size the page in the fit is as wide as in the simulation, the line under its time axis
     stands beside the start while it fits there, and its health table writes every word of its figures whole, a failed
@@ -6438,6 +6438,23 @@ def test_a_chain_says_its_end_while_a_refusals_box_stands_open(tmp_path, monkeyp
     chain.start([_a_load(host, load)])
     turn_until(app, lambda: bool(seen) and not held.is_live())
     assert under_the_box == [(REFUSED, True)], under_the_box
+
+
+def test_a_chain_stopped_in_the_turn_it_ended_says_the_stop_and_never_that_it_finished(tmp_path):
+    """A chain that has ended, its end not yet said, stopped in that very turn, as a close or Windows' end of a session
+    stops it: it says the stop and never that it finished, so that nothing its end would start starts."""
+    from core.gui.load_chain import CLOSED, LoadChain
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock
+    app = qt_app()
+    _controller_on(tmp_path, Clock(_at(8, 12, 4)))
+    chain = LoadChain(build_run_host())
+    heard = _heard(chain)
+    chain.start([])                                      # no link: ended at once, its end said a turn later
+    assert (chain.is_going(), chain.why) == (False, "")
+    chain.stop()
+    _turns(app)
+    assert (heard, chain.why) == ([CLOSED], CLOSED), heard
 
 
 def test_a_chain_whose_first_link_raises_ends_and_raises(tmp_path):

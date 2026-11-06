@@ -15,7 +15,7 @@ is checked at every keystroke and reads nothing.
 """
 import re
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
                                QVBoxLayout, QWidget)
 
@@ -24,9 +24,11 @@ from core.Helpers import labels
 from core.refusals import Refusal, require_note
 
 from .. import design, fields, fonts, style
+from ..reported import reported
 from ..run.controller import controller
 from ..step_facts import Fact
 from . import labeled_inputs
+from .choice import Choice
 from .help_badge import HelpBadge
 from .labeled_inputs import _NumberField
 from .marker import Marker, painted_icon
@@ -662,6 +664,7 @@ class Form(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.rows: dict[str, Row] = {}
+        self._width: "int | None" = None         # the width the form was last fitted to
         self.head = SectionHead(MAIN_HEAD)
         self._grid = _grid(design.SIZE["label_w"][0])
         self._main_rows, self._side_rows = [], []
@@ -674,6 +677,8 @@ class Form(QWidget):
         column.addWidget(self.fold)
         column.addStretch(1)
         left.setLayout(column)
+        self._left = left
+        left.installEventFilter(self)            # a row's words beside its field changed: its list held again
         self.side_head = SectionHead("")
         self._side_grid = _grid(design.SIZE["label_w"][1])
         self.side = QWidget()
@@ -741,8 +746,33 @@ class Form(QWidget):
             self._main_rows.append(row)
 
     def fit(self, width: int) -> None:
-        """Set the two columns side by side when ``width`` has room, else one above the other."""
+        """Set the two columns side by side when ``width`` has room, else one above the other; and hold each list among
+        the main settings that has not the room for its longest item beside its label to the room it has, so that the
+        main settings stand within ``width`` at the window's least size."""
+        self._width = width
+        self._hold_the_lists()
         self.columns.fit(width)
+
+    def _hold_the_lists(self) -> None:
+        """Each list among the main settings held to the room its row leaves it at the width last fitted to: the label's
+        column, the gaps, and the unit and the origin that stand beside it; let go where its longest item fits."""
+        if self._width is None:
+            return
+        gap = self._grid.horizontalSpacing()
+        label = self._grid.columnMinimumWidth(0)
+        for row in self._main_rows:
+            box = row.widget
+            if not isinstance(box, Choice):
+                continue
+            beside = sum(part.minimumSizeHint().width() + gap for part in (row.unit, row.origin) if not part.isHidden())
+            room = self._width - label - gap - beside
+            box.hold_to(room if box._whole_width() > room else None)
+
+    @reported(False)
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.LayoutRequest and watched is getattr(self, "_left", None):
+            self._hold_the_lists()
+        return False
 
     def stops(self) -> list:
         """Every control of the form the Tab key stops at, in the order the page is read: the fold's own button before

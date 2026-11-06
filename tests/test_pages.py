@@ -2303,6 +2303,35 @@ def test_the_longest_file_name_fits_the_second_step_at_the_least_size(factor, tm
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_every_steps_body_stands_within_its_view_at_the_least_size(factor, tmp_path):
+    """At the window's least size, at the ordinary text size and at one and a half times it, the body of each step a
+    plan fills -- Model and options, Prior and Training -- stands within its view: it asks no more width than the view
+    gives, and no part of it stands past the view's right edge. The Training step's longest choice of "Continue or
+    start new", chosen, is held to the room its row has where it must be, cut short with the whole of it in the tip."""
+    with text_size(factor), _the_look(False):
+        fonts.load_app_font(qt_app())
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        window = build_window()
+        design.set_room((3400, 1380))
+        window.setMinimumSize(1, 1)
+        shown_off_screen(window, design.scaled(900), design.scaled(600))
+        inference = window.part("inference")
+        training = inference.posterior_panel
+        choice = training.resume_choice
+        choice.setCurrentIndex(choice.findData("never"))
+        for step, page in (("model", inference.config_panel), ("prior", inference.prior_panel), ("training", training)):
+            window.go_to("inference", step)
+            _settle()
+            port, body = page.scroller.viewport(), page.scroller.body
+            assert body.minimumSizeHint().width() <= port.width(), (step, body.minimumSizeHint().width(), port.width())
+            out = [(type(part).__name__, _edge_of(part, port).right()) for part in [body, *body.findChildren(QWidget)]
+                   if part.isVisibleTo(page) and _edge_of(part, port).right() >= port.width()]
+            assert out == [], (step, port.width(), out[:6])
+        if choice.width() < choice.fontMetrics().horizontalAdvance(choice.currentText()):
+            assert choice.toolTip() == choice.currentText(), "a choice cut short has not the whole of it in its tip"
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
 def test_the_keyboard_lands_in_view_on_both_laps(factor, tmp_path):
     """Every control of the body the Tab key stops at stands whole in the viewport, at the window's least size and both text
     sizes, on the lap that starts at the top and on the next, which comes back into the body from outside it: the toolkit

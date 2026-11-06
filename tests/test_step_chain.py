@@ -332,11 +332,11 @@ def _reaching(names, forbidden) -> list:
 
 def test_the_rules_and_tables_import_no_toolkit_and_no_engine():
     """The places, the keys, the steps' rules and what a reopened window can offer load neither the toolkit nor the
-    engine, and the record words load no engine (they write a date as the look does). Every import statement of each module is read, wherever
-    it stands, and so is every statement of each module of this repository it imports, since a call can miss an
-    import inside a branch it does not take. In a pytest process both are loaded already, so the proof is a
-    fresh interpreter for each, which imports every module those statements name, from this repository or not,
-    and calls the rules down every branch."""
+    engine, and the record words load no engine (they write a date as the look does). Every import statement of each
+    module is read, wherever it stands, and so is every statement of each module of this repository it imports, since
+    a call can miss an import inside a branch it does not take. In a pytest process both are loaded already, so the
+    proof is a fresh interpreter for each, which imports every module those statements name, from this repository or
+    not, and calls the rules down every branch."""
     for module, forbidden in (("core.gui.keys", _RULES_FORBIDDEN), ("core.gui.chain", _RULES_FORBIDDEN),
                               ("core.gui.step_facts", _RULES_FORBIDDEN), ("core.gui.continuing", _RULES_FORBIDDEN),
                               ("core.gui.record_words", _WORDS_FORBIDDEN)):
@@ -813,8 +813,9 @@ def test_a_resumable_kept_training_makes_step_three_unfinished_with_no_prior():
 def test_home_names_the_newest_offer_above_what_was_in_use_last_time():
     """The newest offer that can be taken stands above "Continue with these" and the step in hand: a training to
     continue, a set to fit again, a kept training to resume by its name, a kept narrowing round with its command and
-    the step that lists it; a training stopped with its set unfinished, and a kept training that cannot be resumed, are
-    passed over, so Home stays ordinary after a stop."""
+    the step that lists it, an unnamed one by Records' label read as part of the heading; a training stopped with its
+    set unfinished, and a kept training that cannot be resumed, are passed over, so Home stays ordinary after a
+    stop."""
     last = SimpleNamespace(model="NADROWSKI", chi_mode=False, bounds=None, prior=None, posterior=None, plan=None,
                            prior_words="", posterior_words="")
     session = _session()
@@ -835,6 +836,9 @@ def test_home_names_the_newest_offer_above_what_was_in_use_last_time():
         found = chain.next_step(session, states, picks=last, offers=(offer,))
         assert (found.heading, found.sentence, found.button, found.part, found.page, found.action) == want, offer.kind
         assert found.offer is offer and found.link is None
+    unnamed = _offer("resume", kept="k", epoch=41, label="Unnamed unfinished training, 3 Oct 2026, 01:00", named=False)
+    assert chain.next_step(session, states, picks=last, offers=(unnamed,)).heading == (
+        "Next: resume the unnamed unfinished training, 3 Oct 2026, 01:00"), "an unnamed one's heading is no sentence"
     passed = (_offer("stopped", run="r", batch=236), _offer("resume", kept="k", why_not="its set is gone"))
     found = chain.next_step(session, states, picks=last, offers=passed)
     assert (found.button, found.action, found.offer) == ("Continue with these", "continue_with_these", None)
