@@ -1,5 +1,41 @@
 # PRISM — state
 
+**Last updated:** 2026-11-06, the afternoon (14:33 by the clock; the weekly bar 89 %, resetting on 8 November at 04:00 UTC,
+20:00 on 7 November PST): STAGE 4'S BUILD STANDS WITH TASKS 0 TO 14 COMPLETE. The same chat went on at the owner's word ("I
+want to keep going", and at 89 % "Finish task 14 now").
+
+- **Task 14, Continue and Resume after a reopening:** `613cc6a`..`a2ac89c` (departures `d98f44f`, 307 to 324 and the code
+  audit's item 22; the build `d4c9dd5`, `8d7fd22`, `5d7bc79`, `2b89263`, `acb1509`; the fix round's departures `ffb94f4`,
+  325 to 337; the fix round `a2ac89c`). What a reopened window offers, read from the run history and the kept trainings
+  (`core/gui/continuing.py`, no toolkit); "Continue from batch N" fills the forms from the run's own settings and continues
+  its simulation set; "Resume" rebuilds the training from its kept record alone, on the device, width and units it was kept
+  with (`core/gui/panels/inference/resume.py`); the Training step lists every kept training with Resume and Delete; the past
+  view's offers; the reopening's words. The engine untouched; `FIT_CODE` untouched.
+- **The reviews found:** seat two, four Important (the set's folder compared by its full path, so "Fit again" stood beside
+  a resumable kept training; a Resume's units file shown as typed units; a kept training of typed limits stopping silently
+  at the prior after the session was let go; the name at Resume unchecked); seat three, eleven Important test gaps (25 of
+  its 26 faults green: one model in every test again, the rebuilt configuration never reaching the stage, "Fit again"
+  never pressed). One fix round built them all, with every step's body held within its view at the least size (the
+  Training step's right 33 px had been out of reach at text 100 %); its reader CLEAN with seven Minors for the last review.
+- **The gate:** 3410 passed, 10 skipped, 5 deselected, 3425 collected, 44 min 32 s at `a2ac89c` (a busy machine: the
+  engine's own tests ran about 40 % slower than at `acb1509`'s 35 min 18 s). No display-marked test or start-up path
+  touched. `Artifacts/` 428 entries, identical before and after; `PRISM.ini` unchanged. The carried-over list: 1580 rows,
+  missing 0, gone 60.
+- **For the owner at the exit, new from Task 14** (the ledger and `stage-4/briefs/task-14-*` hold each): Task 13's proposal 2
+  widened to Continue and Resume; the Training page's main button follows "Only continue"; a training kept by another
+  program shows at the step's next showing; at the least size a long item of "Continue or start new" is cut short in its
+  middle; a Discard during another page's run deletes nothing until that run ends; after a Resume the session keeps the
+  kept training's device and width; the bounds and units files compared by bytes, not values; a units file of a training's
+  own shows on step 1 as typed; the three gates that can still stop a Resume after its question.
+- **Measured:** Task 14 about 9 points in all (80 % to 89 % over two days). Seat one ran one bare `python3 -c` beside a gate
+  (no import); recorded.
+
+NEXT: the stage's LAST REVIEW (three readers, one fix wave), carrying the fix reader's seven Minors and Task 11's fix
+reader's three; then Task 15, the exit. At 89 % the last review is not started (about 4 to 6 points) unless the owner says
+so; after the reset, in this chat or a new one.
+
+What follows is the head as the evening of 5 November left it:
+
 **Last updated:** 2026-11-05, the evening (19:32 by the clock; the weekly bar 84 %, resetting on 8 November at 04:00 UTC,
 20:00 on 7 November PST): TASK 14'S SKEPTIC'S TRIAL IS DONE AND ITS BRIEF IS FINAL; NOTHING OF TASK 14 IS IN THE REPOSITORY
 YET. The session started at 16:06 from `docs/superpowers/prompts/2026-11-05-window-redesign-stage-4-build-from-task-14.md`
