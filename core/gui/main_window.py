@@ -629,21 +629,28 @@ class MainWindow(QMainWindow):
     def offer_pressed(self, offer) -> None:
         """An offer taken, from Home's button. For a training of this launch whose page still offers it, that page opened
         and its own button pressed. Else "Continue from batch N" or "Fit again" fills the forms from the run's history
-        and continues it, through Parameter inference, which opens at the Training step. Nothing while a run is live, or
-        for no offer."""
-        if controller().is_live() or offer is None or getattr(offer, "kind", None) not in ("continue", "fit_again"):
+        and continues it, and "Resume" resumes the kept training on its own record, each through Parameter inference,
+        which opens at the Training step. Nothing while a run is live, or for no offer."""
+        if controller().is_live() or offer is None or getattr(offer, "kind", None) not in ("continue", "fit_again",
+                                                                                          "resume"):
             return
         held = controller()
         if getattr(offer, "run", None) and held.offered(offer.run):
             # A training of this launch whose page still holds its own call: its page opened and its own button pressed,
             # the exact call into the session as it stands, with nothing applied, loaded or asked again.
             self._open_run(offer.run)
-            held.continue_run(offer.run)
+            if offer.kind == "resume":
+                held.resume_training(offer.run)
+            else:
+                held.continue_run(offer.run)
             return
         inference = self.part("inference")
         if not isinstance(inference, InferenceScreen):
             return
-        inference.continue_from(offer)
+        if offer.kind == "resume":
+            inference.resume_kept(offer.kept)
+        else:
+            inference.continue_from(offer)
 
     def _states_changed(self, states) -> None:
         """The six steps' states were worked out again: the rail shows them, and Home reads now while it is

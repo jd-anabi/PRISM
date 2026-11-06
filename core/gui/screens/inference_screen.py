@@ -45,6 +45,8 @@ CONTINUE_TITLE = "{}?"
 CONTINUE_LETS_GO_TEXT = "This lets go of {}. Nothing is deleted: each stays in Records."
 KEEP_SESSION = "Keep this session"
 CONTINUE_OTHER = "Continue and start a new session"
+RESUME_TITLE = "Resume this training?"
+RESUME_OTHER = "Resume and start a new session"
 
 
 class InferenceScreen(QWidget):
@@ -300,14 +302,62 @@ class InferenceScreen(QWidget):
         self.navigate.emit("inference", "training")
         return loads
 
+    def resume_kept(self, ident: str) -> "LoadChain | None":
+        """"Resume" for the kept training ``ident``, from Home, the Training step's list or a past view: what stops it
+        said on its row before anything is read; a name asked for when its record holds none ("Cancel" starts nothing);
+        asked first when the session holds a record; then its model and options, its bounds file and its prior put in use
+        from its record by a chain of loads, the prior loaded on the configuration its record rebuilds, and, once the
+        prior is loaded, the training resumed on its own record. The chain is handed back; None when nothing started."""
+        from core import config as prism_config
+        from core.artifacts import default_store
+        from core.SBI import fit_state
+        from ..widgets.ask import ask_text
+        if controller().is_live():
+            return None
+        store = default_store()
+        try:
+            kept = fit_state.kept_fit(store, ident)
+        except Exception as error:           # noqa: BLE001 -- gone or torn since the list was read
+            self.navigate.emit("inference", "training")
+            self.posterior_panel.say_on_row(ident, str(getattr(error, "message", None) or error))
+            return None
+        problems = (kept.why_not,) if not kept.can_resume else resuming.resume_problems(
+            kept, device=prism_config.detect_device(), store=store)
+        if problems:
+            # Shown first: the step's reading as it comes into sight reads the list again, which says no sentence.
+            self.navigate.emit("inference", "training")
+            self.posterior_panel.say_on_row(ident, " ".join(problems))
+            return None
+        name = ""
+        if not kept.posterior_name:
+            from ..panels.inference.posterior_tab import NAME_TEXT, NAME_TITLE
+            name = ask_text(self, NAME_TITLE, NAME_TEXT, "Name", "Resume") or ""
+            if not name:
+                return None
+        if not self._lets_go(RESUME_TITLE, RESUME_OTHER):
+            return None
+        record = kept.config or {}
+        options = {"chi_mode": bool(record.get("chi_mode")), "chi_k_pad": record.get("chi_k_pad"),
+                   "chi_max_cycles": record.get("chi_max_cycles"), "reparam_rotate": record.get("reparam_rotate"),
+                   "units_override": tuple(record["units"]) if isinstance(record.get("units"), list) else None}
+        cfg = resuming.resume_config(kept)
+        loads = self.load_chain(record.get("model"), options, resuming.bounds_key(kept), kept.parents.get("prior"),
+                                candidate=cfg)
+        loads.finished.connect(lambda: self.posterior_panel.resume(kept, name))
+        self.navigate.emit("inference", "training")
+        return loads
+
     # ── a chain of loads ──
-    def load_chain(self, model, options, bounds_file, prior, posterior=None, observation=None, *, fill=None):
+    def load_chain(self, model, options, bounds_file, prior, posterior=None, observation=None, *, fill=None,
+                   candidate=None):
         """Step 1 applied with ``model`` and ``options``, asking nothing (``ConfigPanel.apply_quietly``, which calls
         ``fill`` once the model stands on the form), ``bounds_file`` then selected in step 2's list when one is named,
         and the saved ``prior`` loaded by step 2's own "Load this prior", then, once it has returned its record, the saved
         ``posterior`` by step 3's: a chain of loads, started and handed back. A load that does not start or does not
         finish ends the chain, and what came before it stays. A step 1 that cannot be applied, or a chain asked for while
-        another goes, starts nothing, and the chain stops at once. An observation's link is not built yet."""
+        another goes, starts nothing, and the chain stops at once. An observation's link is not built yet. ``candidate``
+        is the configuration the prior is loaded with, when the caller holds one (a kept training's, rebuilt from its
+        record), else step 2 builds its own."""
         if observation is not None:
             raise ValueError("a chain of loads takes no observation yet")
         loads = LoadChain(self)
@@ -319,7 +369,7 @@ class InferenceScreen(QWidget):
             self.prior_panel.bounds_picker.restore_key(bounds_file)
         links = [] if applied else [lambda: False]
         if applied and prior:
-            links.append(lambda: self.prior_panel.load_record(prior))
+            links.append(lambda: self.prior_panel.load_record(prior, candidate=candidate))
             if posterior:
                 links.append(lambda: self.posterior_panel.load_record(posterior))
         loads.start(links)

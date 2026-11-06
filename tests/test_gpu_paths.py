@@ -126,3 +126,54 @@ def test_a_training_stopped_on_the_card_resumes_with_its_split_counters_and_opti
     training = post.manifest.body["training"]
     assert (training["resumed_fit"], training["fit_processes"], training["fit_id"]) == (True, 2, row.id)
     assert r.store.list("fit") == []
+
+
+def test_a_kept_training_resumes_through_the_windows_call_with_a_posterior_held(tiny_run_cuda, monkeypatch, capsys):
+    """A training on the card, stopped after its first pass is saved, is resumed as the window's Resume resumes it: its
+    configuration rebuilt from the kept training's own record (on the device it was kept on), its prior loaded on that
+    configuration, and the window's call (the kept training named, a name taken while it trained dropped), while the
+    module's posterior stays held on the card. It finishes; the card's memory in use before and after is written to the
+    test's output; no line of the run says the card ran out of memory."""
+    import logging
+    import torch
+    from core import orchestrator
+    from core.gui.panels.inference.resume import resume_call, resume_config, resume_problems
+    from core.SBI import fit_state
+    r = tiny_run_cuda
+    held = r.posterior                                   # the module's posterior, on the card, held through the resume
+    assert r.cfg.hw.device.type == "cuda"
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 1, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, store=r.store,
+                                         name="window_resumed", num_runs=3, run_size_cap=8, hidden_features=8,
+                                         num_transforms=1, stop_after_epochs=3, max_num_epochs=4,
+                                         checkpoint_every=1, new_run=True, fisher_points=1, fisher_m=4)
+    kept, = [k for k in fit_state.kept_fits(r.store) if k.posterior_name == "window_resumed"]
+    assert kept.can_resume and resume_problems(kept, device=r.cfg.hw, store=r.store) == ()
+    cfg = resume_config(kept)
+    assert (cfg.hw.device.type, cfg.hw.batch_size) == ("cuda", kept.config["run_size"])
+    prior = orchestrator.build_prior(cfg, r.prior.id, False, fig_sink=r.sink, store=r.store)
+    lines = []
+
+    class _Heard(logging.Handler):
+        def emit(self, record):
+            lines.append(record.getMessage())
+
+    heard = _Heard()
+    logging.getLogger("core").addHandler(heard)
+    torch.cuda.synchronize()
+    before = torch.cuda.memory_allocated()
+    try:
+        post = orchestrator.build_posterior(cfg, prior, None, True, **resume_call(kept), if_name_taken="unnamed",
+                                            fig_sink=r.sink, store=r.store)
+    finally:
+        logging.getLogger("core").removeHandler(heard)
+    torch.cuda.synchronize()
+    after = torch.cuda.memory_allocated()
+    with capsys.disabled():
+        print(f"\n[card] memory in use before the resume {before} bytes, after {after} bytes")
+    assert held.posterior is not None, "the posterior held went"
+    assert post.name == "window_resumed" and post.manifest.body["training"]["resumed_fit"] is True
+    assert not [line for line in lines if "out of memory" in line.lower()], lines
+    assert [k for k in fit_state.kept_fits(r.store) if k.id == kept.id] == []

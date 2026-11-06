@@ -64,6 +64,7 @@ from ...widgets.labeled_inputs import FloatField, IntField
 from .base import training_spec
 from .help_text import HELP
 from .prior_tab import bounds_in_use, recorded_file
+from .resume import resume_call
 from .step_page import StepPage
 
 TITLE = "Training"
@@ -98,6 +99,9 @@ SAVED_WITHOUT_NAME = "It was saved without its name: '{}' was taken while the ru
 SETTING_BLOCKS = "a setting cannot be used"
 #: The hint under "Name" after "Continue from batch N" filled the forms.
 EARLIER_NAME_TEXT = "The earlier run was named {}."
+#: The name a kept training with none is asked for at Resume.
+NAME_TITLE = "Name this training"
+NAME_TEXT = "This kept training has no name yet. A posterior needs one."
 
 # THE SETTINGS A TRAINING READS, in the order the stage checks them: the field key, which is also build_posterior's
 # keyword but for the expected epochs, which only the run's page reads; and the rule's floor, an int for
@@ -206,6 +210,9 @@ class PosteriorPanel(StepPage):
         self._handed = None                  # the name and the note this page's last training was handed
         self._moved_to = ""                  # the posterior the list was last moved to at a run's end, by its id
         self._lists_wait = False             # the reading after the typing stops reads no kept training
+        self._resuming = None                # the kept training a Resume is starting, until its run is dispatched
+        self._last_resumed = None            # the id of the kept training this page's last Resume started
+        self._said_on_row: dict = {}         # a refusal said on a kept training's row, by its id, until the next reading
         self.switch_button = QPushButton()
         self.switch_button.clicked.connect(self._switch)
         self.head.add_action(self.switch_button)
@@ -501,6 +508,7 @@ class PosteriorPanel(StepPage):
         held and the budget passes its rules, the saved simulation sets at this budget, the run history's paces for this
         size, and the epochs the last finished training of this kind ran: only then has it looked for one."""
         if not self._lists_wait and self._screen is not None and hasattr(self._screen, "read_offers"):
+            self._said_on_row = {}
             self._screen.read_offers()
         if self.view == "load":
             self._read_the_record()
@@ -555,6 +563,25 @@ class PosteriorPanel(StepPage):
             super()._timer_fired()
         finally:
             self._lists_wait = False
+
+    def resume(self, kept, name: str = "") -> bool:
+        """Start the kept training ``kept`` again, on its own record: the configuration and the prior the session holds,
+        put in use from that record, and the call naming the kept training (and the name asked for, when its record holds
+        none). True when its run was started."""
+        cfg, prior = self._held()
+        if prior is None or controller().is_live():
+            return False
+        self._resuming, self._last_resumed = kept, kept.id
+        try:
+            return self.dispatch(orchestrator.build_posterior, cfg, prior, None, True, **resume_call(kept, name),
+                                 if_name_taken="unnamed", provide_fig_sink=True, on_result=self._on_posterior)
+        finally:
+            self._resuming = None
+
+    def say_on_row(self, ident: str, sentence: str) -> None:
+        """Say ``sentence`` on the kept training's row, in place of its Resume, until the list is next read."""
+        self._said_on_row[ident] = sentence
+        self.redraw()
 
     def continue_run(self, offer, settings_: dict) -> None:
         """The forms filled from a training's history, for "Continue from batch N" or "Fit again on the saved
@@ -829,6 +856,12 @@ class PosteriorPanel(StepPage):
         setting away is no box: the page reads again and asks the question before simulating from zero, the stage's
         sentence unshown, and a yes starts the training again with the consent. A field that now breaks its rule is told
         as any refusal is."""
+        if getattr(exc, "field", None) == "resume_fit" and self._last_resumed:
+            # A Resume refused (a race, a torn record, a process training it): said on the kept training's row,
+            # beside its "Delete", and the list read again.
+            said = str(getattr(exc, "message", None) or exc)
+            self._screen.read_offers()
+            self.say_on_row(self._last_resumed, said)
         if getattr(exc, "field", None) != "new_run" or controller().is_live() or self._held()[1] is None:
             super()._refusal(exc)
             return
@@ -849,6 +882,15 @@ class PosteriorPanel(StepPage):
         reads it)."""
         if fn is not orchestrator.build_posterior:
             return super().run_spec(fn, *args, **kwargs)
+        if args[3] and self._resuming is not None:
+            kept = self._resuming
+            record = getattr(kept, "config", None) or {}
+            given = {key: record.get(key) for key in ("stop_after_epochs", "max_num_epochs", "hidden_features",
+                                                      "num_transforms", "checkpoint_every")}
+            given.update(kwargs)
+            given["name"] = kwargs.get("name") or getattr(kept, "posterior_name", "") or ""
+            return training_spec("Training", _PLACE, STOP_WORDS, args[0], given, narrowed=False,
+                                 plan=None, settings=self._kept_settings(kept))
         if args[3]:
             row = self.form.rows["expected_epochs"]
             typed = None if "expected_epochs" in self.problems() else row.value()
@@ -857,6 +899,23 @@ class PosteriorPanel(StepPage):
                                  settings=self.settings_entry())
         return RunSpec("Posterior load", _PLACE, stop_button="Stop loading", loads_only=True, keeps_files=False,
                        stop_asks=False)
+
+    def _kept_settings(self, kept) -> dict:
+        """What a Resume is started with, as its run's history keeps it: the kept training's own record, never the
+        forms: its model and its options, its bounds file and its prior, its name, and one row for each setting of the
+        fit it was kept with."""
+        record = getattr(kept, "config", None) or {}
+        cfg, prior = self._held()
+        rows = [{"step": "training", "name": key, "label": self.form.rows[key].label_text(), "value": _plain(record[key]),
+                 "origin": "kept training", "plan": None, "usual": _plain(self.form.rows[key].usual())}
+                for key, _ in _RULES if key in record]
+        options = {name: _plain(record.get(name)) for name in ("chi_mode", "chi_k_pad", "chi_max_cycles",
+                                                               "reparam_rotate")}
+        options["units_override"] = _plain(record.get("units"))
+        return {"model": _plain(record.get("model")), "chi_mode": _plain(record.get("chi_mode")), "options": options,
+                "bounds": _plain(bounds_in_use(cfg)), "prior": _plain(getattr(prior, "id", None)), "resume": None,
+                "name": getattr(kept, "posterior_name", "") or "", "note": getattr(kept, "note", "") or "",
+                "rows": rows, "resume_fit": getattr(kept, "id", None)}
 
     def settings_entry(self) -> dict:
         """What this training is started with, as its run's history keeps it: names and numbers only. The model and its

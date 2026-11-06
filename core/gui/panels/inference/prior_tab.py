@@ -909,11 +909,13 @@ class PriorPanel(StepPage):
         self._dispatched, self._dispatched_key = candidate, self._candidate_key
         self.dispatch(orchestrator.build_prior, *args, provide_fig_sink=True, on_result=self._on_prior, **kwargs)
 
-    def load_record(self, ref: str) -> bool:
+    def load_record(self, ref: str, candidate=None) -> bool:
         """Load the saved prior ``ref`` as "Load this prior" does, with the bounds file selected, for a caller that asked
         its own question first: the saved view shown and read, so that the list holds a record saved since by another
-        program, ``ref`` selected, the facts read, and the load started unless they block it. True when its run was
-        started. While a run is live it changes nothing: neither the view, nor the list, nor what is held."""
+        program, ``ref`` selected, the facts read, and the load started unless they block it. ``candidate`` is the
+        configuration the caller holds for it (a kept training's, rebuilt from its record), handed the load in place of
+        the page's own and put in use with the prior. True when its run was started. While a run is live it changes
+        nothing: neither the view, nor the list, nor what is held."""
         if controller().is_live():
             return False
         self._by_keyboard = False                # no key pressed this load
@@ -921,10 +923,11 @@ class PriorPanel(StepPage):
         self.read_facts()
         self.prior_picker.restore_key(ref)
         self.read_facts()
-        if self.prior_picker.key() != ref or not self.foot.main_button.isEnabled() or self._candidate is None:
+        cfg = self._candidate if candidate is None else candidate
+        if self.prior_picker.key() != ref or not self.foot.main_button.isEnabled() or cfg is None:
             return False
-        self._dispatched, self._dispatched_key = self._candidate, self._candidate_key
-        return self.dispatch(orchestrator.build_prior, self._candidate, ref, False, provide_fig_sink=True,
+        self._dispatched, self._dispatched_key = cfg, self._candidate_key
+        return self.dispatch(orchestrator.build_prior, cfg, ref, False, provide_fig_sink=True,
                              on_result=self._on_prior)
 
     def run_spec(self, fn, *args, **kwargs) -> RunSpec:

@@ -1604,6 +1604,68 @@ def test_of_two_trainings_started_in_one_second_the_later_is_the_newest():
         assert [(offer.kind, offer.run) for offer in found] == [("stopped", "20261003T120000-training-2")], found
 
 
+#: The configurations a kept training is rebuilt from in the test of its rebuild: its model, its bounds (a file of the
+#: model's folder, or "typed" for the limits of master.txt typed by hand with no forcing section), and its options.
+_REBUILT = {
+    "Nadrowski master.txt with the frequency response": ("NADROWSKI", "master.txt",
+                                                         dict(chi_mode=True, chi_k_pad=12, chi_max_cycles=8.0,
+                                                              reparam_rotate=True)),
+    "Nadrowski master.txt without it": ("NADROWSKI", "master.txt", dict(chi_mode=False, reparam_rotate=False)),
+    "Nadrowski master_tier1.txt, typed units": ("NADROWSKI", "master_tier1.txt",
+                                                dict(chi_mode=True, chi_k_pad=14, chi_max_cycles=6.5,
+                                                     units_override=("nm", "ms", "pN", "kHz"))),
+    "Hopf's first file": ("HOPF", None, dict(chi_mode=False)),
+    "limits typed by hand with no forcing section": ("NADROWSKI", "typed", dict(chi_mode=False)),
+    "Nadrowski master.txt, a width of its own": ("NADROWSKI", "master.txt", dict(chi_mode=False)),
+}
+
+
+@pytest.mark.parametrize("case", list(_REBUILT))
+def test_a_kept_training_is_rebuilt_as_its_set_was_made(case, store, monkeypatch):
+    """A kept training's configuration is rebuilt from its record alone as its simulation set was made: the identity
+    the training stage reads off it, the fingerprint of its units and its width among it, is the one the configuration
+    it was made with gives, for each configuration (a units file or units typed; a bounds file or limits typed by hand
+    with no forcing section; Nadrowski's and Hopf's), on the device it was kept on whatever the device check says now,
+    and its batch as wide as its set's."""
+    from pathlib import Path
+    from types import SimpleNamespace as held
+    import torch
+    from core import cli, config, registry
+    from core.artifacts import write_fit_manifest
+    from core.artifacts.identity import SimulationIdentity
+    from core.artifacts.manifest import config_from_cfg
+    from core.Helpers import file_manager
+    from core.SBI import fit_state
+    from core.gui.panels.inference.resume import resume_config, resume_draft
+    from tests._fixtures import _fit_body
+    model, bounds, options = _REBUILT[case]
+    folder = config.BOUNDS_PATH / model.lower()
+    labels, drift = config.VALID_LABELS[config.VALID_MODELS.index(model)], registry.state_dep_drift(model)
+    if bounds == "typed":
+        params, rescale, _forcing, _ = file_manager.parse_bounds_file(str(folder / "master.txt"))
+        cfg = cli.make_sim_config(model, labels, drift, bounds_dicts=(params, rescale, {}), hw=config.cpu_device(),
+                                  **options)
+    else:
+        path = folder / bounds if bounds else sorted(folder.glob("*.txt"))[0]
+        cfg = cli.make_sim_config(model, labels, drift, str(path), hw=config.cpu_device(), **options)
+    width = 8 if case.endswith("a width of its own") else cfg.hw.batch_size
+    block = {**config_from_cfg(cfg), "num_runs": 4, "run_size": width, "run_size_cap": 0}
+    path = store.new_fit_dir()
+    path.mkdir(parents=True)
+    write_fit_manifest(path, body=_fit_body(), cfg=cfg, config=block, parents={"prior": "p", "simulation": "s"},
+                       hw=cfg.hw)
+    kept = next(row for row in fit_state.kept_fits(store) if Path(row.path) == path)
+    card = config.DeviceConfig(device=torch.device("cuda"), dtype=cfg.hw.dtype, batch_size=2 ** 11)
+    monkeypatch.setattr(config, "detect_device", lambda: card)
+    again, prior = resume_config(kept), held(fingerprint="0" * 16)
+    assert (again.hw.device.type, again.hw.batch_size) == ("cpu", width)
+    made = SimulationIdentity.from_cfg(cfg, prior, width, 4).to_dict()
+    rebuilt = SimulationIdentity.from_cfg(again, prior, again.hw.batch_size, 4).to_dict()
+    assert rebuilt == made, {key: (made[key], rebuilt.get(key)) for key in made if made[key] != rebuilt.get(key)}
+    units = options.get("units_override")
+    assert resume_draft(kept).units_override == (tuple(units) if units else None)
+
+
 def test_home_and_the_steps_take_the_newest_offer_each_can_say():
     """Home names the newest offer that can be taken, passing over a training stopped with its set unfinished; the
     steps' state says the newest kept training to resume, training to continue, or stopped one, never a set to fit

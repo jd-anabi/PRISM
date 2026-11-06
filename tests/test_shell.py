@@ -8502,6 +8502,160 @@ def test_continue_passes_the_must_continue_policy_and_asks_no_consent(store, tmp
     assert all_asked() == [], "the press asked a question"
 
 
+@pytest.mark.parametrize("cause", ["bounds edited", "bounds gone", "bounds renamed in its capitals", "units gone",
+                                   "units changed", "typed limits with a forcing section", "prior deleted",
+                                   "card gone", "a library changed"])
+def test_a_kept_training_whose_files_have_moved_says_why_before_anything_is_read(cause, store, tmp_path, monkeypatch):
+    """A kept training whose world has moved since it was kept, after a reopening, each cause alone: its Resume says
+    why on its row, in words, and nothing is read, applied, loaded or started; nothing raises. A library changed is the
+    record's own reason, said before any Resume is offered: Home offers it not. A bounds file renamed in its capitals
+    alone is the same file on Windows: nothing is said, and the press goes on."""
+    import shutil
+    import sys
+    from core import cli, config, registry
+    from core.Helpers import file_manager
+    if cause == "bounds renamed in its capitals" and sys.platform != "win32":
+        pytest.skip("a name in other capitals is the same file only where the file system ignores case")
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    goes_on = cause == "bounds renamed in its capitals"
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held, release=goes_on)
+    copy, units = tmp_path / "bounds" / "master copy.txt", tmp_path / "units" / "units copy.txt"
+    for made, source in ((copy, config.BOUNDS_PATH / "nadrowski" / "master.txt"),
+                         (units, cli.resolve_units_file("NADROWSKI"))):
+        made.parent.mkdir()
+        shutil.copyfile(source, made)
+    labels, drift = config.VALID_LABELS[config.VALID_MODELS.index("NADROWSKI")], registry.state_dep_drift("NADROWSKI")
+    if cause == "typed limits with a forcing section":
+        cfg = cli.make_sim_config("NADROWSKI", labels, drift, bounds_dicts=file_manager.parse_bounds_file(str(copy))[:3],
+                                  hw=config.cpu_device())
+    else:
+        cfg = cli.make_sim_config("NADROWSKI", labels, drift, str(copy), hw=config.cpu_device(),
+                                  units_override=str(units) if cause.startswith("units") else None)
+    kept = _a_kept_training(store, held, cfg=cfg, config={"device": "cuda"} if cause == "card gone" else None,
+                            identity={"libraries": {"torch": "0.0"}} if cause == "a library changed" else None)
+    said = {"bounds edited": "The bounds file master copy.txt has changed since this training began.",
+            "bounds gone": "The bounds file master copy.txt is no longer there.",
+            "bounds renamed in its capitals": None,
+            "units gone": "The units file units copy.txt is no longer there.",
+            "units changed": "The units file units copy.txt has changed since this training began.",
+            "typed limits with a forcing section": ("This training was started from limits typed by hand with a "
+                                                    "forcing section, which its record cannot rebuild."),
+            "prior deleted": "The prior it was trained with is no longer in Records.",
+            "card gone": "It was trained on the graphics card; this computer has none now.",
+            "a library changed": "torch was 0.0 when this training was kept, and is"}[cause]
+    if cause == "bounds edited":
+        copy.write_bytes(copy.read_bytes() + b"\n# edited\n")
+    elif cause == "bounds gone":
+        copy.unlink()
+    elif cause == "bounds renamed in its capitals":
+        copy.rename(copy.with_name("MASTER COPY.txt"))
+    elif cause == "units gone":
+        units.unlink()
+    elif cause == "units changed":
+        units.write_bytes(units.read_bytes() + b"\n# edited\n")
+    elif cause == "prior deleted":
+        store.delete("prior", held.prior, force=True)
+    elif cause == "card gone":
+        monkeypatch.setattr(config, "detect_device", config.cpu_device)
+    window, home = _home_of_last_time(tmp_path)
+    assert (home.next_button.text() == "&Resume") == (cause != "a library changed"), home.next_button.text()
+    inference = window.part("inference")
+    inference.read_offers()
+    page = inference.posterior_panel
+    if goes_on:
+        app = qt_app()
+        assert inference.resume_kept(kept) is not None and page._said_on_row == {}
+        _settle(app, inference, posterior_load)
+        assert posterior_load.calls[-1][1] == {"resume_fit": kept, "if_name_taken": "unnamed"}
+        return
+    assert inference.resume_kept(kept) is None
+    assert page._said_on_row.get(kept, "").startswith(said), page._said_on_row
+    assert (prior_load.calls, posterior_load.calls, controller().is_live(), inference.session.draft) == (
+        [], [], False, None), "something was read, applied or started"
+
+
+def test_resume_sends_only_the_kept_training_and_rebuilds_from_its_record(store, tmp_path, monkeypatch):
+    """A Resume, with step 1's form on Hopf and the Training page's settings at other values:
+    step 1 applied with the record's model and options, its prior loaded on the configuration its record rebuilds, and
+    the stage handed the four arguments with the kept training named and nothing else of a form; the run is named and
+    paced from the record, and its history keeps the record's settings."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held, name="retrain_3")
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    window.go_to("inference", "training")
+    inference = window.part("inference")
+    inference.config_panel.model_combo.setCurrentText("HOPF")
+    page = inference.posterior_panel
+    page.form.rows["num_runs"].set_value(9_000)
+    page.form.rows["hidden_features"].set_value(256)
+    calls = len(posterior_load.calls)
+    inference.resume_kept(kept)
+    _settle(app, inference, posterior_load)
+    args, kwargs = posterior_load.calls[-1]
+    assert len(posterior_load.calls) == calls + 1
+    assert (len(args), args[2:], kwargs) == (4, (None, True), {"resume_fit": kept, "if_name_taken": "unnamed"})
+    assert (inference.session.draft.model, inference.config_panel.model_combo.currentText()) == ("NADROWSKI",
+                                                                                                "NADROWSKI")
+    spec = controller().model.spec
+    assert (spec.name, spec.patience, spec.facts["network"], spec.facts["cadence"]) == ("retrain_3", 3, (8, 2), 1)
+    assert spec.settings["resume_fit"] == kept and {row["name"]: row["value"] for row in spec.settings["rows"]}[
+        "hidden_features"] == 8
+
+
+def test_a_kept_training_with_no_name_asks_for_one_at_resume(store, tmp_path, monkeypatch):
+    """A kept training with no name asks for one at its Resume; the name typed is handed to the stage; "Cancel" starts
+    nothing."""
+    from tests._fixtures import asked, choose
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held, name="")
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.read_offers()
+    choose(monkeypatch, words="Cancel")
+    assert inference.resume_kept(kept) is None and asked().title == "Name this training"
+    calls = len(posterior_load.calls)
+    choose(monkeypatch, words="Resume", text="retrain_9")
+    inference.resume_kept(kept)
+    _settle(app, inference, posterior_load)
+    assert posterior_load.calls[-1][1] == {"resume_fit": kept, "name": "retrain_9", "if_name_taken": "unnamed"}
+    assert len(posterior_load.calls) > calls
+
+
+def test_resume_asks_before_it_lets_go_of_what_is_held(store, tmp_path, monkeypatch):
+    """A Resume while the session holds a prior asks first, "Keep this session" preselected, naming what it lets go:
+    kept, nothing is applied or loaded; answered the other way, the kept training's model and prior come into use."""
+    from tests._fixtures import asked, choose
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held)
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.continue_with(window._picks)
+    _settle(app, inference)
+    before = inference.session
+    choose(monkeypatch, words="Keep this session")
+    inference.read_offers()
+    assert inference.resume_kept(kept) is None and inference.session is before
+    assert (asked().title, asked().safe, set(asked().answers)) == (
+        "Resume this training?", "Keep this session", {"Keep this session", "Resume and start a new session"})
+    assert "the prior retrain_prior" in asked().sentence
+    choose(monkeypatch, words="Resume and start a new session")
+    prior_load.release(SimpleNamespace(kind="prior", id=held.prior, name="retrain_prior",
+                                       manifest=store.get("prior", held.prior)))
+    posterior_load.release(SimpleNamespace(kind="posterior", id="resumed", name="retrain_3", manifest=None,
+                                           posterior=SimpleNamespace(truncation=None)))
+    calls = len(posterior_load.calls)
+    inference.resume_kept(kept)
+    _settle(app, inference)
+    turn_until(app, lambda: len(posterior_load.calls) > calls and not controller().is_live())
+    assert inference.session is not before and posterior_load.calls[-1][1]["resume_fit"] == kept
+
+
 def test_the_training_steps_list_reads_once_and_never_while_a_run_is_live(store, tmp_path, monkeypatch):
     """The kept trainings are read with the Training step's own readings (as it is shown and at "Check again"), never
     at the reading after the typing stops, and never while a run is live, whatever is opened or changed then; the run's
@@ -8641,6 +8795,40 @@ def test_the_repeats_of_a_continue_after_a_reopening_send_its_own_call(store, tm
     assert (first[1]["resume"], first[1]["new_run"], first[1]["name"]) == ("require", False, "retrain_4")
     assert training.calls[1] == first and training.calls[2] == first, training.calls
     training.release(SimpleNamespace(kind="posterior", id="made", name="retrain_4", manifest=None,
+                                     posterior=SimpleNamespace(truncation=None)))
+    turn_until(app, lambda: not controller().is_live())
+
+
+def test_a_resumes_repeat_keeps_the_kept_training_and_sends_nothing_of_the_forms(store, tmp_path, monkeypatch):
+    """A Resume that fails in its fit: the page's "Resume the training" repeats the Resume's own call, the kept training
+    named and nothing of the forms, whatever they hold by then."""
+    from core import orchestrator
+    from tests._runs import note, to_the_fit
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held)
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    training = StandIn()
+    training.kept_fit = note(kept, 8)
+    monkeypatch.setattr(orchestrator, "build_posterior", training)
+    inference.read_offers()
+    inference.resume_kept(kept)
+    turn_until(app, training.started.is_set)
+    page = inference.posterior_panel
+    page.form.rows["num_runs"].set_value(9_000)
+    page.form.rows["hidden_features"].set_value(256)
+    to_the_fit(app, training, RunText(controller()), controller()._clock, _set_of(tmp_path, 4, complete=True),
+               [(8, 0)])
+    training.fail(RuntimeError("the disk is full"))
+    turn_until(app, lambda: not controller().is_live())
+    assert page.run_view.resume_button.isVisibleTo(page.run_view)
+    page.run_view.resume_button.click()
+    turn_until(app, lambda: len(training.calls) == 2)
+    assert training.calls[1] == (training.calls[0][0], {"resume_fit": kept, "if_name_taken": "unnamed"}), (
+        training.calls)
+    training.release(SimpleNamespace(kind="posterior", id="made", name="retrain_3", manifest=None,
                                      posterior=SimpleNamespace(truncation=None)))
     turn_until(app, lambda: not controller().is_live())
 
