@@ -1102,7 +1102,8 @@ def test_a_plan_with_many_problems_says_eight_and_counts_the_rest_each_breaking_
 def test_the_picker_opens_on_no_plan_and_says_what_was_last_used(tmp_path, monkeypatch, store):
     """At launch the list shows "No plan", never what was chosen before. Beside it while it shows "No plan", the plan
     last used with the model shown and when, or that its file is gone; nothing when the last step applied, or the last
-    run started, had no plan, nor for another model's plan."""
+    run started, had no plan, nor for another model's plan. Hopf's plan last used has a name of its own, so that a hint
+    read under another model's key would show."""
     from datetime import datetime
     from core.gui import settings
     from core.gui.remembered import LAST_USED_AT_KEY, LAST_USED_KEY
@@ -1136,14 +1137,14 @@ def test_the_picker_opens_on_no_plan_and_says_what_was_last_used(tmp_path, monke
     assert opened({LAST_USED_KEY.format("nadrowski"): "retrain", LAST_USED_AT_KEY.format("nadrowski"): "?"})[1] == (
         "Last used: retrain")
     assert opened({LAST_USED_KEY.format("nadrowski"): "", LAST_USED_AT_KEY.format("nadrowski"): ""})[1] == ""
-    assert opened({LAST_USED_KEY.format("hopf"): "retrain"})[1] == ""
+    assert opened({LAST_USED_KEY.format("hopf"): "zz_hopf"})[1] == ""
     plans_of = tmp_path / "plans" / "nadrowski"
     (plans_of / "retrain.txt").rename(plans_of / "Retrain.txt")
     assert opened({LAST_USED_KEY.format("nadrowski"): "retrain", LAST_USED_AT_KEY.format("nadrowski"): used.isoformat()
                    })[1] == "Last used: Retrain, 5 Oct 2026, 14:02", "a plan renamed in another case was said gone"
     page.model_combo.setCurrentText("HOPF")
     page.read_facts()
-    assert page.form.rows["plan"].origin.text().replace(BREAK, "") == "Last used: retrain (the file is no longer there)"
+    assert page.form.rows["plan"].origin.text().replace(BREAK, "") == "Last used: zz_hopf (the file is no longer there)"
 
 
 def test_one_press_fills_steps_one_to_three(tmp_path, monkeypatch, store):

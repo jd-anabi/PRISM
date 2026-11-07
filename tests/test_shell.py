@@ -5276,7 +5276,8 @@ def test_a_start_handed_over_builds_no_window_and_exits_zero(tmp_path, monkeypat
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     monkeypatch.setattr(sys, "stderr", None)
-    widgets, found = len(QApplication.topLevelWidgets()), process_state(app)
+    found = process_state(app)                       # the collector run first: what an earlier test dropped is gone
+    widgets = found["top-level widgets"]
     with whole_program(held_by_another=True) as built:
         changed = sorted(key for key, value in process_state(app).items() if value != found[key])
         assert set(changed) <= {"names", "root log handler", "quiet segment bar", "default store", "one-PRISM lock",
@@ -6319,7 +6320,8 @@ def test_main_hands_over_to_an_open_prism_and_builds_nothing(tmp_path, monkeypat
     held = one_instance.claim(settings.settings().fileName())            # the open PRISM
     held.knocked.connect(lambda: heard.append(True))
     try:
-        widgets, found = len(QApplication.topLevelWidgets()), process_state(app)
+        found = process_state(app)                   # the collector run first: what an earlier test dropped is gone
+        widgets = found["top-level widgets"]
         with _names_kept(app), as_another_process():
             status = _main(entry)
         left = sorted(key for key, value in process_state(app).items() if value != found[key])
@@ -7801,7 +7803,8 @@ def test_the_press_during_a_run_reads_nothing_and_changes_nothing(store, tmp_pat
 def test_step_one_applied_by_code_refuses_what_its_press_refuses(store, tmp_path, monkeypatch):
     """Step 1 applied by code, asking nothing: a model the list does not hold, and one parameter inference cannot take,
     answer False and apply nothing, the form's model as it was; a value the rules refuse is told as the press tells
-    it, and nothing is applied. A chain asked for with an observation is refused, for that link is not built yet."""
+    it, and nothing is applied; a units file that cannot be read is told by its name, and nothing is applied. A chain
+    asked for with an observation is refused, for that link is not built yet."""
     from tests._dialogs import all_asked, forget_asked
     _a_launch_before(store, tmp_path, monkeypatch)
     window, _home = _home_of_last_time(tmp_path)
@@ -7818,6 +7821,12 @@ def test_step_one_applied_by_code_refuses_what_its_press_refuses(store, tmp_path
     monkeypatch.setattr(first, "_unusable", lambda model: "cannot be inferred" if model == "NADROWSKI" else "")
     assert first.apply_quietly("NADROWSKI", {"chi_mode": False}) is False
     assert (first.model_combo.currentText(), inference.session.draft) == ("HOPF", None)
+    forget_asked()
+    gone = tmp_path / "units of a rig since moved.txt"
+    assert first.apply_quietly("HOPF", {"chi_mode": False, "units_override": str(gone)}) is False
+    said = [(one.title, one.sentence.startswith(f"The units file {gone.name} cannot be read: ")) for one in all_asked()]
+    assert said == [("Check your inputs", True)], all_asked()
+    assert inference.session.draft is None
     with pytest.raises(ValueError, match="no observation"):
         inference.load_chain("NADROWSKI", {"chi_mode": False}, None, None, observation=object())
 
@@ -8015,8 +8024,9 @@ def test_the_plan_in_use_after_the_press_holds_its_files_hash_and_the_moment_of_
 
 
 def test_one_press_with_hopf_last_time_fills_hopfs_own_plan(store, tmp_path, monkeypatch):
-    """Hopf in use last time, with the plan last used with it: the press reads that plan from Hopf's own folder of plans
-    and fills it, and applies step 1 with Hopf."""
+    """Hopf in use last time, with the plan last used with it, which names a bounds file of Hopf's own: the press reads
+    that plan from Hopf's own folder of plans, checked against Hopf's own folder of bounds files, and fills it, step 2's
+    list on that file, and applies step 1 with Hopf."""
     from core.gui import plans as window_plans
     from core.gui import remembered
     from tests._fixtures import _nad_cfg, _prior_artifact
@@ -8024,7 +8034,7 @@ def test_one_press_with_hopf_last_time_fills_hopfs_own_plan(store, tmp_path, mon
     root = tmp_path / "plans"
     monkeypatch.setattr(window_plans, "PLAN_FOLDER", root)
     (root / "hopf").mkdir(parents=True)
-    (root / "hopf" / "zz_hopf.txt").write_bytes(b"# Training\nnum_runs = 7000\n")
+    (root / "hopf" / "zz_hopf.txt").write_bytes(b"# Prior\nbounds = cell.txt\n# Training\nnum_runs = 7000\n")
     remembered.put_many([(remembered.MODEL_KEY, "HOPF"), (remembered.KIND_KEY, "false"),
                          (remembered.LAST_USED_KEY.format("hopf"), "zz_hopf")])
     window, home = _home_of_last_time(tmp_path)
@@ -8035,6 +8045,7 @@ def test_one_press_with_hopf_last_time_fills_hopfs_own_plan(store, tmp_path, mon
     inference = window.part("inference")
     assert (inference.session.draft.model, inference.plan_source.name) == ("HOPF", "zz_hopf")
     assert inference.posterior_panel.form.rows["num_runs"].value() == 7000
+    assert inference.prior_panel.bounds_picker.key() == "cell.txt", "Hopf's own bounds file was not filled"
 
 
 @pytest.mark.parametrize("failing", ["prior", "posterior"])

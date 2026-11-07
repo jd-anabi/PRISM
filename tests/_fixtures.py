@@ -23,6 +23,8 @@ time under another name, with a second, empty SHOWN that the guard never touches
 A window, a part of it, the inference screen, a bare run host and a step of the look are built by the
 five builders here -- ``build_window``, ``build_part``, ``build_inference``, ``build_run_host``,
 ``build_step_page`` -- and by no suite itself, so a constructor's arguments are written in one place.
+``step_pages`` names every page the window builds on the step page, the one list the standing tests of
+the rebuilt pages are held to.
 """
 import ast
 import inspect
@@ -1197,6 +1199,22 @@ def build_step_page(cls=None, *, session=None, window=None):
     if window is not None:
         window._places[page] = window._places.pop(old)
     return page
+
+
+def step_pages() -> dict:
+    """Every page of the window built on the step page, read off the window's own text: each class's name, with the file
+    it stands in and the step it is built for. The standing tests that bind every rebuilt page name their pages by hand,
+    and each holds its list to this one, so that a page built later and named in none of them is not passed unread."""
+    gui = Path(__file__).resolve().parents[1] / "core" / "gui"
+    found = {}
+    for path in sorted(gui.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ClassDef) and any(getattr(base, "id", None) == "StepPage" for base in node.bases):
+                steps = [keyword.value.value for call in ast.walk(node) if isinstance(call, ast.Call)
+                         for keyword in call.keywords
+                         if keyword.arg == "step" and isinstance(keyword.value, ast.Constant)]
+                found[node.name] = (path.name, steps[0] if steps else None)
+    return found
 
 
 def process_state(app) -> dict:

@@ -1324,6 +1324,17 @@ def test_a_pages_own_line_stands_under_what_is_in_use_and_goes_when_its_next_run
     turn_until(app, lambda: not controller().is_live())
 
 
+def test_the_pages_walked_here_are_every_page_built_on_the_step_page():
+    """STANDING. The standing tests of this file that bind every rebuilt page walk the pages named here, by hand: a page
+    built on the step page and named nowhere here would pass each of them unread. So the pages, the fields typed into
+    and the steps walked are every page the window builds on the step page, read off its own text."""
+    from tests._fixtures import step_pages
+    pages = step_pages()
+    assert sorted(pages) == sorted(cls.__name__ for cls in PAGES.values() if cls is not None), pages
+    assert set(EDITED) == set(PAGES.values())
+    assert sorted(step for _file, step in pages.values()) == sorted(WALKED), pages
+
+
 # ── when a page reads ──
 @pytest.mark.parametrize("page_class", list(PAGES.values()), ids=list(PAGES))
 def test_a_page_is_built_with_no_reading_and_no_running_timer(page_class, tmp_path, monkeypatch):

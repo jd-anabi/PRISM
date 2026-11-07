@@ -4227,6 +4227,9 @@ def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
     from core.gui import step_facts
     from core.gui.panels.inference import config_tab, posterior_tab, prior_tab, step_page
     held = []
+    from tests._fixtures import step_pages
+    assert sorted(f"{page.__name__.rpartition('.')[2]}.py" for page in (config_tab, prior_tab, posterior_tab)) == (
+        sorted(file for file, _step in step_pages().values())), step_pages()
     for module in (config_tab, prior_tab, posterior_tab, step_facts, step_page):
         for node in ast.walk(ast.parse(inspect.getsource(module))):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -4286,6 +4289,9 @@ def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
             "stop_after_epochs", "max_num_epochs", "fisher_m", "fisher_dz", "fisher_points", "resume", "new_run",
             "posterior", "accept_truncated", "prior", "name", "resume_fit"} <= trained, sorted(trained)
     unanswered = {"device"}
+    from tests._fixtures import step_pages
+    assert {step for _file, step in step_pages().values()} == {"model", "prior", "training"}, (
+        "a page whose stage is not read here")
     for step, keys_ in (("prior", built), ("training", trained)):
         assert keys_ <= set(FIELDS), sorted(keys_ - set(FIELDS))
         silent = sorted(key for key in keys_ - unanswered if not gui_fields.fix_sentence(key, here=step))

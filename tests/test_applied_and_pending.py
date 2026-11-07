@@ -738,6 +738,8 @@ def test_a_rebuilt_page_keeps_no_message_box():
     """A rebuilt page asks and tells through the one shared question: neither the step page nor any page built on it names
     the toolkit's message box, or keeps a log pane of its own."""
     folder = Path(__file__).resolve().parents[1] / "core" / "gui" / "panels" / "inference"
+    from tests._fixtures import step_pages
+    assert sorted({file for file, _step in step_pages().values()}) == sorted(REBUILT), step_pages()
     for name in ("step_page.py", *REBUILT):
         tree = ast.parse((folder / name).read_text(encoding="utf-8"))
         named = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
@@ -3385,11 +3387,11 @@ def _saved_words(ref) -> str:
 
 
 def test_a_kept_training_that_matches_is_named_before_a_new_one_starts(tmp_path, monkeypatch):
-    """Kept trainings that match the training about to start, at the network and the learning rate typed, are named
-    first, in a question, "Cancel" preselected: each by its name or its label, how it stopped in words, the epoch it was
-    saved after and when that pass was saved, in local time, not when it was first kept. "Cancel"
-    starts nothing; "Start a new training" starts one beside them, which leaves each kept training as it is, and asks
-    nothing more: a match is of a whole simulation set, which a training continues."""
+    """Kept trainings that match the training about to start, at the network, the learning rate, the patience and the
+    epoch limit typed, each off its usual value, are named first, in a question, "Cancel" preselected: each by its name
+    or its label, how it stopped in words, the epoch it was saved after and when that pass was saved, in local time, not
+    when it was first kept. "Cancel" starts nothing; "Start a new training" starts one beside them, which leaves each
+    kept training as it is, and asks nothing more: a match is of a whole simulation set, which a training continues."""
     from datetime import datetime
     from core.artifacts import default_store
     from core.gui import texts
@@ -3398,7 +3400,11 @@ def test_a_kept_training_that_matches_is_named_before_a_new_one_starts(tmp_path,
         rows = page.form.rows
         rows["hidden_features"].widget.setText("96")
         rows["learning_rate"].widget.setText("0.00025")
-        assert all(rows[key].value() != rows[key].usual() for key in ("hidden_features", "learning_rate"))
+        rows["stop_after_epochs"].widget.setText("7")
+        rows["max_num_epochs"].widget.ticked_box.setChecked(False)
+        rows["max_num_epochs"].widget.field.setText("200")
+        assert all(rows[key].value() != rows[key].usual()
+                   for key in ("hidden_features", "learning_rate", "stop_after_epochs", "max_num_epochs"))
         first = _a_kept_training(page)
         second = _a_kept_training(page, stopped="error", name="", passes=7)
         page.read_facts()
