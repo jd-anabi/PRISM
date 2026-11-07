@@ -7,7 +7,9 @@ the streams it binds, the one that lets go what the builders made, the one that 
 bringing a window to the front and the one that stands in for the requests made of Windows, are
 autouse at session and function scope, and the check that no panel outlives its module at module
 scope; a test requests the last two by name, ``brought_forward`` and ``windows_asked``, to read what
-each kept, and no other by name.
+each kept, and no other by name. One more, at session scope, sets what is alive once the suites are
+collected aside from the collector of cycles, so that the collection each test's end asks for walks
+only what the tests made since.
 """
 from pathlib import Path
 
@@ -188,6 +190,19 @@ def _checkpointing_off_unless_asked():
     mp.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 0)
     yield
     mp.undo()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _long_lived_objects_set_aside():
+    """Everything alive once the suites are collected, torch, the toolkit, the program and the suites' own modules,
+    about half a million objects that live as long as the process, is set aside from the collector of cycles for the
+    session: each full collection a test's end asks for (tests/_built.py, as it lets go of what the builders made)
+    then walks what the tests made since, not all of them every time."""
+    import gc
+    gc.collect()
+    gc.freeze()
+    yield
+    gc.unfreeze()
 
 
 @pytest.fixture(scope="session", autouse=True)
