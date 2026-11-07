@@ -76,9 +76,14 @@ GO_TO_TRAINING = "Go to Training"
 KEPT = "kept from last time"
 UNITS = "model time units"
 SAVED_WITHOUT_NAME = "It was saved without its name: '{}' was taken while the run was going."
-FORCE_SCALE_TEXT = ("This bounds file lists f_scale, but a posterior trained on it reads a spontaneous recording only, "
-                    "where no drive acts: f_scale cannot change what is observed, so its estimate will be the prior's. "
-                    "Choose a bounds file with neither a forcing section nor f_scale for a spontaneous recording.")
+_FORCE_SCALE_WHY = ("reads a spontaneous recording only, where no drive acts: f_scale cannot change what is observed, "
+                    "so its estimate will be the prior's. Choose a bounds file with neither a forcing section nor "
+                    "f_scale for a spontaneous recording.")
+FORCE_SCALE_TEXT = "This bounds file lists f_scale, but a posterior trained on it " + _FORCE_SCALE_WHY
+#: The same, said of what the configuration in use was built on where the list does not show it: limits typed by hand,
+#: or a bounds file the list does not select, by its path.
+FORCE_SCALE_TYPED_TEXT = "The limits typed by hand list f_scale, but a posterior trained on them " + _FORCE_SCALE_WHY
+FORCE_SCALE_FILE_TEXT = "The bounds file in use, {}, lists f_scale, but a posterior trained on it " + _FORCE_SCALE_WHY
 KEEP_POSTERIOR = "Keep the posterior"
 LOAD_TITLE, LOAD_RELEASE = "Load this prior?", "Load and release the posterior"
 BUILD_TITLE, BUILD_RELEASE = "Build a new prior?", "Build and release the posterior"
@@ -475,7 +480,8 @@ class PriorPanel(StepPage):
     def facts_from_form(self) -> tuple:
         """The facts of the step as the form, the session and the last reading stand: the rules under their fields; the
         candidate's trouble beside the list; the bounds file and the saved prior, as the last reading read them; what a
-        build costs and takes; the configuration in use's attention lines; the name and the note."""
+        build costs and takes; the configuration in use's attention lines; step 1's changes not applied; the name and
+        the note."""
         found = self.problems()
         for key, row in self.form.rows.items():
             if row.widget is None or key in ("name", "note"):
@@ -518,8 +524,9 @@ class PriorPanel(StepPage):
             same_box=read.get("same_box", True), sets_of_prior=read.get("sets_of_prior"),
             rounds=values["num_iterations"] if cost_ok else None, batch=batch if cost_ok else None,
             stable=values["max_sets"] if cost_ok else None, steps=steps, took=self._took,
-            sets_for_model=read.get("sets_for_model", 0), attention=self._attention(), name_facts=names,
-            field_facts=field_facts, plan_lines=self.plan_lines())
+            sets_for_model=read.get("sets_for_model", 0), attention=self._attention(),
+            others_pending=self._others_pending(), name_facts=names, field_facts=field_facts,
+            plan_lines=self.plan_lines())
 
     def _candidate_row(self) -> str:
         return "bounds_typed" if self._typed() else "bounds"
@@ -537,7 +544,8 @@ class PriorPanel(StepPage):
 
     def _attention(self) -> list:
         """What the configuration in use asks a person to know: its units declared against the pipeline's own, and a
-        scale of the force no drive can move. Never raises."""
+        scale of the force no drive can move, said of what the configuration was built on: the file the list selects,
+        else the limits typed by hand or the file by its path, as a Resume's configuration may hold. Never raises."""
         cfg, _prior = self._held()
         if cfg is None:
             return []
@@ -547,7 +555,10 @@ class PriorPanel(StepPage):
             said = []
         try:
             if cfg.observation_mode == "spontaneous" and "f_scale" in cfg.rescale_params:
-                said.append(FORCE_SCALE_TEXT)
+                built = bounds_in_use(cfg)
+                said.append(FORCE_SCALE_TYPED_TEXT if not built else
+                            FORCE_SCALE_TEXT if not self._typed() and _named(self.bounds_picker.key()) == _named(built)
+                            else FORCE_SCALE_FILE_TEXT.format(_named(built)))
         except Exception:                    # noqa: BLE001
             pass
         return said

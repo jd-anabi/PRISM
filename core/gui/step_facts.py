@@ -359,8 +359,9 @@ def prior_facts(*, view: str, needs: bool = False, bounds_error: str = "", bound
                 model: "str | None" = None, built_on: "str | None" = None, selected: str = "", edited: bool = False,
                 same_box: bool = True, sets_of_prior: "Sequence[int] | None" = None, rounds: "int | None" = None,
                 batch: "int | None" = None, stable: "int | None" = None, steps: "int | None" = None, took=None,
-                sets_for_model: int = 0, attention: Sequence[str] = (), name_facts: Sequence[Fact] = (),
-                field_facts: Sequence[Fact] = (), plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
+                sets_for_model: int = 0, attention: Sequence[str] = (), others_pending: Sequence[str] = (),
+                name_facts: Sequence[Fact] = (), field_facts: Sequence[Fact] = (),
+                plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
     """The facts of the second step, in the order of its table, those that block first. ``view`` is "saved" or
     "build". ``needs``: no model is applied, so nothing can be made. ``bounds_error`` and ``prior_error`` say why the
     bounds file or the saved prior chosen cannot be used, each with the words beside the button. A saved prior:
@@ -371,7 +372,8 @@ def prior_facts(*, view: str, needs: bool = False, bounds_error: str = "", bound
     costs, ``steps`` the steps each candidate is integrated over when they are known, any of the three None leaves the
     cost out; ``took``, the run history's last build, how long it takes; ``sets_for_model``, the saved simulation sets of
     the model, which a new prior cannot continue. Then ``attention``, what the configuration in use asks a person to
-    know; the name's and the fields' facts; and what the plan in use says."""
+    know; ``others_pending``, the sentences of the steps before it whose changes are not applied, which do not block;
+    the name's and the fields' facts; and what the plan in use says."""
     facts = [Fact("lock", NEEDS_A_MODEL, NEEDS_A_MODEL_BLOCKS)] if needs else []
     if bounds_error:
         facts.append(Fact("err", bounds_error, bounds_blocks))
@@ -395,6 +397,7 @@ def prior_facts(*, view: str, needs: bool = False, bounds_error: str = "", bound
         elif sets_for_model > 1:
             facts.append(Fact("info", OTHERS_TEXT.format(sets_for_model)))
     facts += [Fact("warn", sentence) for sentence in attention]
+    facts += [Fact("warn", said) for said in others_pending if said]
     return ordered((*facts, *name_facts, *field_facts, *plan_lines))
 
 

@@ -44,8 +44,7 @@ from core import config, orchestrator
 from core.artifacts import Accept, default_store
 from core.refusals import Refusal, default_clause, require_at_least, require_positive
 
-from ... import continuing, design, fields, fonts, keys, plans, record_words, settings, style, texts
-from ...chain import model_label
+from ... import continuing, design, fields, fonts, plans, record_words, settings, style, texts
 from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...remembered import NUM_RUNS_KEY, POSTERIOR_KEY, RUN_SIZE_KEY, put_many
 from ...reported import reported
@@ -55,7 +54,7 @@ from ...run.model import RunSpec
 from ...run.view import SelectableLines, WrappedWords
 from ...step_facts import (CANCEL, CONTINUING, LOAD_POSTERIOR_WORDS, NO_POSTERIOR_TEXT, NO_PRIOR_WORDS, START_WORDS,
                            Fact, SelectionRow, budget_words, held_value, how_long_words, kept_words, load_facts,
-                           narrowed_question, new_set_question, new_training_question, of_this_model, pending_words,
+                           narrowed_question, new_set_question, new_training_question, of_this_model,
                            posterior_in_use, saved_posterior_words, set_words, stopped_words, training_facts,
                            uses_words)
 from ...widgets.artifact_picker import StorePicker
@@ -101,9 +100,10 @@ SAVED_WITHOUT_NAME = "It was saved without its name: '{}' was taken while the ru
 SETTING_BLOCKS = "a setting cannot be used"
 #: The hint under "Name" after "Continue from batch N" filled the forms.
 EARLIER_NAME_TEXT = "The earlier run was named {}."
-#: The name a kept training with none is asked for at Resume.
+#: The name a kept training with none is asked for at Resume, and one whose name another posterior has taken since.
 NAME_TITLE = "Name this training"
 NAME_TEXT = "This kept training has no name yet. A posterior needs one."
+NAME_TAKEN_TEXT = "The name '{}' is now taken by another posterior. This training needs another one."
 #: The list of kept trainings: its heading, its two buttons, what a row says of a training a run of this window trains,
 #: and Delete's question.
 KEPT_HEAD = "Kept trainings"
@@ -511,21 +511,6 @@ class PosteriorPanel(StepPage):
         names = [*(getattr(cfg, "params_dict", None) or {}), *(getattr(cfg, "rescale_params", None) or {})]
         return fields.difference_lines(getattr(one, "fields", ()), prior_label=self._prior_labels.get, param_keys=names)
 
-    def _others_pending(self) -> list:
-        """The other steps whose page shows changes they have not applied, each with what this run uses of it."""
-        screen = self._screen
-        try:
-            pending = screen.pending() if screen is not None else frozenset()
-        except Exception:                    # noqa: BLE001 -- a page's facts never raise
-            return []
-        session, said = getattr(screen, "session", None), []
-        held = {"model": lambda: model_label(getattr(getattr(session, "draft", None), "model", None)),
-                "prior": lambda: record_words.label_of(getattr(session, "inf_prior", None))}
-        for step in ("model", "prior"):
-            if step in pending:
-                said.append(pending_words(keys.step_number(step), keys.step(step).name, held[step]()))
-        return said
-
     # ── the reading of the disk ──
     def read_disk(self) -> None:
         """The run history (the last run on this computer and the last that measured its batches); and, while a prior is
@@ -673,8 +658,10 @@ class PosteriorPanel(StepPage):
 
     def delete_pressed(self, ident: str) -> None:
         """"Delete" on a kept training's row: asked first, "Keep it" preselected; deleted from Records, the list read
-        again, and the keyboard on the next row's "Resume", else the row's before, else the step's heading. Nothing
-        while a run is live."""
+        again, and the keyboard where the row stood: on the first button of the row now in its place, its "Resume", or
+        its "Delete" for a row that offers no Resume, else the row before's, else the step's heading; whatever the row
+        said before. A Delete the store refuses is said on the row, and the keyboard stays. Nothing while a run is
+        live."""
         if controller().is_live():
             return
         offer = next((offer for offer in self.kept_offers() if offer.kept == ident), None)
@@ -684,6 +671,7 @@ class PosteriorPanel(StepPage):
         if not ask(self, DELETE_TITLE, sentence, KEEP_IT, DELETE_IT, loses_work=True):
             return
         at = next((index for index, (row, _parts) in enumerate(self._kept_rows) if row.kept == ident), 0)
+        self._said_on_row.pop(ident, None)      # what the row said before, a refused Resume's, is no refusal of this
         try:
             default_store().delete("fit", ident)
         except Exception as error:           # noqa: BLE001 -- said on the row, as any refusal of the store is
@@ -694,9 +682,9 @@ class PosteriorPanel(StepPage):
             QTimer.singleShot(0, self, lambda: self._keyboard_after_delete(at))
 
     def _keyboard_after_delete(self, at: int) -> None:
-        """The keyboard after a row's training was deleted, the row at ``at`` gone: on the "Resume" of the row now in
-        its place, else of the row before (or its "Delete", for a row that offers no Resume), else on the step's
-        heading."""
+        """The keyboard after a row's training was deleted, the row at ``at`` gone: where it stood in the list, on the
+        first button of the row now in its place (its "Resume", or its "Delete" for a row that offers no Resume), else
+        on the first button of the row before, else on the step's heading."""
         for index in (at, at - 1):
             if 0 <= index < len(self._kept_rows):
                 parts = self._kept_rows[index][1]
@@ -1036,7 +1024,7 @@ class PosteriorPanel(StepPage):
             given.update(kwargs)
             given["name"] = kwargs.get("name") or getattr(kept, "posterior_name", "") or ""
             return training_spec("Training", _PLACE, STOP_WORDS, args[0], given, narrowed=False,
-                                 plan=None, settings=self._kept_settings(kept))
+                                 plan=None, settings=self._kept_settings(kept, given["name"]))
         if args[3]:
             row = self.form.rows["expected_epochs"]
             typed = None if "expected_epochs" in self.problems() else row.value()
@@ -1046,10 +1034,10 @@ class PosteriorPanel(StepPage):
         return RunSpec("Posterior load", _PLACE, stop_button="Stop loading", loads_only=True, keeps_files=False,
                        stop_asks=False)
 
-    def _kept_settings(self, kept) -> dict:
+    def _kept_settings(self, kept, name: str) -> dict:
         """What a Resume is started with, as its run's history keeps it: the kept training's own record, never the
-        forms: its model and its options, its bounds file and its prior, its name, and one row for each setting of the
-        fit it was kept with."""
+        forms: its model and its options, its bounds file and its prior, the name the run is called by (``name``: its
+        record's, or the one the Resume asked for), and one row for each setting of the fit it was kept with."""
         record = getattr(kept, "config", None) or {}
         cfg, prior = self._held()
         rows = [{"step": "training", "name": key, "label": self.form.rows[key].label_text(), "value": _plain(record[key]),
@@ -1061,7 +1049,7 @@ class PosteriorPanel(StepPage):
         options["units_override"] = _plain(resume_draft(kept).units_override)
         return {"model": _plain(record.get("model")), "chi_mode": _plain(record.get("chi_mode")), "options": options,
                 "bounds": _plain(bounds_in_use(cfg)), "prior": _plain(getattr(prior, "id", None)), "resume": None,
-                "name": getattr(kept, "posterior_name", "") or "", "note": getattr(kept, "note", "") or "",
+                "name": name, "note": getattr(kept, "note", "") or "",
                 "rows": rows, "resume_fit": getattr(kept, "id", None)}
 
     def settings_entry(self) -> dict:

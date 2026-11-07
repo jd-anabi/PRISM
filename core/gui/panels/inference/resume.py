@@ -44,9 +44,10 @@ def read_offers(store, folder) -> tuple:
     except OSError:
         runs = []
 
-    def set_batches(name: str):
+    def set_batches(folder: str):
+        # The set's folder as the history holds it, its whole path, which the join leaves as it is.
         try:
-            state = training_checkpoint.peek(store.kind_dir("simulation") / name)
+            state = training_checkpoint.peek(store.kind_dir("simulation") / folder)
         except Exception:                    # noqa: BLE001 -- a set that cannot be read holds nothing to continue
             return None
         done = (state or {}).get("batches_done")

@@ -1856,19 +1856,59 @@ def test_the_bounds_file_remembered_comes_back_with_the_model_it_came_into_use_w
 
 def test_the_configuration_in_use_says_its_units_and_its_force_scale(tmp_path, monkeypatch):
     """While a configuration is in use, what its units declare against the pipeline's own, and a scale of the force no
-    drive can move, are said in "Before you start" as "Attention.", blocking nothing."""
+    drive can move, are said in "Before you start" as "Attention.", blocking nothing; the scale of the force said of
+    what the configuration was built on: the file the list selects, else the file in use by its path, or the limits
+    typed by hand, which no file holds."""
     with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
         cfg = screen.session.cfg
         cfg.check_unit_consistency = lambda: ["Units file declares frequency in 'Hz' but time in 'ms'."]
         cfg.rescale_params = {"f_scale": (None, (0.1, 10.0))}
         page.redraw()
         said = [row.sentence.plain_text() for row in page.foot.facts.rows() if row.kind == "warn"]
+        why = ("reads a spontaneous recording only, where no drive acts: f_scale cannot change what is observed, so "
+               "its estimate will be the prior's. Choose a bounds file with neither a forcing section nor f_scale for "
+               "a spontaneous recording.")
         assert said[:2] == [
             "Attention. Units file declares frequency in 'Hz' but time in 'ms'.",
-            "Attention. This bounds file lists f_scale, but a posterior trained on it reads a spontaneous recording only, "
-            "where no drive acts: f_scale cannot change what is observed, so its estimate will be the prior's. Choose a "
-            "bounds file with neither a forcing section nor f_scale for a spontaneous recording."]
+            "Attention. This bounds file lists f_scale, but a posterior trained on it " + why]
         assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+        page.bounds_picker.restore_key("master_tier1.txt")
+        page.redraw()
+        said = [row.sentence.plain_text() for row in page.foot.facts.rows() if row.kind == "warn"]
+        assert said[1] == ("Attention. The bounds file in use, master.txt, lists f_scale, but a posterior trained on "
+                           "it " + why), said
+        cfg.sources = {"bounds": ""}
+        page.redraw()
+        said = [row.sentence.plain_text() for row in page.foot.facts.rows() if row.kind == "warn"]
+        assert said[1] == ("Attention. The limits typed by hand list f_scale, but a posterior trained on them "
+                           + why), said
+
+
+def test_the_prior_step_says_step_ones_changes_not_applied_and_never_its_own(tmp_path, monkeypatch):
+    """A prior's build or load reads the model step 1 holds, never its form: while step 1's page shows a change it has
+    not applied, "Before you start" on Prior says so in both views, with the model the run uses, and blocks nothing; a
+    change of Prior's own, which its row and the rail say, is no line of its facts."""
+    pending = ("Attention. Step 1, Model and options, has changes that are not applied. This run uses what is in use: "
+               "Nadrowski.")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        def said():
+            return [row.sentence.plain_text() for row in page.foot.facts.rows() if row.kind == "warn"]
+
+        assert pending not in said() and screen.pending() == frozenset(), said()
+        screen.config_panel.model_combo.setCurrentText("HOPF")
+        assert screen.pending() == {"model"}, screen.pending()
+        for view in ("build", "saved"):
+            page.show_view(view)
+            page.redraw()
+            assert said().count(pending) == 1, (view, said())
+        page.show_view("build")
+        page.redraw()
+        assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+        screen.config_panel.model_combo.setCurrentText("NADROWSKI")
+        page.bounds_picker.restore_key("master_tier1.txt")
+        page.redraw()
+        assert screen.pending() == {"prior"}, screen.pending()
+        assert not any("has changes that are not applied" in line for line in said()), said()
 
 
 @pytest.mark.parametrize("end", ["failed", "stopped"])

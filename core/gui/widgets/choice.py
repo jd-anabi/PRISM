@@ -28,11 +28,15 @@ class Choice(QComboBox):
 
     def hold_to(self, room: "int | None") -> None:
         """Hold the box to ``room`` pixels, the item shown cut short in its middle where it needs more, the whole of it
-        in the tip and in the open list; None lets it go."""
+        in the tip and in the open list; None lets it go, and with it the tip of a box no longer cut, which would name
+        the item shown at the last choice made while it was held."""
         if room == self._room:
             return
         self._room = room
-        self._said_whole()
+        if self._cut():
+            self.say_whole()
+        else:
+            self.setToolTip("")
         self.updateGeometry()
         self.update()
 

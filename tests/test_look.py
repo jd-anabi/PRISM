@@ -5767,6 +5767,27 @@ def test_a_choice_is_as_wide_as_its_longest_item_however_its_items_change():
         _gone(holder)
 
 
+def test_a_list_held_to_its_row_and_let_go_keeps_no_tip_of_an_item_it_no_longer_shows():
+    """A list a form holds to its room says the whole of the item it shows in its tip, for it may show it cut short; let
+    go, it shows each item whole and says none in its tip, so no tip names an item chosen while it was held. A capped
+    list, which may always show its item cut short, keeps saying it."""
+    from core.gui.widgets.choice import Choice
+    QApplication.instance() or QApplication([])
+    with _the_look(False):
+        for most, tips in ((None, ["Second", "", ""]), (360, ["Second", "Second", "Third"])):
+            choice = Choice(most=most)
+            choice.addItems(["First", "Second", "Third"])
+            choice.hold_to(40)
+            choice.setCurrentIndex(1)
+            said = [choice.toolTip()]
+            choice.hold_to(None)
+            said.append(choice.toolTip())
+            choice.setCurrentIndex(2)
+            said.append(choice.toolTip())
+            assert said == tips, (most, said)
+            _gone(choice)
+
+
 def test_the_book_face_is_reached_only_from_its_places():
     """The book face has four places and no fifth. One label class asks the font factory for it, and only the
     modules of those places may build that label or ask the factory themselves; none may name a book face."""

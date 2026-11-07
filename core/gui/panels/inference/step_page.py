@@ -34,12 +34,13 @@ from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QS
 
 from core.refusals import Refusal
 
-from ... import design, fields, plans, style
+from ... import design, fields, keys, plans, record_words, style
+from ...chain import model_label
 from ...reported import reported
 from ...run.controller import controller
 from ...run.retry import NOTED_TEXT
 from ...run.view import RunView
-from ...step_facts import Fact, ordered, reading_words, reason_beside, refused_facts
+from ...step_facts import Fact, ordered, pending_words, reading_words, reason_beside, refused_facts
 from ...widgets.ask import ask
 from ...widgets.facts import Foot
 from ...widgets.figure_stack import FigureStack
@@ -350,6 +351,22 @@ class StepPage(RunHost, QWidget):
         if plans.HEADING_OF.get(self.step) is None or not hasattr(screen, "plan_source"):
             return ()
         return plans.plan_facts(screen, plans.headings_to(self.step))
+
+    def _others_pending(self) -> list:
+        """The steps before this one whose page shows changes they have not applied, each with what this step's run uses
+        of it, what that step holds: a run reads what the steps before it hold, never their forms. Reads nothing."""
+        screen = self._screen
+        try:
+            pending = screen.pending() if screen is not None else frozenset()
+        except Exception:                    # noqa: BLE001 -- a page's facts never raise
+            return []
+        session, said = getattr(screen, "session", None), []
+        held = {"model": lambda: model_label(getattr(getattr(session, "draft", None), "model", None)),
+                "prior": lambda: record_words.label_of(getattr(session, "inf_prior", None))}
+        for step in held:
+            if step in pending and keys.step_number(step) < keys.step_number(self.step):
+                said.append(pending_words(keys.step_number(step), keys.step(step).name, held[step]()))
+        return said
 
     def say_the_plan(self) -> None:
         """Beside each row a plan fills, where its value came from; under the heading, the plan in use and how many of

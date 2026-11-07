@@ -8657,8 +8657,8 @@ def test_resume_sends_only_the_kept_training_and_rebuilds_from_its_record(store,
 
 
 def test_a_kept_training_with_no_name_asks_for_one_at_resume(store, tmp_path, monkeypatch):
-    """A kept training with no name asks for one at its Resume; the name typed is handed to the stage; "Cancel" starts
-    nothing."""
+    """A kept training with no name asks for one at its Resume; the name typed is handed to the stage, and the Resume's
+    history keeps it; "Cancel" starts nothing."""
     from tests._fixtures import asked, choose
     held = _a_launch_before(store, tmp_path, monkeypatch)
     _prior_load, posterior_load = _the_loads(monkeypatch, store, held)
@@ -8675,6 +8675,32 @@ def test_a_kept_training_with_no_name_asks_for_one_at_resume(store, tmp_path, mo
     _settle(app, inference, posterior_load)
     assert posterior_load.calls[-1][1] == {"resume_fit": kept, "name": "retrain_9", "if_name_taken": "unnamed"}
     assert len(posterior_load.calls) > calls
+    assert controller().model.spec.settings["name"] == "retrain_9", "the Resume's history names no name"
+
+
+def test_a_kept_training_whose_name_is_taken_since_asks_for_another_at_resume(store, tmp_path, monkeypatch):
+    """A kept training whose name another posterior has taken since asks for another at its Resume, saying why, before
+    anything is let go or loaded: the stage would refuse the taken name at its entry, and its sentence names the field
+    of a new training. "Cancel" starts nothing; the name typed is handed to the stage, and the Resume's history keeps
+    it."""
+    from tests._fixtures import asked, choose
+    held = _a_launch_before(store, tmp_path, monkeypatch)            # its posterior is named zz_trained
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held, name="zz_trained")
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.read_offers()
+    choose(monkeypatch, words="Cancel")
+    assert inference.resume_kept(kept) is None
+    assert (asked().title, asked().sentence) == ("Name this training", "The name 'zz_trained' is now taken by another "
+                                                                       "posterior. This training needs another one.")
+    assert (prior_load.calls, posterior_load.calls, inference.session.draft) == ([], [], None)
+    choose(monkeypatch, words="Resume", text="retrain_9")
+    inference.resume_kept(kept)
+    _settle(app, inference, posterior_load)
+    assert posterior_load.calls[-1][1] == {"resume_fit": kept, "name": "retrain_9", "if_name_taken": "unnamed"}
+    assert controller().model.spec.settings["name"] == "retrain_9", "the Resume's history names the name taken"
 
 
 def test_resume_asks_before_it_lets_go_of_what_is_held(store, tmp_path, monkeypatch):
@@ -9142,15 +9168,22 @@ def test_resume_puts_the_records_settings_on_the_steps_and_loads_its_prior_on_it
     folder, which the configuration handed in stands for; no step reads as changed; the prior is loaded on the
     configuration its record rebuilds, on the processor at the width its set was made with, whose identity is the
     record's own; the stage is handed the kept training alone, and the Resume's history keeps the units as step 1 holds
-    them. Nothing stops between the question and the stage."""
+    them. Nothing stops between the question and the stage. Step 2, read after it, names the prior the Resume loaded
+    and what it was built on; the configuration the load was handed no longer stands for its bounds, so its own "Choose
+    a bounds file." stands where the list selects none; and it says nothing of a bounds file of limits no file holds."""
     import torch
     from core import config
     from core.artifacts.identity import SimulationIdentity
     from core.Helpers import file_manager
     from core.gui.step_facts import units_words
     held = _a_launch_before(store, tmp_path, monkeypatch)
-    prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held, release=False)
     cfg, prior, model, listed, units, typed_units = _put_back(case, store, tmp_path)
+    prior_load.release(SimpleNamespace(kind="prior", id=prior, name=f"prior_of_{model.lower()}",
+                                       manifest=store.get("prior", prior)))
+    posterior_load.release(SimpleNamespace(kind="posterior", id=held.posterior, name="zz_trained",
+                                           manifest=store.get("posterior", held.posterior),
+                                           posterior=SimpleNamespace(truncation=None)))
     kept = _a_kept_training(store, SimpleNamespace(prior=prior), cfg=cfg)
     card = config.DeviceConfig(device=torch.device("cuda"), dtype=torch.float32, batch_size=2 ** 11)
     monkeypatch.setattr(config, "detect_device", lambda: card)
@@ -9178,6 +9211,18 @@ def test_resume_puts_the_records_settings_on_the_steps_and_loads_its_prior_on_it
     assert (handed.hw.device.type, handed.hw.batch_size) == ("cpu", 64)
     assert SimulationIdentity.from_cfg(handed, stub, 64, 4).to_dict() == SimulationIdentity.from_cfg(
         cfg, stub, 64, 4).to_dict()
+    assert prior_load.calls[-1][0][1] == prior, "the load was asked for another prior than the kept training's own"
+    step_two = inference.prior_panel
+    step_two.read_facts()
+    said = [row.sentence.plain_text() for row in step_two.foot.facts.rows()]
+    assert ("Error. Choose a bounds file." in said) is (not listed), ("the Resume's configuration still stands", said)
+    built_on = listed or ("limits typed by hand" if case == "limits typed by hand" else cfg.sources["bounds"])
+    assert step_two.in_use_words()[0] == f"prior_of_{model.lower()}", step_two.in_use_words()
+    assert step_two.in_use_words()[1].startswith(f"Built on {built_on}, "), step_two.in_use_words()
+    if not listed:                                    # no file selected, so "This bounds file" names none shown
+        assert not [line for line in said if line.startswith("Attention. This bounds file lists")], said
+    if case == "limits typed by hand":
+        assert [line for line in said if line.startswith("Attention. The limits typed by hand list f_scale")], said
 
 
 @pytest.mark.parametrize("case", list(_PUT_BACK)[:3])
@@ -9398,6 +9443,51 @@ def test_the_list_and_home_say_a_kept_training_in_whole_sentences(store, tmp_pat
         for ident in [offer.kept for offer, _parts in page._kept_rows]:
             _row_of(page, ident)["delete"].click()
         turn_until(qt_app(), lambda: QApplication.focusWidget() is page.help_button)
+
+
+def test_after_a_delete_the_keyboard_stands_where_the_row_stood_whatever_the_row_said(store, tmp_path, monkeypatch):
+    """After a Delete the keyboard stands where the deleted row stood: on the first button of the row now in its place,
+    its "Delete" when that row offers no Resume, though the row before offers one; with no row after it, on the first
+    button of the row before; with none left, on the step's heading. A row that said why its Resume was refused is
+    placed after as any other. The keyboard is elsewhere before each Delete, so that only the page can bring it
+    there."""
+    from PySide6.QtWidgets import QApplication
+    from core import config
+    from tests._fixtures import choose
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    first = _a_kept_training(store, held, name="retrain_1", saved_at="2026-10-03T10:00:00+00:00")
+    refused = _a_kept_training(store, held, name="retrain_2", config={"device": "cuda"},
+                               saved_at="2026-10-02T10:00:00+00:00")
+    last = _a_kept_training(store, held, name="retrain_3", identity={"libraries": {"torch": "0.0"}},
+                            saved_at="2026-10-01T10:00:00+00:00")
+    monkeypatch.setattr(config, "detect_device", config.cpu_device)      # the card it was trained on is gone
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    with _in_front(window):
+        window.go_to("inference", "training")
+        page = window.part("inference").posterior_panel
+        assert [offer.kept for offer, _parts in page._kept_rows] == [first, refused, last]
+        assert not _row_of(page, last)["resume"].isVisibleTo(page.kept_block), "the last row offers a Resume"
+        _row_of(page, refused)["resume"].click()
+        assert page._said_on_row.get(refused) and not _row_of(page, refused)["resume"].isVisibleTo(page.kept_block)
+        choose(monkeypatch, words="Delete it")
+
+        def where() -> tuple:
+            """The row and the words of what holds the keyboard."""
+            held = QApplication.focusWidget()
+            return (next((offer.kept for offer, parts in page._kept_rows if held in parts.values()), None),
+                    getattr(held, "text", lambda: "")())
+
+        for deleted, lands in ((refused, lambda: _row_of(page, last)["delete"]),
+                               (last, lambda: _row_of(page, first)["resume"]), (first, lambda: page.help_button)):
+            page.foot.check_again.setFocus()                         # the keyboard elsewhere than the list
+            assert QApplication.focusWidget() is page.foot.check_again, "the test proves nothing"
+            _row_of(page, deleted)["delete"].click()
+            try:
+                turn_until(app, lambda: QApplication.focusWidget() is lands())
+            except AssertionError:
+                pytest.fail(f"after the Delete of {deleted} the keyboard is on {where()}")
 
 
 def test_fit_again_asks_with_its_own_words_before_it_lets_the_session_go(store, tmp_path, monkeypatch):

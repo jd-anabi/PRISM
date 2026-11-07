@@ -554,6 +554,10 @@ def test_a_choice_not_applied_elsewhere_is_said_and_does_not_block():
         ("warn", said),
         ("warn", "Step 1, Model and options, has changes that are not applied. This run uses what is in use: Nadrowski.")]
     assert not any(fact.blocks for fact in facts)
+    model = pending_words(1, "Model and options", "Nadrowski")
+    for view in (BUILD, SAVED):                      # a prior's build and load read the model step 1 holds
+        facts = prior_facts(others_pending=[model], **view)
+        assert _said(facts)[-1] == ("warn", model) and not any(fact.blocks for fact in facts), _said(facts)
 
 
 @pytest.mark.parametrize("state", ["new", "new_with_siblings"])

@@ -17,8 +17,6 @@ HELP = {
             "simulate.",
     "prior": "Load a saved prior from the store, or choose “(from scratch)” to construct a new "
              "stability-screened parameter prior.",
-    "posterior": "Load a trained posterior from the store, or “(from scratch)” to train a new one. "
-                 "Training from scratch needs a prior; loading an existing posterior does not.",
     "tsnpe_obs": "The observation to refine around. Written by the Infer tab at INFERENCE time -- "
                  "an amortized posterior has none when it is SAVED, which is why there is a picker "
                  "here rather than an automatic choice. The round refuses unless the stored "
@@ -44,16 +42,6 @@ HELP = {
                    "candidates-per-round, so this is the coverage of the broad Sobol census that "
                    "SEEDS the local flood-fill. The sweep is ITERATION-bounded, which is why the "
                    "next field is not a speed dial.",
-    "vram_ceiling": "HARD ceiling on what ONE simulation batch may plan to hold on the GPU. "
-                    "0 = off, and off is right on an idle card. It is NOT a substitute for freeing "
-                    "VRAM — with nothing free it can do nothing, because not even a floor-sized "
-                    "chunk fits. What it buys is keeping a run that HAS headroom inside real VRAM: "
-                    "past that, Windows pages the batch into shared system memory rather than "
-                    "failing, and it runs up to 9x slower with nothing to say why (measured "
-                    "2026-08-27: 21.67 GiB completed on a 15.92 GiB card). Set it to about the free "
-                    "VRAM nvidia-smi reports, minus ~1 GiB for the CUDA context. Splitting costs "
-                    "wall-clock on the batches it touches. Not remembered between sessions, on "
-                    "purpose.",
     "sweep_batch": "Candidates per global round; 0 = follow the hardware batch. NOT a speed knob — "
                    "the sweep is iteration-bounded, so shrinking this makes the prior WORSE without "
                    "making it faster (measured 527 s at 2048 against >70 min and unfinished at 32).",

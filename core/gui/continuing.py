@@ -282,11 +282,12 @@ def offers(histories: Iterable[dict], kept_rows: Iterable, *, records_root: str,
     resumable or not, a narrowing round's with its command; and the newest training of the history of the records
     folder ``records_root`` (``histories``, as ``history.read`` gives them, of any records folder and any order), which,
     failed or not seen to end with a history that names its settings and its bounds file, offers to continue from the
-    batch its set holds (``set_batches``, the set's own count by its folder's name, None for no set), or, its set whole
-    and no kept training on that set to resume, to fit again; stopped with its set unfinished, it offers what the steps
-    alone say. A later training of that folder, whatever its end, leaves an earlier one nothing. ``prior_label`` names a
-    kept training's prior by its id, as a sentence names it, None for one no longer in Records; ``parent_narrowed``
-    says whether a kept narrowing round's parent posterior, by its id, is itself narrowed."""
+    batch its set holds (``set_batches``, the set's own count by its folder as the history holds it, its whole path,
+    None for no set), or, its set whole and no kept training on that set to resume, to fit again; stopped with its set
+    unfinished, it offers what the steps alone say. A later training of that folder, whatever its end, leaves an
+    earlier one nothing. ``prior_label`` names a kept training's prior by its id, as a sentence names it, None for one
+    no longer in Records; ``parent_narrowed`` says whether a kept narrowing round's parent posterior, by its id, is
+    itself narrowed."""
     records = [record for record in histories if isinstance(record, dict)]
     kept_rows = list(kept_rows)
     trainings = sorted(((moment, record) for record in records

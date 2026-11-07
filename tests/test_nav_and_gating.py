@@ -3672,6 +3672,21 @@ def test_the_window_says_t_obs_where_it_means_the_recording_length():
     assert "(t_scale, T)" not in HELP["cal_scales"] + HELP["num_runs"]
 
 
+def test_every_help_entry_of_parameter_inference_stands_beside_a_control_or_is_kept_by_name():
+    """Help lists every entry of parameter inference's help, so an entry whose control has gone tells a person of a
+    setting the window no longer has, or no longer has as the entry says it. Each entry is read beside a control by a
+    page of parameter inference, or is one of the few kept by name, whose words are still true, until each setting
+    gains a help panel of its own."""
+    from core.gui.panels.inference.help_text import HELP
+    kept = {"bounds", "cell", "chi_f0", "chi_range", "units_mode", "units_text"}
+    read = set()
+    for path in (Path(__file__).resolve().parents[1] / "core" / "gui" / "panels").rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "help_text import HELP" in text:
+            read |= set(re.findall(r'HELP\["(\w+)"\]', text))
+    assert set(HELP) - read == kept, sorted(set(HELP) - read)
+
+
 def test_a_blank_t_obs_is_refused_on_all_three_infer_branches(tmp_path):
     """The three observation-length boxes. FloatField.value() turns a blank or half-typed box into
     0.0, and every branch used to forward it: the simulated one spent the simulation and then died in

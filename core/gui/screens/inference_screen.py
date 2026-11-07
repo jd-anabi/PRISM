@@ -327,10 +327,11 @@ class InferenceScreen(QWidget):
 
     def resume_kept(self, ident: str) -> "LoadChain | None":
         """"Resume" for the kept training ``ident``, from Home, the Training step's list or a past view: what stops it
-        said on its row before anything is read; a name asked for when its record holds none ("Cancel" starts nothing);
-        asked first when the session holds a record; then its model and options, its bounds file and its prior put in use
-        from its record by a chain of loads, the prior loaded on the configuration its record rebuilds, and, once the
-        prior is loaded, the training resumed on its own record. The chain is handed back; None when nothing started."""
+        said on its row before anything is read; a name asked for when its record holds none, or when another posterior
+        has taken its name since ("Cancel" starts nothing); asked first when the session holds a record; then its model
+        and options, its bounds file and its prior put in use from its record by a chain of loads, the prior loaded on
+        the configuration its record rebuilds, and, once the prior is loaded, the training resumed on its own record.
+        The chain is handed back; None when nothing started."""
         from core import config as prism_config
         from core.artifacts import default_store
         from core.SBI import fit_state
@@ -352,9 +353,12 @@ class InferenceScreen(QWidget):
             self.posterior_panel.say_on_row(ident, " ".join(problems))
             return None
         name = ""
-        if not kept.posterior_name:
-            from ..panels.inference.posterior_tab import NAME_TEXT, NAME_TITLE
-            name = ask_text(self, NAME_TITLE, NAME_TEXT, "Name", "Resume",
+        # A name another posterior has taken since: the stage would refuse it, and its sentence names a new training's.
+        taken = bool(kept.posterior_name) and _name_trouble(store, kept.posterior_name) is not None
+        if not kept.posterior_name or taken:
+            from ..panels.inference.posterior_tab import NAME_TAKEN_TEXT, NAME_TEXT, NAME_TITLE
+            sentence = NAME_TAKEN_TEXT.format(kept.posterior_name) if taken else NAME_TEXT
+            name = ask_text(self, NAME_TITLE, sentence, "Name", "Resume",
                             check=lambda typed: _name_trouble(store, typed)) or ""
             if not name:
                 return None
