@@ -1,5 +1,33 @@
 # PRISM — state
 
+**Last updated:** 2026-11-06, the evening (19:54 by the clock; the weekly bar 94 %, resetting on 8 November at 04:00 UTC):
+STAGE 4'S BUILD AND ITS LAST REVIEW ARE COMPLETE; TASK 15, THE EXIT, IS NEXT, WITH THE OWNER. The same chat went on at the
+owner's word ("Start it now", then a pause at 15:45 for a restart of the app, then "Go on").
+
+- **The last review:** three seats over `d02073b..a2ac89c` (the product as one piece: "the stage may exit once the wave
+  cures two Importants"; the tests as one piece: "not approved", two Importants; the sorting of 167 deferred things), then
+  ONE fix wave, `a79e9d4`..`4ca2371`: a Resume whose kept name another posterior took asks for a name; step 2's "Before
+  you start" says step 1's pending changes; two Help entries that contradicted Settings deleted; one list of the rebuilt
+  pages for the standing checks; the plans and Resume tests put through Hopf; the keyboard after a Delete; and, in a
+  commit of its own, the suites' long-lived objects set aside from the collector once per session (`gc.freeze()` in
+  `tests/conftest.py`: the window suites 22 % faster, every guard that rests on collection still red on its fault). Its
+  re-read CLEAN; departures 338 to 343; the code audit's list gained items 23 to 28, and the re-read's four Minors wait
+  for the exit's documents.
+- **The gate:** 3416 passed, 10 skipped, 5 deselected, 3431 collected, 42 min 8 s at `4ca2371` on a slow machine (the
+  engine's own tests 38 % slower than quiet); the exit's quiet gate of record reads the freeze's gain. `Artifacts/` 428
+  entries, identical; `PRISM.ini` unchanged; the carried-over list 1586 rows, missing 0, gone 60.
+- **Found for the owner:** the desktop held 4 names after the gate where it held 11 at 15:46; seven items went to the
+  Recycle Bin from it at 16:36 (the ledger names them); nothing of PRISM, its tests or the review's scripts can move a
+  file to the Recycle Bin or names the desktop. Asked of the owner; nothing restored or touched.
+- **The owner pushed** up to `dc66861` during the day; `main` stands above it by the review's commits.
+
+NEXT: Task 15, the exit (the plan's section): first one question to the owner, the order (recommended as for stage 3:
+the pictures and the owner's questions on them first, any change asked as a small task of its own, then the gates of
+record once on the final head); the exit's list for the owner is gathered in `stage-4/reviews/stage-4-final-review-sorting.md`'s
+last section and the briefs' exit sections of Tasks 10 to 14.
+
+What follows is the head as the afternoon of 6 November left it:
+
 **Last updated:** 2026-11-06, the afternoon (14:33 by the clock; the weekly bar 89 %, resetting on 8 November at 04:00 UTC,
 20:00 on 7 November PST): STAGE 4'S BUILD STANDS WITH TASKS 0 TO 14 COMPLETE. The same chat went on at the owner's word ("I
 want to keep going", and at 89 % "Finish task 14 now").
