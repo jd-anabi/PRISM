@@ -651,8 +651,10 @@ class MainWindow(QMainWindow):
         """An offer taken, from Home's button (``where`` "home") or a past view's, which stands on the Training step.
         For a training of this launch whose page still offers it, that page opened and its own button pressed. Else
         "Continue from batch N" or "Fit again" fills the forms from the run's history and continues it, what stops it
-        said where it was pressed, and "Resume" resumes the kept training on its own record, each through Parameter
-        inference, which opens at the Training step. Nothing while a run is live, or for no offer."""
+        said under the Training step's heading and, pressed on a past view, on that view, and "Resume" resumes the kept
+        training on its own record, each through Parameter inference, which opens at the Training step. A past view says
+        only what its own press set: what an earlier press left there goes. Nothing while a run is live, or for no
+        offer."""
         if controller().is_live() or offer is None or getattr(offer, "kind", None) not in ("continue", "fit_again",
                                                                                           "resume"):
             return
@@ -671,12 +673,12 @@ class MainWindow(QMainWindow):
             return
         if offer.kind == "resume":
             inference.resume_kept(offer.kept)
-            return
-        inference.continue_from(offer, where=where)
-        said = inference.notice_on("training") if where == "training" else ""
+        else:
+            inference.continue_from(offer, where=where)
         page = inference.posterior_panel
-        if said and page.results.currentWidget() is page.past_view:
-            page.past_view.say(said)                 # where the press was made: the run's page, which stands in sight
+        if page._past_view is not None:
+            # The press clears what an earlier press left; pressed on the past view, it says there what it set itself.
+            page.past_view.say(inference.notice_on("training") if where == "training" else "")
 
     def _states_changed(self, states) -> None:
         """The six steps' states were worked out again: the rail shows them, and Home reads now while it is

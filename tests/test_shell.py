@@ -9257,20 +9257,21 @@ def test_resume_puts_the_records_settings_on_the_steps_and_loads_its_prior_on_it
         assert [line for line in said if line.startswith("Attention. The limits typed by hand list f_scale")], said
 
 
-@pytest.mark.parametrize("case", list(_PUT_BACK)[:3])
+@pytest.mark.parametrize("case", list(_PUT_BACK)[:4])
 def test_continue_puts_the_runs_own_settings_on_the_steps(case, store, tmp_path, monkeypatch):
-    """"Continue from batch N" after a reopening, for a training of Nadrowski on master.txt, of Hopf's first file, and
-    of the tier-1 box with units typed, slots 14, lock-in 6.5 and the frequency response: step 1 shows the run's model,
-    kind, slots, lock-in limit, rotation and units; step 2's list selects its bounds file; the prior is loaded on the
+    """"Continue from batch N" after a reopening, for a training of Nadrowski on master.txt, of Hopf's first file, of
+    the tier-1 box with units typed, slots 14, lock-in 6.5 and the frequency response, and of a units file of its own:
+    step 1 shows the run's model, kind, slots, lock-in limit, rotation and units (that file as the units row's third
+    choice, the draft holding its path); step 2's list selects its bounds file; the prior is loaded on the
     configuration step 2 builds of them, which is the run's own."""
     from core.artifacts.manifest import config_from_cfg
     held = _a_launch_before(store, tmp_path, monkeypatch)
     prior_load, _posterior_load = _the_loads(monkeypatch, store, held)
-    cfg, prior, model, listed, _units, typed_units = _put_back(case, store, tmp_path)
+    cfg, prior, model, listed, units, typed_units = _put_back(case, store, tmp_path)
     options = {"chi_mode": bool(cfg.chi_mode), "reparam_rotate": bool(cfg.reparam_rotate),
                "chi_k_pad": cfg.chi_k_pad if cfg.chi_mode else None,
                "chi_max_cycles": cfg.chi_max_cycles if cfg.chi_mode else None,
-               "units_override": list(typed_units) if typed_units else None}
+               "units_override": list(typed_units) if typed_units else str(units) if units is not None else None}
     _a_failed_training(store, tmp_path, held, handed={"model": model, "chi_mode": bool(cfg.chi_mode),
                                                        "options": options, "bounds": listed, "prior": prior})
     window, home = _home_of_last_time(tmp_path)
@@ -9280,7 +9281,9 @@ def test_continue_puts_the_runs_own_settings_on_the_steps(case, store, tmp_path,
     inference = window.part("inference")
     _settle(app, inference)
     typed = " ".join(typed_units) if typed_units else ""
-    assert (inference.loads.why, _on_the_steps(inference)) == ("", _as_made(cfg, model, listed, typed))
+    assert (inference.loads.why, _on_the_steps(inference)) == ("", _as_made(cfg, model, listed, typed, units))
+    held_units = str(units) if units is not None else typed_units
+    assert inference.session.draft.units_override == held_units, inference.session.draft.units_override
     handed = prior_load.calls[-1][0][0]
     machine = ("device", "dtype", "run_size")             # the computer's, which step 2 builds on as it stands now
     made = {key: value for key, value in config_from_cfg(cfg).items() if key not in machine}
@@ -9608,10 +9611,11 @@ def test_the_name_asked_at_resume_is_checked_as_the_store_checks_a_posteriors_na
 def test_home_takes_the_reopenings_path_once_the_pages_call_can_no_longer_start(store, tmp_path, monkeypatch):
     """A training of this launch that failed with batches saved, whose page offers "Continue from batch N": once step 1
     has been applied again, the page's own call can no longer start, the run is no longer offered as the page's, and
-    Home's press takes the reopening's path at once."""
+    Home's press takes the reopening's path at once, which shows the Training step's form in place of that run's
+    page."""
     from core import orchestrator
     held = _a_launch_before(store, tmp_path, monkeypatch)
-    _the_loads(monkeypatch, store, held)
+    prior_load, _posterior_load = _the_loads(monkeypatch, store, held)
     window, home = _home_of_last_time(tmp_path)
     app = qt_app()
     inference = window.part("inference")
@@ -9639,11 +9643,15 @@ def test_home_takes_the_reopenings_path_once_the_pages_call_can_no_longer_start(
     assert controller().offered(run)
     assert inference.config_panel.apply_quietly("NADROWSKI", {"chi_mode": False})
     assert not controller().offered(run), "a call that can no longer start is offered as the page's"
-    taken = []
-    monkeypatch.setattr(type(inference), "continue_from", lambda screen, offer, where="home": taken.append(offer.kind))
     window.go_to("home")
+    assert page.results.currentWidget() is page.run_view, "the run's page was not the page's own"
+    prior_load.release(SimpleNamespace(kind="prior", id=held.prior, name="retrain_prior",
+                                       manifest=store.get("prior", held.prior)))
     home.next_button.click()
-    assert (taken, len(training.calls)) == (["continue"], 1)
+    landed = (window.current_place(), page.results.currentWidget() is page.figures)
+    _settle(app, inference)
+    assert landed == (("inference", "training"), True), ("the press left the run's page in sight", landed)
+    assert (inference.loads.why, len(training.calls)) == ("", 1), inference.loads.why
 
 
 def test_a_past_view_offers_nothing_while_a_run_is_live(store, tmp_path, monkeypatch):
@@ -9687,7 +9695,7 @@ def test_the_rail_keeps_a_kept_training_when_parameter_inference_opens_at_anothe
     assert window.shell.rail.row("training").accessibleName() == said
 
 
-# ── the exit's changes: Home's presses, the kept round's command, the load view's order ──
+# ── Home's presses, the kept round's command, the load view's order ──
 def test_home_sets_a_kept_rounds_command_apart_in_the_fixed_face(store, tmp_path, monkeypatch):
     """A kept narrowing round after a reopening: Home's sentence ends where the command begins, and the command stands
     on lines of its own under it, in the fixed-width face, selectable and a stop of the Tab key, as the Training step's
@@ -9745,14 +9753,15 @@ def test_the_load_view_lists_the_saved_posteriors_before_the_kept_trainings(stor
     assert body.indexOf(page.kept_block) == body.indexOf(page.in_use) + 1
 
 
-@pytest.mark.parametrize("offered", ["continue", "resume"])
+@pytest.mark.parametrize("offered", ["continue", "resume", "a resume refused", "a resume of a training gone since"])
 def test_a_press_on_home_shows_the_steps_form_after_the_runs_page_was_seen(offered, store, tmp_path, monkeypatch):
     """"Continue from batch N", and "Resume", pressed on Home after that run's page was seen in the same launch: the
     Training step is shown with its form, not the page of the run that is over, which stays as it was behind "How the
-    run went"."""
+    run went". So too for a Resume refused before anything is read, its prior deleted since, and for one whose kept
+    training is gone since the list was read: each says why on its row, with the form in sight."""
     held = _a_launch_before(store, tmp_path, monkeypatch)
     _prior_load, posterior_load = _the_loads(monkeypatch, store, held)
-    kept = _a_kept_training(store, held) if offered == "resume" else None
+    kept = _a_kept_training(store, held) if offered != "continue" else None
     _a_failed_training(store, tmp_path, held, acknowledged=False, kept=kept,
                        outcome="failed" if offered == "continue" else "stopped")
     window, home = _home_of_last_time(tmp_path)
@@ -9766,11 +9775,20 @@ def test_a_press_on_home_shows_the_steps_form_after_the_runs_page_was_seen(offer
         assert home.next_button.text() == "&Continue from batch 236"
     else:
         assert home.next_button.text() == "&Resume"
+    if offered == "a resume refused":
+        store.delete("prior", held.prior, force=True)
+    elif offered == "a resume of a training gone since":
+        store.delete("fit", kept, force=True)
     choose(monkeypatch, other=True)
     home.next_button.click()
     landed = (window.current_place(), page.results.currentWidget() is page.figures)
-    _settle(qt_app(), window.part("inference"), posterior_load if offered == "resume" else None)
+    if offered in ("continue", "resume"):
+        _settle(qt_app(), window.part("inference"), posterior_load if offered == "resume" else None)
     assert landed == (("inference", "training"), True), ("the press landed on the run's page, not the form", landed)
+    if offered == "a resume refused":
+        assert _row_of(page, kept)["why"].text() == "The prior it was trained with is no longer in Records."
+    elif offered == "a resume of a training gone since":
+        assert _row_of(page, kept)["why"].text(), "the row says nothing of why"
 
 
 def test_continue_with_these_asks_first_before_it_sets_choices_not_applied(store, tmp_path, monkeypatch):
@@ -9819,69 +9837,269 @@ def test_continue_with_these_asks_first_before_it_sets_choices_not_applied(store
     assert step_one.plan_choice.currentData() == "zz_last"
 
 
-def test_continue_with_these_asks_nothing_with_nothing_chosen_on_the_forms(store, tmp_path, monkeypatch):
-    """With every value at its usual one or put back from last time, "Continue with these" asks nothing."""
+@pytest.mark.parametrize("shown", ["nothing", "a plan shown in the list"])
+def test_continue_with_these_asks_nothing_with_nothing_chosen_on_the_forms(shown, store, tmp_path, monkeypatch):
+    """With every value at its usual one or put back from last time, "Continue with these" asks nothing; with no plan
+    used last time, a plan of the model shown in step 1's list and not filled is left there by the press, and is not
+    asked about either."""
     held = _a_launch_before(store, tmp_path, monkeypatch, kind=True)
     _the_loads(monkeypatch, store, held)
     window, home = _home_of_last_time(tmp_path)
     inference = window.part("inference")
+    step_one = inference.config_panel
+    if shown == "a plan shown in the list":
+        held.folder.mkdir(parents=True)
+        (held.folder / "other.txt").write_bytes(b"# Training\nnum_runs = 7000\n")
+        step_one.read_facts()
+        step_one.plan_choice.showPopup()
+        step_one.plan_choice.hidePopup()
+        step_one.plan_choice.setCurrentIndex(step_one.plan_choice.findData("other"))
     window.go_to("home")
     home.next_button.click()
+    assert all_asked() == [], [one.items for one in all_asked()]
     _settle(qt_app(), inference)
-    assert all_asked() == [] and inference.loads.why == "", all_asked()
+    assert inference.loads.why == "", inference.loads.why
+    if shown == "a plan shown in the list":
+        assert (step_one.plan_choice.currentData(), inference.plan_source) == ("other", None)
 
 
-@pytest.mark.parametrize("press", ["Continue with these", "Continue from batch 236", "Resume"])
-def test_a_chain_that_stops_says_where_under_the_heading_of_the_page_its_press_opened(press, store, tmp_path,
+def test_continue_with_these_names_another_models_plan_shown_as_becoming_no_plan(store, tmp_path, monkeypatch):
+    """With no plan used last time, Hopf on step 1's form and a plan of Hopf shown in its list, neither applied: the
+    press puts Nadrowski on the form, whose list shows "No plan", and asks first, naming the model and the plan."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    hopf = held.folder.parent / "hopf"
+    hopf.mkdir(parents=True)
+    (hopf / "hopf_plan.txt").write_bytes(b"# Training\nnum_runs = 3000\n")
+    window, home = _home_of_last_time(tmp_path)
+    step_one = window.part("inference").config_panel
+    step_one.model_combo.setCurrentText("HOPF")
+    step_one.plan_choice.showPopup()
+    step_one.plan_choice.hidePopup()
+    step_one.plan_choice.setCurrentIndex(step_one.plan_choice.findData("hopf_plan"))
+    window.go_to("home")
+    choose(monkeypatch, default=True)
+    home.next_button.click()
+    assert asked().items == ("Model: Hopf becomes Nadrowski", "Plan: hopf_plan becomes No plan"), asked().items
+
+
+def test_continue_with_these_names_what_a_plan_filled_now_when_no_plan_was_used_last_time(store, tmp_path,
+                                                                                          monkeypatch):
+    """With no plan used last time, a plan filled on the forms this launch and not applied: the press sets step 1 to
+    what was in use last time, every setting the plan does not keep at its usual one, so it asks first, naming each
+    setting of step 1 the plan filled that it resets. Answered, the plan stays in use and says where step 1 departs
+    from it."""
+    from tests._dialogs import forget_asked
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    held.folder.mkdir(parents=True)
+    (held.folder / "retrain.txt").write_bytes(b"# Model and options\nchi_mode = on\nreparam_rotate = off\n")
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    step_one = inference.config_panel
+    step_one.read_facts()
+    step_one.plan_choice.showPopup()
+    step_one.plan_choice.hidePopup()
+    step_one.plan_choice.setCurrentIndex(step_one.plan_choice.findData("retrain"))
+    choose(monkeypatch, words="Fill the forms")
+    step_one.fill_button.click()
+    assert (inference.plan_source.name, step_one.kind_choice.currentData(), step_one.rot_choice.currentData()) == (
+        "retrain", True, False)
+    window.go_to("home")
+    forget_asked()
+    choose(monkeypatch, default=True)
+    home.next_button.click()
+    assert asked().items == ("Kind of observation: frequency response becomes set by the bounds file",
+                             "Rotation: off becomes on"), asked().items
+    assert inference.loads is None, "kept, the press loaded something"
+    forget_asked()
+    choose(monkeypatch, words="Continue with these")
+    home.next_button.click()
+    _settle(app, inference)
+    draft = inference.session.draft
+    assert (inference.loads.why, draft.chi_mode, draft.reparam_rotate, inference.plan_source.name) == (
+        "", False, True, "retrain"), inference.loads.why
+    assert step_one.plan_line.text() == "Plan: retrain, 2 changes", step_one.plan_line.text()
+
+
+def test_continue_with_these_asks_its_question_under_the_pointer_not_the_wait_cursor(store, tmp_path, monkeypatch):
+    """"Continue with these" is pressed under the wait cursor, which stands while Parameter inference is built and
+    step 1 applied; its question waits for a person, so the pointer over it is the arrow, and once it is answered no
+    cursor of the press is left in force."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    window, home = _home_of_last_time(tmp_path)
+    step_one = window.part("inference").config_panel
+    step_one.rot_choice.setCurrentIndex(step_one.rot_choice.findData(not step_one.rot_choice.currentData()))
+    window.go_to("home")
+    seen = []
+
+    def looked() -> None:
+        cursor = QApplication.overrideCursor()
+        seen.append(None if cursor is None else cursor.shape())
+
+    choose(monkeypatch, words="Keep what is there", during=looked)
+    home.next_button.click()
+    assert [one.title for one in all_asked()] == ["Continue with these?"], all_asked()
+    assert seen in ([None], [Qt.CursorShape.ArrowCursor]), ("the question was asked under the wait cursor", seen)
+    assert QApplication.overrideCursor() is None, "the press left a cursor in force"
+
+
+#: How a press's chain of loads is made to stop: the press, what fails, what its sentence then says after the press's
+#: words, and what is done next that takes the sentence away (None: nothing more is done).
+_STOPS = {
+    "Continue with these, its prior's load failing": (
+        "Continue with these", "the prior's load", "Prior: the prior retrain_prior was not loaded. Prior says why.",
+        "Home's button"),
+    "Continue from batch 236, its prior's load failing": (
+        "Continue from batch 236", "the prior's load", "Prior: the prior retrain_prior was not loaded. Prior says why.",
+        "a run"),
+    "Resume, its prior's load failing": (
+        "Resume", "the prior's load", "Prior: the prior retrain_prior was not loaded. Prior says why.",
+        "step 1 applied"),
+    "Continue from batch 236, a units file that cannot be read": (
+        "Continue from batch 236", "the units file", "Model and options: the model Nadrowski was not applied. Model "
+        "and options says why.", None),
+    "Continue with these, its posterior's load failing": (
+        "Continue with these", "the posterior's load", "Training: the posterior zz_trained was not loaded. Training "
+        "says why.", None),
+    "Continue with these, a prior step 2's list does not hold": (
+        "Continue with these", "the prior's record", "Prior: the prior was not loaded. Prior says why.", None),
+}
+
+
+@pytest.mark.parametrize("case", list(_STOPS))
+def test_a_chain_that_stops_says_where_under_the_heading_of_the_page_its_press_opened(case, store, tmp_path,
                                                                                         monkeypatch):
     """A chain of loads that stops before its end says so in one sentence under the heading of the page its press
-    opened, Home for "Continue with these" and the Training step for "Continue from batch N" and "Resume": the press,
-    the step it stopped at, what was not loaded, and that the step says why. It goes at the next press or run, and no
-    other page says it."""
+    opened, read there as the press leaves it: Home for "Continue with these" and the Training step, its form in sight,
+    for "Continue from batch N" and "Resume". It names the press, the step it stopped at (step 1, whose units file
+    cannot be read; step 2, whose prior's load fails, or whose list no longer holds the prior, which it then names
+    alone; step 3, whose posterior's load fails), what was not applied or loaded, and that the step says why, which it
+    does. It goes at the next press of Home's button, step 1 applied, or a run, and no other page says it."""
+    from core import orchestrator
     from core.gui.run.controller import controller
+    press, failing, words, then = _STOPS[case]
     held = _a_launch_before(store, tmp_path, monkeypatch)
-    prior_load, _posterior_load = _the_loads(monkeypatch, store, held, release=False)
-    kept = None
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held, release=False)
     if press == "Continue from batch 236":
-        _a_failed_training(store, tmp_path, held)
+        units = tmp_path / "no units here.txt"
+        options = {"chi_mode": False, "reparam_rotate": False,
+                   "units_override": str(units) if failing == "the units file" else None}
+        _a_failed_training(store, tmp_path, held, handed={"options": options})
     elif press == "Resume":
         kept = _a_kept_training(store, held)
         _a_failed_training(store, tmp_path, held, outcome="stopped", kept=kept)
     window, home = _home_of_last_time(tmp_path)
     app = qt_app()
-    inference = window.part("inference")
-    inference.read_offers()
-    window.go_to("home")
+    if failing == "the prior's record":
+        # Gone after Home read what was in use last time, and before step 2's list was first read.
+        store.delete("prior", held.prior, force=True)
+    else:
+        window.part("inference").read_offers()
+        window.go_to("home")
     assert home.next_button.text() == f"&{press}"
     choose(monkeypatch, other=True)
     home.next_button.click()
-    turn_until(app, prior_load.started.is_set)
-    prior_load.fail(RuntimeError("the prior's file could not be read"))
+    inference = window.part("inference")
+    if failing == "the prior's load":
+        turn_until(app, prior_load.started.is_set)
+        prior_load.fail(RuntimeError("the prior's file could not be read"))
+    elif failing == "the posterior's load":
+        turn_until(app, prior_load.started.is_set)
+        prior_load.release(SimpleNamespace(kind="prior", id=held.prior, name="retrain_prior",
+                                           manifest=store.get("prior", held.prior)))
+        turn_until(app, posterior_load.started.is_set)
+        posterior_load.fail(RuntimeError("the posterior's file could not be read"))
     _settle(app, inference)
-    said = f"{press} stopped at Prior: the prior retrain_prior was not loaded. Prior says why."
-    where, other = ((home.notice, inference.posterior_panel.notice) if press == "Continue with these"
-                    else (inference.posterior_panel.notice, home.notice))
+    said = f"{press} stopped at {words}"
+    page = inference.posterior_panel
+    # Where the press left the person, read before anything else is opened or read.
+    if press == "Continue with these":
+        where, other = home.notice, page.notice
+        assert window.current_place()[0] == "home", window.current_place()
+        assert (where.sentence.plain_text(), where.isVisibleTo(home)) == (said, True), where.sentence.plain_text()
+    else:
+        where, other = page.notice, home.notice
+        assert (window.current_place(), page.results.currentWidget() is page.figures) == (
+            ("inference", "training"), True), window.current_place()
+        assert (where.sentence.plain_text(), where.isVisibleTo(page)) == (said, True), where.sentence.plain_text()
+    if failing == "the units file":
+        line = inference.config_panel.form.rows["units"].line
+        assert line.says() and line.words.startswith("The units file no units here.txt cannot be read"), line.words
     window.go_to("home")
     window.go_to("inference", "training")
     assert (where.sentence.plain_text(), where.isVisibleTo(where.parentWidget())) == (said, True)
     assert not other.isVisibleTo(other.parentWidget()) and not inference.prior_panel.notice.isVisibleTo(
         inference.prior_panel.notice.parentWidget())
-    stand_in = StandIn(word="Prior load")
-    stand_in.release(SimpleNamespace(kind="prior", id=held.prior, name="retrain_prior",
-                                     manifest=store.get("prior", held.prior)))
-    from core import orchestrator
-    monkeypatch.setattr(orchestrator, "build_prior", stand_in)
-    inference.prior_panel.load_record(held.prior)
-    turn_until(app, lambda: not controller().is_live())
-    assert inference.notice_on("home") == inference.notice_on("training") == "", "a run did not take the sentence away"
+    if then == "Home's button":
+        window.go_to("home")
+        assert not home.next.action, home.next
+        home.next_button.click()
+        assert (inference.notice_on("home"), home.notice.isVisibleTo(home)) == ("", False), (
+            "Home's button did not take the sentence away")
+    elif then == "a run":
+        stand_in = StandIn(word="Prior load")
+        stand_in.release(SimpleNamespace(kind="prior", id=held.prior, name="retrain_prior",
+                                         manifest=store.get("prior", held.prior)))
+        monkeypatch.setattr(orchestrator, "build_prior", stand_in)
+        inference.prior_panel.load_record(held.prior)
+        turn_until(app, lambda: not controller().is_live())
+        assert inference.notice_on("home") == inference.notice_on("training") == "", (
+            "a run did not take the sentence away")
+    elif then == "step 1 applied":
+        step_one = inference.config_panel
+        step_one.rot_choice.setCurrentIndex(step_one.rot_choice.findData(not step_one.rot_choice.currentData()))
+        choose(monkeypatch, words="Apply and start a new session")
+        step_one.foot.main_button.click()
+        assert (inference.notice_on("training"), page.notice.isVisibleTo(page)) == ("", False), (
+            "step 1 applied did not take the sentence away")
+
+
+@pytest.mark.parametrize("model", ["with a drive", "with no free parameter", "no longer listed"])
+def test_a_chain_stopped_at_a_model_step_one_cannot_take_says_why_itself(model, store, tmp_path, monkeypatch):
+    """"Continue from batch N" of a training whose model step 1 can no longer take: one of your own edited since to
+    have a drive, or to have no free parameter, which parameter inference cannot use, or one no longer among the models.
+    Step 1 never shows that model, so it cannot say why; the sentence under the Training step's heading says it in its
+    place, and asks no one to look at a step."""
+    import shutil
+    from core import config, registry
+    bounds = tmp_path / "bounds of the model.txt"
+    shutil.copyfile(config.BOUNDS_PATH / "nadrowski" / "master.txt", bounds)
+    name = "GONE_SINCE" if model == "no longer listed" else "HOPF"
+    if name == "HOPF":
+        monkeypatch.setattr(registry, "is_user_model", lambda named: named == "HOPF")
+        monkeypatch.setattr(registry, "is_sbi_user_model", lambda named: False)
+        monkeypatch.setattr(registry, "user_model_has_forcing", lambda named: model == "with a drive")
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, _posterior_load = _the_loads(monkeypatch, store, held)
+    _a_failed_training(store, tmp_path, held, handed={"model": name, "bounds": str(bounds)})
+    window, home = _home_of_last_time(tmp_path)
+    inference = window.part("inference")
+    inference.read_offers()
+    window.go_to("home")
+    assert home.next_button.text() == "&Continue from batch 236"
+    home.next_button.click()
+    _settle(qt_app(), inference)
+    why = {"with a drive": "the model Hopf has external forcing, so parameter inference cannot use it",
+           "with no free parameter": "the model Hopf has no free parameters to infer, so parameter inference "
+                                     "cannot use it",
+           "no longer listed": "the model GONE_SINCE is not among the models"}[model]
+    page = inference.posterior_panel
+    assert (page.notice.sentence.plain_text(), page.notice.isVisibleTo(page)) == (
+        f"Continue from batch 236 stopped at Model and options: {why}.", True), page.notice.sentence.plain_text()
+    assert (inference.session.draft, prior_load.calls) == (None, []), "something was applied or loaded"
 
 
 @pytest.mark.parametrize("gone", ["prior", "bounds file", "both"])
 @pytest.mark.parametrize("where", ["home", "past view"])
 def test_continue_from_batch_n_reads_its_prior_and_bounds_file_before_it_lets_anything_go(gone, where, store,
                                                                                           tmp_path, monkeypatch):
-    """"Continue from batch N" reads the run's prior and bounds file before its question: one gone is said where the
-    press was made, on Home under its heading or on the run's page, and nothing is asked, applied, loaded or let go."""
+    """"Continue from batch N" reads the run's prior and bounds file before its question: one gone is said under the
+    heading of the Training step, the step the press fills, and nothing is asked, applied, loaded or let go. Pressed on
+    Home, the Training step is shown with its form in sight, also after the run's page was seen, and Home says nothing
+    of it; pressed on the run's page, the page says it too where it stands."""
     held = _a_launch_before(store, tmp_path, monkeypatch)
     prior_load, _posterior_load = _the_loads(monkeypatch, store, held)
     handed = {"prior": "20260101T000000"} if gone in ("prior", "both") else {}
@@ -9891,23 +10109,91 @@ def test_continue_from_batch_n_reads_its_prior_and_bounds_file_before_it_lets_an
     window, home = _home_of_last_time(tmp_path)
     inference = window.part("inference")
     inference.read_offers()
-    session = inference.session
+    session, page = inference.session, inference.posterior_panel
     words = {"prior": "the prior it was trained with is no longer in Records",
              "bounds file": "the bounds file gone.txt is no longer there"}
     said = "Continue from batch 236 cannot start: " + "; and ".join(
         words[one] for one in (("prior", "bounds file") if gone == "both" else (gone,))) + "."
+    window._open_run(_REOPENED)
     if where == "home":
         window.go_to("home")
+        inference.read_offers()
+        window.go_to("home")
         home.next_button.click()
-        assert (home.notice.sentence.plain_text(), home.notice.isVisibleTo(home)) == (said, True)
+        landed = (window.current_place(), page.results.currentWidget() is page.figures)
+        assert landed == (("inference", "training"), True), landed
+        assert (page.notice.sentence.plain_text(), page.notice.isVisibleTo(page)) == (said, True)
+        assert (inference.notice_on("home"), home.notice.isVisibleTo(home)) == ("", False), "Home says it"
     else:
-        window._open_run(_REOPENED)
-        view = inference.posterior_panel.past_view
+        view = page.past_view
         view.continue_button.click()
-        assert view.notice.text() == said, view.notice.text()
+        assert (view.notice.text(), inference.notice_on("training")) == (said, said), view.notice.text()
     assert (all_asked(), inference.loads, inference.session is session, prior_load.calls) == ([], None, True, []), (
         "something was asked, loaded or let go")
 
+
+@pytest.mark.parametrize("again", ["on the run's page", "on Home"])
+def test_continue_pressed_again_says_nothing_of_what_the_first_press_found(again, store, tmp_path, monkeypatch):
+    """"Continue from batch N" refused on the run's page, its bounds file gone; the file put back; Continue pressed
+    again, on that page or on Home, which reads both, finds nothing gone, and is kept at its question: neither the run's
+    page nor the Training step's heading says what the first press found any longer, and nothing is loaded."""
+    import shutil
+    from core import config
+    bounds = tmp_path / "bounds of the rig.txt"
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    _a_failed_training(store, tmp_path, held, handed={"bounds": str(bounds)}, acknowledged=again == "on Home")
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.continue_with(window._picks)
+    _settle(app, inference)
+    chain_of_last_time, page = inference.loads, inference.posterior_panel
+    inference.read_offers()
+    window._open_run(_REOPENED)
+    view = page.past_view
+    view.continue_button.click()
+    said = "Continue from batch 236 cannot start: the bounds file bounds of the rig.txt is no longer there."
+    assert (view.notice.text(), inference.notice_on("training")) == (said, said), view.notice.text()
+    shutil.copyfile(config.BOUNDS_PATH / "nadrowski" / "master.txt", bounds)
+    choose(monkeypatch, words="Keep this session")
+    if again == "on Home":
+        window.go_to("home")
+        window.go_to("home")
+        assert home.next_button.text() == "&Continue from batch 236", home.next_button.text()
+        home.next_button.click()
+    else:
+        view.continue_button.click()
+    assert [one.title for one in all_asked()] == ["Continue from batch 236?"], all_asked()
+    assert (view.notice.text(), inference.notice_on("training"), inference.loads is chain_of_last_time) == (
+        "", "", True), (view.notice.text(), inference.notice_on("training"))
+
+
+def test_a_resume_refused_on_its_row_takes_away_the_sentence_an_earlier_press_left(store, tmp_path, monkeypatch):
+    """A Resume's chain stops at its prior's load and says so under the Training step's heading; the prior is then
+    deleted, and Resume pressed on the kept training's row is refused before anything is read, on its row: the earlier
+    sentence goes, so the page gives one reason, the row's."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, _posterior_load = _the_loads(monkeypatch, store, held, release=False)
+    kept = _a_kept_training(store, held)
+    _a_failed_training(store, tmp_path, held, outcome="stopped", kept=kept)
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.read_offers()
+    window.go_to("home")
+    assert home.next_button.text() == "&Resume"
+    choose(monkeypatch, other=True)
+    home.next_button.click()
+    turn_until(app, prior_load.started.is_set)
+    prior_load.fail(RuntimeError("the prior's file could not be read"))
+    _settle(app, inference)
+    page = inference.posterior_panel
+    assert inference.notice_on("training").startswith("Resume stopped at Prior: "), inference.notice_on("training")
+    store.delete("prior", held.prior, force=True)
+    _row_of(page, kept)["resume"].click()
+    said = (inference.notice_on("training"), page.notice.isVisibleTo(page), _row_of(page, kept)["why"].text())
+    assert said == ("", False, "The prior it was trained with is no longer in Records."), said
 
 
 def test_a_resumes_own_units_file_is_a_third_choice_and_its_device_is_said_until_a_step_is_applied(store, tmp_path,
@@ -9969,6 +10255,77 @@ def test_a_resumes_own_units_file_is_a_third_choice_and_its_device_is_said_until
     assert step_one.units_choice.findData("own") < 0, "the third choice stood with no units file of its own held"
 
 
+def _resumed_with_units_of_its_own(store, tmp_path, monkeypatch):
+    """A training kept with a units file of its own, resumed after a reopening, the processor standing in for the
+    device: (window, Parameter inference, what the launch before left, the units file, the units' words)."""
+    from core import config
+    from core.Helpers import file_manager
+    from core.gui.step_facts import units_words
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held, release=False)
+    cfg, prior, _model, _listed, units, _typed = _put_back("a units file of its own", store, tmp_path)
+    prior_load.release(SimpleNamespace(kind="prior", id=prior, name="prior_of_nadrowski",
+                                       manifest=store.get("prior", prior)))
+    posterior_load.release(SimpleNamespace(kind="posterior", id=held.posterior, name="zz_trained",
+                                           manifest=store.get("posterior", held.posterior),
+                                           posterior=SimpleNamespace(truncation=None)))
+    kept = _a_kept_training(store, SimpleNamespace(prior=prior), cfg=cfg)
+    monkeypatch.setattr(config, "detect_device", config.cpu_device)
+    window, _home = _home_of_last_time(tmp_path)
+    inference = window.part("inference")
+    inference.read_offers()
+    inference.resume_kept(kept)
+    _settle(qt_app(), inference, posterior_load)
+    return window, inference, held, units, units_words(file_manager.parse_units_file(str(units)))
+
+
+def test_a_plan_saved_after_a_resume_holds_its_own_units_files_units_as_words(store, tmp_path, monkeypatch):
+    """After the Resume of a training kept with a units file of its own, a plan saved from step 1 holds that file's
+    units in words, as a plan holds units, read back from the plan's file; that plan in use, the Training step reads
+    step 1's units, the file's, as the plan's own: no departure."""
+    from core.plans import read_plan
+    from tests._dialogs import answer_in_turn
+    window, inference, held, _units, words = _resumed_with_units_of_its_own(store, tmp_path, monkeypatch)
+    step_one = inference.config_panel
+    assert step_one.units_choice.currentData() == "own" and step_one.save_button.isEnabled()
+    answer_in_turn(monkeypatch, ("Save", "rig_units"))
+    step_one.save_button.click()
+    written = read_plan(held.folder / "rig_units.txt")
+    saved = written.values.get(("Model and options", "units"))
+    assert sorted(str(saved).split()) == sorted(words.split()), written.values
+    assert inference.plan_source.name == "rig_units"
+    page = inference.posterior_panel
+    window.go_to("inference", "training")
+    page.read_facts()
+    assert page.plan_line.text() == "Plan: rig_units", page.plan_line.text()
+
+
+def test_a_units_file_of_its_own_stays_chosen_across_another_model_and_is_applied_with_it(store, tmp_path,
+                                                                                         monkeypatch):
+    """After the Resume of a training kept with a units file of its own, another model chosen on step 1's form leaves
+    the units row's third choice chosen, as units typed stay, and the model chosen back finds it there with nothing to
+    apply; applied with Hopf, Hopf is handed the file. A units file whose units cannot be used is refused on the units
+    row, as units typed are, and nothing is applied."""
+    window, inference, _held, units, _words = _resumed_with_units_of_its_own(store, tmp_path, monkeypatch)
+    step_one = inference.config_panel
+    step_one.model_combo.setCurrentText("HOPF")
+    assert step_one.units_choice.currentData() == "own", step_one.units_choice.currentData()
+    step_one.model_combo.setCurrentText("NADROWSKI")
+    assert step_one.units_choice.currentData() == "own" and step_one.nothing_to_apply()
+    step_one.model_combo.setCurrentText("HOPF")
+    choose(monkeypatch, words="Apply and start a new session")
+    step_one.foot.main_button.click()
+    assert (inference.session.draft.model, inference.session.draft.units_override) == ("HOPF", str(units))
+    bad = tmp_path / "units of no use.txt"
+    bad.write_bytes(b"# Units\nnm notaunit ms pN\n")
+    draft = inference.session.draft
+    assert not step_one.apply_quietly("NADROWSKI", {"chi_mode": False, "units_override": str(bad)})
+    line = step_one.form.rows["units"].line
+    assert inference.session.draft is draft, "a units file that cannot be used was applied"
+    assert line.says() and line.words.startswith("Units from the file units of no use.txt cannot be used: "), (
+        line.words)
+
+
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])
 def test_a_long_named_units_file_keeps_step_one_within_its_view_at_the_least_size(factor, store, tmp_path, monkeypatch):
@@ -10011,5 +10368,5 @@ def test_continue_from_batch_n_finds_another_models_prior_and_bounds_file_where_
     inference.read_offers()
     window.go_to("home")
     home.next_button.click()
-    assert (inference.notice_on("home"), inference.loads is not None) == ("", True), inference.notice_on("home")
+    assert (inference.notice_on("training"), inference.loads is not None) == ("", True), inference.notice_on("training")
     _settle(qt_app(), inference)

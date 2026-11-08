@@ -430,8 +430,10 @@ class _Wrapped(QLabel):
 
     @reported(QLabel.sizeHint)
     def sizeHint(self):
+        """As wide as the widest line with the room at its sides, so that the widest line stands on one line."""
+        margins = self.contentsMargins()
         widest = max((QFontMetrics(self.font()).horizontalAdvance(line) for line in self.text().split("\n")),
-                     default=0)
+                     default=0) + margins.left() + margins.right()
         return QSize(widest, self.heightForWidth(widest))
 
     @reported(QLabel.minimumSizeHint)

@@ -1566,8 +1566,9 @@ def test_the_windows_two_checks_are_listed_as_the_readers_are(tmp_path, monkeypa
 def test_another_model_on_the_form_and_back_keeps_the_plan_in_use(tmp_path, monkeypatch, store):
     """The list follows the model shown on step 1's form: another model chosen there shows "No plan" and lists that
     model's own plans as it opens, while the plan in use stays in use, its line under the list left out for a model it
-    is not of. Chosen back, the list stands on the plan in use again at its next reading, and nothing is lost: the plan
-    line, the origins, the plan a training's history keeps and the plan last used."""
+    is not of. Chosen back, the list stands on the plan in use again at its next reading, with no line under it in the
+    meantime, and nothing is lost: the plan line, the origins, the plan a training's history keeps and the plan last
+    used."""
     window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
     hopf = folder.parent / "hopf"
     hopf.mkdir()
@@ -1583,6 +1584,8 @@ def test_another_model_on_the_form_and_back_keeps_the_plan_in_use(tmp_path, monk
     assert _origins(screen)[("training", "num_runs")] == "from plan retrain"
     assert _opened(page) == ["No plan", "hopf_plan"]
     page.model_combo.setCurrentText("NADROWSKI")
+    line = page.form.rows["plan"].line
+    assert (line.isHidden(), line.words) == (True, ""), ("a line stood under the list before it was read", line.words)
     page.read_facts()
     assert page.plan_choice.currentData() == "retrain" and page.form.rows["plan"].line.isHidden()
     assert ([_said(one.plan_line) for one in screen.step_pages()], _origins(screen), screen.plan_entry(),
@@ -1620,6 +1623,50 @@ def test_step_one_applied_with_another_model_lets_the_plan_and_its_waiting_file_
     page.foot.main_button.click()
     assert (screen.plan_source, prior.waiting_file(), screen.session.draft.model) == (None, None, "HOPF"), (
         "a plan of Nadrowski waiting stood after Hopf was applied")
+
+
+@pytest.mark.parametrize("then", ["nothing", "the usual values", "a plan of Hopf naming no bounds file"])
+def test_a_waiting_file_is_selected_only_for_the_model_it_was_filled_for(then, tmp_path, monkeypatch, store):
+    """A plan of Nadrowski fills its bounds file, which waits; Hopf is chosen on the form, where a save writes no bounds
+    file of Nadrowski's into a plan of Hopf; then the usual values, or a plan of Hopf that names no bounds file, take
+    the plan's place, and the file goes with its plan. Applied with Hopf, then or at once, step 2 selects no file of
+    that name in Hopf's folder, though one stands there, and says nothing of the plan's file."""
+    import shutil
+    from core.config import BOUNDS_PATH
+    from core.gui.panels.inference import config_tab, prior_tab
+    from tests._dialogs import all_asked, choose, forget_asked
+    bounds = tmp_path / BOUNDS_PATH.name
+    for model in ("nadrowski", "hopf"):
+        shutil.copytree(BOUNDS_PATH / model, bounds / model)
+    shutil.copyfile(bounds / "nadrowski" / "master_tier1.txt", bounds / "hopf" / "master_tier1.txt")
+    monkeypatch.setattr(config_tab, "BOUNDS_PATH", bounds)
+    monkeypatch.setattr(prior_tab, "BOUNDS_PATH", bounds)
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    prior = screen.prior_panel
+    hopf = folder.parent / "hopf"
+    hopf.mkdir()
+    _plan(hopf, "# Training\nnum_runs = 3000\n", "hopf_plan")
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    page.model_combo.setCurrentText("HOPF")
+    assert (prior.waiting_file(), screen.plan_source.name) == ("master_tier1.txt", "retrain")
+    forget_asked()
+    choose(monkeypatch)
+    page.save_button.click()
+    saving = all_asked()[-1]
+    assert not [item for item in saving.items if "master_tier1.txt" in item], saving.items
+    if then == "the usual values":
+        _press_fill(page, monkeypatch, None, answer="Return to the usual values")
+    elif then == "a plan of Hopf naming no bounds file":
+        page.plan_choice.showPopup()
+        page.plan_choice.hidePopup()
+        _press_fill(page, monkeypatch, "hopf_plan", answer="Fill the forms")
+    if then != "nothing":
+        assert prior.waiting_file() is None and prior.waiting_line.isHidden(), "the file outlived its plan"
+    choose(monkeypatch, words="Apply and start a new session")
+    page.foot.main_button.click()
+    assert screen.session.draft.model == "HOPF"
+    assert prior.bounds_picker.key() != "master_tier1.txt", "Hopf's file of the plan's name was selected"
+    assert prior.gone_line.isHidden(), _said(prior.gone_line)
 
 
 def test_the_origin_of_every_row_follows_the_source_in_use(tmp_path, monkeypatch, store):
@@ -2144,8 +2191,9 @@ def test_nothing_to_save_greys_the_button_with_its_reason(tmp_path, monkeypatch,
 
 
 def test_a_plans_name_is_judged_as_it_is_typed(tmp_path, monkeypatch, store):
-    """The name is letters, digits, _ and -, at most 40 of them, judged as it is typed: a name that breaks the rule says
-    why under the line and greys "Save"; one that keeps it can be saved."""
+    """The name is the letters a to z in either case, digits, _ and -, at most 40 of them, judged as it is typed: a name
+    that breaks the rule, a letter beyond a to z among them, says why under the line and greys "Save"; one that keeps it
+    can be saved."""
     from tests._dialogs import answer_in_turn
     window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch)
     screen.posterior_panel.form.rows["num_runs"].set_value(7000)
@@ -2153,15 +2201,15 @@ def test_a_plans_name_is_judged_as_it_is_typed(tmp_path, monkeypatch, store):
     judged = []
 
     def typed(dialog) -> None:
-        for name in ("retrain v2", "a" * 41, "retrain/2", "x" * 40, "retrain-2_b"):
+        for name in ("retrain v2", "a" * 41, "retrain/2", "réglage", "x" * 40, "Retrain-2_b"):
             dialog.field.setText(name)
             judged.append((name, dialog.wrong, dialog.other_button.isEnabled()))
 
     answer_in_turn(monkeypatch, typed)
     page.save_button.click()
-    rule = "A plan's name is letters, digits, _ and -, at most 40 characters."
+    rule = "A plan's name is the letters a to z in either case, digits, _ and -, at most 40 characters."
     assert judged == [("retrain v2", rule, False), ("a" * 41, rule, False), ("retrain/2", rule, False),
-                      ("x" * 40, "", True), ("retrain-2_b", "", True)]
+                      ("réglage", rule, False), ("x" * 40, "", True), ("Retrain-2_b", "", True)]
     assert not folder.exists()
 
 

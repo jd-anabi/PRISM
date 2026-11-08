@@ -54,7 +54,7 @@ HEADING_OF = {"model": "Model and options", "prior": "Prior", "training": "Train
 FILLED = tuple(HEADING_OF.values())
 #: A plan's name: what the file's name may be when the window saves one.
 NAME_RULE = re.compile(r"[A-Za-z0-9_-]{1,40}")
-NAME_TEXT = "A plan's name is letters, digits, _ and -, at most 40 characters."
+NAME_TEXT = "A plan's name is the letters a to z in either case, digits, _ and -, at most 40 characters."
 NOT_IN_FOLDER_TEXT = "The bounds file {} is not in this model's bounds folder."
 OTHER_CASE_TEXT = ("The bounds file {} is not in this model's bounds folder; {} is. A plan names its file with the "
                    "same capitals.")
@@ -411,11 +411,13 @@ def fill_forms(screen, values: dict, source: PlanSource, keep_remembered: bool =
     return True
 
 
-def would_replace(screen, values: dict, *, steps=None, keep_remembered: bool = False) -> tuple[str, ...]:
+def would_replace(screen, values: dict, *, steps=None, keep_remembered: bool = False,
+                  source_kept: bool = True) -> tuple[str, ...]:
     """What a fill with ``values`` would change that a person typed or that was put back: each row of steps 1 to 3 (of
     ``steps`` alone, when named) whose value is neither its usual one nor the source's in use, and that the fill would
     set to another, as "Batches: 9,500 becomes 10,000", in the steps' order; with ``keep_remembered``, a value put back
-    from last time and not touched since is kept by the fill, so it is not counted."""
+    from last time and not touched since is kept by the fill, so it is not counted. With ``source_kept`` False, a value
+    the source in use filled is counted as a person's choice too: the fill sets it whatever that source holds."""
     source, changed = screen.plan_source, []
     for page in screen.step_pages():
         if steps is not None and page.step not in steps:
@@ -428,7 +430,7 @@ def would_replace(screen, values: dict, *, steps=None, keep_remembered: bool = F
                     continue
                 new = row.usual()
             now = row.value()
-            held = plan_value(source, heading, name)
+            held = plan_value(source, heading, name) if source_kept else None
             if same(now, new) or same(now, row.usual()) or (held is not None and same(now, held)):
                 continue
             if keep_remembered and getattr(row, "kept", False):

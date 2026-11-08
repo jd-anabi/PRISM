@@ -8815,6 +8815,62 @@ def test_a_list_gives_its_longest_item_the_room_it_is_drawn_in(factor, monkeypat
             _gone(choice)
 
 
+def test_a_lists_widest_item_is_measured_once_until_its_items_its_hint_or_its_font_change(monkeypatch):
+    """A list as wide as its longest item measures its items once, not at every pass of a layout: a list of five hundred
+    records took a fortieth of a second a pass on the real screen. Other words for an item, an item taken away or
+    added, another hint and another text size measure it again, and its width follows each."""
+    from core.gui.widgets.choice import Choice
+    QApplication.instance() or QApplication([])
+    measured, measure = [], Choice._advance
+    monkeypatch.setattr(Choice, "_advance", lambda self, text: measured.append(text) or measure(self, text))
+    hint = "Choose one of the plans of this model: a hint longer than any plan"
+    with _the_look(False):
+        choice = Choice()
+        choice.setFont(fonts.inter("body"))
+        choice.addItems(["No plan", "retrain"])
+        choice.ensurePolished()
+        widths = [choice.sizeHint().width()]
+        measured.clear()
+        choice.sizeHint()
+        choice.minimumSizeHint()
+        assert measured == [], ("measured again with nothing changed", measured)
+        for change in (lambda: choice.setItemText(1, "retrain with a much longer name than any before it"),
+                       lambda: choice.removeItem(1),
+                       lambda: choice.addItem("retrain with the longest name of every plan in this list, by far"),
+                       lambda: choice.setPlaceholderText(hint)):
+            measured.clear()
+            change()
+            widths.append(choice.sizeHint().width())
+            assert measured and widths[-1] != widths[-2], (widths, measured)
+        with text_size(1.5):
+            choice.setFont(fonts.inter("body"))
+            assert choice.sizeHint().width() > widths[-1], (choice.sizeHint().width(), widths)
+        _gone(choice)
+
+
+def test_a_lists_room_for_the_item_chosen_is_that_of_the_words_it_draws():
+    """A list may speak of its items by other names than the words it shows, as the list of models gives a model's
+    engine name: the room the item chosen needs to stand whole is that of the words drawn."""
+    from core.gui.widgets.choice import Choice
+
+    class Spoken(Choice):
+        def currentText(self):
+            return str(self.currentData())
+
+    QApplication.instance() or QApplication([])
+    with _the_look(False):
+        choice = Spoken()
+        for words, name in (("Nadrowski", "NADROWSKI_WITH_A_LONG_ENGINE_NAME"), ("Hopf", "HOPF_ENGINE")):
+            choice.addItem(words, name)
+        choice.ensurePolished()
+        for index in (0, 1):
+            choice.setCurrentIndex(index)
+            drawn, spoken = choice._advance(choice.itemText(index)), choice._advance(choice.currentText())
+            assert drawn != spoken
+            assert choice.shown_width() == choice._chrome()[1] + drawn, (index, choice.shown_width(), drawn, spoken)
+        _gone(choice)
+
+
 @pytest.mark.parametrize("dark", [False, True])
 @pytest.mark.parametrize("factor", [1.0, 1.5])
 def test_a_lists_hint_is_drawn_in_the_hint_colour_where_its_item_would_stand(dark, factor):
@@ -8864,3 +8920,37 @@ def test_a_lists_hint_is_drawn_in_the_hint_colour_where_its_item_would_stand(dar
                 assert place == item_place, (dark, factor, most, enabled, place, item_place)
                 holder.hide()
                 _gone(holder)
+        # Held narrower than its hint, a list draws its hint cut short in its middle, as an item is, in the hint colour:
+        # pixel for pixel the hint those words make in a list wide enough for them.
+        holder = QWidget()
+        box = QVBoxLayout(holder)
+        held, whole = Choice(), Choice()
+        for one in (held, whole):
+            one.setFont(fonts.inter("body"))             # the lettering's own letters, each its own width
+            box.addWidget(one, 0, Qt.AlignLeft)
+        held.setPlaceholderText(words)
+        holder.setAttribute(Qt.WA_DontShowOnScreen)
+        holder.resize(design.scaled(400), design.scaled(120))
+        holder.show()
+        app.processEvents()
+        held.hold_to(held.shown_width() - design.scaled(40))
+        app.processEvents()
+        cut = held.shown_text()
+        assert cut != words and "…" in cut, cut
+        whole.setPlaceholderText(cut)
+        whole.updateGeometry()
+        app.processEvents()
+        assert whole.shown_text() == cut, (cut, whole.shown_text())
+
+        def drawn(choice, right):
+            image, edge = choice.grab().toImage(), design.scaled(3)
+            return {(x, y): QColor(image.pixel(x, y)).name().upper() for y in range(edge, image.height() - edge)
+                    for x in range(edge, right) if QColor(image.pixel(x, y)).name().upper() != field.upper()}
+
+        chevron = design.scaled(design.SIZE["combo_pad"][1]) + design.scaled(design.SIZE["marker"]) + 2
+        right = min(held.width(), whole.width()) - chevron
+        seen = drawn(held, right)
+        assert design.hex_colour("ink_3").upper() in set(seen.values()), (dark, factor, sorted(set(seen.values()))[:6])
+        assert seen == drawn(whole, right), (dark, factor, "the hint held short is not drawn cut short in its middle")
+        holder.hide()
+        _gone(holder)

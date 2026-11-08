@@ -6624,3 +6624,25 @@ def test_the_ring_on_a_runs_failure_message_stands_clear_of_its_words(dark, fact
                     and max(y for _, y in inked) < image.height() - room + 1), (
                 "the words stand where the ring is drawn", min(x for x, _ in inked), min(y for _, y in inked))
             _gone(block)
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_a_selectable_block_asks_the_height_of_its_words_and_their_room(factor):
+    """A selectable block of lines asks as much width as its widest line with the ring's room at both sides, and so,
+    for its least height, the height of its words at that width with the room above and below: a command that stands
+    on one line asks one line, not two."""
+    from core.gui import design, fonts
+    from core.gui.run.view import SelectableLines
+    from tests._fixtures import qt_app
+    from tests._look_helpers import _gone, text_size
+    qt_app()
+    with text_size(factor):
+        block = SelectableLines()
+        block.setFont(fonts.fixed())
+        block.setText("python -m core tsnpe --resume-fit 20261003T030211 --device cpu")
+        margins = block.contentsMargins()
+        one = block.heightForWidth(design.scaled(4000))
+        assert one < 2 * block.fontMetrics().lineSpacing() + margins.top() + margins.bottom(), one
+        assert (block.minimumSizeHint().height(), block.sizeHint().height()) == (one, one), (
+            block.minimumSizeHint().height(), one, block.sizeHint().width())
+        _gone(block)

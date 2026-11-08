@@ -260,6 +260,7 @@ class PriorPanel(StepPage):
         self._grid_from = None                   # the bounds file the limits typed by hand were loaded from
         self._lists_wait = False                 # the reading after the typing stops reads neither list
         self._pending = None                     # a plan's bounds file, waiting for step 1 to apply a model
+        self._pending_model = None               # the model on step 1's form that file was filled for
         self.switch_button = QPushButton()
         self.switch_button.clicked.connect(self._switch)
         self.head.add_action(self.switch_button)
@@ -422,10 +423,11 @@ class PriorPanel(StepPage):
         return {"bounds": built, **{key: fields_[key].value() for key in keys}}
 
     def _on_the_plans_folder(self) -> bool:
-        """Whether the list stands in the folder of the model on step 1's form, the model a plan's file that waits was
-        filled for: with nothing applied the list stands in Nadrowski's."""
+        """Whether the list stands in the folder of the model a plan's file that waits was filled for, else of the model
+        on step 1's form: with nothing applied the list stands in Nadrowski's."""
         shown = getattr(getattr(self._screen, "config_panel", None), "model_combo", None)
-        return shown is not None and Path(self.bounds_picker.base_path) == BOUNDS_PATH / shown.currentText().lower()
+        model = self._pending_model or (shown.currentText() if shown is not None else None)
+        return model is not None and Path(self.bounds_picker.base_path) == BOUNDS_PATH / model.lower()
 
     def bounds_built(self):
         """The bounds a build reads now: the limits typed by hand, the file the list selects by its name with forward
@@ -810,10 +812,11 @@ class PriorPanel(StepPage):
         """Step 1 applied: the list of bounds files points at the model's own folder, its selection kept where that
         folder holds it, else the file that came into use last for this model, which is said when it has gone; a plan's
         bounds file that waits, which waits only for the model it was filled for, is selected by its name in that folder
-        before either, and said in the plan's words when it is not there; the limits typed by hand follow."""
+        before either, and said in the plan's words when it is not there; for another model it is let go, unsaid; the
+        limits typed by hand follow."""
         model = getattr(draft, "model", None)
         folder = BOUNDS_PATH / str(model or "nadrowski").lower()
-        pending = self._pending
+        pending = self._pending if self._pending_model == model else None
         self._stop_waiting()
         key = self.bounds_picker.key() if Path(folder) == Path(self.bounds_picker.base_path) else ""
         if not key and self._bounds_pick[0] == model:
@@ -860,14 +863,18 @@ class PriorPanel(StepPage):
             self.gone_line.set_text("" if entry else PLAN_GONE_TEXT.format(name))
             self.gone_line.setVisible(not entry)
         else:
-            self.pending_bounds(name)
+            self.pending_bounds(name, shown.currentText() if shown is not None else None)
         self.form.rows["bounds"].kept = False
 
-    def pending_bounds(self, name: str) -> None:
-        """Hold a plan's bounds file, by its name with forward slashes, until step 1 applies the model on its form, the
-        model the plan was filled for: it is then selected in that model's folder. Said under the list while it waits;
-        a file chosen in the list, limits typed by hand, or step 1 applied with another model take its place."""
-        self._pending = name
+    def pending_bounds(self, name: str, model: "str | None" = None) -> None:
+        """Hold a plan's bounds file, by its name with forward slashes, until step 1 applies ``model``, the model on its
+        form the plan was filled for (that model when none is named): it is then selected in that model's folder, and
+        only then. Said under the list while it waits; a file chosen in the list, limits typed by hand, step 1 applied
+        with another model, or the plan in use gone or replaced by another model's take its place."""
+        if model is None:
+            shown = getattr(getattr(self._screen, "config_panel", None), "model_combo", None)
+            model = shown.currentText() if shown is not None else None
+        self._pending, self._pending_model = name, model
         self.waiting_line.set_text(WAITING_TEXT.format(name))
         self.waiting_line.setVisible(True)
         self.redraw()
@@ -876,14 +883,18 @@ class PriorPanel(StepPage):
         """The plan's bounds file that waits for step 1 to apply its model, by its name; None while none waits."""
         return self._pending
 
+    def waiting_model(self) -> "str | None":
+        """The model the plan's bounds file that waits was filled for; None while none waits."""
+        return self._pending_model if self._pending is not None else None
+
     def let_the_plans_file_go(self) -> None:
-        """Step 1 applied with another model than the plan's lets the plan in use go, and its bounds file with it: that
-        model has its own file."""
+        """The plan in use let go, or replaced by another model's: its bounds file that waits goes with it, for the
+        model applied next has its own file."""
         self._stop_waiting()
 
     def _stop_waiting(self) -> None:
         """No plan's bounds file waits any longer."""
-        self._pending = None
+        self._pending, self._pending_model = None, None
         line = getattr(self, "waiting_line", None)
         if line is not None:
             line.setVisible(False)

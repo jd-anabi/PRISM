@@ -48,7 +48,8 @@ NAME_FREE_TEXT = "Fine. This name is free."
 #: name of the usual length, and the name's check on one line.
 BLOCK_LEAST = 360
 #: The window's words for a name the store refuses, in the order the store judges it.
-NAME_SHAPE_TEXT = "A name is letters, digits, _ . and -, starts with a letter or a digit, and is at most 64 characters."
+NAME_SHAPE_TEXT = ("A name is the letters a to z in either case, digits, _ . and -, starts with a letter or a digit, "
+                   "and is at most 64 characters.")
 NAME_ID_TEXT = ("A name cannot be shaped like a record's id: a date and a time, as 20261108T081500, or twelve of the "
                 "digits and the letters a to f.")
 NAME_TAKEN_BY_TEXT = "The name '{}' is taken by another {}. Choose another name."
@@ -785,7 +786,9 @@ class Form(QWidget):
         the main settings that has not the room for its longest item beside its label to the room it has, so that the
         main settings stand within ``width`` at the window's least size. Beside the block for this run, that room is
         what the block's least width leaves, so that a list's longest item never narrows the block: the block stands
-        beside only where every list shows the item chosen whole in that room, and under the main settings else."""
+        beside only where every list shows the item chosen whole in that room, and under the main settings else. It is
+        judged again, at the width last fitted to, whenever the main settings ask to be laid out again: another item
+        chosen in a list, other words beside a field, a row shown or hidden as a view changes."""
         self._width = width
         self._beside = self._room_beside(width)
         self._hold_the_lists()
@@ -811,6 +814,12 @@ class Form(QWidget):
             return None
         return room
 
+    def _judge(self) -> None:
+        """Beside or under, and the lists' room, worked out again at the width last fitted to; nothing before the first
+        fit."""
+        if self._width is not None:
+            self.fit(self._width)
+
     def _hold_the_lists(self) -> None:
         """Each list among the main settings held to the room its row leaves it at the width last fitted to, beside the
         block when it stands beside; let go where its longest item fits."""
@@ -824,7 +833,7 @@ class Form(QWidget):
     @reported(False)
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Type.LayoutRequest and watched is getattr(self, "_left", None):
-            self._hold_the_lists()
+            self._judge()
         return False
 
     def stops(self) -> list:

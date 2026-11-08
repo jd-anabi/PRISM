@@ -798,7 +798,7 @@ def test_every_block_the_pages_say_is_known_to_be_lifted_on_the_page_or_not():
             for name, value in vars(module).items() if name.endswith("BLOCKS") and isinstance(value, str)}
     said |= {form.NEEDS_A_NAME}
     assert set(step_facts.FINAL_BLOCKS) == set(FINAL)
-    assert said == set(FINAL) | set(YET), (sorted(said - set(FINAL) - set(YET)), sorted(set(FINAL) | set(YET) - said))
+    assert said == set(FINAL) | set(YET), (sorted(said - set(FINAL) - set(YET)), sorted((set(FINAL) | set(YET)) - said))
 
 
 @pytest.mark.parametrize("words", FINAL + YET)

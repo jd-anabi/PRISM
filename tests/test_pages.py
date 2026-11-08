@@ -748,6 +748,7 @@ def test_a_real_store_says_why_a_name_cannot_be_used(tmp_path):
     for kind in ("prior", "posterior"):
         names = build_part(NameAndNote, kind=kind, required=True, store=store)
         for typed, sentence in (("a b", NAME_SHAPE_TEXT), ("-a", NAME_SHAPE_TEXT), ("a" * 65, NAME_SHAPE_TEXT),
+                                ("Müller_1", NAME_SHAPE_TEXT), ("café", NAME_SHAPE_TEXT),
                                 ("20261001T222935", NAME_ID_TEXT), ("deadbeef0123", NAME_ID_TEXT),
                                 ("retrain_prior", "The name 'retrain_prior' is taken by another prior. Choose another "
                                                   "name." if kind == "prior" else None), ("a" * 64, None)):
@@ -756,8 +757,8 @@ def test_a_real_store_says_why_a_name_cannot_be_used(tmp_path):
             fact = names.name_fact()
             said = None if fact is None else (fact.sentence, fact.blocks)
             assert said == (None if sentence is None else (sentence, BLOCKS)), (kind, typed, said)
-    assert NAME_SHAPE_TEXT == ("A name is letters, digits, _ . and -, starts with a letter or a digit, and is at most "
-                               "64 characters.")
+    assert NAME_SHAPE_TEXT == ("A name is the letters a to z in either case, digits, _ . and -, starts with a letter "
+                               "or a digit, and is at most 64 characters.")
     assert NAME_ID_TEXT == ("A name cannot be shaped like a record's id: a date and a time, as 20261108T081500, or "
                             "twelve of the digits and the letters a to f.")
 
@@ -3262,9 +3263,10 @@ def test_the_block_for_a_training_holds_a_name_whole_beside_its_main_settings(fa
     """At the opening size, at the ordinary text size and at one and a half times it, the block for this run stands
     beside the Training step's main settings at no less than its least width, which holds a name of the usual length,
     in a field as wide as the Prior step's, and the name's check on one line; "Continue or start new" is held to the
-    room left beside the block and shows the item chosen whole, its longest whole in its tip. The Prior step's columns
-    stand at their shares, its list held to nothing. A little narrower, where the room beside the block would cut the
-    item chosen, the block stands under the main settings."""
+    room left beside the block and shows the item chosen whole. The Prior step's columns stand at their shares, its list
+    held to nothing. Where the room beside the block would cut the item chosen, the block stands under the main
+    settings, everything whole: at once when that item is chosen, and beside again as soon as one that fits is; a block
+    shown again, as the load view gives way to the setup, is judged at once too; and a little narrower, at any item."""
     from core.gui.widgets.form import BLOCK_LEAST, NAME_FREE_TEXT
     assert BLOCK_LEAST == 360
     with text_size(factor), _the_look(False):
@@ -3300,14 +3302,52 @@ def test_the_block_for_a_training_holds_a_name_whole_beside_its_main_settings(fa
         label = form.rows["name"].line.label
         assert label.text() == NAME_FREE_TEXT and label.height() < 2 * label.fontMetrics().lineSpacing(), label.height()
         assert choice.shown_text() == choice.currentText(), choice.shown_text()
-        longest = choice.findData("never")
-        choice.setCurrentIndex(longest)
-        assert choice.toolTip() == choice.currentText() or choice.shown_text() == choice.currentText()
-        choice.setCurrentIndex(0)
+        choice.setCurrentIndex(choice.findData("never"))             # the longest, with no resize after it
+        _settle()
+        assert (form.columns.stacked(), choice.shown_text()) == (True, choice.currentText()), (factor, "never")
+        assert body.minimumSizeHint().width() <= port.width(), (body.minimumSizeHint().width(), port.width())
+        for index in (choice.findData("require"), 0):                # each whole in the room beside the block
+            choice.setCurrentIndex(index)
+            _settle()
+            assert (form.columns.stacked(), choice.shown_text()) == (False, choice.currentText()), (factor, index)
+            assert form.side.width() >= design.scaled(BLOCK_LEAST), form.side.width()
+        training.show_view("load")                                   # fitted while the block is hidden
+        _settle()
+        window.resize(design.scaled(1310), design.scaled(820))
+        _settle()
+        training.show_view("training")
+        _settle()
+        assert not form.columns.stacked() and form.side.width() >= design.scaled(BLOCK_LEAST), (
+            "the block shown again stood under the main settings", form.side.width())
         window.resize(design.scaled(1215), design.scaled(820))
         _settle()
         assert form.columns.stacked() and choice.shown_text() == choice.currentText(), (
             form.columns.stacked(), choice.shown_text())
+
+
+def test_a_form_too_narrow_for_two_columns_holds_no_list_to_the_room_beside_its_block():
+    """A pixel narrower than the width from which a page sets two columns, the block for this run stands under the main
+    settings, however much room beside it there would be: a list whose item chosen would stand whole beside the block,
+    and whose longest item would not, is held to no room beside a block that is not there, and stands whole in the room
+    of one column."""
+    with _the_look(False):
+        form = _the_form()
+        listed = Choice()
+        listed.addItem("No plan")
+        form.add("plan", listed, label="Plan")
+        form.add("name", QLineEdit(), label="Name", side=True)
+        width = design.two_columns_from() - 1
+        least = max(form.side.minimumWidth(), form.side.minimumSizeHint().width())
+        taken = form._list_rows()[0][1]
+        beside = width - design.scaled(design.SIZE["col_gap"]) - least - taken
+        words = "a plan"
+        while listed._chrome()[1] + listed._advance(words) <= beside:
+            words += " with a long name"
+        listed.addItem(words)
+        assert listed.shown_width() <= beside < listed._whole_width() <= width - taken, (
+            listed.shown_width(), beside, listed._whole_width(), width - taken)
+        form.fit(width)
+        assert (form._beside, listed._room) == (None, None), (form._beside, listed._room)
 
 
 
@@ -3315,13 +3355,16 @@ def test_the_block_for_a_training_holds_a_name_whole_beside_its_main_settings(fa
 def test_every_list_of_the_three_steps_shows_its_item_whole_with_real_metrics(tmp_path):
     """Needs QT_QPA_PLATFORM=windows (the root conftest defaults to offscreen, where this is skipped). With the real
     platform's fonts and their metrics, at the opening size the window takes on the screen it stands on, at the ordinary
-    text size and at one and a half times it, every list of Model and options, Prior and Training that is not held to a
-    room shows the item it holds, or its hint, whole: "No plan" read "No…an" at one and a half times the ordinary text,
-    the toolkit measuring it a pixel narrower than it draws it. The window is laid out where no screen shows it and is
-    never shown or brought to the front: the window in front stays in front."""
+    text size and at one and a half times it, every list of Model and options, Prior and Training shows the item it
+    holds, or its hint, whole: "No plan" read "No…an" at one and a half times the ordinary text, the toolkit measuring
+    it a pixel narrower than it draws it. A list held to the room beside a block for a run is as wide as the item it
+    holds needs, and shows it whole there too. The window is laid out where no screen shows it and is never shown or
+    brought to the front: the window in front stays in front."""
     import ctypes
+    import math
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtGui import QFontMetricsF, QGuiApplication
+    from PySide6.QtWidgets import QStyle, QStyleOptionComboBox
     from core.gui import fonts
     app = QApplication.instance() or QApplication([])
     if QGuiApplication.platformName() != "windows":
@@ -3346,10 +3389,19 @@ def test_every_list_of_the_three_steps_shows_its_item_whole_with_real_metrics(tm
                 window.go_to("inference", step)
                 _settle()
                 for box in page.findChildren(Choice):
-                    if box.isVisibleTo(page) and box._room is None and box.width() >= box.sizeHint().width():
-                        shown = box.placeholderText() if box.currentIndex() < 0 else box.itemText(box.currentIndex())
-                        if shown and box.shown_text() != shown:
-                            cut.append((factor, step, shown, box.shown_text()))
+                    held = box._room is not None
+                    if not box.isVisibleTo(page) or not (held or box.width() >= box.sizeHint().width()):
+                        continue
+                    shown = box.placeholderText() if box.currentIndex() < 0 else box.itemText(box.currentIndex())
+                    option = QStyleOptionComboBox()
+                    box.initStyleOption(option)
+                    room = box.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
+                                                      QStyle.SubControl.SC_ComboBoxEditField, box).width()
+                    drawn = math.ceil(QFontMetricsF(box.font()).horizontalAdvance(shown))   # measured here, not by it
+                    if held and box.shown_width() > box.width():
+                        cut.append((factor, step, shown, "held narrower than the item", box.shown_width(), box.width()))
+                    elif shown and (box.shown_text() != shown or drawn > room):
+                        cut.append((factor, step, shown, box.shown_text(), drawn, room))
             window.hide()
             assert cut == [], cut
     assert user32.GetForegroundWindow() == front, "a window was brought to the front"

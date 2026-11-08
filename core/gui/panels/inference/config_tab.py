@@ -65,6 +65,7 @@ UNIT_SOURCES = (("From the model's units file", "file"), ("Typed here", "typed")
 #: Resume of a training kept with one does: that file, by its name.
 OWN_UNITS_ITEM = "From the file {}"
 OWN_UNITS = "own"
+OWN_UNITS_FROM = "{} from the file {}"
 FREQUENCY_RESPONSE_TEXT = ("Frequency response (χ(ω)): one spontaneous recording and several driven recordings, each at "
                            "one frequency.")
 BOUNDS_FILE_TEXT = ("Set by the bounds file: a spontaneous recording, and one driven recording when the file has a "
@@ -84,6 +85,11 @@ THE_UNITS_FILE = "the model's units file"
 TYPED_HERE = "typed here"
 FORCING_TEXT = "This model has external forcing, so parameter inference cannot use it."
 NO_PARAMETERS_TEXT = "This model has no free parameters to infer, so parameter inference cannot use it."
+#: Why the step cannot take a model a press names, which the form never shows: in words a sentence of the press
+#: carries, the model by its name.
+NOT_LISTED_WORDS = "the model {} is not among the models"
+FORCING_WORDS = "the model {} has external forcing, so parameter inference cannot use it"
+NO_PARAMETERS_WORDS = "the model {} has no free parameters to infer, so parameter inference cannot use it"
 #: Said while the model chosen is one of your own that parameter inference can take: the place is the window's own words.
 CALIBRATION_TEXT = ("The checks are not tuned for a model of your own: read their results in {}, before you rely on its "
                     "posterior.")
@@ -436,12 +442,23 @@ class ConfigPanel(StepPage):
             return FORCING_TEXT if registry.user_model_has_forcing(model) else NO_PARAMETERS_TEXT
         return ""
 
+    def cannot_take(self, model) -> str:
+        """Why ``apply_quietly`` would apply nothing for ``model`` before the model stands on the form, in words a
+        press's sentence carries: a model the list no longer holds, or one parameter inference cannot take; "" else,
+        where what the step reads says why itself."""
+        label = chain.model_label(model)
+        if not isinstance(model, str) or self.model_combo.findData(model) < 0:
+            return NOT_LISTED_WORDS.format(label)
+        if self._unusable(model):
+            return (FORCING_WORDS if registry.user_model_has_forcing(model) else NO_PARAMETERS_WORDS).format(label)
+        return ""
+
     # ── the rules ──
     def problems(self) -> dict:
         """Every rule of the page the form breaks now, by field key in the order a press reads them: the line under the
         field, built from its row's label, and what the press says, the same with the value it found and the usual one.
         The settings of the frequency response are read only while that kind is chosen, as the draft reads them; typed
-        units only while they are typed."""
+        units only while they are typed, and a units file of its own, as its units were read, while it is chosen."""
         rows, found = self.form.rows, {}
 
         def label(key) -> str:
@@ -488,6 +505,15 @@ class ConfigPanel(StepPage):
                     found["units"] = (f"{label('units')} typed here cannot be used: {refused.message}",) * 2
                 except Exception as error:           # noqa: BLE001 -- what a units library raises on a word it cannot read
                     found["units"] = (f"{label('units')} typed here cannot be used: {error}",) * 2
+        elif self.units_choice.currentData() == OWN_UNITS and self._own_units is not None:
+            # A units file of its own, whatever model it is applied with, is held to the rule of units typed here.
+            named = OWN_UNITS_FROM.format(label("units"), Path(self._own_units).name)
+            try:
+                cli.units_to_factors(tuple(self._file_units.get(str(self._own_units), ())))
+            except Refusal as refused:
+                found["units"] = (f"{named} cannot be used: {refused.message}",) * 2
+            except Exception as error:               # noqa: BLE001 -- a units library's own error on a word
+                found["units"] = (f"{named} cannot be used: {error}",) * 2
         return {key: found[key] for key in RULED if key in found}
 
     def _read(self) -> dict:
@@ -908,9 +934,12 @@ class ConfigPanel(StepPage):
         in_use = source.name if source is not None and source.kind == "plan" else None
         gone = in_use is not None and listed is None and _one_plan(self._gone, in_use)
         in_the_list = _listed_as([self.plan_choice.itemData(at) for at in range(1, self.plan_choice.count())], in_use)
-        # Nothing is said of a plan in use of another model than the one shown, which the list cannot show.
+        # Nothing is said of a plan in use of another model than the one shown, which the list cannot show; nor of the
+        # plan in use while its model, shown again, waits for its plans to be read, when the list stands on it again.
         other = in_use is not None and not self._plan_of_the_model_shown(source)
-        held, changed = self._in_use_words(source), listed != (in_the_list or in_use) and not gone and not other
+        coming = self._unlisted and self._plan_of_the_model_shown(source)
+        held = self._in_use_words(source)
+        changed = listed != (in_the_list or in_use) and not gone and not other and not coming
         row.set_line("warn" if changed else "", NOT_FILLED_TEXT.format(held) if changed else "")
         self.plan_in_use.set_text(IN_USE_TEXT.format(held))
         refused = isinstance(shown, engine_plans.PlanRefusal)
@@ -1033,10 +1062,13 @@ class ConfigPanel(StepPage):
 
     def _bounds_of_another_model(self) -> bool:
         """Whether step 2's list selects a file in another model's folder than the model shown: the list holds the files
-        of the model applied, or Nadrowski's while nothing is applied. A plan's file that waits is the shown model's."""
+        of the model applied, or Nadrowski's while nothing is applied. A plan's file that waits is the file of the model
+        it was filled for, which another model may stand on the form beside."""
         prior = getattr(self._screen, "prior_panel", None)
-        if prior is None or prior.waiting_file() is not None:
+        if prior is None:
             return False
+        if prior.waiting_file() is not None:
+            return prior.waiting_model() != self.model_combo.currentText()
         shown = BOUNDS_PATH / self.model_combo.currentText().lower()
         return bool(prior.bounds_picker.key()) and Path(prior.bounds_picker.base_path) != Path(shown)
 

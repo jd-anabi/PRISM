@@ -13,8 +13,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QPlainTextEdit,
-                               QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit,
+                               QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from .. import design, fonts
 from ..style import set_class
@@ -282,15 +282,32 @@ class Ask(QDialog):
         self.detail_link.setVisible(False)
 
 
+def _arrow_while_asked() -> bool:
+    """A question waits for a person, so the pointer over it is the arrow: a cursor in force, as the wait cursor while a
+    part is built or a press applies, gives way to the arrow until the question is answered. Whether one was."""
+    if QApplication.overrideCursor() is None:
+        return False
+    QApplication.setOverrideCursor(Qt.CursorShape.ArrowCursor)
+    return True
+
+
+def _cursor_back(arrow: bool) -> None:
+    """The cursor in force before the question, once it is answered."""
+    if arrow:
+        QApplication.restoreOverrideCursor()
+
+
 def ask(parent, title: str, sentence: str, safe: str, other: str | None = None, *, loses_work: bool = False,
         marker: str = "warn", items: Sequence[str] | None = None, beneath: str | None = None,
         detail: str | None = None) -> bool:
     """Ask, or with no other answer tell. True for the other answer, False for the safe one."""
     dialog = Ask(parent, title, sentence, safe, other, loses_work=loses_work, marker=marker, items=items,
                  beneath=beneath, detail=detail)
+    arrow = _arrow_while_asked()
     try:
         return dialog.exec() == QDialog.DialogCode.Accepted
     finally:
+        _cursor_back(arrow)
         dialog.deleteLater()
 
 
@@ -299,8 +316,10 @@ def ask_text(parent, title: str, sentence: str, label: str, other: str, *, text:
     """Ask for one line of text. The text for the other answer, None for "Cancel"."""
     dialog = Ask(parent, title, sentence, CANCEL, other, marker="info", items=items, beneath=beneath,
                  label=label, text=text, check=check)
+    arrow = _arrow_while_asked()
     try:
         dialog.exec()
         return dialog.answer_text
     finally:
+        _cursor_back(arrow)
         dialog.deleteLater()
