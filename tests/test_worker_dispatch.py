@@ -516,6 +516,29 @@ def test_the_guard_also_stands_on_the_older_spelling_of_the_blocking_call():
         "an opening through exec_ was not recorded")
 
 
+def test_an_opening_is_recorded_opens_nothing_and_fails_the_check(request, tmp_path):
+    """An "Open" button hands a file or a folder to the computer, which would open a window on the screen. The session
+    guard (tests/conftest.py::_no_folders_opened) stands in for the one way the window opens anything: it keeps what
+    would have been opened, opens nothing, and answers as an opening that succeeded. What fails a test is the per-test
+    check on what nobody read, run at teardown."""
+    import pytest
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+    from tests._dialogs import OPENED, check_openings_read, opened
+    from tests._fixtures import qt_app
+    qt_app()
+    assert {"_no_folders_opened", "_every_opening_is_read"} <= set(request.fixturenames), \
+        "both guards must be in force for every test without being asked for"   # BEFORE any opening
+    assert OPENED == [], "OPENED must be empty at the start of every test"
+    folder = QUrl.fromLocalFile(str(tmp_path))
+    assert QDesktopServices.openUrl(folder) is True
+    assert QDesktopServices.openUrl(QUrl("https://example.org/a")) is True
+    with pytest.raises(AssertionError, match="open what it never read"):
+        check_openings_read()
+    assert opened() == [folder.toLocalFile(), "https://example.org/a"] and OPENED == []
+    check_openings_read()
+
+
 def test_an_unanswered_file_chooser_is_recorded_returns_cancelled_and_fails_the_check(request):
     """A file chooser is the second thing that stalls an offscreen run: QFileDialog's statics spin a
     nested event loop of their own, and a patched ``exec`` does not reach them. The session guard

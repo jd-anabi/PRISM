@@ -18,12 +18,14 @@ wants are the ones the operator would have seen at that moment. A record is word
 tuples of strings and a bool; never the box, a button, an exception or a traceback -- so keeping one
 keeps nothing of a failed run alive. ``CHOOSER_CALLS`` holds one ``ChooserCall`` per file chooser the
 code under test opened. ``NATIVE_BOXES`` holds the words of each plain Windows message the entry point
-asked for, which ``native_box`` keeps in its place.
+asked for, which ``native_box`` keeps in its place. ``OPENED`` holds each file or folder the code under test
+handed to the computer to open, which ``opener`` keeps in its place, opening nothing.
 
 No name here is ever bound a second time: ``forget_asked()`` empties the two lists in place. A
 test reads a box or a question through ``asked()`` and ``all_asked()``, starts over with
 ``forget_asked()``, answers with ``choose()``, leaves one open a while with ``hold_open()`` and holds Enter down
-into one with ``held_enter()``; it reads the plain Windows messages it caused with ``native_boxes()``.
+into one with ``held_enter()``; it reads the plain Windows messages it caused with ``native_boxes()``, and what it
+asked the computer to open with ``opened()``.
 """
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -52,6 +54,33 @@ def check_native_boxes_read() -> None:
     """Fail when a plain Windows message was asked for and its test never read it."""
     if NATIVE_BOXES:
         raise AssertionError(f"the test asked for a plain Windows message it never read: {NATIVE_BOXES}")
+
+
+# Every file or folder handed to the computer to open, in order, as a local path (or the address, for one that is no
+# file), opened by nobody: tests/conftest.py::_no_folders_opened puts opener in place of QDesktopServices.openUrl for
+# the session, and _every_opening_is_read empties the list around each test and fails a test that left one unread.
+OPENED: list[str] = []
+
+
+def opener(url) -> bool:
+    """``QDesktopServices.openUrl`` as the suites have it: what would have been opened kept, nothing opened, and the
+    answer an opening that succeeded gives."""
+    OPENED.append(url.toLocalFile() or url.toString())
+    return True
+
+
+def opened() -> list[str]:
+    """Every file or folder handed to the computer to open since the last reading, in order; read, they are
+    forgotten."""
+    said = list(OPENED)
+    OPENED.clear()
+    return said
+
+
+def check_openings_read() -> None:
+    """Fail when a file or a folder was handed to the computer to open and its test never read it."""
+    if OPENED:
+        raise AssertionError(f"the test had the computer open what it never read: {OPENED}")
 
 # Every QMessageBox or shared question the code under test opened, in order: the dialogs themselves,
 # shown to nobody. tests/conftest.py::_no_modal_dialogs replaces the exec of each of the two classes

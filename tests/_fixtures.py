@@ -41,9 +41,10 @@ from core.artifacts import manifest as mf
 # The dialog record, the chooser record and their helpers live in tests/_dialogs.py, whose import
 # loads neither torch nor the program. Re-exported so a suite keeps one import line; the lists are
 # the SAME objects.
-from tests._dialogs import (CHOOSER_CALLS, NATIVE_BOXES, SHOWN, Asked, ChooserCall, all_asked,  # noqa: F401
-                            answer_chooser, asked, check_choosers_answered, check_native_boxes_read, choose,
-                            chooser_guard, forget_asked, held_enter, hold_open, native_box, native_boxes, record)
+from tests._dialogs import (CHOOSER_CALLS, NATIVE_BOXES, OPENED, SHOWN, Asked, ChooserCall, all_asked,  # noqa: F401
+                            answer_chooser, asked, check_choosers_answered, check_native_boxes_read,
+                            check_openings_read, choose, chooser_guard, forget_asked, held_enter, hold_open, native_box,
+                            native_boxes, opened, opener, record)
 # The record of what the builders below made, which tests/conftest.py lets go at each test's end. Reached
 # through its module, never re-exported: a container of widgets here is what the builders' own test refuses.
 from tests import _built

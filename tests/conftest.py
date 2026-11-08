@@ -359,6 +359,34 @@ def _every_native_box_is_read():
         NATIVE_BOXES.clear()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_folders_opened():
+    """An "Open" button hands a file or a folder to the computer, which opens it in Explorer or in the program set for
+    it: one pressed in a test would open a window on the screen, whatever the test is marked for. For the whole session
+    ``QDesktopServices.openUrl``, the one way the window opens anything, is tests/_dialogs.opener, which keeps what
+    would have been opened in OPENED and opens nothing; a test's own stand-in layered with monkeypatch wins while
+    installed, and its undo puts this one back."""
+    from PySide6.QtGui import QDesktopServices
+    from tests._dialogs import opener
+    mp = pytest.MonkeyPatch()
+    mp.setattr(QDesktopServices, "openUrl", staticmethod(opener))
+    yield
+    mp.undo()
+
+
+@pytest.fixture(autouse=True)
+def _every_opening_is_read():
+    """OPENED holds this test's openings only, and one the test did not read -- with tests/_dialogs.opened() -- FAILS
+    it here, at teardown: a file or a folder opened where none was expected."""
+    from tests._dialogs import OPENED, check_openings_read
+    OPENED.clear()
+    yield
+    try:
+        check_openings_read()
+    finally:
+        OPENED.clear()
+
+
 @pytest.fixture(autouse=True)
 def _streams_put_back():
     """A test that binds the standard streams to a window's log, as the entry point does when PRISM starts with no
