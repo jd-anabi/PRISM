@@ -831,11 +831,12 @@ def test_home_names_the_newest_offer_above_what_was_in_use_last_time():
                                                                        "what the resume says", "Resume", "inference",
                                                                        "training", "resume")),
             (_offer("round", kept="k", command="python -m core tsnpe --resume-fit k"),
-             ("Next: resume the narrowing round", "what the round sayspython -m core tsnpe --resume-fit k",
-              "Open Training", "inference", "training", None))):
+             ("Next: resume the narrowing round", "what the round says", "Open Training", "inference", "training",
+              None))):
         found = chain.next_step(session, states, picks=last, offers=(offer,))
         assert (found.heading, found.sentence, found.button, found.part, found.page, found.action) == want, offer.kind
         assert found.offer is offer and found.link is None
+        assert found.command == ("python -m core tsnpe --resume-fit k" if offer.kind == "round" else ""), offer.kind
     unnamed = _offer("resume", kept="k", epoch=41, label="Unnamed unfinished training, 3 Oct 2026, 01:00", named=False)
     assert chain.next_step(session, states, picks=last, offers=(unnamed,)).heading == (
         "Next: resume the unnamed unfinished training, 3 Oct 2026, 01:00"), "an unnamed one's heading is no sentence"

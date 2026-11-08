@@ -48,19 +48,28 @@ CONTINUE_OTHER = "Continue and start a new session"
 FIT_AGAIN_OTHER = "Fit again and start a new session"
 RESUME_TITLE = "Resume this training?"
 RESUME_OTHER = "Resume and start a new session"
+RESUME_WORDS = "Resume"
+CONTINUE_WITH_WORDS = "Continue with these"
+#: The question "Continue with these" asks when it would set what was chosen on the forms and not applied.
+CONTINUE_WITH_TITLE = "Continue with these?"
+CONTINUE_WITH_TEXT = ("This applies and loads what was in use last time. It sets these, which were chosen on the forms "
+                      "and not applied:")
+KEEP_WHAT_IS_THERE = "Keep what is there"
+REPLACED_TEXT = "{}: {} becomes {}"
+NO_PLAN_WORDS = "No plan"
+#: Said under the heading of the page a press opened, when its chain of loads stopped before its end.
+CHAIN_STOPPED_TEXT = "{} stopped at {}: {} was not {}. {} says why."
+#: Said where "Continue from batch N" was pressed, when what it would load is gone: nothing is let go.
+CONTINUE_CANNOT_TEXT = "{} cannot start: {}."
+CONTINUE_PRIOR_GONE = "the prior it was trained with is no longer in Records"
+CONTINUE_BOUNDS_GONE = "the bounds file {} is no longer there"
 
 
 def _name_trouble(store, typed: str) -> "str | None":
-    """Why the store would refuse ``typed`` as a posterior's name, in its own words; None when it is free, or when the
-    store cannot be read now (the training stage reads it again at its entry)."""
-    from core.refusals import Refusal
-    try:
-        store.assert_name_free("posterior", typed.strip())
-    except Refusal as refused:
-        return refused.message
-    except OSError:
-        return None
-    return None
+    """Why the store would refuse ``typed`` as a posterior's name, in the window's words; None when it is free, or when
+    the store cannot be read now (the training stage reads it again at its entry)."""
+    from ..widgets.form import name_trouble
+    return name_trouble("posterior", typed.strip(), store=store)
 
 
 class InferenceScreen(QWidget):
@@ -87,9 +96,16 @@ class InferenceScreen(QWidget):
         # The folder of the plans, one folder for each model under it; a test hands its own.
         self.plans_folder = Path(plans) if plans is not None else Path(window_plans.PLAN_FOLDER)
         self.plan_source = None                  # where the forms were last filled from: a plan, a record or a run
+        self.plan_model = None                   # the model on step 1's form as the forms were filled from it
         self.plan_file = window_plans.UNREAD     # the plan file in use as the last reading found it: its hash, or None
         self._plan_hashes: dict = {}             # each plan file's hash, kept until the file is written again
         self.loads = None                        # the last chain of loads started, going or ended
+        # A sentence said under the heading of one place, "home" or a step's key, until the next press or run: where a
+        # chain of loads stopped, or why a press could not start one.
+        self._notice = ("", "")
+        # The configuration a Resume put in use, with the device and the width it runs on: (the configuration, the kind
+        # of device, the kept training's width or None), until step 1 or step 2 is applied again.
+        self._resumed = None
         # What the run history and the kept trainings offer, as last read: none before the first reading, and the last
         # kept while a run is live.
         self._offers: tuple = ()
@@ -114,6 +130,7 @@ class InferenceScreen(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.pages, 1)
 
+        controller().status_changed.connect(self._status_changed)
         self.refresh_gates()
 
     def panels(self):
@@ -200,8 +217,13 @@ class InferenceScreen(QWidget):
         draft that is not the window's own, is not written.
         """
         self.session = SbiSession(draft=draft)
-        self.prior_panel.on_draft_set(draft)
         model, kind = getattr(draft, "model", None), getattr(draft, "chi_mode", None)
+        if self.plan_source is not None and model != self.plan_model:
+            # Applied with another model than the one the forms were filled for: the plan in use goes, and a plan's
+            # bounds file that waits goes with it. A model only shown on the form lets nothing go.
+            self.plan_source, self.plan_model, self.plan_file = None, None, window_plans.UNREAD
+            self.prior_panel.let_the_plans_file_go()
+        self.prior_panel.on_draft_set(draft)
         picks = [(key, value) for key, value, fits in ((remembered.MODEL_KEY, model, isinstance(model, str)),
                                                        (remembered.KIND_KEY, kind, isinstance(kind, bool))) if fits]
         picks += self.last_used(model)
@@ -253,6 +275,38 @@ class InferenceScreen(QWidget):
         remembered.put_many(picks + self.last_used(getattr(getattr(session, "draft", None), "model", None)))
         self.refresh_gates()
 
+    # ── a sentence a press leaves ──
+    def notice_on(self, where: str) -> str:
+        """The sentence said under the heading of ``where`` ("home", or a step's key): where the last chain of loads
+        stopped, or why a press could not start one; "" for none."""
+        return self._notice[1] if self._notice[0] == where else ""
+
+    def set_notice(self, where: str, sentence: str) -> None:
+        """Say ``sentence`` under the heading of ``where`` until the next press or run; the steps and Home drawn
+        again."""
+        self._notice = (where, sentence)
+        self.refresh_gates()
+
+    def clear_notice(self) -> None:
+        """The next press or run: the sentence goes."""
+        if self._notice[1]:
+            self._notice = ("", "")
+            self.refresh_gates()
+
+    def _status_changed(self, status) -> None:
+        """A run has begun: the sentence a press left goes."""
+        if getattr(status, "live", False):
+            self.clear_notice()
+
+    def resumed_on(self) -> "tuple[str, int | None] | None":
+        """The kind of device ("cpu", "cuda") a Resume put the session on, and the kept training's width when it is
+        its own, while the configuration that Resume put in use is held: until step 1 or step 2 is applied again. None
+        else."""
+        held = self._resumed
+        if held is None or held[0] is not getattr(self.session, "cfg", None):
+            return None
+        return held[1], held[2]
+
     # ── what a reopened window offers ──
     def offers(self) -> tuple:
         """What the run history and the kept trainings offer, newest first, as last read (``read_offers``)."""
@@ -284,14 +338,34 @@ class InferenceScreen(QWidget):
         from ..widgets.ask import ask
         return ask(self, title, CONTINUE_LETS_GO_TEXT.format(", ".join(held)), KEEP_SESSION, other)
 
-    def continue_from(self, offer) -> "LoadChain | None":
+    def _continue_problems(self, model: str, bounds: str, prior) -> list:
+        """What a Continue's chain would find gone, each in a few words: the run's prior, no longer in Records, and its
+        bounds file, no longer in the model's bounds folder (or where its path names it). Read with no run live."""
+        from core.artifacts import default_store
+        from ..panels.inference.prior_tab import BOUNDS_PATH
+        found = []
+        try:
+            if not isinstance(prior, str) or not prior:
+                raise LookupError(prior)
+            default_store().get("prior", prior)
+        except Exception:                    # noqa: BLE001 -- deleted, torn, or never named
+            found.append(CONTINUE_PRIOR_GONE)
+        path = Path(bounds) if Path(bounds).is_absolute() else BOUNDS_PATH / model.lower() / bounds
+        if not path.is_file():
+            found.append(CONTINUE_BOUNDS_GONE.format(Path(bounds).name))
+        return found
+
+    def continue_from(self, offer, where: str = "home") -> "LoadChain | None":
         """"Continue from batch N", or "Fit again on the saved simulations", for the training of the run ``offer`` names,
         after a reopening: its history read again, asked first when the session holds a record, then step 1 applied with
         the model and the options the run was started with, the Training step's forms filled from its settings once the
         model stands, its bounds file selected and its prior loaded by step 2's own load, and, once the prior is loaded,
         the Training step set to continue: "Only continue", the name and the note blank with the earlier name as the
-        hint. The chain of loads is handed back; None when nothing started: a run live, a history gone or no longer
-        naming its settings, or the question answered "Keep this session"."""
+        hint. Its prior and its bounds file are read first: one gone is said under the heading of ``where``, the place
+        the press was made ("home", or "training" for a past view of the Training step), and nothing is let go. Once the
+        step is shown, its form is in sight, not the page of a run that is over. The chain of loads is handed back; None
+        when nothing started: a run live, a history gone or no longer naming its settings, its prior or its bounds file
+        gone, or the question answered "Keep this session"."""
         from ..run import history
         if controller().is_live() or offer is None or not offer.run:
             return None
@@ -301,6 +375,12 @@ class InferenceScreen(QWidget):
             return None
         model = settings_.get("model")
         if not isinstance(model, str) or not model:
+            return None
+        gone = self._continue_problems(model, settings_["bounds"], settings_.get("prior"))
+        if gone:
+            # Read before the question: what would stop the chain after the session was let go is said now, where the
+            # press was made, and nothing is let go.
+            self.set_notice(where, CONTINUE_CANNOT_TEXT.format(offer.button, "; and ".join(gone)))
             return None
         other = FIT_AGAIN_OTHER if offer.kind == "fit_again" else CONTINUE_OTHER
         if not self._lets_go(CONTINUE_TITLE.format(offer.button), other):
@@ -320,9 +400,11 @@ class InferenceScreen(QWidget):
         def fill() -> None:
             self.config_panel.fill_with(source)
 
-        loads = self.load_chain(model, options, settings_["bounds"], settings_.get("prior"), fill=fill)
+        loads = self.load_chain(model, options, settings_["bounds"], settings_.get("prior"), fill=fill,
+                                press=offer.button, where="training")
         loads.finished.connect(lambda: self.posterior_panel.continue_run(offer, settings_))
         self.navigate.emit("inference", "training")
+        self.posterior_panel.to_the_form()
         return loads
 
     def resume_kept(self, ident: str) -> "LoadChain | None":
@@ -331,7 +413,8 @@ class InferenceScreen(QWidget):
         has taken its name since ("Cancel" starts nothing); asked first when the session holds a record; then its model
         and options, its bounds file and its prior put in use from its record by a chain of loads, the prior loaded on
         the configuration its record rebuilds, and, once the prior is loaded, the training resumed on its own record.
-        The chain is handed back; None when nothing started."""
+        The step's form is in sight once it is shown, not the page of a run that is over. The chain is handed back; None
+        when nothing started."""
         from core import config as prism_config
         from core.artifacts import default_store
         from core.SBI import fit_state
@@ -343,6 +426,7 @@ class InferenceScreen(QWidget):
             kept = fit_state.kept_fit(store, ident)
         except Exception as error:           # noqa: BLE001 -- gone or torn since the list was read
             self.navigate.emit("inference", "training")
+            self.posterior_panel.to_the_form()
             self.posterior_panel.say_on_row(ident, str(getattr(error, "message", None) or error))
             return None
         problems = (continuing.as_sentence(kept.why_not),) if not kept.can_resume else resuming.resume_problems(
@@ -350,6 +434,7 @@ class InferenceScreen(QWidget):
         if problems:
             # Shown first: the step's reading as it comes into sight reads the list again, which says no sentence.
             self.navigate.emit("inference", "training")
+            self.posterior_panel.to_the_form()
             self.posterior_panel.say_on_row(ident, " ".join(problems))
             return None
         name = ""
@@ -370,15 +455,20 @@ class InferenceScreen(QWidget):
                    "chi_max_cycles": record.get("chi_max_cycles"), "reparam_rotate": record.get("reparam_rotate"),
                    "units_override": resuming.resume_draft(kept).units_override}
         cfg = resuming.resume_config(kept)
+        width = record.get("run_size")
+        own = isinstance(width, int) and not isinstance(width, bool) and width > 0
+        self._resumed = (cfg, getattr(getattr(getattr(cfg, "hw", None), "device", None), "type", None),
+                         width if own else None)
         loads = self.load_chain(record.get("model"), options, resuming.bounds_key(kept), kept.parents.get("prior"),
-                                candidate=cfg)
+                                candidate=cfg, press=RESUME_WORDS, where="training")
         loads.finished.connect(lambda: self.posterior_panel.resume(kept, name))
         self.navigate.emit("inference", "training")
+        self.posterior_panel.to_the_form()
         return loads
 
     # ── a chain of loads ──
     def load_chain(self, model, options, bounds_file, prior, posterior=None, observation=None, *, fill=None,
-                   candidate=None):
+                   candidate=None, press: str = "", where: str = ""):
         """Step 1 applied with ``model`` and ``options``, asking nothing (``ConfigPanel.apply_quietly``, which calls
         ``fill`` once the model stands on the form), ``bounds_file`` then selected in step 2's list when one is named,
         and the saved ``prior`` loaded by step 2's own "Load this prior", then, once it has returned its record, the saved
@@ -386,37 +476,71 @@ class InferenceScreen(QWidget):
         finish ends the chain, and what came before it stays. A step 1 that cannot be applied, or a chain asked for while
         another goes, starts nothing, and the chain stops at once. An observation's link is not built yet. ``candidate``
         is the configuration the prior is loaded with, when the caller holds one (a kept training's, rebuilt from its
-        record), else step 2 builds its own."""
+        record), else step 2 builds its own. With ``press``, the words of the button that asked for the chain, a chain
+        that stops before its end says so under the heading of ``where``, the place the press opened ("home", or a
+        step's key), naming the step it stopped at and what was not loaded, until the next press or run."""
         if observation is not None:
             raise ValueError("a chain of loads takes no observation yet")
         loads = LoadChain(self)
         going = self.loads is not None and self.loads.is_going()
         if not going:
             self.loads = loads
+            self.clear_notice()
+            if press:
+                loads.at = ("model", f"the model {chain.model_label(model)}", "applied")
+                loads.stopped.connect(lambda why: self._chain_stopped(loads, press, where, why))
         applied = not going and self.config_panel.apply_quietly(model, options, fill=fill)
         if applied and (bounds_file or candidate is not None):
             # A configuration handed in stands for bounds the list may not hold: the list then selects none.
             self.prior_panel.bounds_picker.restore_key(bounds_file or "")
         links = [] if applied else [lambda: False]
+
+        def at(step, kind, ref, call):
+            def link() -> bool:
+                loads.at = (step, self._record_named(kind, ref), "loaded")
+                return call()
+            return link
+
         if applied and prior:
-            links.append(lambda: self.prior_panel.load_record(prior, candidate=candidate))
+            links.append(at("prior", "prior", prior, lambda: self.prior_panel.load_record(prior, candidate=candidate)))
             if posterior:
-                links.append(lambda: self.posterior_panel.load_record(posterior))
+                links.append(at("training", "posterior", posterior,
+                                lambda: self.posterior_panel.load_record(posterior)))
         loads.start(links)
         return loads
 
+    def _record_named(self, kind: str, ref) -> str:
+        """A saved prior or posterior as a sentence names it, by its label in its step's list: "the prior
+        retrain_prior"; "the prior" alone when the list does not hold it."""
+        picker = self.prior_panel.prior_picker if kind == "prior" else self.posterior_panel.post_picker
+        found = picker.combo.findData(ref)
+        label = picker.combo.itemText(found) if found >= 0 else ""
+        return f"the {kind} {label}".rstrip() if label else f"the {kind}"
+
+    def _chain_stopped(self, loads, press: str, where: str, why: str) -> None:
+        """A chain of loads a press asked for stopped before its end: the step it stopped at, and what was not loaded,
+        said under the heading of the page the press opened. A chain stopped because the window closed says nothing."""
+        if why == "closed" or getattr(loads, "at", None) is None:
+            return
+        step, what, done = loads.at
+        name = keys.step(step).name
+        self.set_notice(where, CHAIN_STOPPED_TEXT.format(press, name, what, done, name))
+
     def continue_with(self, picks):
-        """What was in use last time, applied and loaded as one press of Home's "Continue with these" asks: the plan last
-        used, read and checked again now, filled into the forms once the model stands, keeping the values put back from
-        last time and asking nothing, the press being the person's own; step 1 applied with the model, the kind of
+        """What was in use last time, applied and loaded as one press of Home's "Continue with these" asks: the plan
+        last used, read and checked again now, filled into the forms once the model stands, keeping the values put back
+        from last time and asking nothing, the press being the person's own; step 1 applied with the model, the kind of
         observation remembered and the plan's other settings of that step, every other at its usual value; then the
-        bounds file selected and the prior and the posterior loaded, each by its own step. A plan gone, or with problems,
-        since Home read it is left out, and the rest goes on. The chain of loads is handed back. While a run is live it
-        reads nothing, neither the plan nor its folder, changes nothing, and hands back a chain that stops at once."""
+        bounds file selected and the prior and the posterior loaded, each by its own step. A plan gone, or with
+        problems, since Home read it is left out, and the rest goes on. The chain of loads is handed back. While a run
+        is live it reads nothing, neither the plan nor its folder, changes nothing, and hands back a chain that stops at
+        once. When it would set a choice made on the forms and not applied (step 1's model, kind, rotation, units or
+        plan shown, and each setting the plan fills on the other steps), it asks first, "Keep what is there"
+        preselected, as the plan's own fill does; kept, nothing is read further and None is handed back."""
         if controller().is_live():
             return self.load_chain(picks.model, {}, None, None)
         plan = remembered.last_plan(picks.model, picks.plan, plans_folder=self.plans_folder) if picks.plan else None
-        options, fill = {}, None
+        options, fill, source = {}, None, None
         if plan is not None:
             source = window_plans.source_of(plan, controller().now())
             options = {_DRAFT_NAMES.get(name, name): value for (heading, name), value in source.values.items()
@@ -428,13 +552,50 @@ class InferenceScreen(QWidget):
         options["chi_mode"] = picks.chi_mode is True
         if options.get("units_override") is not None:
             options["units_override"] = tuple(str(options["units_override"]).split())
-        return self.load_chain(picks.model, options, picks.bounds, picks.prior, picks.posterior, fill=fill)
+        replaced = self._continuing_replaces(picks.model, options, source)
+        if replaced:
+            from ..widgets.ask import ask
+            if not ask(self, CONTINUE_WITH_TITLE, CONTINUE_WITH_TEXT, KEEP_WHAT_IS_THERE, CONTINUE_WITH_WORDS,
+                       items=replaced):
+                return None
+        return self.load_chain(picks.model, options, picks.bounds, picks.prior, picks.posterior, fill=fill,
+                               press=CONTINUE_WITH_WORDS, where="home")
+
+    def _continuing_replaces(self, model, options: dict, source) -> tuple:
+        """What "Continue with these" would set that a person chose on the forms and did not apply, or that was put
+        back and is not what the press puts in use: the model on step 1's form, each of step 1's settings, the plan
+        shown in its list, and, with a plan, each setting of steps 2 and 3 the plan fills over what was typed, as
+        "Rotation: off becomes on". A value at its usual one, or put back from last time and kept by the press, is no
+        choice of a person's."""
+        page = self.config_panel
+        found = []
+        row, shown = page.form.rows["model"], page.model_combo.currentText()
+        if shown != model and not row.at_usual() and not row.kept:
+            found.append(REPLACED_TEXT.format(row.label_text(), chain.model_label(shown), chain.model_label(model)))
+        listed = page.plan_choice.currentData()
+        after = source.name if source is not None else (listed if shown == model else None)
+        if listed is not None and listed != after:
+            found.append(REPLACED_TEXT.format(page.form.rows["plan"].label_text(), listed, after or NO_PLAN_WORDS))
+        heading = window_plans.HEADING_OF["model"]
+        values = {(heading, name): value for name, value in (("chi_mode", options.get("chi_mode")),
+                                                             *((key, options.get(key)) for key in
+                                                               ("chi_n_freqs", "chi_k_pad", "chi_max_cycles",
+                                                                "reparam_rotate")))
+                  if value is not None}
+        units = options.get("units_override")
+        values[(heading, "units")] = " ".join(str(unit) for unit in units) if isinstance(units, (tuple, list)) else None
+        if source is not None:
+            values = {**source.values, **values}
+        found += window_plans.would_replace(self, values, steps=None if source is not None else ("model",),
+                                            keep_remembered=True)
+        return tuple(found)
 
     # ── the plan in use ──
     def take_plan(self, source) -> None:
         """The forms were filled from ``source``, or returned to their usual values (None): it is the plan in use, and
         every step is drawn again, its origins and its plan line with it. Nothing is applied and nothing is read."""
         self.plan_source = source
+        self.plan_model = None if source is None else self.config_panel.model_combo.currentText()
         self.plan_file = source.sha256 if source is not None and source.kind == "plan" else window_plans.UNREAD
         self.refresh_gates()
 

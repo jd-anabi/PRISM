@@ -43,6 +43,9 @@ class LoadChain(QObject):
         self._started = False
         self._said = False
         self.why: "str | None" = None
+        # What the link in hand puts in use, for a caller that says where a chain stopped: (the step's key, the words
+        # that name it, "applied" or "loaded"); None for a caller that says nothing.
+        self.at: "tuple[str, str, str] | None" = None
 
     def is_going(self) -> bool:
         """Whether a link's run is live or the next link waits for its turn."""

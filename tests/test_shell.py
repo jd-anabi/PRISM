@@ -25,6 +25,7 @@ from core.gui.widgets.page import Columns, PageHead, Sentence
 from core.gui.widgets.rule_table import StateCell, TextCell
 from tests._fixtures import (build_part, build_run_host, build_step_page, build_window,
                              card_and_programs as _card_and_programs, qt_app)
+from tests._dialogs import all_asked, asked, choose
 from tests._runs import (BUDGET as _BUDGET, ROTATED as _ROTATED, ROTATING as _ROTATING, RunText, StandIn, at as _at,
                          epoch_line as _epoch, running, start_run, training_spec as _training_spec, turn_until,
                          writing as _writing)
@@ -7957,7 +7958,9 @@ def test_the_remembered_kind_is_passed_and_every_other_option_is_usual_or_the_pl
     rows["reparam_rotate"].set_value(not config.REPARAM_ROTATE)
     first.units_choice.setCurrentIndex(first.units_choice.findData("typed"))
     first.units_text.setText("kHz ms nm pN")
+    choose(monkeypatch, words="Continue with these")
     _press_continue(window, home)
+    assert [one.title for one in all_asked()] == ["Continue with these?"], all_asked()
     draft = inference.session.draft
     assert (draft.chi_mode, draft.units_override) == (kind, None if plan is None else ("kHz", "ms", "nm", "pN"))
     if kind:
@@ -7991,7 +7994,9 @@ def test_the_plans_values_its_waiting_bounds_file_and_its_line_survive_the_press
     window, home = _home_of_last_time(tmp_path)
     inference = window.part("inference")
     inference.config_panel.model_combo.setCurrentText("HOPF")
+    choose(monkeypatch, words="Continue with these")
     _press_continue(window, home)
+    assert all_asked()[-1].items[0] == "Model: Hopf becomes Nadrowski", all_asked()[-1].items
     prior = inference.prior_panel
     assert inference.plan_source.name == "zz_last" and inference.session.draft.model == "NADROWSKI"
     assert inference.prior_panel.form.rows["num_iterations"].value() == 40
@@ -8276,11 +8281,11 @@ def test_a_link_that_does_not_start_leaves_home_on_its_step(why, store, tmp_path
 
 @pytest.mark.parametrize("plan", [None, _ZZ_LAST], ids=["no plan", "a plan"])
 def test_what_was_typed_before_the_press_is_what_the_press_sets(plan, store, tmp_path, monkeypatch):
-    """The press asks nothing, so what a person typed on the forms before it and did not apply is set as the press sets
-    it: on step 1 every setting is put back to its usual value, or the plan's; on steps 2 and 3, with a plan, every
-    setting the plan holds takes its value and every other, one the plan does not hold among them, its usual one, and
-    with none they stay as typed. A value put back from last time and not touched since is kept, with a plan or
-    without."""
+    """The press asks first, naming each value a person typed on the forms before it and did not apply that it would
+    set to another; answered, what was typed is set as the press sets it: on step 1 every setting is put back to its
+    usual value, or the plan's; on steps 2 and 3, with a plan, every setting the plan holds takes its value and every
+    other, one the plan does not hold among them, its usual one, and with none they stay as typed and are not named. A
+    value put back from last time and not touched since is kept, with a plan or without, and is not named."""
     from core.gui import remembered
     held = _a_launch_before(store, tmp_path, monkeypatch, plan=plan, **{remembered.NUM_RUNS_KEY: "6000"})
     _the_loads(monkeypatch, store, held)
@@ -8292,7 +8297,14 @@ def test_what_was_typed_before_the_press_is_what_the_press_sets(plan, store, tmp
     usual_sets = prior.form.rows["max_sets"].usual()
     prior.form.rows["max_sets"].set_value(usual_sets - 25000)
     training.form.rows["hidden_features"].set_value(128)
+    choose(monkeypatch, words="Continue with these")
     _press_continue(window, home)
+    named = all_asked()[-1].items
+    if plan is None:
+        assert named == ("Rotation: off becomes on",), named
+    else:                                               # the network width typed is its usual value: no choice
+        assert named == ("Sweep rounds: 45 becomes 40", f"Stable sets to collect: {usual_sets - 25000:,} becomes "
+                         f"{usual_sets:,}"), named
     typed = (inference.session.draft.reparam_rotate, prior.form.rows["num_iterations"].value(),
              prior.form.rows["max_sets"].value(), training.form.rows["hidden_features"].value(),
              training.form.rows["num_runs"].value())
@@ -9150,23 +9162,28 @@ def _put_back(case, store, tmp_path):
 
 def _on_the_steps(inference):
     """What steps 1 and 2 show after a Resume or a Continue: the model, the kind, the slots and the lock-in limit of the
-    frequency response, the rotation, the units' choice and the units typed, and the bounds file step 2's list
-    selects."""
+    frequency response, the rotation, the units' choice and the units typed, or the item of a units file of its own,
+    and the bounds file step 2's list selects."""
     step_one, rows = inference.config_panel, inference.config_panel.form.rows
     chi = step_one.kind_choice.currentData() is True
+    units = step_one.units_choice.currentData()
     return (step_one.model_combo.currentText(), step_one.kind_choice.currentData(),
             rows["chi_k_pad"].value() if chi else None, rows["chi_max_cycles"].value() if chi else None,
-            step_one.rot_choice.currentData(), step_one.units_choice.currentData(),
-            step_one.units_text.text() if step_one.units_choice.currentData() == "typed" else "",
-            inference.prior_panel.bounds_picker.key())
+            step_one.rot_choice.currentData(), units,
+            step_one.units_text.text() if units == "typed" else step_one.units_choice.currentText() if units == "own"
+            else "", inference.prior_panel.bounds_picker.key())
 
 
-def _as_made(cfg, model, listed, units_words):
+def _as_made(cfg, model, listed, units_words, units_file=None):
     """What steps 1 and 2 should show for a configuration ``cfg`` of ``model``: its options, the units typed for units
-    a record names as typed or as a file of its own (``units_words``), the model's file else, and ``listed``."""
+    a record names as typed (``units_words``), the units row's third choice for a units file of its own
+    (``units_file``), the model's file else, and ``listed``."""
+    from pathlib import Path
     chi = bool(cfg.chi_mode)
+    units = ("own", f"From the file {Path(units_file).name}") if units_file is not None else (
+        ("typed", units_words) if units_words else ("file", ""))
     return (model, chi, cfg.chi_k_pad if chi else None, cfg.chi_max_cycles if chi else None, bool(cfg.reparam_rotate),
-            "typed" if units_words else "file", units_words, listed)
+            *units, listed)
 
 
 @pytest.mark.parametrize("case", list(_PUT_BACK))
@@ -9179,9 +9196,10 @@ def test_resume_puts_the_records_settings_on_the_steps_and_loads_its_prior_on_it
     folder, which the configuration handed in stands for; no step reads as changed; the prior is loaded on the
     configuration its record rebuilds, on the processor at the width its set was made with, whose identity is the
     record's own; the stage is handed the kept training alone, and the Resume's history keeps the units as step 1 holds
-    them. Nothing stops between the question and the stage. Step 2, read after it, names the prior the Resume loaded
-    and what it was built on; the configuration the load was handed no longer stands for its bounds, so its own "Choose
-    a bounds file." stands where the list selects none; and it says nothing of a bounds file of limits no file holds."""
+    them. Step 1's "In use" names the processor and the width the session now runs on. Nothing stops between the
+    question and the stage. Step 2, read after it, names the prior the Resume loaded and what it was built on, has
+    nothing to apply and says no error where the list selects no file, and says nothing of a bounds file of limits no
+    file holds."""
     import torch
     from core import config
     from core.artifacts.identity import SimulationIdentity
@@ -9205,9 +9223,11 @@ def test_resume_puts_the_records_settings_on_the_steps_and_loads_its_prior_on_it
     inference.resume_kept(kept)
     _settle(app, inference, posterior_load)
     assert inference.loads.why == "" and posterior_load.calls[-1][1] == {"resume_fit": kept, "if_name_taken": "unnamed"}
-    typed = (" ".join(typed_units) if typed_units else
-             " ".join(file_manager.parse_units_file(str(units))) if units is not None else "")
-    assert _on_the_steps(inference) == _as_made(cfg, model, listed, typed), _on_the_steps(inference)
+    typed = " ".join(typed_units) if typed_units else ""
+    assert _on_the_steps(inference) == _as_made(cfg, model, listed, typed, units), _on_the_steps(inference)
+    assert inference.config_panel.in_use_words()[1].endswith(
+        "Runs on the processor as the resumed training was kept, 64 simulations at a time, until step 1 or step 2 is "
+        "applied again."), inference.config_panel.in_use_words()
     held_units = str(units) if units is not None else typed_units
     assert inference.session.draft.units_override == held_units, inference.session.draft.units_override
     assert controller().model.spec.settings["options"]["units_override"] == (
@@ -9226,7 +9246,8 @@ def test_resume_puts_the_records_settings_on_the_steps_and_loads_its_prior_on_it
     step_two = inference.prior_panel
     step_two.read_facts()
     said = [row.sentence.plain_text() for row in step_two.foot.facts.rows()]
-    assert ("Error. Choose a bounds file." in said) is (not listed), ("the Resume's configuration still stands", said)
+    assert "Error. Choose a bounds file." not in said and step_two.nothing_to_apply(), ("step 2 is not done", said)
+    assert step_two.foot.reason.text() == "Nothing to apply: these choices are in use.", step_two.foot.reason.text()
     built_on = listed or ("limits typed by hand" if case == "limits typed by hand" else cfg.sources["bounds"])
     assert step_two.in_use_words()[0] == f"prior_of_{model.lower()}", step_two.in_use_words()
     assert step_two.in_use_words()[1].startswith(f"Built on {built_on}, "), step_two.in_use_words()
@@ -9557,9 +9578,9 @@ def test_a_delete_the_store_refuses_and_a_kept_training_gone_since_the_list_are_
 
 def test_the_name_asked_at_resume_is_checked_as_the_store_checks_a_posteriors_name(store, tmp_path, monkeypatch):
     """The name a Resume asks for an unnamed kept training is checked as it is typed, by the store's own rule: one with
-    a space, one shaped like a record's id and one a posterior holds each keep the question open with the store's
-    reason under the line and its "Resume" greyed, so the question is left as "Cancel" leaves it: nothing starts and
-    the session is kept."""
+    a space, one shaped like a record's id and one a posterior holds each keep the question open with the reason in the
+    window's words under the line and its "Resume" greyed, so the question is left as "Cancel" leaves it: nothing
+    starts and the session is kept."""
     from tests._dialogs import answer_in_turn
     held = _a_launch_before(store, tmp_path, monkeypatch)
     prior_load, posterior_load = _the_loads(monkeypatch, store, held)
@@ -9568,9 +9589,9 @@ def test_the_name_asked_at_resume_is_checked_as_the_store_checks_a_posteriors_na
     inference = window.part("inference")
     inference.read_offers()
     before = inference.session
-    for typed, reason in (("retrain 9", "letters, digits, _ . - and at most 64 characters"),
-                          ("20261003T030211", "shaped like an artifact id"),
-                          ("zz_trained", "a posterior named 'zz_trained' already exists")):
+    from core.gui.widgets.form import NAME_ID_TEXT, NAME_SHAPE_TEXT
+    for typed, reason in (("retrain 9", NAME_SHAPE_TEXT), ("20261003T030211", NAME_ID_TEXT),
+                          ("zz_trained", "The name 'zz_trained' is taken by another posterior. Choose another name.")):
         seen = []
 
         def typed_in(dialog, typed=typed, seen=seen):
@@ -9580,7 +9601,7 @@ def test_the_name_asked_at_resume_is_checked_as_the_store_checks_a_posteriors_na
         answer_in_turn(monkeypatch, typed_in)                # the line typed, then left as "Cancel" leaves it
         assert inference.resume_kept(kept) is None, typed
         (wrong, enabled), = seen
-        assert (reason in wrong, enabled) == (True, False), (typed, wrong, enabled)
+        assert (wrong, enabled) == (reason, False), (typed, wrong, enabled)
         assert (prior_load.calls, posterior_load.calls, inference.session is before) == ([], [], True)
 
 
@@ -9619,7 +9640,7 @@ def test_home_takes_the_reopenings_path_once_the_pages_call_can_no_longer_start(
     assert inference.config_panel.apply_quietly("NADROWSKI", {"chi_mode": False})
     assert not controller().offered(run), "a call that can no longer start is offered as the page's"
     taken = []
-    monkeypatch.setattr(type(inference), "continue_from", lambda screen, offer: taken.append(offer.kind))
+    monkeypatch.setattr(type(inference), "continue_from", lambda screen, offer, where="home": taken.append(offer.kind))
     window.go_to("home")
     home.next_button.click()
     assert (taken, len(training.calls)) == (["continue"], 1)
@@ -9664,3 +9685,331 @@ def test_the_rail_keeps_a_kept_training_when_parameter_inference_opens_at_anothe
     assert window.shell.rail.row("training").accessibleName() == said
     window.go_to("inference", "model")
     assert window.shell.rail.row("training").accessibleName() == said
+
+
+# ── the exit's changes: Home's presses, the kept round's command, the load view's order ──
+def test_home_sets_a_kept_rounds_command_apart_in_the_fixed_face(store, tmp_path, monkeypatch):
+    """A kept narrowing round after a reopening: Home's sentence ends where the command begins, and the command stands
+    on lines of its own under it, in the fixed-width face, selectable and a stop of the Tab key, as the Training step's
+    list sets it; with no round to offer, no command stands."""
+    from core.gui import fonts
+    from core.gui.run.view import SelectableLines
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    window, home = _home_of_last_time(tmp_path)
+    assert not home.next_command.isVisibleTo(home) and home.next_command.text() == ""
+    window.close()
+    kept = _a_kept_training(store, held, name="round_1", region={"lo": [0.0]})
+    window, home = _home_of_last_time(tmp_path)
+    command, sentence = home.next_command, home._next_sentence.plain_text()
+    assert home.next_heading.label.text() == "Next: resume the narrowing round"
+    assert sentence.endswith("It is resumed from the command line until its page offers it:"), sentence
+    assert "python -m core" not in sentence, "the command stands inside the sentence"
+    assert command.text().startswith(f"python -m core tsnpe --resume-fit {kept} ") and command.isVisibleTo(home)
+    assert (isinstance(command, SelectableLines), command.font().family(), bool(command.focusPolicy() & Qt.TabFocus)) \
+        == (True, fonts.fixed().family(), True)
+    layout = home._next_block.layout()
+    assert layout.indexOf(command) == layout.indexOf(home._next_sentence) + 1, "the command is not under the sentence"
+
+
+def test_the_load_view_lists_the_saved_posteriors_before_the_kept_trainings(store, tmp_path, monkeypatch):
+    """The kept trainings stand under what the step holds while a training is set up, beside the choice to start one;
+    in the load view, which is for the saved posteriors, they stand after them, on the page and in the Tab key's
+    order."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    kept = _a_kept_training(store, held)
+    window, _home = _home_of_last_time(tmp_path)
+    window.go_to("inference", "training")
+    page = window.part("inference").posterior_panel
+    row, body = _row_of(page, kept), page._body
+
+    def chain_from(start):
+        at, found = start.nextInFocusChain(), []
+        while at is not start and len(found) < 500:
+            found.append(at)
+            at = at.nextInFocusChain()
+        return found
+
+    assert body.indexOf(page.kept_block) == body.indexOf(page.in_use) + 1
+    first = page.form.first_control()
+    order = chain_from(page.head.findChildren(QPushButton)[-1])
+    assert order.index(row["resume"]) < order.index(first), "the setup view's list is not before its form"
+    page.show_view("load")
+    qt_app().processEvents()
+    listed = page.post_picker.combo
+    assert body.indexOf(page.kept_block) == body.indexOf(page.form) + 1, "the load view's kept trainings stand first"
+    assert page.kept_block.mapTo(page, QPoint(0, 0)).y() > listed.mapTo(page, QPoint(0, 0)).y()
+    order = chain_from(page.head.findChildren(QPushButton)[-1])
+    assert order.index(listed) < order.index(row["resume"]) < order.index(page.scroller), (
+        "the load view's Tab order does not reach the saved posteriors before the kept trainings")
+    page.show_view("training")
+    assert body.indexOf(page.kept_block) == body.indexOf(page.in_use) + 1
+
+
+@pytest.mark.parametrize("offered", ["continue", "resume"])
+def test_a_press_on_home_shows_the_steps_form_after_the_runs_page_was_seen(offered, store, tmp_path, monkeypatch):
+    """"Continue from batch N", and "Resume", pressed on Home after that run's page was seen in the same launch: the
+    Training step is shown with its form, not the page of the run that is over, which stays as it was behind "How the
+    run went"."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held) if offered == "resume" else None
+    _a_failed_training(store, tmp_path, held, acknowledged=False, kept=kept,
+                       outcome="failed" if offered == "continue" else "stopped")
+    window, home = _home_of_last_time(tmp_path)
+    page = window.part("inference").posterior_panel
+    window._open_run(_REOPENED)
+    assert page.results.currentWidget() is page.past_view, "the run's page was not seen"
+    window.go_to("home")
+    window.part("inference").read_offers()
+    window.go_to("home")
+    if offered == "continue":
+        assert home.next_button.text() == "&Continue from batch 236"
+    else:
+        assert home.next_button.text() == "&Resume"
+    choose(monkeypatch, other=True)
+    home.next_button.click()
+    landed = (window.current_place(), page.results.currentWidget() is page.figures)
+    _settle(qt_app(), window.part("inference"), posterior_load if offered == "resume" else None)
+    assert landed == (("inference", "training"), True), ("the press landed on the run's page, not the form", landed)
+
+
+def test_continue_with_these_asks_first_before_it_sets_choices_not_applied(store, tmp_path, monkeypatch):
+    """"Continue with these" sets step 1's form to what was in use last time. A choice made there and not applied, that
+    it would set to another (the model, the kind, the rotation, the plan shown), is asked about first, each in a line,
+    "Keep what is there" preselected; kept, nothing is applied or loaded and the form is as it was; answered, the press
+    goes on. A value at its usual one, or put back from last time, is no choice of a person's: with only those, nothing
+    is asked."""
+    from tests._dialogs import forget_asked
+    held = _a_launch_before(store, tmp_path, monkeypatch, plan="# Training\nnum_runs = 9000\n")
+    _the_loads(monkeypatch, store, held)
+    folder = tmp_path / "plans" / "nadrowski"
+    (folder / "other.txt").write_bytes(b"# Training\nnum_runs = 7000\n")
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    step_one = inference.config_panel
+    step_one.read_facts()
+    step_one.plan_choice.showPopup()
+    step_one.plan_choice.hidePopup()
+    step_one.plan_choice.setCurrentIndex(step_one.plan_choice.findData("other"))
+    step_one.rot_choice.setCurrentIndex(step_one.rot_choice.findData(not step_one.rot_choice.currentData()))
+    step_one.kind_choice.setCurrentIndex(step_one.kind_choice.findData(True))
+    inference.posterior_panel.form.rows["num_runs"].set_value(9500)
+    window.go_to("home")
+    rotated = "on" if step_one.rot_choice.currentData() else "off"
+    usual = "off" if rotated == "on" else "on"
+    forget_asked()
+    choose(monkeypatch, default=True)
+    home.next_button.click()
+    question = asked()
+    assert (question.title, question.sentence, set(question.answers), question.default) == (
+        "Continue with these?", "This applies and loads what was in use last time. It sets these, which were chosen "
+        "on the forms and not applied:", {"Keep what is there", "Continue with these"}, "Keep what is there"), question
+    assert question.items == ("Plan: other becomes zz_last", "Kind of observation: frequency response becomes set by "
+                              "the bounds file", f"Rotation: {rotated} becomes {usual}",
+                              "Batches: 9,500 becomes 9,000"), question.items
+    assert (inference.loads, inference.session.draft, step_one.kind_choice.currentData()) == (None, None, True), (
+        "kept, the press applied or loaded something")
+    forget_asked()
+    choose(monkeypatch, words="Continue with these")
+    home.next_button.click()
+    _settle(app, inference)
+    assert [one.title for one in all_asked()] == ["Continue with these?"]
+    assert inference.loads.why == "" and inference.session.draft.chi_mode is False
+    assert step_one.plan_choice.currentData() == "zz_last"
+
+
+def test_continue_with_these_asks_nothing_with_nothing_chosen_on_the_forms(store, tmp_path, monkeypatch):
+    """With every value at its usual one or put back from last time, "Continue with these" asks nothing."""
+    held = _a_launch_before(store, tmp_path, monkeypatch, kind=True)
+    _the_loads(monkeypatch, store, held)
+    window, home = _home_of_last_time(tmp_path)
+    inference = window.part("inference")
+    window.go_to("home")
+    home.next_button.click()
+    _settle(qt_app(), inference)
+    assert all_asked() == [] and inference.loads.why == "", all_asked()
+
+
+@pytest.mark.parametrize("press", ["Continue with these", "Continue from batch 236", "Resume"])
+def test_a_chain_that_stops_says_where_under_the_heading_of_the_page_its_press_opened(press, store, tmp_path,
+                                                                                        monkeypatch):
+    """A chain of loads that stops before its end says so in one sentence under the heading of the page its press
+    opened, Home for "Continue with these" and the Training step for "Continue from batch N" and "Resume": the press,
+    the step it stopped at, what was not loaded, and that the step says why. It goes at the next press or run, and no
+    other page says it."""
+    from core.gui.run.controller import controller
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, _posterior_load = _the_loads(monkeypatch, store, held, release=False)
+    kept = None
+    if press == "Continue from batch 236":
+        _a_failed_training(store, tmp_path, held)
+    elif press == "Resume":
+        kept = _a_kept_training(store, held)
+        _a_failed_training(store, tmp_path, held, outcome="stopped", kept=kept)
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.read_offers()
+    window.go_to("home")
+    assert home.next_button.text() == f"&{press}"
+    choose(monkeypatch, other=True)
+    home.next_button.click()
+    turn_until(app, prior_load.started.is_set)
+    prior_load.fail(RuntimeError("the prior's file could not be read"))
+    _settle(app, inference)
+    said = f"{press} stopped at Prior: the prior retrain_prior was not loaded. Prior says why."
+    where, other = ((home.notice, inference.posterior_panel.notice) if press == "Continue with these"
+                    else (inference.posterior_panel.notice, home.notice))
+    window.go_to("home")
+    window.go_to("inference", "training")
+    assert (where.sentence.plain_text(), where.isVisibleTo(where.parentWidget())) == (said, True)
+    assert not other.isVisibleTo(other.parentWidget()) and not inference.prior_panel.notice.isVisibleTo(
+        inference.prior_panel.notice.parentWidget())
+    stand_in = StandIn(word="Prior load")
+    stand_in.release(SimpleNamespace(kind="prior", id=held.prior, name="retrain_prior",
+                                     manifest=store.get("prior", held.prior)))
+    from core import orchestrator
+    monkeypatch.setattr(orchestrator, "build_prior", stand_in)
+    inference.prior_panel.load_record(held.prior)
+    turn_until(app, lambda: not controller().is_live())
+    assert inference.notice_on("home") == inference.notice_on("training") == "", "a run did not take the sentence away"
+
+
+@pytest.mark.parametrize("gone", ["prior", "bounds file", "both"])
+@pytest.mark.parametrize("where", ["home", "past view"])
+def test_continue_from_batch_n_reads_its_prior_and_bounds_file_before_it_lets_anything_go(gone, where, store,
+                                                                                          tmp_path, monkeypatch):
+    """"Continue from batch N" reads the run's prior and bounds file before its question: one gone is said where the
+    press was made, on Home under its heading or on the run's page, and nothing is asked, applied, loaded or let go."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, _posterior_load = _the_loads(monkeypatch, store, held)
+    handed = {"prior": "20260101T000000"} if gone in ("prior", "both") else {}
+    if gone in ("bounds file", "both"):
+        handed["bounds"] = "gone.txt"
+    _a_failed_training(store, tmp_path, held, handed=handed, acknowledged=where == "home")
+    window, home = _home_of_last_time(tmp_path)
+    inference = window.part("inference")
+    inference.read_offers()
+    session = inference.session
+    words = {"prior": "the prior it was trained with is no longer in Records",
+             "bounds file": "the bounds file gone.txt is no longer there"}
+    said = "Continue from batch 236 cannot start: " + "; and ".join(
+        words[one] for one in (("prior", "bounds file") if gone == "both" else (gone,))) + "."
+    if where == "home":
+        window.go_to("home")
+        home.next_button.click()
+        assert (home.notice.sentence.plain_text(), home.notice.isVisibleTo(home)) == (said, True)
+    else:
+        window._open_run(_REOPENED)
+        view = inference.posterior_panel.past_view
+        view.continue_button.click()
+        assert view.notice.text() == said, view.notice.text()
+    assert (all_asked(), inference.loads, inference.session is session, prior_load.calls) == ([], None, True, []), (
+        "something was asked, loaded or let go")
+
+
+
+def test_a_resumes_own_units_file_is_a_third_choice_and_its_device_is_said_until_a_step_is_applied(store, tmp_path,
+                                                                                                    monkeypatch):
+    """After the Resume of a training kept with a units file of its own, step 1's units row offers that file as a third
+    choice, chosen, by its name, its units said under the row, with nothing to apply; another choice reads as changed
+    and choosing the file again does not. Applied with the file chosen, the draft holds the file itself. Step 1's "In
+    use" names the processor and the width the session runs on until step 2 is applied again; applied with the model's
+    own file, the third choice goes."""
+    from core import config
+    from core.Helpers import file_manager
+    from core.gui.step_facts import units_words
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, posterior_load = _the_loads(monkeypatch, store, held, release=False)
+    cfg, prior, model, listed, units, _typed = _put_back("a units file of its own", store, tmp_path)
+    loaded = SimpleNamespace(kind="prior", id=prior, name="prior_of_nadrowski", manifest=store.get("prior", prior))
+    prior_load.release(loaded)
+    posterior_load.release(SimpleNamespace(kind="posterior", id=held.posterior, name="zz_trained",
+                                           manifest=store.get("posterior", held.posterior),
+                                           posterior=SimpleNamespace(truncation=None)))
+    kept = _a_kept_training(store, SimpleNamespace(prior=prior), cfg=cfg)
+    monkeypatch.setattr(config, "detect_device", config.cpu_device)
+    window, _home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    inference.read_offers()
+    inference.resume_kept(kept)
+    _settle(app, inference, posterior_load)
+    step_one = inference.config_panel
+    words = units_words(file_manager.parse_units_file(str(units)))
+    items = [step_one.units_choice.itemText(at) for at in range(step_one.units_choice.count())]
+    assert items == ["From the model's units file", "Typed here", "From the file units of the rig.txt"], items
+    assert step_one.units_choice.currentData() == "own" and step_one.nothing_to_apply()
+    assert step_one.units_line.plain_text() == f"{words}, from the file units of the rig.txt"
+    assert "Units From the file units of the rig.txt" in step_one.form.fold.summary.text(), (
+        step_one.form.fold.summary.text())
+    resumed = "Runs on the processor as the resumed training was kept, 64 simulations at a time"
+    assert resumed in step_one.in_use_words()[1], step_one.in_use_words()
+    step_one.units_choice.setCurrentIndex(step_one.units_choice.findData("typed"))
+    assert not step_one.nothing_to_apply() and "model" in inference.pending()
+    step_one.units_choice.setCurrentIndex(step_one.units_choice.findData("own"))
+    assert step_one.nothing_to_apply() and inference.pending() == frozenset()
+    from core import orchestrator
+    again = StandIn(word="Prior load")
+    again.release(SimpleNamespace(kind="prior", id=held.prior, name="retrain_prior",
+                                  manifest=store.get("prior", held.prior)))
+    monkeypatch.setattr(orchestrator, "build_prior", again)
+    assert inference.prior_panel.load_record(held.prior), "step 2 was not applied again"
+    turn_until(app, lambda: not controller().is_live())
+    assert inference.session.cfg is not None and resumed not in step_one.in_use_words()[1], (
+        "the device was said after step 2 was applied again")
+    step_one.rot_choice.setCurrentIndex(step_one.rot_choice.findData(not step_one.rot_choice.currentData()))
+    choose(monkeypatch, words="Apply and start a new session")
+    step_one.foot.main_button.click()
+    assert inference.session.draft.units_override == str(units)
+    step_one.units_choice.setCurrentIndex(step_one.units_choice.findData("file"))
+    step_one.foot.main_button.click()
+    assert inference.session.draft.units_override is None
+    assert step_one.units_choice.findData("own") < 0, "the third choice stood with no units file of its own held"
+
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_a_long_named_units_file_keeps_step_one_within_its_view_at_the_least_size(factor, store, tmp_path, monkeypatch):
+    """The units row's third choice names a units file by its name, which a person gives at any length: at the window's
+    least size, with the fold open, step 1's body stands within its view, the name cut short in its middle and whole
+    in its tip and in the open list."""
+    from core import cli
+    from tests._look_helpers import _settle as _turned, _the_look, text_size
+    name = "units of the rig measured on the second of november in the lab downstairs.txt"
+    with text_size(factor), _the_look(False):
+        _on_the_runs_clock(tmp_path)
+        window = build_window()
+        design.set_room((3400, 1380))
+        window.setMinimumSize(1, 1)
+        _shown_off_screen(window, design.scaled(900), design.scaled(600))
+        units = tmp_path / name
+        units.write_bytes(open(cli.resolve_units_file("NADROWSKI"), "rb").read())
+        inference = window.part("inference")
+        step_one = inference.config_panel
+        assert step_one.apply_quietly("NADROWSKI", {"chi_mode": False, "units_override": str(units)})
+        window.go_to("inference", "model")
+        step_one.form.fold.set_open(True)
+        _turned()
+        box, port, body = step_one.units_choice, step_one.scroller.viewport(), step_one.scroller.body
+        assert box.currentData() == "own" and box.toolTip() == f"From the file {name}"
+        assert box.shown_text() != box.currentText() and "…" in box.shown_text()
+        assert body.minimumSizeHint().width() <= port.width(), (body.minimumSizeHint().width(), port.width())
+
+
+def test_continue_from_batch_n_finds_another_models_prior_and_bounds_file_where_they_are(store, tmp_path, monkeypatch):
+    """A training of Hopf continued after a reopening: its prior and its first bounds file are where that model's are,
+    so nothing is said and the chain starts."""
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    cfg, prior, model, listed, _units, _typed = _put_back("Hopf's first file", store, tmp_path)
+    _a_failed_training(store, tmp_path, held, handed={"model": model, "bounds": listed, "prior": prior,
+                                                       "options": {"chi_mode": False, "reparam_rotate": True}})
+    window, home = _home_of_last_time(tmp_path)
+    inference = window.part("inference")
+    inference.read_offers()
+    window.go_to("home")
+    home.next_button.click()
+    assert (inference.notice_on("home"), inference.loads is not None) == ("", True), inference.notice_on("home")
+    _settle(qt_app(), inference)

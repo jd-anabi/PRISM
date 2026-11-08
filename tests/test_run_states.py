@@ -4371,19 +4371,18 @@ def test_the_full_text_is_hidden_until_asked_and_follows_the_end_only_while_at_t
     turn_until(app, lambda: not held.is_live())
 
 
-def test_the_full_text_finds_and_opens_its_file_and_its_folder(tmp_path, monkeypatch):
+def test_the_full_text_finds_and_opens_its_file_and_its_folder(tmp_path):
     """"Find…" opens a field that selects, at each Enter, the next place in the full text that holds its words,
     from the top again after the end, and leaves the selection where it was when no line holds them. "Open the
     file" and "Open its folder" hand the run's text file and the folder of runs to the computer, which opens
-    them; no path is written anywhere on the page. A run that keeps no file has neither to open."""
+    them (the session's guard keeps them in place of opening them); no path is written anywhere on the page. A run
+    that keeps no file has neither to open."""
     from PySide6.QtCore import QUrl
-    from PySide6.QtGui import QDesktopServices
     from PySide6.QtWidgets import QAbstractButton, QLabel, QLineEdit
+    from tests._dialogs import opened
     from tests._fixtures import build_run_host, qt_app
     from tests._runs import Clock, StandIn, running, start_run, turn_until
     app = qt_app()
-    opened = []
-    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
     host, stand_in = build_run_host(), StandIn()
     view, full = host.run_view, host.run_view.full_text
@@ -4409,7 +4408,8 @@ def test_the_full_text_finds_and_opens_its_file_and_its_folder(tmp_path, monkeyp
     view.file_button.click()
     view.folder_button.click()
     folder, run = tmp_path / "runs", "20261008T190211-training"
-    assert opened == [QUrl.fromLocalFile(str(folder / f"{run}.txt")), QUrl.fromLocalFile(str(folder))], opened
+    files = [QUrl.fromLocalFile(str(path)).toLocalFile() for path in (folder / f"{run}.txt", folder)]
+    assert opened() == files
     words = ([widget.text() for widget in view.findChildren(QLabel) + view.findChildren(QAbstractButton)
               + view.findChildren(QLineEdit)] + [full.toPlainText(), view.title.text()])
     assert not [said for said in words if str(tmp_path) in said or tmp_path.as_posix() in said], words
@@ -6578,3 +6578,49 @@ def test_the_list_of_kept_trainings_fits_its_column_at_the_windows_least_size(fa
         _in_its_column(host.run_view, column, "a training's run started from the step that lists the kept trainings")
         stand_in.release()
         turn_until(app, lambda: not held.is_live())
+
+
+
+@pytest.mark.parametrize("dark", [False, True])
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_ring_on_a_runs_failure_message_stands_clear_of_its_words(dark, factor, tmp_path):
+    """The failure's message quoted on a run's page takes the keyboard, and the ring, which takes the colour of the
+    words, stands round it: the words stand inside its edge by the room the ring keeps outside it, on every side, so the
+    ring never touches them, in both themes and at both text sizes. Every selectable block of lines keeps the same
+    room: the command a page sets beneath its sentence, a kept round's command."""
+    from PySide6.QtGui import QColor
+    from core.gui import design
+    from core.gui.run.view import SelectableLines
+    from tests._fixtures import build_run_host, qt_app
+    from tests._look_helpers import _gone, _the_look, text_size
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    room = design.SIZE["focus_ring"] + design.SIZE["focus_gap"]
+    app = qt_app()
+    with text_size(factor), _the_look(dark):
+        held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+        host, stand_in = build_run_host(), StandIn()
+        view = host.run_view
+        start_run(host, stand_in, spec=_training())
+        stand_in.fail(RuntimeError("CUDA error: an illegal memory access was encountered\nCUDA kernel errors might be "
+                                   "asynchronously reported at some other API call"))
+        turn_until(app, lambda: not held.is_live())
+        message = view.failure_message
+        assert message.isVisibleTo(view) and message.text().startswith("CUDA error"), message.text()
+        quoted, command = SelectableLines(), SelectableLines()
+        quoted.setText(message.text())
+        command.setText("python -m core tsnpe --resume-fit 20261003T030211 --device cpu")
+        for block in (message, view.command_line, quoted, command):
+            margins = block.contentsMargins()
+            assert (margins.left(), margins.top(), margins.right(), margins.bottom()) == (room,) * 4, block
+        paper = design.hex_colour("paper").upper()
+        for block in (quoted, command):                     # drawn alone, as the run's page draws its own
+            block.setFont(message.font())
+            block.resize(design.scaled(600), block.heightForWidth(design.scaled(600)))
+            image = block.grab().toImage()
+            inked = [(x, y) for y in range(image.height()) for x in range(image.width())
+                     if QColor(image.pixel(x, y)).name().upper() != paper]
+            assert inked, "nothing of the words was drawn"
+            assert (min(x for x, _ in inked) >= room and min(y for _, y in inked) >= room
+                    and max(y for _, y in inked) < image.height() - room + 1), (
+                "the words stand where the ring is drawn", min(x for x, _ in inked), min(y for _, y in inked))
+            _gone(block)

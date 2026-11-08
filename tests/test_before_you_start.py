@@ -71,7 +71,7 @@ def test_a_prior_of_another_model_blocks_and_says_which():
     then no matter."""
     facts = prior_facts(**{**SAVED, "record_model": "BP"}, sets_of_prior=[5])
     assert _said(facts) == [("err", "This prior was made for the model BP.")]
-    assert reason_beside(facts, live=False, nothing_to_apply=False) == "Cannot start yet: this prior is for another model."
+    assert reason_beside(facts, live=False, nothing_to_apply=False) == "Cannot start: this prior is for another model."
 
 
 # ── the build view ──
@@ -566,7 +566,7 @@ def test_only_continue_with_nothing_to_continue_blocks_with_its_reason(state):
     continue it blocks nothing."""
     facts = training_facts(reading=_reading(checkpoint=state), resume="require", batches=10000)
     assert facts[0] == Fact("err", "There is no saved simulation set to continue.", "there is nothing to continue")
-    assert reason_beside(facts, live=False, nothing_to_apply=False) == "Cannot start yet: there is nothing to continue."
+    assert reason_beside(facts, live=False, nothing_to_apply=False) == "Cannot start: there is nothing to continue."
     for done in ("resume_partial", "resume_complete"):
         assert not any(fact.blocks for fact in training_facts(reading=_reading(checkpoint=done, batches_done=4),
                                                               resume="require", batches=10000))
@@ -772,3 +772,58 @@ def test_plan_facts_read_the_form_of_their_own_step_and_what_the_others_hold():
     assert plans.plan_line(_screen(), ("Model and options",)) == "No plan"
     assert plans.plan_line(_screen(_source("record", "retrain_posterior")), ("Model and options",)) == (
         "Settings from record retrain_posterior")
+
+
+# ── the lead beside the button ──
+#: The blocks that neither waiting nor an edit on the page lifts: a model inference cannot take, a file or a record
+#: that cannot be read, a record made for another model, nothing to continue.
+FINAL = ("this model cannot be used", "the bounds file cannot be read", "the prior cannot be read",
+         "this prior is for another model", "there is nothing to continue", "the posterior cannot be read",
+         "this posterior is for another model")
+#: The blocks a person lifts on the page: a field, a choice, a name, a step applied, a record chosen or made.
+YET = ("a setting cannot be used", "the limits typed cannot be used", "the last start was refused", "needs a model",
+       "no bounds file is chosen", "no saved prior is chosen", "no prior is saved yet", "needs a prior",
+       "a saved simulation set would be continued", "no saved posterior is chosen", "no posterior is saved yet",
+       "the name cannot be used", "a name is needed", "the note cannot be used")
+
+
+def test_every_block_the_pages_say_is_known_to_be_lifted_on_the_page_or_not():
+    """Every block a page of the three steps can say beside its button, read from the names of the facts' module, the
+    form's and the three pages' that end in BLOCKS, is either lifted on the page and reads "Cannot start yet:", or is
+    not and reads "Cannot start:". A block added without a place in one of the two fails here."""
+    from core.gui import step_facts
+    from core.gui.panels.inference import config_tab, posterior_tab, prior_tab
+    from core.gui.widgets import form
+    said = {value for module in (step_facts, form, config_tab, prior_tab, posterior_tab)
+            for name, value in vars(module).items() if name.endswith("BLOCKS") and isinstance(value, str)}
+    said |= {form.NEEDS_A_NAME}
+    assert set(step_facts.FINAL_BLOCKS) == set(FINAL)
+    assert said == set(FINAL) | set(YET), (sorted(said - set(FINAL) - set(YET)), sorted(set(FINAL) | set(YET) - said))
+
+
+@pytest.mark.parametrize("words", FINAL + YET)
+def test_the_lead_beside_the_button_says_whether_the_page_can_lift_the_block(words):
+    """One block: "Cannot start:" for a block no wait or edit on the page lifts, "Cannot start yet:" for one the page
+    lifts. Two: the lead is the first's, the one its words name. A run live says so, whatever blocks."""
+    lead = "Cannot start:" if words in FINAL else "Cannot start yet:"
+    one = (Fact("err", "A sentence.", words),)
+    assert reason_beside(one, live=False, nothing_to_apply=False) == f"{lead} {words}."
+    other = "a name is needed" if words in FINAL else "the prior cannot be read"
+    two = (Fact("err", "A sentence.", words), Fact("lock", "Another.", other))
+    assert reason_beside(two, live=False, nothing_to_apply=False) == f"{lead} {words}, and 1 more above."
+    assert reason_beside(two, live=True, nothing_to_apply=False) == "A run is live. Only one runs at a time."
+
+
+# ── after a Resume ──
+@pytest.mark.parametrize("device, width, said", [
+    ("cpu", 2048, "Runs on the processor as the resumed training was kept, 2,048 simulations at a time, until step 1 "
+                  "or step 2 is applied again."),
+    ("cuda", 16384, "Runs on the graphics card as the resumed training was kept, 16,384 simulations at a time, until "
+                    "step 1 or step 2 is applied again."),
+    ("cpu", None, "Runs on the processor as the resumed training was kept, until step 1 or step 2 is applied again."),
+    ("meta", 64, ""), (None, 64, "")])
+def test_step_one_says_the_device_and_the_width_a_resume_runs_on(device, width, said):
+    """After a Resume step 1's "In use" adds the device the session now uses and, when it is the kept training's own,
+    its width, grouped by thousands; a device of no kind known says nothing."""
+    from core.gui.step_facts import resumed_words
+    assert resumed_words(device, width) == said

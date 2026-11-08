@@ -719,11 +719,13 @@ def test_an_edit_takes_back_what_the_last_reading_said_and_a_blank_name_reads_no
     assert not names.read_timer.isActive() and len(store.asked) == 1
 
 
-def test_a_taken_name_outlines_the_field_and_blocks_with_the_engines_sentence():
+def test_a_taken_name_outlines_the_field_and_blocks_with_the_windows_sentence():
+    """A name the store refuses as taken is said in the window's words, which name the kind of record and ask for
+    another name, not the store's, which ask for a rename the window cannot make."""
     names, _store = _names(taken=("retrain",))
     names.name.setText("retrain")
     names.check_now()
-    sentence = "a prior named 'retrain' already exists; rename or delete it first"
+    sentence = "The name 'retrain' is taken by another prior. Choose another name."
     fact = names.name_fact()
     assert (fact.kind, fact.sentence, fact.blocks) == ("err", sentence, "the name cannot be used")
     assert names.rows["name"].line.label.text() == sentence and names.name.property("state") == "error"
@@ -733,15 +735,31 @@ def test_a_taken_name_outlines_the_field_and_blocks_with_the_engines_sentence():
 
 
 def test_a_real_store_says_why_a_name_cannot_be_used(tmp_path):
-    """A name that is no legal name and one shaped like an id, each in its own sentence, through the real call; a taken
-    name has its own test."""
+    """Through the real call, each name the store refuses in the window's own sentence, judged as the store judges it:
+    no legal name (a space, a first sign that is no letter or digit, past 64 characters), a name shaped like a record's
+    id (a date and a time, twelve of the digits and the letters a to f), and a name another record of the kind holds;
+    a name of 64 characters, and one a record of another kind holds, are free."""
     from core.artifacts import ArtifactStore
+    from core.gui.widgets.form import NAME_ID_TEXT, NAME_SHAPE_TEXT
+    from tests._fixtures import _nad_cfg, _prior_artifact
     qt_app()
-    names = build_part(NameAndNote, kind="prior", required=True, store=ArtifactStore(tmp_path))
-    for typed, words in (("a b", "bad artifact name"), ("20261001T222935", "shaped like an artifact id")):
-        names.name.setText(typed)
-        names.check_now()
-        assert words in names.name_fact().sentence and names.name_fact().blocks == BLOCKS
+    store = ArtifactStore(tmp_path)
+    _prior_artifact(store, _nad_cfg(), name="retrain_prior")
+    for kind in ("prior", "posterior"):
+        names = build_part(NameAndNote, kind=kind, required=True, store=store)
+        for typed, sentence in (("a b", NAME_SHAPE_TEXT), ("-a", NAME_SHAPE_TEXT), ("a" * 65, NAME_SHAPE_TEXT),
+                                ("20261001T222935", NAME_ID_TEXT), ("deadbeef0123", NAME_ID_TEXT),
+                                ("retrain_prior", "The name 'retrain_prior' is taken by another prior. Choose another "
+                                                  "name." if kind == "prior" else None), ("a" * 64, None)):
+            names.name.setText(typed)
+            names.check_now()
+            fact = names.name_fact()
+            said = None if fact is None else (fact.sentence, fact.blocks)
+            assert said == (None if sentence is None else (sentence, BLOCKS)), (kind, typed, said)
+    assert NAME_SHAPE_TEXT == ("A name is letters, digits, _ . and -, starts with a letter or a digit, and is at most "
+                               "64 characters.")
+    assert NAME_ID_TEXT == ("A name cannot be shaped like a record's id: a date and a time, as 20261108T081500, or "
+                            "twelve of the digits and the letters a to f.")
 
 
 def test_a_store_that_cannot_be_read_says_nothing_of_the_name():
@@ -1672,12 +1690,12 @@ def test_a_rebuilt_page_stands_at_homes_distance_from_the_rail(tmp_path):
 
 
 def test_a_middle_begins_with_no_control(tmp_path):
-    """The first things in the scrolling body are the plan in use and what is in use, neither of which takes a key: a
-    control there has no room for the top of its ring."""
+    """The first things in the scrolling body are the sentence a press may leave, the plan in use and what is in use,
+    none of which takes a key: a control there has no room for the top of its ring."""
     window, page, _clock = _a_page(tmp_path)
     layout = page.scroller.body.layout()
-    assert [layout.itemAt(at).widget() for at in (0, 1)] == [page.plan_line, page.in_use]
-    assert page.plan_line.focusPolicy() == page.in_use.focusPolicy() == Qt.NoFocus
+    assert [layout.itemAt(at).widget() for at in (0, 1, 2)] == [page.notice, page.plan_line, page.in_use]
+    assert page.notice.focusPolicy() == page.plan_line.focusPolicy() == page.in_use.focusPolicy() == Qt.NoFocus
 
 
 def test_the_run_page_takes_the_place_of_the_form_and_gives_it_back(tmp_path):
@@ -2839,8 +2857,9 @@ def test_a_name_the_stage_refused_is_read_again_with_the_facts(tmp_path):
     store = _Store(taken=("retrain_3",))
     page.names._store = store
     row = page.form.rows["name"]
-    page._refusal(Refusal("The name was taken while the run was going.", field="name"))
-    assert row.line.label.text() == "The name was taken while the run was going."
+    page._refusal(Refusal("a prior named 'retrain_3' already exists; rename or delete it first", field="name"))
+    assert row.line.label.text() == "The name 'retrain_3' is taken by another prior. Choose another name.", (
+        "the store's own sentence stood under the name")
     page.foot.check_again.click()
     assert row.line.kind == "err" and page.foot.reason.text() == "Cannot start yet: the name cannot be used."
     store.taken = ()
@@ -3235,3 +3254,102 @@ def test_the_training_buttons_stand_inside_the_smallest_window_with_real_metrics
             window.hide()
             app.processEvents()
     assert user32.GetForegroundWindow() == front, "the front was taken from the window the person works in"
+
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_block_for_a_training_holds_a_name_whole_beside_its_main_settings(factor, tmp_path):
+    """At the opening size, at the ordinary text size and at one and a half times it, the block for this run stands
+    beside the Training step's main settings at no less than its least width, which holds a name of the usual length,
+    in a field as wide as the Prior step's, and the name's check on one line; "Continue or start new" is held to the
+    room left beside the block and shows the item chosen whole, its longest whole in its tip. The Prior step's columns
+    stand at their shares, its list held to nothing. A little narrower, where the room beside the block would cut the
+    item chosen, the block stands under the main settings."""
+    from core.gui.widgets.form import BLOCK_LEAST, NAME_FREE_TEXT
+    assert BLOCK_LEAST == 360
+    with text_size(factor), _the_look(False):
+        fonts.load_app_font(qt_app())
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        window = build_window()
+        design.set_room((3400, 1380))
+        window.setMinimumSize(1, 1)
+        shown_off_screen(window, design.scaled(1300), design.scaled(820))
+        inference = window.part("inference")
+        training, prior = inference.posterior_panel, inference.prior_panel
+        window.go_to("inference", "prior")
+        prior.show_view("build")
+        _settle()
+        held = prior.form
+        assert not held.columns.stacked() and held._left.width() > held._left.minimumSizeHint().width()
+        assert held.side.width() > held._left.width() and prior.bounds_picker.combo._room is None
+        window.go_to("inference", "training")
+        _settle()
+        form, choice = training.form, training.resume_choice
+        name = form.rows["name"].widget
+        port, body = training.scroller.viewport(), training.scroller.body
+        assert not form.columns.stacked()
+        assert body.minimumSizeHint().width() <= port.width(), (body.minimumSizeHint().width(), port.width())
+        out = [(type(part).__name__, _edge_of(part, port).right()) for part in [body, *body.findChildren(QWidget)]
+               if part.isVisibleTo(training) and _edge_of(part, port).right() >= port.width()]
+        assert out == [], out[:6]
+        assert form.side.width() >= design.scaled(BLOCK_LEAST), form.side.width()
+        assert name.width() == prior.form.rows["name"].widget.width(), (name.width(), prior.form.rows["name"].widget)
+        training.names.name.setText("retrain_4")
+        training.names.check_now()
+        _settle()
+        label = form.rows["name"].line.label
+        assert label.text() == NAME_FREE_TEXT and label.height() < 2 * label.fontMetrics().lineSpacing(), label.height()
+        assert choice.shown_text() == choice.currentText(), choice.shown_text()
+        longest = choice.findData("never")
+        choice.setCurrentIndex(longest)
+        assert choice.toolTip() == choice.currentText() or choice.shown_text() == choice.currentText()
+        choice.setCurrentIndex(0)
+        window.resize(design.scaled(1215), design.scaled(820))
+        _settle()
+        assert form.columns.stacked() and choice.shown_text() == choice.currentText(), (
+            form.columns.stacked(), choice.shown_text())
+
+
+
+@pytest.mark.display
+def test_every_list_of_the_three_steps_shows_its_item_whole_with_real_metrics(tmp_path):
+    """Needs QT_QPA_PLATFORM=windows (the root conftest defaults to offscreen, where this is skipped). With the real
+    platform's fonts and their metrics, at the opening size the window takes on the screen it stands on, at the ordinary
+    text size and at one and a half times it, every list of Model and options, Prior and Training that is not held to a
+    room shows the item it holds, or its hint, whole: "No plan" read "No…an" at one and a half times the ordinary text,
+    the toolkit measuring it a pixel narrower than it draws it. The window is laid out where no screen shows it and is
+    never shown or brought to the front: the window in front stays in front."""
+    import ctypes
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication
+    from core.gui import fonts
+    app = QApplication.instance() or QApplication([])
+    if QGuiApplication.platformName() != "windows":
+        pytest.skip(f"needs the windows platform, got {QGuiApplication.platformName()!r}")
+    user32 = ctypes.WinDLL("user32")
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    front = user32.GetForegroundWindow()
+    for factor in (1.0, 1.5):
+        with text_size(factor), _the_look(False):
+            fonts.load_app_font(app)
+            controller_on(tmp_path, Clock(at(8, 12, 4)))
+            window = build_window()
+            window.setAttribute(Qt.WA_DontShowOnScreen)
+            available = window.screen().availableGeometry()
+            opening, _least = design.window_sizes((available.width(), available.height()))
+            window.resize(*opening)
+            window.show()
+            inference = window.part("inference")
+            cut = []
+            for step, page in (("model", inference.config_panel), ("prior", inference.prior_panel),
+                               ("training", inference.posterior_panel)):
+                window.go_to("inference", step)
+                _settle()
+                for box in page.findChildren(Choice):
+                    if box.isVisibleTo(page) and box._room is None and box.width() >= box.sizeHint().width():
+                        shown = box.placeholderText() if box.currentIndex() < 0 else box.itemText(box.currentIndex())
+                        if shown and box.shown_text() != shown:
+                            cut.append((factor, step, shown, box.shown_text()))
+            window.hide()
+            assert cut == [], cut
+    assert user32.GetForegroundWindow() == front, "a window was brought to the front"

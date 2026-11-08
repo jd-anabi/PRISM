@@ -40,7 +40,7 @@ from ...reported import reported
 from ...run.controller import controller
 from ...session import ConfigDraft
 from ...step_facts import (CHANGED_TEXT, NOT_HELD, Fact, SelectionRow, held_value, model_facts, model_in_use,
-                           units_words)
+                           resumed_words, units_words)
 from ...widgets import labeled_inputs
 from ...widgets.artifact_picker import LIST_MOST
 from ...widgets.ask import ask, ask_text
@@ -61,6 +61,10 @@ GO_TO_PRIOR = "Go to Prior"
 KINDS = (("Set by the bounds file", False), ("Frequency response", True))
 ROTATIONS = (("On", True), ("Off", False))
 UNIT_SOURCES = (("From the model's units file", "file"), ("Typed here", "typed"))
+#: The third choice of the units row, offered while what step 1 holds names a units file other than the model's, as a
+#: Resume of a training kept with one does: that file, by its name.
+OWN_UNITS_ITEM = "From the file {}"
+OWN_UNITS = "own"
 FREQUENCY_RESPONSE_TEXT = ("Frequency response (χ(ω)): one spontaneous recording and several driven recordings, each at "
                            "one frequency.")
 BOUNDS_FILE_TEXT = ("Set by the bounds file: a spontaneous recording, and one driven recording when the file has a "
@@ -114,6 +118,9 @@ SHOW_HOLDS = "Show what it holds"
 HOLDS_COLUMNS = ("Step", "Setting", "In the plan", "Usual")
 NOT_APPLIED_YET = "not applied yet"
 IN_USE_TEXT = "In use: {}."
+#: Under the list while it shows another plan than the plan in use: choosing in the list fills nothing, and applying the
+#: step does not fill it either, so the plan shown is not "Changed, not applied".
+NOT_FILLED_TEXT = "Not filled yet. In use: {}."
 PLAN_FILLED_WORDS = "plan {}, filled {}"
 SOURCE_FILLED_WORDS = "settings from {} {}, filled {}"
 #: The two, for a source that keeps no moment of its fill.
@@ -186,8 +193,8 @@ class _ModelChoice(Choice):
             self.setCurrentIndex(found)
 
 
-def _choice(items) -> Choice:
-    choice = Choice()
+def _choice(items, *, most: "int | None" = None) -> Choice:
+    choice = Choice(most=most)
     for words, value in items:
         choice.addItem(words, value)
     return choice
@@ -251,7 +258,12 @@ class _UnitsField:
         self._row.kept = on
 
     def value(self):
-        return " ".join(self._page.units_text.text().split()) if self._page._typed() else None
+        """The words typed; a units file other than the model's by the words it was read with, as a plan holds units;
+        None for the model's file."""
+        page = self._page
+        if page.units_choice.currentData() == OWN_UNITS:
+            return " ".join(page._file_units.get(str(page._own_units), ()))
+        return " ".join(page.units_text.text().split()) if page._typed() else None
 
     def set_value(self, value) -> None:
         """The model's units file for None, else the words typed."""
@@ -287,12 +299,14 @@ class ConfigPanel(StepPage):
         super().__init__(screen, TITLE, SENTENCE, step="model", parent=parent)
         self._units_read: dict = {}
         self._file_units: dict = {}          # each units file other than the model's a draft held, by path: its words
+        self._own_units = None               # the units file other than the model's the units row offers, by its path
         self._seeded = ""                    # what the box of typed units was last filled with from a units file
         self._shown_plan = None              # the plan the list shows, as it was last read, or why it cannot be used
         self._listed_for = None              # the model whose folder the list of plans was last read for
         self._folder_there = False           # whether that folder stood there at that reading
         self._hint = ""                      # the plan last used with the model shown, beside the list
         self._gone = None                    # the plan the list showed until its file went, "No plan" shown since
+        self._unlisted = False               # the list was set back to "No plan" by a change of model, not by a choice
         self.model_combo = _ModelChoice()
         self.model_combo.addItems(VALID_MODELS)
         self.model_combo.setCurrentText("NADROWSKI")
@@ -302,7 +316,8 @@ class ConfigPanel(StepPage):
         self.kind_choice.currentIndexChanged.connect(self._kind_chosen)
         self.rot_choice = _choice(ROTATIONS)
         self.rot_choice.setCurrentIndex(self.rot_choice.findData(bool(config.REPARAM_ROTATE)))
-        self.units_choice = _choice(UNIT_SOURCES)
+        # Capped as a list of names a person gives is: its third choice names a units file.
+        self.units_choice = _choice(UNIT_SOURCES, most=LIST_MOST)
         self.units_text = QLineEdit()
         self.units_text.setPlaceholderText("e.g. kHz ms nm pN")
         form = self.form
@@ -353,8 +368,34 @@ class ConfigPanel(StepPage):
         return self.units_choice.currentData() == "typed"
 
     def _units_override(self):
-        """What the draft's units are: None for the model's units file, else the words typed here."""
+        """What the draft's units are: None for the model's units file, the path of the other units file the row offers,
+        else the words typed here."""
+        if self.units_choice.currentData() == OWN_UNITS:
+            return self._own_units
         return tuple(self.units_text.text().split()) if self._typed() else None
+
+    def _offer_own_units(self, path: "str | None") -> None:
+        """The units row's third choice, the units file ``path`` other than the model's, offered by its name; None takes
+        the choice away, and the model's file is chosen if it was the one chosen. The row's signals are held while the
+        list changes, then the choice heard."""
+        choice = self.units_choice
+        at = choice.findData(OWN_UNITS)
+        if path == self._own_units and (at >= 0) == (path is not None):
+            return
+        was = choice.currentData()
+        choice.blockSignals(True)
+        try:
+            if at >= 0:
+                choice.removeItem(at)
+            if path is not None:
+                choice.addItem(OWN_UNITS_ITEM.format(Path(path).name), OWN_UNITS)
+                choice.setItemData(choice.count() - 1, str(path), Qt.ToolTipRole)
+            self._own_units = path
+            if was == OWN_UNITS:
+                choice.setCurrentIndex(choice.findData(OWN_UNITS if path is not None else "file"))
+        finally:
+            choice.blockSignals(False)
+        self._units_chosen()
 
     def _units_of(self, model) -> tuple:
         """The model's units file as the units line says it, read once each time the model is chosen, never as the page
@@ -384,12 +425,10 @@ class ConfigPanel(StepPage):
         return ""
 
     def _held_units(self, draft):
-        """The units a draft holds as the form compares them: a units file other than the model's by the words it was
-        read with as the draft was applied, which the form shows typed; else as held."""
+        """The units a draft holds as the form compares them: a units file other than the model's by its path, which the
+        row's third choice names; else as held."""
         held = held_value(draft, "units_override")
-        if isinstance(held, (str, Path)) and str(held) in self._file_units:
-            return self._file_units[str(held)]
-        return held
+        return str(held) if isinstance(held, Path) else held
 
     def _unusable(self, model) -> str:
         """Why parameter inference cannot take ``model``, or "" when it can."""
@@ -515,6 +554,8 @@ class ConfigPanel(StepPage):
         rotate, units = getattr(draft, "reparam_rotate", None), getattr(draft, "units_override", None)
         if isinstance(rotate, bool):
             read["reparam_rotate"] = rotate
+        if isinstance(units, (str, Path)) and str(units) in self._file_units:
+            units = self._file_units[str(units)]             # another units file, as a plan holds units
         read["units"] = " ".join(str(unit) for unit in units) if isinstance(units, (tuple, list)) else None
         return read
 
@@ -536,16 +577,29 @@ class ConfigPanel(StepPage):
                            plan_lines=self.plan_lines())
 
     def in_use_words(self) -> tuple:
+        """What the step holds; after a Resume, while the session runs as the resumed training was kept, the device and
+        the width it runs on."""
         draft = self._draft()
         if draft is None:
             return "", NOTHING_YET
-        return model_in_use(draft, self._units_said(getattr(draft, "units_override", None), getattr(draft, "model", None)))
+        label, sentence = model_in_use(draft, self._units_said(getattr(draft, "units_override", None),
+                                                               getattr(draft, "model", None)))
+        resumed = getattr(self._screen, "resumed_on", lambda: None)()
+        said = resumed_words(*resumed) if resumed is not None else ""
+        return label, f"{sentence} {said}".strip()
 
     def main_pressed(self) -> None:
         self._build_config()
 
     def refresh_local_gates(self) -> None:
-        """What the step holds and what follows from it, and the way on to the next step once a model is applied."""
+        """What the step holds and what follows from it, and the way on to the next step once a model is applied. The
+        units row offers a units file other than the model's while the step holds one, or while it is the row's
+        choice."""
+        held_units = held_value(self._draft(), "units_override")
+        if isinstance(held_units, (str, Path)) and str(held_units) in self._file_units:
+            self._offer_own_units(str(held_units))
+        elif self.units_choice.currentData() != OWN_UNITS:
+            self._offer_own_units(None)
         super().refresh_local_gates()
         held = self._draft() is not None
         self.set_next(GO_TO_PRIOR if held else "", "prior" if held else None)
@@ -562,8 +616,8 @@ class ConfigPanel(StepPage):
         self.form.rows["model"].kept = False
         self._model_left()
         self._units_read.pop(model, None)
-        words, where, trouble = self._units_of(model)
-        self.units_line.set_text(UNITS_FROM.format(words, where) if words else NO_UNITS_FILE.format(trouble))
+        words, _where, _trouble = self._units_of(model)
+        self._say_the_units_file()
         if not self._typed() or self.units_text.text() == self._seeded:
             self.units_text.setText(words)
             self._seeded = words
@@ -575,12 +629,22 @@ class ConfigPanel(StepPage):
             self.form.rows[key].set_shown(self._chi())
 
     def _units_chosen(self, _index: int = 0) -> None:
-        """The line of the model's units file while it is chosen; the box of typed units, and what typing them means,
-        while they are typed."""
+        """The line of the units file chosen, the model's or another; the box of typed units, and what typing them
+        means, while they are typed."""
         typed = self._typed()
         self.units_line.setVisible(not typed)
         self.units_text.setVisible(typed)
         self.typed_note.setVisible(typed)
+        self._say_the_units_file()
+
+    def _say_the_units_file(self) -> None:
+        """The line under the units row: the units of the file chosen and where they come from; reads no file."""
+        if self.units_choice.currentData() == OWN_UNITS and self._own_units is not None:
+            words = units_words(self._file_units.get(str(self._own_units), ()))
+            self.units_line.set_text(UNITS_FROM.format(words, f"the file {Path(self._own_units).name}"))
+            return
+        words, where, trouble = self._units_read.get(self.model_combo.currentText(), ("", "", ""))
+        self.units_line.set_text(UNITS_FROM.format(words, where) if words else NO_UNITS_FILE.format(trouble))
 
     # ── applying ──
     def _build_config(self) -> None:
@@ -616,14 +680,14 @@ class ConfigPanel(StepPage):
     def apply_quietly(self, model: str, options: dict, *, fill=None) -> bool:
         """Apply ``model`` with ``options`` as "Apply model and options" does, asking nothing, for a caller that asked
         its own question first or lets go of nothing held: the model on the form; then ``fill``, when handed, which
-        fills the forms once the model stands, since a model chosen on the form lets the plan in use go and a fill made
-        before would go with it; then each setting of ``options`` by its name in a draft (``chi_mode``, the three of the
-        driven recordings, ``reparam_rotate``, and ``units_override``, the units typed, None for the model's file, or
-        the path of another units file, which the form shows typed, with its words, and the draft holds as the file),
-        every other setting of the step, and one ``options`` gives as None, at its usual value; then the rules read the
-        form as a press reads it, and a value one refuses is told as a press's refusal is and nothing is applied. True
-        when the draft is held. Nothing while a run is live, for a model the list does not hold, or for one parameter
-        inference cannot take."""
+        fills the forms once the model stands, so that the plan it fills is listed among that model's plans; then each
+        setting of ``options`` by its name in a draft (``chi_mode``, the three of the driven recordings,
+        ``reparam_rotate``, and ``units_override``, the units typed, None for the model's file, or the path of another
+        units file, which the units row offers as a third choice, by its name, and the draft holds), every other setting
+        of the step, and one ``options`` gives as None, at its usual value; then the rules read the form as a press
+        reads it, and a value one refuses is told as a press's refusal is and nothing is applied. True when the draft is
+        held. Nothing while a run is live, for a model the list does not hold, or for one parameter inference cannot
+        take."""
         if controller().is_live() or self.model_combo.findData(model) < 0 or self._unusable(model):
             return False
         self.model_combo.setCurrentText(model)
@@ -643,7 +707,11 @@ class ConfigPanel(StepPage):
                 self._refusal(Refusal(f"The units file {Path(units_file).name} cannot be read: {error}",
                                       field="units"))
                 return False
-        self._units_field.set_value(None if units is None else " ".join(str(unit) for unit in units))
+        if units_file is not None:
+            self._offer_own_units(units_file)
+            self.units_choice.setCurrentIndex(self.units_choice.findData(OWN_UNITS))
+        else:
+            self._units_field.set_value(None if units is None else " ".join(str(unit) for unit in units))
         try:
             values = self._read()
         except Refusal as refused:
@@ -733,8 +801,10 @@ class ConfigPanel(StepPage):
         return pages() if callable(pages) else ()
 
     def _model_left(self) -> None:
-        """Another model shown on the form: its plans are not read yet, the list shows "No plan", and no plan is in use,
-        nor a plan's bounds file waiting on step 2; the values on the forms stay as they are."""
+        """Another model shown on the form: its plans are not read yet, and the list shows "No plan" until they are,
+        when it stands on the plan in use again if that plan is the model's. The plan in use, and a plan's bounds file
+        waiting on step 2, stay: they are let go only when step 1 is applied with another model than the plan's. The
+        values on the forms stay as they are."""
         if not hasattr(self, "plan_choice"):
             return
         self.plan_choice.blockSignals(True)
@@ -745,12 +815,13 @@ class ConfigPanel(StepPage):
         finally:
             self.plan_choice.blockSignals(False)
         self._shown_plan, self._listed_for, self._folder_there, self._hint, self._gone = None, None, False, "", None
-        screen = self._screen
-        prior = getattr(screen, "prior_panel", None)
-        if prior is not None:
-            prior.let_the_plans_file_go()
-        if getattr(screen, "plan_source", None) is not None:
-            screen.take_plan(None)
+        self._unlisted = True
+
+    def _plan_of_the_model_shown(self, source) -> bool:
+        """Whether ``source``, the source in use, is a plan of the model shown on the form: one the list can show."""
+        if getattr(source, "kind", None) != "plan":
+            return False
+        return getattr(self._screen, "plan_model", None) == self.model_combo.currentText()
 
     def _read_the_plans(self, show: "str | None" = None) -> None:
         """The model's plans listed again, the plan shown kept while it stands there, under its own name or else under
@@ -766,6 +837,10 @@ class ConfigPanel(StepPage):
         choice, shown = self.plan_choice, show if show is not None else self.plan_choice.currentData()
         if shown is None and self._gone is not None:
             shown = self._gone                   # the plan whose file went is shown again once its file is back
+        source = getattr(self._screen, "plan_source", None)
+        if shown is None and self._unlisted and self._plan_of_the_model_shown(source):
+            shown = source.name                  # the model shown again is the plan's: the list stands on it again
+        self._unlisted = False
         found = _listed_as(names, shown)
         choice.blockSignals(True)
         try:
@@ -811,7 +886,7 @@ class ConfigPanel(StepPage):
     def _plan_chosen(self, _index: int = 0) -> None:
         """Another plan chosen in the list: it is read, so that what it holds or why it cannot be used is said. The
         forms do not change."""
-        self._gone = None
+        self._gone, self._unlisted = None, False
         if not controller().is_live():
             self._read_the_plan_shown()
         self.redraw()
@@ -833,8 +908,10 @@ class ConfigPanel(StepPage):
         in_use = source.name if source is not None and source.kind == "plan" else None
         gone = in_use is not None and listed is None and _one_plan(self._gone, in_use)
         in_the_list = _listed_as([self.plan_choice.itemData(at) for at in range(1, self.plan_choice.count())], in_use)
-        held, changed = self._in_use_words(source), listed != (in_the_list or in_use) and not gone
-        row.set_line("warn" if changed else "", CHANGED_TEXT.format(held) if changed else "")
+        # Nothing is said of a plan in use of another model than the one shown, which the list cannot show.
+        other = in_use is not None and not self._plan_of_the_model_shown(source)
+        held, changed = self._in_use_words(source), listed != (in_the_list or in_use) and not gone and not other
+        row.set_line("warn" if changed else "", NOT_FILLED_TEXT.format(held) if changed else "")
         self.plan_in_use.set_text(IN_USE_TEXT.format(held))
         refused = isinstance(shown, engine_plans.PlanRefusal)
         held = shown if isinstance(shown, engine_plans.Plan) else None

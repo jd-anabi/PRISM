@@ -871,6 +871,15 @@ class PosteriorPanel(StepPage):
             row.set_shown(not load)
         self.form.side.setVisible(not load)
         self.names = None if load else self._names
+        # The kept trainings under what the step holds while a training is set up, beside the choice to start one; in
+        # the load view after the saved posteriors, which that view is for.
+        self._body.removeWidget(self.kept_block)
+        self._body.insertWidget(self._body.indexOf(self.form if load else self.in_use) + 1, self.kept_block)
+        self._a_stop_joined()
+
+    def region_after_the_form(self) -> bool:
+        """The kept trainings stand after the form in the load view."""
+        return self.view == "load"
 
     def _switch(self) -> None:
         self.show_view("training" if self.view == "load" else "load")

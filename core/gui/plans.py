@@ -411,12 +411,15 @@ def fill_forms(screen, values: dict, source: PlanSource, keep_remembered: bool =
     return True
 
 
-def would_replace(screen, values: dict) -> tuple[str, ...]:
-    """What a fill with ``values`` would change that a person typed or that was put back: each row of steps 1 to 3 whose
-    value is neither its usual one nor the source's in use, and that the fill would set to another, as "Batches: 9,500
-    becomes 10,000", in the steps' order."""
+def would_replace(screen, values: dict, *, steps=None, keep_remembered: bool = False) -> tuple[str, ...]:
+    """What a fill with ``values`` would change that a person typed or that was put back: each row of steps 1 to 3 (of
+    ``steps`` alone, when named) whose value is neither its usual one nor the source's in use, and that the fill would
+    set to another, as "Batches: 9,500 becomes 10,000", in the steps' order; with ``keep_remembered``, a value put back
+    from last time and not touched since is kept by the fill, so it is not counted."""
     source, changed = screen.plan_source, []
     for page in screen.step_pages():
+        if steps is not None and page.step not in steps:
+            continue
         heading = HEADING_OF.get(page.step)
         for name, row in page.plan_fields().items():
             new = values.get((heading, name), _MISSING)
@@ -427,6 +430,8 @@ def would_replace(screen, values: dict) -> tuple[str, ...]:
             now = row.value()
             held = plan_value(source, heading, name)
             if same(now, new) or same(now, row.usual()) or (held is not None and same(now, held)):
+                continue
+            if keep_remembered and getattr(row, "kept", False):
                 continue
             said = typed_words(row) if now is None else ""
             changed.append(f"{row.label_text()}: {said or value_words(row, now)} becomes {value_words(row, new)}")

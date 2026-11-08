@@ -236,7 +236,10 @@ def _made(created) -> str:
 
 class PriorPanel(StepPage):
     """Step 2. ``bounds_picker`` and ``prior_picker`` list the bounds files of the model applied and the saved priors;
-    ``typed_tick`` and ``bounds_grid`` are the limits typed by hand; ``view`` is "saved" or "build"."""
+    ``typed_tick`` and ``bounds_grid`` are the limits typed by hand; ``view`` is "saved" or "build". A build empties the
+    page's figures only once its prior has come back."""
+
+    figures_until_returned = True
 
     def __init__(self, screen, parent=None):
         super().__init__(screen, TITLE, SENTENCE, step="prior", parent=parent)
@@ -532,9 +535,12 @@ class PriorPanel(StepPage):
         return "bounds_typed" if self._typed() else "bounds"
 
     def _bounds_trouble(self) -> tuple:
-        """Why the bounds chosen cannot be used, and the words beside the button; ``("", "")`` when they can, and while
-        a configuration handed to a load stands for them: the page's own is not the one that load hands the run."""
-        if self._draft() is None or self._standing is not None:
+        """Why the bounds chosen cannot be used, and the words beside the button; ``("", "")`` when they can, while a
+        configuration handed to a load stands for them (the page's own is not the one that load hands the run), and
+        while the saved view shows what is in use with nothing to apply, whatever the list of bounds files shows: after
+        a Resume of limits typed by hand or of a file of another folder it selects no file, and no load is to be
+        made."""
+        if self._draft() is None or self._standing is not None or self.nothing_to_apply():
             return "", ""
         if not self._typed() and not self.bounds_picker.key():
             return NO_BOUNDS_TEXT, NO_BOUNDS_BLOCKS
@@ -841,7 +847,7 @@ class PriorPanel(StepPage):
     def take_plans_bounds(self, name: str) -> None:
         """A plan's bounds file, filled: the limits typed by hand no longer read, and the file selected now when the
         model on step 1's form is the one applied, else held for the model it was filled for until step 1 applies it,
-        and let go when another model is chosen on the form."""
+        and let go when step 1 is applied with another model."""
         self.typed_tick.setChecked(False)
         screen = self._screen
         shown = getattr(getattr(screen, "config_panel", None), "model_combo", None)
@@ -860,7 +866,7 @@ class PriorPanel(StepPage):
     def pending_bounds(self, name: str) -> None:
         """Hold a plan's bounds file, by its name with forward slashes, until step 1 applies the model on its form, the
         model the plan was filled for: it is then selected in that model's folder. Said under the list while it waits;
-        a file chosen in the list, limits typed by hand, or another model chosen on step 1's form take its place."""
+        a file chosen in the list, limits typed by hand, or step 1 applied with another model take its place."""
         self._pending = name
         self.waiting_line.set_text(WAITING_TEXT.format(name))
         self.waiting_line.setVisible(True)
@@ -871,8 +877,8 @@ class PriorPanel(StepPage):
         return self._pending
 
     def let_the_plans_file_go(self) -> None:
-        """Another model chosen on step 1's form lets the plan in use go, and its bounds file with it: the model step 1
-        applies next has its own file."""
+        """Step 1 applied with another model than the plan's lets the plan in use go, and its bounds file with it: that
+        model has its own file."""
         self._stop_waiting()
 
     def _stop_waiting(self) -> None:

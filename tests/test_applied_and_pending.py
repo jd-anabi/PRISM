@@ -328,7 +328,7 @@ def test_a_model_inference_cannot_take_greys_apply_with_its_reason(monkeypatch):
         page.redraw()
         foot = page.foot
         assert not foot.main_button.isEnabled()
-        assert foot.reason.text() == "Cannot start yet: this model cannot be used."
+        assert foot.reason.text() == "Cannot start: this model cannot be used."
         first = foot.facts.rows()[0]
         assert (first.kind, first.sentence.plain_text()) == ("err", f"Error. {words}")
         page._build_config()
@@ -927,20 +927,52 @@ def _press_and_end(page, stand_in, end, monkeypatch):
 def test_a_build_that_ends_any_way_but_well_leaves_what_was_held(end, tmp_path, monkeypatch):
     """A build that is refused at the stage's entry, fails, is stopped or is taken back as it starts writes no slot: the
     configuration, the prior, the posterior and the observation held are the very objects they were, the name and the
-    note stand as typed, and the rail and "In use" say what they said."""
+    note stand as typed, the rail and "In use" say what they said, and the figures of the prior in use stand as they
+    stood, whatever the build drew before it ended."""
     choose(monkeypatch, words="Build and release the posterior")
     with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
         session = screen.session
         held = (session.cfg, session.inf_prior, session.posterior, session.observation)
         said = (screen.step_states(), page.in_use.line_text(), page.in_use.sentence.plain_text(),
                 window.shell.rail.row("prior").accessibleName())
+        stack = page.figure_stack
+        stack.add_figure("The prior in use", b"")
+        if end != "withdrawn":
+            stand_in.figure("The build's own")          # drawn as the build starts, before it ends
         _press_and_end(page, stand_in, end, monkeypatch)
+        assert [stack.tabText(at) for at in range(stack.count())] == ["The prior in use"], (
+            end, [stack.tabText(at) for at in range(stack.count())])
         assert screen.session is session
         assert all(now is then for now, then in zip((session.cfg, session.inf_prior, session.posterior,
                                                      session.observation), held)), end
         assert (page.names.name.text(), page.names.note.text()) == ("retrain_2", "a second try"), end
         assert (screen.step_states(), page.in_use.line_text(), page.in_use.sentence.plain_text(),
                 window.shell.rail.row("prior").accessibleName()) == said, end
+
+
+def test_a_build_that_returns_its_prior_shows_its_own_figures_alone(tmp_path, monkeypatch):
+    """The figures of the prior in use stand out of sight on the build's own page while it runs, and go once the build
+    has returned its prior: the page then shows the new prior's figures alone."""
+    from core.artifacts import default_store
+    from core.gui.run.controller import controller
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    from tests._runs import turn_until
+    app = qt_app()
+    choose(monkeypatch, words="Build and release the posterior")
+    with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        stack = page.figure_stack
+        stack.add_figure("The prior in use", b"")
+        stand_in.figure("The build's own")
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        turn_until(app, lambda: stack.count() == 2)
+        during = [stack.tabText(at) for at in range(stack.count())]
+        written = _prior_artifact(default_store(), _nad_cfg(), name="retrain_2").id
+        stand_in.release(SimpleNamespace(kind="prior", id=written, name="retrain_2",
+                                         manifest=default_store().get("prior", written)))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert during == ["The prior in use", "The build's own"], during
+        assert [stack.tabText(at) for at in range(stack.count())] == ["The build's own"]
 
 
 def test_a_prior_comes_into_use_only_when_its_run_returns(tmp_path, monkeypatch):
@@ -3007,9 +3039,9 @@ def test_the_load_views_facts_read_the_record_selected(tmp_path, monkeypatch):
              "round "
              "will refuse this pair. Load other_prior in step 2 first.", NO_PLAN], True, ""), seen[with_other]
         assert seen[for_hopf] == (["Error. This posterior was made for the model Hopf.", NO_PLAN], False,
-                                  "Cannot start yet: this posterior is for another model."), seen[for_hopf]
+                                  "Cannot start: this posterior is for another model."), seen[for_hopf]
         assert seen[unread] == (["Error. The posterior cannot be read: OSError: the disk said no", NO_PLAN], False,
-                                "Cannot start yet: the posterior cannot be read."), seen[unread]
+                                "Cannot start: the posterior cannot be read."), seen[unread]
 
 
 def test_a_load_reads_none_of_the_training_settings(tmp_path, monkeypatch):
@@ -3899,7 +3931,7 @@ def test_never_fixes_continue_or_start_new_with_its_reason(tmp_path, monkeypatch
         assert page.resume_choice.isEnabled() and page.never_line.isHidden()
         _pick(page.resume_choice, "require")
         page.read_facts()
-        assert page.foot.reason.text() == "Cannot start yet: there is nothing to continue."
+        assert page.foot.reason.text() == "Cannot start: there is nothing to continue."
         never.field.setText("0")                    # a typed 0 saves nothing either, as the stage reads it
         assert (page.resume_choice.currentData(), page.resume_choice.isEnabled(), page.never_line.isHidden()) == (
             "auto", False, False)

@@ -976,7 +976,7 @@ def test_choosing_in_the_list_changes_nothing(tmp_path, monkeypatch, store):
     assert _said(page.plan_about) == f"{ABOUT_RETRAIN} 8 settings in 4 steps."
     assert held() == before
     assert _said(page.plan_in_use) == "In use: no plan."
-    assert page.form.rows["plan"].line.words == "Changed, not applied. In use: no plan."
+    assert page.form.rows["plan"].line.words == "Not filled yet. In use: no plan."
     assert written == [], written
 
 
@@ -1052,10 +1052,10 @@ def test_a_long_plan_name_keeps_the_first_step_inside_the_least_window(factor, t
 def test_a_hand_named_file_is_listed_and_a_plan_with_problems_fills_nothing(tmp_path, monkeypatch, store):
     """Every .txt of the model's folder is listed, a hand-named one too. One with problems says so with each problem on
     its line, greys the fill button with the reason beside it, and fills nothing, never a part of a plan, at a press
-    that reaches the page all the same. "Open the plans folder" is greyed until the folder exists, then opens it."""
-    from core.gui import plans as window_plans
-    opened = []
-    monkeypatch.setattr(window_plans, "open_folder", opened.append)
+    that reaches the page all the same. "Open the plans folder" is greyed until the folder exists, then hands the folder
+    to the computer, which the session's guard keeps in place of opening it."""
+    from PySide6.QtCore import QUrl
+    from tests._dialogs import opened
     window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch)
     assert _opened(page) == ["No plan"] and not page.open_button.isEnabled()
     broken = "# Training\nnum_runs = 9000\nnum_run = 5\n\n# Trainng\nhidden_features = 64\n"
@@ -1075,7 +1075,7 @@ def test_a_hand_named_file_is_listed_and_a_plan_with_problems_fills_nothing(tmp_
     page._fill_pressed()
     assert _values(screen) == before and screen.plan_source is None
     page.open_button.click()
-    assert opened == [folder]
+    assert opened() == [QUrl.fromLocalFile(str(folder)).toLocalFile()]
 
 
 def test_a_plan_with_many_problems_says_eight_and_counts_the_rest_each_breaking_anywhere(tmp_path, monkeypatch, store):
@@ -1484,9 +1484,9 @@ def test_a_waiting_file_is_found_in_the_folder_of_the_model_applied(tmp_path, mo
 
 
 def test_a_waiting_file_goes_with_the_model_it_was_filled_for(tmp_path, monkeypatch, store):
-    """Another model chosen on step 1's form lets the plan in use go, and its waiting bounds file with it: the line
-    under the list goes, and the model applied next has its own file back, kept from last time, with nothing said of the
-    plan's."""
+    """Another model chosen on step 1's form lets nothing go: the plan in use and its waiting bounds file stand, the
+    file said under the list. Applied, that model lets both go: the line under the list goes, and the model has its own
+    file back, kept from last time, with nothing said of the plan's."""
     from core.gui import settings
     from core.gui.remembered import BOUNDS_KEY, BOUNDS_MODEL_KEY
     qs = settings.settings()
@@ -1503,7 +1503,9 @@ def test_a_waiting_file_goes_with_the_model_it_was_filled_for(tmp_path, monkeypa
     applied = (prior.bounds_picker.key(), prior.gone_line.isHidden(), prior.waiting_line.isHidden(),
                _origins(screen)[("prior", "bounds")])
     assert before[0] == "master_tier1.txt" and not before[2], before
-    assert chosen == (None, True, None, ""), chosen
+    assert chosen[:2] == ("master_tier1.txt", False) and chosen[2].name == "retrain", chosen
+    assert chosen[3] == "from plan retrain", chosen
+    assert screen.plan_source is None, "applied with another model, the plan in use stood"
     assert applied == ("cell.txt", True, True, "kept from last time"), applied
 
 
@@ -1561,24 +1563,63 @@ def test_the_windows_two_checks_are_listed_as_the_readers_are(tmp_path, monkeypa
         "line 3: 'num_run' is not a setting PRISM has. The nearest is num_runs."], "the reader's problems stood alone"
 
 
-def test_a_model_changed_returns_the_list_to_no_plan(tmp_path, monkeypatch, store):
-    """The list follows the model shown on step 1's form: another model chosen there shows "No plan", lists that
-    model's own plans as it opens, and leaves no plan in use; the values on the forms stay as they are, and say they
-    are changed from the usual."""
+def test_another_model_on_the_form_and_back_keeps_the_plan_in_use(tmp_path, monkeypatch, store):
+    """The list follows the model shown on step 1's form: another model chosen there shows "No plan" and lists that
+    model's own plans as it opens, while the plan in use stays in use, its line under the list left out for a model it
+    is not of. Chosen back, the list stands on the plan in use again at its next reading, and nothing is lost: the plan
+    line, the origins, the plan a training's history keeps and the plan last used."""
     window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
     hopf = folder.parent / "hopf"
     hopf.mkdir()
     _plan(hopf, "# Training\nnum_runs = 3000\n", "hopf_plan")
     _press_fill(page, monkeypatch, answer="Fill the forms")
-    assert screen.plan_source.name == "retrain"
+    before = ([_said(one.plan_line) for one in screen.step_pages()], _origins(screen), screen.plan_entry(),
+              screen.plan_source)
     page.model_combo.setCurrentText("HOPF")
-    assert _listed(page) == ["No plan"] and screen.plan_source is None
+    assert _listed(page) == ["No plan"] and screen.plan_source is before[3]
+    assert page.form.rows["plan"].line.isHidden(), "a line under the list compared it with another model's plan"
+    assert _said(page.plan_in_use).startswith("In use: plan retrain, filled ")
     assert _values(screen)[("training", "num_runs")] == 10000
-    assert _origins(screen)[("training", "num_runs")] == "changed from the usual"
-    assert [_said(one.plan_line) for one in screen.step_pages()] == ["No plan"] * 3
+    assert _origins(screen)[("training", "num_runs")] == "from plan retrain"
     assert _opened(page) == ["No plan", "hopf_plan"]
     page.model_combo.setCurrentText("NADROWSKI")
-    assert _listed(page) == ["No plan"] and _opened(page) == ["No plan", "retrain"]
+    page.read_facts()
+    assert page.plan_choice.currentData() == "retrain" and page.form.rows["plan"].line.isHidden()
+    assert ([_said(one.plan_line) for one in screen.step_pages()], _origins(screen), screen.plan_entry(),
+            screen.plan_source) == before
+
+
+def test_step_one_applied_with_another_model_lets_the_plan_and_its_waiting_file_go(tmp_path, monkeypatch, store):
+    """The plan in use, and a plan's bounds file that waits, are let go only when step 1 is applied with another model
+    than the plan's: the plan line then reads "No plan", the history keeps none, and the model applied has its own
+    bounds file. Applied with the plan's own model, both stay."""
+    from tests._dialogs import choose
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    prior = screen.prior_panel
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert prior.waiting_file() == "master_tier1.txt"
+    page.model_combo.setCurrentText("HOPF")
+    assert screen.plan_source is not None and prior.waiting_file() == "master_tier1.txt"
+    page.model_combo.setCurrentText("NADROWSKI")
+    page.foot.main_button.click()
+    assert getattr(screen.plan_source, "name", None) == "retrain", "applied with the plan's own model, the plan went"
+    assert prior.bounds_picker.key() == "master_tier1.txt"
+    page.model_combo.setCurrentText("HOPF")
+    choose(monkeypatch, words="Apply and start a new session")
+    page.foot.main_button.click()
+    assert screen.session.draft.model == "HOPF"
+    assert (screen.plan_source, screen.plan_entry(), prior.waiting_file()) == (None, None, None)
+    assert [_said(one.plan_line) for one in screen.step_pages()] == ["No plan"] * 3
+    page.model_combo.setCurrentText("NADROWSKI")
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    assert prior.waiting_file() == "master_tier1.txt"
+    choose(monkeypatch, words="Apply and start a new session")
+    page.model_combo.setCurrentText("HOPF")
+    page.rot_choice.setCurrentIndex(page.rot_choice.findData(not page.rot_choice.currentData()))
+    assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+    page.foot.main_button.click()
+    assert (screen.plan_source, prior.waiting_file(), screen.session.draft.model) == (None, None, "HOPF"), (
+        "a plan of Nadrowski waiting stood after Hopf was applied")
 
 
 def test_the_origin_of_every_row_follows_the_source_in_use(tmp_path, monkeypatch, store):
@@ -2316,7 +2357,7 @@ def test_two_spellings_of_one_plan_listed_keep_the_plan_in_use_its_own(tmp_path,
     assert _listed(page) == ["No plan", "Retrain", "retrain"]
     assert (page.plan_choice.currentData(), page.form.rows["plan"].line.words) == ("retrain", "")
     page.plan_choice.setCurrentIndex(page.plan_choice.findData("Retrain"))
-    assert page.form.rows["plan"].line.words == "Changed, not applied. In use: plan retrain, filled 8 Oct 2026, 12:04."
+    assert page.form.rows["plan"].line.words == "Not filled yet. In use: plan retrain, filled 8 Oct 2026, 12:04."
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows keeps one file for both spellings of a name")
@@ -2366,8 +2407,8 @@ def test_with_no_file_selected_the_save_says_nothing_of_the_bounds_list(tmp_path
 
 
 def test_a_gone_plan_is_not_chosen_again_in_another_models_list(tmp_path, monkeypatch, store):
-    """The plan in use's file removed, another model chosen on step 1's form lets the plan go: a plan of that model of
-    the same name is not chosen in its list unasked."""
+    """The plan in use's file removed and another model chosen on step 1's form: a plan of that model of the same name
+    is not chosen in its list unasked, and the plan in use, the other model's, stays until step 1 is applied."""
     window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
     _press_fill(page, monkeypatch, answer="Fill the forms")
     hopf = folder.parent / "hopf"
@@ -2377,7 +2418,8 @@ def test_a_gone_plan_is_not_chosen_again_in_another_models_list(tmp_path, monkey
     page.read_facts()
     page.model_combo.setCurrentText("HOPF")
     page.read_facts()
-    assert (page.plan_choice.currentText(), screen.plan_source) == ("No plan", None), page.plan_choice.currentText()
+    assert page.plan_choice.currentText() == "No plan", page.plan_choice.currentText()
+    assert screen.plan_source.name == "retrain", "a model only shown on the form let the plan in use go"
 
 
 def test_a_name_in_two_other_cases_is_said_not_to_be_there(tmp_path, monkeypatch):
@@ -2497,7 +2539,7 @@ def test_a_plan_in_use_whose_file_is_gone_is_said_by_its_fact_alone(tmp_path, mo
     page.read_facts()
     page.plan_choice.setCurrentIndex(page.plan_choice.findData("another"))   # with the arrow keys, the list shut
     page.plan_choice.setCurrentIndex(0)
-    assert row.line.words.startswith("Changed, not applied. In use: plan retrain"), row.line.words
+    assert row.line.words.startswith("Not filled yet. In use: plan retrain"), row.line.words
     assert (page.fill_button.text(), page.fill_button.isEnabled()) == ("Return the forms to the usual values", True)
 
 
@@ -2526,7 +2568,7 @@ def test_a_source_with_no_moment_says_none(tmp_path, monkeypatch, store):
                                              {("Training", "num_runs"): 10000}))
     page.redraw()
     assert _said(page.plan_in_use) == "In use: plan retrain.", _said(page.plan_in_use)
-    assert page.form.rows["plan"].line.words == "Changed, not applied. In use: plan retrain."
+    assert page.form.rows["plan"].line.words == "Not filled yet. In use: plan retrain."
     changed = window_plans.PlanSource("record", "retrain_posterior", None, "", None, {}, ident="20261008T120400")
     screen.take_plan(changed)
     page.redraw()
@@ -2617,7 +2659,8 @@ def test_a_plan_under_the_inputs_is_recorded_by_its_path_under_them(tmp_path, mo
 
 def test_a_trainings_start_writes_the_keys_of_the_model_held(tmp_path, monkeypatch, store):
     """A training's start writes the plan last used with the model step 1 holds, never the model the form shows: with
-    another model shown, that model's hint is left as it was."""
+    another model shown, the plan in use stands and is written with the model held, and the shown model's hint is left
+    as it was."""
     from core.gui import settings
     from core.gui.remembered import LAST_USED_KEY
     window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
@@ -2627,7 +2670,7 @@ def test_a_trainings_start_writes_the_keys_of_the_model_held(tmp_path, monkeypat
     _a_training_starts(screen, monkeypatch, tmp_path)
     qs = settings.settings()
     qs.sync()
-    assert (qs.value(LAST_USED_KEY.format("nadrowski")), qs.value(LAST_USED_KEY.format("hopf"))) == ("", None), (
+    assert (qs.value(LAST_USED_KEY.format("nadrowski")), qs.value(LAST_USED_KEY.format("hopf"))) == ("retrain", None), (
         qs.value(LAST_USED_KEY.format("nadrowski")), qs.value(LAST_USED_KEY.format("hopf")))
 
 

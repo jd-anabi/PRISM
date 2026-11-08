@@ -1,6 +1,8 @@
 """The drop-down of the look: a stock combo box that paints its own chevron."""
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QPainter, QPalette
+import math
+
+from PySide6.QtCore import QRect, QRectF, Qt
+from PySide6.QtGui import QFontMetricsF, QPainter, QPalette
 from PySide6.QtWidgets import QComboBox, QStyle, QStyleOptionComboBox, QStylePainter
 
 from .. import design
@@ -49,12 +51,38 @@ class Choice(QComboBox):
             self.say_whole()
 
     def _whole_width(self) -> int:
-        """As wide as the longest item, with the chevron's room: what the toolkit gives with no cap."""
-        return super().sizeHint().width()
+        """As wide as the longest item, or the hint, with the chevron's room: what the toolkit gives with no cap, and
+        wider by what the toolkit's measure of an item falls short of the room it is drawn in. On Windows, at some text
+        sizes, the toolkit measures an item a pixel narrower than it draws it, and a box of that width cut "No plan" to
+        "No…an" at one and a half times the ordinary text."""
+        texts = [self.itemText(at) for at in range(self.count())] + [self.placeholderText()]
+        given, chrome = self._chrome()
+        return max(given, chrome + max((self._advance(text) for text in texts if text), default=0))
+
+    def shown_width(self) -> int:
+        """As wide as the box must be to show the item chosen, or the hint while none is, whole."""
+        return self._chrome()[1] + self._advance(self.placeholderText() if self._hinting() else self.currentText())
+
+    def _chrome(self) -> tuple[int, int]:
+        """The toolkit's own width of the box, and the room the box takes beside its words: its padding and the
+        chevron's room."""
+        given = super().sizeHint().width()
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        option.rect = QRect(0, 0, given, max(self.height(), 1))
+        room = self.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
+                                           QStyle.SubControl.SC_ComboBoxEditField, self).width()
+        return given, given - room
+
+    def _advance(self, text: str) -> int:
+        """How wide ``text`` is drawn, to the pixel above."""
+        exact = math.ceil(QFontMetricsF(self.font()).horizontalAdvance(text))
+        return max(self.fontMetrics().horizontalAdvance(text), exact)
 
     @reported(QComboBox.sizeHint)
     def sizeHint(self):
         hint = super().sizeHint()
+        hint.setWidth(self._whole_width())
         if self._most is not None:
             hint.setWidth(min(hint.width(), design.scaled(self._most)))
         if self._room is not None:
@@ -76,9 +104,13 @@ class Choice(QComboBox):
             self.view().setMinimumWidth(self._whole_width())  # the open list shows every name whole
         super().showPopup()
 
+    def _hinting(self) -> bool:
+        """Whether the box shows its hint: no item chosen, and a hint to show."""
+        return self.currentIndex() < 0 and bool(self.placeholderText())
+
     @reported()
     def paintEvent(self, event):
-        if not self._cut():
+        if not self._cut() and not self._hinting():
             super().paintEvent(event)                    # the box itself, as the toolkit draws it
         else:
             self._paint_cut_short()
@@ -102,15 +134,22 @@ class Choice(QComboBox):
         return self.fontMetrics().elidedText(text, Qt.ElideMiddle, room.width())
 
     def _paint_cut_short(self) -> None:
-        """The box as the toolkit draws it, the item shown cut short in its middle to the room it has."""
+        """The box as the toolkit draws it, the item shown cut short in its middle to the room it has. The hint is drawn
+        in the hint's colour of the palette, greyed with the box: the style sheet's colour of a box's text would win
+        over the palette the toolkit's own label is drawn with, and the hint would read as a name chosen."""
         painter = QStylePainter(self)
         try:
             option = QStyleOptionComboBox()
             self.initStyleOption(option)
             painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option)
-            if self.currentIndex() < 0 and self.placeholderText():
-                option.palette.setBrush(QPalette.ColorRole.ButtonText, option.palette.placeholderText())
             option.currentText = self.shown_text()
-            painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option)
+            if not self._hinting():
+                painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option)
+                return
+            room = self.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
+                                               QStyle.SubControl.SC_ComboBoxEditField, self)
+            group = QPalette.ColorGroup.Active if self.isEnabled() else QPalette.ColorGroup.Disabled
+            painter.setPen(self.palette().color(group, QPalette.ColorRole.PlaceholderText))
+            painter.drawText(room, int(Qt.AlignLeft | Qt.AlignVCenter), option.currentText)
         finally:
             painter.end()

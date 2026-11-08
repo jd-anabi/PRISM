@@ -627,8 +627,9 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
 
 
 def _laid_out(label):
-    """A label's words laid out at its width, as they may break: inside a word that is wider than a line, as a long
-    path is, and nowhere else but between words; the lines one under the other from the label's top left."""
+    """A label's words laid out at the width inside its margins, as they may break: inside a word that is wider than a
+    line, as a long path is, and nowhere else but between words; the lines one under the other from the top left
+    inside its margins, in the label's own coordinates."""
     from PySide6.QtCore import QPointF
     from PySide6.QtGui import QTextLayout, QTextOption
     layout = QTextLayout(label.text().replace("\n", chr(0x2028)), label.font())
@@ -636,13 +637,14 @@ def _laid_out(label):
     option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
     layout.setTextOption(option)
     layout.beginLayout()
-    top = 0.0
+    room = label.contentsRect()
+    top = float(room.top())
     while True:
         line = layout.createLine()
         if not line.isValid():
             break
-        line.setLineWidth(label.width())
-        line.setPosition(QPointF(0, top))
+        line.setLineWidth(room.width())
+        line.setPosition(QPointF(room.left(), top))
         top += line.height()
     layout.endLayout()
     return layout
@@ -660,7 +662,7 @@ def _at_the_end_of(layout, index):
     as the layout counts them."""
     from PySide6.QtCore import QPoint
     line = layout.lineAt(index)
-    x = line.naturalTextWidth() + 1
+    x = line.x() + line.naturalTextWidth() + 1
     return QPoint(round(x), round(line.y() + line.height() / 2)), line.xToCursor(x)
 
 

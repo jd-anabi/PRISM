@@ -182,8 +182,9 @@ class Next:
     page the button opens and whose end it acknowledges; and for a button that does something in place of opening a
     place, what it does (``"continue_with_these"``: apply and load what was in use last time;
     ``"continue_run"``: fill the forms from a training's history and continue it, or fit it again; ``"resume"``: resume
-    a kept training) and the offer it takes (``offer``); and ``link``, the words of a link beside the button that opens
-    the run's page, for a run whose end has not been seen and whose offer the button takes."""
+    a kept training) and the offer it takes (``offer``); ``link``, the words of a link beside the button that opens
+    the run's page, for a run whose end has not been seen and whose offer the button takes; and ``command``, a command
+    line set apart under the sentence, as a kept narrowing round's, which is resumed from the command line."""
     heading: str
     sentence: str
     button: str
@@ -193,6 +194,7 @@ class Next:
     action: str | None = None
     link: str | None = None
     offer: object = None
+    command: str = ""
 
 
 # the next step while a step is in hand, by the step
@@ -276,8 +278,8 @@ def _takes(offer) -> bool:
 def _offered(offer) -> Next:
     """Home's next step for the offer ``offer``."""
     if offer.kind == "round":
-        return Next("Next: resume the narrowing round", f"{offer.sentence}{offer.command}", "Open Training",
-                    "inference", "training", offer=offer)
+        return Next("Next: resume the narrowing round", offer.sentence.rstrip(), "Open Training", "inference",
+                    "training", offer=offer, command=offer.command)
     label = offer.label
     if offer.kind != "resume":
         heading = "Next: continue the training"

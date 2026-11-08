@@ -31,6 +31,9 @@ NOTHING_TO_APPLY_TEXT = "Nothing to apply: these choices are in use."
 REFUSED_BLOCKS = "the last start was refused"
 ONE_BLOCKS_TEXT = "Cannot start yet: {}."
 SEVERAL_BLOCK_TEXT = "Cannot start yet: {}, and {} more above."
+#: The same, for a block that neither waiting nor an edit on the page lifts: the thing chosen itself cannot be used.
+ONE_STOPS_TEXT = "Cannot start: {}."
+SEVERAL_STOP_TEXT = "Cannot start: {}, and {} more above."
 
 
 @dataclass(frozen=True)
@@ -67,11 +70,12 @@ def reason_beside(facts: Sequence[Fact], *, live: bool, nothing_to_apply: bool) 
     if live:
         return LIVE_TEXT
     blocking = [fact.blocks for fact in ordered(facts) if fact.blocks]
+    if not blocking:
+        return NOTHING_TO_APPLY_TEXT if nothing_to_apply else ""
+    final = blocking[0] in FINAL_BLOCKS          # the lead is the first block's, the one its words name
     if len(blocking) == 1:
-        return ONE_BLOCKS_TEXT.format(blocking[0])
-    if blocking:
-        return SEVERAL_BLOCK_TEXT.format(blocking[0], len(blocking) - 1)
-    return NOTHING_TO_APPLY_TEXT if nothing_to_apply else ""
+        return (ONE_STOPS_TEXT if final else ONE_BLOCKS_TEXT).format(blocking[0])
+    return (SEVERAL_STOP_TEXT if final else SEVERAL_BLOCK_TEXT).format(blocking[0], len(blocking) - 1)
 
 
 def reading_words(read_at: datetime | None, *, live: bool) -> str:
@@ -200,6 +204,20 @@ def model_in_use(draft, units_said: str) -> tuple[str, str]:
     if units_said:
         parts.append(f"Units {units_said}.")
     return model_label(getattr(draft, "model", None)), " ".join(parts)
+
+
+#: What step 1's "In use" adds after a Resume, while the session runs as the resumed training was kept.
+RESUMED_TEXT = "Runs on {} as the resumed training was kept{}, until step 1 or step 2 is applied again."
+RESUMED_WIDTH = ", {:,} simulations at a time"
+DEVICE_WORDS = {"cpu": "the processor", "cuda": "the graphics card"}
+
+
+def resumed_words(device: "str | None", width: "int | None") -> str:
+    """The sentence step 1's "In use" adds after a Resume: the device the session now uses, by the kind of device
+    ("cpu", "cuda"), and the width, when it is the kept training's own; "" for a device of no kind known."""
+    if device not in DEVICE_WORDS:
+        return ""
+    return RESUMED_TEXT.format(DEVICE_WORDS[device], RESUMED_WIDTH.format(width) if width else "")
 
 
 def model_facts(*, usable_reason: str, field_facts: Sequence[Fact], plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
@@ -799,3 +817,11 @@ def training_facts(*, needs_prior: bool = False, uses: str = "", budget: str = "
     facts += [Fact("info", said) for said in (how_long, memory) if said]
     facts += [Fact("warn", said) for said in others_pending if said]
     return ordered((*facts, *name_facts, *field_facts, *plan_lines))
+
+
+#: The blocks that neither waiting nor an edit on the page lifts, beside which the button reads "Cannot start:": a model
+#: parameter inference cannot take, a file or a record that cannot be read, a record made for another model, and nothing
+#: to continue. Every other block is lifted on the page (a field, a choice, a name, a step applied, a record chosen or
+#: made) and reads "Cannot start yet:".
+FINAL_BLOCKS = frozenset({UNUSABLE_BLOCKS, BOUNDS_BLOCKS, PRIOR_BLOCKS, OTHER_MODEL_BLOCKS, NOTHING_TO_CONTINUE_BLOCKS,
+                          POSTERIOR_BLOCKS, OTHER_MODEL_POSTERIOR_BLOCKS})

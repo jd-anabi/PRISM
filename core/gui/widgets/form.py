@@ -20,10 +20,11 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QHBoxLayout, Q
                                QVBoxLayout, QWidget)
 
 from core.artifacts import default_store
+from core.artifacts import manifest
 from core.Helpers import labels
 from core.refusals import Refusal, require_note
 
-from .. import design, fields, fonts, style
+from .. import design, fields, fonts, record_words, style
 from ..reported import reported
 from ..run.controller import controller
 from ..step_facts import Fact
@@ -43,6 +44,14 @@ MAIN_HEAD = "Main settings"
 #: How long after the last keystroke a name is checked, in milliseconds.
 READ_AFTER_MS = 300
 NAME_FREE_TEXT = "Fine. This name is free."
+#: The least width of the block for a run beside the main settings, in the look's pixels at the ordinary text size: a
+#: name of the usual length, and the name's check on one line.
+BLOCK_LEAST = 360
+#: The window's words for a name the store refuses, in the order the store judges it.
+NAME_SHAPE_TEXT = "A name is letters, digits, _ . and -, starts with a letter or a digit, and is at most 64 characters."
+NAME_ID_TEXT = ("A name cannot be shaped like a record's id: a date and a time, as 20261108T081500, or twelve of the "
+                "digits and the letters a to f.")
+NAME_TAKEN_BY_TEXT = "The name '{}' is taken by another {}. Choose another name."
 TYPE_A_NAME_TEXT = "Type a name."
 NAME_BLOCKS = "the name cannot be used"
 NEEDS_A_NAME = "a name is needed"
@@ -546,6 +555,29 @@ class Fold(Ruled):
             self.set_open(True)
 
 
+def name_words(kind: str, name: str) -> str:
+    """The window's sentence for a name the store refuses for a record of ``kind``, judged as the store judges it: its
+    shape first, then a shape a record's id has, else taken. The store's own sentence names an "artifact" and asks for a
+    rename the window cannot make."""
+    if not manifest.NAME_RE.match(name):
+        return NAME_SHAPE_TEXT
+    if manifest.ID_RE.match(name):
+        return NAME_ID_TEXT
+    return NAME_TAKEN_BY_TEXT.format(name, record_words.kind_word(kind))
+
+
+def name_trouble(kind: str, name: str, *, store=None) -> "str | None":
+    """Why the store would refuse ``name`` for a record of ``kind``, in the window's words; None when it is free, and
+    when the store cannot be read now (a stage reads it again at its entry)."""
+    try:
+        (store or default_store()).assert_name_free(kind, name)
+    except Refusal:
+        return name_words(kind, name)
+    except OSError:
+        return None
+    return None
+
+
 class NameAndNote(QWidget):
     """The block of a run that makes a record: "Name" and "Note". A required name left blank blocks with its own words;
     a name the store refuses is outlined, with the store's sentence under it, and blocks; a note its rule refuses does
@@ -618,8 +650,8 @@ class NameAndNote(QWidget):
         self._refused, self._free = "", NAME_FREE_TEXT
         try:
             (self._store or default_store()).assert_name_free(self.kind, name)
-        except Refusal as refused:
-            self._refused, self._free = refused.message, ""
+        except Refusal:
+            self._refused, self._free = name_words(self.kind, name), ""
         except OSError:
             self._free = ""
         self._say_name()
@@ -687,6 +719,9 @@ class Form(QWidget):
         column.addStretch(1)
         self.side.setLayout(column)
         self.side.setVisible(False)
+        # beside the main settings, the block holds a name of the usual length and the name's check whole on one line
+        self.side.setMinimumWidth(design.scaled(BLOCK_LEAST))
+        self._beside: "int | None" = None        # the room the main settings have beside the block, or None
         self.columns = Columns(left, self.side, stretch=design.GAP["setup_columns"])
         self.setLayout(_column(self.columns))
 
@@ -748,24 +783,42 @@ class Form(QWidget):
     def fit(self, width: int) -> None:
         """Set the two columns side by side when ``width`` has room, else one above the other; and hold each list among
         the main settings that has not the room for its longest item beside its label to the room it has, so that the
-        main settings stand within ``width`` at the window's least size."""
+        main settings stand within ``width`` at the window's least size. Beside the block for this run, that room is
+        what the block's least width leaves, so that a list's longest item never narrows the block: the block stands
+        beside only where every list shows the item chosen whole in that room, and under the main settings else."""
         self._width = width
+        self._beside = self._room_beside(width)
         self._hold_the_lists()
         self.columns.fit(width)
 
-    def _hold_the_lists(self) -> None:
-        """Each list among the main settings held to the room its row leaves it at the width last fitted to: the label's
-        column, the gaps, and the unit and the origin that stand beside it; let go where its longest item fits."""
-        if self._width is None:
-            return
+    def _list_rows(self) -> list:
+        """The main settings' rows that hold a list, each with the room taken beside the list in its row: the label's
+        column, the gaps, and the unit and the origin that stand beside it."""
         gap = self._grid.horizontalSpacing()
         label = self._grid.columnMinimumWidth(0)
-        for row in self._main_rows:
-            box = row.widget
-            if not isinstance(box, Choice):
-                continue
-            beside = sum(part.minimumSizeHint().width() + gap for part in (row.unit, row.origin) if not part.isHidden())
-            room = self._width - label - gap - beside
+        return [(row.widget, label + gap + sum(part.minimumSizeHint().width() + gap for part in (row.unit, row.origin)
+                                               if not part.isHidden()))
+                for row in self._main_rows if isinstance(row.widget, Choice)]
+
+    def _room_beside(self, width: int) -> "int | None":
+        """The room the main settings have beside the block for this run at ``width``: None when the block is not shown,
+        when the page is too narrow for two columns, or when a list would not show the item chosen whole there."""
+        if self.side.isHidden() or width < design.two_columns_from():
+            return None
+        least = max(self.side.minimumWidth(), self.side.minimumSizeHint().width())
+        room = width - design.scaled(design.SIZE["col_gap"]) - least
+        if any(box.shown_width() > room - taken for box, taken in self._list_rows()):
+            return None
+        return room
+
+    def _hold_the_lists(self) -> None:
+        """Each list among the main settings held to the room its row leaves it at the width last fitted to, beside the
+        block when it stands beside; let go where its longest item fits."""
+        if self._width is None:
+            return
+        whole = self._width if self._beside is None else self._beside
+        for box, taken in self._list_rows():
+            room = whole - taken
             box.hold_to(room if box._whole_width() > room else None)
 
     @reported(False)

@@ -17,6 +17,8 @@ from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QSi
 from .. import chain, design, fonts, keys, style
 from ..reported import reported
 from ..run import ends
+from ..run.view import SelectableLines
+from ..widgets.message_row import MessageRow
 from ..widgets.page import Columns, Page, PageHead, Sentence
 from ..widgets.rule_table import Column, RuleTable, StateCell, TextCell
 from ..widgets.ruled import SectionHead
@@ -71,7 +73,8 @@ class HomeFacts:
     """What Home states, read at one moment: the inference session, its six steps' states, the run's status (None
     for none: nothing runs, and no end waits to be seen), every record of the store in use, whether the records
     folder in use has a run in its history or a run is live, the latest runs of that folder, newest first, and what
-    was in use last time (None for nothing read)."""
+    was in use last time (None for nothing read); and the sentence a press left on Home ("" for none): where its chain
+    of loads stopped, or why it could not start one."""
     session: object
     states: tuple
     run: object
@@ -80,6 +83,7 @@ class HomeFacts:
     runs: tuple[RunRow, ...] = ()
     picks: object = None
     offers: tuple = ()
+    notice: str = ""
 
 
 def _capital(words: str) -> str:
@@ -168,6 +172,8 @@ class HomeScreen(QWidget):
     navigate = Signal(str, object)
     open_run = Signal(str)
     action_pressed = Signal(str)
+    # The main button pressed, whatever it then does: said first.
+    pressed = Signal()
 
     def __init__(self, read: Callable[[], HomeFacts], parent=None) -> None:
         super().__init__(parent)
@@ -186,9 +192,20 @@ class HomeScreen(QWidget):
         self.page.add_fixed(self._head)
         self.page.add_gap(design.scaled(design.GAP["head_to_body"]), design.scaled(design.GAP["head_to_body_small"]))
 
+        # under the heading, until the next press or run: where a chain of loads a press of Home's asked for stopped, or
+        # why the press could not start one
+        self.notice = MessageRow("warn", "")
+        self.notice.setVisible(False)
         # the next step: its heading over a rule, a sentence, and the main button
         self.next_heading = SectionHead("")
         self._next_sentence = Sentence()
+        # A command set apart under the sentence (a kept narrowing round's): on lines of its own, in the fixed-width
+        # face, selectable, so that it is copied whole and nothing of the sentence with it, as the Training step's list
+        # sets it.
+        self.next_command = SelectableLines()
+        self.next_command.setFont(fonts.fixed())
+        self.next_command.setFocusPolicy(Qt.StrongFocus)
+        self.next_command.setVisible(False)
         self.next_button = style.set_class(_MainButton(), cls="primary")
         self.next_button.clicked.connect(self._next_pressed)
         # beside the button that takes the offer of a run whose end has not been seen: the way to its page
@@ -207,8 +224,10 @@ class HomeScreen(QWidget):
         lines = QVBoxLayout(self._next_block)
         lines.setContentsMargins(0, 0, 0, 0)
         lines.setSpacing(design.scaled(design.SIZE["row_gap"]))    # one space between those shown: a next
+        lines.addWidget(self.notice)
         lines.addWidget(self.next_heading)                         # step with no sentence keeps no room for one
         lines.addWidget(self._next_sentence)
+        lines.addWidget(self.next_command)
         lines.addLayout(buttons)
 
         # the first opening: four buttons, each with its sentence beside it
@@ -313,9 +332,13 @@ class HomeScreen(QWidget):
         self._left.setVisible(not self._first)
         self._next = chain.next_step(facts.session, facts.states, run=facts.run, picks=facts.picks,
                                      offers=facts.offers)
+        self.notice.set_sentence(facts.notice)
+        self.notice.setVisible(bool(facts.notice) and not self._first)
         self.next_heading.set_text(self._next.heading)
         self._next_sentence.set_text(self._next.sentence)
         self._next_sentence.setVisible(bool(self._next.sentence))
+        self.next_command.setText(self._next.command)
+        self.next_command.setVisible(bool(self._next.command))
         self.next_button.setText(style.access_key(self._next.button))
         self.next_link.setText(self._next.link or "")
         self.next_link.setVisible(bool(self._next.link))
@@ -356,6 +379,7 @@ class HomeScreen(QWidget):
 
     # what Home opens
     def _next_pressed(self) -> None:
+        self.pressed.emit()
         if self._next is not None and self._next.action is not None:
             self.action_pressed.emit(self._next.action)
         elif self._next is not None and self._next.run is not None:

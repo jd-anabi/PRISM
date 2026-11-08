@@ -1514,7 +1514,7 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
         inf.session = SbiSession(draft=types.SimpleNamespace(make_config=builder, model="NADROWSKI"))
         forget_asked()
         pp.read_facts()
-        assert said() == (("err", sentence), False, "Cannot start yet: the bounds file cannot be read."), said()
+        assert said() == (("err", sentence), False, "Cannot start: the bounds file cannot be read."), said()
         pp._main_clicked()
         assert all_asked() == [] and reached == [] and inf.session.cfg is None
 
@@ -3328,7 +3328,7 @@ def test_a_malformed_bounds_file_is_refused_beside_the_list(line, said, tmp_path
     page.read_facts()
     assert _line_of(page, "bounds") == ("err", said)
     assert not page.foot.main_button.isEnabled()
-    assert page.foot.reason.text() == "Cannot start yet: the bounds file cannot be read."
+    assert page.foot.reason.text() == "Cannot start: the bounds file cannot be read."
     assert any(row.sentence.plain_text() == f"Error. {said}" for row in page.foot.facts.rows())
     page.typed_tick.setChecked(True)
     page.read_facts()

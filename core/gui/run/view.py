@@ -459,10 +459,13 @@ class _Lines(_Wrapped):
     menu the toolkit's own for a selectable label. A selection is counted as the text layout counts the words, in
     UTF-16 units (two for a character outside the Basic Multilingual Plane), and ends when the keyboard goes to
     another control, but not when the window or a popup takes it. A command so copied is one line, as it was
-    written."""
+    written. The words stand inside the block by the room the focus ring keeps outside it, so that the ring, which takes
+    the colour of the words, stands clear of them."""
 
     def __init__(self) -> None:
         super().__init__()
+        room = design.SIZE["focus_ring"] + design.SIZE["focus_gap"]      # line weights: they do not grow with the text
+        self.setContentsMargins(room, room, room, room)
         self.setFocusPolicy(Qt.ClickFocus)
         self.setCursor(Qt.IBeamCursor)
         self._anchor = self._cursor = 0

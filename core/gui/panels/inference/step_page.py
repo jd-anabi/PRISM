@@ -44,10 +44,11 @@ from ...step_facts import Fact, ordered, pending_words, reading_words, reason_be
 from ...widgets.ask import ask
 from ...widgets.facts import Foot
 from ...widgets.figure_stack import FigureStack
-from ...widgets.form import READ_AFTER_MS, Form
+from ...widgets.form import READ_AFTER_MS, Form, name_words
 from ...widgets.form import _may_wrap as form_words
 from ...widgets.in_use import InUse
 from ...widgets.marker import painted_icon
+from ...widgets.message_row import MessageRow
 from ...widgets.page import Page, PageHead, Scroller, _ring_room
 from ..run_host import RunHost
 
@@ -103,6 +104,7 @@ class StepPage(RunHost, QWidget):
         self._by_keyboard = False            # the last press was made by the keyboard, until its run is over
         self._hand_back = False              # a load pressed by the keyboard failed: its question gives the keyboard back
         self._load_from = None               # where the figures of the load in hand begin, while it runs
+        self._build_from = None              # the same, for a run that keeps the figures until its record returns
         self._link_withdrawn = False         # a load returned its record since the last run that took the column
         self.names = None                    # the name and note of the record a run makes, when the page holds them
         self._said_changed: dict = {}        # what this page said under each selection row, by its field key
@@ -145,6 +147,11 @@ class StepPage(RunHost, QWidget):
         self._body = QVBoxLayout(body)
         self._body.setContentsMargins(0, 0, 0, 0)
         self._body.setSpacing(design.scaled(design.GAP["block"]))
+        # Under the heading: where a chain of loads that this page shows stopped, or why its press could not start it,
+        # until the next press or run.
+        self.notice = MessageRow("warn", "")
+        self.notice.setVisible(False)
+        self._body.addWidget(self.notice)
         # The plan in use, under the heading, on a step a plan fills: small, as where a value came from is said.
         self.plan_line = style.set_class(QLabel(), cls="small")
         self.plan_line.setTextFormat(Qt.PlainText)
@@ -263,10 +270,10 @@ class StepPage(RunHost, QWidget):
         sight, and again as a row joins the form or a figure joins the stack. A part that is a stop only at times has its
         place all the same. A control that makes its own fields again after that, as a grid does, calls this when it
         has."""
-        stops = [*self.head.findChildren(QPushButton), *self.run_view.stops(), *self.region_stops(),
-                 self.run_view.how_link,
-                 *self.figure_stack.stops(), self.next_button, *self.form.stops(), self.scroller, self.foot.facts.scroller,
-                 *self.foot.stops()]
+        region, after = self.region_stops(), self.region_after_the_form()
+        stops = [*self.head.findChildren(QPushButton), *self.run_view.stops(), *([] if after else region),
+                 self.run_view.how_link, *self.figure_stack.stops(), self.next_button, *self.form.stops(),
+                 *(region if after else []), self.scroller, self.foot.facts.scroller, *self.foot.stops()]
         policies = [(stop, stop.focusPolicy()) for stop in stops]
         for stop, policy in policies:
             stop.setFocusPolicy(policy | Qt.TabFocus)
@@ -279,6 +286,19 @@ class StepPage(RunHost, QWidget):
         """The stops a page stands under what the step holds, in their order: none, but on a page that lists something
         there."""
         return []
+
+    def region_after_the_form(self) -> bool:
+        """Whether what the page lists stands after the form rather than under what the step holds."""
+        return False
+
+    def to_the_form(self) -> None:
+        """The form in sight in place of a run's page that is over, or a past run's: a press that fills the form shows
+        what it filled. A run's page of a run that is live stays."""
+        shown = self.results.currentWidget()
+        if shown is self._past_view:
+            self._back_from_the_past()
+        elif shown is self.run_view and not self.is_running():
+            self._back_to_the_form()
 
     def _a_stop_joined(self) -> None:
         """A row or a figure joined the page: it takes its place in the order, once there is one."""
@@ -316,6 +336,9 @@ class StepPage(RunHost, QWidget):
                         + tuple(self.facts_from_form()))
         self._say_changed()
         self.say_the_plan()
+        said = getattr(self._screen, "notice_on", lambda _where: "")(self.step)
+        self.notice.set_sentence(said)
+        self.notice.setVisible(bool(said))
         nothing = self.nothing_to_apply()
         self.foot.set_reads(self.reads_the_disk)
         self.foot.set_main_words(self.main_words())
@@ -516,16 +539,24 @@ class StepPage(RunHost, QWidget):
         if self._body.indexOf(self.figure_stack) >= 0:
             self.figure_stack.setVisible(self.figure_stack.count() > 0)
 
+    #: Whether a run that takes the column keeps the page's figures until it returns its record, as the Prior page's
+    #: build does, so that what is in use never stands over no figure; else the figures are emptied as the run starts.
+    figures_until_returned = False
+
     def _run_began(self, spec) -> None:
-        """A run of this page's own takes away the page's own line, and empties its figures and takes its column. A run
-        that only loads a record keeps them while it runs, and leaves the last run that took the column its figures and
-        its link: the figures the load adds are kept apart."""
+        """A run of this page's own takes away the page's own line, and empties its figures and takes its column; on a
+        page whose figures stay until the run returns its record, its figures are kept apart instead, out of sight on
+        the run's page. A run that only loads a record keeps them while it runs, and leaves the last run that took the
+        column its figures and its link: the figures the load adds are kept apart."""
         self.in_use.say(None)
         self._hand_back = False
         if spec.loads_only:
             self._load_from = self.figure_stack.mark()
         else:
-            self.figure_stack.clear_all()
+            if self.figures_until_returned:
+                self._build_from = self.figure_stack.mark()
+            else:
+                self.figure_stack.clear_all()
             self._link_withdrawn = False
         super()._run_began(spec)
 
@@ -537,6 +568,14 @@ class StepPage(RunHost, QWidget):
         hands the keyboard on to the next step, and one that failed has it given back to the main button once its
         failure is told."""
         by_keyboard, self._by_keyboard = self._by_keyboard, False
+        built, self._build_from = self._build_from, None
+        if built is not None and not status.loading:
+            # A run that returned its record shows its own figures alone; one that returned none leaves the figures of
+            # what is in use, and nothing of its own.
+            if status.outcome == "finished":
+                self.figure_stack.close_before(built)
+            else:
+                self.figure_stack.close_from(built)
         if status.loading:
             finished = status.outcome == "finished"
             mark, self._load_from = self._load_from, None
@@ -593,12 +632,15 @@ class StepPage(RunHost, QWidget):
         """A refusal is told in the shared question, with where to fix it. When it closes, the row of the refused field
         keeps the sentence and takes the keyboard; a refusal with no row on this page stands first among the facts."""
         fix = fields.fix_sentence(exc.field, here=self.step)
-        ask(self, REFUSAL_TITLE, exc.message, OK_TEXT, beneath=fix or None)
+        said = exc.message
+        if exc.field == "name" and self.names is not None and self.names.name_value():
+            said = name_words(self.names.kind, self.names.name_value())     # the store's sentence names an "artifact"
+        ask(self, REFUSAL_TITLE, said, OK_TEXT, beneath=fix or None)
         row = self.form.rows.get(exc.field)
         if row is None or row.widget is None or not row.is_shown():
-            self.say_at_the_head(refused_facts((f"{exc.message} {fix}".rstrip(),))[0])
+            self.say_at_the_head(refused_facts((f"{said} {fix}".rstrip(),))[0])
             return
-        row.mark(exc.message)
+        row.mark(said)
         self.redraw()
         target = row.focus_target()
         if target is not None and self.isVisible():

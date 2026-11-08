@@ -457,6 +457,7 @@ class MainWindow(QMainWindow):
                            if name == "inference" else [widget]):
                 holder.setContentsMargins(margin, margin, margin, margin)
         if name == "home":
+            widget.pressed.connect(self._home_pressed)
             widget.navigate.connect(self.go_to)
             widget.open_run.connect(self._open_run)
             widget.action_pressed.connect(self._action)
@@ -603,8 +604,15 @@ class MainWindow(QMainWindow):
         status = controller().status
         # Once Parameter inference is built it holds what is offered, read at its own moments; before, Home's reading.
         offers = inference.offers() if inference is not None else self._offers
+        notice = inference.notice_on("home") if inference is not None else ""
         return HomeFacts(session, self._step_states(), status, records, has_runs=bool(runs) or status.live,
-                         runs=runs, picks=picks, offers=offers)
+                         runs=runs, picks=picks, offers=offers, notice=notice)
+
+    def _home_pressed(self) -> None:
+        """Home's main button pressed, whatever it does: the sentence a press left on Home goes."""
+        inference = self._built.get("inference")
+        if inference is not None:
+            inference.clear_notice()
 
     def _action(self, action: str) -> None:
         """Home's main button pressed for what it does in place of opening a place: "Continue with these" applies and
@@ -617,7 +625,7 @@ class MainWindow(QMainWindow):
             return
         if action in ("continue_run", "resume"):
             home = self._built.get("home")
-            self.offer_pressed(getattr(getattr(home, "next", None), "offer", None))
+            self.offer_pressed(getattr(getattr(home, "next", None), "offer", None), where="home")
             return
         picks = self._picks
         if action != "continue_with_these" or getattr(picks, "model", None) is None:
@@ -639,10 +647,11 @@ class MainWindow(QMainWindow):
         else:
             self._states_changed(self._step_states())
 
-    def offer_pressed(self, offer) -> None:
-        """An offer taken, from Home's button or a past view's. For a training of this launch whose page still offers it,
-        that page opened and its own button pressed. Else "Continue from batch N" or "Fit again" fills the forms from the
-        run's history and continues it, and "Resume" resumes the kept training on its own record, each through Parameter
+    def offer_pressed(self, offer, where: str = "training") -> None:
+        """An offer taken, from Home's button (``where`` "home") or a past view's, which stands on the Training step.
+        For a training of this launch whose page still offers it, that page opened and its own button pressed. Else
+        "Continue from batch N" or "Fit again" fills the forms from the run's history and continues it, what stops it
+        said where it was pressed, and "Resume" resumes the kept training on its own record, each through Parameter
         inference, which opens at the Training step. Nothing while a run is live, or for no offer."""
         if controller().is_live() or offer is None or getattr(offer, "kind", None) not in ("continue", "fit_again",
                                                                                           "resume"):
@@ -662,8 +671,12 @@ class MainWindow(QMainWindow):
             return
         if offer.kind == "resume":
             inference.resume_kept(offer.kept)
-        else:
-            inference.continue_from(offer)
+            return
+        inference.continue_from(offer, where=where)
+        said = inference.notice_on("training") if where == "training" else ""
+        page = inference.posterior_panel
+        if said and page.results.currentWidget() is page.past_view:
+            page.past_view.say(said)                 # where the press was made: the run's page, which stands in sight
 
     def _states_changed(self, states) -> None:
         """The six steps' states were worked out again: the rail shows them, and Home reads now while it is

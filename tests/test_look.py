@@ -750,7 +750,8 @@ CLASSES_WITH_A_FONT = ("QAbstractItemView", "QHeaderView", "QMessageBox", "QMenu
 CLASSES_WITH_EQUAL_DIGITS = ("QAbstractItemView", "QHeaderView")      # where numbers stand under one another
 FIXED_FACE_CALLERS = {"screens/artifact_screen.py", "screens/shell.py", "widgets/ask.py",
                       "run/view.py",   # the record's text, a part's and a question's full error, a run's full text
-                      "panels/inference/posterior_tab.py"}   # a kept narrowing round's command; each later caller joins by name
+                      "panels/inference/posterior_tab.py",   # a kept narrowing round's command, on the Training step
+                      "screens/home_screen.py"}   # and on Home; each later caller joins by name
 
 
 def _tabular():
@@ -8771,3 +8772,95 @@ def test_a_loss_curve_whose_paint_fails_draws_nothing_ends_its_painter_and_repor
         assert _at(_screen_of(plot, 1.0), 320, 60) == design.hex_colour("paper")
     finally:
         _gone(plot)
+
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_a_list_gives_its_longest_item_the_room_it_is_drawn_in(factor, monkeypatch):
+    """The toolkit works a list's width out from its items as it measures them, and on Windows, at some text sizes, it
+    measures an item a pixel narrower than it draws it: a list as wide as the toolkit said cut "No plan" to "No…an" at
+    one and a half times the ordinary text. A list is as wide as its longest item, or its hint, is drawn, with the
+    chevron's room: with the toolkit's width made a pixel short of the longest here, as Windows makes it, every item and
+    the hint stand whole in the room the list gives its words, capped or not."""
+    from PySide6.QtCore import QSize
+    from PySide6.QtWidgets import QComboBox, QStyleOptionComboBox
+    from core.gui.widgets.choice import Choice
+    QApplication.instance() or QApplication([])
+    given = QComboBox.sizeHint
+
+    def a_pixel_short(self):
+        """The toolkit's width less what it leaves beyond the longest item, and a pixel more: as Windows measures."""
+        hint = given(self)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        option.rect = QRect(0, 0, hint.width(), max(hint.height(), 1))
+        room = self.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
+                                           QStyle.SubControl.SC_ComboBoxEditField, self).width()
+        exact = QFontMetricsF(self.font())
+        longest = max(math.ceil(exact.horizontalAdvance(text)) for text in
+                      [self.itemText(at) for at in range(self.count())] + [self.placeholderText()] if text)
+        return QSize(hint.width() - (room - longest) - 1, hint.height())
+
+    monkeypatch.setattr(QComboBox, "sizeHint", a_pixel_short)
+    with text_size(factor), _the_look(False):
+        for most in (None, 360):
+            choice = Choice(most=most)
+            choice.addItems(["No plan", "retrain"])
+            choice.setPlaceholderText("Choose one of the plans")          # the longest: the hint has its room too
+            choice.ensurePolished()
+            choice.resize(choice.sizeHint())
+            for index, words in ((-1, "Choose one of the plans"), (0, "No plan"), (1, "retrain")):
+                choice.setCurrentIndex(index)
+                assert choice.shown_text() == words, (most, index, choice.shown_text())
+            _gone(choice)
+
+
+@pytest.mark.parametrize("dark", [False, True])
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_a_lists_hint_is_drawn_in_the_hint_colour_where_its_item_would_stand(dark, factor):
+    """A list with nothing chosen shows its hint in the palette's hint colour, greyed with the list, never in the ink of
+    a name chosen, capped or not, and its words stand where an item of the same words stands."""
+    from core.gui.widgets.choice import Choice
+    app = QApplication.instance() or QApplication([])
+    words = "Choose a bounds file"
+    with text_size(factor), _the_look(dark):
+        field = design.hex_colour("field")
+        for most in (None, 360):
+            for enabled in (True, False):
+                holder = QWidget()
+                box = QVBoxLayout(holder)
+                hint, item = Choice(most=most), Choice(most=most)
+                for one in (hint, item):
+                    one.addItem(words, "x")
+                    one.setPlaceholderText(words)
+                    one.setEnabled(enabled)
+                    box.addWidget(one)
+                hint.setCurrentIndex(-1)
+                holder.setAttribute(Qt.WA_DontShowOnScreen)
+                holder.resize(design.scaled(400), design.scaled(120))
+                holder.show()
+                app.processEvents()
+
+                def inked(choice):
+                    image = choice.grab().toImage()
+                    edge = design.scaled(3)
+                    chevron = design.scaled(design.SIZE["combo_pad"][1]) + design.scaled(design.SIZE["marker"]) + 2
+                    found = {}
+                    for y in range(edge, image.height() - edge):
+                        for x in range(edge, image.width() - chevron):
+                            colour = QColor(image.pixel(x, y)).name().upper()
+                            if colour != field.upper():
+                                found.setdefault(colour, []).append((x, y))
+                    every = [point for points in found.values() for point in points]
+                    return set(found), (min(x for x, _ in every), min(y for _, y in every),
+                                        max(x for x, _ in every), max(y for _, y in every))
+
+                colours, place = inked(hint)
+                _, item_place = inked(item)
+                want = design.hex_colour("ink_3" if enabled else "disabled_ink").upper()
+                assert want in colours, (dark, factor, most, enabled, sorted(colours)[:6])
+                if enabled:
+                    assert design.hex_colour("ink").upper() not in colours, "the hint is drawn in the ink of a name"
+                assert place == item_place, (dark, factor, most, enabled, place, item_place)
+                holder.hide()
+                _gone(holder)
