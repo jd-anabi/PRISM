@@ -35,6 +35,7 @@ from core.Helpers import file_manager
 from core.refusals import Refusal, default_clause
 
 from ... import chain, design, fields, keys, plans, settings, style, texts
+from ...file_chooser import choose_file
 from ...remembered import KIND_KEY, LAST_USED_AT_KEY, LAST_USED_KEY, MODEL_KEY
 from ...reported import reported
 from ...run.controller import controller
@@ -66,6 +67,14 @@ UNIT_SOURCES = (("From the model's units file", "file"), ("Typed here", "typed")
 OWN_UNITS_ITEM = "From the file {}"
 OWN_UNITS = "own"
 OWN_UNITS_FROM = "{} from the file {}"
+#: Under the units row: a units file of any folder, chosen in the system's file chooser, which opens at the units folder
+#: of the model shown and becomes the row's third choice.
+CHOOSE_UNITS_WORDS = "Choose a units file…"
+CHOOSE_UNITS_TITLE = "Choose a units file"
+UNITS_FILTER = "Units file (*.txt);;All files (*)"
+UNREADABLE_UNITS_TEXT = "The units file {} cannot be read: {}"
+#: Beside the main button while a units file chosen in the chooser is refused on its row: no start was made.
+UNITS_FILE_BLOCKS = "the units file chosen cannot be used"
 FREQUENCY_RESPONSE_TEXT = ("Frequency response (χ(ω)): one spontaneous recording and several driven recordings, each at "
                            "one frequency.")
 BOUNDS_FILE_TEXT = ("Set by the bounds file: a spontaneous recording, and one driven recording when the file has a "
@@ -232,6 +241,17 @@ def _counted(count: int, one: str, many: str) -> str:
     return one if count == 1 else many.format(count)
 
 
+def _cannot_use(units) -> str:
+    """Why the units a units file gave cannot be used, in the units library's own words; "" when they can."""
+    try:
+        cli.units_to_factors(tuple(units))
+    except Refusal as refused:
+        return refused.message
+    except Exception as error:                       # noqa: BLE001 -- a units library's own error on a word
+        return str(error)
+    return ""
+
+
 class _PlanChoice(Choice):
     """The list of a model's plans, "No plan" first: as wide as its longest name up to the cap of a list of names, and
     read again, by ``before_opening``, each time it opens."""
@@ -349,6 +369,10 @@ class ConfigPanel(StepPage):
         units.add_under(self.units_text)
         units.hear(self.units_text)
         self.typed_note = form.add_sentence(TYPED_TEXT, under="units")
+        self.choose_units_button = QPushButton(CHOOSE_UNITS_WORDS)
+        self.choose_units_button.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)     # as wide as its words
+        self.choose_units_button.clicked.connect(self._choose_units_file)
+        units.add_under(self.choose_units_button)
         self.units_choice.currentIndexChanged.connect(self._units_chosen)
         self._units_field = _UnitsField(self)
         self.restore_settings(settings.settings())
@@ -508,12 +532,9 @@ class ConfigPanel(StepPage):
         elif self.units_choice.currentData() == OWN_UNITS and self._own_units is not None:
             # A units file of its own, whatever model it is applied with, is held to the rule of units typed here.
             named = OWN_UNITS_FROM.format(label("units"), Path(self._own_units).name)
-            try:
-                cli.units_to_factors(tuple(self._file_units.get(str(self._own_units), ())))
-            except Refusal as refused:
-                found["units"] = (f"{named} cannot be used: {refused.message}",) * 2
-            except Exception as error:               # noqa: BLE001 -- a units library's own error on a word
-                found["units"] = (f"{named} cannot be used: {error}",) * 2
+            why = _cannot_use(self._file_units.get(str(self._own_units), ()))
+            if why:
+                found["units"] = (f"{named} cannot be used: {why}",) * 2
         return {key: found[key] for key in RULED if key in found}
 
     def _read(self) -> dict:
@@ -619,13 +640,12 @@ class ConfigPanel(StepPage):
 
     def refresh_local_gates(self) -> None:
         """What the step holds and what follows from it, and the way on to the next step once a model is applied. The
-        units row offers a units file other than the model's while the step holds one, or while it is the row's
-        choice."""
-        held_units = held_value(self._draft(), "units_override")
-        if isinstance(held_units, (str, Path)) and str(held_units) in self._file_units:
-            self._offer_own_units(str(held_units))
-        elif self.units_choice.currentData() != OWN_UNITS:
-            self._offer_own_units(None)
+        units row offers a units file other than the model's while it is the row's choice, the step's own or one chosen
+        since, which no reading puts out of its place; else the one the step holds, if it holds one."""
+        if self.units_choice.currentData() != OWN_UNITS:
+            held_units = held_value(self._draft(), "units_override")
+            self._offer_own_units(str(held_units) if isinstance(held_units, (str, Path)) and str(held_units) in
+                                  self._file_units else None)
         super().refresh_local_gates()
         held = self._draft() is not None
         self.set_next(GO_TO_PRIOR if held else "", "prior" if held else None)
@@ -671,6 +691,46 @@ class ConfigPanel(StepPage):
             return
         words, where, trouble = self._units_read.get(self.model_combo.currentText(), ("", "", ""))
         self.units_line.set_text(UNITS_FROM.format(words, where) if words else NO_UNITS_FILE.format(trouble))
+
+    def _units_folder(self) -> str:
+        """The folder the chooser of a units file opens at: the units folder of the model shown, else the folder of
+        every model's units."""
+        units = Path(config.UNITS_PATH)
+        shown = units / self.model_combo.currentText().lower()
+        return str(shown if shown.is_dir() else units)
+
+    def _choose_units_file(self) -> None:
+        """"Choose a units file…": a units file of any folder, chosen in the system's file chooser and read at once with
+        the engine's own reader, becomes the units row's third choice, chosen, in place of the one it offered; nothing is
+        applied. A file that cannot be read, or whose units cannot be used, changes nothing of the row: why is said
+        under it, as a refusal of the row is, until the row is edited, and beside the main button that the units file
+        chosen cannot be used, no start having been made. Cancelled, nothing changes. Nothing while a run
+        is live, and nothing is remembered: neither the file nor the folder it was chosen in."""
+        if controller().is_live():
+            return
+        chosen = choose_file(self, CHOOSE_UNITS_TITLE, self._units_folder(), UNITS_FILTER, save=False)
+        if not chosen:
+            return
+        path = str(Path(chosen))
+        row, name = self.form.rows["units"], Path(path).name
+        try:
+            words = tuple(str(unit) for unit in file_manager.parse_units_file(path))
+        except Exception as error:                   # noqa: BLE001 -- a file that cannot be read applies nothing
+            row.mark(UNREADABLE_UNITS_TEXT.format(name, error), UNITS_FILE_BLOCKS)
+            self.redraw()
+            return
+        why = _cannot_use(words)
+        if why:
+            row.mark(f"{OWN_UNITS_FROM.format(row.label_text(), name)} cannot be used: {why}", UNITS_FILE_BLOCKS)
+            self.redraw()
+            return
+        self._file_units[path] = words
+        self._offer_own_units(path)
+        choice, at = self.units_choice, self.units_choice.findData(OWN_UNITS)
+        if choice.currentIndex() == at:
+            choice.currentIndexChanged.emit(at)      # another file in the one place is a choice the row hears
+        else:
+            choice.setCurrentIndex(at)
 
     # ── applying ──
     def _build_config(self) -> None:
@@ -730,8 +790,7 @@ class ConfigPanel(StepPage):
                 units = self._file_units[units_file] = tuple(str(unit) for unit in
                                                              file_manager.parse_units_file(units_file))
             except Exception as error:       # noqa: BLE001 -- a units file that cannot be read applies nothing
-                self._refusal(Refusal(f"The units file {Path(units_file).name} cannot be read: {error}",
-                                      field="units"))
+                self._refusal(Refusal(UNREADABLE_UNITS_TEXT.format(Path(units_file).name, error), field="units"))
                 return False
         if units_file is not None:
             self._offer_own_units(units_file)
@@ -1163,7 +1222,7 @@ class ConfigPanel(StepPage):
             beneath.append(NOT_APPLIED_SAVED_TEXT.format(", ".join(pending)))
         name = ask_text(self, SAVE_TITLE, SAVE_TEXT, SAVE_LABEL, SAVE_ANSWER,
                         check=lambda typed: None if plans.NAME_RULE.fullmatch(typed) else plans.NAME_TEXT,
-                        items=items, beneath=" ".join(beneath) or None)
+                        items=items, beneath=" ".join(beneath) or None, room=(plans.NAME_TEXT,))
         if not name:
             return
         folder = self._plans_folder()

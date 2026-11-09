@@ -13,8 +13,6 @@ The name is checked 300 ms after the last keystroke and again at the press, sinc
 records of its kind; never while a run is live, so that an edit waiting as a run starts is read when it ends. The note
 is checked at every keystroke and reads nothing.
 """
-import re
-
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
                                QVBoxLayout, QWidget)
@@ -33,7 +31,7 @@ from .choice import Choice
 from .help_badge import HelpBadge
 from .labeled_inputs import _NumberField
 from .marker import Marker, painted_icon
-from .page import _BREAK, _BREAK_AFTER, Columns, Sentence
+from .page import Columns, Sentence, _may_wrap
 from .ruled import Ruled, SectionHead
 
 FOLD_WORDS = "Rarely changed ({count})"
@@ -59,18 +57,6 @@ NEEDS_A_NAME = "a name is needed"
 NOTE_BLOCKS = "the note cannot be used"
 #: What a row of a kind the form does not know says of a field that reads as nothing.
 BLANK_WORDS = "blank"
-#: A word this long in an origin, a record's name, may break: no origin column at the window's least width is narrower.
-_LONG_WORD = re.compile(r"\S{17,}")
-_PIECE = re.compile(rf"[^\s{_BREAK}]{{16}}(?=[^\s{_BREAK}])")
-
-
-def _may_wrap(words: str) -> str:
-    """``words`` with places to break inside a long word: after a slash, an underscore or a full stop, and in what is still
-    too long between them."""
-    def broken(word) -> str:
-        return _PIECE.sub(lambda piece: piece.group() + _BREAK, _BREAK_AFTER.sub(_BREAK, word.group()))
-
-    return _LONG_WORD.sub(broken, words)
 
 
 def _column(*parts) -> QVBoxLayout:
@@ -205,6 +191,7 @@ class Row:
         self._label, self._usual, self._unit = label, usual, unit
         self._on_edit, self._on_mark = edited, marked
         self._shown, self._marked, self._blocks = True, False, False
+        self._why = ""                       # the words beside the main button for the refusal marked, "" for a start's
         self.kept = False
         self.label = QLabel(labels.pretty_gui(label))
         self.label.setWordWrap(True)
@@ -363,14 +350,21 @@ class Row:
                 style.set_class(heard, state="error" if kind == "err" else "")
         self._say(kind, sentence)
 
-    def mark(self, sentence: str) -> None:
-        """A refusal of this row: its sentence under the field, stopping the start, until the field is edited."""
+    def mark(self, sentence: str, blocks: str = "") -> None:
+        """A refusal of this row: its sentence under the field, stopping the start, until the field is edited; beside the
+        main button ``blocks``, the words for a refusal that is no refused start ("" for one that is)."""
         self._set_line("err", sentence)
         self._marked = self._blocks = True
+        self._why = blocks
 
     def refused(self) -> str:
         """The sentence of the refusal that stops the start here, "" for none: a row off the page stops nothing."""
         return self.line.words if self._blocks and self._shown else ""
+
+    def refused_why(self) -> str:
+        """The words beside the main button for the refusal that stops the start here: "" for a refused start's, and for
+        none."""
+        return self._why if self.refused() else ""
 
     def ease(self) -> None:
         """The facts were read again since the refusal: it stops the start no longer, since what cures it may stand in
@@ -842,9 +836,10 @@ class Form(QWidget):
         return [*(stop for row in self._main_rows for stop in row.stops()), *self.fold.stops(),
                 *(stop for row in self._side_rows for stop in row.stops())]
 
-    def refused(self) -> tuple:
-        """The sentences of the refusals that stop the start, in the order the page reads."""
-        return tuple(sentence for sentence in (row.refused() for row in self._in_order()) if sentence)
+    def refusals(self) -> tuple:
+        """The refusals that stop the start, in the order the page reads: each its sentence and the words beside the main
+        button for it, "" for a refused start's."""
+        return tuple((row.refused(), row.refused_why()) for row in self._in_order() if row.refused())
 
     def ease(self) -> None:
         """The facts were read again: no refusal stops the start any longer."""

@@ -430,6 +430,8 @@ class InferenceScreen(QWidget):
         if controller().is_live():
             return None
         self.clear_notice()
+        if self.posterior_panel._past_view is not None:
+            self.posterior_panel.past_view.say("")       # what a press on a past view left there goes too
         store = default_store()
         try:
             kept = fit_state.kept_fit(store, ident)
@@ -451,9 +453,11 @@ class InferenceScreen(QWidget):
         taken = bool(kept.posterior_name) and _name_trouble(store, kept.posterior_name) is not None
         if not kept.posterior_name or taken:
             from ..panels.inference.posterior_tab import NAME_TAKEN_TEXT, NAME_TEXT, NAME_TITLE
+            from ..widgets.form import NAME_ID_TEXT, NAME_SHAPE_TEXT
             sentence = NAME_TAKEN_TEXT.format(kept.posterior_name) if taken else NAME_TEXT
             name = ask_text(self, NAME_TITLE, sentence, "Name", "Resume",
-                            check=lambda typed: _name_trouble(store, typed)) or ""
+                            check=lambda typed: _name_trouble(store, typed),
+                            room=(NAME_SHAPE_TEXT, NAME_ID_TEXT)) or ""
             if not name:
                 return None
         if not self._lets_go(RESUME_TITLE, RESUME_OTHER):

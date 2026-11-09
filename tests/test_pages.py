@@ -198,6 +198,7 @@ def test_each_field_has_exactly_one_origin_over_every_combination():
 def test_a_refusal_among_the_facts_is_an_error_with_the_words_every_refusal_has():
     assert refused_facts(("One.", "Two.")) == (Fact("err", "One.", REFUSED_BLOCKS), Fact("err", "Two.", REFUSED_BLOCKS))
     assert refused_facts(()) == () and REFUSED_BLOCKS == "the last start was refused"
+    assert refused_facts(("One.",), "the file cannot be used") == (Fact("err", "One.", "the file cannot be used"),)
 
 
 @pytest.mark.parametrize("seconds, words", [
@@ -576,7 +577,7 @@ def test_a_value_that_is_only_shown_is_no_setting_of_the_fold():
 def test_a_long_origin_wraps_and_stays_on_the_page(name, key, tmp_path):
     """No record's name is too long for its row: the origin takes the lines it needs, a word with no place to break among
     them, at the window's least size, and its words are all still there."""
-    from core.gui.widgets.form import _BREAK
+    from core.gui.widgets.page import _BREAK
     window, page, _clock = _a_page(tmp_path, size=(900, 600))
     row = page.form.rows[key]
     row.set_origin("from record " + name)
@@ -2163,7 +2164,8 @@ WALKED = {
         "set by the bounds file": (lambda page: None, lambda page: [page.help_button],
                                    lambda page: [page.model_combo, page.plan_choice, page.fill_button,
                                                  page.kind_choice],
-                                   lambda page: [page.rot_choice, page.units_choice], lambda page: [],
+                                   lambda page: [page.rot_choice, page.units_choice, page.choose_units_button],
+                                   lambda page: [],
                                    lambda page, small: [*([page.foot.more] if small else []), page.foot.main_button]),
         "the frequency response, typed units, applied": (
             lambda page: (page.kind_choice.setCurrentIndex(page.kind_choice.findData(True)),
@@ -2171,13 +2173,14 @@ WALKED = {
                           page.units_text.setText("kHz ms nm pN"), page.foot.main_button.click()),
             lambda page: [page.help_button, page.next_button],
             lambda page: [page.model_combo, page.plan_choice, page.fill_button, page.save_button, page.kind_choice],
-            lambda page: [*_driven(page), page.rot_choice, page.units_choice, page.units_text], lambda page: [],
+            lambda page: [*_driven(page), page.rot_choice, page.units_choice, page.units_text,
+                          page.choose_units_button], lambda page: [],
             lambda page, small: [*([page.foot.more] if small else [])]),
         "a plan shown, its folder there": (
             _a_plan_shown, lambda page: [page.help_button],
             lambda page: [page.model_combo, page.plan_choice, page.holds_button, page.fill_button, page.open_button,
                           page.kind_choice],
-            lambda page: [page.rot_choice, page.units_choice], lambda page: [],
+            lambda page: [page.rot_choice, page.units_choice, page.choose_units_button], lambda page: [],
             lambda page, small: [*([page.foot.more] if small else []), page.foot.main_button]),
     },
     "prior": {

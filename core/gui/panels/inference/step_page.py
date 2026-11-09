@@ -332,7 +332,8 @@ class StepPage(RunHost, QWidget):
     def redraw(self) -> None:
         """"Before you start" and the main button as the form and the session stand: reads nothing."""
         live = controller().is_live()
-        facts = ordered(((self._head_fact,) if self._head_fact is not None else ()) + refused_facts(self.form.refused())
+        refused = tuple(fact for sentence, why in self.form.refusals() for fact in refused_facts((sentence,), why))
+        facts = ordered(((self._head_fact,) if self._head_fact is not None else ()) + refused
                         + tuple(self.facts_from_form()))
         self._say_changed()
         self.say_the_plan()

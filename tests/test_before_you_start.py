@@ -784,7 +784,8 @@ FINAL = ("this model cannot be used", "the bounds file cannot be read", "the pri
 YET = ("a setting cannot be used", "the limits typed cannot be used", "the last start was refused", "needs a model",
        "no bounds file is chosen", "no saved prior is chosen", "no prior is saved yet", "needs a prior",
        "a saved simulation set would be continued", "no saved posterior is chosen", "no posterior is saved yet",
-       "the name cannot be used", "a name is needed", "the note cannot be used")
+       "the name cannot be used", "a name is needed", "the note cannot be used",
+       "the units file chosen cannot be used")
 
 
 def test_every_block_the_pages_say_is_known_to_be_lifted_on_the_page_or_not():

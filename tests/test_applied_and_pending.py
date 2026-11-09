@@ -570,6 +570,171 @@ def test_units_filled_from_a_file_follow_the_model_until_they_are_typed():
     assert page.units_text.text() == "nm"
 
 
+# ── a units file of any folder, chosen ──
+def _units_file(folder, name, data: bytes) -> Path:
+    """A file named ``name`` holding ``data`` in ``folder``, a folder of the test's own: its path."""
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
+    path.write_bytes(data)
+    return path
+
+
+def _items(choice) -> list:
+    """The words of every item of a list, in its order."""
+    return [choice.itemText(at) for at in range(choice.count())]
+
+
+def _units_row(page) -> tuple:
+    """What the units row shows and what follows from it: its items, its choice, the line of the file under it, its own
+    line, whether the step has nothing to apply and whether the main button can be pressed."""
+    return (_items(page.units_choice), page.units_choice.currentData(), page.units_line.plain_text(),
+            _line(page, "units"), page.nothing_to_apply(), page.foot.main_button.isEnabled())
+
+
+def test_choose_a_units_file_stands_under_the_units_row_and_opens_at_the_models_units_folder(tmp_path, monkeypatch):
+    """"Choose a units file…" stands under the units row, last, as wide as its words, and the Tab key reaches it after
+    the list and the box of typed units. Pressed, it opens the system's chooser of a file to open, titled "Choose a units
+    file", units files first and every file offered, at the units folder of the model shown on the form, read from the
+    resources' folder of units as it is pressed, else at that folder itself. Cancelled, the row stands as it stood, and
+    nothing is written to the settings. While a run is live, none opens."""
+    from PySide6.QtWidgets import QSizePolicy
+    from core import config
+    from core.gui import settings
+    from tests._dialogs import CHOOSER_CALLS, ChooserCall, answer_chooser
+    from tests._runs import running
+    units = tmp_path / "Units"
+    (units / "hopf").mkdir(parents=True)
+    _screen, page = _first_step()
+    _apply(page)
+    page.form.fold.set_open(True)
+    row, button = page.form.rows["units"], page.choose_units_button
+    assert button.text() == "Choose a units file…" and row.under[-1] is button and button.isVisibleTo(page)
+    assert button.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Maximum
+    assert row.stops() == [page.units_choice, page.units_text, button]
+    remembered = sorted(settings.settings().allKeys())
+    monkeypatch.setattr(config, "UNITS_PATH", units)
+    before = _units_row(page)
+    answer_chooser(monkeypatch, "")
+    _pick(page.model_combo, "HOPF")
+    button.click()
+    _pick(page.model_combo, "NADROWSKI")
+    button.click()
+    chooser = ("open", "Choose a units file")
+    filter_ = "Units file (*.txt);;All files (*)"
+    assert CHOOSER_CALLS == [ChooserCall(*chooser, str(units / "hopf"), filter_, ""),
+                             ChooserCall(*chooser, str(units), filter_, "")], CHOOSER_CALLS
+    assert _units_row(page) == before
+    assert sorted(settings.settings().allKeys()) == remembered
+    with running():
+        page._choose_units_file()
+    assert len(CHOOSER_CALLS) == 2, "a chooser opened while a run was live"
+
+
+@pytest.mark.parametrize("model, bounds", [("NADROWSKI", "master.txt"), ("NADROWSKI", "master_tier1.txt"),
+                                           ("HOPF", None)], ids=["Nadrowski", "the tier-1 box", "Hopf"])
+def test_a_units_file_chosen_is_the_third_choice_and_what_is_applied_reads_it(model, bounds, tmp_path, monkeypatch):
+    """A units file of a folder of its own, with units other than the model's, chosen: the units row's third choice,
+    chosen, named by its file, its whole path, written as Windows writes it, its item's tip and what the draft will
+    hold, so that a file a record names is the same file chosen again, its units under the row in the order of the
+    alphabet, the
+    fold's summary naming it, the row changed against the model's file applied, and nothing applied. Applied, the draft
+    holds the file, "In use" names it, a plan would hold its units as words, the run's history its path, and the
+    configuration made from it on the model's bounds file reads the file, its units and its bytes. A second file chosen
+    takes the first one's place, one third choice in the list, changed against the first."""
+    import hashlib
+    from PySide6.QtCore import Qt
+    from core import cli, config
+    from core.artifacts.identity import _units_sha256
+    from tests._dialogs import answer_chooser
+    rig = _units_file(tmp_path / "rig", "rig units.txt", b"# Units\nHz nm pN s\n")
+    bench = _units_file(tmp_path / "bench", "bench units.txt", b"# Units\r\nnm ms pN kHz\r\n# the bench's own\r\n")
+    screen, page = _first_step()
+    _pick(page.model_combo, model)
+    _apply(page)
+    page.form.fold.set_open(True)
+    model_words = page.units_line.plain_text().split(", from ")[0]
+    answer_chooser(monkeypatch, rig.as_posix())                  # as the system's chooser writes a path
+    page.choose_units_button.click()
+    assert _items(page.units_choice) == ["From the model's units file", "Typed here", "From the file rig units.txt"]
+    assert page.units_choice.currentData() == "own" and page.units_choice.itemData(2, Qt.ToolTipRole) == str(rig)
+    assert page.units_line.plain_text() == "Hz nm pN s, from the file rig units.txt"
+    assert "Units From the file rig units.txt" in page.form.fold.summary.text(), page.form.fold.summary.text()
+    assert _line(page, "units") == ("warn", f"Changed, not applied. In use: {model_words}, from the model's file.")
+    assert screen.session.draft.units_override is None
+    _apply(page)
+    draft = screen.session.draft
+    assert (draft.model, draft.units_override) == (model, str(rig)) and _line(page, "units") == ("", "")
+    assert page.in_use.sentence.plain_text().endswith("Units Hz nm pN s, from the file rig units.txt.")
+    assert sorted(page.plan_read(True)["units"].split()) == ["Hz", "nm", "pN", "s"]
+    assert screen.posterior_panel.settings_entry()["options"]["units_override"] == str(rig)
+    folder = config.BOUNDS_PATH / model.lower()
+    bounds_file = folder / (bounds or sorted(path.name for path in folder.glob("*.txt"))[0])
+    cfg = cli.make_sim_config(draft.model, draft.labels, draft.state_dep_drift, str(bounds_file),
+                              units_override=draft.units_override, chi_mode=draft.chi_mode, hw=config.cpu_device())
+    assert (cfg.sources["units"], sorted(cfg.units_dict)) == (str(rig), ["Hz", "nm", "pN", "s"])
+    assert _units_sha256(cfg) == hashlib.sha256(rig.read_bytes()).hexdigest()
+    answer_chooser(monkeypatch, str(bench))
+    page.choose_units_button.click()
+    assert _items(page.units_choice) == ["From the model's units file", "Typed here", "From the file bench units.txt"]
+    assert page.units_line.plain_text() == "kHz ms nm pN, from the file bench units.txt"
+    assert _line(page, "units") == ("warn", "Changed, not applied. In use: Hz nm pN s, from the file rig units.txt.")
+
+
+#: Units files the units row cannot take, each by how it is made in a folder of the test's own: its name, and what it
+#: holds (None for a folder of that name, "gone" for no file at all), and the opening words of what the row says of it.
+_REFUSED = {
+    "a folder": ("units folder.txt", None, "The units file units folder.txt cannot be read: "),
+    "bytes that are no text": ("units.bin", b"\xff\xfe\x00\x01", "The units file units.bin cannot be read: "),
+    "gone since it was chosen": ("gone.txt", "gone", "The units file gone.txt cannot be read: File not found: "),
+    "no units in it": ("master copy.txt", b"# Parameters\nk_gs = 1.0 in (0.5, 2.0)\n",
+                       "Units from the file master copy.txt cannot be used: Could not detect a time unit"),
+    "a unit that does not resolve": ("odd units.txt", b"# Units\nnm notaunit ms pN\n",
+                                     "Units from the file odd units.txt cannot be used: "),
+}
+
+
+@pytest.mark.parametrize("case", list(_REFUSED))
+def test_a_units_file_the_row_cannot_take_changes_nothing_of_the_row_and_says_why_under_it(case, tmp_path,
+                                                                                         monkeypatch):
+    """A file chosen that cannot be read, or whose units cannot be used, is read at once and taken nowhere: the units
+    row stands as it stood, its third choice still the file applied before, and the reason stands under it and among
+    the facts as a refusal of the row does, until the row is edited; beside the greyed main button, that the units file
+    chosen cannot be used, since no start was made. A start refused on the same row still says it was."""
+    from core.refusals import Refusal
+    from tests._dialogs import answer_chooser
+    name, data, said = _REFUSED[case]
+    rig = _units_file(tmp_path / "rig", "rig units.txt", b"# Units\nHz nm pN s\n")
+    chosen = tmp_path / "chosen" / name
+    chosen.parent.mkdir()
+    if data is None:
+        chosen.mkdir()
+    elif data != "gone":
+        chosen.write_bytes(data)
+    screen, page = _first_step()
+    _apply(page)
+    page.form.fold.set_open(True)
+    answer_chooser(monkeypatch, str(rig))
+    page.choose_units_button.click()
+    _apply(page)
+    _pick(page.rot_choice, False)
+    items, choice, line, _own, _nothing, _enabled = before = _units_row(page)
+    assert before[3:] == (("", ""), False, True), before
+    answer_chooser(monkeypatch, str(chosen))
+    page.choose_units_button.click()
+    kind, words = _line(page, "units")
+    assert (kind, words.startswith(said)) == ("err", True), (kind, words)
+    assert _units_row(page)[:3] == (items, choice, line) and screen.session.draft.units_override == str(rig)
+    assert not page.foot.main_button.isEnabled()
+    assert page.foot.reason.text() == "Cannot start yet: the units file chosen cannot be used."
+    facts = [(fact.kind, fact.sentence.plain_text()) for fact in page.foot.facts.rows()]
+    assert facts[0] == ("err", f"Error. {words}"), facts
+    _pick(page.units_choice, "file")
+    assert _line(page, "units") == ("warn", "Changed, not applied. In use: Hz nm pN s, from the file rig units.txt.")
+    assert page.foot.main_button.isEnabled()
+    page._refusal(Refusal("The units were refused.", field="units"))
+    assert page.foot.reason.text() == "Cannot start yet: the last start was refused."
+
+
 def test_a_refusal_whose_cure_is_in_another_field_stops_the_press_only_until_the_page_reads_again(tmp_path):
     """A refusal marks its row and stops the press. An edit of another field mends nothing of the row's own, and still
     the button comes back once the page reads again, after the typing has stopped, though the first step reads nothing

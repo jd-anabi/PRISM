@@ -2213,6 +2213,52 @@ def test_a_plans_name_is_judged_as_it_is_typed(tmp_path, monkeypatch, store):
     assert not folder.exists()
 
 
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_save_as_a_plan_keeps_the_room_of_its_names_rule_from_the_moment_it_opens(factor, tmp_path, monkeypatch, store):
+    """In the program's own lettering the rule of a plan's name takes more than one line in "Save as a plan", at both
+    text sizes; the question holds its room from the moment it opens, so a name judged wrong, which says the rule, and
+    right again leaves the question and its answers where they stood. The program's font is put back."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtGui import QFont
+    from core.gui import fonts
+    from core.gui import plans as window_plans
+    from tests._dialogs import answer_in_turn
+    from tests._fixtures import qt_app
+    from tests._look_helpers import _the_look, text_size
+    app, seen = qt_app(), []
+    kept = QFont(app.font())
+
+    def judged(dialog) -> None:
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        dialog.show()
+        for name in (None, "retrain v2", "retrain_2"):
+            if name is not None:
+                dialog.field.setText(name)
+            app.processEvents()
+            seen.append((dialog.wrong, dialog.height(), dialog.safe_button.mapTo(dialog, QPoint(0, 0)).y()))
+        message = dialog.field_message
+        message.setText(window_plans.NAME_TEXT)
+        seen.append(message.heightForWidth(message.width()) // message.fontMetrics().height())
+        dialog.hide()
+
+    try:
+        with text_size(factor), _the_look(False):
+            fonts.load_app_font(app)
+            window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch)
+            screen.posterior_panel.form.rows["num_runs"].set_value(7000)
+            _shown_again(window)
+            answer_in_turn(monkeypatch, judged)
+            page.save_button.click()
+            window.hide()
+    finally:
+        app.setFont(kept)
+    *heights, lines = seen
+    assert [wrong for wrong, _height, _answers in heights] == ["", window_plans.NAME_TEXT, ""], heights
+    assert lines >= 2, (factor, lines, "the rule takes one line here")
+    assert len({(height, answers) for _wrong, height, answers in heights}) == 1, (factor, heights)
+    assert not folder.exists()
+
+
 def test_the_save_says_to_commit_the_file(tmp_path, monkeypatch, store):
     """A plan saved becomes the plan in use, shown in the list, with no value changed, and the page says to commit the
     file before a long run."""

@@ -24,6 +24,21 @@ def _breakable(words: str) -> str:
     return _LONG_WORD.sub(lambda word: _BREAK_AFTER.sub(_BREAK, word.group()), words)
 
 
+#: A word this long in a narrow place, a record's name, may break: no origin column at the window's least width, and no
+#: question's line, is narrower.
+_LONG_RUN = re.compile(r"\S{17,}")
+_PIECE = re.compile(rf"[^\s{_BREAK}]{{16}}(?=[^\s{_BREAK}])")
+
+
+def _may_wrap(words: str) -> str:
+    """``words`` with places to break inside a long word: after a slash, an underscore or a full stop, and in what is still
+    too long between them."""
+    def broken(word) -> str:
+        return _PIECE.sub(lambda piece: piece.group() + _BREAK, _BREAK_AFTER.sub(_BREAK, word.group()))
+
+    return _LONG_RUN.sub(broken, words)
+
+
 def _ring_room() -> int:
     """The room a focus ring needs outside a control: the ring's weight and the gap it keeps. Both are line
     weights, so the room does not grow with the text."""

@@ -6664,69 +6664,119 @@ def test_a_question_that_asks_for_a_line_of_text_takes_enter_only_once_the_text_
             _question_closed(dialog)
 
 
-#: A rule of a line typed into a question, with the longest sentence any rule of the window gives today.
-LINE_RULE = "A plan's name is letters, digits, _ and -, at most 40 characters."
+#: The window's own rules of a name typed into a question: where each sentence is given, by its file and its name there.
+#: "Save as a plan" judges a plan's name by the first; "Name this training" a posterior's by the second.
+LINE_RULES = {"a plan's name": ("core/gui/plans.py", "NAME_TEXT"),
+              "a record's name": ("core/gui/widgets/form.py", "NAME_SHAPE_TEXT")}
 
 
-def _a_line_form(text="", judge=lambda typed: None if typed.isalnum() else LINE_RULE):
+def _rule(which) -> str:
+    """The sentence of the window's rule ``which`` of ``LINE_RULES``, read from its file and never imported: the
+    modules that hold the window's rules reach the engine, which this suite never loads."""
+    path, name = LINE_RULES[which]
+    tree = ast.parse((REPO / path).read_text(encoding="utf-8"))
+    return next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == name for target in node.targets))
+
+
+def _a_line_form(text="", judge=None, room=()):
+    """The form that asks for a plan's name, judged by the window's rule unless ``judge`` is handed, holding the room of
+    ``room``."""
     from core.gui.widgets.ask import Ask
+    rule = _rule("a plan's name")
+    judge = judge or (lambda typed: None if typed.isalnum() else rule)
     return _question_opened(Ask(None, "Save as a plan", "Only the settings that differ from their usual values are "
                                 "written. A setting left out follows the usual value.", "Cancel", "Save",
-                                marker="info", label="Plan name", text=text, check=judge))
+                                marker="info", label="Plan name", text=text, check=judge, room=room))
+
+
+@contextlib.contextmanager
+def _in_the_programs_lettering():
+    """The program's own font on the application, built at the text size in force, as the window sets it as it starts:
+    a sentence measured in the toolkit's stand-in lettering wraps elsewhere. The font found is put back."""
+    app = QApplication.instance() or QApplication([])
+    kept = QFont(app.font())
+    try:
+        assert fonts.load_app_font(app) == design.LETTERING
+        yield
+    finally:
+        app.setFont(kept)
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.25, 1.5, 2.0, 2.25])
 def test_the_line_forms_sentence_wraps_and_never_widens_the_question(factor):
     """What is wrong with the line stands as wide as the question's text, and wraps there: the question keeps its width
-    whatever the sentence, at every text size, and no line of the sentence runs past the text's right edge. A word too
-    long for a line does not widen it either."""
+    whatever the sentence, at every text size, once it is laid out again, and no line of the sentence runs past the
+    text's right edge. A word too long for a line, with underscores in it or none, does not widen it either: it breaks,
+    and stands whole."""
     QApplication.instance() or QApplication([])
     with text_size(factor):
         long = ("This name is taken by a plan saved earlier today by another person working on the same computer, "
                 "so choose another one.")
         unbroken = "_".join(["a_folder_with_a_long_name"] * 6)
-        dialog, _got = _a_line_form(judge=lambda typed: {"fine": None, "taken": long}.get(typed, unbroken))
+        letters = f"The name '{'m' * 64}' is taken by another posterior. Choose another name."
+        dialog, _got = _a_line_form(judge=lambda typed: {"fine": None, "taken": long, "letters": letters}.get(
+            typed, unbroken))
         try:
             dialog.field.setText("fine")
-            QApplication.processEvents()
+            _settle()
             wide = dialog.width()
             dialog.field.setText("taken")
-            QApplication.processEvents()
+            _settle()
             message = dialog.field_message
             assert dialog.width() == wide == design.scaled(448), (factor, dialog.width(), wide)
             assert message.wordWrap() and message.text() == long
             right = _in_question(message).x() + message.width()
             assert right <= _in_question(dialog.sentence).x() + dialog.sentence.width(), (factor, right)
             assert message.height() >= message.heightForWidth(message.width()), "the sentence is cut at its foot"
-            dialog.field.setText("unbroken")
-            QApplication.processEvents()
-            assert (dialog.width(), _in_question(message).x() + message.width()) == (wide, right), (
-                "a word too long for a line widened the question or its sentence")
+            for typed in ("unbroken", "letters"):
+                dialog.field.setText(typed)
+                _settle()
+                assert (dialog.width(), _in_question(message).x() + message.width()) == (wide, right), (
+                    factor, typed, dialog.width(), "a word too long for a line widened the question or its sentence")
+                assert message.height() >= message.heightForWidth(message.width()), (factor, typed, "cut at its foot")
+                set_in = message.fontMetrics().boundingRect(QRect(0, 0, message.width(), 100_000),
+                                                            Qt.TextFlag.TextWordWrap, message.text())
+                assert set_in.width() <= message.width(), (factor, typed, set_in.width(), "a line runs past its edge")
+                assert dialog.wrong == (unbroken if typed == "unbroken" else letters), "what is wrong lost its words"
         finally:
             _question_closed(dialog)
 
 
-@pytest.mark.parametrize("factor", [1.0, 1.25, 1.5])
-def test_the_line_form_keeps_its_height_as_the_line_is_judged(factor):
-    """The question holds the room of one line of what is wrong from the start: a line judged wrong, and right again,
-    leaves the question and its answers where they stood, at the text sizes where the rule's sentence takes one line."""
-    QApplication.instance() or QApplication([])
-    with text_size(factor):
-        dialog, _got = _a_line_form()
-        try:
-            placed = (dialog.height(), _in_question(dialog.safe_button).y())
-            dialog.field.setText("retrain v2")
-            QApplication.processEvents()
-            assert dialog.field_message.isVisible()
-            assert dialog.field_message.heightForWidth(dialog.field_message.width()) <= design.scaled(
-                design.SIZE["line_h"]), "the rule's sentence takes two lines here"
-            assert (dialog.height(), _in_question(dialog.safe_button).y()) == placed, factor
-            dialog.field.setText("retrain2")
-            QApplication.processEvents()
-            assert not dialog.field_message.isVisible()
-            assert (dialog.height(), _in_question(dialog.safe_button).y()) == placed, factor
-        finally:
-            _question_closed(dialog)
+@pytest.mark.parametrize("which", list(LINE_RULES))
+@pytest.mark.parametrize("factor", [1.0, 1.25, 1.5, 2.0])
+def test_the_line_form_keeps_the_room_of_its_rule_as_the_line_is_judged(factor, which):
+    """In the program's own lettering, under the look's sheet, each of the window's rules of a name takes more than one
+    line in the question, at every text size. Handed that sentence as its room, the question holds it from the start: a
+    line judged wrong, which says it, and right again leaves the question, its width and its answers where they stood,
+    and the sentence stands whole beside its marker, its first line level with the marker's. Handed no room, the
+    question holds one line's room, and the same sentence makes it taller."""
+    rule = _rule(which)
+    with text_size(factor), _in_the_programs_lettering(), _the_look(False):
+        for room in ((rule,), ()):
+            dialog, _got = _a_line_form(judge=lambda typed: None if typed.isalnum() else rule, room=room)
+            try:
+                message = dialog.field_message
+                placed = (dialog.width(), dialog.height(), _in_question(dialog.safe_button).y())
+                dialog.field.setText("retrain v2")
+                QApplication.processEvents()
+                assert message.isVisible() and message.text() == rule
+                tall = message.heightForWidth(message.width())
+                assert tall > message.fontMetrics().lineSpacing(), (factor, which, tall, "the rule takes one line here")
+                moved = (dialog.width(), dialog.height(), _in_question(dialog.safe_button).y())
+                if not room:
+                    assert moved[1] > placed[1], (factor, which, "a question with no room held the rule's")
+                    continue
+                assert moved == placed, (factor, which, moved, placed)
+                assert message.height() >= message.heightForWidth(message.width()), "the sentence is cut"
+                assert message.alignment() & Qt.AlignmentFlag.AlignTop, "the first line stands away from its marker"
+                dialog.field.setText("retrain2")
+                QApplication.processEvents()
+                assert not message.isVisible()
+                assert (dialog.width(), dialog.height(), _in_question(dialog.safe_button).y()) == placed, (factor,
+                                                                                                          which)
+            finally:
+                _question_closed(dialog)
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5, 2.25])
@@ -6751,7 +6801,7 @@ def test_the_line_forms_gaps_at_every_text_size(factor):
                 design.GAP["marker_text"])
             answers = _in_question(dialog.safe_button).y()
             assert answers == _in_question(wrong).y() + wrong.height() + design.scaled(design.DIALOG["gap"]), factor
-            assert message.text() == LINE_RULE
+            assert message.text() == _rule("a plan's name")
         finally:
             _question_closed(dialog)
 
@@ -6763,13 +6813,14 @@ def test_the_record_of_a_line_form_holds_what_was_asked(monkeypatch):
     from core.gui.widgets.ask import ask, ask_text
     from tests._dialogs import all_asked, forget_asked
     forget_asked()
+    rule = _rule("a plan's name")
     ask_text(None, "Save as a plan", "Only what differs is written.", "Plan name", "Save", text="retrain v2",
-             check=lambda typed: None if typed.isalnum() else LINE_RULE)
+             check=lambda typed: None if typed.isalnum() else rule, room=(rule,))
     ask_text(None, "Save as a plan", "Only what differs is written.", "Plan name", "Save", text="retrain2",
-             check=lambda typed: None if typed.isalnum() else LINE_RULE)
+             check=lambda typed: None if typed.isalnum() else rule)
     ask(None, *A_QUESTION, "Go on")
     first, second, plain = all_asked()
-    assert (first.label, first.line, first.wrong) == ("Plan name", "retrain v2", LINE_RULE)
+    assert (first.label, first.line, first.wrong) == ("Plan name", "retrain v2", rule)
     assert (second.label, second.line, second.wrong) == ("Plan name", "retrain2", "")
     assert (plain.label, plain.line, plain.wrong) == (None, "", "")
 

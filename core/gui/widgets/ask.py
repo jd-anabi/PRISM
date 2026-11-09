@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout, QLabe
 from .. import design, fonts
 from ..style import set_class
 from .marker import Marker, painted_icon
-from .page import Sentence
+from .page import Sentence, _may_wrap
 
 ASK_MARKERS = ("warn", "err", "info")   # the three a question may carry; not the ten states of the paint module
 ITEMS_SHOWN = 8                    # a list longer than this scrolls inside the question
@@ -52,7 +52,7 @@ class Ask(QDialog):
     def __init__(self, parent, title: str, sentence: str, safe: str, other: str | None = None, *,
                  loses_work: bool = False, marker: str = "warn", items: Sequence[str] | None = None,
                  beneath: str | None = None, detail: str | None = None, label: str | None = None,
-                 text: str = "", check: Callable[[str], str | None] | None = None) -> None:
+                 text: str = "", check: Callable[[str], str | None] | None = None, room: Sequence[str] = ()) -> None:
         # Both refusals come before the base class is built: a call refused later would leave a dialog,
         # half built, under its parent.
         if marker not in ASK_MARKERS:
@@ -109,7 +109,7 @@ class Ask(QDialog):
             words.addWidget(self.beneath)
         self.field = self.field_message = self._wrong = None
         if label is not None:
-            words.addLayout(self._line(label, text))
+            words.addLayout(self._line(label, text, column, room))
         self.detail_link = self.detail_box = None
         if self.wording.detail:
             self.detail_link = set_class(QPushButton(FULL_ERROR), cls="link")
@@ -218,11 +218,12 @@ class Ask(QDialog):
             area.setProperty("ring", "inset")
         return area
 
-    def _line(self, label: str, text: str) -> QVBoxLayout:
+    def _line(self, label: str, text: str, column: int, room: Sequence[str]) -> QVBoxLayout:
         """The one labelled field and, under it, the place for what is wrong with the line: as wide as the question's
-        text, so that a sentence wraps there and never widens the question, and holding its line's height while nothing
-        is wrong, so that the question does not jump as the line is judged, at the text sizes where a rule's sentence
-        takes one line."""
+        text, so that a sentence wraps there and never widens the question, and holding from the start the height of the
+        tallest of ``room``, the sentences the line's rule gives, as they wrap there in the question's own lettering (one
+        line's height with none handed in), so that the question does not move as the line is judged wrong and right.
+        The text size is the launch's, so the room is worked out once, here."""
         scaled = design.scaled
         block = QVBoxLayout()
         block.setSpacing(scaled(design.GAP["field_message"]))
@@ -248,6 +249,18 @@ class Ask(QDialog):
         self.field_message = QLabel()
         self.field_message.setTextFormat(Qt.TextFormat.PlainText)
         self.field_message.setWordWrap(True)
+        self.field_message.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)   # beside its marker
+        self.field_message.ensurePolished()                  # in the lettering it is drawn in
+        # As wide as the text beside its marker, whatever it says: a sentence the toolkit would set wider, or a long
+        # name in it, wraps there and never widens the question.
+        width = column - scaled(design.SIZE["marker"]) - scaled(design.GAP["marker_text"])
+        self.field_message.setFixedWidth(width)
+        tallest = 0
+        for sentence in room:
+            self.field_message.setText(_may_wrap(sentence))
+            tallest = max(tallest, self.field_message.heightForWidth(width))
+        self.field_message.setText("")
+        self.field_message.setMinimumHeight(tallest)
         wrong.addWidget(self.field_message, 1)
         held = self._wrong.sizePolicy()
         held.setRetainSizeWhenHidden(True)                   # its line's height is the question's from the start
@@ -264,7 +277,7 @@ class Ask(QDialog):
         text = text.strip()
         wrong = (self._check(text) if text and self._check is not None else None) or ""
         self.wrong = wrong
-        self.field_message.setText(wrong)
+        self.field_message.setText(_may_wrap(wrong))
         self._wrong.setVisible(bool(wrong))
         set_class(self.field, state="error" if wrong else "")
         self.other_button.setEnabled(bool(text) and not wrong)
@@ -312,10 +325,12 @@ def ask(parent, title: str, sentence: str, safe: str, other: str | None = None, 
 
 
 def ask_text(parent, title: str, sentence: str, label: str, other: str, *, text: str = "",
-             check: Callable[[str], str | None] | None = None, items=None, beneath=None) -> str | None:
-    """Ask for one line of text. The text for the other answer, None for "Cancel"."""
+             check: Callable[[str], str | None] | None = None, items=None, beneath=None,
+             room: Sequence[str] = ()) -> str | None:
+    """Ask for one line of text. The text for the other answer, None for "Cancel". ``room`` names the sentences
+    ``check`` can give whose room the question keeps from the start."""
     dialog = Ask(parent, title, sentence, CANCEL, other, marker="info", items=items, beneath=beneath,
-                 label=label, text=text, check=check)
+                 label=label, text=text, check=check, room=room)
     arrow = _arrow_while_asked()
     try:
         dialog.exec()

@@ -52,10 +52,11 @@ class Fact:
                              f"the button: {self.blocks!r}")
 
 
-def refused_facts(sentences: Iterable[str]) -> tuple[Fact, ...]:
+def refused_facts(sentences: Iterable[str], blocks: str = "") -> tuple[Fact, ...]:
     """What a refusal says among the facts, each of ``sentences`` the engine's own: an "Error." that stops the start, as
-    the mark under its field does, for a marker never disagrees with the button."""
-    return tuple(Fact("err", sentence, REFUSED_BLOCKS) for sentence in sentences)
+    the mark under its field does, for a marker never disagrees with the button; beside the button ``blocks``, or, for a
+    refused start, that it was."""
+    return tuple(Fact("err", sentence, blocks or REFUSED_BLOCKS) for sentence in sentences)
 
 
 def ordered(facts: Iterable[Fact]) -> tuple[Fact, ...]:

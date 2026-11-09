@@ -9608,6 +9608,71 @@ def test_the_name_asked_at_resume_is_checked_as_the_store_checks_a_posteriors_na
         assert (prior_load.calls, posterior_load.calls, inference.session is before) == ([], [], True)
 
 
+def _the_question_as_judged(names, seen):
+    """What a question that asks for a line answers with ``names`` typed in turn: it is shown, off the screen, and for
+    the line as it opened and then for each name, its height, where its answers stand and what is wrong, kept in
+    ``seen``; then left as "Cancel" leaves it."""
+    from PySide6.QtCore import QPoint, Qt
+
+    def judged(dialog) -> None:
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        dialog.show()
+        for name in (None, *names):
+            if name is not None:
+                dialog.field.setText(name)
+            qt_app().processEvents()
+            seen.append((dialog.wrong, dialog.height(), dialog.safe_button.mapTo(dialog, QPoint(0, 0)).y()))
+        dialog.hide()
+
+    return judged
+
+
+def _lines_of(dialog_message, sentence) -> int:
+    """How many lines ``sentence`` takes where a question says what is wrong with its line."""
+    dialog_message.setText(sentence)
+    return dialog_message.heightForWidth(dialog_message.width()) // dialog_message.fontMetrics().height()
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_name_this_training_keeps_the_room_of_the_stores_rule_from_the_moment_it_opens(factor, store, tmp_path,
+                                                                                      monkeypatch):
+    """In the program's own lettering the store's rule of a name takes more than one line in "Name this training", at
+    both text sizes; the question holds the room of the taller of its two rules from the moment it opens, so a name of
+    the wrong shape, one shaped like a record's id, a name another posterior holds and a free one each leave the
+    question and its answers where they stood. The program's font is put back."""
+    from PySide6.QtGui import QFont
+    from core.gui import fonts
+    from core.gui.widgets.form import NAME_ID_TEXT, NAME_SHAPE_TEXT
+    from tests._dialogs import answer_in_turn
+    from tests._look_helpers import _the_look, text_size
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held, name="")
+    app, seen = qt_app(), []
+    font = QFont(app.font())
+    try:
+        with text_size(factor), _the_look(False):
+            fonts.load_app_font(app)
+            window, _home = _home_of_last_time(tmp_path)
+            inference = window.part("inference")
+            inference.read_offers()
+            room = []
+
+            def measured(dialog) -> None:
+                _the_question_as_judged(("retrain 9", "20261003T030211", "zz_trained", "retrain_9"), seen)(dialog)
+                room.append(_lines_of(dialog.field_message, NAME_SHAPE_TEXT))
+
+            answer_in_turn(monkeypatch, measured)
+            assert inference.resume_kept(kept) is None
+            window.hide()
+    finally:
+        app.setFont(font)
+    taken = "The name 'zz_trained' is taken by another posterior. Choose another name."
+    assert [wrong for wrong, _height, _answers in seen] == ["", NAME_SHAPE_TEXT, NAME_ID_TEXT, taken, ""], seen
+    assert room[0] >= 2, (factor, room, "the store's rule takes one line here")
+    assert len({(height, answers) for _wrong, height, answers in seen}) == 1, (factor, seen)
+
+
 def test_home_takes_the_reopenings_path_once_the_pages_call_can_no_longer_start(store, tmp_path, monkeypatch):
     """A training of this launch that failed with batches saved, whose page offers "Continue from batch N": once step 1
     has been applied again, the page's own call can no longer start, the run is no longer offered as the page's, and
@@ -10169,31 +10234,44 @@ def test_continue_pressed_again_says_nothing_of_what_the_first_press_found(again
         "", "", True), (view.notice.text(), inference.notice_on("training"))
 
 
-def test_a_resume_refused_on_its_row_takes_away_the_sentence_an_earlier_press_left(store, tmp_path, monkeypatch):
-    """A Resume's chain stops at its prior's load and says so under the Training step's heading; the prior is then
-    deleted, and Resume pressed on the kept training's row is refused before anything is read, on its row: the earlier
-    sentence goes, so the page gives one reason, the row's."""
+@pytest.mark.parametrize("earlier", ["a chain's stop", "a past view's refusal"])
+def test_a_resume_refused_on_its_row_takes_away_the_sentence_an_earlier_press_left(earlier, store, tmp_path,
+                                                                                   monkeypatch):
+    """A Resume's chain stops at its prior's load and says so under the Training step's heading; or a past view's
+    "Continue from batch N" finds its bounds file gone and says so on the view. The prior is then deleted, and Resume
+    pressed on a kept training's row is refused before anything is read, on its row: the earlier sentence goes, from the
+    heading and from the past view alike, so the page gives one reason, the row's."""
     held = _a_launch_before(store, tmp_path, monkeypatch)
     prior_load, _posterior_load = _the_loads(monkeypatch, store, held, release=False)
     kept = _a_kept_training(store, held)
-    _a_failed_training(store, tmp_path, held, outcome="stopped", kept=kept)
+    if earlier == "a chain's stop":
+        _a_failed_training(store, tmp_path, held, outcome="stopped", kept=kept)
+    else:
+        _a_failed_training(store, tmp_path, held, handed={"bounds": str(tmp_path / "bounds of the rig.txt")})
     window, home = _home_of_last_time(tmp_path)
     app = qt_app()
     inference = window.part("inference")
     inference.read_offers()
-    window.go_to("home")
-    assert home.next_button.text() == "&Resume"
-    choose(monkeypatch, other=True)
-    home.next_button.click()
-    turn_until(app, prior_load.started.is_set)
-    prior_load.fail(RuntimeError("the prior's file could not be read"))
-    _settle(app, inference)
     page = inference.posterior_panel
-    assert inference.notice_on("training").startswith("Resume stopped at Prior: "), inference.notice_on("training")
+    if earlier == "a chain's stop":
+        window.go_to("home")
+        assert home.next_button.text() == "&Resume"
+        choose(monkeypatch, other=True)
+        home.next_button.click()
+        turn_until(app, prior_load.started.is_set)
+        prior_load.fail(RuntimeError("the prior's file could not be read"))
+        _settle(app, inference)
+        assert inference.notice_on("training").startswith("Resume stopped at Prior: "), inference.notice_on("training")
+    else:
+        window._open_run(_REOPENED)
+        page.past_view.continue_button.click()
+        assert page.past_view.notice.text() == (
+            "Continue from batch 236 cannot start: the bounds file bounds of the rig.txt is no longer there.")
     store.delete("prior", held.prior, force=True)
     _row_of(page, kept)["resume"].click()
-    said = (inference.notice_on("training"), page.notice.isVisibleTo(page), _row_of(page, kept)["why"].text())
-    assert said == ("", False, "The prior it was trained with is no longer in Records."), said
+    said = (inference.notice_on("training"), page.notice.isVisibleTo(page), _row_of(page, kept)["why"].text(),
+            page.past_view.notice.text() if page._past_view is not None else "")
+    assert said == ("", False, "The prior it was trained with is no longer in Records.", ""), said
 
 
 def test_a_resumes_own_units_file_is_a_third_choice_and_its_device_is_said_until_a_step_is_applied(store, tmp_path,
@@ -10326,16 +10404,62 @@ def test_a_units_file_of_its_own_stays_chosen_across_another_model_and_is_applie
         line.words)
 
 
+def test_a_units_file_chosen_after_a_resume_keeps_its_place_until_another_choice_is_made(store, tmp_path, monkeypatch):
+    """After the Resume of a training kept with a units file of its own, another units file chosen takes its place as the
+    units row's third choice, changed against the file the step holds; "Save as a plan…", after which every step is
+    drawn again, leaves it chosen and writes its units as words. Units typed and the plan saved again, the step's own
+    file is the third choice once more."""
+    from core.plans import read_plan
+    from tests._dialogs import answer_chooser, answer_in_turn
+    window, inference, held, _units, words = _resumed_with_units_of_its_own(store, tmp_path, monkeypatch)
+    step_one = inference.config_panel
+    choice, line = step_one.units_choice, step_one.form.rows["units"].line
+    bench = tmp_path / "bench" / "units of the bench.txt"
+    bench.parent.mkdir()
+    bench.write_bytes(b"# Units\nHz nm pN s\n")
+    window.go_to("inference", "model")
+    step_one.form.fold.set_open(True)
+    answer_chooser(monkeypatch, str(bench))
+    step_one.choose_units_button.click()
+    items = [choice.itemText(at) for at in range(choice.count())]
+    assert items == ["From the model's units file", "Typed here", "From the file units of the bench.txt"], items
+    assert (line.kind, line.words) == (
+        "warn", f"Changed, not applied. In use: {words}, from the file units of the rig.txt."), line.words
+    answer_in_turn(monkeypatch, ("Save", "bench_units"))
+    step_one.save_button.click()
+    assert inference.plan_source.name == "bench_units"
+    assert (choice.currentData(), choice.currentText()) == ("own", "From the file units of the bench.txt"), (
+        "a reading put the step's own file back in the place of the one chosen")
+    written = read_plan(held.folder / "bench_units.txt").values[("Model and options", "units")]
+    assert sorted(str(written).split()) == ["Hz", "nm", "pN", "s"], written
+    choice.setCurrentIndex(choice.findData("typed"))
+    answer_in_turn(monkeypatch, ("Save", "typed_units"))
+    step_one.save_button.click()
+    assert inference.plan_source.name == "typed_units"
+    assert choice.itemText(choice.findData("own")) == "From the file units of the rig.txt"
 
+
+
+@pytest.mark.parametrize("way", ["applied", "chosen"])
 @pytest.mark.parametrize("factor", [1.0, 1.5])
-def test_a_long_named_units_file_keeps_step_one_within_its_view_at_the_least_size(factor, store, tmp_path, monkeypatch):
-    """The units row's third choice names a units file by its name, which a person gives at any length: at the window's
-    least size, with the fold open, step 1's body stands within its view, the name cut short in its middle and whole
-    in its tip and in the open list."""
+def test_a_long_named_units_file_keeps_step_one_within_its_view_at_the_least_size(factor, way, store, tmp_path,
+                                                                                  monkeypatch):
+    """The units row's third choice names a units file by its name, which a person gives at any length, applied as a
+    chain applies a record's, or chosen in the chooser: at the window's least size, with the fold open, step 1's body
+    stands within its view, the name cut short in its middle and whole in its tip and in the open list, and "Choose a
+    units file…" whole in view; in the light theme for the one and the dark for the other, in the program's own
+    lettering, which is put back."""
+    from PySide6.QtGui import QFont
     from core import cli
+    from core.gui import fonts
+    from tests._dialogs import answer_chooser
     from tests._look_helpers import _settle as _turned, _the_look, text_size
     name = "units of the rig measured on the second of november in the lab downstairs.txt"
-    with text_size(factor), _the_look(False):
+    app = qt_app()
+    font = QFont(app.font())
+    with text_size(factor), _the_look(way == "chosen"), contextlib.ExitStack() as put_back:
+        put_back.callback(app.setFont, font)
+        fonts.load_app_font(app)
         _on_the_runs_clock(tmp_path)
         window = build_window()
         design.set_room((3400, 1380))
@@ -10345,14 +10469,20 @@ def test_a_long_named_units_file_keeps_step_one_within_its_view_at_the_least_siz
         units.write_bytes(open(cli.resolve_units_file("NADROWSKI"), "rb").read())
         inference = window.part("inference")
         step_one = inference.config_panel
-        assert step_one.apply_quietly("NADROWSKI", {"chi_mode": False, "units_override": str(units)})
+        if way == "applied":
+            assert step_one.apply_quietly("NADROWSKI", {"chi_mode": False, "units_override": str(units)})
         window.go_to("inference", "model")
         step_one.form.fold.set_open(True)
+        if way == "chosen":
+            answer_chooser(monkeypatch, str(units))
+            step_one.choose_units_button.click()
         _turned()
         box, port, body = step_one.units_choice, step_one.scroller.viewport(), step_one.scroller.body
         assert box.currentData() == "own" and box.toolTip() == f"From the file {name}"
         assert box.shown_text() != box.currentText() and "…" in box.shown_text()
         assert body.minimumSizeHint().width() <= port.width(), (body.minimumSizeHint().width(), port.width())
+        button = step_one.choose_units_button
+        assert button.mapTo(port, button.rect().topRight()).x() < port.width(), "the chooser's button is cut"
 
 
 def test_continue_from_batch_n_finds_another_models_prior_and_bounds_file_where_they_are(store, tmp_path, monkeypatch):
