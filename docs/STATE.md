@@ -1,5 +1,41 @@
 # PRISM — state
 
+**Last updated:** 2026-11-09, afternoon (13:05 by the clock; the weekly bar 26 %, resetting on 15 November at 04:00 UTC):
+STAGE 5'S PLAN IS WRITTEN AND COMMITTED, FOR THE OWNER'S APPROVAL: `docs/superpowers/plans/2026-11-09-window-redesign-stage-5.md`
+(`ce8d57c`), with departures 398 to 424 in the plan and in the design's section 8. Nothing is built; no code changed. The
+chat started at 09:49 from the owner's pasted prompt (`docs/superpowers/prompts/2026-11-09-window-redesign-stage-5-plan.md`).
+
+- **How it was made** (the ledger's section "Stage 5 — … (plan)" and `stage-5/plan-drafts/` hold it): six readers (sonnet,
+  about 2.4 M tokens), six probes in a scratch copy (opus, 0.58 M; nothing on the card), the head and the task outline by the
+  controller, the task sections by one drafter (opus, 0.60 M, then 0.86 M for the corrections), two cross-checks (seat X, opus,
+  0.61 M: 32 findings, among them the order of the plans' and the kept round's tasks; seat Y, sonnet, 0.27 M: 8), the
+  controller's rulings (`controller-rulings.md`), one re-read (sonnet, 0.24 M: every ruling applied; six slips, mended). About
+  6.3 M tokens in background agents; the bar 21 % to 26 %.
+- **The owner's answers today:** S5-1, the Checks headline for a posterior trained with χ off reads "n of 3 deciding checks
+  passed; 3 do not apply to this posterior"; S5-2, a kept narrowing round is offered after a reopening on the Narrowing round
+  page only, Home and the rail leading there; S5-3, a check's settings stand open on its page and one press runs it.
+- **Its shape:** Tasks 0 and 14 the controller's; thirteen building tasks: 1 the front (tests only), 2 the engine (E4
+  `observation_name`, E6's six refusals given `posterior`, one field on the round's refusal; `FIELDS` 115), 3 the checks' rules,
+  the chain's words and Training's pre-run line, 4 the pieces, 5 the Checks list, a check's page and every result, 6 and 7 the
+  checks' forms and runs, 8 the timing of a short fit and the card test (scratch stores), 9 the comparison after simulating, 10
+  Inference, 11 the Narrowing round, 12 plans fill every step, 13 a kept round after a reopening (Resume and Continue). About 195
+  new test functions, about 590 items; the fast gate about 50 to 55 minutes by the end.
+- **Measured by the probes:** check 8's two fits cannot be one run (two runs, departure 411); a check's page beside the full
+  list needs a window about 1,446 px wide, so the list narrows to two columns beside it from about 1,162 px (412); a kept round
+  resumes with its parents loaded by id and `resume_fit` alone, to the same region and best loss; the feared 0 % kept share of a
+  resumed round is not real; the same recordings given twice are saved twice (413, and the audit's list).
+- **Owed at the exit:** THE SLOW SET (stages 4 and 5); the card test (five lines and run 5), the diagnostic card (beyond its
+  rule: E6 moves no tensor, but two of its commands run the changed functions) and one card test through the Checks page's own
+  call; the real-screen run; the pictures; the walkthrough rows; the guide's pages for Checks, Inference and the round;
+  `CLAUDE.md`'s sentences this stage makes false, on the owner's yes.
+- **No function of `FIT_CODE` is touched by any task; `core/config.py` is not touched.** Engine files change only in Task 2.
+- **Unpushed:** `ce8d57c` and this STATE commit (the owner pushed up to `cdc80d2`).
+
+NEXT: the owner's reading and approval of the plan; then the build from Task 0, in this chat or in a new one from a hand-off
+prompt, the weekly bar read first.
+
+What follows is the head as the morning of 9 November left it:
+
 **Last updated:** 2026-11-09, morning (09:31 by the clock; the weekly bar 21 %, resetting on 15 November at 04:00 UTC):
 STAGE 4 IS CLOSED, AND THE PROMPT FOR STAGE 5'S PLAN IS WRITTEN, at the owner's "Yes, write it":
 `docs/superpowers/prompts/2026-11-09-window-redesign-stage-5-plan.md`. It carries what stage 5 must take from stage 4's
