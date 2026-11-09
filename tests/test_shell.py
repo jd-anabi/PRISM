@@ -10333,9 +10333,10 @@ def test_a_resumes_own_units_file_is_a_third_choice_and_its_device_is_said_until
     assert step_one.units_choice.findData("own") < 0, "the third choice stood with no units file of its own held"
 
 
-def _resumed_with_units_of_its_own(store, tmp_path, monkeypatch):
+def _resumed_with_units_of_its_own(store, tmp_path, monkeypatch, before=None):
     """A training kept with a units file of its own, resumed after a reopening, the processor standing in for the
-    device: (window, Parameter inference, what the launch before left, the units file, the units' words)."""
+    device, ``before`` called with the window and Parameter inference before Resume is pressed, when handed: (window,
+    Parameter inference, what the launch before left, the units file, the units' words)."""
     from core import config
     from core.Helpers import file_manager
     from core.gui.step_facts import units_words
@@ -10352,6 +10353,8 @@ def _resumed_with_units_of_its_own(store, tmp_path, monkeypatch):
     window, _home = _home_of_last_time(tmp_path)
     inference = window.part("inference")
     inference.read_offers()
+    if before is not None:
+        before(window, inference)
     inference.resume_kept(kept)
     _settle(qt_app(), inference, posterior_load)
     return window, inference, held, units, units_words(file_manager.parse_units_file(str(units)))
@@ -10439,22 +10442,75 @@ def test_a_units_file_chosen_after_a_resume_keeps_its_place_until_another_choice
     assert choice.itemText(choice.findData("own")) == "From the file units of the rig.txt"
 
 
+def test_a_resume_that_puts_its_units_file_where_one_stands_chosen_is_heard_by_the_row(store, tmp_path, monkeypatch):
+    """A units file chosen and another refused on step 1, then the Resume of a training kept with a units file of its
+    own: its file takes the chosen one's place, the list standing where it stood, and the row and the list hear it as a
+    choice. The list's tip names the training's file, and the refused file's sentence is gone from under the row and
+    from beside the main button."""
+    from tests._dialogs import answer_chooser
+    bench = tmp_path / "bench" / "units of the bench.txt"
+    bench.parent.mkdir()
+    bench.write_bytes(b"# Units\nHz nm pN s\n")
+    bad = tmp_path / "bad" / "master copy.txt"
+    bad.parent.mkdir()
+    bad.write_bytes(b"# Parameters\nk_gs = 1.0 in (0.5, 2.0)\n")
+    seen = {}
 
-@pytest.mark.parametrize("way", ["applied", "chosen"])
+    def chosen_and_refused(window, inference):
+        step_one = inference.config_panel
+        window.go_to("inference", "model")
+        step_one.form.fold.set_open(True)
+        answer_chooser(monkeypatch, str(bench))
+        step_one.choose_units_button.click()
+        answer_chooser(monkeypatch, str(bad))
+        step_one.choose_units_button.click()
+        seen["before"] = (step_one.units_choice.currentData(), step_one.units_choice.toolTip(),
+                          step_one.form.rows["units"].line.kind, step_one.foot.reason.text())
+
+    window, inference, _held, units, _words = _resumed_with_units_of_its_own(store, tmp_path, monkeypatch,
+                                                                             before=chosen_and_refused)
+    assert seen["before"] == ("own", "From the file units of the bench.txt", "err",
+                              "Cannot start yet: the units file chosen cannot be used."), seen["before"]
+    step_one = inference.config_panel
+    choice, row = step_one.units_choice, step_one.form.rows["units"]
+    assert (inference.session.draft.units_override, choice.currentData()) == (str(units), "own")
+    assert choice.toolTip() == "From the file units of the rig.txt", choice.toolTip()
+    assert (row.refused(), row.line.kind) == ("", ""), (row.line.kind, row.line.words)
+    assert "the units file chosen cannot be used" not in step_one.foot.reason.text(), step_one.foot.reason.text()
+    facts = [fact.sentence.plain_text() for fact in step_one.foot.facts.rows()]
+    assert not any("master copy.txt" in fact for fact in facts), facts
+
+
+
+#: Names a person gives a units file, at any length: words with spaces between them, and one word of 64 characters
+#: with no space, in CamelCase and with underscores.
+LONG_UNITS_NAMES = {"spaces": "units of the rig measured on the second of november in the lab downstairs.txt",
+                    "CamelCase": "UnitsOfTheRigMeasuredOnTheSecondOfNovemberInTheLabDownstairs.txt",
+                    "underscores": "units_of_the_rig_measured_on_the_second_of_november_upstairs.txt"}
+#: What such a file meets on step 1: applied as a chain applies a record's, chosen in the chooser, or chosen and refused
+#: (no units in it); and a folder chosen, refused in the system's words, which name its whole path, one of its folders
+#: named by one long word.
+LONG_UNITS_WAYS = [("spaces", "applied"), ("spaces", "chosen"),
+                   *((shape, way) for shape in ("CamelCase", "underscores")
+                     for way in ("applied", "chosen", "refused")),
+                   ("a folder", "refused")]
+
+
+@pytest.mark.parametrize("shape, way", LONG_UNITS_WAYS, ids=[f"{shape}, {way}" for shape, way in LONG_UNITS_WAYS])
 @pytest.mark.parametrize("factor", [1.0, 1.5])
-def test_a_long_named_units_file_keeps_step_one_within_its_view_at_the_least_size(factor, way, store, tmp_path,
+def test_a_long_named_units_file_keeps_step_one_within_its_view_at_the_least_size(factor, shape, way, store, tmp_path,
                                                                                   monkeypatch):
-    """The units row's third choice names a units file by its name, which a person gives at any length, applied as a
-    chain applies a record's, or chosen in the chooser: at the window's least size, with the fold open, step 1's body
-    stands within its view, the name cut short in its middle and whole in its tip and in the open list, and "Choose a
-    units file…" whole in view; in the light theme for the one and the dark for the other, in the program's own
+    """The units row names a units file by its name, which a person gives at any length, with spaces or as one word:
+    applied as a chain applies a record's, chosen in the chooser, or chosen and refused, and a folder refused in words
+    that name its whole path. At the window's least size, with the fold open, step 1's body stands within its view, a
+    name taken cut short in its middle and whole in its tip, a sentence under the row broken inside its long word, and
+    "Choose a units file…" whole in view; in the light theme, and the dark for a file chosen, in the program's own
     lettering, which is put back."""
     from PySide6.QtGui import QFont
     from core import cli
     from core.gui import fonts
     from tests._dialogs import answer_chooser
     from tests._look_helpers import _settle as _turned, _the_look, text_size
-    name = "units of the rig measured on the second of november in the lab downstairs.txt"
     app = qt_app()
     font = QFont(app.font())
     with text_size(factor), _the_look(way == "chosen"), contextlib.ExitStack() as put_back:
@@ -10465,21 +10521,32 @@ def test_a_long_named_units_file_keeps_step_one_within_its_view_at_the_least_siz
         design.set_room((3400, 1380))
         window.setMinimumSize(1, 1)
         _shown_off_screen(window, design.scaled(900), design.scaled(600))
-        units = tmp_path / name
-        units.write_bytes(open(cli.resolve_units_file("NADROWSKI"), "rb").read())
+        if shape == "a folder":
+            # The system breaks a path after each backslash: one folder of the path named by one word of 64 letters.
+            units = tmp_path / "TheRigsUnitsKeptOnTheSharedDriveOfTheLabDownstairsSinceNovember8" / "units.txt"
+            units.mkdir(parents=True)
+        else:
+            units = tmp_path / LONG_UNITS_NAMES[shape]
+            units.write_bytes(b"# Parameters\nk_gs = 1.0 in (0.5, 2.0)\n" if way == "refused" else
+                              open(cli.resolve_units_file("NADROWSKI"), "rb").read())
         inference = window.part("inference")
         step_one = inference.config_panel
         if way == "applied":
             assert step_one.apply_quietly("NADROWSKI", {"chi_mode": False, "units_override": str(units)})
         window.go_to("inference", "model")
         step_one.form.fold.set_open(True)
-        if way == "chosen":
+        if way != "applied":
             answer_chooser(monkeypatch, str(units))
             step_one.choose_units_button.click()
         _turned()
         box, port, body = step_one.units_choice, step_one.scroller.viewport(), step_one.scroller.body
-        assert box.currentData() == "own" and box.toolTip() == f"From the file {name}"
-        assert box.shown_text() != box.currentText() and "…" in box.shown_text()
+        line = step_one.form.rows["units"].line
+        if way == "refused":
+            named = repr(str(units)) if shape == "a folder" else units.name
+            assert (box.currentData(), line.kind, named in line.words) == ("file", "err", True), line.words
+        else:
+            assert box.currentData() == "own" and box.toolTip() == f"From the file {units.name}"
+            assert box.shown_text() != box.currentText() and "…" in box.shown_text()
         assert body.minimumSizeHint().width() <= port.width(), (body.minimumSizeHint().width(), port.width())
         button = step_one.choose_units_button
         assert button.mapTo(port, button.rect().topRight()).x() < port.width(), "the chooser's button is cut"

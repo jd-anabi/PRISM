@@ -572,8 +572,9 @@ def test_a_value_that_is_only_shown_is_no_setting_of_the_fold():
 
 
 @pytest.mark.parametrize("key", ["num_runs", "chi_f0"], ids=["a setting", "a value only shown"])
-@pytest.mark.parametrize("name", [LONG_NAME, "x" * 60, "a.very.long.name.of.a.record.set.apart.by.full.stops.alone"],
-                         ids=["underscores", "one word", "full stops"])
+@pytest.mark.parametrize("name", [LONG_NAME, "x" * 60, "y" * 30,
+                                  "a.very.long.name.of.a.record.set.apart.by.full.stops.alone"],
+                         ids=["underscores", "one word", "one word of thirty letters", "full stops"])
 def test_a_long_origin_wraps_and_stays_on_the_page(name, key, tmp_path):
     """No record's name is too long for its row: the origin takes the lines it needs, a word with no place to break among
     them, at the window's least size, and its words are all still there."""

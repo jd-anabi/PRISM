@@ -6708,7 +6708,8 @@ def test_the_line_forms_sentence_wraps_and_never_widens_the_question(factor):
     """What is wrong with the line stands as wide as the question's text, and wraps there: the question keeps its width
     whatever the sentence, at every text size, once it is laid out again, and no line of the sentence runs past the
     text's right edge. A word too long for a line, with underscores in it or none, does not widen it either: it breaks,
-    and stands whole."""
+    and stands whole. The room the question holds is the least of its height, never the most: a sentence taller than
+    the room, a taken name of 64 letters, stands whole."""
     QApplication.instance() or QApplication([])
     with text_size(factor):
         long = ("This name is taken by a plan saved earlier today by another person working on the same computer, "
@@ -6716,7 +6717,7 @@ def test_the_line_forms_sentence_wraps_and_never_widens_the_question(factor):
         unbroken = "_".join(["a_folder_with_a_long_name"] * 6)
         letters = f"The name '{'m' * 64}' is taken by another posterior. Choose another name."
         dialog, _got = _a_line_form(judge=lambda typed: {"fine": None, "taken": long, "letters": letters}.get(
-            typed, unbroken))
+            typed, unbroken), room=(_rule("a plan's name"),))
         try:
             dialog.field.setText("fine")
             _settle()
@@ -6729,11 +6730,14 @@ def test_the_line_forms_sentence_wraps_and_never_widens_the_question(factor):
             right = _in_question(message).x() + message.width()
             assert right <= _in_question(dialog.sentence).x() + dialog.sentence.width(), (factor, right)
             assert message.height() >= message.heightForWidth(message.width()), "the sentence is cut at its foot"
+            room = message.minimumHeight()
             for typed in ("unbroken", "letters"):
                 dialog.field.setText(typed)
                 _settle()
                 assert (dialog.width(), _in_question(message).x() + message.width()) == (wide, right), (
                     factor, typed, dialog.width(), "a word too long for a line widened the question or its sentence")
+                if typed == "letters":
+                    assert message.heightForWidth(message.width()) > room, (factor, room, "it fits: this says nothing")
                 assert message.height() >= message.heightForWidth(message.width()), (factor, typed, "cut at its foot")
                 set_in = message.fontMetrics().boundingRect(QRect(0, 0, message.width(), 100_000),
                                                             Qt.TextFlag.TextWordWrap, message.text())
@@ -6777,6 +6781,27 @@ def test_the_line_form_keeps_the_room_of_its_rule_as_the_line_is_judged(factor, 
                                                                                                           which)
             finally:
                 _question_closed(dialog)
+
+
+@pytest.mark.parametrize("order", ["the taller first", "the taller last"])
+def test_the_line_forms_room_is_the_tallest_of_its_sentences_in_either_order(order):
+    """Handed two sentences of unequal height as its room, in either order, the question holds the taller from the
+    start: the taller said, nothing moves."""
+    rule = _rule("a plan's name")
+    room = (rule, "Short.") if order == "the taller first" else ("Short.", rule)
+    with text_size(1.0), _in_the_programs_lettering(), _the_look(False):
+        dialog, _got = _a_line_form(judge=lambda typed: None if typed.isalnum() else rule, room=room)
+        try:
+            message = dialog.field_message
+            placed = (dialog.width(), dialog.height(), _in_question(dialog.safe_button).y())
+            dialog.field.setText("retrain v2")
+            _settle()
+            assert message.isVisible() and message.text() == rule
+            tall = message.heightForWidth(message.width())
+            assert tall > message.fontMetrics().lineSpacing(), (tall, "the rule takes one line: this says nothing")
+            assert (dialog.width(), dialog.height(), _in_question(dialog.safe_button).y()) == placed, (order, placed)
+        finally:
+            _question_closed(dialog)
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5, 2.25])

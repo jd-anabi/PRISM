@@ -73,6 +73,8 @@ CHOOSE_UNITS_WORDS = "Choose a units file…"
 CHOOSE_UNITS_TITLE = "Choose a units file"
 UNITS_FILTER = "Units file (*.txt);;All files (*)"
 UNREADABLE_UNITS_TEXT = "The units file {} cannot be read: {}"
+#: Under the units row, for a file the engine's reader finds no units in: a bounds file or a cell file, most often.
+NO_UNITS_TEXT = "The file {} holds no units: a units file lists them under \"# Units\"."
 #: Beside the main button while a units file chosen in the chooser is refused on its row: no start was made.
 UNITS_FILE_BLOCKS = "the units file chosen cannot be used"
 FREQUENCY_RESPONSE_TEXT = ("Frequency response (χ(ω)): one spontaneous recording and several driven recordings, each at "
@@ -248,8 +250,18 @@ def _cannot_use(units) -> str:
     except Refusal as refused:
         return refused.message
     except Exception as error:                       # noqa: BLE001 -- a units library's own error on a word
-        return str(error)
+        return str(error) or type(error).__name__    # an error with no words of its own still refuses
     return ""
+
+
+def _file_trouble(label: str, name: str, units) -> str:
+    """Why the units file ``name``, its units as the engine's reader gave them, cannot be used, as the units row,
+    labelled ``label``, says it: a file with none in it in words of its own, any other cause in the units library's;
+    "" when they can be used."""
+    if not units:
+        return NO_UNITS_TEXT.format(name)
+    why = _cannot_use(units)
+    return f"{OWN_UNITS_FROM.format(label, name)} cannot be used: {why}" if why else ""
 
 
 class _PlanChoice(Choice):
@@ -531,10 +543,10 @@ class ConfigPanel(StepPage):
                     found["units"] = (f"{label('units')} typed here cannot be used: {error}",) * 2
         elif self.units_choice.currentData() == OWN_UNITS and self._own_units is not None:
             # A units file of its own, whatever model it is applied with, is held to the rule of units typed here.
-            named = OWN_UNITS_FROM.format(label("units"), Path(self._own_units).name)
-            why = _cannot_use(self._file_units.get(str(self._own_units), ()))
+            why = _file_trouble(label("units"), Path(self._own_units).name,
+                                self._file_units.get(str(self._own_units), ()))
             if why:
-                found["units"] = (f"{named} cannot be used: {why}",) * 2
+                found["units"] = (why,) * 2
         return {key: found[key] for key in RULED if key in found}
 
     def _read(self) -> dict:
@@ -687,7 +699,7 @@ class ConfigPanel(StepPage):
         """The line under the units row: the units of the file chosen and where they come from; reads no file."""
         if self.units_choice.currentData() == OWN_UNITS and self._own_units is not None:
             words = units_words(self._file_units.get(str(self._own_units), ()))
-            self.units_line.set_text(UNITS_FROM.format(words, f"the file {Path(self._own_units).name}"))
+            self.units_line.set_text(UNITS_FROM.format(words, f"the file {_may_wrap(Path(self._own_units).name)}"))
             return
         words, where, trouble = self._units_read.get(self.model_combo.currentText(), ("", "", ""))
         self.units_line.set_text(UNITS_FROM.format(words, where) if words else NO_UNITS_FILE.format(trouble))
@@ -704,33 +716,42 @@ class ConfigPanel(StepPage):
         the engine's own reader, becomes the units row's third choice, chosen, in place of the one it offered; nothing is
         applied. A file that cannot be read, or whose units cannot be used, changes nothing of the row: why is said
         under it, as a refusal of the row is, until the row is edited, and beside the main button that the units file
-        chosen cannot be used, no start having been made. Cancelled, nothing changes. Nothing while a run
-        is live, and nothing is remembered: neither the file nor the folder it was chosen in."""
+        chosen cannot be used, no start having been made. The press takes away what an earlier press of its own said
+        there, so that cancelled the row stands as it stood before that file; a refused start's sentence stays. Nothing
+        while a run is live, and nothing is remembered: neither the file nor the folder it was chosen in."""
         if controller().is_live():
             return
+        row = self.form.rows["units"]
+        if row.unmark(UNITS_FILE_BLOCKS):
+            self.redraw()
         chosen = choose_file(self, CHOOSE_UNITS_TITLE, self._units_folder(), UNITS_FILTER, save=False)
         if not chosen:
             return
         path = str(Path(chosen))
-        row, name = self.form.rows["units"], Path(path).name
+        name = Path(path).name
         try:
             words = tuple(str(unit) for unit in file_manager.parse_units_file(path))
         except Exception as error:                   # noqa: BLE001 -- a file that cannot be read applies nothing
             row.mark(UNREADABLE_UNITS_TEXT.format(name, error), UNITS_FILE_BLOCKS)
             self.redraw()
             return
-        why = _cannot_use(words)
+        why = _file_trouble(row.label_text(), name, words)
         if why:
-            row.mark(f"{OWN_UNITS_FROM.format(row.label_text(), name)} cannot be used: {why}", UNITS_FILE_BLOCKS)
+            row.mark(why, UNITS_FILE_BLOCKS)
             self.redraw()
             return
+        was = self.units_choice.currentIndex()
         self._file_units[path] = words
         self._offer_own_units(path)
-        choice, at = self.units_choice, self.units_choice.findData(OWN_UNITS)
-        if choice.currentIndex() == at:
-            choice.currentIndexChanged.emit(at)      # another file in the one place is a choice the row hears
-        else:
-            choice.setCurrentIndex(at)
+        self.units_choice.setCurrentIndex(self.units_choice.findData(OWN_UNITS))
+        self._units_heard(was)
+
+    def _units_heard(self, was: int) -> None:
+        """The units row's choice heard by the row and its list when it stands on the item it stood on (``was``):
+        another file in the third choice's place, or the file it stands on put there again, is a choice as an item
+        chosen is, its tip naming it and a sentence the row's last choice left under it gone."""
+        if self.units_choice.currentIndex() == was:
+            self.units_choice.currentIndexChanged.emit(was)
 
     # ── applying ──
     def _build_config(self) -> None:
@@ -792,11 +813,13 @@ class ConfigPanel(StepPage):
             except Exception as error:       # noqa: BLE001 -- a units file that cannot be read applies nothing
                 self._refusal(Refusal(UNREADABLE_UNITS_TEXT.format(Path(units_file).name, error), field="units"))
                 return False
+        was = self.units_choice.currentIndex()
         if units_file is not None:
             self._offer_own_units(units_file)
             self.units_choice.setCurrentIndex(self.units_choice.findData(OWN_UNITS))
         else:
             self._units_field.set_value(None if units is None else " ".join(str(unit) for unit in units))
+        self._units_heard(was)
         try:
             values = self._read()
         except Refusal as refused:

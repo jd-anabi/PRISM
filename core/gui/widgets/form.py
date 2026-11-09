@@ -170,10 +170,12 @@ class _Line(QWidget):
         self.setVisible(False)
 
     def say(self, kind: str, words: str) -> None:
+        """Say ``words`` with the marker of ``kind``: kept as handed in, and shown with places to break inside a long
+        word, a file's name or a path, so that the line never stands wider than its column."""
         self.kind, self.words = kind, words
         if kind:
             self.marker.set_kind(kind)
-        self.label.setText(words)
+        self.label.setText(_may_wrap(words))
 
     def says(self) -> bool:
         return bool(self.kind and self.words)
@@ -337,7 +339,8 @@ class Row:
         self._marked = False
         self._set_line(kind, sentence)
 
-    def _set_line(self, kind: str, sentence: str) -> None:
+    def _set_line(self, kind: str, sentence: str, *, heard: bool = True) -> None:
+        """The line, the field outlined with it in error, and with ``heard`` each box of text the row hears."""
         number = None if self.widget is None else _number_of(self.widget)
         if number is not None:
             number.set_error((sentence if kind == "err" else "") or number.own_error())
@@ -345,17 +348,28 @@ class Row:
                 kind, sentence = "err", number.error()
         elif isinstance(self.widget, QLineEdit):
             style.set_class(self.widget, state="error" if kind == "err" else "")
-        for heard in self._heard:
-            if isinstance(heard, QLineEdit):
-                style.set_class(heard, state="error" if kind == "err" else "")
+        for box in self._heard:
+            if isinstance(box, QLineEdit):
+                style.set_class(box, state="error" if kind == "err" and heard else "")
         self._say(kind, sentence)
 
     def mark(self, sentence: str, blocks: str = "") -> None:
         """A refusal of this row: its sentence under the field, stopping the start, until the field is edited; beside the
-        main button ``blocks``, the words for a refusal that is no refused start ("" for one that is)."""
-        self._set_line("err", sentence)
+        main button ``blocks``, the words for a refusal that is no refused start ("" for one that is). A refusal with
+        words of its own is the field's, not what a box under it holds, so no box the row hears is outlined with it."""
+        self._set_line("err", sentence, heard=not blocks)
         self._marked = self._blocks = True
         self._why = blocks
+
+    def unmark(self, blocks: str) -> bool:
+        """Take away the refusal marked with ``blocks``, its words beside the main button, as an edit of the field
+        would, whether it still stops the start or the facts were read since; a refusal marked with other words, a
+        refused start's among them, stays. True when one was taken away."""
+        if not (blocks and self._marked and self._why == blocks):
+            return False
+        self._marked = self._blocks = False
+        self._set_line("", "")
+        return True
 
     def refused(self) -> str:
         """The sentence of the refusal that stops the start here, "" for none: a row off the page stops nothing."""
