@@ -1,5 +1,16 @@
 # PRISM — state
 
+**Last updated:** 2026-11-09, early morning (06:06 by the clock; the weekly bar 20 %): STAGE 4 OF THE WINDOW REDESIGN IS
+CLOSED. The owner answered the exit's last two questions: A14 "Yes, all of them" (the `CLAUDE.md` edits: the memory
+limit kept in Settings, the fifth input folder `Plans/`, one sentence on plans and on Continue filling the forms, the
+thirty-four suites, eight session-wide guards and nine per-test checks, Resume after a reopening, the plan picker not
+remembered) and A15 "Yes, record it" (the fast gate's time of record 43 min 28 s, 3572 passed, at `850dc23`; the 16
+minutes kept as the old target), both applied word for word in `125b332` with `docs/guide/testing.md`'s paragraph.
+Unpushed: 23 commits after `dc66861`. NEXT: stage 5 of the redesign (Checks, Inference and the narrowing round rebuilt
+on the step page), its plan first, from a hand-off prompt written at the owner's word.
+
+What follows is the exit as it stood before the owner's answers:
+
 **Last updated:** 2026-11-09, early morning (05:38 by the clock; the weekly bar 20 %, resetting on 15 November at 04:00
 UTC): STAGE 4'S EXIT HAS RUN EVERY STEP BUT THE OWNER'S: THE GATES OF RECORD ARE ALL GREEN ON `850dc23`. What waits is
 the owner's yes or no to the `CLAUDE.md` edits (A14) and to the gate's time (A15), both in exact words in
