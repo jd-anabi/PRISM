@@ -1,5 +1,61 @@
 # PRISM — state
 
+**Last updated:** 2026-11-09, early morning (05:38 by the clock; the weekly bar 20 %, resetting on 15 November at 04:00
+UTC): STAGE 4'S EXIT HAS RUN EVERY STEP BUT THE OWNER'S: THE GATES OF RECORD ARE ALL GREEN ON `850dc23`. What waits is
+the owner's yes or no to the `CLAUDE.md` edits (A14) and to the gate's time (A15), both in exact words in
+`stage-4/exit/claude-md-proposal.md`; then stage 4 is closed. The same chat, from 7 November, at the owner's words
+("Pictures first (Recommended)", the sixteen answers in `stage-4/exit/owner-answers.md`, "Build it now", "Yes, keep the
+room (Recommended)").
+
+- **The exit's builds, each through the full loop (trial, one brief, one implementer, the gate and three readers, one fix
+  round):**
+  - Task 15c, the owner's answers and the controller's picture cures X1 to X8: `a433e67` (the suites keep any file or
+    folder the window would open: `_no_folders_opened`, `_every_opening_is_read`), `3371e8e`, its fix round `411e74c`;
+  - Task 15d, a chooser of any units file on step 1's Units row ("Choose a units file…") and the name questions keeping
+    their rule's room: `4e22999`, its fix round `531aae3`;
+  - Task 15e, three defects the second pictures found: step 2 said "the bounds file selected is ." (and "The bounds file
+    selected differs …") with no file selected, now no comparison while the list selects none; a refused units file's
+    reason gave way to "Changed, not applied" at the next reading, now it stands until the row is edited; a change of
+    model wiped it, now the hidden box is filled with its signals held: `25ca12f`, its fix round (tests only) `850dc23`.
+  - Departures 344 to 397 (each task's rows committed before its build: `2e0c8ac`, `ad41876`, `880e0c1`, `a05a9db`,
+    `fdbca5d`, `d1dbee7`).
+- **The pictures, three times:** at `fa983c9` (488, three sets), at `531aae3` (516, three sets, nine checks each, 92
+  pairs shown to the owner), at `850dc23` (524, plain and text 150 %; the 150 % scaling set not drawn again, a ruling:
+  twice it showed nothing that is not at 100 %; 12 pairs shown). Reports `stage-4/reports/exit-pictures{,-2,-3}-report.md`.
+- **The documents:** the guide pages for the rebuilt steps `c45e7b7` (seven pages stamped `531aae3`; two readers, 36
+  points of which 5 Important, all but one taken, and a re-reader); the walkthrough's rows `7cd91bf` (G8, G9, G11 to G25,
+  G37 to G53, and the text above the table); the code audit's list items 29 to 33 `c5c262d`.
+- **THE GATES OF RECORD, ALL ON `850dc23`:**
+  - the fence: only the seven engine files the plan allows changed since `d02073b` (+608 −41), `core/config.py` by its
+    one line `PLANS_PATH`; `refusals.FIELDS` 114; 34 suites; the orchestrator's last statement
+    `fit_state.remember_loaded_code()`, as before; `Artifacts/simulations/eda5c2a1e468` untouched;
+  - the digests: `fit_state.code_digests()`, 17 names, EQUAL to stage 4's first record
+    (`stage-4/gates/digests-before-task02.json`) and to `stage-3/gates/digests-after-task03.json`, written as
+    `stage-4/gates/digests-at-exit.json`; among them `core.SBI.train.run_fit` `2b7a0bce64570300`,
+    `core.SBI.train.train_nn` `2cf84a17feb813e0`, `core.orchestrator.build_embedding_net` `45bb3140bcebcfc7`;
+  - the quiet fast gate, alone: 3572 passed, 11 skipped, 5 deselected, in 43 min 28 s (04:18 to 05:01). The four suites
+    the stage added take 3 min 30 s alone (945 passed); the engine's slowest test took 257 s alone, against 182 s at
+    stage 3's gate, so the machine reads slower even alone, why not established;
+  - the card test (`CLAUDE.md`'s five lines and run 5, no diagnostic card, nothing under `core/diagnostics` changed):
+    every criterion held, in 25 min 30 s (05:02 to 05:27); masked probes 32.7 % and 32.2 %; run 5 resumed from pass 3 to
+    30 with `resumed_fit: True`, `fit_processes: 2`; the scratch store deleted;
+  - the real screen: 11 passed, none skipped, in 21 s (`powercfg /requests` afterwards is the owner's to read: it needs
+    an administrator shell);
+  - the collection: 3588; the carried-over list 1642 rows, missing 0, gone 63, each closed (56 born rows added, four
+    gone rows closed by hand, one of them, Task 5's, missed by the last review);
+  - every ground check as recorded: `Artifacts/` 428 entries identical, `PRISM.ini` 3,296 bytes unchanged, its folder its
+    two files, no `sbi-logs`, the desktop its four names, `Resources/Models` `SHM.json` and `SHM2.json`.
+- **For the owner to read:** `stage-4/exit/rulings-for-the-owner.md` and `rulings-for-the-owner-2.md` (its part three,
+  section H, is this morning's: Task 15e, the guide's readers, the scale150 ruling, two older looks left as built).
+- **Unpushed:** 21 commits after `dc66861` (the owner pushed up to it on 6 November).
+
+NEXT: the owner's A14 (the `CLAUDE.md` edits, each in exact words, yes or no) and A15 (the gate's time in `CLAUDE.md`
+and `docs/guide/testing.md`); the yes applied in one commit of its own; then STATE, and stage 4 is closed. After it, as
+`docs/superpowers/notes/` and the memory have it: stage 5 of the redesign (Checks, Inference and the narrowing round
+rebuilt on the step page), its plan first; then stages 6 to 9, the code audit, and the retrain from the window.
+
+What follows is the head as the evening of 6 November left it:
+
 **Last updated:** 2026-11-06, the evening (19:54 by the clock; the weekly bar 94 %, resetting on 8 November at 04:00 UTC):
 STAGE 4'S BUILD AND ITS LAST REVIEW ARE COMPLETE; TASK 15, THE EXIT, IS NEXT, WITH THE OWNER. The same chat went on at the
 owner's word ("Start it now", then a pause at 15:45 for a restart of the app, then "Go on").
