@@ -25,6 +25,11 @@ five builders here -- ``build_window``, ``build_part``, ``build_inference``, ``b
 ``build_step_page`` -- and by no suite itself, so a constructor's arguments are written in one place.
 ``step_pages`` names every page the window builds on the step page, the one list the standing tests of
 the rebuilt pages are held to.
+
+The records the Checks page and the narrowing round read are written here in seconds, through the store's own writer
+(``write_diagnostic``, ``write_calibration``, ``write_observation``, ``build_fit_record`` with a round's region), with
+the settings and results of each check as the engine writes them (``check_results``) and the unusable counts a
+simulation set's state carries (``write_simulation_set``).
 """
 import ast
 import inspect
@@ -795,11 +800,12 @@ _FIT_STOPS = {"on_purpose": (True, "cancelled"), "error": (False, "RuntimeError:
 
 def _fit_body(*, passes: int = 3, stopped: "str | None" = "on_purpose", posterior_name: str = "",
               complete: bool = False, unresumable: "str | None" = None, identity: "dict | None" = None,
-              saved_at: "str | None" = None) -> dict:
+              saved_at: "str | None" = None, region: "dict | None" = None) -> dict:
     """A kept training's manifest body at its smallest, every key of its kind present: an identity with
     each of its parts (the one handed in, else one whose parts are zeros), a progress of ``passes`` passes with
     finite losses, last saved at ``saved_at`` (now when it is None), and the stop ``stopped`` names ("on_purpose",
-    "error", or None for a record whose process never wrote how it stopped)."""
+    "error", or None for a record whose process never wrote how it stopped), and ``region`` the region of a narrowing
+    round as ``region_to_json`` writes it (``region_dict``), None for a training that is not a round."""
     from datetime import datetime, timezone
     if stopped is not None and stopped not in _FIT_STOPS:
         raise ValueError(f"stopped must be one of {sorted(_FIT_STOPS)} or None, not {stopped!r}")
@@ -811,7 +817,7 @@ def _fit_body(*, passes: int = 3, stopped: "str | None" = "on_purpose", posterio
     if identity is None:
         identity = {"simulation": {"digest": "0" * 12}, "batches": 4, "settings": {"hidden_features": 8},
                     "code": {}, "constants": {}, "libraries": {}, "network": "0" * 16}
-    return {"posterior_name": posterior_name, "identity": identity, "region": None,
+    return {"posterior_name": posterior_name, "identity": identity, "region": region,
             "progress": {"passes": int(passes), "best_validation_loss": 1.5, "passes_since_best": 0,
                          "last_validation_loss": 1.5, "saved_at": saved_at or at, "wall_seconds": 12.0,
                          "processes": 1},
@@ -821,7 +827,8 @@ def _fit_body(*, passes: int = 3, stopped: "str | None" = "on_purpose", posterio
 def build_fit_record(store, *, passes: int = 3, stopped: "str | None" = "on_purpose",
                      posterior_name: str = "", note: str = "", parents: "dict | None" = None,
                      complete: bool = False, unresumable: "str | None" = None,
-                     identity: "dict | None" = None, saved_at: "str | None" = None) -> str:
+                     identity: "dict | None" = None, saved_at: "str | None" = None,
+                     region: "dict | None" = None) -> str:
     """A kept training's record, its manifest alone (no header and no state), written in an instant
     through ``write_fit_manifest`` into a new folder of ``store`` (``store.new_fit_dir()``).
 
@@ -832,29 +839,41 @@ def build_fit_record(store, *, passes: int = 3, stopped: "str | None" = "on_purp
     smallest one, whose parts are zeros and which matches no configuration. Handed alone it matches no training either:
     a match also needs ``parents={"simulation": <folder's name>}`` naming a complete set of its batches
     (``write_simulation_set`` with ``complete=True``) and the real code, constants and libraries in the identity.
-    ``saved_at`` is when its last pass was saved, an ISO moment with its zone; now when none is handed.
+    ``saved_at`` is when its last pass was saved, an ISO moment with its zone; now when none is handed. ``region`` makes the
+    record a narrowing round's kept training: the region as ``region_dict`` gives it, with ``parents`` naming the
+    ``prior``, the ``simulation`` (the set's folder), the ``parent_posterior`` and the ``observation``.
     ``cfg=None``, like ``build_browse_store``'s rows: nothing here reads a bounds file or trains anything.
 
     :returns: the record's id.
     """
     from core.artifacts import write_fit_manifest
     body = _fit_body(passes=passes, stopped=stopped, posterior_name=posterior_name, complete=complete,
-                     unresumable=unresumable, identity=identity, saved_at=saved_at)
+                     unresumable=unresumable, identity=identity, saved_at=saved_at, region=region)
     return write_fit_manifest(store.new_fit_dir(), body=body, note=note, parents=parents).id
 
 
-def write_simulation_set(root, identity: dict, batches: int, *, complete: bool = False) -> Path:
+def write_simulation_set(root, identity: dict, batches: int, *, complete: bool = False,
+                         chi_masked: "Sequence[tuple[int, int]] | None" = None) -> Path:
     """A simulation set's folder under ``root``, written as the engine writes what it is known by: a header holding
     ``identity``, a state saying ``batches`` batches are done (and whether the set is ``complete``), and an empty
     folder of shards. The folder is named as the engine names the set of that identity (``resolve_dir``), so the engine
     finds it as it finds a set it wrote; a set of another identity is another folder. Only what the engine's listing of
     sets and its reading of a set's progress read is written: no rows, no rotation and no manifest, so the store's
-    listing shows it as interrupted. Returns the folder."""
+    listing shows it as interrupted. ``chi_masked``, the unusable driven recordings of a chi training, is one
+    ``(masked, total)`` pair for each of the ``batches`` batches done, kept in the state as the engine keeps them, one
+    ``[masked, total]`` per batch; a state without them has no such key, as a set written before the counts were kept.
+    ValueError, before anything is written, for a list of another length. Returns the folder."""
+    state = {"batches_done": batches, "complete": complete, "rng": None}
+    if chi_masked is not None:
+        if len(chi_masked) != batches:
+            raise ValueError(f"a simulation set's state holds one pair of counts for each batch done: {len(chi_masked)} "
+                             f"pairs were given for {batches} batches")
+        state["chi_masked"] = [[int(masked), int(total)] for masked, total in chi_masked]
     from core.SBI import training_checkpoint
     folder = training_checkpoint.resolve_dir(identity, root)
     (folder / "shards").mkdir(parents=True, exist_ok=True)
     torch.save({"identity": identity}, folder / "header.pt")
-    torch.save({"batches_done": batches, "complete": complete, "rng": None}, folder / "state.pt")
+    torch.save(state, folder / "state.pt")
     return folder
 
 
@@ -864,12 +883,339 @@ def write_history(folder, **fields) -> dict:
     needs its zone; hand ``started`` as well, since the history's readers pass over a record with no start, and a test
     that finds nothing offered would then pass for the wrong reason. A name the history does not keep is refused as the
     writer refuses it. Returns the record as it was handed to the writer, a time still a ``datetime`` where the file
-    holds its text; the file is ``folder / f"{record['id']}.json"``."""
+    holds its text; the file is ``folder / f"{record['id']}.json"``.
+
+    A narrowing round's run is written with its word and the settings it was started with, as names and numbers:
+    ``word="Narrowing round", settings={"model": "NADROWSKI", "parent_posterior": "20261001T100000", "observation":
+    "20261002T090000", "level": 0.9, "directions": 3}``."""
     from core.gui.run import history
     record = {name: None for name in history.FIELDS}
     record.update(fields)
     history.write(folder, record)
     return record
+
+
+# ── the records the Checks page and a narrowing round read, written in seconds ──
+@contextmanager
+def _store_dated(store, created):
+    """The store's clock, for the block, at ``created`` (a moment with its zone, kept as the store keeps one: in UTC), so
+    that a record created in the block carries that moment and an id stamped from it, as a record the engine wrote then
+    would. The clock is put back at the end. Nothing changes when ``created`` is None."""
+    from datetime import timezone
+    if created is None:
+        yield
+        return
+    if created.tzinfo is None:
+        raise ValueError("a record's moment needs its time zone")
+    moment, real = created.astimezone(timezone.utc), store._clock
+    store._clock = lambda: moment
+    try:
+        yield
+    finally:
+        store._clock = real
+
+
+def _draw_figures(writer, titles) -> None:
+    """A small picture for each of ``titles`` in the record being written, drawn on a bare ``Figure`` (never through
+    pyplot, so nothing stays open) and saved where the writer says, so that the manifest lists it as the engine's figure
+    is listed. Inside the writer's ``with`` block only."""
+    from matplotlib.figure import Figure
+    for title in titles:
+        fig = Figure(figsize=(1, 1))
+        fig.add_subplot().plot([0, 1], [0, 1])
+        fig.savefig(writer.figure_path(title), dpi=20)
+
+
+def _with_cell(cfg, cell):
+    """What the writer reads a record's input files from when a cell file is named: the sources of ``cfg`` (none when it
+    is None) with the cell file ``cell`` among them."""
+    from types import SimpleNamespace
+    return SimpleNamespace(model=getattr(cfg, "model", "NADROWSKI"), hw=getattr(cfg, "hw", None),
+                           sources={**(getattr(cfg, "sources", None) or {}), "cell": str(cell)})
+
+
+def write_diagnostic(store, cfg, *, diagnostic: str, variant: "str | None" = None, parents: "dict | None" = None,
+                     settings: "dict | None" = None, results: "dict | None" = None, figures=(),
+                     cell: "str | None" = None, created=None, name: str = "", note: str = "") -> str:
+    """One ``diagnostic`` record written through ``store.create`` as every diagnostic function writes one: the
+    ``diagnostic`` and ``variant`` it names, its ``parents`` (``{"posterior": id, "prior": id, ...}`` as that diagnostic
+    names them), its ``settings`` (also copied into the configuration block, as the engine does) and its ``results``
+    (``check_results`` gives each check's), and one small picture for each title in ``figures``. ``cfg`` is a
+    configuration or None (an empty configuration block). ``cell`` is the path of an existing cell file, recorded as the
+    record's input cell file with its hash. ``created`` is a moment with its zone: the record's creation moment and the
+    stamp of its id, as the store writes them (UTC); now when None. No payload, no log and no fingerprint is written.
+    Returns the record's id."""
+    settings = {} if settings is None else dict(settings)
+    with _store_dated(store, created):
+        writer = store.create("diagnostic", cfg, name=name, note=note)
+    if cell is not None:
+        writer.cfg = _with_cell(cfg, cell)
+    with writer:
+        _draw_figures(writer, figures)
+        writer.parents = dict(parents or {})
+        writer.config.update(settings)
+        writer.body = {"diagnostic": diagnostic, "variant": variant, "settings": settings,
+                       "results": {} if results is None else dict(results)}
+    return writer.id
+
+
+def write_calibration(store, cfg, *, posterior: str, prior: str, results: "dict | None" = None, figures=(),
+                      created=None, name: str = "") -> str:
+    """One ``calibration`` record as the calibration stage writes it: parents ``posterior`` and ``prior`` (ids), the
+    three sizes of ``results`` copied into the configuration block, and one small picture for each title in
+    ``figures``. ``results`` defaults to ``check_results("calibration")["results"]``: a passing verdict at 2,000
+    datasets, 200 points and 1,000 samples, seed 1840273. ``created`` as in ``write_diagnostic``. No payload, no log and
+    no fingerprint is written. Returns the record's id."""
+    results = check_results("calibration")["results"] if results is None else dict(results)
+    with _store_dated(store, created):
+        writer = store.create("calibration", cfg, name=name)
+    with writer:
+        _draw_figures(writer, figures)
+        writer.parents = {"posterior": posterior, "prior": prior}
+        writer.config.update({key: results[key] for key in ("n_cal", "cal_n_scales", "num_posterior_samples")
+                              if key in results})
+        writer.body = {"results": results}
+    return writer.id
+
+
+def write_observation(store, cfg, *, name: str = "", digest: str = "0123456789abcdef", mode: "str | None" = None,
+                      width: "int | None" = None) -> str:
+    """One ``observation`` record, its manifest alone (no payload, so a loader refuses it; the readers of manifests
+    read it): every key of its kind, ``digest`` as the observation's digest and as the fingerprint the engine records,
+    ``mode`` the kind of observation (the configuration's when None, else "spontaneous"), the conditioning block of
+    ``cfg`` (a width of 50 with one forcing channel when ``cfg`` is None) with its width replaced by ``width`` when
+    that is handed, and an experimental source with no recordings. Returns the record's id."""
+    conditioning = mf.conditioning_block(cfg) if cfg is not None else {"width": 50, "forcing_dim": 1}
+    if width is not None:
+        conditioning = {**conditioning, "width": int(width)}
+    with store.create("observation", cfg, name=name) as writer:
+        writer.fingerprints["x_obs"] = digest
+        writer.body = {"mode": mode or getattr(cfg, "observation_mode", "spontaneous"), "conditioning": conditioning,
+                       "x_obs_digest": digest, "T_obs_cell": 4.5, "n_obs": 4096, "forcing_vals": {},
+                       "chi_obs_freqs": None,
+                       "source": {"kind": "experimental", "recordings": [], "T_obs_s": 4.5, "F0_si": None,
+                                  "forcing_params_si": None}}
+    return writer.id
+
+
+def region_dict(dims=(0, 1), *, level: float = 0.9, n_latent: int = 4,
+                x_obs_digest: str = "0123456789abcdef") -> dict:
+    """A narrowing round's region as ``region_to_json`` writes it into a posterior's record and a kept training's: the
+    real region class, an unrotated box of -1 to 1 along each of ``dims``, then its own conversion, so the shape is the
+    engine's. For ``build_fit_record(region=)``."""
+    from core.SBI.truncate import TruncationRegion
+    box = TruncationRegion(list(dims), [-1.0] * len(dims), [1.0] * len(dims), level=level, n_latent=n_latent,
+                           x_obs_digest=x_obs_digest)
+    return mf.region_to_json(box)
+
+
+# What a check's record holds, by the check's key, as the engine writes it. Only the fields the Checks page reads are
+# written (the grids, the per-point rows and the other arrays of a diagnostic stay in its payload files, which are the
+# engine's); every field written is one the engine writes, in the shape it writes it.
+_UNSET = object()
+#: The verdicts of the input-use check for a channel, as the engine writes them (the plain ones are "healthy",
+#: "compressed" and "severely compressed").
+ABLATION_INVISIBLE = "*** INVISIBLE -- the whole physical range does nothing ***"
+ABLATION_NONFINITE = "NON-FINITE -- this perturbation drove the network to a NaN/Inf output"
+ABLATION_DEAD = "constant in training (structurally dead)"
+_NAMES = ("k", "lam", "f_max", "tau", "tau_c", "s")           # parameters of the Nadrowski box, in its order
+#: The configured chi settings a probe check judged, as its record states them.
+_CONFIGURED = {"chi_f0": 0.15, "chi_freq_bounds": [0.03, 0.3], "chi_k_pad": 12, "chi_min_cycles": 2.0,
+               "chi_max_cycles": 20.0, "probe_count": 6}
+
+
+def _band(band_holds=True, drive_holds=True, repeats=24):
+    from core.diagnostics.probes import DRIVE_PHASE
+    settings = {"lengths": [3.1, 6.2], "multipliers": [0.03, 0.1, 0.3], "drives": [0.15], "repeats": repeats,
+                "cycle_caps": [20.0], "cv_max": 0.2, "phase_max": None, "snr_min": 3.0, "sup_min": 0.5,
+                "peak_window": 0.1, "seed": 0, "drive_phase": DRIVE_PHASE, "configured": dict(_CONFIGURED)}
+    return {"settings": settings, "results": {"band_holds": band_holds, "drive_holds": drive_holds}}
+
+
+def _audit(masked_fraction=0.379, num_runs=100, hold=True, nonfinite=0):
+    from core.diagnostics.probes import PROBE_LAYOUT
+    probes = num_runs * 32 * 7
+    masked = round(masked_fraction * probes)
+    if not 0 <= nonfinite <= masked:
+        raise ValueError(f"{nonfinite} non-finite lock-ins cannot be more than the {masked} masked probes")
+    leaf = {"too_slow_at_band_top": masked - nonfinite, "shortened_by_duration_draw": 0,
+            "non_finite_lock_in": nonfinite}
+    counts = {"cycle_floor": masked - nonfinite, **leaf}
+    first = max(leaf, key=lambda cause: leaf[cause])                 # a tie goes to the earlier cause
+    settings = {"num_runs": num_runs, "run_size": 32, "chi_k_fixed": None, "seed": 0,
+                "configured": {**_CONFIGURED, "probe_count": {"drawn_per_batch_from": [2, 12]}},
+                "probe_layout": PROBE_LAYOUT}
+    results = {
+        "probes": probes, "live": probes - masked, "masked": masked, "masked_fraction": masked_fraction,
+        "causes": {cause: {"count": count, "share": count / probes} for cause, count in counts.items()},
+        "invariants": {"non_finite_frequency": 0 if hold else 1, "at_or_above_nyquist": 0, "out_of_band": 0,
+                       "hold": hold},
+        "attribution": {"floor_label_at_or_above_the_floor": 0,
+                        "shortened_label_at_full_length": 0 if hold else 1, "holds": hold},
+        "dominant_cause": first if masked and leaf[first] > 0 else None,
+        "cross_check": {"row_ranges": num_runs,
+                        "batches": {"expected": num_runs, "committed": num_runs if hold else num_runs - 1},
+                        "coverage": [], "mismatches": [], "abandoned_attempt_warnings": 0, "holds": hold}}
+    return {"settings": settings, "results": results}
+
+
+def _input_use(a1="healthy", d3="healthy", invisible=0, nonfinite=0, rows=200_000, n_sweep=33, total=40):
+    def channel(label, verdict):
+        return {"label": label, "max_disp": 1.2, "rel_median": 1.0, "p1": -1.0, "p99": 1.0, "verdict": verdict}
+
+    results = {"n_rows": rows, "base_row": 0, "live_probes": 6, "median_disp": 1.2,
+               "channels": [channel("A1_mean", a1), channel("D3_bimodality", d3)],
+               "counts": {"constant": 0, "invisible": invisible, "nonfinite": nonfinite,
+                          "usable": total - invisible - nonfinite, "total": total},
+               "accepted": []}
+    return {"settings": {"rows": rows, "n_sweep": n_sweep}, "results": results}
+
+
+def _rotation(eigenvalues=_UNSET, n_worst=3, top_n=4):
+    if eigenvalues is _UNSET:
+        eigenvalues = [1000.0, 300.0, 100.0, 30.0, 10.0, 3.0]
+    count = len(_NAMES) if eigenvalues is None else len(eigenvalues)
+    if not n_worst < count <= len(_NAMES):
+        raise ValueError(f"{count} directions are too few or too many for {n_worst} worst ones and {len(_NAMES)} names")
+    names = list(_NAMES[:count])
+    directions, per_param, flat_axes = [], [], []
+    for j in range(count):                      # an unrotated basis: direction j is parameter j alone
+        loadings = [{"name": names[j], "loading": 1.0}] + [{"name": names[i], "loading": 0.0}
+                                                           for i in range(count) if i != j]
+        directions.append({"index": j, "eigenvalue": None if eigenvalues is None else float(eigenvalues[j]),
+                           "loadings": loadings[:top_n]})
+        bottom, top = float(j >= count - n_worst), float(j < 4)
+        if bottom > 0.6:
+            verdict = "UNMEASURED" if bottom > 0.95 else "very poor"
+        elif bottom > 0.25:
+            verdict = "poor"
+        else:
+            verdict = "good" if top > 0.5 else "moderate"
+        per_param.append({"name": names[j], "bottom_share": bottom, "top4_share": top, "peak_dir": j,
+                          "verdict": verdict})
+        if bottom:
+            flat_axes.append({"name": names[j], "share": 1.0, "loading": 1.0, "partners": []})
+    results = {"P": count, "orthogonality": 1.0e-15,
+               "eigenvalues": None if eigenvalues is None else [float(v) for v in eigenvalues],
+               "directions": directions, "per_param": per_param, "flat_axes": flat_axes, "accepted": []}
+    return {"settings": {"n_worst": n_worst, "top_n": top_n}, "results": results}
+
+
+def _jacobian(observation_mode="chi", t_obs_s=4.5, condition_number=12.5, unmeasurable=(), degenerate_pairs=(),
+              dead_channels=()):
+    settings = {"m": 32, "m_noise": 128, "rel": 0.02, "min_valid": 0.5, "zero_tol": 0.05, "noise_eps": 1e-06,
+                "t_obs_s": t_obs_s, "seed": 0}
+    results = {"observation_mode": observation_mode, "T_obs_s": t_obs_s, "n_features": 40,
+               "condition_number": condition_number, "unmeasurable": list(unmeasurable),
+               "degenerate_pairs": [dict(pair) for pair in degenerate_pairs], "dead_channels": list(dead_channels)}
+    return {"settings": settings, "results": results}
+
+
+def _laplace(n_points=6, median_sd=0.1, frac_identified=1.0):
+    names = _NAMES[:3]
+    tags = ["GT"] + [f"prior{k}" for k in range(1, n_points)]
+    settings = {"n_points": n_points, "m": 32, "m_noise": 128, "rel": 0.02, "min_valid": 0.5, "sd_identified": 0.3,
+                "t_obs_s": 4.5, "seed": 0, "log_range_params": []}
+    results = {"points": [{"tag": tag, "measurable": len(names)} for tag in tags],
+               "per_param": [{"name": name, "unit": "range", "sd": [median_sd] * n_points, "median_sd": median_sd,
+                              "frac_identified": frac_identified} for name in names],
+               "accepted": []}
+    return {"settings": settings, "results": results}
+
+
+def _sbc(fraction_passed=1.0, repeats=10, n_cal=2000, samples=1000):
+    passed = round(fraction_passed * repeats)                     # a whole number of repeats
+    per_param = [{"name": name, "ks_p_median": 0.5, "ks_p_min": 0.2, "frac_ks_below_05": 0.0,
+                  "c2st_ranks_median": 0.5, "assumed": False} for name in _NAMES[:2]]
+    settings = {"repeats": repeats, "n_cal": n_cal, "num_posterior_samples": samples, "cal_n_scales": None,
+                "chi_k_fixed": None, "seed": 0}
+    results = {"per_param": per_param, "n_valid": [n_cal] * repeats, "stratum": "pooled", "kept_fraction": None,
+               "accepted": [],
+               "rank_verdict": {"per_repeat": [k < passed for k in range(repeats)],
+                                "fraction_passed": passed / repeats, "scope": "rank-uniformity half only"}}
+    return {"settings": settings, "results": results}
+
+
+def _drive(oscillating=True, strongest_free_running=0.15, weakest_captured=0.8):
+    from core.diagnostics.probes import DRIVE_PHASE
+    force_scale, omega0, f_drive = 2.0, 0.01, 0.014
+    settings = {"t_obs_s": 5.0, "repeats": 16, "detune": 1.4, "strengths": [0.05, 0.15, 0.4, 0.8], "free_min": 0.7,
+                "captured_max": 0.1, "peak_window": 0.02, "clarity_min": 3.0, "seed": 0, "drive_phase": DRIVE_PHASE,
+                "configured": dict(_CONFIGURED)}
+
+    def ratio(strength):
+        if strongest_free_running is not None and strength <= strongest_free_running:
+            return 0.95
+        return 0.05 if weakest_captured is not None and strength >= weakest_captured else 0.4
+
+    rows = [{"strength": s, "cell_force": s * force_scale, "chi_median": 0.5, "plv_median": 0.5,
+             "own_peak_ratio": ratio(s),
+             "verdict": "free-running" if ratio(s) >= 0.7 else "captured" if ratio(s) <= 0.1 else "in between"}
+            for s in settings["strengths"]]
+
+    def pick(strength):
+        return None if strength is None else {"strength": strength, "cell_force": strength * force_scale}
+
+    def forcing(strength):
+        return None if strength is None else {"amp": strength * force_scale, "freq": f_drive, "phase": 0.0,
+                                              "offset": 0.0}
+
+    box = None if weakest_captured is None else {
+        "amp": [0.0, 3.0 * weakest_captured * force_scale], "freq": [omega0 / 10.0, omega0 * 10.0],
+        "phase": [0.0, 6.283185307], "offset": [-50.0, 50.0]}
+    results = {"oscillating": oscillating, "force_scale": force_scale, "strengths": rows,
+               "strongest_free_running": pick(strongest_free_running), "weakest_captured": pick(weakest_captured),
+               "suggested_forcing": {"free_running": forcing(strongest_free_running),
+                                     "captured": forcing(weakest_captured), "box": box}}
+    return {"settings": settings, "results": results}
+
+
+def _calibration(passed=True, n_cal=2000, cal_n_scales=200, samples=1000, seed=1840273):
+    from core import config, orchestrator
+    names = list(_NAMES[:2])
+    ks = [0.5, 0.5] if passed else [0.001, 0.5]
+    results = {
+        "sbc": {"per_param": [{"name": name, "ks_p": p, "c2st_ranks": 0.5, "c2st_dap": 0.5}
+                              for name, p in zip(names, ks)]},
+        "tarp": {"atc": 0.0123, "ks_p": 0.5, "num_bins": config.TARP_NUM_BINS},
+        "informativeness": None, "kept_fraction": None, "n_cal": n_cal, "cal_n_scales": cal_n_scales,
+        "num_posterior_samples": samples, "verdict": orchestrator.calibration_verdict(ks, names, [], 0.5),
+        "seed": seed, "accepted": []}
+    return {"results": results}
+
+
+_CHECK_BUILDERS = {"band": _band, "audit": _audit, "input_use": _input_use, "identifiability": _rotation,
+                   "pin_down": _jacobian, "fixed_number": _sbc, "drive_study": _drive, "across_prior": _laplace,
+                   "calibration": _calibration}
+
+
+def check_results(check: str, **given) -> dict:
+    """What a check's record holds, as the engine writes it, ready to hand to the writer:
+    ``{"settings": ..., "results": ...}`` for a diagnostic (``write_diagnostic(..., **check_results("band"))``) and
+    ``{"results": ...}`` for the calibration (``write_calibration(..., **check_results("calibration"))``). Only the
+    fields the Checks page reads are written, in the engine's shapes. Every default is a passing, ordinary record; the
+    keywords change what the page reads (a TypeError for any other):
+
+    - ``band``: ``band_holds``, ``drive_holds`` (True, False or None), ``repeats`` (a setting).
+    - ``audit``: ``masked_fraction`` (0.379), ``num_runs`` (100), ``hold`` (True; False puts one finding in each of the
+      three consistency records), ``nonfinite`` (the masked probes that are non-finite lock-ins, 0).
+    - ``input_use``: ``a1``, ``d3`` (the verdicts of the channels ``A1_mean`` and ``D3_bimodality``; ``ABLATION_*``
+      for the bad ones), ``invisible``, ``nonfinite`` (the counts), ``rows``, ``n_sweep``, ``total``.
+    - ``identifiability`` (the rotation): ``eigenvalues`` (a list, or None for a record whose eigenvalues were not
+      kept; absent gives six), ``n_worst``, ``top_n``.
+    - ``pin_down`` (the Jacobian): ``observation_mode``, ``t_obs_s``, ``condition_number``, ``unmeasurable``,
+      ``degenerate_pairs`` (``{"a", "b", "cos"}`` each), ``dead_channels``.
+    - ``fixed_number`` (SBC, pooled): ``fraction_passed`` (rounded to a whole number of the ``repeats``), ``repeats``,
+      ``n_cal``, ``samples``.
+    - ``drive_study``: ``oscillating``, ``strongest_free_running``, ``weakest_captured`` (strengths, or None).
+    - ``across_prior`` (Laplace): ``n_points``, ``median_sd``, ``frac_identified``.
+    - ``calibration``: ``passed`` (the verdict is the engine's own function over p-values that pass or fail),
+      ``n_cal``, ``cal_n_scales``, ``samples``, ``seed``.
+
+    KeyError for a check that writes no record (the comparison, the timing and the card test)."""
+    if check not in _CHECK_BUILDERS:
+        raise KeyError(f"{check}: no record of this check holds results to write")
+    return _CHECK_BUILDERS[check](**given)
 
 
 def compare_preflight_refusals(store) -> list:
@@ -1120,8 +1466,8 @@ TWO_LINES = ("The saved set for these settings holds 4,812 of 5,000 batches, so 
              "stopped and adds the rest; nothing that was saved is simulated again.")
 
 
-def _the_stand_in_page():
-    """The class of the page ``build_step_page`` makes when it is handed none: a step as awkward as a real one. Its form
+def _the_stand_in_page(step: str = "training"):
+    """The class of the page ``build_step_page`` makes when it is handed none, built for the step ``step`` (a key of the six steps): a step as awkward as a real one. Its form
     holds a grouped number, a float, a list and a ticked field among the main settings and in the fold, the name and the
     note of a required record, and a value that is only shown; its main button has the longest words a real one has; and
     one rule read live on "Batches", said under the field at every drawing, as every ruled row of a real page is. It
@@ -1136,7 +1482,7 @@ def _the_stand_in_page():
 
     class _Page(StepPage):
         def __init__(self, screen, parent=None):
-            super().__init__(screen, "A step", "One plain sentence under the page's title.", step="training",
+            super().__init__(screen, "A step", "One plain sentence under the page's title.", step=step,
                              parent=parent)
             self.readings = self.pressed = 0
             self.said, self.held, self.words = (), ("", ""), "Build a new prior (about a minute and a half)"
@@ -1183,20 +1529,31 @@ def _the_stand_in_page():
     return _Page
 
 
-def build_step_page(cls=None, *, session=None, window=None):
-    """A step of the look on the inference screen, in the place of step 3: an instance of ``cls``, called with the screen
-    alone, or of the stand-in page. The screen is built anew, holding ``session`` when one is handed, unless ``window``
-    is: the page then stands in that window's Parameter inference, at step 3's place, as a rebuilt page will. The stand-in
-    is built here and not at this module's head: a class of the window read at import would load the window's whole
-    program with every suite that imports these helpers. The page goes with its screen, when the test that built it
-    ends."""
+# The attribute of the inference screen that holds the page of each step, by the step's key.
+_STEP_SLOTS = {"model": "config_panel", "prior": "prior_panel", "training": "posterior_panel",
+               "checks": "validate_panel", "infer": "infer_panel", "narrowing": "tsnpe_panel"}
+
+
+def build_step_page(cls=None, *, session=None, window=None, step: str = "training"):
+    """A step of the look on the inference screen, in the place of the step ``step`` (a key of ``keys.STEPS``; step 3,
+    ``"training"``, unless another is handed): an instance of ``cls``, called with the screen alone, or of the stand-in
+    page, which is then built for that step. The page stands in that step's slot of the screen and in its place of the
+    window; the class it replaces is left unplaced. The screen is built anew, holding ``session`` when one is handed,
+    unless ``window`` is: the page then stands in that window's Parameter inference, as a rebuilt page will. A key that
+    is no step's is a KeyError, before anything is built. The stand-in is built here and not at this module's head: a
+    class of the window read at import would load the window's whole program with every suite that imports these
+    helpers. The page goes with its screen, when the test that built it ends."""
+    from core.gui import keys
+    number = keys.step_number(step) - 1
     qt_app()
     screen = build_inference(session=session) if window is None else window.part("inference")
-    page = _built.keep((cls or _the_stand_in_page())(screen))
-    old, at = screen.posterior_panel, screen.pages.indexOf(screen.posterior_panel)
+    page = _built.keep((cls or _the_stand_in_page(step))(screen))
+    slot = _STEP_SLOTS[step]
+    old, at = getattr(screen, slot), screen.pages.indexOf(getattr(screen, slot))
+    assert at == number and screen.panels()[number] is old, (step, at)
     screen.pages.removeWidget(old)
     screen.pages.insertWidget(at, page)
-    screen.posterior_panel = page
+    setattr(screen, slot, page)
     if window is not None:
         window._places[page] = window._places.pop(old)
     return page

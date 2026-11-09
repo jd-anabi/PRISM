@@ -1917,6 +1917,132 @@ def test_the_stand_in_refuses_a_page_whose_place_it_does_not_know():
     assert not controller().is_live()
 
 
+def test_the_stand_in_run_calls_on_stage_on_the_worker_in_order(tmp_path):
+    """A stand-in told its stages, and handed an ``on_stage`` as the engine's staged calls are (the card test's), calls it
+    for each stage in order as its run is released, on the thread the run is on and not the window's. At an event
+    "failed" it then raises, as the engine passes a failure on, and the stages after it are not called, so the run ends
+    as failed. A call handed no ``on_stage`` ignores its stages; an event that is none of the four the engine reports
+    is refused when the stand-in is made."""
+    import threading
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text = RunText(held)
+    stages = (("prior", "started", None), ("prior", "finished", 1.5), ("posterior", "started", None),
+              ("posterior", "finished", 2.5), ("validate", "skipped", None))
+    here, seen = threading.get_ident(), []
+
+    def on_stage(stage, event, seconds):
+        seen.append((stage, event, seconds, threading.get_ident()))
+
+    with pytest.raises(ValueError, match="begun"):
+        StandIn(stages=(("prior", "begun", None),))
+    ordered = StandIn(stages=stages)
+    start_run(build_run_host(), ordered, on_stage=on_stage)
+    turn_until(app, ordered.started.is_set)
+    assert seen == [], "the stages are passed as the run is released, not as the call begins"
+    ordered.release()
+    turn_until(app, lambda: not held.is_live(), 10)
+    assert [call[:3] for call in seen] == list(stages)
+    assert len({call[3] for call in seen}) == 1 and seen[0][3] != here, "the stages were not called on the worker"
+    assert text.ended[-1].outcome == "finished" and ordered.calls[0][1]["on_stage"] is on_stage
+
+    seen.clear()
+    quiet = StandIn(stages=stages)
+    start_run(build_run_host(), quiet)
+    quiet.release()
+    turn_until(app, lambda: not held.is_live(), 10)
+    assert seen == [] and text.ended[-1].outcome == "finished"
+
+    failing = StandIn(stages=(("prior", "started", None), ("prior", "failed", 0.5), ("posterior", "started", None)))
+    start_run(build_run_host(), failing, on_stage=on_stage)
+    failing.release()
+    turn_until(app, lambda: not held.is_live(), 10)
+    assert [call[:3] for call in seen] == [("prior", "started", None), ("prior", "failed", 0.5)]
+    assert text.ended[-1].outcome == "failed"
+
+
+def test_a_step_page_stands_at_the_step_it_is_built_for(tmp_path):
+    """A step of the look built for a step stands in that step's slot of the inference screen, in that step's place of
+    the window and in the screen's stack, and is built with that step: the window's move to the step shows it. The slot
+    of step 3 is the default, as it was; every step of the window takes its place; a key that is no step's is refused
+    before anything is built."""
+    from core.gui import keys
+    from tests._fixtures import build_step_page, build_window, qt_app
+    from tests._look_helpers import _settle
+    from tests._runs import Clock
+    from tests._window_helpers import shown_off_screen
+    qt_app()
+    _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    window = build_window()
+    screen = window.part("inference")
+    old = screen.validate_panel
+    page = build_step_page(step="checks", window=window)
+    assert page.step == "checks" and type(page).__name__ == "_Page"
+    assert screen.validate_panel is page and screen.panels()[3] is page and screen.panels().count(page) == 1
+    assert screen.pages.indexOf(page) == 3 and screen.pages.indexOf(old) == -1
+    assert screen.posterior_panel is not page and screen.panels()[2] is screen.posterior_panel
+    assert window._places[page] == ("inference", "checks") and old not in window._places
+    shown_off_screen(window, 1300, 820)
+    window.go_to("inference", "checks")
+    _settle()
+    assert screen.current_step() == "checks" and screen.pages.currentWidget() is page
+    assert build_step_page().step == "training"
+    for number, place in enumerate(keys.STEPS):
+        another = build_step_page(step=place.key)
+        assert another.step == place.key and another._screen.panels()[number] is another, place.key
+    with pytest.raises(KeyError, match="nowhere"):
+        build_step_page(step="nowhere")
+
+
+def test_the_lines_the_helpers_say_are_the_ones_the_engine_writes():
+    """The engine's lines that the helpers of tests/_runs.py write are held to the engine itself: the training's total of
+    unusable driven recordings, in each of its forms, is the string the engine's own function builds and the run's
+    table reads as the row it names; the third scope is the engine's own words; a calibration's lines and a narrowing
+    round's are the engine's, found in its source or built by its own class, and the run's table reads those it has a
+    row for."""
+    from core import orchestrator
+    from core.SBI import pipeline
+    from core.SBI.truncate import TruncationRegion
+    from core.gui.run.model import SIMULATION_ROW
+    from tests import _runs
+    pipeline_text = Path(pipeline.__file__).read_text(encoding="utf-8")
+    orchestrator_text = Path(orchestrator.__file__).read_text(encoding="utf-8")
+    counted = pipeline._BatchProbeLedger([(312, 1000), (489, 1000), (400, 1000)])
+    third = _runs.scope_part(7)
+    assert third == ("only the batches this process generated; the cache's first 7 batches were committed without "
+                     "per-batch counts")
+    for scope in (_runs.SCOPE_WHOLE, _runs.SCOPE_PROCESS, third):
+        assert _runs.masked_line(1201, 3000, 3, scope) == counted.summary_line(scope)
+        assert _runs.masked_none(scope) == pipeline._BatchProbeLedger().summary_line(scope)
+    for words in (_runs.SCOPE_WHOLE, _runs.SCOPE_PROCESS, "only the batches this process generated; the cache's first ",
+                  "batches were committed without per-batch counts"):
+        assert words in pipeline_text, words
+    total = readings.read(_runs.masked_line(1201, 3000, 3, third), "info")
+    assert total.name == "chi_total"
+    assert (total.values["masked"], total.values["total"], total.values["batches"], total.values["scope"]) == (
+        1201, 3000, 3, third)
+    assert readings.read(_runs.masked_none(_runs.SCOPE_PROCESS), "info").name == "chi_none"
+    with pytest.raises(ValueError):
+        _runs.masked_line(5, 0, 3, _runs.SCOPE_WHOLE)
+
+    frame, patho, sbc, tarp = _runs.CALIBRATION_LINES
+    assert frame.startswith(f"{SIMULATION_ROW}:") and f'desc="{SIMULATION_ROW}"' in pipeline_text
+    assert readings.read(patho, "info").name == "patho_total"
+    assert sbc == "SBC uniformity checks:" and f'log.info("{sbc}")' in orchestrator_text
+    assert re.fullmatch(r"TARP: ATC=\S+  KS p=\d\.\d{3}", tarp)
+    assert 'log.info(f"TARP: ATC={atc:.3g}  KS p={tarp_kspval:.3f}")' in orchestrator_text
+
+    region, writing, masked, epoch = _runs.ROUND_LINES
+    shown = TruncationRegion([0, 2], [-1.2, -0.5], [1.1, 0.8], level=0.9)
+    assert region == f"[tsnpe] region from observation obs_1: {shown!r}"
+    assert "[tsnpe] region from observation {observation.name or observation.id}: {region!r}" in orchestrator_text
+    assert [readings.read(line, "info").name for line in (writing, masked, epoch)] == [
+        "simulation_writing", "chi_total", "fit_epoch"]
+    assert epoch == _runs.epoch_line(1)
+
+
 def test_no_test_and_no_part_of_the_window_reaches_a_run_through_a_panels_flag():
     """Nothing under the program or the suites names a page's old run flag -- a name, an attribute, a name
     defined or imported, a keyword, or a string that is one of them -- read off each file's syntax tree, its

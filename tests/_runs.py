@@ -14,6 +14,11 @@ test's own clock and folder (``controller_on``), a training as its page hands it
 training brought to a stage by the engine's own lines (``say``, ``to_the_simulation``, ``to_the_fit``) and those lines
 (``writing``, ``complete``, ``epoch_line``).
 
+A stand-in told its ``stages`` calls the ``on_stage`` it is handed as the engine's staged calls (the card test's) do,
+and the engine's lines of a check and of a narrowing round stand ready to be said: ``masked_line`` and ``masked_none``
+(the training's total of unusable driven recordings, in each form it is written), ``progress_frame``,
+``CALIBRATION_LINES`` and ``ROUND_LINES``.
+
 At module level this file imports the standard library and the toolkit's core, nothing of torch and nothing of the
 program: what it needs of the program it imports where it needs it.
 """
@@ -53,6 +58,10 @@ BUDGET = "[budget] 10,000 batches x 2,048 rows = 20,480,000 training rows"
 ROTATING = "Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)..."
 ROTATED = "[fisher] eigenvalue spread (best/worst direction): 412"
 NOT_SAVED = "[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."
+#: What a stand-in told to fail a stage raises, as the engine passes a failure on.
+STAGE_FAILED_TEXT = "stand-in stage failed"
+#: The events the engine's staged calls report: a stage is skipped, begins, ends with its seconds, or fails with them.
+STAGE_EVENTS = ("skipped", "started", "finished", "failed")
 
 
 class Clock:
@@ -85,11 +94,21 @@ class StandIn:
     when the controller's status says so, and also when the run's own token is set with none asked through the
     controller, as the end of a test sets it for a training saving its posterior. It may be called again, as a try of
     a run or the repeat of its call is: ``calls`` holds the arguments of each call, in order, and each call ends at
-    the end its test gives it after the call began."""
+    the end its test gives it after the call began.
 
-    def __init__(self, *, word: str = "Training", lines=(), takes_stops: bool = True):
+    ``stages`` are the staged calls of an engine function that is handed an ``on_stage`` (the card test), each
+    ``(stage, event, seconds)`` with the event one of ``STAGE_EVENTS``; a call handed ``on_stage`` as a keyword makes
+    them, in order, on the thread the run is on, as its run is released and before it returns. At an event "failed" it
+    then raises ``RuntimeError(STAGE_FAILED_TEXT)``, as the engine passes a failure on, and the stages after it are not
+    called. A run ended by ``fail`` raises its own error and makes none; a call handed no ``on_stage`` ignores them."""
+
+    def __init__(self, *, word: str = "Training", lines=(), takes_stops: bool = True, stages=()):
         self.word = word
         self.takes_stops = takes_stops
+        self.stages = tuple((str(stage), event, seconds) for stage, event, seconds in stages)
+        unknown = [event for _stage, event, _seconds in self.stages if event not in STAGE_EVENTS]
+        if unknown:
+            raise ValueError(f"a stage's event is one of {STAGE_EVENTS}, not {unknown[0]!r}")
         self.kept_fit = None
         self.calls: list[tuple[tuple, dict]] = []
         self.started = threading.Event()
@@ -170,6 +189,7 @@ class StandIn:
                         if self.kept_fit is not None:
                             end[1].kept_fit = self.kept_fit
                         raise end[1]
+                    self._pass_stages(kwargs.get("on_stage"))
                     return end[1]
                 asked = controller().status.stop_requested or (token is not None and token.requested.is_set())
                 # the held stop's fallback, armed only once the end of the test has asked
@@ -193,6 +213,16 @@ class StandIn:
             if framed:
                 sys.stderr.write("\r")           # the bar's row is let go, as a bar that does not stay goes
 
+    def _pass_stages(self, on_stage) -> None:
+        """Call ``on_stage`` for each of the stand-in's stages, in order, on the thread this is called on (the run's);
+        at an event "failed", raise as the engine passes a failure on. Nothing when no ``on_stage`` was handed."""
+        if on_stage is None:
+            return
+        for stage, event, seconds in self.stages:
+            on_stage(stage, event, seconds)
+            if event == "failed":
+                raise RuntimeError(STAGE_FAILED_TEXT)
+
     @staticmethod
     def _do(item, log, fig_sink) -> bool:
         """Do one queued thing; True when it wrote a frame of a bar."""
@@ -207,8 +237,7 @@ class StandIn:
                 log.log(_LEVELS[level], text)
         elif kind == "row":
             _, desc, done, total = item
-            pct = int(100 * done / total) if total else 0
-            sys.stderr.write(f"\r{desc}: {pct:3d}%|{'#' * (pct // 10):<10}| {done}/{total} [00:10<00:20,  9.70s/it]")
+            sys.stderr.write("\r" + progress_frame(desc, done, total))
             return True
         elif kind == "figure":
             if fig_sink is not None:
@@ -321,6 +350,70 @@ def epoch_line(n, since=0, took=3780.0, training=-3.0, validation=-3.1) -> str:
     best, and the two losses (written in the shortest form that keeps six digits, so -3.0 reads -3)."""
     return (f"[fit] epoch {n}: training loss {training:.6g}, validation loss {validation:.6g}, took {took:.1f} s, "
             f"epochs since the best {since}")
+
+
+# ── the engine's lines of a check and of a narrowing round ──
+#: The scopes a training's total of unusable driven recordings names, as the engine words them: every batch of the
+#: simulation set was counted, or only this process's batches, with no set kept.
+SCOPE_WHOLE = "every committed batch of the simulation cache"
+SCOPE_PROCESS = "this process only (no simulation cache)"
+#: The spread of the share across batches that every total made here states after its counts: lowest, highest and
+#: median, in per cent. They are fixed figures, not worked out from the counts handed in.
+_PER_BATCH = (31.2, 48.9, 40.0)
+
+
+def scope_part(first: int) -> str:
+    """The third scope of the total: a resumed simulation whose first ``first`` batches were committed with no
+    per-batch counts, so the total counts only the batches this process generated. It holds a semicolon of its own."""
+    return (f"only the batches this process generated; the cache's first {first} batches were committed without "
+            f"per-batch counts")
+
+
+def masked_line(unusable: int, total: int, batches: int, scope: str) -> str:
+    """The training's total of unusable driven recordings as the engine words it: the counts with thousands separators,
+    the share to one decimal, the number of batches, the ``scope`` (``SCOPE_WHOLE``, ``SCOPE_PROCESS`` or
+    ``scope_part(n)``), then the spread across batches in the fixed figures of this module. ValueError for a total or a
+    count of batches that is not above zero, or more unusable than the total."""
+    if total <= 0 or batches <= 0 or not 0 <= unusable <= total:
+        raise ValueError(f"a total of {unusable} unusable of {total} over {batches} batches is no total the engine says")
+    low, high, middle = _PER_BATCH
+    return (f"[chi] masked probes: {unusable:,} of {total:,} ({100.0 * unusable / total:.1f}%) over {batches} batches, "
+            f"{scope}; per batch {low:.1f}-{high:.1f}%, median {middle:.1f}%")
+
+
+def masked_none(scope: str) -> str:
+    """The same record when no probe was counted."""
+    return f"[chi] masked probes: none counted, {scope}"
+
+
+def progress_frame(desc: str, done: int, total: int) -> str:
+    """One frame of a progress bar as the engine's bar writes it on the error stream, without the carriage return that
+    brings the cursor back to the start of its row: the description, the share done, the bar, ``done`` of ``total`` and
+    the time."""
+    pct = int(100 * done / total) if total else 0
+    return f"{desc}: {pct:3d}%|{'#' * (pct // 10):<10}| {done}/{total} [00:10<00:20,  9.70s/it]"
+
+
+#: The four lines a calibration's stages begin at, as the engine writes them. The first is a frame of the bar that counts
+#: the calibration's simulations, which a run shows with ``stand_in.row``; the other three are records, said with
+#: ``say``.
+CALIBRATION_LINES = (
+    progress_frame("Generating training data", 3, 10),
+    "[patho] run total: 0 pathological of 2,000 simulated trajectories (0.0000%) -- 0 non-finite, 0 exactly constant, "
+    "0 over 1e+06",
+    "SBC uniformity checks:",
+    "TARP: ATC=0.0123  KS p=0.512",
+)
+#: The simulation set a narrowing round writes to, as the round's lines name it.
+ROUND_FOLDER = r"C:\Users\J\PRISM\Artifacts\simulations\3f9a2c1d7b04"
+#: A narrowing round's lines, in the order the engine says them: its region, its simulation set, its total of unusable
+#: driven recordings and its first epoch.
+ROUND_LINES = (
+    "[tsnpe] region from observation obs_1: TruncationRegion(level=0.9, d0:[-1.2,1.1], d2:[-0.5,0.8], basis=unrotated)",
+    writing(ROUND_FOLDER),
+    masked_line(1201, 3000, 3, SCOPE_WHOLE),
+    epoch_line(1),
+)
 
 
 def say(app, stand_in, text, *lines, level="info", again=True) -> None:

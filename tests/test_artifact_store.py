@@ -1152,6 +1152,117 @@ def test_the_simulation_identity_fingerprints_typed_unit_tokens_when_no_units_fi
     assert SimulationIdentity.from_cfg(unnamed, None, 4, 2).to_dict()["units_sha256"] == fp
 
 
+# The parents a check's record names, by key: a posterior and a prior by their ids, a simulation set by its folder.
+_CHECK_PARENTS = {"posterior": "20261001T100000", "prior": "20261001T090000", "simulation": "0123456789ab"}
+
+
+@pytest.mark.parametrize("check, diagnostic, variant, parents", [
+    pytest.param("band", "probes", "band", (), id="band"),
+    pytest.param("audit", "probes", "mask", ("prior",), id="audit"),
+    pytest.param("input_use", "ablation", None, ("posterior", "simulation"), id="input_use"),
+    pytest.param("identifiability", "identifiability", "rotation", ("posterior",), id="identifiability"),
+    pytest.param("pin_down", "identifiability", "jacobian", (), id="pin_down"),
+    pytest.param("fixed_number", "sbc", "pooled", ("posterior", "prior"), id="fixed_number"),
+    pytest.param("drive_study", "probes", "drive", (), id="drive_study"),
+    pytest.param("across_prior", "identifiability", "laplace", ("posterior",), id="across_prior"),
+    pytest.param("calibration", None, None, ("posterior", "prior"), id="calibration"),
+])
+def test_the_check_record_writers_write_what_the_engine_writes(store, check, diagnostic, variant, parents):
+    """Each record a check leaves is written through the store's own writer, in seconds, and reads back as the engine's
+    does: the store finds it, its manifest passes the schema's check, and its parents, its diagnostic and variant, its
+    settings and results, its input cell file and its moment of creation are what the writer was handed, every figure
+    it lists is a picture on disk, and the id is stamped from the moment handed (as the store stamps one from its own
+    clock). The results are those ``check_results`` gives for the check: the fields the engine writes and the page reads,
+    and none it does not write. Nothing is written beside the manifest and the pictures: no payload and no log."""
+    from tests._fixtures import check_results, write_calibration, write_diagnostic
+    made = datetime(2026, 10, 3, 9, 30, 15, tzinfo=timezone(timedelta(hours=-7)))
+    cell = config.CELL_PATH / "nadrowski" / "master_spont.txt"
+    named = {key: _CHECK_PARENTS[key] for key in parents}
+    given = check_results(check)
+    with pytest.raises(TypeError):
+        check_results(check, no_such_setting=1)
+    if diagnostic is None:
+        kind, titles = "calibration", ("SBC ranks (CDF)", "TARP coverage")
+        written = write_calibration(store, None, posterior=named["posterior"], prior=named["prior"], figures=titles,
+                                    created=made, name="by_hand", **given)
+    else:
+        kind, titles = "diagnostic", ("The figure",)
+        written = write_diagnostic(store, None, diagnostic=diagnostic, variant=variant, parents=named, figures=titles,
+                                   cell=str(cell), created=made, name="by_hand", note="a note", **given)
+    manifest = store.get(kind, written)
+    assert mf.validate(manifest.to_dict()).id == written
+    assert (manifest.kind, manifest.id, manifest.name) == (kind, written, "by_hand")
+    assert manifest.created == "2026-10-03T16:30:15+00:00" and written == "20261003T163015", (manifest.created, written)
+    assert manifest.parents == named
+    folder = store.path(kind, written)
+    assert manifest.figures == [f"figures/{st.slug(title)}.png" for title in titles]
+    for figure in manifest.figures:
+        assert (folder / figure).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n", figure
+    assert manifest.payloads == {} and not (folder / "log.txt").exists()
+    if diagnostic is None:
+        loaded = store.load_calibration(written)
+        assert loaded.results == given["results"] and manifest.body == {"results": given["results"]}
+        assert manifest.config == {"n_cal": 2000, "cal_n_scales": 200, "num_posterior_samples": 1000}
+        assert manifest.inputs["cell"] is None
+    else:
+        loaded = store.load_diagnostic(written)
+        assert (loaded.diagnostic, loaded.variant) == (diagnostic, variant)
+        assert loaded.settings == given["settings"] and loaded.results == given["results"]
+        assert manifest.config == given["settings"] and manifest.note == "a note"
+        assert manifest.inputs["cell"] == {"path": "Cells/nadrowski/master_spont.txt", "sha256": prov.sha256_file(cell)}
+    if check == "band":
+        assert check_results("band", band_holds=False)["results"]["band_holds"] is False
+        assert check_results("band", repeats=5)["settings"]["repeats"] == 5
+        with pytest.raises(KeyError, match="timing"):
+            check_results("timing")
+
+
+def test_a_simulation_sets_state_carries_its_unusable_counts(tmp_path):
+    """A simulation set written for a test carries, in the state file, the unusable driven-recording counts the engine
+    stores when it saves a chi training's batches: one ``[masked, total]`` pair for each batch done, none for a set
+    written without them (as the state of a set written before the counts were kept), and a complete set keeps them.
+    Counts that do not cover the batches done are refused before anything is written, since the engine never stores
+    counts for a batch nobody counted."""
+    from core.SBI import training_checkpoint
+    identity = {"format": "training-rows/2", "prior_fingerprint": "f" * 16, "n_runs": 4, "truncation": None}
+    counts = [(120, 400), (131, 410), (98, 380)]
+    folder = write_simulation_set(tmp_path, identity, 3, chi_masked=counts)
+    state = training_checkpoint.peek(folder)
+    assert state["chi_masked"] == [[120, 400], [131, 410], [98, 380]]
+    assert len(state["chi_masked"]) == state["batches_done"] == 3 and state["complete"] is False
+    done = write_simulation_set(tmp_path, {**identity, "n_runs": 5}, 3, complete=True, chi_masked=counts)
+    kept = training_checkpoint.peek(done)
+    assert kept["chi_masked"] == state["chi_masked"] and kept["complete"] is True
+    plain = write_simulation_set(tmp_path, {**identity, "n_runs": 6}, 2)
+    assert "chi_masked" not in training_checkpoint.peek(plain)
+    with pytest.raises(ValueError, match="for 2 batches"):
+        write_simulation_set(tmp_path, {**identity, "n_runs": 7}, 2, chi_masked=counts)
+    assert not training_checkpoint.resolve_dir({**identity, "n_runs": 7}, tmp_path).exists()
+
+
+def test_the_observation_and_kept_round_writers_write_what_the_engine_writes(store):
+    """An observation's record holds every key of its kind, with the digest, the kind of observation and the width of the
+    conditioning it was handed (the digest also as the fingerprint the engine records); a kept training's record holds
+    the region of a narrowing round exactly as the engine writes one, beside the parents the round names, and none for
+    a training that is not a round. Written in seconds; no payload."""
+    from tests._fixtures import region_dict, write_observation
+    seen = write_observation(store, None, name="obs_a", digest="fedcba9876543210", mode="chi", width=122)
+    manifest = store.get("observation", seen)
+    assert mf.validate(manifest.to_dict()).id == seen and manifest.payloads == {}
+    assert (manifest.name, manifest.body["mode"], manifest.body["x_obs_digest"], manifest.fingerprints["x_obs"]) == (
+        "obs_a", "chi", "fedcba9876543210", "fedcba9876543210")
+    assert manifest.body["conditioning"]["width"] == 122 and set(manifest.body) == set(mf.BODY_KEYS["observation"])
+    default = store.get("observation", write_observation(store, None))
+    assert default.body["x_obs_digest"] == "0123456789abcdef" and default.body["mode"] == "spontaneous"
+    region = region_dict((0, 2), level=0.9)
+    assert region["dims"] == [0, 2] and region["level"] == 0.9 and len(region["lo"]) == 2
+    parents = {"prior": _CHECK_PARENTS["prior"], "simulation": _CHECK_PARENTS["simulation"],
+               "parent_posterior": _CHECK_PARENTS["posterior"], "observation": seen}
+    record = store.get("fit", build_fit_record(store, region=region, parents=parents))
+    assert record.body["region"] == region and record.parents == parents
+    assert store.get("fit", build_fit_record(store)).body["region"] is None
+
+
 def test_simulation_directories_live_under_the_store_without_a_prefix(store):
     from core.SBI import training_checkpoint as tc
     ident = {"format": "training-rows/2", "n_runs": 3, "prior_fingerprint": "a" * 16, "truncation": None}
