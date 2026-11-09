@@ -350,7 +350,8 @@ class StepPage(RunHost, QWidget):
 
     def _say_changed(self) -> None:
         """Under each selection row that shows something other than what the step holds, "Changed, not applied" and what
-        is in use, unless the page says something of its own there that stops the start; the line goes when the choice is
+        is in use, unless the page says something of its own there that stops the start, or a refusal with words of its
+        own stands there until the row is edited (the row is still counted as changed); the line goes when the choice is
         put back or applied. How many there are stands in "In use", and the fold counts those it holds."""
         changed = []
         for selection in self.selection_rows():
@@ -360,7 +361,7 @@ class StepPage(RunHost, QWidget):
             said = self._said_changed.pop(selection.key, None)
             if selection.changed():
                 changed.append(row)
-                if not row.in_error():
+                if not row.in_error() and not row.holds_its_own_refusal():
                     self._said_changed[selection.key] = selection.line()
                     row.set_line("warn", self._said_changed[selection.key])
             elif said is not None and row.line.kind == "warn" and row.line.words == said:

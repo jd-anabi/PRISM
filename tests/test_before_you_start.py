@@ -51,6 +51,25 @@ def test_a_saved_priors_bounds_file_against_the_one_selected(built_on, selected,
     assert not any(fact.blocks for fact in facts)
 
 
+@pytest.mark.parametrize("edited", [False, True])
+@pytest.mark.parametrize("same_box", [True, False])
+@pytest.mark.parametrize("built_on", ["master_tier1.txt", None, "C:/other folder/master of the rig.txt"],
+                         ids=["a file of the folder", "limits typed by hand", "a file of another folder"])
+def test_a_saved_prior_is_compared_with_no_bounds_file_while_none_is_selected(built_on, same_box, edited):
+    """While the list of bounds files selects none, a saved prior is compared with no file, whatever it was built on and
+    whatever its box or an edit since says: its facts are the sets made with it alone, and with no model applied the
+    lock before them. What it was built on is then said in "In use" and under the list of saved priors, not here, so
+    nothing blocks but the lock."""
+    sets = ("info", "1 saved simulation set was made with this prior; it holds 3 batches.")
+    got = prior_facts(**{**SAVED, "built_on": built_on, "selected": "", "edited": edited, "same_box": same_box},
+                      sets_of_prior=[3])
+    assert _said(got) == [sets] and not any(fact.blocks for fact in got)
+    locked = prior_facts(**{**SAVED, "built_on": built_on, "selected": "", "edited": edited, "same_box": same_box},
+                         needs=True, sets_of_prior=[3])
+    assert [(fact.kind, fact.blocks != "") for fact in locked] == [("lock", True), ("info", False)]
+    assert _said(locked)[1:] == [sets]
+
+
 @pytest.mark.parametrize("batches, sentence", [
     ([], "No saved simulation set was made with this prior."),
     ([3989], "1 saved simulation set was made with this prior; it holds 3,989 batches."),

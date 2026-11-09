@@ -524,7 +524,7 @@ class PriorPanel(StepPage):
             view=self.view, needs=self._draft() is None, bounds_error=bounds_error, bounds_blocks=bounds_blocks,
             prior_error=prior_error, prior_blocks=prior_blocks, record_model=read.get("record_model"),
             model=getattr(self._draft(), "model", None), built_on=read.get("built_on"),
-            selected=_named(self.bounds_picker.key() or (bounds_in_use(self._standing) or "")),
+            selected=_named(self.bounds_picker.key()),
             edited=read.get("edited", False),
             same_box=read.get("same_box", True), sets_of_prior=read.get("sets_of_prior"),
             rounds=values["num_iterations"] if cost_ok else None, batch=batch if cost_ok else None,

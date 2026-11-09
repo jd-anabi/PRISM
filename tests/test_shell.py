@@ -9199,7 +9199,10 @@ def test_resume_puts_the_records_settings_on_the_steps_and_loads_its_prior_on_it
     them. Step 1's "In use" names the processor and the width the session now runs on. Nothing stops between the
     question and the stage. Step 2, read after it, names the prior the Resume loaded and what it was built on, has
     nothing to apply and says no error where the list selects no file, and says nothing of a bounds file of limits no
-    file holds."""
+    file holds. Where the list selects the file the prior was built on, step 2 says it was built on the bounds file
+    selected; where it selects none, the prior is compared with no file, in every set of facts the Resume hands step 2's
+    foot as well as in the last, and none says what it was built on."""
+    import re
     import torch
     from core import config
     from core.artifacts.identity import SimulationIdentity
@@ -9220,6 +9223,14 @@ def test_resume_puts_the_records_settings_on_the_steps_and_loads_its_prior_on_it
     app = qt_app()
     inference = window.part("inference")
     inference.read_offers()
+    handed_to_the_foot = []
+    foot, set_facts = inference.prior_panel.foot, inference.prior_panel.foot.set_facts
+
+    def record_facts(facts, *args, **kwargs):
+        handed_to_the_foot.append([fact.sentence for fact in facts])
+        return set_facts(facts, *args, **kwargs)
+
+    monkeypatch.setattr(foot, "set_facts", record_facts)
     inference.resume_kept(kept)
     _settle(app, inference, posterior_load)
     assert inference.loads.why == "" and posterior_load.calls[-1][1] == {"resume_fit": kept, "if_name_taken": "unnamed"}
@@ -9251,6 +9262,13 @@ def test_resume_puts_the_records_settings_on_the_steps_and_loads_its_prior_on_it
     built_on = listed or ("limits typed by hand" if case == "limits typed by hand" else cfg.sources["bounds"])
     assert step_two.in_use_words()[0] == f"prior_of_{model.lower()}", step_two.in_use_words()
     assert step_two.in_use_words()[1].startswith(f"Built on {built_on}, "), step_two.in_use_words()
+    if listed:
+        assert f"Fine. Built on {listed}, the bounds file selected." in said, said
+    else:                      # no file selected, so the prior is compared with none: no fact of what it was built on
+        assert not [line for line in said if re.match(r"\w+\. Built on ", line) or "the bounds file selected" in line], said
+        assert handed_to_the_foot and not [facts for facts in handed_to_the_foot
+                                           if any("the bounds file selected" in line for line in facts)], (
+            "a set of facts handed to step 2's foot during the Resume compared the prior with a file", handed_to_the_foot)
     if not listed:                                    # no file selected, so "This bounds file" names none shown
         assert not [line for line in said if line.startswith("Attention. This bounds file lists")], said
     if case == "limits typed by hand":

@@ -3260,6 +3260,25 @@ def test_with_no_model_applied_the_prior_page_is_blocked_first(store):
     assert page.foot.reason.text().startswith("Cannot start yet: needs a model") and not page.foot.main_button.isEnabled()
 
 
+def test_with_no_model_applied_a_saved_prior_is_compared_with_no_bounds_file(store):
+    """With no model applied the bounds list selects no file, so a saved prior chosen is compared with none: the facts
+    are the need for a model first and the simulation sets made with the prior, and none says what it was built on or
+    names a bounds file selected. What it was built on stands under the list of saved priors."""
+    from tests._fixtures import _nad_cfg, _prior_artifact, qt_app
+    qt_app()
+    saved = _prior_artifact(store, _nad_cfg(), name="saved_one").id
+    page = build_inference().prior_panel
+    page.show_view("saved")
+    page.prior_picker.refresh()
+    page.prior_picker.restore_key(saved)
+    page.read_facts()
+    facts = [(row.kind, row.sentence.plain_text()) for row in page.foot.facts.rows()]
+    assert facts[0] == ("lock", "Blocked. Needs a model: apply one in step 1, Model and options."), facts
+    assert facts[1] == ("info", "Information. No saved simulation set was made with this prior."), facts
+    assert not [said for _kind, said in facts if "Built on" in said or "bounds file selected" in said], facts
+    assert page.prior_line.plain_text().endswith("built on master.txt."), page.prior_line.plain_text()
+
+
 def test_a_load_reads_none_of_the_seven_settings(store):
     """A load reads only the saved prior and the bounds file: a setting of the build left blank or broken stops nothing
     in the saved view, and none of the seven travels with the load."""

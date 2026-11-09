@@ -1901,6 +1901,33 @@ def test_the_foot_of_the_first_step_says_when_it_read_only_while_a_plan_is_in_us
     assert page.reads_the_disk is False and foot.reading.isHidden() and foot.check_again.isHidden()
 
 
+def test_check_again_leaves_a_refused_units_files_sentence_under_the_row_while_a_plan_is_in_use(tmp_path, monkeypatch,
+                                                                                               store):
+    """With a plan in use and units typed that the step does not hold, a units file chosen and refused keeps its sentence
+    under the units row when "Check again" is pressed: the real button reads the page again, which turns the sentence
+    from an error into a warning and says no "Changed, not applied" in its place. The button beside it is lit, and "In
+    use" counts the change not applied."""
+    from tests._dialogs import answer_chooser
+    from tests.test_applied_and_pending import _apply, _line, _pick, _units_file
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    page.form.fold.set_open(True)
+    page.read_facts()
+    _apply(page)
+    _pick(page.units_choice, "typed")
+    page.units_text.setText("kHz ms nm pN")
+    bad = _units_file(tmp_path / "bad", "master copy.txt", b"# Parameters\nk_gs = 1.0 in (0.5, 2.0)\n")
+    answer_chooser(monkeypatch, str(bad))
+    page.choose_units_button.click()
+    kind, words = _line(page, "units")
+    assert (kind, words.startswith("The file master copy.txt holds no units")) == ("err", True), (kind, words)
+    assert not page.foot.check_again.isHidden() and not page.foot.main_button.isEnabled()
+    page.foot.check_again.click()
+    assert _line(page, "units") == ("warn", words), _line(page, "units")
+    assert page.foot.main_button.isEnabled() and not page.in_use.pending.isHidden()
+    assert "changed and not applied" in page.in_use.pending.sentence.plain_text()
+
+
 def test_a_held_enter_answers_neither_the_fill_nor_the_save(tmp_path, monkeypatch):
     """In the whole program, whose ring follows the keyboard as it does for a person: Enter held down as the fill's
     question or the save's dialog opens answers neither, each still standing after the repeats. Enter pressed afresh

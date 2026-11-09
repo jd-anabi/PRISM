@@ -371,6 +371,12 @@ class Row:
         self._set_line("", "")
         return True
 
+    def holds_its_own_refusal(self) -> bool:
+        """Whether the sentence of a refusal with words of its own beside the main button stands under the field,
+        stopping the start or eased by a reading since: until the field is edited. A refused start's, marked with no
+        words of its own, is not one."""
+        return self._marked and bool(self._why)
+
     def refused(self) -> str:
         """The sentence of the refusal that stops the start here, "" for none: a row off the page stops nothing."""
         return self.line.words if self._blocks and self._shown else ""

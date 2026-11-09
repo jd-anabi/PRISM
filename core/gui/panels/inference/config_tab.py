@@ -670,14 +670,21 @@ class ConfigPanel(StepPage):
         """A model chosen, by a person or by the list read again: its units file read again, so that a file written since
         says its units; its units line; and the box of typed units filled from it while the units come from that file, or
         while the box still holds what a file filled it with, so that typing them starts from the file in use. Units
-        typed here are never written over."""
+        typed here are never written over. While the box is out of sight it is filled with its signals held: the units
+        row hears that box, and a box filled out of sight is no edit of the row, so a refused units file's sentence
+        stays under the row."""
         self.form.rows["model"].kept = False
         self._model_left()
         self._units_read.pop(model, None)
         words, _where, _trouble = self._units_of(model)
         self._say_the_units_file()
         if not self._typed() or self.units_text.text() == self._seeded:
-            self.units_text.setText(words)
+            hidden = not self._typed()
+            self.units_text.blockSignals(hidden)
+            try:
+                self.units_text.setText(words)
+            finally:
+                self.units_text.blockSignals(False)
             self._seeded = words
         self._edited()
 

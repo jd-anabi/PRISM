@@ -385,8 +385,10 @@ def prior_facts(*, view: str, needs: bool = False, bounds_error: str = "", bound
     "build". ``needs``: no model is applied, so nothing can be made. ``bounds_error`` and ``prior_error`` say why the
     bounds file or the saved prior chosen cannot be used, each with the words beside the button. A saved prior:
     ``record_model``, the model its record was made for, against ``model``, the one applied; ``built_on``, the bounds
-    file it was built on (None for limits typed by hand), against ``selected``, with ``edited`` (the same file, edited
-    since) and ``same_box`` (its parameters and their limits are the selected file's); ``sets_of_prior``, the batches of
+    file it was built on (None for limits typed by hand), against ``selected``, the file the list selects, "" for none,
+    with ``edited`` (the same file, edited since) and ``same_box`` (its parameters and their limits are the selected
+    file's); with no file selected the record is compared with none, and what it was built on is said only in "In use"
+    and under the list of saved priors; ``sets_of_prior``, the batches of
     each saved simulation set made with it, None for not read. A build: ``rounds``, ``batch`` and ``stable`` give what it
     costs, ``steps`` the steps each candidate is integrated over when they are known, any of the three None leaves the
     cost out; ``took``, the run history's last build, how long it takes; ``sets_for_model``, the saved simulation sets of
@@ -402,7 +404,7 @@ def prior_facts(*, view: str, needs: bool = False, bounds_error: str = "", bound
         elif record_model is not None and model is not None and record_model != model:
             facts.append(Fact("err", OTHER_MODEL_TEXT.format(model_label(record_model)), OTHER_MODEL_BLOCKS))
         else:
-            if record_model is not None and not bounds_error:
+            if record_model is not None and not bounds_error and selected:
                 facts.append(_bounds_fact(built_on, selected, edited, same_box))
             if sets_of_prior is not None:
                 facts.append(_sets_fact(sets_of_prior))

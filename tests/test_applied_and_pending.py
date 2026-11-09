@@ -745,6 +745,112 @@ def test_a_units_file_the_row_cannot_take_changes_nothing_of_the_row_and_says_wh
     assert page.foot.reason.text() == "Cannot start yet: the last start was refused."
 
 
+def _refused_units_row(state, tmp_path, monkeypatch):
+    """The first step, in a window in sight, applied, its units row put in ``state`` against what the step holds ("typed units", "the model's
+    file with typed units held", "another units file"), and a file that holds no units chosen and refused: (screen,
+    page, the sentence under the row, the file refused, the units a press of the main button applies)."""
+    from tests._dialogs import answer_chooser
+    rig = _units_file(tmp_path / "rig", "rig units.txt", b"# Units\nHz nm pN s\n")
+    bad = _units_file(tmp_path / "bad", "master copy.txt", b"# Parameters\nk_gs = 1.0 in (0.5, 2.0)\n")
+    _window, screen, page = _shown_first_step(tmp_path)
+    _apply(page)
+    page.form.fold.set_open(True)
+    if state == "typed units":
+        _pick(page.units_choice, "typed")
+        page.units_text.setText("kHz ms nm pN")
+        applied = ("kHz", "ms", "nm", "pN")
+    elif state == "the model's file with typed units held":
+        _pick(page.units_choice, "typed")
+        page.units_text.setText("nm ms pN kHz")
+        _apply(page)
+        _pick(page.units_choice, "file")
+        applied = None
+    else:
+        answer_chooser(monkeypatch, str(rig))
+        page.choose_units_button.click()
+        applied = str(rig)
+    assert page.nothing_to_apply() is False
+    answer_chooser(monkeypatch, str(bad))
+    page.choose_units_button.click()
+    kind, words = _line(page, "units")
+    assert (kind, words) == ("err", "The file master copy.txt holds no units: a units file lists them under "
+                                    "\"# Units\"."), (kind, words)
+    return screen, page, words, bad, applied
+
+
+@pytest.mark.parametrize("reading", ["the page's timer", "a reading asked for"])
+@pytest.mark.parametrize("state", ["typed units", "the model's file with typed units held", "another units file"])
+def test_a_refused_units_files_sentence_stands_over_a_change_not_applied_until_the_row_is_edited(state, reading,
+                                                                                               tmp_path, monkeypatch):
+    """A units file chosen and refused keeps its sentence under the units row while the row holds a change not applied,
+    as it does while the row holds what the step holds: the page reading again (its timer after an edit of another
+    row, or a reading asked for) turns it from an error into a warning and says no "Changed, not applied" in its
+    place, for it is the one place the sentence is said. The change not applied is still counted, in "In use", on the
+    fold and on the rail. The main button applies what the row showed, never the refused file, and the sentence still
+    stands; at the next edit of the units row it goes, and "Changed, not applied" takes its place, or nothing when the
+    row is back at what the step holds."""
+    screen, page, words, bad, applied = _refused_units_row(state, tmp_path, monkeypatch)
+    facts = [(fact.kind, fact.sentence.plain_text()) for fact in page.foot.facts.rows()]
+    assert facts[0] == ("err", f"Error. {words}") and not page.foot.main_button.isEnabled(), facts
+    assert page.foot.reason.text() == "Cannot start yet: the units file chosen cannot be used."
+    _pick(page.rot_choice, not page.rot_choice.currentData())
+    if reading == "the page's timer":
+        page.read_timer.timeout.emit()
+    else:
+        page.read_facts()
+    assert _line(page, "units") == ("warn", words), _line(page, "units")
+    assert page.foot.main_button.isEnabled() and page.foot.reason.text() == ""
+    assert not any(words in fact.sentence.plain_text() for fact in page.foot.facts.rows())
+    assert page.in_use.pending.sentence.plain_text() == "Attention. 2 choices below are changed and not applied."
+    assert "2 changed" in page.form.fold.button.text(), page.form.fold.button.text()
+    assert screen.pending() == {"model"}
+    page.read_facts()
+    assert _line(page, "units") == ("warn", words), "a second reading took the sentence away"
+    _apply(page)
+    assert str(bad) not in str(screen.session.draft.units_override)
+    assert screen.session.draft.units_override == applied
+    assert _line(page, "units") == ("warn", words), _line(page, "units")
+    held = page.units_choice.currentData()
+    _pick(page.units_choice, "file" if held != "file" else "typed")
+    page.read_facts()
+    said = _line(page, "units")
+    assert said[0] == "warn" and said[1].startswith("Changed, not applied. In use: "), said
+    _pick(page.units_choice, held)
+    page.read_facts()
+    assert _line(page, "units") == ("", "")
+
+
+def test_a_change_of_model_leaves_a_refused_units_files_sentence_until_the_row_is_edited(tmp_path, monkeypatch):
+    """A model chosen fills the box of typed units from its units file; while the units row is not on "Typed here" that
+    box is out of sight and what fills it is no edit of the row, so a refused units file's sentence stays under the row,
+    an error until the page reads again and a warning after. While units are typed and still as a file filled them, the
+    filling does change the units the row holds: the box holds the new model's units and the sentence goes."""
+    from tests._dialogs import answer_chooser
+    bad = _units_file(tmp_path / "bad", "master copy.txt", b"# Parameters\nk_gs = 1.0 in (0.5, 2.0)\n")
+    for typed in (False, True):
+        _screen, page = _first_step()
+        _apply(page)
+        page.form.fold.set_open(True)
+        if typed:
+            _pick(page.units_choice, "typed")
+        answer_chooser(monkeypatch, str(bad))
+        page.choose_units_button.click()
+        words = _line(page, "units")[1]
+        assert _line(page, "units")[0] == "err" and words.startswith("The file master copy.txt holds no units")
+        before = page.units_text.text()
+        _pick(page.model_combo, "BP")
+        filled = page._units_of("BP")[0]
+        assert filled != before, "the two models' units files say the same"
+        if typed:
+            assert page.units_text.text() == filled
+            assert _line(page, "units")[1] != words, "the sentence stood over a row whose units had changed"
+            continue
+        assert _line(page, "units") == ("err", words), _line(page, "units")
+        page.read_facts()
+        assert _line(page, "units") == ("warn", words), _line(page, "units")
+        assert page.units_text.text() == filled and page.units_choice.currentData() == "file"
+
+
 def test_choose_a_units_file_pressed_again_takes_away_what_it_said_of_the_file_it_refused(tmp_path, monkeypatch):
     """A later press of "Choose a units file…" takes away the sentence its own earlier press left under the units row,
     whether it still stops the start or the page has read since: cancelled, the row stands as it stood before the
