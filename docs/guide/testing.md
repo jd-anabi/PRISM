@@ -69,15 +69,16 @@ and the session guards).
   minutes. One process, because the session installs its temporary records root once: only a single
   process can catch code that swaps the default store and never puts it back, and a gate split
   across processes hides it. Its time of record is taken in one process on a quiet machine, nothing
-  else running: at commit e17f1ec, on 29 October 2026, 2010 passed, 9 skipped (the display-marked
-  tests) and 5 deselected (the slow set) in 27 min 16 s, the card present, so the gpu-marked tests
-  ran on it. `--durations=15` named its slowest, all in `tests/test_user_sbi.py` but the last:
-  `test_train_and_validate_without_a_loaded_cell` (182 s),
-  `test_calibration_theta_star_lies_inside_the_region_when_one_is_given` (80 s),
-  `test_no_forcing_user_model_full_sbi_pipeline` (46 s),
-  `test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch` (46 s),
-  `test_chi_fisher_rotation_builds_over_the_chi_feature_set` (45 s) and
-  `tests/test_tool.py::test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud` (44 s).
+  else running: at commit 850dc23, on 9 November 2026, 3572 passed, 11 skipped (the display-marked
+  tests) and 5 deselected (the slow set) in 43 min 28 s, the card present, so the gpu-marked tests
+  ran on it; the target of 16 minutes is no longer met.
+  `--durations=15` named its slowest, all in `tests/test_user_sbi.py` but the last:
+  `test_train_and_validate_without_a_loaded_cell` (257 s),
+  `test_calibration_theta_star_lies_inside_the_region_when_one_is_given` (113 s),
+  `test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch` (65 s),
+  `test_no_forcing_user_model_full_sbi_pipeline` (64 s),
+  `test_chi_fisher_rotation_builds_over_the_chi_feature_set` (63 s) and
+  `tests/test_tool.py::test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud` (60 s).
 - **The full run** is `python -m pytest`; budget about an hour and a half, and log it to a file.
   `python -m pytest -m slow --collect-only -q` lists the slow set, the real simulations the fast gate
   leaves out.

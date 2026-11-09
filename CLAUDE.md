@@ -55,8 +55,9 @@ what is on disk, the last gate). Update it at the end of every session.
 ## Tests
 
 - pytest. Fast gate: `pytest -m "not slow"` (the recorded one-process target is 16 minutes, piece-3
-  spec §8.4; the last quiet gate of record took 27 min 16 s, 2010 passed, at `e17f1ec` on 29 October
-  2026). Full: `pytest` (never timed in one process; the two halves at the window redesign's stage-3
+  spec §8.4, not met since stage 2; the last quiet gate of record took 43 min 28 s, 3572 passed, at
+  `850dc23` on 9 November 2026, the machine reading slower alone than it did at stage 3, whose gate
+  took 27 min 16 s, 2010 passed). Full: `pytest` (never timed in one process; the two halves at the window redesign's stage-3
   exit were 27 min 16 s + 1 h 0 min 49 s, so budget about 95 minutes. The slow set is five tests: the
   chi full-pipeline test `test_chi_mode_full_sbi_pipeline` in `tests/test_user_sbi.py` (1528 s; 2618 s
   at piece 6, 1397 s at piece 5 — the open list), in `tests/test_tool.py` the Nadrowski sanity-path
@@ -85,7 +86,7 @@ what is on disk, the last gate). Update it at the end of every session.
 - `tests/conftest.py` turns training checkpointing OFF for the session
   (`_checkpointing_off_unless_asked`, which rebinds `orchestrator.TRAINING_CHECKPOINT_EVERY`); it
   is the only session-wide KNOB default the suites install, and a test that wants a simulation
-  cache passes `checkpoint_every` explicitly. Six more session-wide autouse guards stand beside
+  cache passes `checkpoint_every` explicitly. Eight more session-wide autouse guards stand beside
   it: a temp artifact root (`_sandbox_default_store`), a temp settings file so no panel reads the
   real `PRISM.ini` and no test can write it (`_settings_home`, plus a fresh `.ini` per test; at
   teardown the real file must be unchanged and its folder must hold exactly what it held, so a
@@ -93,24 +94,37 @@ what is on disk, the last gate). Update it at the end of every session.
   modal dialog can stall the run (`_no_modal_dialogs`, on today's message boxes and on the shared
   question), no file chooser can open (`_no_file_choosers`: one a test did not answer is recorded
   and answers "cancelled"), no plain Windows message can wait for an OK (`_no_native_boxes`: the
-  one the entry point shows when PRISM cannot start is recorded, never shown), and
-  `<repo>/sbi-logs` must not exist (`_no_sbi_logs`) — asserted at SETUP too, so a leftover tree
-  makes every pytest run error before the first test. Seven per-test checks fail a test at its
+  one the entry point shows when PRISM cannot start is recorded, never shown), no file or folder
+  can be opened (`_no_folders_opened`: what the window hands the computer to open is recorded in
+  its place and nothing opens), the folder of
+  saved plans `Resources/Plans` holds at the end exactly what it held at the start, the same paths
+  with the same bytes, and the window's own folder of plans is one of the session's, empty
+  (`_no_plans_written`), and `<repo>/sbi-logs` must not exist (`_no_sbi_logs`) — asserted at SETUP
+  too, so a leftover tree makes every pytest run error before the first test. One more session
+  fixture is no guard and sets nothing: `_long_lived_objects_set_aside` takes one full collection
+  and sets what is then alive (about half a million objects, torch, the toolkit and the suites'
+  own modules) aside from the collector of cycles, so each collection a test's end asks for walks
+  only what the tests made; an object alive then and dropped later in a cycle is never collected
+  in that process (memory only). Nine per-test checks fail a test at its
   teardown: a file chooser it opened and did not answer (`_every_file_chooser_is_answered`); a
-  plain Windows message recorded and never read (`_every_native_box_is_read`); an error the
+  plain Windows message recorded and never read (`_every_native_box_is_read`); a file or folder
+  handed to the computer to open and never read (`_every_opening_is_read`); an error the
   window's own drawing code caught while it ran (`_drawing_code_raises_nothing`; a test that
   causes one on purpose does it inside `reported.expected()`); a run still live when it ends
   (`_built_widgets_let_go`, which then deletes every window and part the builders made, so none
   outlives its test); the lock of one PRISM at a time still held (`brought_forward`, which also
   keeps any window from being brought to the front, except in the tests marked for the real
-  screen); the standard streams left bound to a window's log (`_streams_put_back`); and a request
+  screen); the standard streams left bound to a window's log, or the window's folder of plans bound
+  to another than the session's (`_streams_put_back`); the application's font set and left set
+  (`_application_font_put_back`); and a request
   of Windows left standing — the computer kept awake, a reason against ending the session
   registered, or Windows reached at all (`windows_asked`, which stands in for keeping the computer
   awake, that reason, the taskbar's flash and the watch on Windows' end of a session, except in the
   tests marked for the real screen, which make each call for real and release it). One check
   fails a whole module at its end: a panel built in it that outlives it (`_no_panel_outlives_its_module`;
   every run locks and frees every panel still enrolled). After every test the room the look's
-  layout thresholds are held to is put back (`_layout_room_put_back`).
+  layout thresholds are held to is put back (`_layout_room_put_back`), and the memory limit is
+  put back as the test found it with the keep-awake switch on (`_memory_limit_put_back`).
 - A green suite does not certify the GPU path. The gpu-marked tests do run on the card inside every
   fast gate when CUDA is present (`tests/test_gpu_paths.py`'s CUDA inference run, six in
   `tests/test_user_sbi.py` and one in `tests/test_diagnostics.py`), but they are not a substitute: no
@@ -218,16 +232,22 @@ what is on disk, the last gate). Update it at the end of every session.
   rotation and calibration knobs, the HPD level and the direction count), the Config tab's
   non-dimensional χ drive amplitude and band are read-only displays of it, and a consent is never
   persisted — it is answered by the session that runs. A stale key an older build left in
-  `PRISM.ini` is ignored, not restored. The Simulate, FDT and CrossVal panels remember their own
+  `PRISM.ini` is ignored, not restored. The plan picker is the one picker that is not
+  remembered: it opens on "No plan" at every launch, and only the name of the plan last used
+  with each model, and when, is kept, for the picker's hint. The Simulate, FDT and CrossVal
+  panels remember their own
   numeric fields — except the ones the CrossVal panel re-derives instead, n_freqs and M_ensemble
   from its preset and the grid ends from its cell — and their pickers' selections; the Seed box,
   the record name and the note are never remembered — a remembered seed would silently turn every
   run into a repeat of the last one, and a remembered name would be refused as taken at the next
   launch's first run (piece-5 spec §5.5, E7; plan ruling P30) — and neither are the "Compare
   saved …" controls, whose remembered list would name records a later session may have deleted.
-- `Resources/` holds the hand-edited inputs (`Bounds/`, `Cells/`, `Units/`, `Models/`). The
+- `Resources/` holds the hand-edited inputs (`Bounds/`, `Cells/`, `Units/`, `Models/`, `Plans/`). The
   bounds file declares WHICH parameters are inferred and in what order, and therefore the
-  observation mode; a cell's model comes from its parent folder. Everything generated lives under
+  observation mode; a cell's model comes from its parent folder; a run plan is
+  `Plans/<model>/<name>.txt`, read by `core/plans.py`, and like the bounds and cell files it is tracked in
+  git and committed before a long run, so that the run's records are not stamped as made from a changed
+  tree (no plan is shipped; the first is saved from the window). Everything generated lives under
   `Artifacts/<kind>/<name>__<id>/` with a `manifest.json` and, since piece 3, a `log.txt` of that
   run's records — every `core` record and Python warning since the outermost public entry began,
   stamped `HH:MM:SS info/warning/error` (`core/runs.py`) — for every kind but the simulation cache,
@@ -248,6 +268,11 @@ what is on disk, the last gate). Update it at the end of every session.
   `Artifacts/` path (a test pins it). The old `Resources/{Priors,Posteriors,Checkpoints,Observations,
   Plots,CrossValidation,ReductionMap}` trees were deleted by the clean-break runbook on 2026-09-11
   (design spec §9); `Resources/` holds only the four input folders and `Artifacts/` started empty.
+- A run plan fills the forms of steps 1 to 3 only when a press asks it to: the picker's "Fill the forms
+  from this plan", Home's "Continue with these" when a plan was in use last time, or "Continue from batch
+  N", which fills the settings the run was started with and leaves the name and the note blank; a plan is
+  never applied at launch, the picker opens on "No plan", and only the name of the plan last used with
+  each model, and when, is remembered, for the picker's hint.
 - The narrowing-round safety rules (where each is enforced and the test that pins it) and the traps
   that still bite are in `docs/guide/rules-and-traps.md`; the reasoning behind the science settings
   is in `docs/guide/science.md`. The handoff they were written from is archived (see `docs/STATE.md`).
@@ -260,9 +285,11 @@ what is on disk, the last gate). Update it at the end of every session.
   `docs/guide/retrain.md` is still a command-line runbook until it is rewritten as the window
   route. A long run has the card to itself: while one is live, no pytest (the fast gate runs its
   gpu-marked tests on the card), no card gate and no second window (opening the window touches the
-  card). A full-size generation on this card needs the VRAM ceiling set (with none the 1 October
-  run died at batch 237; at 6 GiB 9,500 batches went through), and the window's field opens at 0
-  unless `PRISM_VRAM_CEILING_GIB` is set in the environment the window starts in. While a long run
+  card). A full-size generation on this card needs the memory limit set (with none the 1 October
+  run died at batch 237; at 6 GiB 9,500 batches went through): it is set once in Settings, "This
+  computer", is remembered for this computer, and is shown in the Training step's "Before you
+  start"; `PRISM_VRAM_CEILING_GIB`, set in the environment the window starts in, takes precedence
+  over it when it holds a number. A run started from the command line reads the variable only. While a long run
   is live, edit no file under `core/` (whether an import late in a run can read an edited file is
   not established), and note `git rev-parse HEAD` when it starts: a posterior stamps the
   checkout's git revision and dirty flag when it is written at the end, so a commit of any file
@@ -272,8 +299,9 @@ what is on disk, the last gate). Update it at the end of every session.
   stopped training is kept as a record of its own (kind `fit`, under `Artifacts/fits/`). It is
   resumed by hand, from the command line with `train --resume-fit <id>`, given the same `--bounds`,
   `--prior`, `--chi` and `--device` it was trained with (the window offers Resume on the run's page
-  of a training that stopped or failed in its fit, until PRISM is closed; Resume after a reopening
-  comes with the Training page's rebuild), only while its settings, its network's shape, the code that builds or trains the
+  of a training that stopped or failed in its fit, until PRISM is closed, and after a reopening on
+  the Training step's list of kept trainings and on Home; a kept narrowing round after a reopening is
+  still resumed from the command line, until the round's page is rebuilt), only while its settings, its network's shape, the code that builds or trains the
   network, the libraries and its simulation set are what it was trained with: an edit inside that
   code (`fit_state.FIT_CODE`), even a comment, makes every training kept before it unresumable, so
   finish a kept training you want before such an edit. A resume reads the simulation set back
@@ -313,7 +341,7 @@ what is on disk, the last gate). Update it at the end of every session.
   command line, bringing recordings, the science, the architecture, the rules and traps, testing,
   and the retrain runbook. They cite no working document (the source scan walks them), and each
   opens with the commit it was checked against.
-- `tests/` — the thirty suites (`test_fit_saving.py` the kept training's: its files, lock and
+- `tests/` — the thirty-four suites (`test_fit_saving.py` the kept training's: its files, lock and
   identity, the training call's per-pass hook and restore, the training stage's saving and resuming;
   `test_look.py` the look's: no torch; the table of colours,
   type and sizes, the lettering, the style sheet, the painted devices and the shared question;
@@ -324,7 +352,12 @@ what is on disk, the last gate). Update it at the end of every session.
   lines it reads, the run's controller and the run's page; `test_stop_and_close.py` stopping a run,
   keeping or discarding the training a stop kept, the close during a run and Windows' end of a
   session; `test_retry.py` a run's failure on its page, the window's tries after the card ran out
-  of memory, and Continue and Resume;
+  of memory, and Continue and Resume; `test_pages.py` the pieces every rebuilt page is made of
+  (a fact and its order, the form, "In use", the foot, when a page reads and how it hosts a run);
+  `test_plans.py` the plan reader and the window's lists, fills and saves of plans;
+  `test_before_you_start.py` what a step says in "Before you start", as values;
+  `test_applied_and_pending.py` what a step holds against what its page shows, the load view,
+  the kept trainings, and Continue and Resume;
   `test_artifact_store.py` is the store's, `test_tool.py` the
   command-line tool's, `test_diagnostics.py` the diagnostics' (the five and the three `probes`
   modes), `test_refusals.py` the torch-free rules', tables' and run-buffer's,
