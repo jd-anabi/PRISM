@@ -3279,6 +3279,41 @@ def test_with_no_model_applied_a_saved_prior_is_compared_with_no_bounds_file(sto
     assert page.prior_line.plain_text().endswith("built on master.txt."), page.prior_line.plain_text()
 
 
+def test_a_bounds_file_waiting_is_no_file_selected_for_a_saved_prior(store):
+    """A bounds file that waits is no file selected: before step 1 is applied the list selects nothing, so a saved prior
+    chosen is compared with none, whether the file waits because a plan holds it for a model not yet applied or because
+    it was remembered from last time with the prior. Neither says what the prior was built on or names a bounds file
+    selected."""
+    from core.gui import remembered
+    from tests._fixtures import _nad_cfg, _prior_artifact, qt_app
+
+    def said(page):
+        page.read_facts()
+        return [(row.kind, row.sentence.plain_text()) for row in page.foot.facts.rows()]
+
+    def compares(facts):
+        return [line for _kind, line in facts if "Built on" in line or "bounds file selected" in line]
+    qt_app()
+    saved = _prior_artifact(store, _nad_cfg(), name="saved_one").id
+    page = build_inference().prior_panel
+    page.show_view("saved")
+    page.prior_picker.refresh()
+    page.prior_picker.restore_key(saved)
+    page.pending_bounds("master_tier1.txt", "NADROWSKI")
+    assert page.waiting_file() == "master_tier1.txt" and page.bounds_picker.key() == ""
+    facts = said(page)
+    assert facts[0][0] == "lock" and not compares(facts), facts
+    remembered.put_many([(remembered.MODEL_KEY, "NADROWSKI"), (remembered.BOUNDS_KEY, "master_tier1.txt"),
+                         (remembered.BOUNDS_MODEL_KEY, "NADROWSKI"), (remembered.PRIOR_KEY, saved)])
+    page = build_inference().prior_panel
+    page.show_view("saved")
+    page.prior_picker.refresh()
+    assert page.prior_picker.key() == saved and page.bounds_picker.key() == "", (
+        page.prior_picker.key(), page.bounds_picker.key())
+    facts = said(page)
+    assert facts[0][0] == "lock" and not compares(facts), facts
+
+
 def test_a_load_reads_none_of_the_seven_settings(store):
     """A load reads only the saved prior and the bounds file: a setting of the build left blank or broken stops nothing
     in the saved view, and none of the seven travels with the load."""

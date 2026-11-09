@@ -9267,7 +9267,8 @@ def test_resume_puts_the_records_settings_on_the_steps_and_loads_its_prior_on_it
     else:                      # no file selected, so the prior is compared with none: no fact of what it was built on
         assert not [line for line in said if re.match(r"\w+\. Built on ", line) or "the bounds file selected" in line], said
         assert handed_to_the_foot and not [facts for facts in handed_to_the_foot
-                                           if any("the bounds file selected" in line for line in facts)], (
+                                           if any(line.startswith("Built on ") or "bounds file selected" in line.lower()
+                                                  for line in facts)], (
             "a set of facts handed to step 2's foot during the Resume compared the prior with a file", handed_to_the_foot)
     if not listed:                                    # no file selected, so "This bounds file" names none shown
         assert not [line for line in said if line.startswith("Attention. This bounds file lists")], said

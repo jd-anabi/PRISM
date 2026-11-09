@@ -14,6 +14,7 @@ from core.gui.session import SbiSession
 from core.gui.step_facts import NOT_HELD, SelectionRow, units_words
 from tests._dialogs import all_asked, asked, choose, forget_asked
 from tests._fixtures import build_inference, build_window, qt_app
+from tests._window_helpers import _apply, _line, _pick, _units_file
 
 #: The pages of Parameter inference built on the step page, by their files beside it.
 REBUILT = ("config_tab.py", "prior_tab.py", "posterior_tab.py")
@@ -48,25 +49,6 @@ def _shown_first_step(tmp_path):
     _settle()
     screen = window.part("inference")
     return window, screen, screen.config_panel
-
-
-def _pick(choice, value) -> None:
-    """Choose the item of ``choice`` that holds ``value``."""
-    found = choice.findData(value)
-    assert found >= 0, value
-    choice.setCurrentIndex(found)
-
-
-def _apply(page) -> None:
-    """The main button, pressed: the reading that counts, then the apply."""
-    assert page.foot.main_button.isEnabled(), page.foot.reason.text()
-    page.foot.main_button.click()
-
-
-def _line(page, key) -> tuple:
-    """What the line under the row ``key`` says: its marker and its words, or two empty strings."""
-    line = page.form.rows[key].line
-    return (line.kind, line.words) if line.says() else ("", "")
 
 
 def _remember(**values) -> None:
@@ -571,14 +553,6 @@ def test_units_filled_from_a_file_follow_the_model_until_they_are_typed():
 
 
 # ── a units file of any folder, chosen ──
-def _units_file(folder, name, data: bytes) -> Path:
-    """A file named ``name`` holding ``data`` in ``folder``, a folder of the test's own: its path."""
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / name
-    path.write_bytes(data)
-    return path
-
-
 def _items(choice) -> list:
     """The words of every item of a list, in its order."""
     return [choice.itemText(at) for at in range(choice.count())]
@@ -818,6 +792,35 @@ def test_a_refused_units_files_sentence_stands_over_a_change_not_applied_until_t
     _pick(page.units_choice, held)
     page.read_facts()
     assert _line(page, "units") == ("", "")
+
+
+def test_a_refused_start_gives_way_to_a_change_not_applied_where_a_refused_units_file_does_not(tmp_path, monkeypatch):
+    """A start refused for the units gives way when the page reads again: the units row holds a change not applied, so
+    the sentence the refusal marked it with is replaced by "Changed, not applied. In use: …", for that sentence was
+    never a file's. A units file chosen and refused, with the row in that same state, keeps its own sentence at the
+    reading, as a warning, and says no "Changed, not applied" in its place."""
+    from core.refusals import Refusal
+    from tests._dialogs import answer_chooser
+    _screen, page = _first_step()
+    _apply(page)
+    page.form.fold.set_open(True)
+    _pick(page.units_choice, "typed")
+    page.units_text.setText("kHz ms nm pN")
+    page._refusal(Refusal("The units were refused.", field="units"))
+    assert _line(page, "units") == ("err", "The units were refused.")
+    page.read_facts()
+    said = _line(page, "units")
+    assert said[0] == "warn" and said[1].startswith("Changed, not applied. In use: "), said
+    bad = _units_file(tmp_path / "bad", "master copy.txt", b"# Parameters\nk_gs = 1.0 in (0.5, 2.0)\n")
+    _pick(page.units_choice, "file")
+    _pick(page.units_choice, "typed")
+    page.units_text.setText("kHz ms nm pN")
+    answer_chooser(monkeypatch, str(bad))
+    page.choose_units_button.click()
+    kind, words = _line(page, "units")
+    assert (kind, words.startswith("The file master copy.txt holds no units")) == ("err", True), (kind, words)
+    page.read_facts()
+    assert _line(page, "units") == ("warn", words), _line(page, "units")
 
 
 def test_a_change_of_model_leaves_a_refused_units_files_sentence_until_the_row_is_edited(tmp_path, monkeypatch):

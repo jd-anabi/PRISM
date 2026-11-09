@@ -1908,7 +1908,7 @@ def test_check_again_leaves_a_refused_units_files_sentence_under_the_row_while_a
     from an error into a warning and says no "Changed, not applied" in its place. The button beside it is lit, and "In
     use" counts the change not applied."""
     from tests._dialogs import answer_chooser
-    from tests.test_applied_and_pending import _apply, _line, _pick, _units_file
+    from tests._window_helpers import _apply, _line, _pick, _units_file
     window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
     _press_fill(page, monkeypatch, answer="Fill the forms")
     page.form.fold.set_open(True)

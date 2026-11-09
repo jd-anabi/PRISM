@@ -8,6 +8,7 @@ Nothing here builds a window: the builders of tests/_fixtures.py do that, and a 
 """
 import contextlib
 import warnings
+from pathlib import Path
 
 from core.gui.session import SbiSession
 
@@ -69,3 +70,30 @@ def given(monkeypatch):
 
     monkeypatch.setattr(QWidget, "setFocus", set_focus)
     return given
+
+
+def _pick(choice, value) -> None:
+    """Choose the item of ``choice`` that holds ``value``."""
+    found = choice.findData(value)
+    assert found >= 0, value
+    choice.setCurrentIndex(found)
+
+
+def _apply(page) -> None:
+    """The main button, pressed: the reading that counts, then the apply."""
+    assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+    page.foot.main_button.click()
+
+
+def _line(page, key) -> tuple:
+    """What the line under the row ``key`` says: its marker and its words, or two empty strings."""
+    line = page.form.rows[key].line
+    return (line.kind, line.words) if line.says() else ("", "")
+
+
+def _units_file(folder, name, data: bytes) -> Path:
+    """A file named ``name`` holding ``data`` in ``folder``, a folder of the test's own: its path."""
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
+    path.write_bytes(data)
+    return path
