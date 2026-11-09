@@ -1,9 +1,11 @@
 # PRISM — state
 
-**Last updated:** 2026-11-09, afternoon (13:05 by the clock; the weekly bar 26 %, resetting on 15 November at 04:00 UTC):
-STAGE 5'S PLAN IS WRITTEN AND COMMITTED, FOR THE OWNER'S APPROVAL: `docs/superpowers/plans/2026-11-09-window-redesign-stage-5.md`
-(`ce8d57c`), with departures 398 to 424 in the plan and in the design's section 8. Nothing is built; no code changed. The
-chat started at 09:49 from the owner's pasted prompt (`docs/superpowers/prompts/2026-11-09-window-redesign-stage-5-plan.md`).
+**Last updated:** 2026-11-09, afternoon (13:09 by the clock; the weekly bar 27 %, resetting on 15 November at 04:00 UTC):
+STAGE 5'S PLAN IS WRITTEN, COMMITTED AND APPROVED ("I approve it", 9 November):
+`docs/superpowers/plans/2026-11-09-window-redesign-stage-5.md` (`ce8d57c`), with departures 398 to 424 in the plan and in the
+design's section 8. Nothing is built; no code changed. The chat started at 09:49 from the owner's pasted prompt
+(`docs/superpowers/prompts/2026-11-09-window-redesign-stage-5-plan.md`). The hand-off prompt for the build is
+`docs/superpowers/prompts/2026-11-09-window-redesign-stage-5-build.md`.
 
 - **How it was made** (the ledger's section "Stage 5 — … (plan)" and `stage-5/plan-drafts/` hold it): six readers (sonnet,
   about 2.4 M tokens), six probes in a scratch copy (opus, 0.58 M; nothing on the card), the head and the task outline by the
@@ -29,10 +31,11 @@ chat started at 09:49 from the owner's pasted prompt (`docs/superpowers/prompts/
   call; the real-screen run; the pictures; the walkthrough rows; the guide's pages for Checks, Inference and the round;
   `CLAUDE.md`'s sentences this stage makes false, on the owner's yes.
 - **No function of `FIT_CODE` is touched by any task; `core/config.py` is not touched.** Engine files change only in Task 2.
-- **Unpushed:** `ce8d57c` and this STATE commit (the owner pushed up to `cdc80d2`).
+- **Unpushed:** `ce8d57c`, `d603c22` and this commit (the owner pushed up to `cdc80d2`).
 
-NEXT: the owner's reading and approval of the plan; then the build from Task 0, in this chat or in a new one from a hand-off
-prompt, the weekly bar read first.
+NEXT: the build from Task 0, in a new chat the owner starts from
+`docs/superpowers/prompts/2026-11-09-window-redesign-stage-5-build.md`, the weekly bar read first. Then stages 6 to 9, the code
+audit, the retrain from the window.
 
 What follows is the head as the morning of 9 November left it:
 
