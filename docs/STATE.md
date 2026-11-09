@@ -1,5 +1,16 @@
 # PRISM — state
 
+**Last updated:** 2026-11-09, morning (09:31 by the clock; the weekly bar 21 %, resetting on 15 November at 04:00 UTC):
+STAGE 4 IS CLOSED, AND THE PROMPT FOR STAGE 5'S PLAN IS WRITTEN, at the owner's "Yes, write it":
+`docs/superpowers/prompts/2026-11-09-window-redesign-stage-5-plan.md`. It carries what stage 5 must take from stage 4's
+plan (departures 55, 72, 100, 137, 141, 142, 149, 152 and 253), from stage 4's last review (the product seat's section
+7, the sorting's B1 to B5 and H8), from stage 2's sorting (921b, 951a, 956f) and from the fit-saving last review; the
+slow set is owed at stage 5's exit for stages 4 and 5 together; the departures go on from 398. Nothing is built; no
+code changed. NEXT: the plan of stage 5, in a new chat the owner starts from that prompt. Unpushed: 25 commits after
+`dc66861`, this one included.
+
+What follows is the head as the early morning of 9 November left it:
+
 **Last updated:** 2026-11-09, early morning (06:06 by the clock; the weekly bar 20 %): STAGE 4 OF THE WINDOW REDESIGN IS
 CLOSED. The owner answered the exit's last two questions: A14 "Yes, all of them" (the `CLAUDE.md` edits: the memory
 limit kept in Settings, the fifth input folder `Plans/`, one sentence on plans and on Continue filling the forms, the
