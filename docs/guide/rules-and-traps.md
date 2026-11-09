@@ -1,6 +1,6 @@
 # Rules and traps
 
-Checked against commit 30ff8a3.
+Checked against commit 531aae3.
 
 This page is for whoever changes the code. It holds the rules the code keeps, each with where it is
 enforced; the safety rules of a narrowing round, as a table; and the traps: mistakes that once
@@ -90,14 +90,21 @@ live-looking value. The widths and the reasons are in
 **Every setting is an argument, never a configuration edit.** The front ends pass every setting to
 the stage, because assigning a `core.config` constant after the stages are imported changes nothing
 they read ([Stages and compositions](architecture.md#stages-and-compositions) says why). The one
-run setting the window writes into `core.config` is the memory ceiling, which the batch planner
-reads through the module every time it plans
-([The inference settings](window.md#the-inference-settings)); the simulation pipeline also reads
-two environment variables of its own
+run setting the window writes into `core.config` is the memory limit, which the batch planner reads
+through the module every time it plans; it is kept in Settings, under This computer, remembered for
+the computer it was set on and applied as the program starts, and exactly one module of the window
+assigns it (`core/gui/memory_limit.py`). It changes how a batch is split and never what is
+simulated or any simulation set's identity. The variable `PRISM_VRAM_CEILING_GIB`, when it holds a
+number, takes precedence over it, and what the window says is in force is the planner's own answer,
+so a screen and a run cannot disagree; in a run of the tool only the variable sets it, the tool never
+assigning the constant, which keeps `core/config.py`'s value (0)
+([Memory planning](architecture.md#memory-planning-and-out-of-memory-recovery)). The simulation
+pipeline also reads two environment variables of its own
 ([Environment variables](command-line.md#environment-variables)). Pinned by
-`tests/test_user_sbi.py::test_build_posterior_takes_the_budget_as_arguments_because_the_constants_are_snapshotted`
-and
-`tests/test_settings_persistence.py::test_the_training_budget_reaches_build_posterior_as_arguments_not_via_config`.
+`tests/test_user_sbi.py::test_build_posterior_takes_the_budget_as_arguments_because_the_constants_are_snapshotted`,
+`tests/test_applied_and_pending.py::test_every_argument_of_the_table_reaches_the_stage`,
+`tests/test_settings_persistence.py::test_one_module_of_the_window_assigns_the_memory_limit` and
+`tests/test_settings_persistence.py::test_the_limit_in_force_is_the_planners_own_answer_over_a_table_of_texts`.
 
 **Every public entry works on a private copy of its configuration.** `core.runs.public_entry` hands
 every public stage, composition and diagnostic, and the FDT measurement and sweep study,
@@ -125,7 +132,12 @@ exception, never a refusal. Known gaps, which are not the rule, include:
   (`core.artifacts.store.ArtifactStore.load_prior`, `load_posterior`, `load_observation`,
   `load_calibration`, `load_inference`, `load_diagnostic`) and in `get`, `path` and `rename`;
   `set_note`, `delete`, `read_log` and `load_fdt` name the field `artifact`;
-- a units-file refusal carries the field `units`, which no flag answers.
+- a units-file refusal carries the field `units`, which no flag answers;
+- the four keys of a run plan (`plan`, `chi_mode`, `reparam_rotate`, `expected_epochs`) map to no flag
+  in the tool's table (`--chi` sets chi mode, but no refusal of the tool's carries the key): the tool
+  reads no plan, so none of them is ever a refusal of the tool's. A rebuilt step names the row for
+  every key it can receive, and a plan's own problems are told in the reader's sentences with their
+  line (`core.plans.PlanRefusal`).
 
 How the tool prints each is in [Exit codes](command-line.md#exit-codes). Pinned by
 `tests/test_refusals.py::test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_registered`,
@@ -142,7 +154,7 @@ the cycle floor below which a probe is masked come only from `core/config.py` (`
   before any comparison and before the payload is read. A different band or drive means editing
   `core/config.py` deliberately. The probe count is not checked, on purpose: it is what one
   observation supplies, and training draws its own for every batch.
-- The window's Config tab also has boxes for the lock-in ceiling and the number of probe slots
+- The window's step 1, Model and options, also has boxes for the lock-in limit and the number of probe slots
   ([The inference settings](window.md#the-inference-settings)).
 - `ArtifactStore.load_posterior` refuses a chi posterior whose band, drive, lock-in ceiling or slot
   count differs from the loading configuration's.
@@ -171,13 +183,16 @@ posterior. Pinned by
 **A persisted value that defines what is measured is compared with `core/config.py` before the
 spend.** A remembered preference is harmless; a remembered measurement definition outlives the change
 to `core/config.py` that retired it, which once cost a multi-day run
-([What the window remembers](window.md#what-the-window-remembers)). So the inference tabs remember
-no science setting, the band and drive are read-only displays, and
-`_assert_chi_config_is_deliberate` compares them with `core/config.py`, not with another record,
-before the first simulation. A setting persisted in future that defines the measurement needs the
-same comparison. Pinned by
-`tests/test_settings_persistence.py::test_science_knobs_open_at_config_and_are_not_written` and
-`tests/test_settings_persistence.py::test_the_config_tab_science_knobs_open_at_config_and_are_not_written`.
+([What the window remembers](window.md#what-the-window-remembers)). So the inference steps remember
+selections (the pickers, the kind of observation, the recording's lengths and drive amplitude, the
+training budget) and no science setting: every science setting opens at `core/config.py` on every
+launch, a plan fills a form only when asked and only its name and time are remembered, as a hint, a consent is answered by
+the session that runs, and the band and drive are read-only displays. `_assert_chi_config_is_deliberate`
+compares them with `core/config.py`, not with another record, before the first simulation. A setting
+persisted in future that defines the measurement needs the same comparison. Pinned by
+`tests/test_settings_persistence.py::test_science_knobs_open_at_config_and_are_not_written`,
+`tests/test_settings_persistence.py::test_the_config_tab_science_knobs_open_at_config_and_are_not_written`
+and `tests/test_settings_persistence.py::test_the_written_keys_are_exactly_the_remembered_table`.
 
 **A pre-flight reads its configuration from the same place as the run it clears.** Smoke runs that
 built their configuration from `core/config.py` were once green while the window, restoring its own
@@ -218,7 +233,7 @@ enforces it and the test that pins it.
 | **The eigenbasis rule:** the region is cut in the rotation's leading directions, flat ones left full width | barely constrained directions cut on noise | `core.SBI.truncate.region_from_posterior` takes intervals on the leading directions of the parent's latent only; `build_posterior` wraps the truncated prior around the rotated latent prior; `tsnpe_round` refuses more directions than the latent has | `tests/test_conditioning_repair.py::test_the_region_is_built_over_the_leading_fisher_directions_only`; `tests/test_conditioning_repair.py::test_tsnpe_round_refuses_bad_direction_counts_and_hpd_levels_before_any_spend` |
 | **The unweighted-draws rule:** the region comes from unweighted posterior draws, not best fits | a second, undeclared likelihood, with the discrepancy measure as a hidden setting | `truncate.region_from_posterior` takes per-direction quantiles of the flow's own draws (20,000, seeded from the observation), with no ranking step | structural, no dedicated test |
 | **The generous-region rule:** a 99.9 % region, with the truth-outside rate watched | a tight region deleting support no later round can recover | `truncate.DEFAULT_HPD`; `tsnpe_round` refuses a level outside (0, 1) and warns below 0.99; `build_posterior` reports, for a round around a simulated cell, whether the truth lies inside each truncated direction (`TruncationRegion.containment`), records it in `training.truth_containment` and warns when it is outside, and logs the fraction of the prior the region kept | `tests/test_conditioning_repair.py::test_tsnpe_round_refuses_bad_direction_counts_and_hpd_levels_before_any_spend`; `tests/test_conditioning_repair.py::test_a_tight_hpd_warns_through_the_preflight_channel_and_still_runs`; `tests/test_conditioning_repair.py::test_a_narrowing_round_reports_and_records_whether_the_truth_lies_inside_each_direction`; `tests/test_conditioning_repair.py::test_a_region_reports_containment_per_truncated_direction` |
-| **The cost-on-screen rule** | a round, a full simulation campaign, started without its cost in view | the TSNPE tab shows the Posterior tab's budget group (`core.gui.panels.inference.base._TrainingBudgetMixin`); on the command line `build_posterior` logs its `[budget]` line on every training run | `tests/test_artifact_store.py::test_the_budget_line_prints_with_default_arguments`; `tests/test_settings_persistence.py::test_the_training_budget_shows_the_simulation_count_and_the_cap_trade`; `tests/test_settings_persistence.py::test_the_budget_lines_only_format_the_preview` (the TSNPE tab's own lines too) |
+| **The cost-on-screen rule** | a round, a full simulation campaign, started without its cost in view | the Training step's "Before you start" says how many simulations the run makes, how long the last training of this size took, the memory limit in force and what the saved sets would do, from `core.orchestrator.training_reading` and the run history; the narrowing round still shows the older budget group (`core.gui.panels.inference.base._TrainingBudgetMixin`); on the command line `build_posterior` logs its `[budget]` line on every training run | `tests/test_artifact_store.py::test_the_budget_line_prints_with_default_arguments`; `tests/test_before_you_start.py::test_the_simulations_are_counted_for_each_kind_of_observation`; `tests/test_before_you_start.py::test_the_memory_lines_say_what_is_in_force_and_what_the_last_run_measured`; `tests/test_settings_persistence.py::test_the_budget_lines_only_format_the_preview` (the narrowing round's lines) |
 | **The region-carries-its-basis rule:** the child reuses the parent's rotation, never recomputes it, skips directions loaded on t_scale, and names its base prior | a region drawn in one rotation and enforced in another: one such round kept 0.01 % of its parent posterior and lost the truth | `build_truncation_region` records the parent's rotation, a probe of its training bijection, the observation's digest and the parent's prior fingerprint; `build_posterior` trains in that rotation without running the Fisher and refuses a basis mismatch (`TruncationRegion.check_basis`), a rotation setting that disagrees, a resumed cache from another region or rotation (`TruncationRegion.check_checkpoint_V`) and another prior (`run_guards._assert_prior_matches_region`); `region_from_posterior` skips a direction loaded on t_scale above `truncate.t_scale_loading_max` | `tests/test_conditioning_repair.py::test_a_region_measured_in_one_basis_is_refused_in_a_sign_flipped_one`; `tests/test_conditioning_repair.py::test_build_truncation_region_records_the_parents_basis`; `tests/test_conditioning_repair.py::test_a_truncated_round_refuses_a_prior_other_than_the_parents`; `tests/test_conditioning_repair.py::test_a_t_scale_loaded_direction_is_excluded_from_the_region`; `tests/test_user_sbi.py::test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch`; `tests/test_user_sbi.py::test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest_is_untouched` |
 | **The calibrate-on-the-region rule** | a calibration drawn from the full prior, which reports a miscalibration that is not one | `orchestrator._calibration_prior`, shared by `validate_calibration` and `core.diagnostics.sbc_repeats`, restricts the rotated calibration prior to the region after checking its basis; `orchestrator._sbc_reference_sample` draws the rank test's reference from that same proposal, t_scale override included | `tests/test_user_sbi.py::test_calibration_theta_star_lies_inside_the_region_when_one_is_given`; `tests/test_diagnostics.py::test_the_calibration_draw_is_three_helpers_with_the_stratification_seam` |
 
@@ -356,7 +371,7 @@ The design is in [The window](architecture.md#the-window); these are the rules i
 ### Settings persistence and the inference screen
 
 What the window remembers, and why, is in
-[What the window remembers](window.md#what-the-window-remembers); the tabs and their gates are in
+[What the window remembers](window.md#what-the-window-remembers); the steps and their gates are in
 [The Parameter Inference tabs](window.md#the-parameter-inference-tabs).
 
 - **The restore order.** A picker's saved key re-applied before its folder is rescanned is wiped by
@@ -372,18 +387,22 @@ What the window remembers, and why, is in
   files are added, and restoring a vanished entry would blank the combo. Guard: `ArtifactPicker.key`
   and `ArtifactPicker.restore_key`. Pinned by
   `tests/test_settings_persistence.py::test_missing_picker_key_restores_to_default_not_blank`.
-- **The gating table, TSNPE included.** Validate and TSNPE gate on the prior loaded on the Prior tab,
+- **The gating table, narrowing round included.** Checks and the narrowing round gate on the prior loaded in step 2, Prior,
   never on the drive prior ([The Parameter Inference tabs](window.md#the-parameter-inference-tabs)
   says why). Guard: `InferenceScreen.refresh_gates`, re-run
-  after every stage, and `TSNPEPanel.refresh_local_gates` for the TSNPE button's observation. Pinned
+  after every stage, and `TSNPEPanel.refresh_local_gates` for the narrowing round's button's observation. Pinned
   by
-  `tests/test_nav_and_gating.py::test_inference_tab_gates_follow_the_session` and
-  `tests/test_nav_and_gating.py::test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior`.
+  `tests/test_nav_and_gating.py::test_every_step_opens_and_its_state_follows_the_session` (the checks
+  become startable on the inference prior alone) and
+  `tests/test_nav_and_gating.py::test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior`; the
+  guard itself, that `refresh_gates` works out each step's gate once and says the new states once, is
+  `tests/test_step_chain.py::test_refresh_gates_says_the_new_states_once_and_the_rail_and_home_hear_them`.
 - **A new draft replaces the session; installing a configuration edits it.** Mixing them up discards
   the session's prior, posterior and observation, or the draft in the middle of a stage.
   `InferenceScreen.new_draft` replaces the session, because another model or unit system invalidates
-  every record it holds; `install_config` sets the configuration in place, because the Prior tab
-  installs it as the first step of building the prior. Guard: the Config tab asks before a new draft
+  every record it holds; `install_config` sets a configuration in place and no page calls it now:
+  step 2's configuration comes into use with its prior, in place, through `take_prior`. Guard: step 1
+  asks before a new draft
   releases anything ([The dialogs](window.md#the-dialogs)). Pinned by
   `tests/test_nav_and_gating.py::test_apply_confirms_before_it_discards_the_session`.
 - **Pickers follow the built configuration's model.** A picker on the wrong model's folder offers
@@ -394,10 +413,69 @@ What the window remembers, and why, is in
   (`core.gui.widgets.param_grid`) and are never persisted.
 - **The control lock covers every panel.** A model changed on a sibling step mid-run would repoint
   pickers and re-seed inputs under the running worker. Guard: the run controller calls
-  `set_controls_enabled(False)` on every panel in `BasePanel._instances` at a run's start and frees
+  `set_controls_enabled(False)` on every panel in `RunHost._instances` at a run's start and frees
   them at its end (`core.gui.run.controller.RunController.dispatch`), and a part built while a run is
   live comes up locked (`MainWindow._wire`). Pinned by
   `tests/test_run_states.py::test_a_part_built_during_a_run_asks_the_controller_and_comes_up_locked`.
+- **Nothing computes or reads beside a live run.** A rebuilt step reads the saved records, the
+  history and the card only when it is shown, after a pause in typing, at a run's end, on a store
+  change, on "Check again" and at the press; its constructor reads nothing and starts no timer, a
+  step first opened during a run reads nothing until the run ends. Settings reads the card's free
+  memory only when its button is pressed, on a thread of its own, whose answer comes back by a plain
+  list and a timer, never by a signal of an object that may be gone. Two openings are the
+  exceptions, because a person opens them: Home reads the run histories and each kind's
+  manifests, and Records lists the kind on show. Guard: `StepPage`'s `read_facts`, `read_soon` and the
+  `stale` mark. Pinned by
+  `tests/test_pages.py::test_a_page_is_built_with_no_reading_and_no_running_timer`,
+  `tests/test_pages.py::test_no_reading_happens_between_a_runs_start_and_its_end` and
+  `tests/test_shell.py::test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end`.
+- **A record comes into use only when its run has returned it.** A slot of the session
+  (the prior, the posterior, the configuration) written before the run returns would leave a
+  half-built session when the run fails, is stopped or is taken back. Guard: the one way a record
+  comes in is `InferenceScreen.take_prior` and `take_posterior`, called from a run's result, never
+  from its start; `new_draft`, step 1's Apply, runs nothing and replaces the session. Pinned by
+  `tests/test_applied_and_pending.py::test_a_build_that_ends_any_way_but_well_leaves_what_was_held` and
+  `tests/test_applied_and_pending.py::test_a_training_that_ends_any_way_but_well_leaves_what_was_held`.
+- **A rebuilt page asks through the one shared dialog, and a test cannot stall on a box.** A rebuilt
+  page asks, tells and refuses through `core.gui.widgets.ask` alone and keeps no message box of the
+  toolkit's own. The older pages, Records and Your own models still use instances of the toolkit's
+  message box. Guard: the session fixture `_no_modal_dialogs` records every message box and every
+  question with its words and answers each at once with no button, the safe answer, so an unexpected
+  one cannot stall a run. A test reads what was asked with `tests/_dialogs.asked()`. Pinned by
+  `tests/test_applied_and_pending.py::test_a_rebuilt_page_keeps_no_message_box`. A held Enter does not
+  answer a question the same press opened (`tests/test_shell.py::test_a_question_keeps_its_own_enter`).
+- **The run's page is never hidden under the form.** On an older page, beside a run's page the form
+  gives up its least width, while the run's page keeps its own (326 px at the ordinary text size),
+  and the form gets its width back with the figures; on a rebuilt step the run's page takes the place
+  of the form. A page that cut the run's page off at a narrow window would hide the stop button of a
+  run that costs hours. Guard: `BasePanel._fit_the_form` for the older pages, the step page's own
+  layout for the rebuilt. Pinned by
+  `tests/test_run_states.py::test_nothing_of_the_run_page_is_hidden_under_the_form_at_any_width` and
+  `tests/test_run_states.py::test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width`.
+- **Enter presses the button that shows the focus ring, and never repeats.** A held Enter that
+  landed on "Stop" would stop a run, and one that landed on a question's default would answer it.
+  Guard: `MainWindow.keyPressEvent` ignores a repeat and presses only a push button with the ring,
+  and the application's filter takes a repeated Enter whose control stands in a dialog. Pinned by
+  `tests/test_shell.py::test_enter_presses_the_button_that_shows_the_ring` and
+  `tests/test_shell.py::test_a_held_enter_cannot_land_on_the_stop_button`.
+- **A plan is read strictly, by an engine module that imports nothing heavy.** A reader that skipped
+  what it did not know would let a mistyped name decide days of work; a plan with any problem is
+  refused whole, and every registered setting is either allowed in a plan or refused for a stated
+  reason. Guard: `core.plans.read_plan`. Pinned by
+  `tests/test_plans.py::test_every_registered_key_is_allowed_or_refused_for_a_stated_reason` and
+  `tests/test_plans.py::test_the_plan_reader_imports_neither_torch_nor_the_toolkit_nor_the_configuration`.
+- **A Resume is offered only where the record says it can be resumed.** A kept training resumes
+  only while its settings, its network's shape, the code that builds or trains the network, the
+  configuration constants, the libraries and its simulation set are what it was trained with. Guard: `core.gui.panels.inference.resume.resume_problems` is asked before anything is
+  read, and a kept training that cannot resume says why and offers only Delete. Pinned by
+  `tests/test_shell.py::test_a_page_never_offers_resume_where_the_record_says_it_cannot_be_resumed`.
+- **A painted device reads the look's table, and whatever the engine draws is drawn light.** A colour
+  written into a painter, or a figure that followed the appearance, would split a stored figure
+  across two palettes. Guard: every painter (`core/gui/paint.py`, the time axis, the marks) reads
+  `core/gui/design.py`, and `core/gui/mpl_theme.py` writes matplotlib's settings once, as the
+  application is built, in the light side of the look in either appearance. Pinned by
+  `tests/test_look.py::test_the_tick_box_and_the_radio_dot_are_painted_from_the_table` and
+  `tests/test_figures.py::test_nothing_changes_the_figure_settings_but_the_windows_theme_as_it_starts`.
 - **`core/gui/panels/inference_tabs.py` is a re-export shim.** The six steps' panels live in
   `core/gui/panels/inference/`, one module per step. Deleting the shim fails the suites, which import
   through it, but Help, which reads its help text by string path, skips it without a word. No guard
@@ -573,7 +651,7 @@ seconds with no simulation: run it first after touching anything chi.
   floor. Three routes:
   - Build a new prior. A new fit changes `prior_fingerprint`, so the cache is keyed afresh. When the
     prior is the only difference, the first training run is refused as one setting away from the old
-    cache and goes ahead on consent (`--new-run`, or the Posterior tab's question).
+    cache and goes ahead on consent (`--new-run`, or the Training step's question).
     [The retrain runbook](retrain.md#decisions) takes this route.
   - Remove the old cache. `--resume never` refuses rather than start over it
     ([Training-cache flags](command-line.md#training-cache-flags)), and
@@ -589,7 +667,7 @@ seconds with no simulation: run it first after touching anything chi.
     the checkpoint cadence. The old cache stays on disk: a later run at the default cadence with the
     same identity finds it and reuses its rows, so remove it, or build a new prior, before that run.
 
-  The window offers the first two routes, through the Prior tab and a delete on the Artifacts screen.
+  The window offers the first two routes, through step 2, Prior, and a delete on the Records screen.
 
   A feature change must also bump `core.SBI.statistics.FEATURE_SET_VERSION`, which re-keys every
   cache but is not compared when a posterior or an observation loads. No guard stands here yet:
@@ -697,7 +775,7 @@ The narrowing-round rules themselves are in the table above.
   Guard: `SimulationIdentity` carries the region (None for an amortized run), so a round has a cache
   of its own; `training_checkpoint.near_miss_siblings` ignores a cache that differs in the region
   alone. The amortized identity's digest is pinned to a fixed value, and any change to the
-  identity's fields re-keys every cache on disk. The TSNPE tab cannot say in advance whether a round
+  identity's fields re-keys every cache on disk. The narrowing round cannot say in advance whether a round
   will resume, since the region is drawn when the round starts. Pinned by
   `tests/test_user_sbi.py::test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest_is_untouched`
   and

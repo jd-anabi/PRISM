@@ -1,6 +1,6 @@
 # Getting started
 
-Checked against commit e17f1ec.
+Checked against commit 531aae3.
 
 This page takes you from a fresh installation to a first run in each front end, and shows where
 PRISM keeps what it reads and what it writes.
@@ -20,7 +20,8 @@ PRISM's dependencies installed.
 
 - **The launchers start the window with no console.** `run.bat` starts it with the environment's
   `pythonw.exe` and returns at once, and `run.sh` starts it detached from the terminal, which may then
-  be closed. A second start brings the open window to the front. What the window prints outside a
+  be closed. Only one PRISM runs at a time, so a second start brings the open window to the front.
+  What the window prints outside a
   run, a record another thread logs during one, the toolkit's own messages, an error nothing else
   caught and a crash of the interpreter go to `window-log.txt` beside the settings file, after a dated
   line for each launch; a run's full text is on the run's page and in the dated file it opens, in the
@@ -47,6 +48,9 @@ PRISM's dependencies installed.
   it again, delete the mark first (`run.bat --where` names it). The shortcut starts PRISM with
   the environment Windows gives it, so a variable set in a shell (`PRISM_ARTIFACTS`,
   `PRISM_VRAM_CEILING_GIB`) reaches the window only through `run.bat` started from that shell.
+  The memory limit needs no variable: Settings, under This computer, keeps it for the computer it was
+  set on, and a variable that holds a number takes precedence over it
+  ([Memory planning](architecture.md#memory-planning-and-out-of-memory-recovery)).
 - **`KMP_DUPLICATE_LIB_OK=TRUE`.** torch and MKL each ship an OpenMP runtime; without this variable
   the first simulation aborts with "OMP Error #15" and no traceback. Both entry modules, the window's
   `core.gui.__main__` and the tool's `core.__main__`, set it themselves (unless it is already set) and
@@ -61,12 +65,16 @@ PRISM's dependencies installed.
 
 PRISM keeps its inputs apart from the records its runs generate.
 
-- **Inputs** live under `Resources/`, in four folders: `Bounds/` (which parameters are inferred, in
+- **Inputs** live under `Resources/`, in five folders: `Bounds/` (which parameters are inferred, in
   what order and over what box), `Cells/` (one cell's initial conditions and parameter values),
-  `Units/` (the unit system a model's files are written in) and `Models/` (the definitions of
-  user-defined models). Bounds, cell and units files are edited by hand. The window's model builder,
+  `Units/` (the unit system a model's files are written in), `Models/` (the definitions of
+  user-defined models) and `Plans/` (run plans: the settings of the first three steps, one folder per
+  model). `Plans/` does not exist until the first plan is saved from the window, and no plan ships.
+  Bounds, cell, units and plan files are edited by hand, and are tracked in git like the rest of the
+  inputs: commit a plan you saved before a long run, or every record the run writes is stamped as made
+  from a changed tree. The window's model builder,
   under Your own models, writes a user model's definition into `Models/`, and a first bounds file,
-  cell file and units file for that model into the other three folders
+  cell file and units file for that model into `Bounds/`, `Cells/` and `Units/`
   (`core.Helpers.model_store.save_user_model`). [Bringing recordings](recordings.md#input-files)
   describes each format.
 - **Records**, what every stage, diagnostic and FDT run writes, live under the records root
@@ -108,18 +116,44 @@ export PRISM_ARTIFACTS="$HOME/prism-scratch"
 
 The window opens on Home, which says what to do next. The inference chain is the six steps of
 Parameter inference, which the rail lists under that part while it is open; each step is a page of
-its own, Alt+1 to Alt+6 open them from anywhere, and they are used in order.
-[The window](window.md), which describes the window as it was before its layout was redesigned, names
-the steps by their old tab names, Config, Prior, Posterior, Validate, Infer and TSNPE, and
-[The Parameter Inference tabs](window.md#the-parameter-inference-tabs) says when each is enabled.
+its own, Alt+1 to Alt+6 open them from anywhere, and they are used in order. The first three steps
+are the rebuilt pages described here; steps 4 to 6 are still the older pages, with their own
+controls. [The window](window.md) describes the window as it was before its layout was redesigned and
+names the steps by their old tab names, Config, Prior, Posterior, Validate, Infer and TSNPE;
+[The Parameter Inference tabs](window.md#the-parameter-inference-tabs) says what each needs before it can start.
 
-1. **Model and options.** Choose the model and its options (tick "Multi-frequency χ(ω)
-   conditioning" for chi mode), then press **Apply model & options**.
-2. **Prior.** Choose a bounds file, leave the Prior picker on its "(from scratch)" entry and press
-   **Build / Load prior**, which runs the stability sweep and fits the prior. Picking a saved prior
-   instead loads it.
-3. **Training.** Leave the Posterior picker on its "(from scratch)" entry, set the Training budget,
-   and press **Train / Load posterior**.
+**Home.** Home's heading says the next step and its button goes there. PRISM starts every launch
+with nothing loaded. When a model was in use last time and nothing is loaded yet, Home's button reads
+**Continue with these** and its sentence lists what that is: the model, the kind of observation, the
+bounds file, the prior, the posterior and the plan last used, each only while it can still be found as
+it was used. One press applies step 1, loads the prior, then the posterior, one after another, each
+once the one before has returned its record; nothing is loaded until you press. If you changed the
+forms and did not apply them, the press first asks and lists what it would set, with "Keep what is
+there" as its safe answer. A chain that stops says where, under Home's heading, and the step it
+stopped at says why.
+
+**A step's page.** Each of the first three steps has a heading, a line that says what the step holds
+("In use"), the form, and a foot that never scrolls: **Before you start** lists what stops the start
+(marked Error or Blocked), what needs attention and what is fine, with the words that go beside the
+main button, and **Check again** reads the saved records again. A page reads the disk when it is
+shown, 300 ms after your last edit, when a run ends, when the store changes, at **Check again** and
+at the press, and never while a run is live. Under each setting a small word says where its value came
+from: usual, changed from the usual, kept from last time, "from plan NAME", or changed from the plan
+("from run NAME" after a Continue).
+
+1. **Model and options.** Choose the model, the kind of observation ("Frequency response" is chi
+   mode) and the units, then press **Apply model and options**. Applying while records are in use asks
+   first, because it starts a new session. The **Plan** row fills all
+   three steps' settings from a plan file ([Run plans](recordings.md#run-plans)).
+2. **Prior.** Choose a bounds file, give the prior a Name, and press **Build a new prior**, which
+   runs the stability sweep and fits the prior. **Use a saved prior instead…** switches the page to
+   its list of saved priors, and **Load this prior** loads the one you chose.
+3. **Training.** Set the training budget (Batches, Simulations per batch, and the network's width and
+   depth), give the posterior a Name, and press **Start training**. **Use a saved posterior
+   instead…** switches the page to the saved posteriors, and **Load this posterior** loads one. A
+   training that finds its simulation set whole or partly saved says so under **Before you start**,
+   and **Start training** continues it. With **Only continue** chosen, the button reads **Continue
+   from batch N**, or **Fit again on the saved simulations** when the set is whole.
 4. **Checks.** Press **Run calibration** to calibrate the posterior on data simulated from its own
    prior.
 5. **Inference.** Choose "Simulated (cell ground truth)" and a cell, or "Experimental data" and your
@@ -127,12 +161,41 @@ the steps by their old tab names, Config, Prior, Posterior, Validate, Infer and 
 6. **Narrowing round**, when you want it: **Run TSNPE round** trains a narrowed posterior around a
    recorded observation (step 5 records one each time it runs).
 
-While a step's run goes, the run's own page stands in place of the step's results: where the run
-stands, its messages and the figures it made, and a stop button that asks before it stops anything
-that would be lost. The foot of the rail says what is running from any part, and pressing it goes to
-the run. Each stage writes its record when it completes. The Save button beside a name box on the
-Prior and Training steps names the record just made; saving is a rename, and nothing is simulated
-again.
+The name is typed before the run and the record is written under it when the run completes; there is
+no Save afterwards on these steps. The name is checked as you type against the store's rule (the
+letters a to z in either case, digits, `_`, `.` and `-`, at most 64 characters, starting with a letter
+or a digit) and against the names already taken. Under a choice on its form that differs from what
+the step holds, a step says "Changed, not applied" and what is in use; "In use" counts such choices,
+and the rail marks the step.
+
+While a step's run goes, the run's own page stands in place of the step's form: where the run stands,
+its messages and the figures it made, and a stop button that asks before it stops anything that would
+be lost. The foot of the rail says what is running from any part, and pressing it goes to the run.
+Each stage writes its record when it completes.
+
+**The memory limit.** In Settings, under This computer, **Memory limit** is either "No limit" or
+"Limit each batch to" a number of GiB: the most graphics-card memory one batch of simulations may plan
+to use. It changes how a batch is split, never what is simulated, it is remembered for the computer it
+was set on, and the Training step's "Before you start" names the limit in force. A full-size
+simulation on a card shared with the desktop needs it set ([The retrain runbook](retrain.md)). The
+same page holds the switch that keeps the computer awake while a run is live. The limit is locked while a
+run is live.
+
+**After a reopening.** When the newest training failed or was cut off (PRISM or the computer closed
+during it), the next launch's Home offers **Continue from batch N** if its saved simulations stop
+short of the end. If they are whole and no kept training stands on them, it offers **Fit again on
+the saved simulations**. A training you stopped during its simulations is not offered on Home: the
+Training step says how far its simulations reached, and its own button continues them. A training
+kept after some epochs, stopped, failed or cut off during its fit, is offered with **Resume**.
+**Continue from batch N** and **Fit again** ask first if something is in use,
+apply step 1 with the run's own model and options, fill the Training step's form from the settings
+the run was started with, load its prior and open the Training step with "Only continue" chosen and
+the name and note blank; you press the Training step's own button to start. The Training step lists
+every kept training with **Resume** and **Delete** beside it; **Resume** puts the kept training's own
+model and prior in use first, asking if something is in use, then resumes it, and a resume first
+reads the simulation set back. A kept narrowing round is
+resumed from the command line: Home and the Training step print the `tsnpe --resume-fit` command for
+it; the narrowing round's page has no Resume button.
 
 A small training budget (a few batches in the Training step's Batches box) gives a posterior that
 shows the chain working and nothing more: at that size neither the posterior nor its calibration
@@ -241,9 +304,11 @@ three exceptions:
 - A reference to a record, wherever a flag asks for one (`--prior`, `--posterior`, `--observation`,
   `--record`, an `artifacts` mode's `<ref>`), is its name or its bare id. The directory name
   `_unnamed__<id>` is not a reference.
-- A taken name is refused when the stage starts, before anything is spent.
-- Naming a record after the fact (the window's Save) is a rename: the manifest is rewritten, then the
-  directory is renamed.
+- A taken name is refused when the stage starts, before anything is spent; the window checks it as it
+  is typed, and the first three steps ask for it before the run.
+- Naming a record after the fact is a rename (`ArtifactStore.rename`): the manifest is rewritten, then
+  the directory is renamed. The window names a record when its run starts and has no control that
+  renames one.
 
 **Loading refuses a mismatch.** Loading checks a record against the configuration in use before
 anything is spent: the model and the parameter set and its order; for a prior or a posterior also

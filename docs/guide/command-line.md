@@ -1,6 +1,6 @@
 # The command-line tool
 
-Checked against commit b2d73c2.
+Checked against commit 531aae3.
 
 `python -m core <subcommand> [<mode>] <flags>` is PRISM's command-line tool (`core.tool`). It takes
 flags only and never prompts, so a run can be written down and repeated. This page lists every
@@ -17,6 +17,14 @@ flag's entry here ends with the same clause. The examples are run from the repos
   as [The artifact store](getting-started.md#the-artifact-store) describes. That section also says
   what a record holds and what the kinds, names and ids are, and
   [Inputs and records](getting-started.md#inputs-and-records) says where each run saves.
+- **Run plans.** The window fills the settings of its first three steps from a plan file
+  ([Run plans](recordings.md#run-plans)); the tool reads none, and takes most of the same settings as
+  flags. The slots, the lock-in limit, the rotation and typed units have none (the tool takes
+  `core/config.py`'s values and the model's units file), and the expected epochs are the window's
+  alone.
+  The four keys a plan adds to the refusal registry (`plan`, `chi_mode`, `reparam_rotate` and
+  `expected_epochs`) map to no flag in the tool's table (`--chi` sets chi mode, but no refusal of the
+  tool's carries the key), so a refusal that names one is the window's and never the tool's.
 - **What goes where.** The tool's own framing lines (`[cfg]`, `[prism]`, `[smoke]`, `[prism fdt]`,
   `[prism crossval]`, and the `artifacts` family's listings and reports) are prints on stdout. They
   are not records, so no `log.txt` holds them. A stage's messages are records: information goes to
@@ -184,12 +192,13 @@ The tool reads no environment variable itself; every setting is a flag. PRISM re
 |---|---|---|
 | `PRISM_RESOURCES` | the inputs root | see [Inputs and records](getting-started.md#inputs-and-records) |
 | `PRISM_ARTIFACTS` | the records root | see [Inputs and records](getting-started.md#inputs-and-records); the tool resolves it once, when a command starts, except for `smoke`, and for `fdt` and `crossval` given `--store-root`, which use another root |
-| `PRISM_VRAM_CEILING_GIB` | the GiB one simulation batch may plan to hold on the card; 0 or unset is automatic | afresh for every batch plan |
+| `PRISM_VRAM_CEILING_GIB` | the GiB one simulation batch may plan to hold on the card; 0 or unset is automatic; in the window, a number here takes precedence over the memory limit kept in Settings | afresh for every batch plan |
 | `PRISM_MEM_LOG_EVERY` | the batches between `[mem]` memory lines, 250 when unset | once, when the simulation pipeline is first imported |
 
 The last two are read by the simulation pipeline (`core.SBI.pipeline`), never by the tool, and are
 deliberately not flags: they change how a batch is planned in memory, or how often memory is
-reported, never the rows it produces. [The inference settings](window.md#the-inference-settings)
+reported, never the rows it produces. The window keeps the first in Settings (This computer); in a run
+of the tool only the variable sets it. [The inference settings](window.md#the-inference-settings)
 says what the ceiling buys and how to size it.
 
 Two more are set rather than read as settings:
@@ -1169,7 +1178,7 @@ Two sweep records together, and a slice of both at one operating point.
 
 ## artifacts
 
-Reads, annotates and tidies the store of records: the command-line twin of the window's Artifacts
+Reads, annotates and tidies the store of records: the command-line twin of the window's Records
 screen. [Browsing the store](getting-started.md#browsing-the-store) sets the two side by side.
 
 - The family takes no configuration flags and no `--store-root`: it reads the root

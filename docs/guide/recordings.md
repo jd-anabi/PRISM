@@ -1,6 +1,6 @@
 # Bringing recordings
 
-Checked against commit 30ff8a3.
+Checked against commit 531aae3.
 
 This page is for a lab member who brings a preparation and its recordings to PRISM. It covers the
 files that describe a cell, how a cell is matched to its bounds file, the three observation modes and
@@ -124,13 +124,14 @@ nm ms pN kHz
 - Tokens are matched to quantities by their dimension, not their order. A time token is required.
 - A drive frequency is read as the reciprocal of the time unit, whatever frequency token the file
   declares. A frequency token, if the file declares one, must be the reciprocal of the time token
-  (kHz with ms, Hz with s); it is only a label and may be left out. The window's Prior tab logs a
-  warning when it builds a configuration whose tokens disagree
-  (`core.sim_config.SimConfig.check_unit_consistency`); the command-line tool does not check.
+  (kHz with ms, Hz with s); it is only a label and may be left out. The window's step 2, Prior, says
+  so under "Before you start" (marked Attention) when the configuration in use declares tokens that
+  disagree (`core.sim_config.SimConfig.check_unit_consistency`); the command-line tool does not check.
 - A force token is needed wherever a force in newtons is converted: a forced-mode drive, the chi
   drive amplitude, and a tier-1 box.
-- The window's Config tab can take the tokens typed in place of the file
-  ([The inference settings](window.md#the-inference-settings)).
+- The window's step 1, Model and options, can take the tokens typed in place of the file ("Typed
+  here"), or a units file from any folder ("Choose a units file…"), which it reads at once and
+  refuses in words if it holds no units ([The inference settings](window.md#the-inference-settings)).
 
 **Model files**, `Resources/Models/<NAME>.json`, define user models. The model builder writes them,
 together with a first bounds, cell and units file for the model
@@ -140,6 +141,72 @@ together with a first bounds, cell and units file for the model
 names: `Cells/nadrowski/` holds Nadrowski cells. The inference chain takes the model from the bounds
 file's folder, the FDT analyses from the cell's, and `--model` overrides either
 ([Configuration flags](command-line.md#configuration-flags)).
+
+## Run plans
+
+A run plan is a text file of the science settings of the window's first three steps, so that a
+training can be set up again, or set up the same way for another cell, in one press. It is an input
+like a bounds or cell file: it lives at `Resources/Plans/<model>/<name>.txt`, one folder per model with
+the model's name in lower case (`core.config.PLANS_PATH`), it is hand-edited, and it is tracked in git.
+No plan ships, and the folder is made when the first plan is saved. A plan saved from the window is
+named with the letters a to z in either case, digits, `_` and `-`, at most 40 characters; a file
+named by hand is listed and read whatever its name. Only the window reads plans
+(`core.plans` is the reader, with the standard library alone); the command-line tool reads none, and
+no stage does. A plan only fills the forms: it never starts a run, applies a step or changes which
+record is picked.
+
+A plan reads like a cell file, `#` heading lines and `name = value` lines. What stands under the first
+heading is free text and is shown as the plan's description; what follows white space and `#` on a
+setting line is a remark and is never read:
+
+```
+# About this plan
+The temperature box at the larger network.
+
+# Model and options
+chi_mode = on                  # Kind of observation: Frequency response
+
+# Prior
+bounds = master_tier1.txt      # Bounds file
+
+# Training
+num_runs = 10000               # Batches
+hidden_features = 256          # Network width
+```
+
+- **The headings** are About this plan, Model and options, Prior, Training, Calibration, Inference
+  and Narrowing round, and each setting stands under its own: a name under another heading is a
+  problem. Each name is a setting's key in the refusal registry (`core.refusals.FIELDS`), the same key
+  that names the setting in a refusal. The window fills the first three headings into steps 1 to 3;
+  it reads the other three and shows them as "not applied yet", but fills nothing from them.
+  **Save as a plan…** writes only steps 1 to 3's settings, with no description, so saving over a
+  plan that holds the rest drops it, after asking.
+- **Values.** A setting the file does not hold means the built-in value. `chi_mode` and
+  `reparam_rotate` take `on` or `off`; `bounds` is the name of a file in the model's bounds folder (a
+  sub-folder is written with a forward slash); `units` is the units' words; a whole-number setting is
+  digits alone (10000, never 10000.0 or 1e4), and a number takes a point as its decimal mark,
+  whatever Windows' number format is (0.0005, or 5e-4). A value
+  that breaks the setting's own rule is refused with that rule's sentence.
+- **Strict.** The readers of the cell and bounds files skip what they do not know; the plan's reader
+  does not, because a plan decides days of work on the card. Every line is understood or named as a
+  problem with its line number, all of them at once, with the nearest known name when one is close, and
+  a plan with any problem is refused whole. A setting no plan can hold is refused with the reason: it
+  is fixed by measurement (the chi band and drive), belongs to this computer (the device), to one
+  run (the name, the note, the seed), is a consent, is a pick of a record or a recording and not a
+  setting, is the folder the plan stands in (the model), or is no setting of the inference steps.
+- **Checked beyond the file.** The window also checks what the reader cannot: that the bounds file is
+  in the model's bounds folder, with the same capitals, and that the units resolve.
+
+In the window, step 1's **Plan** row lists the model's plans, opens on "No plan" at every launch
+(the plan last used with the model, and when, is remembered only as a hint beside the list), shows a plan's description and what it
+holds, and **Fill the forms from this plan** fills steps 1 to 3, asking first what it would replace;
+**Save as a plan…** writes every setting of steps 1 to 3 that differs from its usual value, the
+bounds file chosen in the list (never limits typed by hand), each with a remark naming its label.
+Under each setting a small word says where its value came from (usual, changed from the usual, kept
+from last time, "from plan NAME", or changed from the plan), and each step's "Before you start" says the plan in use and each
+setting that has since departed from it. A run's history records the plan, with the file's hash.
+Commit a plan before a long run: a plan that is saved or edited and not committed makes every record
+the run writes read as made from a changed tree.
 
 ## How a cell finds its bounds file
 
@@ -158,9 +225,9 @@ file of the same name. When neither exists, the Live simulation refuses the cell
 fall back to an older format that carries the bounds and units inside the cell file itself.
 
 The inference chain never looks. Every inference, diagnostic and probe command takes `--bounds`
-([Configuration flags](command-line.md#configuration-flags)), and in the window the Prior tab's
-Bounds picker chooses it ([The Parameter Inference tabs](window.md#the-parameter-inference-tabs)). A
-cell given to `infer --cell`, to `probes` or to the Infer tab is checked against that bounds file,
+([Configuration flags](command-line.md#configuration-flags)), and in the window step 2, Prior,
+chooses it with its Bounds file list ([The Parameter Inference tabs](window.md#the-parameter-inference-tabs)). A
+cell given to `infer --cell`, to `probes` or to step 5, Inference, is checked against that bounds file,
 not against the one it would find.
 
 The tier-1 cell `master_spont_tier1.txt` is for the inference chain, with
@@ -195,8 +262,8 @@ prints `inputs.bounds` and `config.mode`.
   it). A much stronger drive can also capture the bundle, which then abandons its own rhythm and
   follows the drive, so that χ measures the drive rather than the bundle.
 
-In the window, the Config tab's "Multi-frequency χ(ω) conditioning" tick is the chi switch, and the
-Prior tab's Bounds picker the bounds file. The Infer tab's "Experimental data" mode then shows the
+In the window, step 1's "Kind of observation" list is the chi switch ("Frequency response" is chi
+mode) and step 2's Bounds file list chooses the bounds file. Step 5's "Experimental data" mode then shows the
 page for the mode: Spontaneous, with Forced and the drive boxes in forced mode, or, in chi mode,
 Passive, Drive F₀ (N) and the Forced probes table; each page has its own T_obs (s) box
 ([The inference settings](window.md#the-inference-settings)). On the command line,
@@ -255,7 +322,7 @@ cell's own oscillation, measured from the passive recording.
   driven recordings than the posterior's probe slots (12 unless it was trained with another number);
   and a set in which no probe survives.
 
-The window's **Plan probes…**, on the Infer tab's chi page, applies the same rules before you make
+The window's **Plan probes…**, on step 5's chi page, applies the same rules before you make
 the driven recordings: from the passive recording it measures Ω₀, gives the band in hertz, and says
 how long a probe must be at each edge of it. The command line has no equivalent: no subcommand
 measures Ω₀ from a recording.
@@ -320,7 +387,7 @@ Chi mode rests on four settings in `core/config.py`, chosen by measurements on t
 | `CHI_MAX_CYCLES` | 20 | the lock-in ceiling: each probe is locked in over at most its first 20 cycles, because on this model a longer lock-in is not a better one |
 
 The band, the drive and the cycle floor come only from `core/config.py`. The lock-in ceiling, and
-the number of probe slots beside it, also have boxes on the window's Config tab
+the number of probe slots beside it, also have boxes on step 1, Model and options ("Lock-in limit" and "Slots for driven recordings")
 ([The inference settings](window.md#the-inference-settings)); a posterior records both, and the
 store refuses a mismatch when it loads one. The command-line tool and the `probes` checks always use
 `core/config.py`'s values.
@@ -396,7 +463,7 @@ python -m core artifacts show diagnostic my_cell_band
 **When a check fails.** A check measures and changes nothing. The band, the drive and the cycle
 floor change only by a deliberate edit of `core/config.py`, followed by a retrain
 ([The retrain runbook](retrain.md)); the lock-in ceiling and the number of probe slots change there
-too, or on the window's Config tab, and a change to either also means a retrain. The store refuses
+too, or on step 1, Model and options, and a change to either also means a retrain. The store refuses
 to load a chi posterior trained at another band, drive, lock-in ceiling or number of probe slots
 (`core.artifacts.store.ArtifactStore.load_posterior`). The cycle floor is neither recorded with a
 posterior nor part of the simulation cache's identity

@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit e17f1ec.
+Checked against commit 531aae3.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green
@@ -52,6 +52,8 @@ is who sets which, for a check.
   process, the default store keeps the root it was first built with, so set the variable before
   anything builds it, or use `core.artifacts.use_store`.
 - `PRISM_VRAM_CEILING_GIB` and `PRISM_MEM_LOG_EVERY` are set by nothing here: export them yourself.
+  (The window's memory limit, kept in Settings, is put back after every test, so a test cannot
+  leave one for the next.)
   [Environment variables](command-line.md#environment-variables) says when each is read, which is
   why setting the second inside a running window changes nothing.
 - `PYTORCH_CUDA_ALLOC_CONF` is given an allocator policy by `core/config.py` when it is imported,
@@ -94,10 +96,27 @@ and the session guards).
   - `display`: needs a real screen, and is skipped offscreen. In PowerShell,
     `$env:QT_QPA_PLATFORM = "windows"; python -m pytest -m display; Remove-Item Env:QT_QPA_PLATFORM`
     runs these on the real screen, since the root `conftest.py` only defaults the variable; they
-    create hidden native windows, and nothing shows. There are nine at commit e17f1ec. Four of them
+    create hidden native windows, and nothing shows. There are 11 at commit 531aae3. Four of them
     make for real the requests a run makes of Windows, each on a window never shown, and release each:
     keeping the computer awake, the reason against ending the session, the taskbar's flash, and the
     answer to Windows' question whether the session may end.
+- **The window's suites**, among the 34 test files in all. The look's, with no engine: `tests/test_look.py`.
+  The shell: `tests/test_shell.py` (the rail, the places, the keys, Home, "Continue with these", the
+  reopening's offers, one PRISM at a time) and `tests/test_step_chain.py` (the torch-free rules of the
+  places and the six steps' states). The run: `tests/test_run_states.py` (its model, controller and
+  page, and that nothing of the run's page is hidden under a form at any width),
+  `tests/test_run_text.py`, `tests/test_stop_and_close.py` and `tests/test_retry.py`. The kept
+  training: `tests/test_fit_saving.py`. The rebuilt steps: `tests/test_pages.py` (the pieces every
+  rebuilt page is made of: a fact and its order, the form, "In use", the foot, when a page reads and
+  how it hosts a run, and the Tab walk), `tests/test_plans.py` (the plan reader, and the window's lists,
+  fills and saves of plans), `tests/test_before_you_start.py` (what each step says before it starts,
+  as values) and `tests/test_applied_and_pending.py` (what a step holds against what its page shows,
+  the load view, the kept trainings, Continue and Resume). The shared stand-ins and builders are
+  `tests/_fixtures.py` (`build_window`, `build_part`, `build_inference`, `build_run_host`),
+  `tests/_runs.py` (the stand-in run and the window's clock moved by hand), `tests/_dialogs.py` (the
+  record of every question, plain Windows message, file chooser and opening),
+  `tests/_built.py` (the record of every window and part the builders made, deleted when the test
+  ends) and `tests/_window_helpers.py`.
 - **Counting.** `python -m pytest --collect-only -q` counts the tests. Count them; never trust a
   number written down.
 - **One pytest process at a time.** Two would share the card and the test model the fixtures install
@@ -125,24 +144,45 @@ and the session guards).
   - `_no_native_boxes`: the plain Windows message the entry module shows when PRISM cannot start
     (`core.gui.__main__._native_box`) keeps its words and shows nothing, on the real screen as much as
     off it, since it waits for a person's OK;
+  - `_no_folders_opened`: the window opens a file or a folder through one call, `QDesktopServices.openUrl`;
+    for the whole session it is `tests/_dialogs.opener`, which keeps what would have been opened and
+    opens nothing, so an "Open" button pressed in a test shows no window on the screen;
+  - `_no_plans_written`: the folder of saved plans, `Resources/Plans`, holds at the end of the session
+    exactly what it held at its start, the same paths with the same bytes, and the window's own folder
+    of plans is a folder of the session's, empty, so that no test lists or writes the real one (a
+    test that writes a plan binds a folder of its own with `monkeypatch`);
   - `_no_sbi_logs`: `<repo>/sbi-logs` must not exist, checked at setup as well as teardown, so a
     leftover tree makes every run error before its first test.
+- **One session fixture is no guard and sets nothing**, `_long_lived_objects_set_aside`: it takes one
+  full collection and sets everything then alive (about half a million objects: torch, the toolkit,
+  the program and the suites' own modules) aside from the collector of cycles, so that the full
+  collection a test's end asks for walks only what the tests made. An object alive then and dropped
+  later in a cycle is never collected in that process (memory only).
 - **The module check**, `_no_panel_outlives_its_module`: once a module's tests and fixtures have all
-  ended, the set of panels every run locks (`BasePanel._instances`) holds no panel it did not hold
+  ended, the set of panels every run locks (`RunHost._instances`) holds no panel it did not hold
   when the module began. A panel left there would be locked and freed by every later module's runs,
   and refreshed at their end through whatever records that module has in use.
-- **The per-test fixtures**, autouse for every test. Three set a test up or put something back:
+- **The per-test fixtures**, autouse for every test. Four set a test up or put something back:
   - `_isolated_settings`: a fresh settings file for each test, then the session's again;
   - `_clear_shown`: the record of dialogs holds this test's alone;
   - `_layout_room_put_back`: the room the screen offers the window, which the look's two layout
-    thresholds are held to, is put back to none after each test.
+    thresholds are held to, is put back to none after each test;
+  - `_memory_limit_put_back`: the memory limit the window assigns on `core.config`, the one setting it
+    assigns there, is put back as the test found it, and the keep-awake switch is put back on.
 
-  The others fail a test at its teardown:
+  The other nine fail a test at its teardown:
   - `_every_file_chooser_is_answered`: a file chooser the test opened and did not answer;
   - `_every_native_box_is_read`: a plain Windows message the test did not read
     (`tests/_dialogs.native_boxes()`), a start that failed where none was expected;
+  - `_every_opening_is_read`: a file or folder the window handed to the computer to open that the
+    test did not read (`tests/_dialogs.opened()`);
   - `_streams_put_back`: the standard streams left bound to a window's log, as the entry module binds
-    them when PRISM starts with no console; they are put back first;
+    them when PRISM starts with no console, or the window's folder of plans left bound to another
+    than the session's; they are put back first;
+  - `_application_font_put_back`: the application's font left set by a test, once the font it began
+    with is in force again (a test that began with no application is held to the font the toolkit
+    gives a new one), because the program's fonts registered again under a changed font would take its
+    family for the toolkit's own;
   - `_drawing_code_raises_nothing`: an error the window's own drawing code caught and recorded while
     the test ran (`core.gui.reported`); a test that causes one on purpose does it inside
     `reported.expected()`;
@@ -447,8 +487,8 @@ Then delete the scratch folder, as the recipe says.
   comment that documents a fix contains the very text the check forbids.
 - **Pin that a knob reaches its target, not just the signature.** A setting a function accepts and
   never passes on satisfies a signature check. Follow it to where it is used, as
-  `tests/test_settings_persistence.py::test_the_training_budget_reaches_build_posterior_as_arguments_not_via_config`
-  does: it sets the boxes, presses the button, and asserts the values arrive as the stage's keyword
-  arguments.
+  `tests/test_applied_and_pending.py::test_every_argument_of_the_table_reaches_the_stage`
+  does: it sets the Training step's fields, presses its button, and asserts the values arrive as the
+  stage's keyword arguments, with no constant of the configuration written.
 - **Slow-mark a real simulation that takes more than about a minute** (`@pytest.mark.slow`), so the
   fast gate stays fast.

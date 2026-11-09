@@ -1,6 +1,6 @@
 # The PRISM guide
 
-Checked against commit 30ff8a3.
+Checked against commit 531aae3.
 
 This guide explains how to use PRISM, how to run it at full size, and how it is built. Each fact is
 written once, on the page it belongs to; the reading paths below take each kind of reader through the
@@ -26,18 +26,23 @@ Three models are built in (Nadrowski, Hopf and BP), and a user can define more.
 PRISM has two front ends over one core.
 
 - **The window**, a PySide6 desktop application: `run.bat` on Windows, `bash run.sh` on macOS and
-  Linux, or a direct launch ([Launching PRISM](getting-started.md#launching-prism)). Its Artifacts
-  screen browses the store of everything PRISM has generated.
+  Linux, or a direct launch ([Launching PRISM](getting-started.md#launching-prism)). Only one PRISM
+  runs at a time: a second start brings the open window to the front. Its Records screen browses the
+  store of everything PRISM has generated.
 - **The command-line tool**, `python -m core <subcommand>`, which takes flags only and never
   prompts. `python -m core --help` lists the subcommands; its `artifacts` family is the command-line
-  twin of the Artifacts screen.
+  twin of the Records screen.
 
 Both front ends call the same stages (`core.orchestrator`) and the same FDT analysis (`core.FDT`);
 the diagnostics (`core.diagnostics`) are reached from the tool alone. Every setting either front end
-offers reaches its stage as an argument, never as an edit to `core.config`, except the window's VRAM
-ceiling. That one changes only how a batch is planned in memory
-([The inference settings](window.md#the-inference-settings)). So a run started from the window and
-the same run started from the tool do the same thing.
+offers reaches its stage as an argument, never as an edit to `core.config`, except the window's
+memory limit. That one is kept in the window's Settings, under This computer, is remembered for the
+computer it was set on, and changes only how a batch is planned in memory, never what is simulated
+([Memory planning](architecture.md#memory-planning-and-out-of-memory-recovery); the variable
+`PRISM_VRAM_CEILING_GIB`, when it holds a number, takes precedence over it). So a run started from the window and the same run
+started from the tool do the same thing; only the window reads a memory limit that was set in
+Settings; in a run of the tool only the variable sets it, since the tool never assigns the constant,
+which keeps `core/config.py`'s value (0).
 
 ## Reading paths
 
@@ -50,7 +55,7 @@ You decide the science and run the full-size training.
 2. [The retrain runbook](retrain.md): the decisions, the pre-flight checks, the exact commands, what
    to watch while it runs, and the gates a new model must pass.
 3. [The inference settings](window.md#the-inference-settings): every setting on the Parameter
-   Inference tabs, with its flag, the argument that receives it, its default and what it really
+   inference tabs as they were before the redesign, with its flag, the argument that receives it, its default and what it really
    changes.
 4. [Settings that are not speed dials](window.md#settings-that-are-not-speed-dials): the settings
    that look like a trade of time for precision but change the prior or the measurement instead.
@@ -66,9 +71,9 @@ You have recordings of a hair bundle and want to know what they say about its pa
 
 1. [Getting started](getting-started.md): launching PRISM, where its inputs and records live, and a
    first run in each front end.
-2. [Bringing recordings](recordings.md), read in order: the input files, the observation modes and
-   what each needs, drive frequencies, recording lengths, and the chi assumptions and how to check
-   them.
+2. [Bringing recordings](recordings.md), read in order: the input files, among them the run plans
+   that fill the first three steps' settings in one press, the observation modes and what each
+   needs, drive frequencies, recording lengths, and the chi assumptions and how to check them.
 3. [probes](command-line.md#probes): check a preparation, described by its cell file, before you
    record: whether the configured chi band and drive hold for it, and how hard it can be driven.
 4. [infer](command-line.md#infer): run a trained posterior on your recordings.
@@ -119,12 +124,13 @@ You want to judge what a trained model can claim, and check it for yourself.
 ## The pages
 
 - [Getting started](getting-started.md): launching PRISM, inputs and records, a first run in each
-  front end, and the artifact store.
+  front end (in the window, the six steps and what Home offers on a reopening), and the artifact
+  store.
 - [The window](window.md): each screen, the inference settings, what the window remembers, and which
   models each screen supports.
 - [The command-line tool](command-line.md): every subcommand, mode and flag, with worked examples.
-- [Bringing recordings](recordings.md): the input files, observation modes, recording lengths, the
-  chi assumptions, and defining a model of your own.
+- [Bringing recordings](recordings.md): the input files including run plans, observation modes,
+  recording lengths, the chi assumptions, and defining a model of your own.
 - [The science behind the settings](science.md): the reasoning behind each setting, what the last
   retrain measured, and the open questions.
 - [Architecture](architecture.md): how the code is put together, from the module map to the FDT
