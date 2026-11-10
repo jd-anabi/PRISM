@@ -1,5 +1,40 @@
 # PRISM — state
 
+**Last updated:** 2026-11-09, evening (21:48 by the clock; the weekly bar 33 %, resetting on 15 November at 04:00 UTC):
+STAGE 5'S BUILD HAS BEGUN: TASKS 0, 1 AND 2 ARE COMPLETE, each building task with its review clean and its fast gate green
+on the same head. The chat started at 14:21 from the owner's pasted prompt
+(`docs/superpowers/prompts/2026-11-09-window-redesign-stage-5-build.md`); it hands over here (three tasks done, as its
+rule asks). The hand-off prompt for the next chat is
+`docs/superpowers/prompts/2026-11-09-window-redesign-stage-5-build-from-task-3.md`.
+
+- **Task 0** (the controller): the stage's workspace (`stage-5/` in the ledger's folder) and tools (`s5\` in the scratch
+  folder); the seventeen digests of the named training code equal stage 4's at its exit; `Artifacts/` 428 entries.
+- **Task 1, the front (tests only):** the stand-in run's stages, the masked-probes and round lines, the record writers Checks
+  reads, each held to the engine's own source; `build_step_page(step=)`. `e60c40c`, its fix round `8d9a8a6`, `c9ddd81`. About
+  2.3 M tokens.
+- **Task 2, the stage's one engine task:** an inference names its observation (`observation_name` on both compositions,
+  checked before anything is spent; `core.refusals.FIELDS` 115); the input-use check's five refusals and the across-the-prior
+  check's one name the posterior (` (--posterior)` on the command line); the round's refusal of a narrowed parent given another
+  observation names the observation (` (--observation)`). `9362c71`, `e8e79f3`, `7b5564c`, departures 425 to 427 `b57ce77`,
+  its fix round (tests only) `18fc0af`, `c5aeca9`. Nothing inside the named training code; `core/config.py` untouched. THE
+  ENGINE IS CLOSED FOR THE REST OF THE STAGE. About 1.9 to 2.8 M tokens.
+- **The fast gate:** 3607 passed, 11 skipped, 5 deselected at `c5aeca9` (3623 collected), 32 min 40 s, on a machine not
+  certified quiet; every gate's listing of `Artifacts/` after equals the one before; `PRISM.ini` unchanged.
+- **The code audit's list** gains "# Stage 5: what its tasks send to the code audit's list", items 1 to 7
+  (`docs/superpowers/notes/2026-10-29-the-code-audits-list.md`): among them an observation given twice is saved twice, and an
+  inference that ends after its observation is written leaves that observation under its name.
+- **Carried to later tasks** (the prompt and the ledger list each): to Task 8's skeptic, the stand-in run's order of stage
+  events; to Task 10's skeptic, the observation left under its name after a stop or a failure and the step page's sentence for
+  `observation_name`; to the last review, a tautology in Task 1's lines test; to the exit, three guide sentences Task 2 made
+  false.
+- **Unpushed:** 13 commits after `cdc80d2`, this one included.
+
+NEXT: stage 5's build from Task 3, in a new chat the owner starts from
+`docs/superpowers/prompts/2026-11-09-window-redesign-stage-5-build-from-task-3.md`, the weekly bar read first. Then Tasks 4
+to 13, the last review, Task 14 (the exit, with the owner), stages 6 to 9, the code audit, the retrain from the window.
+
+What follows is the head as the afternoon of 9 November left it:
+
 **Last updated:** 2026-11-09, afternoon (13:09 by the clock; the weekly bar 27 %, resetting on 15 November at 04:00 UTC):
 STAGE 5'S PLAN IS WRITTEN, COMMITTED AND APPROVED ("I approve it", 9 November):
 `docs/superpowers/plans/2026-11-09-window-redesign-stage-5.md` (`ce8d57c`), with departures 398 to 424 in the plan and in the

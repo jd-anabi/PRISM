@@ -466,3 +466,16 @@ From Task 2 (an observation's name and the six refusals), `.superpowers/sdd/2026
    fault).** `tsnpe_round`'s refusal (`core/orchestrator.py`) gains `field="observation"`, its sentence unchanged. On
    the command line it now ends ` (--observation)`; on today's round page its "Check your inputs" box gains "Set it in
    the 'Observation' box in step 6, Narrowing round." (measured).
+7. **An inference that ends after its observation is written leaves that observation under its name.** Each
+   composition (`core/orchestrator.py`, `simulated_inference` and `experimental_inference`, about lines 2951 and 2988)
+   writes the observation, now under `observation_name`, and then calls `infer_and_visualize`. A run that ends between
+   that write and the inference's record (a failure in the sampling or the predictive check, the card out of memory, a
+   stop asked for during the inference, the inference's own name taken meanwhile, or item 3's narrowed rule on
+   recordings) keeps the observation, saved under the name given. Before E4 that record was unnamed and cost nothing
+   at the next try; since E4 the same call again is refused at the entry for the observation's name, field
+   `observation_name`. No front end meets it today (none passes the name); once the Inference page requires the
+   observation's name, a person who presses "Run inference" again after a stop or a failure is refused for the name
+   they typed, for a record they did not know was kept. Item 3 is one case of this. The window's side (the page of a
+   stopped or failed inference saying the observation was kept under its name, and the check of the name at the press
+   reading that record) is carried to the task that builds the Inference page. Cure if wanted, in the engine: write
+   the observation after the inference succeeds, or remove or unname it when the inference does not finish.
