@@ -79,7 +79,9 @@ class RunSpec:
     whether it only loads a record, what it writes, whether it has a simulation set to continue, the patience, the
     epoch limit and the expected epochs it was started with, how it stops, and the call itself, for a try again.
     ``plan`` and ``settings`` are what its history keeps of what it was started with, as its page hands them (None
-    until a page hands them), made plain at its start. ``facts`` are what a pace and the expected epochs are looked up
+    until a page hands them), made plain at its start; ``check``, for a check's run, which check and at what sizes
+    (``{"key", "sizes"}``, names and numbers), which its history keeps with how long it took and each of its stages,
+    made plain at its start too. ``facts`` are what a pace and the expected epochs are looked up
     by ("model", "observation": the kind of observation, "narrowed", "network": hidden features and transforms), and
     what is known before the run says it ("rotated": False for a training with no rotation; "memory_limit": the graphics
     card's limit in GiB; "memory_source": where that limit was set, as the history keeps it; "computer": this computer's
@@ -102,6 +104,7 @@ class RunSpec:
     own_view: bool = False
     plan: dict | None = None
     settings: dict | None = None
+    check: dict | None = None
     facts: dict = field(default_factory=dict)
     fn: Callable | None = None
     args: tuple = ()
@@ -607,6 +610,11 @@ class RunModel:
         if _OWN in self._samples:
             return self._own_count()
         return "Running"
+
+    def stages_begun(self) -> tuple[tuple[str, datetime], ...]:
+        """Each stage the run has begun, by its name, with the moment it began, in the order they began."""
+        return tuple((self._stages[index].name, moment)
+                     for index, moment in sorted(self._began.items(), key=lambda pair: pair[1]))
 
     def batches_done(self) -> int | None:
         """The batches of the simulation set done so far, or None before the simulation."""

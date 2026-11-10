@@ -33,8 +33,11 @@ A file holds every name of ``FIELDS``, in that order, None where its run has not
   check's own result, the record the run wrote (its kind, its id, its name and the name it was asked to have, which
   differ when another record took the name while the run was going), how it failed, and its text file's name.
   ``health`` is ``{"failed", "simulated", "memory_peak", "batches_split", "out_of_memory"}`` once any of it is known,
-  else None; ``check`` is None until a check hands one over. A file written before these were kept holds the first two
-  alone. A name a reader finds missing or None, in a file of any age, is no information.
+  else None; a file written before these were kept holds the first two alone. ``check``, of ``CHECK_FIELDS``, is a
+  check's run's: which check (its key) and at what sizes, as its page handed them, how long it took in seconds (None
+  while it runs), the seconds of each stage it began, by the stage's name, and the check's own result, names and
+  numbers only; None for a run that is no check's, and in every file written before checks kept it. A name a reader
+  finds missing or None, in a file of any age, is no information.
 
 ``fit``, of ``FIT_FIELDS``: the epochs, the best epoch and its validation loss, the median seconds per epoch, what
 ended the fit by itself ("patience" or "limit"), the network (hidden features, transforms) and the number of
@@ -76,6 +79,8 @@ FIT_FIELDS = ("epochs", "best_epoch", "best_validation_loss", "seconds_per_epoch
 #: What each entry of ``tries`` holds.
 TRY_FIELDS = ("started", "ended", "outcome", "failure", "batches_before", "batches_after", "epochs_before",
               "epochs_after")
+#: What ``check`` holds.
+CHECK_FIELDS = ("key", "sizes", "seconds", "stages", "result")
 #: How many times in all, and how many seconds apart, a rename refused while another program holds the file open is
 #: tried before the refusal is raised.
 REPLACE_TRIES = 5
@@ -86,7 +91,7 @@ PLAIN_DEPTH = 16
 #: What a name of a history holds when it holds anything but None, as the window writes it, for each name a reader
 #: takes as such; a place's two parts and each try are of their own shape too.
 SHAPES = {"id": str, "place": list, "records_root": str, "outcome": str, "stage": str, "stages": list,
-          "acknowledged": bool, "tries": list, "simulation_set": dict, "health": dict, "fit": dict}
+          "acknowledged": bool, "tries": list, "simulation_set": dict, "health": dict, "fit": dict, "check": dict}
 #: The window's log, the first time a file in the folder of runs is passed over as no run's history it can read:
 #: the file's path and why.
 PASSED_OVER_TEXT = "The file %s is no run's history the window can read (%s); it is passed over."
@@ -317,6 +322,22 @@ def last_measured_on(folder: Path, computer: str) -> dict | None:
     return None
 
 
+def last_check(folder: Path, *, check: str, sizes: dict, computer: str) -> dict | None:
+    """The newest run in ``folder`` of the check whose key is ``check`` that finished, at ``sizes`` (as its page hands
+    them; compared made plain) and on the computer ``computer``, or None. A file that names no computer, or no check,
+    is passed over, and every file is when ``computer`` is ""."""
+    if not computer:
+        return None
+    wanted = plain(sizes)
+    for record in reversed(_records(folder)):
+        held, limit = record.get("check"), record.get("memory_limit")
+        if (isinstance(held, dict) and held.get("key") == check and held.get("sizes") == wanted
+                and record.get("outcome") == "finished" and isinstance(limit, dict)
+                and limit.get("computer") == computer):
+            return record
+    return None
+
+
 def runs_for(folder: Path, simulation_set: str) -> list[dict]:
     """The runs that wrote to the simulation set whose folder is ``simulation_set``, oldest first."""
     return [record for record in _records(folder)
@@ -375,7 +396,7 @@ def _check(record: dict) -> None:
     if not record.get("id"):
         raise ValueError("a run's history file needs the run's id")
     parts = [("the record", FIELDS, record), ("simulation_set", SET_FIELDS, record.get("simulation_set")),
-             ("fit", FIT_FIELDS, record.get("fit"))]
+             ("fit", FIT_FIELDS, record.get("fit")), ("check", CHECK_FIELDS, record.get("check"))]
     parts += [("a try", TRY_FIELDS, one) for one in record.get("tries") or ()]
     for what, kept, held in parts:
         unknown = sorted(set(held) - set(kept)) if isinstance(held, dict) else []

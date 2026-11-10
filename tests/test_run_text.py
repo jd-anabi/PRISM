@@ -615,8 +615,8 @@ def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
     times local with their offset; it reads back as it was written. It is written whole: to a temporary file that is
     made to reach the disk and then renamed over the run's file, so a write that fails, even at the rename, leaves
     the last whole file and no temporary one, and a temporary file or a torn file is never read as a run. What the
-    history does not keep, at the top or inside the set, the fit or a try, and a time with no zone, are refused
-    before anything is written."""
+    history does not keep, at the top or inside the set, the fit, a check's entry or a try, and a time with no zone, are
+    refused before anything is written; a file whose check's entry is no record is no run's history."""
     from core.gui.run import history
 
     started, ended = _at(8, 19, 2, 11), _at(14, 14, 10)
@@ -670,6 +670,8 @@ def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
     before = path.read_bytes()
     for refused in ({**record, "colour": "red"}, {**record, "fit": {**record["fit"], "pace": 1.0}},
                     {**record, "simulation_set": {**record["simulation_set"], "secs_per_batch": 9.7}},
+                    {**record, "check": {"key": "calibration", "sizes": {}, "seconds": 1.0, "stages": {}, "result": {},
+                                         "colour": "red"}},
                     {**record, "tries": [{**record["tries"][0], "epochs_kept": 62}]},
                     {**record, "started": datetime(2026, 10, 8, 19, 2, 11)}, {**record, "id": ""}):
         try:
@@ -697,6 +699,11 @@ def test_one_history_file_per_run_holds_what_its_run_did(tmp_path, monkeypatch):
     (folder / "20261010T090000-training.json.tmp").write_text('{"id": "20261010T0900', encoding="utf-8")
     (folder / "20261011T090000-training.json").write_text('{"id": "20261011T09', encoding="utf-8")
     assert history.read(folder / "20261011T090000-training.json") is None
+    misshapen = folder / "20261012T090000-check.json"
+    misshapen.write_text(json.dumps({**on_disk, "id": "20261012T090000-check", "check": ["calibration"]}),
+                         encoding="utf-8")
+    assert history.read(misshapen) is None
+    misshapen.unlink()
     assert _ids(history.latest(folder, records_root=str(tmp_path / "records"), n=9)) == ["20261008T190211-training"]
 
 
@@ -1255,3 +1262,65 @@ def test_every_reader_of_a_history_treats_what_is_missing_as_no_information(tmp_
     kept = history.read(path)
     assert (kept["acknowledged"], kept["memory_limit"], kept["health"], kept["plan"], kept["settings"]) == (
         True, held_limit, {"failed": 3, "simulated": 2_048}, None, None), kept
+
+
+def test_a_check_runs_history_holds_its_entry_as_names_and_numbers(tmp_path):
+    """A check's run keeps in its history which check it was, at what sizes as its page handed them, made plain, how long
+    it took and the seconds of each stage it began, and its own result, names and numbers only: while it runs, how long
+    and the stage in progress are not known; once it has ended, both are, by the window's clock. A run that is no check's
+    keeps none. The history refuses an entry with any name but its five, and its newest finished run of that check, at
+    those sizes, on this computer, is read back for how long the check took last time."""
+    from core.gui.memory_limit import computer
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from core.gui.run.model import RunSpec, Stage
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, at, controller_on, start_run, turn_until
+    app = qt_app()
+    clock = Clock(at(8, 12, 0))
+    held = controller_on(tmp_path, clock)
+    sizes = {"n_cal": 2000, "cal_n_scales": 200, "num_posterior_samples": 1000, "shape": (2, 3)}
+    spec = RunSpec("Check", ("inference", "checks"), name="Calibration", stop_button="Stop the calibration…",
+                   stages=(Stage("Simulating the test datasets"), Stage("Rank test", ("patho_total",))),
+                   check={"key": "calibration", "sizes": sizes})
+    stand_in = StandIn(word="Check")
+    start_run(build_run_host(), stand_in, spec=spec)
+    assert stand_in.started.wait(5)
+    run = held.status.run
+    stand_in.say("simulating")
+    turn_until(app, lambda: held.model.stage == "Simulating the test datasets")
+    clock.advance(30)
+    stand_in.say("[patho] run total: 0 pathological of 2,000 simulated trajectories (0.0000%) -- 0 non-finite, 0 exactly "
+                 "constant, 0 over 1e+06")
+    turn_until(app, lambda: held.model.stage == "Rank test")
+    live = held._record(held._run)["check"]
+    assert live == {"key": "calibration", "sizes": {**sizes, "shape": [2, 3]}, "seconds": None,
+                    "stages": {"Simulating the test datasets": 30.0, "Rank test": None}, "result": {}}, live
+    clock.advance(15)
+    stand_in.release(None)
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+    record = history.read(tmp_path / "runs" / f"{run}.json")
+    entry = record["check"]
+    assert tuple(entry) == history.CHECK_FIELDS == ("key", "sizes", "seconds", "stages", "result")
+    assert entry == {"key": "calibration", "sizes": {**sizes, "shape": [2, 3]}, "seconds": 45.0,
+                     "stages": {"Simulating the test datasets": 30.0, "Rank test": 15.0}, "result": {}}, entry
+    assert json.loads(json.dumps(entry)) == entry
+    assert history.last_check(tmp_path / "runs", check="calibration", sizes=sizes, computer=computer())["id"] == run
+    from tests._fixtures import write_history
+    write_history(tmp_path / "runs", id="20261008T130000-check", word="Check", started=at(8, 13, 0), outcome="failed",
+                  memory_limit={"gib": None, "source": "none", "computer": computer()},
+                  check={**entry, "seconds": 2.0})
+    assert history.last_check(tmp_path / "runs", check="calibration", sizes=sizes, computer=computer())["id"] == run, (
+        "a check that failed was read as how long the check took")
+    for other in ({"check": "audit"}, {"sizes": {**sizes, "n_cal": 40}}, {"computer": "ANOTHER-PC"}):
+        asked = {"check": "calibration", "sizes": sizes, "computer": computer(), **other}
+        assert history.last_check(tmp_path / "runs", **asked) is None, other
+    with pytest.raises(ValueError):
+        history.write(tmp_path / "runs", {**record, "check": {**entry, "colour": "red"}})
+    plain = StandIn(word="Run")
+    start_run(build_run_host(), plain, spec=RunSpec("Run", ("inference", "checks")))
+    assert plain.started.wait(5)
+    other_run = held.status.run
+    plain.release(None)
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+    assert history.read(tmp_path / "runs" / f"{other_run}.json")["check"] is None

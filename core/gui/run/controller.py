@@ -378,6 +378,7 @@ class RunController(QObject):
         limit_text = memory_limit.limit_words(force)
         spec = spec.with_call(fn, args, kwargs)
         spec = replace(spec, plan=history.plain(spec.plan), settings=history.plain(spec.settings),
+                       check=history.plain(spec.check),
                        facts={**spec.facts, "memory_limit": force.gib, "memory_source": force.source,
                               "computer": memory_limit.computer()})
         store = default_store()
@@ -1511,10 +1512,27 @@ class RunController(QObject):
                     "per_batch": budget.get("rows"), "seconds_per_batch": model.seconds_per_batch()},
                 "health": None if not known else {"failed": failed[0], "simulated": failed[1], "memory_peak": peak,
                                                   "batches_split": split, "out_of_memory": lacked},
-                "fit": fit, "check": None,
+                "fit": fit, "check": _check_entry(spec.check, model, run.ended),
                 "result": None if run.result is None else dict(zip(("kind", "id", "name"), run.result),
                                                                asked=run.asked),
                 "failure": failure, "text": f"{run.id}.txt"}
+
+
+def _check_entry(check, model, ended) -> dict | None:
+    """A check's run, as its history keeps it: which check and at what sizes, as its page handed them; how long it took,
+    from its start to its end (None while it runs); each stage it began, by its name, with the seconds to the next one's
+    beginning, the last to the run's end (None while it runs); and its own result, which a check that keeps nothing but
+    its result hands over (none yet). None for a run that is no check's."""
+    if not isinstance(check, dict):
+        return None
+    begun = model.stages_begun()
+    stages = {}
+    for place, (name, began) in enumerate(begun):
+        until = begun[place + 1][1] if place + 1 < len(begun) else ended
+        stages[name] = None if until is None else (until - began).total_seconds()
+    return {"key": check.get("key"), "sizes": check.get("sizes"),
+            "seconds": None if ended is None else (ended - model.started).total_seconds(),
+            "stages": stages, "result": {}}
 
 
 def _discarded(record: dict) -> dict:
