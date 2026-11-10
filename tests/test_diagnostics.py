@@ -1546,22 +1546,20 @@ def test_channel_ablation_refuses_a_cache_whose_width_disagrees_with_the_posteri
                                   "a set with no rows", "rows not the posterior's width"])
 def test_the_input_use_check_refuses_with_the_posterior_field_before_anything_is_spent(case, store, monkeypatch):
     """Each of the input-use check's five refusals of the posterior it is handed names the posterior as its field, so
-    each front end can say where another posterior is chosen, and keeps its sentence. Each is raised before the
-    diagnostic's record is opened: a refused check leaves no record and sweeps nothing."""
+    each front end can say where another posterior is chosen, and keeps its sentence word for word. The three that
+    need only the posterior and its set's record are raised before the set's rows are read; the two about the rows
+    after reading them; all five before the diagnostic's record is opened: a refused check leaves no record and sweeps
+    nothing."""
     from core import orchestrator
     from core.diagnostics import channel_ablation
-    from core.SBI.statistics import SUMMARY_WIDTH
+    from core.SBI import training_checkpoint
+    from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH, VALID_FLAG_LABELS
     cfg = _nad_cfg()
     width = SUMMARY_WIDTH + 1 + orchestrator.expected_forcing_dim(cfg)
     if case == "no simulation set":
         post = store.load_posterior(cfg, _posterior_artifact(store, cfg, name="abl_refused").id)
-        words = "names no simulation cache, so checkpointing was off for its training run"
     else:
-        net_input_dim, cols, batches, words = SUMMARY_WIDTH + 1, width, 1, {
-            "no embedding network": "no EmbeddedNet inside this posterior's estimator",
-            "a summary width not this build's": "wide summary block",
-            "a set with no rows": "holds no committed rows",
-            "rows not the posterior's width": "do not describe the same measurement"}[case]
+        net_input_dim, cols, batches = SUMMARY_WIDTH + 1, width, 1
         if case == "a summary width not this build's":
             net_input_dim = SUMMARY_WIDTH
         elif case == "rows not the posterior's width":
@@ -1575,13 +1573,37 @@ def test_the_input_use_check_refuses_with_the_posterior_field_before_anything_is
                 shard.unlink()
         if case == "no embedding network":
             post.latent.posterior_estimator = torch.nn.Linear(2, 2)
+    label, digest = post.name or post.id, post.manifest.parents.get("simulation")
+    sentence = {
+        "no embedding network": ("no EmbeddedNet inside this posterior's estimator, so there is no conditioning "
+                                 "pathway to sweep."),
+        "no simulation set": (
+            f"Posterior '{label}' names no simulation cache, so checkpointing was off for its training run and its "
+            f"conditioning rows no longer exist. The ranges a channel is swept over have to be the ranges THIS "
+            f"network was trained on; another cache's quantiles describe a different experiment. Retrain with "
+            f"checkpointing on, or pick a posterior that has one."),
+        "a summary width not this build's": (
+            f"Posterior '{label}' has a {SUMMARY_WIDTH}-wide summary block; this build's layout is {SUMMARY_WIDTH + 1} "
+            f"({len(FEATURE_LABELS)} features + {len(VALID_FLAG_LABELS)} valid flags + logT). Labelling its columns "
+            f"from the current list would silently misname them, which is exactly the table this diagnostic exists "
+            f"to read."),
+        "a set with no rows": f"the simulation cache {digest} holds no committed rows.",
+        "rows not the posterior's width": (
+            f"the cache {digest} holds {width - 1}-wide rows but posterior '{label}' conditions on {width}; they do "
+            f"not describe the same measurement.")}[case]
+
     def _opened(kind, *a, **k):
         raise AssertionError(f"the {kind} record was opened before the refusal")
 
+    def _rows_read(*a, **k):
+        raise AssertionError(f"{case}: the set's rows were read before the refusal")
+
     monkeypatch.setattr(store, "create", _opened)
+    if case in ("no embedding network", "no simulation set", "a summary width not this build's"):
+        monkeypatch.setattr(training_checkpoint, "load_rows", _rows_read)
     with pytest.raises(Refusal) as e:
         channel_ablation(cfg, post, rows=50, n_sweep=5, name="abl_refused_check")
-    assert (e.value.field, words in str(e.value)) == ("posterior", True), (e.value.field, str(e.value))
+    assert (e.value.field, str(e.value)) == ("posterior", sentence)
     assert store.list("diagnostic") == []
 
 
@@ -1604,7 +1626,9 @@ def test_identifiability_across_the_prior_refuses_a_posterior_with_no_training_p
     monkeypatch.setattr(store, "create", _create)
     with pytest.raises(Refusal) as e:
         identifiability_laplace(cfg, post, n_points=2, t_obs_s=4.5, name="lap_refused", store=store)
-    assert (e.value.field, "carries no latent training prior" in str(e.value)) == ("posterior", True), str(e.value)
+    assert (e.value.field, str(e.value)) == (
+        "posterior", "this posterior carries no latent training prior (nothing with a `gen_dist` under its `.prior`), "
+                     "so the off-ground-truth points cannot be drawn from the distribution the flow was trained on.")
     with pytest.raises(_Opened):
         identifiability_laplace(cfg, post, n_points=1, t_obs_s=4.5, name="lap_one_point", store=store)
     assert store.list("diagnostic") == []
