@@ -462,3 +462,7 @@ From Task 2 (an observation's name and the six refusals), `.superpowers/sdd/2026
    to the `rows` asked for) and after two information records. On the command line each now ends ` (--posterior)` in
    place of `ValueError:` and its place in the code. `identifiability.py`'s two later `ValueError`s, after simulating,
    stay. Nothing moves a tensor.
+6. **The narrowing round's refusal of a narrowed parent given another observation names the observation (not a
+   fault).** `tsnpe_round`'s refusal (`core/orchestrator.py`) gains `field="observation"`, its sentence unchanged. On
+   the command line it now ends ` (--observation)`; on today's round page its "Check your inputs" box gains "Set it in
+   the 'Observation' box in step 6, Narrowing round." (measured).

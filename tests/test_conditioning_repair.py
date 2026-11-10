@@ -1158,7 +1158,9 @@ def test_a_non_amortized_parent_is_refused_on_another_observation():
     non-amortized parent is valid only near its own observation, so a region drawn from it around
     another one is drawn where the flow extrapolates rather than where it was trained. Reachable
     today by loading a round's posterior on the Posterior tab and then picking a different
-    observation on the TSNPE tab; build_truncation_region does not check it."""
+    observation on the TSNPE tab; build_truncation_region does not check it. The refusal names the
+    observation as its field: the one pick that answers it is the parent's own observation, and each
+    front end names where the observation is chosen."""
     from core import orchestrator
     cfg, store = _round_cfg(), _RoundStore()
     drawn = []
@@ -1173,8 +1175,8 @@ def test_a_non_amortized_parent_is_refused_on_another_observation():
         except Refusal as e:
             assert "b" * 16 in str(e) and "a" * 16 in str(e), f"the refusal must name both digests: {e}"
             assert "no override" in str(e), f"the refusal must say there is no way past it: {e}"
-            assert e.field is None, ("a narrowed parent around another observation has no escape "
-                                     "hatch and no single control; the yellow box names none")
+            assert e.field == "observation", ("a narrowed parent around another observation has no escape "
+                                              "hatch; the observation is where it is answered")
         assert drawn == [] and other.events == []
         # the parent's OWN observation is the legitimate case, and an amortized parent takes any
         assert orchestrator.tsnpe_round(cfg, _parent(digest="a" * 16), object(), _round_obs(),

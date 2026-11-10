@@ -3073,7 +3073,8 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
     # parent is valid only near its own observation, so a region drawn from it around another one is
     # drawn where the flow extrapolates rather than where it was trained. Reachable today by loading a
     # round's posterior and then picking another observation; build_truncation_region checks the
-    # observation's digest against itself, not against the parent.
+    # observation's digest against itself, not against the parent. It names the observation: the one
+    # pick that answers it is the parent's own observation.
     parent_digest = posterior.posterior.x_obs_digest
     if parent_digest is not None and parent_digest != observation.digest:
         raise Refusal(
@@ -3082,7 +3083,7 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
             f"('{observation.name or observation.id}') has digest {observation.digest}. A region drawn "
             f"from it around another observation would be drawn where the flow extrapolates. There is "
             f"no override: draw the round around the parent's own observation, or start from an "
-            f"amortized posterior.")
+            f"amortized posterior.", field="observation")
     # THIS observation's context, and only this one's: a simulated observation puts back its own truth,
     # an experimental one clears whatever an earlier inference left behind. Training reads nothing
     # install sets -- the simulation identity holds no T_obs, n_obs or chi_n_freqs.
