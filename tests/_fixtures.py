@@ -934,25 +934,35 @@ def _with_cell(cfg, cell):
                            sources={**(getattr(cfg, "sources", None) or {}), "cell": str(cell)})
 
 
+def _parents_by_id(parents: dict) -> dict:
+    """``parents`` as the engine writes a record's parents, each by its record's id (a simulation set's by its folder's
+    name, which has an id's form too); a ValueError, before anything is written, for one named otherwise."""
+    for key, ref in parents.items():
+        if not isinstance(ref, str) or not mf.ID_RE.match(ref):
+            raise ValueError(f"a record's parent is named by its id, as the engine names it: {key} {ref!r} is no id")
+    return dict(parents)
+
+
 def write_diagnostic(store, cfg, *, diagnostic: str, variant: "str | None" = None, parents: "dict | None" = None,
                      settings: "dict | None" = None, results: "dict | None" = None, figures=(),
                      cell: "str | None" = None, created=None, name: str = "", note: str = "") -> str:
     """One ``diagnostic`` record written through ``store.create`` as every diagnostic function writes one: the
     ``diagnostic`` and ``variant`` it names, its ``parents`` (``{"posterior": id, "prior": id, ...}`` as that diagnostic
-    names them), its ``settings`` (also copied into the configuration block, as the engine does) and its ``results``
-    (``check_results`` gives each check's), and one small picture for each title in ``figures``. ``cfg`` is a
-    configuration or None (an empty configuration block). ``cell`` is the path of an existing cell file, recorded as the
-    record's input cell file with its hash. ``created`` is a moment with its zone: the record's creation moment and the
-    stamp of its id, as the store writes them (UTC); now when None. No payload, no log and no fingerprint is written.
-    Returns the record's id."""
+    names them, each by its id: a ValueError for one named otherwise), its ``settings`` (also copied into the
+    configuration block, as the engine does) and its ``results`` (``check_results`` gives each check's), and one small
+    picture for each title in ``figures``. ``cfg`` is a configuration or None (an empty configuration block). ``cell``
+    is the path of an existing cell file, recorded as the record's input cell file with its hash. ``created`` is a
+    moment with its zone: the record's creation moment and the stamp of its id, as the store writes them (UTC); now when
+    None. No payload, no log and no fingerprint is written. Returns the record's id."""
     settings = {} if settings is None else dict(settings)
+    parents = _parents_by_id(parents or {})
     with _store_dated(store, created):
         writer = store.create("diagnostic", cfg, name=name, note=note)
     if cell is not None:
         writer.cfg = _with_cell(cfg, cell)
     with writer:
         _draw_figures(writer, figures)
-        writer.parents = dict(parents or {})
+        writer.parents = parents
         writer.config.update(settings)
         writer.body = {"diagnostic": diagnostic, "variant": variant, "settings": settings,
                        "results": {} if results is None else dict(results)}
@@ -960,39 +970,61 @@ def write_diagnostic(store, cfg, *, diagnostic: str, variant: "str | None" = Non
 
 
 def write_calibration(store, cfg, *, posterior: str, prior: str, results: "dict | None" = None, figures=(),
-                      created=None, name: str = "") -> str:
-    """One ``calibration`` record as the calibration stage writes it: parents ``posterior`` and ``prior`` (ids), the
-    three sizes of ``results`` copied into the configuration block, and one small picture for each title in
-    ``figures``. ``results`` defaults to ``check_results("calibration")["results"]``: a passing verdict at 2,000
-    datasets, 200 points and 1,000 samples, seed 1840273. ``created`` as in ``write_diagnostic``. No payload, no log and
-    no fingerprint is written. Returns the record's id."""
+                      created=None, name: str = "", note: str = "") -> str:
+    """One ``calibration`` record as the calibration stage writes it: parents ``posterior`` and ``prior`` (ids: a
+    ValueError for one named otherwise), the three sizes of ``results`` copied into the configuration block, ``note`` as
+    the record's note, and one small picture for each title in ``figures``. ``results`` defaults to
+    ``check_results("calibration")["results"]``: a passing verdict at 2,000 datasets, 200 points and 1,000 samples, seed
+    1840273. ``created`` as in ``write_diagnostic``. No payload, no log and no fingerprint is written. Returns the
+    record's id."""
+    parents = _parents_by_id({"posterior": posterior, "prior": prior})
     results = check_results("calibration")["results"] if results is None else dict(results)
     with _store_dated(store, created):
-        writer = store.create("calibration", cfg, name=name)
+        writer = store.create("calibration", cfg, name=name, note=note)
     with writer:
         _draw_figures(writer, figures)
-        writer.parents = {"posterior": posterior, "prior": prior}
+        writer.parents = parents
         writer.config.update({key: results[key] for key in ("n_cal", "cal_n_scales", "num_posterior_samples")
                               if key in results})
         writer.body = {"results": results}
     return writer.id
 
 
-def write_observation(store, cfg, *, name: str = "", digest: str = "0123456789abcdef", mode: "str | None" = None,
-                      width: "int | None" = None) -> str:
+def _conditioning_of(mode: str) -> dict:
+    """The conditioning block the engine writes for an observation of ``mode`` on a configuration of ``config.py``'s
+    settings, built by the engine's own function: the summary's part, then a frequency-response observation's probe
+    slots, a forced one's four forcing values, or a spontaneous one's nothing."""
+    from types import SimpleNamespace
+    from core import config
+    forcing = {key: (0.0, (0.0, 1.0)) for key in ("amp", "freq", "phase", "offset")} if mode == "forced" else {}
+    return mf.conditioning_block(SimpleNamespace(
+        chi_mode=mode == "chi", chi_k_pad=config.CHI_K_PAD, chi_n_freqs=config.CHI_N_FREQS, chi_f0=config.CHI_F0,
+        chi_freq_bounds=config.CHI_FREQ_BOUNDS, chi_max_cycles=config.CHI_MAX_CYCLES, force_params_dict=forcing))
+
+
+def write_observation(store, cfg, *, name: str = "", note: str = "", digest: str = "0123456789abcdef",
+                      mode: "str | None" = None, width: "int | None" = None) -> str:
     """One ``observation`` record, its manifest alone (no payload, so a loader refuses it; the readers of manifests
-    read it): every key of its kind, ``digest`` as the observation's digest and as the fingerprint the engine records,
-    ``mode`` the kind of observation (the configuration's when None, else "spontaneous"), the conditioning block of
-    ``cfg`` (a width of 50 with one forcing channel when ``cfg`` is None) with its width replaced by ``width`` when
-    that is handed, and an experimental source with no recordings. Returns the record's id."""
-    conditioning = mf.conditioning_block(cfg) if cfg is not None else {"width": 50, "forcing_dim": 1}
+    read it): every key of its kind, ``note`` as its note, ``digest`` as the observation's digest and as the
+    fingerprint the engine records, ``mode`` the kind of observation (the configuration's when None, else
+    "spontaneous"), the conditioning block the engine writes for ``cfg``, or for ``mode`` on ``config.py``'s settings
+    when ``cfg`` is None, with its width replaced by ``width`` when that is handed (the forcing part then the width
+    less the summary's part), and an experimental source whose recordings are not listed. One of frequency response
+    holds the frequencies its driven recordings were made at, one for each of the block's driven recordings, as the
+    engine records them in the cell's units; one of another kind holds none. Returns the record's id."""
+    mode = mode or getattr(cfg, "observation_mode", "spontaneous")
+    conditioning = mf.conditioning_block(cfg) if cfg is not None else _conditioning_of(mode)
     if width is not None:
-        conditioning = {**conditioning, "width": int(width)}
-    with store.create("observation", cfg, name=name) as writer:
+        conditioning = {**conditioning, "width": int(width),
+                        "forcing_dim": int(width) - int(conditioning["input_dim"])}
+    freqs = None
+    if mode == "chi":
+        freqs = [0.004 * 1.5 ** k for k in range(int(conditioning["chi_n_freqs"]))]
+    with store.create("observation", cfg, name=name, note=note) as writer:
         writer.fingerprints["x_obs"] = digest
-        writer.body = {"mode": mode or getattr(cfg, "observation_mode", "spontaneous"), "conditioning": conditioning,
+        writer.body = {"mode": mode, "conditioning": conditioning,
                        "x_obs_digest": digest, "T_obs_cell": 4.5, "n_obs": 4096, "forcing_vals": {},
-                       "chi_obs_freqs": None,
+                       "chi_obs_freqs": freqs,
                        "source": {"kind": "experimental", "recordings": [], "T_obs_s": 4.5, "F0_si": None,
                                   "forcing_params_si": None}}
     return writer.id
@@ -1032,7 +1064,8 @@ def _band(band_holds=True, drive_holds=True, repeats=24):
     return {"settings": settings, "results": {"band_holds": band_holds, "drive_holds": drive_holds}}
 
 
-def _audit(masked_fraction=0.379, num_runs=100, hold=True, nonfinite=0):
+def _audit(masked_fraction=0.379, num_runs=100, invariants_hold=True, attribution_holds=True, cross_check_holds=True,
+           nonfinite=0):
     from core.diagnostics.probes import PROBE_LAYOUT
     probes = num_runs * 32 * 7
     masked = round(masked_fraction * probes)
@@ -1046,27 +1079,67 @@ def _audit(masked_fraction=0.379, num_runs=100, hold=True, nonfinite=0):
                 "configured": {**_CONFIGURED, "probe_count": {"drawn_per_batch_from": [2, 12]}},
                 "probe_layout": PROBE_LAYOUT}
     results = {
-        "probes": probes, "live": probes - masked, "masked": masked, "masked_fraction": masked_fraction,
+        "probes": probes, "live": probes - masked, "masked": masked, "masked_fraction": masked / probes,
         "causes": {cause: {"count": count, "share": count / probes} for cause, count in counts.items()},
-        "invariants": {"non_finite_frequency": 0 if hold else 1, "at_or_above_nyquist": 0, "out_of_band": 0,
-                       "hold": hold},
+        "invariants": {"non_finite_frequency": 0 if invariants_hold else 1, "at_or_above_nyquist": 0, "out_of_band": 0,
+                       "hold": bool(invariants_hold)},
         "attribution": {"floor_label_at_or_above_the_floor": 0,
-                        "shortened_label_at_full_length": 0 if hold else 1, "holds": hold},
+                        "shortened_label_at_full_length": 0 if attribution_holds else 1,
+                        "holds": bool(attribution_holds)},
         "dominant_cause": first if masked and leaf[first] > 0 else None,
         "cross_check": {"row_ranges": num_runs,
-                        "batches": {"expected": num_runs, "committed": num_runs if hold else num_runs - 1},
-                        "coverage": [], "mismatches": [], "abandoned_attempt_warnings": 0, "holds": hold}}
+                        "batches": {"expected": num_runs, "committed": num_runs if cross_check_holds else num_runs - 1},
+                        "coverage": [], "mismatches": [], "abandoned_attempt_warnings": 0,
+                        "holds": bool(cross_check_holds)}}
     return {"settings": settings, "results": results}
 
 
-def _input_use(a1="healthy", d3="healthy", invisible=0, nonfinite=0, rows=200_000, n_sweep=33, total=40):
-    def channel(label, verdict):
-        return {"label": label, "max_disp": 1.2, "rel_median": 1.0, "p1": -1.0, "p99": 1.0, "verdict": verdict}
+#: Where the input-use rows put each verdict's displacement: inside the band the engine's thresholds give that verdict
+#: against a median among the healthy channels' (0.8 to 2.0), from its low end across its width.
+_DISPLACED = {"healthy": (0.8, 1.2), "compressed": (0.03, 0.02), "severely compressed": (0.003, 0.002),
+              ABLATION_INVISIBLE: (1e-9, 1e-9)}
 
-    results = {"n_rows": rows, "base_row": 0, "live_probes": 6, "median_disp": 1.2,
-               "channels": [channel("A1_mean", a1), channel("D3_bimodality", d3)],
-               "counts": {"constant": 0, "invisible": invisible, "nonfinite": nonfinite,
-                          "usable": total - invisible - nonfinite, "total": total},
+
+def _input_use(a1="healthy", d3="healthy", compressed=3, invisible=0, nonfinite=0, rows=200_000, n_sweep=33):
+    import math
+    from core.SBI.statistics import FEATURE_LABELS, VALID_FLAG_LABELS
+    labels = list(FEATURE_LABELS) + list(VALID_FLAG_LABELS) + ["logT"]       # the engine's summary channels
+    named = {"A1_mean": a1, "D3_bimodality": d3}
+    for verdict in named.values():
+        if verdict not in (*_DISPLACED, ABLATION_NONFINITE, ABLATION_DEAD):
+            raise ValueError(f"{verdict!r} is no verdict the input-use check writes")
+    rest = [label for label in reversed(labels) if label not in named]
+    if min(compressed, invisible, nonfinite) < 0 or compressed + invisible + nonfinite > len(rest):
+        raise ValueError(f"{compressed}, {invisible} and {nonfinite} channels do not fit among {len(rest)}")
+    verdicts = {label: "healthy" for label in labels}
+    verdicts.update(named)
+    for verdict, count in (("compressed", compressed), (ABLATION_INVISIBLE, invisible),
+                           (ABLATION_NONFINITE, nonfinite)):
+        for _ in range(count):
+            verdicts[rest.pop(0)] = verdict
+    swept = []
+    for place, label in enumerate(labels):
+        verdict, spread = verdicts[label], ((place + 1) * 0.6180339887) % 1.0       # spread over each band
+        if verdict in _DISPLACED:
+            low, width = _DISPLACED[verdict]
+            swept.append((low + width * spread, label, verdict))
+        else:
+            swept.append((0.0 if verdict == ABLATION_DEAD else None, label, verdict))
+    live = [d for d, _label, verdict in swept if verdict not in (ABLATION_DEAD, ABLATION_NONFINITE)]
+    if 2 * sum(verdict == "healthy" for _d, _label, verdict in swept) <= len(live):
+        raise ValueError("with this few healthy channels the median the engine judges by is not a healthy channel's, "
+                         "and its verdicts would differ from these")
+    med = float(torch.tensor(live).median()) if live else 0.0       # the lower of two middles, as the engine's is
+    channels = []
+    for d, label, verdict in sorted(swept, key=lambda row: (math.inf if row[0] is None else row[0], row[1])):
+        constant = verdict == ABLATION_DEAD
+        channels.append({"label": label, "max_disp": d, "rel_median": None if d is None else d / med,
+                         "p1": 0.0 if constant else -1.0, "p99": 0.0 if constant else 1.0, "verdict": verdict})
+    counted = {"constant": list(verdicts.values()).count(ABLATION_DEAD),
+               "invisible": list(verdicts.values()).count(ABLATION_INVISIBLE),
+               "nonfinite": list(verdicts.values()).count(ABLATION_NONFINITE)}
+    results = {"n_rows": rows, "base_row": 0, "live_probes": 6, "median_disp": med, "channels": channels,
+               "counts": {**counted, "usable": len(labels) - sum(counted.values()), "total": len(labels)},
                "accepted": []}
     return {"settings": {"rows": rows, "n_sweep": n_sweep}, "results": results}
 
@@ -1123,13 +1196,17 @@ def _laplace(n_points=6, median_sd=0.1, frac_identified=1.0):
     return {"settings": settings, "results": results}
 
 
-def _sbc(fraction_passed=1.0, repeats=10, n_cal=2000, samples=1000):
+def _sbc(fraction_passed=1.0, repeats=10, n_cal=2000, samples=1000, chi_k_fixed=None):
+    if chi_k_fixed is not None and not 1 <= int(chi_k_fixed) <= _CONFIGURED["chi_k_pad"]:
+        raise ValueError(f"a fixed number of driven recordings is from 1 to the {_CONFIGURED['chi_k_pad']} probe "
+                         f"slots, not {chi_k_fixed}")
     passed = round(fraction_passed * repeats)                     # a whole number of repeats
     per_param = [{"name": name, "ks_p_median": 0.5, "ks_p_min": 0.2, "frac_ks_below_05": 0.0,
                   "c2st_ranks_median": 0.5, "assumed": False} for name in _NAMES[:2]]
     settings = {"repeats": repeats, "n_cal": n_cal, "num_posterior_samples": samples, "cal_n_scales": None,
-                "chi_k_fixed": None, "seed": 0}
-    results = {"per_param": per_param, "n_valid": [n_cal] * repeats, "stratum": "pooled", "kept_fraction": None,
+                "chi_k_fixed": None if chi_k_fixed is None else int(chi_k_fixed), "seed": 0}
+    stratum = "pooled" if chi_k_fixed is None else f"k{int(chi_k_fixed)}"
+    results = {"per_param": per_param, "n_valid": [n_cal] * repeats, "stratum": stratum, "kept_fraction": None,
                "accepted": [],
                "rank_verdict": {"per_repeat": [k < passed for k in range(repeats)],
                                 "fraction_passed": passed / repeats, "scope": "rank-uniformity half only"}}
@@ -1137,36 +1214,44 @@ def _sbc(fraction_passed=1.0, repeats=10, n_cal=2000, samples=1000):
 
 
 def _drive(oscillating=True, strongest_free_running=0.15, weakest_captured=0.8):
-    from core.diagnostics.probes import DRIVE_PHASE
+    from core.diagnostics.probes import DRIVE_PHASE, _drive_picks, _drive_verdict
     force_scale, omega0, f_drive = 2.0, 0.01, 0.014
     settings = {"t_obs_s": 5.0, "repeats": 16, "detune": 1.4, "strengths": [0.05, 0.15, 0.4, 0.8], "free_min": 0.7,
                 "captured_max": 0.1, "peak_window": 0.02, "clarity_min": 3.0, "seed": 0, "drive_phase": DRIVE_PHASE,
                 "configured": dict(_CONFIGURED)}
+    for given in (strongest_free_running, weakest_captured):
+        if given is not None and given not in settings["strengths"]:
+            raise ValueError(f"a pick is one of the strengths driven, {settings['strengths']}, not {given}")
 
     def ratio(strength):
+        if not oscillating:
+            return None                             # no clear oscillation: nothing is driven, nothing is read
         if strongest_free_running is not None and strength <= strongest_free_running:
             return 0.95
         return 0.05 if weakest_captured is not None and strength >= weakest_captured else 0.4
 
-    rows = [{"strength": s, "cell_force": s * force_scale, "chi_median": 0.5, "plv_median": 0.5,
-             "own_peak_ratio": ratio(s),
-             "verdict": "free-running" if ratio(s) >= 0.7 else "captured" if ratio(s) <= 0.1 else "in between"}
+    rows = [{"strength": s, "cell_force": s * force_scale, "chi_median": 0.5 if oscillating else None,
+             "plv_median": 0.5 if oscillating else None, "own_peak_ratio": ratio(s),
+             "verdict": _drive_verdict(ratio(s), settings["free_min"], settings["captured_max"])}
             for s in settings["strengths"]]
+    strongest, weakest = _drive_picks(rows)                    # the engine's own choice from the verdicts
+    if oscillating and ((strongest or {}).get("strength"), (weakest or {}).get("strength")) != (
+            strongest_free_running, weakest_captured):
+        raise ValueError(f"no verdicts the engine reads pick {strongest_free_running} and {weakest_captured}")
 
-    def pick(strength):
-        return None if strength is None else {"strength": strength, "cell_force": strength * force_scale}
+    def pick(row):
+        return None if row is None else {"strength": row["strength"], "cell_force": row["cell_force"]}
 
-    def forcing(strength):
-        return None if strength is None else {"amp": strength * force_scale, "freq": f_drive, "phase": 0.0,
-                                              "offset": 0.0}
+    def forcing(row):
+        return None if row is None else {"amp": row["strength"] * force_scale, "freq": f_drive, "phase": 0.0,
+                                         "offset": 0.0}
 
-    box = None if weakest_captured is None else {
-        "amp": [0.0, 3.0 * weakest_captured * force_scale], "freq": [omega0 / 10.0, omega0 * 10.0],
+    box = None if weakest is None else {
+        "amp": [0.0, 3.0 * weakest["strength"] * force_scale], "freq": [omega0 / 10.0, omega0 * 10.0],
         "phase": [0.0, 6.283185307], "offset": [-50.0, 50.0]}
     results = {"oscillating": oscillating, "force_scale": force_scale, "strengths": rows,
-               "strongest_free_running": pick(strongest_free_running), "weakest_captured": pick(weakest_captured),
-               "suggested_forcing": {"free_running": forcing(strongest_free_running),
-                                     "captured": forcing(weakest_captured), "box": box}}
+               "strongest_free_running": pick(strongest), "weakest_captured": pick(weakest),
+               "suggested_forcing": {"free_running": forcing(strongest), "captured": forcing(weakest), "box": box}}
     return {"settings": settings, "results": results}
 
 
@@ -1197,17 +1282,28 @@ def check_results(check: str, **given) -> dict:
     keywords change what the page reads (a TypeError for any other):
 
     - ``band``: ``band_holds``, ``drive_holds`` (True, False or None), ``repeats`` (a setting).
-    - ``audit``: ``masked_fraction`` (0.379), ``num_runs`` (100), ``hold`` (True; False puts one finding in each of the
-      three consistency records), ``nonfinite`` (the masked probes that are non-finite lock-ins, 0).
-    - ``input_use``: ``a1``, ``d3`` (the verdicts of the channels ``A1_mean`` and ``D3_bimodality``; ``ABLATION_*``
-      for the bad ones), ``invisible``, ``nonfinite`` (the counts), ``rows``, ``n_sweep``, ``total``.
+    - ``audit``: ``masked_fraction`` (0.379; the record holds the probes masked over the probes, as the engine divides
+      them), ``num_runs`` (100), ``invariants_hold``, ``attribution_holds``, ``cross_check_holds`` (True each; False
+      puts one finding in that consistency record alone), ``nonfinite`` (the masked probes that are non-finite
+      lock-ins, 0).
+    - ``input_use``: one row for each of the engine's summary channels, under its labels, sorted by displacement as the
+      engine sorts them; ``a1``, ``d3`` (the verdicts of the channels ``A1_mean`` and ``D3_bimodality``: "healthy",
+      "compressed", "severely compressed" or an ``ABLATION_*``), ``compressed`` (3), ``invisible``, ``nonfinite`` (0
+      each: how many of the other channels have that verdict), ``rows``, ``n_sweep``. The counts are the verdicts
+      counted; a ValueError for so few healthy channels that the engine would judge the others otherwise.
     - ``identifiability`` (the rotation): ``eigenvalues`` (a list, or None for a record whose eigenvalues were not
       kept; absent gives six), ``n_worst``, ``top_n``.
     - ``pin_down`` (the Jacobian): ``observation_mode``, ``t_obs_s``, ``condition_number``, ``unmeasurable``,
       ``degenerate_pairs`` (``{"a", "b", "cos"}`` each), ``dead_channels``.
-    - ``fixed_number`` (SBC, pooled): ``fraction_passed`` (rounded to a whole number of the ``repeats``), ``repeats``,
-      ``n_cal``, ``samples``.
-    - ``drive_study``: ``oscillating``, ``strongest_free_running``, ``weakest_captured`` (strengths, or None).
+    - ``fixed_number`` (SBC): ``fraction_passed`` (rounded to a whole number of the ``repeats``), ``repeats``,
+      ``n_cal``, ``samples``, ``chi_k_fixed`` (None, the pooled record; a number from 1 to the probe slots holds the
+      count fixed, in the settings and as the stratum ``k<number>``, and the record is written with that stratum as
+      its variant: ``write_diagnostic(..., diagnostic="sbc", variant="k4", **check_results("fixed_number",
+      chi_k_fixed=4))``, as the engine names a fixed-count record).
+    - ``drive_study``: ``oscillating`` (False: nothing driven, so no strength has a reading or a verdict and nothing
+      is picked or suggested, whatever picks are handed), ``strongest_free_running``, ``weakest_captured`` (strengths
+      driven, or None; the verdicts are made so that the engine's own choice picks them, and a ValueError for a pick
+      that is no strength driven or that no verdicts give).
     - ``across_prior`` (Laplace): ``n_points``, ``median_sd``, ``frac_identified``.
     - ``calibration``: ``passed`` (the verdict is the engine's own function over p-values that pass or fail),
       ``n_cal``, ``cal_n_scales``, ``samples``, ``seed``.
@@ -1542,7 +1638,14 @@ def build_step_page(cls=None, *, session=None, window=None, step: str = "trainin
     unless ``window`` is: the page then stands in that window's Parameter inference, as a rebuilt page will. A key that
     is no step's is a KeyError, before anything is built. The stand-in is built here and not at this module's head: a
     class of the window read at import would load the window's whole program with every suite that imports these
-    helpers. The page goes with its screen, when the test that built it ends."""
+    helpers. The page goes with its screen, when the test that built it ends.
+
+    The stand-in page hosts a window's run at "checks" and at "training". At the four other steps the screen calls its
+    page by what that page alone has, and the stand-in has none of it: "model" when a plan fills the forms and in a
+    chain of loads, "prior" at every new draft and in a chain of loads, "infer" at every configuration put in use, and
+    "narrowing" at every working out of the steps' states, which every change of a run's status asks for in a window.
+    At "training" the Continue, Resume and loading presses call the page by name as well. A test that reaches one of
+    those calls leaves the screen's own page at that step, or hands a class that has what is called."""
     from core.gui import keys
     number = keys.step_number(step) - 1
     qt_app()

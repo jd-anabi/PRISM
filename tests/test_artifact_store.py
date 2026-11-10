@@ -1170,10 +1170,15 @@ _CHECK_PARENTS = {"posterior": "20261001T100000", "prior": "20261001T090000", "s
 def test_the_check_record_writers_write_what_the_engine_writes(store, check, diagnostic, variant, parents):
     """Each record a check leaves is written through the store's own writer, in seconds, and reads back as the engine's
     does: the store finds it, its manifest passes the schema's check, and its parents, its diagnostic and variant, its
-    settings and results, its input cell file and its moment of creation are what the writer was handed, every figure
-    it lists is a picture on disk, and the id is stamped from the moment handed (as the store stamps one from its own
-    clock). The results are those ``check_results`` gives for the check: the fields the engine writes and the page reads,
-    and none it does not write. Nothing is written beside the manifest and the pictures: no payload and no log."""
+    settings and results, its input cell file, its note and its moment of creation are what the writer was handed, every
+    figure it lists is a picture on disk, and the id is stamped from the moment handed (as the store stamps one from its
+    own clock), the store's clock put back after. The results are those ``check_results`` gives for the check: every key
+    of its settings and its results, at every depth, is one the engine module that writes the record writes, found in
+    that module's source in quotes, and each deciding check's default is a record that passes, read by the field it is
+    judged on. Nothing is written beside the manifest and the pictures: no payload, no log. A parent that is no
+    record's id is refused, since the engine names its parents by id."""
+    from core import orchestrator
+    from core.diagnostics import ablation, identifiability, probes, sbc
     from tests._fixtures import check_results, write_calibration, write_diagnostic
     made = datetime(2026, 10, 3, 9, 30, 15, tzinfo=timezone(timedelta(hours=-7)))
     cell = config.CELL_PATH / "nadrowski" / "master_spont.txt"
@@ -1181,17 +1186,45 @@ def test_the_check_record_writers_write_what_the_engine_writes(store, check, dia
     given = check_results(check)
     with pytest.raises(TypeError):
         check_results(check, no_such_setting=1)
+    engine = {"probes": probes, "ablation": ablation, "identifiability": identifiability, "sbc": sbc}.get(
+        diagnostic, orchestrator)
+    source = Path(engine.__file__).read_text(encoding="utf-8")
+
+    def keys(value):
+        if isinstance(value, dict):
+            for key, inner in value.items():
+                yield key
+                yield from keys(inner)
+        elif isinstance(value, list):
+            for inner in value:
+                yield from keys(inner)
+
+    unknown = sorted({key for key in keys(given) if f'"{key}"' not in source})
+    assert unknown == [], f"keys {engine.__name__} never writes: {unknown}"
+    results = given["results"]
+    verdicts = {row["label"]: row["verdict"] for row in results.get("channels", ())}
+    passes = {"band": lambda: (results["band_holds"], results["drive_holds"]) == (True, True),
+              "audit": lambda: ((results["invariants"]["hold"], results["attribution"]["holds"],
+                                 results["cross_check"]["holds"], results["causes"]["non_finite_lock_in"]["count"])
+                                == (True, True, True, 0) and abs(results["masked_fraction"] - 0.379) < 0.001),
+              "calibration": lambda: results["verdict"]["passed"] is True,
+              "input_use": lambda: ((verdicts["A1_mean"], verdicts["D3_bimodality"], results["counts"]["invisible"],
+                                     results["counts"]["nonfinite"]) == ("healthy", "healthy", 0, 0)),
+              "identifiability": lambda: isinstance(results["eigenvalues"], list)}
+    assert passes.get(check, lambda: True)(), (check, results)
+    clock = store._clock
     if diagnostic is None:
         kind, titles = "calibration", ("SBC ranks (CDF)", "TARP coverage")
         written = write_calibration(store, None, posterior=named["posterior"], prior=named["prior"], figures=titles,
-                                    created=made, name="by_hand", **given)
+                                    created=made, name="by_hand", note="a note", **given)
     else:
         kind, titles = "diagnostic", ("The figure",)
         written = write_diagnostic(store, None, diagnostic=diagnostic, variant=variant, parents=named, figures=titles,
                                    cell=str(cell), created=made, name="by_hand", note="a note", **given)
+    assert store._clock is clock, "the store's clock was not put back"
     manifest = store.get(kind, written)
     assert mf.validate(manifest.to_dict()).id == written
-    assert (manifest.kind, manifest.id, manifest.name) == (kind, written, "by_hand")
+    assert (manifest.kind, manifest.id, manifest.name, manifest.note) == (kind, written, "by_hand", "a note")
     assert manifest.created == "2026-10-03T16:30:15+00:00" and written == "20261003T163015", (manifest.created, written)
     assert manifest.parents == named
     folder = store.path(kind, written)
@@ -1208,13 +1241,19 @@ def test_the_check_record_writers_write_what_the_engine_writes(store, check, dia
         loaded = store.load_diagnostic(written)
         assert (loaded.diagnostic, loaded.variant) == (diagnostic, variant)
         assert loaded.settings == given["settings"] and loaded.results == given["results"]
-        assert manifest.config == given["settings"] and manifest.note == "a note"
+        assert manifest.config == given["settings"]
         assert manifest.inputs["cell"] == {"path": "Cells/nadrowski/master_spont.txt", "sha256": prov.sha256_file(cell)}
     if check == "band":
         assert check_results("band", band_holds=False)["results"]["band_holds"] is False
         assert check_results("band", repeats=5)["settings"]["repeats"] == 5
         with pytest.raises(KeyError, match="timing"):
             check_results("timing")
+        before = sorted(path.name for path in store.kind_dir("diagnostic").iterdir())
+        with pytest.raises(ValueError, match="smoke_posterior"):
+            write_diagnostic(store, None, diagnostic="sbc", variant="pooled", parents={"posterior": "smoke_posterior"})
+        with pytest.raises(ValueError, match="smoke_prior"):
+            write_calibration(store, None, posterior=_CHECK_PARENTS["posterior"], prior="smoke_prior")
+        assert sorted(path.name for path in store.kind_dir("diagnostic").iterdir()) == before
 
 
 def test_a_simulation_sets_state_carries_its_unusable_counts(tmp_path):
@@ -1242,25 +1281,177 @@ def test_a_simulation_sets_state_carries_its_unusable_counts(tmp_path):
 
 def test_the_observation_and_kept_round_writers_write_what_the_engine_writes(store):
     """An observation's record holds every key of its kind, with the digest, the kind of observation and the width of the
-    conditioning it was handed (the digest also as the fingerprint the engine records); a kept training's record holds
-    the region of a narrowing round exactly as the engine writes one, beside the parents the round names, and none for
-    a training that is not a round. Written in seconds; no payload."""
+    conditioning it was handed (the digest also as the fingerprint the engine records), and its note. Written with no
+    configuration, an observation of each kind holds the conditioning block the engine writes for a real configuration
+    of that kind (the summary's part, the forcing part, the probe slots of a frequency-response one), its forcing part
+    following a width handed; one of frequency response, made from recordings, holds the frequencies of its driven
+    recordings, and one of another kind none. A kept training's record holds the region of a narrowing round exactly as
+    the engine writes one, beside the parents the round names, and none for a training that is not a round. Written in
+    seconds; no payload."""
+    from core import cli, registry
     from tests._fixtures import region_dict, write_observation
-    seen = write_observation(store, None, name="obs_a", digest="fedcba9876543210", mode="chi", width=122)
+    seen = write_observation(store, None, name="obs_a", digest="fedcba9876543210", mode="chi", width=122, note="a note")
     manifest = store.get("observation", seen)
     assert mf.validate(manifest.to_dict()).id == seen and manifest.payloads == {}
     assert (manifest.name, manifest.body["mode"], manifest.body["x_obs_digest"], manifest.fingerprints["x_obs"]) == (
         "obs_a", "chi", "fedcba9876543210", "fedcba9876543210")
     assert manifest.body["conditioning"]["width"] == 122 and set(manifest.body) == set(mf.BODY_KEYS["observation"])
+    assert manifest.note == "a note"
     default = store.get("observation", write_observation(store, None))
     assert default.body["x_obs_digest"] == "0123456789abcdef" and default.body["mode"] == "spontaneous"
-    region = region_dict((0, 2), level=0.9)
-    assert region["dims"] == [0, 2] and region["level"] == 0.9 and len(region["lo"]) == 2
+    labels = config.VALID_LABELS[config.VALID_MODELS.index("NADROWSKI")]
+    spontaneous = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"),
+                                      str(config.BOUNDS_PATH / "nadrowski" / "master_spont.txt"))
+    for mode, cfg in (("spontaneous", spontaneous), ("forced", _nad_cfg()), ("chi", _nad_cfg(chi_mode=True))):
+        assert cfg.observation_mode == mode
+        body = store.get("observation", write_observation(store, None, mode=mode)).body
+        assert body["conditioning"] == mf.conditioning_block(cfg), mode
+        freqs = body["chi_obs_freqs"]
+        if mode == "chi":
+            assert len(freqs) == cfg.chi_n_freqs and all(isinstance(f, float) and f > 0 for f in freqs), freqs
+        else:
+            assert freqs is None, (mode, freqs)
+    assert default.body["conditioning"] == mf.conditioning_block(spontaneous)
+    wider = store.get("observation", write_observation(store, None, mode="chi", width=130)).body["conditioning"]
+    assert (wider["input_dim"], wider["forcing_dim"], wider["width"]) == (50, 80, 130), wider
+    region = region_dict((0, 2), level=0.8)
+    assert region["dims"] == [0, 2] and region["level"] == 0.8 and len(region["lo"]) == 2
     parents = {"prior": _CHECK_PARENTS["prior"], "simulation": _CHECK_PARENTS["simulation"],
                "parent_posterior": _CHECK_PARENTS["posterior"], "observation": seen}
     record = store.get("fit", build_fit_record(store, region=region, parents=parents))
     assert record.body["region"] == region and record.parents == parents
     assert store.get("fit", build_fit_record(store)).body["region"] is None
+
+
+def test_a_check_results_keyword_moves_what_the_engine_moves_with_it():
+    """A keyword of ``check_results`` moves a record as the engine's own run would move it. The audit's three
+    consistency records each break alone, each by its own keyword, and each says it holds exactly when its counts say
+    so, as the engine works it out; the share of unusable probes, and each cause's, is the count over the probes, as
+    the engine divides them. In a drive study each verdict is the engine's own reading of its strength's ratio and the
+    two picks are the engine's own choice from the verdicts, so a pick that is no strength driven, and two picks that
+    no verdicts give, are refused; a cell that shows no clear oscillation is driven at no strength, so no strength has
+    a reading or a verdict and nothing is picked or suggested, whatever picks are handed. A calibration of a fixed
+    number of driven recordings holds that number in its settings and in its stratum together, a number from one to
+    the probe slots."""
+    from core.diagnostics import probes
+    from tests._fixtures import check_results
+    plain = check_results("audit")["results"]
+    for keyword, record, holds in (("invariants_hold", "invariants", "hold"),
+                                   ("attribution_holds", "attribution", "holds"),
+                                   ("cross_check_holds", "cross_check", "holds")):
+        broken = check_results("audit", **{keyword: False})["results"]
+        assert [key for key in plain if plain[key] != broken[key]] == [record], keyword
+        assert (plain[record][holds], broken[record][holds]) == (True, False), keyword
+    for results in (plain, check_results("audit", invariants_hold=False, attribution_holds=False)["results"]):
+        for record, holds in (("invariants", "hold"), ("attribution", "holds")):
+            counts = [value for key, value in results[record].items() if key != holds]
+            assert results[record][holds] is (not any(counts)), (record, results[record])
+    crossed = check_results("audit", cross_check_holds=False)["results"]["cross_check"]
+    assert crossed["batches"]["committed"] != crossed["batches"]["expected"], crossed
+    with pytest.raises(TypeError):
+        check_results("audit", hold=False)
+    for fraction, runs in ((0.379, 100), (0.379, 37), (0.41, 12)):
+        audit = check_results("audit", masked_fraction=fraction, num_runs=runs)["results"]
+        assert audit["masked_fraction"] == audit["masked"] / audit["probes"], (fraction, runs)
+        assert all(cause["share"] == cause["count"] / audit["probes"] for cause in audit["causes"].values())
+
+    drive = check_results("drive_study")
+    rows, settings = drive["results"]["strengths"], drive["settings"]
+    assert [row["strength"] for row in rows] == settings["strengths"]
+    assert [row["verdict"] for row in rows] == [
+        probes._drive_verdict(row["own_peak_ratio"], settings["free_min"], settings["captured_max"]) for row in rows]
+    strongest, weakest = probes._drive_picks(rows)
+    assert drive["results"]["strongest_free_running"] == {"strength": 0.15, "cell_force": strongest["cell_force"]}
+    assert drive["results"]["weakest_captured"] == {"strength": 0.8, "cell_force": weakest["cell_force"]}
+    flat = check_results("drive_study", oscillating=False)["results"]
+    assert flat["oscillating"] is False and [row["strength"] for row in flat["strengths"]] == settings["strengths"]
+    assert all((row["chi_median"], row["plv_median"], row["own_peak_ratio"], row["verdict"]) == (None,) * 4
+               for row in flat["strengths"]), flat["strengths"]
+    assert (flat["strongest_free_running"], flat["weakest_captured"]) == (None, None)
+    assert flat["suggested_forcing"] == {"free_running": None, "captured": None, "box": None}
+    for pick in ({"strongest_free_running": 0.1}, {"weakest_captured": 0.5}):
+        with pytest.raises(ValueError, match="strengths"):
+            check_results("drive_study", **pick)
+    with pytest.raises(ValueError):
+        check_results("drive_study", strongest_free_running=0.4, weakest_captured=0.15)
+
+    pooled = check_results("fixed_number")
+    assert (pooled["settings"]["chi_k_fixed"], pooled["results"]["stratum"]) == (None, "pooled")
+    fixed = check_results("fixed_number", chi_k_fixed=4)
+    assert (fixed["settings"]["chi_k_fixed"], fixed["results"]["stratum"]) == (4, "k4")
+    for wrong in (0, 13):
+        with pytest.raises(ValueError):
+            check_results("fixed_number", chi_k_fixed=wrong)
+
+
+def test_the_input_use_record_holds_every_summary_channel_as_the_engine_sorts_them():
+    """The input-use check's record holds one row for every summary channel the network reads, under the engine's own
+    labels, sorted from the least displacement to the greatest as the engine sorts its sweep (a channel whose sweep gave
+    no finite displacement last), with a few channels besides A1_mean and D3_bimodality compressed and neither of those
+    two first. Each verdict is the one the engine's thresholds give its displacement against the median over the
+    channels that move and stay finite, worked out as the engine works it out; each row's share of that median is its
+    displacement over it; and the counts are the verdicts counted, out of every row. The keywords that make channels
+    invisible or non-finite make that many rows of that verdict besides the two named channels, and a verdict handed for
+    one of the two is that channel's alone."""
+    import collections
+    from core.diagnostics import ablation
+    from core.SBI.statistics import FEATURE_LABELS, VALID_FLAG_LABELS
+    from tests._fixtures import ABLATION_DEAD, ABLATION_INVISIBLE, ABLATION_NONFINITE, check_results
+    source = Path(ablation.__file__).read_text(encoding="utf-8")
+    for rule in ("for d, lab, lo, hi, tag in sorted(swept):", "elif d < FLOAT32_EPS or (med and d < med * 1e-4):",
+                 "elif med and d < med / 100:", "elif med and d < med / 10:",
+                 "med = float(torch.tensor(live).median()) if live else 0.0"):
+        assert rule in source, rule
+    labels = list(FEATURE_LABELS) + list(VALID_FLAG_LABELS) + ["logT"]
+
+    def read(results):
+        rows = results["channels"]
+        assert collections.Counter(row["label"] for row in rows) == collections.Counter(labels)
+        assert rows == sorted(rows, key=lambda row: (math.inf if row["max_disp"] is None else row["max_disp"],
+                                                     row["label"]))
+        live = [row["max_disp"] for row in rows if row["verdict"] not in (ABLATION_DEAD, ABLATION_NONFINITE)]
+        med = float(torch.tensor(live).median())
+        assert results["median_disp"] == med
+        for row in rows:
+            d = row["max_disp"]
+            if row["verdict"] == ABLATION_DEAD:
+                assert (d, row["rel_median"], row["p1"]) == (0.0, 0.0, row["p99"]), row
+            elif row["verdict"] == ABLATION_NONFINITE:
+                assert (d, row["rel_median"]) == (None, None), row
+            else:
+                judged = (ABLATION_INVISIBLE if d < ablation.FLOAT32_EPS or d < med * 1e-4 else "severely compressed"
+                          if d < med / 100 else "compressed" if d < med / 10 else "healthy")
+                assert (row["verdict"], row["rel_median"]) == (judged, d / med), row
+        verdicts = collections.Counter(row["verdict"] for row in rows)
+        counted = {"constant": verdicts[ABLATION_DEAD], "invisible": verdicts[ABLATION_INVISIBLE],
+                   "nonfinite": verdicts[ABLATION_NONFINITE]}
+        assert results["counts"] == {**counted, "usable": len(rows) - sum(counted.values()), "total": len(rows)}
+        return {row["label"]: (place, row["verdict"]) for place, row in enumerate(rows)}
+
+    plain = read(check_results("input_use")["results"])
+    assert len(plain) == len(labels) == 50
+    assert plain["A1_mean"][1] == plain["D3_bimodality"][1] == "healthy"
+    assert plain["A1_mean"][0] > 0 and plain["D3_bimodality"][0] > 0
+    assert 1 <= [verdict for _place, verdict in plain.values()].count("compressed") <= 5
+    marked = check_results("input_use", invisible=3, nonfinite=2)["results"]
+    seen = read(marked)
+    assert (seen["A1_mean"][1], seen["D3_bimodality"][1]) == ("healthy", "healthy")
+    assert (marked["counts"]["invisible"], marked["counts"]["nonfinite"]) == (3, 2)
+    assert [row["verdict"] for row in marked["channels"][-2:]] == [ABLATION_NONFINITE] * 2
+    for keyword, verdict, count in (("a1", ABLATION_INVISIBLE, "invisible"), ("d3", ABLATION_DEAD, "constant"),
+                                    ("a1", ABLATION_NONFINITE, "nonfinite"), ("d3", "compressed", None)):
+        one = check_results("input_use", **{keyword: verdict})["results"]
+        label, other = ("A1_mean", "D3_bimodality") if keyword == "a1" else ("D3_bimodality", "A1_mean")
+        found = read(one)
+        assert (found[label][1], found[other][1]) == (verdict, "healthy"), (keyword, verdict)
+        if count is not None:
+            assert one["counts"][count] == 1, (keyword, verdict, one["counts"])
+    none = read(check_results("input_use", compressed=0)["results"])
+    assert "compressed" not in [verdict for _place, verdict in none.values()], none
+    with pytest.raises(TypeError):
+        check_results("input_use", total=40)
+    with pytest.raises(ValueError):
+        check_results("input_use", invisible=30)
 
 
 def test_simulation_directories_live_under_the_store_without_a_prefix(store):
