@@ -1246,9 +1246,10 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         their controls' own text (posterior_tab.py:232, tsnpe_tab.py:102, infer_tab.py:150), so a
         reworded label, a renamed place or a place moved in a list is seen as a change of what a person
         reads;
-    (d) the keys with no window control are exactly the six the window never exposes, the eleven
-        tool-only diagnostics knobs, and the five FDT settings neither front end exposes, so a
-        tool-only key renders no window sentence;
+    (d) the keys with no window control are exactly the settings the window does not expose (the device, the
+        two sample counts and the name of the observation an inference makes), the eleven tool-only diagnostics
+        knobs, and the five FDT settings neither front end exposes, so a key with no control renders no window
+        sentence;
     (e) the three drive labels are built exactly as the Infer tab builds its rows
         (_rebuild_forcing_fields: labels.gui_forcing_label with config.FORCING_DISPLAY_UNITS, which
         cli.INFERENCE_PROMPT_UNITS aliases), so the read-back over the built step 5 can find them.
@@ -1449,10 +1450,10 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     assert gui_fields.label("s_grid") == "S grid  (T_a/T = 1)", \
         "a box of a page still has a label, so a row and its hint cannot drift apart"
 
-    # (d) no window control: the three the window never exposes, and the tool-only set
+    # (d) no window control: the settings the window does not expose, and the tool-only set
     assert gui_fields.ON_TRAINING_ALONE == {"checkpoint_every", "resume", "max_num_epochs", "expected_epochs"}
     assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
-        "device", "n_samples", "num_posterior_samples",
+        "device", "n_samples", "num_posterior_samples", "observation_name",
         "repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
         "n_sweep", "chi_k_fixed",
         # the probe checks: command line only

@@ -23,8 +23,8 @@ Three shapes of entry:
   sentence quotes the control's own text ("Run on a different observation") and names its places as
   a box's sentence does.
 * ``None`` for a key the window has no control for: the tool-only diagnostics knobs, the three
-  settings the window never exposes (the device and the two sample counts), and the five FDT
-  settings neither front end exposes.
+  settings the window never exposes (the device and the two sample counts), the name of the observation
+  an inference makes, which no page asks for, and the five FDT settings neither front end exposes.
 
 Four settings stand only on the Training page, for its own run: the checkpoint cadence, the resume
 policy, the epoch limit and the expected epochs. A page of the old kind, whose run reads none of them
@@ -116,6 +116,8 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # to the 'Comparison name' box, not the run's.
     "name": (f"Choose another name in 'Name' {_in(('prior', 'training'))}, or in the 'Record name' or 'Comparison "
              f"name' box {_in(('temperature/one_cell', 'temperature/sweep'))}."),
+    # the observation an inference makes: no page names it, so no control answers its name
+    "observation_name": None,
     # Records. Sentences, not (place, label), although Records is a place: the list is not a box, and
     # the Note box sits in its action row, not in a form row the read-back pin reads.
     "artifact": f"Select an artifact in the list {_in('records')}.",

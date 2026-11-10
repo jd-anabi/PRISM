@@ -3700,7 +3700,8 @@ def test_simulated_inference_warns_about_ignored_values_t_obs_and_an_out_of_dist
     with pytest.warns(orchestrator.PreflightWarning) as rec:
         got = orchestrator.simulated_inference(cfg, _sim_post(), 0.5, cell=cell, prior=_P(), store=store)
     said = [str(w.message) for w in rec]
-    assert got == ("OBS", "INF") and made == [{"fig_sink": None, "store": store}]
+    # the observation's name travels to its stage always: blank when none was given, so the stage leaves it unnamed
+    assert got == ("OBS", "INF") and made == [{"name": "", "fig_sink": None, "store": store}]
     assert any("below the training range minimum" in m for m in said), said
     assert any("the bounds file does not declare" in m and "f_scale" in m for m in said), said
     assert any("lies outside the training prior" in m for m in said), said
@@ -3853,6 +3854,173 @@ def test_a_taken_inference_name_is_refused_before_the_observation_is_simulated(s
         orchestrator.simulated_inference(cfg, _sim_post(), 1.0, name="taken", store=store,
                                          cell=str(CELL_PATH / "nadrowski" / "master_weak.txt"))
     assert made == [] and store.list("observation") == []
+
+
+def _observation_made_on(path, store, monkeypatch, tmp_path, **kw):
+    """One inference made together with its observation on the path named ("a simulated cell" or "recordings"), the
+    observation's stage real, the inference's a stand-in that writes a record on the observation it is handed. For a
+    recording the step that turns it into its features stands in (zeros of the conditioning's width): what is under
+    test is the record the observation's stage writes. ``kw`` goes to the composition; the observation and the
+    inference record come back, with the observation the inference was made on."""
+    import numpy as np
+    from core import orchestrator
+    from core.config import CELL_PATH
+    from core.SBI.observations import RecordingSet
+    from core.SBI.statistics import SUMMARY_WIDTH
+    made_on = []
+
+    def _inference(c, posterior, observation, **k):
+        with k["store"].create("inference", c, name=k["name"], note=k["note"]) as w:
+            w.parents = {"observation": observation.id}
+            w.body = {"results": {}}
+        made_on.append(observation)
+        return store.get("inference", w.id)
+
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", _inference)
+    if path == "a simulated cell":                 # a forced cell on the forced bounds: no value is left out
+        obs, inf = orchestrator.simulated_inference(_nad_cfg(), _sim_post(), 1.0, fig_sink=_close, store=store,
+                                                    cell=str(CELL_PATH / "nadrowski" / "master_weak.txt"), **kw)
+    else:
+        def _features(c, x_spont, t_obs_s):
+            c.set_observation_context(t_obs_s * c.get_unit_conversion_factor("s"), {})
+            return (torch.zeros(1, SUMMARY_WIDTH + 1, dtype=torch.float64), torch.zeros(1, 50, dtype=c.hw.dtype),
+                    torch.zeros(1, 50, dtype=c.hw.dtype))
+
+        monkeypatch.setattr(orchestrator, "build_experiment_obs_spontaneous", _features)
+        spont = tmp_path / "spont.npy"
+        np.save(spont, np.zeros(50, dtype=np.float32))
+        obs, inf = orchestrator.experimental_inference(_spont_cfg(), _sim_post(),
+                                                       RecordingSet(spont=str(spont), T_obs_s=1.0),
+                                                       fig_sink=_close, store=store, **kw)
+    return obs, inf, made_on
+
+
+@pytest.mark.parametrize("path", ["a simulated cell", "recordings"])
+def test_an_inferences_observation_is_saved_under_the_name_given(path, store, monkeypatch, tmp_path):
+    """An inference made together with its observation names the observation by the observation's own name, handed
+    to the stage that writes it: the record holds that name and an empty note (the note given is the inference's),
+    and the inference is made on that record. The same text may name the inference too: a name is unique within
+    its kind."""
+    obs, inf, made_on = _observation_made_on(path, store, monkeypatch, tmp_path, name="cell_a_obs",
+                                             note="the inference's note", observation_name="cell_a_obs")
+    record = store.get("observation", obs.id)
+    assert (record.name, record.note, obs.name) == ("cell_a_obs", "", "cell_a_obs"), (record.name, record.note)
+    assert [s.id for s in store.list("observation")] == [obs.id]
+    assert made_on == [obs], "the inference was not made on the observation the composition wrote"
+    assert (inf.name, inf.note, inf.parents["observation"]) == ("cell_a_obs", "the inference's note", obs.id)
+
+
+def test_a_taken_observation_name_is_refused_before_the_cell_is_read(store, monkeypatch):
+    """An observation's name taken before the run is refused at the composition's entry, naming the observation's
+    name, right after the inference's own name: before the cell file is looked for or read, before values typed by
+    hand are put in, before a narrowed posterior's own rule, before a recording is read or hashed, before the truth
+    is held to the prior, before anything is simulated or written, and before any judgement is said. A name badly
+    formed is refused the same way. The choice for a name taken during the run lifts none of it: that choice is for a
+    name another record takes once the run has begun."""
+    import warnings
+    from types import SimpleNamespace
+    from core import cli, orchestrator
+    from core.config import CELL_PATH, SimConfig
+    from core.Helpers import file_manager
+    from core.SBI.observations import RecordingSet
+    from tests._fixtures import write_observation
+    cfg = _spont_cfg()
+    write_observation(store, cfg, name="cell_a_obs")
+    held = [s.id for s in store.list("observation")]
+    reached = []
+    for owner, attr in ((orchestrator, "require_file"), (cli, "load_and_validate_gt"), (cli, "validate_gt_file"),
+                        (file_manager, "parse_values_file"), (SimConfig, "inject_ground_truth"),
+                        (orchestrator, "check_observation_in_distribution"), (orchestrator, "_file_ref"),
+                        (file_manager, "load_experimental_data"), (orchestrator, "generate_observations"),
+                        (orchestrator, "build_experiment_observation"), (orchestrator, "infer_and_visualize"),
+                        (store, "create")):
+        monkeypatch.setattr(owner, attr, lambda *a, _what=attr, **k: reached.append(_what))
+    cell = str(CELL_PATH / "nadrowski" / "master_weak.txt")      # a forced cell: values these bounds ignore
+    prior = SimpleNamespace(prior=None, force_prior=None)
+    calls = {
+        "a simulated cell": lambda **k: orchestrator.simulated_inference(
+            cfg, _sim_post(), 999.0, cell=cell, prior=prior, store=store, **k),
+        "values typed by hand": lambda **k: orchestrator.simulated_inference(
+            cfg, _sim_post(), 999.0, gt_values=({}, {}, {}, {}), store=store, **k),
+        "a narrowed posterior": lambda **k: orchestrator.simulated_inference(
+            cfg, _sim_post(x_obs_digest="d" * 16), 999.0, cell=cell, store=store, **k),
+        "recordings": lambda **k: orchestrator.experimental_inference(
+            cfg, _sim_post(), RecordingSet(spont="spont.npy", T_obs_s=999.0), store=store, **k),
+    }
+    for label, call in calls.items():
+        for given in ({"observation_name": "cell_a_obs"},
+                      {"observation_name": "cell_a_obs", "if_name_taken": "unnamed"},
+                      {"observation_name": "bad name!"}):
+            with warnings.catch_warnings(record=True) as said:
+                warnings.simplefilter("always")
+                with pytest.raises(Refusal) as e:
+                    call(name="inf_a", **given)
+            assert e.value.field == "observation_name", (label, given, e.value.field, str(e.value))
+            words = ("a observation named 'cell_a_obs' already exists" if given["observation_name"] == "cell_a_obs"
+                     else "bad artifact name 'bad name!'")
+            assert words in str(e.value), (label, str(e.value))
+            assert (reached, [str(w.message) for w in said]) == ([], []), (label, given)
+    assert [s.id for s in store.list("observation")] == held and store.list("inference") == []
+
+
+def test_the_inferences_own_name_is_refused_before_the_observations(store, monkeypatch):
+    """With both names taken the inference's own is refused first, on both compositions, as it was before the
+    observation could be named; nothing is spent before either."""
+    from core import orchestrator
+    from core.config import CELL_PATH
+    from core.SBI.observations import RecordingSet
+    from tests._fixtures import write_observation
+    cfg = _spont_cfg()
+    write_observation(store, cfg, name="taken")
+    with store.create("inference", cfg, name="taken") as w:
+        w.body = {"results": {}}
+    spent = []
+    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: spent.append("sim") or "OBS")
+    monkeypatch.setattr(orchestrator, "build_experiment_observation",
+                        lambda c, r, **k: spent.append("exp") or "OBS")
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: spent.append("inf") or "INF")
+    cell = str(CELL_PATH / "nadrowski" / "master_spont.txt")
+    for call in (lambda: orchestrator.simulated_inference(cfg, _sim_post(), 1.0, cell=cell, name="taken",
+                                                          observation_name="taken", store=store),
+                 lambda: orchestrator.experimental_inference(cfg, _sim_post(), RecordingSet(spont="spont.npy",
+                                                                                            T_obs_s=1.0),
+                                                             name="taken", observation_name="taken", store=store)):
+        with pytest.raises(st.StoreError) as e:
+            call()
+        assert (e.value.field, "a inference named 'taken'" in str(e.value)) == ("name", True), str(e.value)
+    assert spent == []
+
+
+@pytest.mark.parametrize("path", ["a simulated cell", "recordings"])
+def test_an_observation_name_taken_during_the_run_is_dropped_for_the_observation_alone(path, store, monkeypatch,
+                                                                                       tmp_path):
+    """The choice for a name another record takes during the run is the observation's alone. Asked for, the
+    observation whose name was taken once the run had begun is saved without a name, saying so in its own log, and
+    the inference is still made on it under the inference's own name."""
+    from core import orchestrator
+    from core.refusals import PreflightWarning
+    from tests._fixtures import write_observation
+    taken = []
+
+    def _take():
+        if not taken:
+            write_observation(store, _spont_cfg(), name="cell_a_obs")
+            taken.append(1)
+
+    if path == "a simulated cell":
+        real = orchestrator.pipeline.gen_obs
+        monkeypatch.setattr(orchestrator.pipeline, "gen_obs", lambda *a, **k: _take() or real(*a, **k))
+    else:
+        real = orchestrator.file_manager.load_experimental_data
+        monkeypatch.setattr(orchestrator.file_manager, "load_experimental_data",
+                            lambda *a, **k: _take() or real(*a, **k))
+    with pytest.warns(PreflightWarning, match="'cell_a_obs' was taken by another observation"):
+        obs, inf, made_on = _observation_made_on(path, store, monkeypatch, tmp_path, name="inf_a",
+                                                 observation_name="cell_a_obs", if_name_taken="unnamed")
+    assert taken == [1] and (obs.name, store.get("observation", obs.id).name) == ("", "")
+    assert "was taken by another observation while this run was going" in (obs.path / "log.txt").read_text(
+        encoding="utf-8")
+    assert (inf.name, made_on) == ("inf_a", [obs])
 
 
 def test_installing_an_experimental_observation_clears_a_stale_truth(store, tmp_path):
@@ -4017,7 +4185,8 @@ def test_the_compositions_forward_every_keyword_unchanged(store, monkeypatch):
     """The SECOND hop is where a composition silently drops a caller's choice. accept, the store, the
     figure sink, the name and the note all have to arrive at the stage that WRITES the artifact -- and
     n_samples must be ABSENT when the caller did not set it, so the stage's own literal default stays
-    the single place that number is written down.
+    the single place that number is written down. The observation's name arrives at the observation's
+    stage as its name, and the inference's name and note never do: the observation keeps no note.
 
     The CONFIG is the one thing that does not arrive as the caller passed it: each composition works
     on a private copy and hands THAT copy to both of its stages, carrying its own writes (the cell's
@@ -4039,9 +4208,9 @@ def test_the_compositions_forward_every_keyword_unchanged(store, monkeypatch):
     acc = Accept(other_observation=True)
     sink = lambda title, fig: None                                 # noqa: E731
     orchestrator.simulated_inference(cfg, _sim_post(), 1.0, accept=acc, n_samples=7, name="n1",
-                                     note="t1", fig_sink=sink, store=store,
+                                     note="t1", observation_name="o1", fig_sink=sink, store=store,
                                      cell=str(CELL_PATH / "nadrowski" / "master_weak.txt"))
-    assert seen["gen"] == {"fig_sink": sink, "store": store}
+    assert seen["gen"] == {"name": "o1", "fig_sink": sink, "store": store}
     fwd = seen["args"][0]
     assert isinstance(fwd, SimConfig) and fwd is not cfg and seen["args"][2] == "OBS"
     assert seen["gen_cfg"] is fwd, "the composition must hand its ONE copy to both of its stages"
@@ -4052,13 +4221,16 @@ def test_the_compositions_forward_every_keyword_unchanged(store, monkeypatch):
                            "accept": acc, "n_samples": 7}
     rec = RecordingSet(spont="x.npy", T_obs_s=1.0)
     orchestrator.experimental_inference(cfg, _sim_post(), rec, accept=acc, name="n2", note="t2",
-                                        fig_sink=sink, store=store)
-    assert seen["rec"] is rec and seen["exp"] == {"fig_sink": sink, "store": store}
+                                        observation_name="o2", fig_sink=sink, store=store)
+    assert seen["rec"] is rec and seen["exp"] == {"name": "o2", "fig_sink": sink, "store": store}
     assert isinstance(seen["exp_cfg"], SimConfig) and seen["exp_cfg"] is not cfg and seen["exp_cfg"] is not fwd
     assert seen["args"][0] is seen["exp_cfg"], "the composition must hand its ONE copy to both of its stages"
     assert_cfg_unchanged(cfg, snap)
     assert seen["inf"] == {"name": "n2", "note": "t2", "fig_sink": sink, "store": store, "accept": acc}, \
         "n_samples must be ABSENT when the caller did not set it"
+    # with no observation's name given, the observation's stage is handed a blank one, which leaves it unnamed
+    orchestrator.experimental_inference(cfg, _sim_post(), rec, name="n3", fig_sink=sink, store=store)
+    assert seen["exp"] == {"name": "", "fig_sink": sink, "store": store}
 
 
 def test_the_config_snapshot_counts_nan_equal_to_nan_inside_a_tensor():
@@ -5288,9 +5460,9 @@ def test_the_compositions_refuse_t_obs_at_or_below_zero_before_any_spend(store, 
     math.log(0.0) inside the conditioning row -- after the spend, with an orphan left behind; the
     experimental path had no check at all. Both compositions now refuse a length at or below 0, not a
     number, or blank, with the field key, in the order the pins rely on -- the sample count, then the
-    length, then the name, then the cell file -- and before any cell is parsed, any recording is built
-    or anything simulated. Outside the training range stays a judgement: the experimental path now
-    gives the same PreflightWarning the simulated one always did."""
+    length, then the inference's name, then its observation's, then the cell file -- and before any cell
+    is parsed, any recording is built or anything simulated. Outside the training range stays a
+    judgement: the experimental path now gives the same PreflightWarning the simulated one always did."""
     from core import cli, orchestrator
     from core.config import CELL_PATH, T_MIN_EXP_S
     from core.SBI.observations import RecordingSet
@@ -5321,23 +5493,31 @@ def test_the_compositions_refuse_t_obs_at_or_below_zero_before_any_spend(store, 
             assert ("is blank" if bad is None else "must be greater than 0") in str(e.value), str(e.value)
     assert spent == [], f"a refused length reached the spend: {spent}"
 
-    # (b) the order: the sample count before the length, the length before the name, the name before
-    # the cell file
+    # (b) the order: the sample count before the length, the length before the inference's name, the inference's
+    # name before its observation's, and the observation's name before the cell file
+    from tests._fixtures import write_observation
     with store.create("inference", cfg, name="taken") as w:
         w.body = {"results": {}}
+    write_observation(store, cfg, name="taken_obs")
     for run in (sim, exp):
         with pytest.raises(Refusal) as e:
-            run(0.0, n_samples=0, name="taken")
+            run(0.0, n_samples=0, name="taken", observation_name="taken_obs")
         assert e.value.field == "n_samples", str(e.value)
         with pytest.raises(Refusal) as e:
-            run(0.0, name="taken")
+            run(0.0, name="taken", observation_name="taken_obs")
         assert e.value.field == "t_obs", str(e.value)
         with pytest.raises(st.StoreError) as e:
-            run(1.0, name="taken")
+            run(1.0, name="taken", observation_name="taken_obs")
         assert e.value.field == "name", str(e.value)
+        with pytest.raises(Refusal) as e:
+            run(1.0, observation_name="taken_obs")
+        assert e.value.field == "observation_name", str(e.value)
     missing = cell + ".nope"
     with pytest.raises(st.StoreError):
         sim(1.0, name="taken", cell=missing)
+    with pytest.raises(Refusal) as e:
+        sim(1.0, observation_name="taken_obs", cell=missing)
+    assert e.value.field == "observation_name", str(e.value)
     for bad_cell, words in ((missing, "was not found"), ("", "is blank")):
         with pytest.raises(Refusal) as e:
             sim(1.0, cell=bad_cell)

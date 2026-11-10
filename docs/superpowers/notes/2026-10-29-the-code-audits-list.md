@@ -417,3 +417,39 @@ From Task 3 (the differing settings and the kept training's facts), `.superpower
 31. **"Before you start" breaks a long word only after a slash, an underscore or a full stop** (`core/gui/widgets/page.py:21`, `_breakable`, used by `Sentence`; the facts' view `core/gui/widgets/facts.py` keeps its horizontal scroll bar off, so a fact too wide is cut, never widening the window). A one-word file name of 64 letters stands whole at the foot at 900 x 600 and text 1.5 (measured at `531aae3`), but a much longer word with none of those marks would be cut at the foot's right edge. Cure: break such a word every so many letters, as `_may_wrap` does (Task 15d's fix round re-read, M2).
 32. **One file is spelled two ways on step 2** (`core/gui/panels/inference/prior_tab.py:143-150`, `recorded_file`, which keeps the record's backslashes, against `:138-140`, `_named`, which writes forward slashes, used by `_bounds_words` and `_attention`). After the Resume of a bounds file of another folder, "In use" and the line under the saved prior's list name the record's path with backslashes, while the bounds row's "Changed, not applied. In use: …" and the force scale's attention line name the configuration's path with forward slashes, once a person selects another file there. Cure: one spelling of a path for a person, used by both (Task 15e's trial, 6 (b)).
 33. **A Resume of a bounds file kept in a subfolder of the model's folder would select nothing on step 2's list** (`core/gui/panels/inference/resume.py:205-215`, `bounds_key`, which returns `PurePath(...).as_posix()`, against the list's keys, which `list_dir` gives by `os.path.relpath`, with backslashes on Windows). `restore_key("sub/x.txt")` finds no `"sub\x.txt"`, the list selects none, and after the load step 2 says "Error. Choose a bounds file." (departure 358 spares only limits typed by hand and a file of another folder). No model's folder under `Resources/Bounds/` has a subfolder today. Cure: match through `_entry_named`, as a plan's waiting file already does, or one spelling of the key in `load_chain` (Task 15e's seat two, note 3).
+
+---
+
+# Stage 5: what its tasks send to the code audit's list
+
+From Task 2 (an observation's name and the six refusals), `.superpowers/sdd/2026-10-06-window-redesign/stage-5/briefs/task-02-brief.md`:
+1. **E4 and the registry's new key, registered for the audit (not a fault).** `core/orchestrator.py`:
+   `simulated_inference(..., observation_name: str = "")` and `experimental_inference(..., observation_name: str = "")`,
+   the keyword after `note`; `_refuse_a_taken_observation_name`, which both call right after the inference's own name,
+   before anything is read, simulated or written, and which raises the store's refusal of a bad or taken name again with
+   the field `observation_name`; the observation stage handed `name=observation_name` always (blank leaves it unnamed),
+   its note left empty. `core.refusals.FIELDS` gains `observation_name` (114 to 115), `None` in both front ends' tables,
+   and `core/plans.py` gives it the reason "it belongs to one run". Nothing under `core/tool` passes it, so a
+   command-line observation is unnamed as before, and no window page passes it yet. With stage 4's item 1 (E5) this
+   completes item 12 of the first part (the setting names E4 and E5 add). Comments only: `core/refusals.py`'s two
+   "tool-only" comments over the diagnostics' and the probe checks' keys and the two in `core/tool/fields.py`'s table
+   now say each key has its flag and leave to the window's table which have a control. Nothing inside `FIT_CODE`.
+2. **An observation given twice is saved twice.** No observation is recognised by its digest: the same recordings
+   given twice to `experimental_inference` write two records with one `x_obs_digest` (measured at this task, as the
+   plan's probe 6 measured it). A cell simulated twice is two observations (new noise each time, two digests), so this
+   is the recordings' case. Since E4 a second save under a name already saved is refused at the entry; an unnamed one
+   is saved again. Cure if wanted: find an observation of the same digest and source and use it, or say it is one.
+3. **An inference on recordings refused for another observation has already saved that observation.**
+   `experimental_inference` leaves the narrowed posterior's rule to `infer_and_visualize`, which can tell the
+   posterior's own recordings from others only by the digest of what was built, so its refusal
+   (`accept_other_observation`) comes after the observation is written; the docstring's "nothing is lost by waiting"
+   holds for the computing, not for the record (measured: one record added, then the refusal). The simulated path
+   refuses before anything. Since E4 the record keeps the name it was given, so the same call with the same name is
+   then refused as taken. The window asks its question before a run starts, so its runs do not meet the refusal; a
+   caller of the engine does. Cure if wanted: compare the digest once the recordings are built, before the write.
+4. **An observation's name taken during the run, with the default choice, is refused under the inference's field.**
+   With `if_name_taken="refuse"` (the default), an observation's name another record takes while the observation is
+   made is refused by the store at the write, after the simulation, with the field `name` (measured), so a front end
+   would point at the inference's name. No front end meets it: the window asks for "unnamed", and the command line
+   gives no observation's name. Cure if wanted: the compositions raise a name refusal of the observation stage again
+   with the field `observation_name` (about 4 lines).

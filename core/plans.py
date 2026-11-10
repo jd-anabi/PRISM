@@ -82,7 +82,7 @@ ALLOWED: dict[str, tuple[str, ...]] = {
 _REASONS: dict[str, tuple[str, ...]] = {
     "it is fixed by measurement": ("chi_f0", "chi_freq_bounds"),
     "it belongs to the computer": ("device",),
-    "it belongs to one run": ("name", "note", "seed"),
+    "it belongs to one run": ("name", "note", "seed", "observation_name"),
     "it is a consent": ("new_run", "accept_truncated", "accept_other_observation", "resume"),
     "it is a pick, not a setting": ("prior", "posterior", "observation", "cell", "resume_fit", "t_obs", "chi_f0_si",
                                     "recording_spont", "recording_forced", "recording_probe",

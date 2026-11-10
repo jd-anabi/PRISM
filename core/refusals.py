@@ -110,6 +110,8 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("accept_truncated", "consent to load a non-amortized posterior", None),
     Field("accept_other_observation", "consent to infer on another observation", None),
     Field("name", "the artifact name", None),
+    # the name of the observation an inference makes together with it, beside the inference's own name
+    Field("observation_name", "the observation's name", None),
     Field("bounds", "the bounds file", None),
     Field("cell", "the cell file", None),
     Field("units", "the units", None),
@@ -178,7 +180,8 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("x_scale", "the length scale, in nm per non-dimensional unit", None),
     Field("t_scale", "the time scale, in seconds per non-dimensional time unit", None),
     Field("forcing_value", "the forcing parameter", None),
-    # tool-only (the diagnostics); no window control, CONTROL[key] is None in core/gui/fields.py
+    # the diagnostics' knobs, each answered by a flag of its subcommand (core/tool/fields.py); the window's table
+    # (core/gui/fields.py) says which of them a control of the window answers
     Field("repeats", "the number of SBC repeats", "10"),                               # sbc_repeats
     Field("n_points", "the number of operating points", "6"),                          # identifiability_laplace
     Field("n_worst", "the number of worst directions to report", "3"),                 # identifiability_rotation
@@ -190,9 +193,10 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("rows", "the number of rows", "200000"),                                     # channel_ablation
     Field("n_sweep", "the number of sweep points", "33"),                              # channel_ablation
     Field("chi_k_fixed", "the fixed chi probe count", None),
-    # tool-only (the probe checks). The four grids and the phase threshold have no default value:
-    # without them the check follows a rule (the configured band and drive, this cell's lengths, the
-    # configured cycle ceiling; the phase not judged), which the help states in words.
+    # the probe checks' knobs, each answered by a flag of the probes subcommand, as the diagnostics' are. The four
+    # grids and the phase threshold have no default value: without them the check follows a rule (the configured
+    # band and drive, this cell's lengths, the configured cycle ceiling; the phase not judged), which the help
+    # states in words.
     Field("probe_seed", "the probe check's random seed", "0"),                         # probe_band, probe_mask, probe_drive
     Field("probe_lengths", "the recording lengths, in seconds", None),
     Field("probe_multipliers", "the probe frequencies, as multiples of the peak frequency", None),

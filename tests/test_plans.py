@@ -286,6 +286,7 @@ def _bytes(folder, data) -> Path:
     ("chi_f0", "it is fixed by measurement"), ("chi_freq_bounds", "it is fixed by measurement"),
     ("device", "it belongs to the computer"),
     ("name", "it belongs to one run"), ("note", "it belongs to one run"), ("seed", "it belongs to one run"),
+    ("observation_name", "it belongs to one run"),
     ("new_run", "it is a consent"), ("accept_truncated", "it is a consent"),
     ("accept_other_observation", "it is a consent"), ("resume", "it is a consent"),
     ("prior", "it is a pick, not a setting"), ("resume_fit", "it is a pick, not a setting"),
@@ -343,7 +344,7 @@ def test_every_registered_key_is_allowed_or_refused_for_a_stated_reason():
     for key, reason in CLASSES.items():
         reasons.setdefault(reason, set()).add(key)
     assert {reason: len(keys) for reason, keys in reasons.items()} == {
-        "it is fixed by measurement": 2, "it belongs to the computer": 1, "it belongs to one run": 3,
+        "it is fixed by measurement": 2, "it belongs to the computer": 1, "it belongs to one run": 4,
         "it is a consent": 4, "it is a pick, not a setting": 13, "it is the folder the plan stands in": 1,
         "it is not a setting of the inference steps": 58}
     assert reasons["it is a pick, not a setting"] == {

@@ -17,10 +17,11 @@ constants only ``config.py`` sets (``chi_k_pad``, ``chi_max_cycles``, ``chi_f0``
 (``artifacts show <kind> <ref>``) -- there is no flag to print, and the refusal's own sentence already
 quotes the ref -- the five FDT settings neither front end exposes (the frequency band, the
 burn-in, the two durations and the step), the model builder's seven numeric fields, which live on
-a window-only screen, the live simulation's two frame settings, on a window-only panel, and the four
-keys of a run plan (``plan``, ``chi_mode``, ``reparam_rotate``, ``expected_epochs``): the tool reads no
-plan, so none of them is ever a refusal of the tool's, whatever flag sets the same setting. One
-repeatable flag can carry several keys:
+a window-only screen, the live simulation's two frame settings, on a window-only panel, the name of the
+observation an inference makes (``observation_name``), which ``infer`` never gives, so its observation
+stays unnamed, and the four keys of a run plan (``plan``, ``chi_mode``, ``reparam_rotate``,
+``expected_epochs``): the tool reads no plan, so none of them is ever a refusal of the tool's, whatever
+flag sets the same setting. One repeatable flag can carry several keys:
 ``--forced PATH[@HZ]`` is both the driven recording and a chi probe's, ``--drive NAME=VALUE`` is the
 amplitude, frequency and phase.
 """
@@ -64,6 +65,8 @@ FLAG: dict[str, str | None] = {
     "accept_truncated": "--accept-truncated",
     "accept_other_observation": "--accept-other-observation",
     "name": "--name",
+    # the observation an inference makes: infer gives it no name, so no flag answers its name
+    "observation_name": None,
     # the artifact browser: `artifacts note <kind> <ref> --note TEXT`. The note text is a FLAG (and
     # not a positional) precisely so this table can name one; the artifact itself is positional.
     "artifact": None,
@@ -115,7 +118,7 @@ FLAG: dict[str, str | None] = {
     "chi_freq_bounds": None,
     # a run plan: the tool reads none
     "plan": None, "chi_mode": None, "reparam_rotate": None, "expected_epochs": None,
-    # tool-only: the diagnostics' knobs
+    # the diagnostics' knobs
     "repeats": "--repeats",
     "n_points": "--n-points",
     "n_worst": "--n-worst",
@@ -127,7 +130,7 @@ FLAG: dict[str, str | None] = {
     "rows": "--rows",
     "n_sweep": "--n-sweep",
     "chi_k_fixed": "--chi-k-fixed",
-    # tool-only: the probe checks. Their own flag names, never the training drive's; --seed,
+    # the probe checks: their own flag names, never the training drive's; --seed,
     # --num-runs, --run-size, --peak-window and --t-obs answer two keys each, and --repeats three, as
     # --drive answers three
     "probe_seed": "--seed",

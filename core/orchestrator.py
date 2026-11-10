@@ -2845,11 +2845,22 @@ def _t_obs_outside_training(T_obs_s: float) -> "str | None":
     return None
 
 
+def _refuse_a_taken_observation_name(store, name: str) -> None:
+    """Refuse the name of the observation an inference makes as the store refuses a bad or a taken name, but with the
+    observation's name as the field: the inference's own name is ``name``, and a front end must point at the right
+    one. A blank name is free. Both compositions call it right after the inference's own name, before anything is
+    read, simulated or written, so a name taken before the run costs nothing."""
+    try:
+        store.assert_name_free("observation", name)
+    except Refusal as exc:
+        raise Refusal(str(exc), field="observation_name") from None
+
+
 @public_entry
 def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: float, *,
                         cell=None, gt_values=None, prior: "LoadedPrior | None" = None,
                         accept=None, n_samples: int | None = None,
-                        name: str = "", note: str = "", fig_sink=None, store=None,
+                        name: str = "", note: str = "", observation_name: str = "", fig_sink=None, store=None,
                         if_name_taken: str = "refuse"):
     """Simulate a ground-truth observation for a cell and infer on it: the whole simulated path.
 
@@ -2867,6 +2878,9 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
                       observation that posterior's region was drawn around.
     :param n_samples: posterior draws; None leaves infer_and_visualize's own default, so that number
                       stays written down in exactly one place.
+    :param observation_name: names the observation this inference makes; it is checked before anything is
+                      spent, right after the inference's own ``name``, and handed to the observation stage as
+                      its ``name``. Blank leaves the observation unnamed; the observation keeps no note.
     :param if_name_taken: the observation's (``generate_observations``'s own), handed on only when it
                       is given, and checked here before anything is simulated. The inference's own name
                       is checked again once the observation is written, and refused there as before.
@@ -2875,8 +2889,8 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
     from .artifacts import Accept
     store = resolve_store(store)
     # THE PRE-SPEND BLOCK, in the order the "refused before any spend" pins rely on: the numeric
-    # knobs, then the name, then the files -- all before the cell is parsed, its truth
-    # injected or anything simulated.
+    # knobs, then the two names (the inference's, then its observation's), then the files -- all
+    # before the cell is parsed, its truth injected or anything simulated.
     _refuse_no_samples(n_samples)
     # A blank or zero length used to pass here, simulate, write the observation and then die in
     # math.log(0.0) inside the conditioning row: after the spend, with an orphan left behind.
@@ -2885,6 +2899,7 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
     # observation had been simulated AND written, so a taken name cost a simulation and left an
     # observation artifact nothing would ever name.
     store.assert_name_free("inference", name)
+    _refuse_a_taken_observation_name(store, observation_name)
     check_if_name_taken(if_name_taken)
     if (cell is None) == (gt_values is None):
         raise Refusal("simulated_inference takes exactly one of cell= (a cell file) and gt_values= "
@@ -2933,7 +2948,7 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
     # The choice for a taken name is the observation's alone, handed on only when it is given, so the
     # observation stage's own default stays the one place it is written down.
     taken = {} if if_name_taken == "refuse" else {"if_name_taken": if_name_taken}
-    obs = generate_observations(cfg, fig_sink=fig_sink, store=store, **taken)
+    obs = generate_observations(cfg, name=observation_name, fig_sink=fig_sink, store=store, **taken)
     inf = infer_and_visualize(cfg, posterior, obs, name=name, note=note, fig_sink=fig_sink, store=store,
                               accept=accept,
                               **({"n_samples": n_samples} if n_samples is not None else {}))
@@ -2943,13 +2958,15 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
 @public_entry
 def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "RecordingSet", *,
                            accept=None, n_samples: int | None = None,
-                           name: str = "", note: str = "", fig_sink=None, store=None,
+                           name: str = "", note: str = "", observation_name: str = "", fig_sink=None, store=None,
                            if_name_taken: str = "refuse"):
     """Any bench recording set (passive, driven, chi) -> the observation artifact -> the inference.
 
     Its own checks are the inputs' alone, before any compute: the sample count, the observation length
     (a Refusal at or below 0; outside the training range the same PreflightWarning the simulated path
-    gives) and the name. The recordings are checked by build_experiment_observation's file
+    gives) and the two names, the inference's and then its observation's: ``observation_name`` names the
+    observation this inference makes, and is handed to the observation stage as its ``name``, as in
+    ``simulated_inference``. The recordings are checked by build_experiment_observation's file
     loop and the drive by the builder, so ``rec`` is forwarded unchecked. A recording carries no truth,
     so there is nothing to compare against the training distribution. And rebuilding the same
     recordings reproduces a region's digest, which is the LEGITIMATE match -- so the non-amortized
@@ -2958,16 +2975,17 @@ def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "Rec
     ``if_name_taken`` is the observation's, as in ``simulated_inference``.
     """
     store = resolve_store(store)
-    # The pre-spend block, in the simulated path's order: the numeric knobs, then the name.
+    # The pre-spend block, in the simulated path's order: the numeric knobs, then the two names.
     _refuse_no_samples(n_samples)
     T_obs_s = require_positive("t_obs", rec.T_obs_s)
     store.assert_name_free("inference", name)   # with the recordings' own file checks, before any compute
+    _refuse_a_taken_observation_name(store, observation_name)
     check_if_name_taken(if_name_taken)
     _outside = _t_obs_outside_training(T_obs_s)
     if _outside:
         _preflight_warn(_outside)
     taken = {} if if_name_taken == "refuse" else {"if_name_taken": if_name_taken}
-    obs = build_experiment_observation(cfg, rec, fig_sink=fig_sink, store=store, **taken)
+    obs = build_experiment_observation(cfg, rec, name=observation_name, fig_sink=fig_sink, store=store, **taken)
     inf = infer_and_visualize(cfg, posterior, obs, name=name, note=note, fig_sink=fig_sink, store=store,
                               accept=accept,
                               **({"n_samples": n_samples} if n_samples is not None else {}))
