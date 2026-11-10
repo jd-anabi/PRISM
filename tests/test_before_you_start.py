@@ -847,3 +847,23 @@ def test_step_one_says_the_device_and_the_width_a_resume_runs_on(device, width, 
     its width, grouped by thousands; a device of no kind known says nothing."""
     from core.gui.step_facts import resumed_words
     assert resumed_words(device, width) == said
+
+
+def test_the_pre_run_checks_line_stands_after_the_memory_and_never_blocks():
+    """What the frequency band and the audit read for the prior in use stands after how long the run takes and the
+    memory limit, and before the other steps' changes, the name's and the fields' facts and the plan; whatever it says,
+    it blocks nothing, and the start stays ungreyed beside it."""
+    checks = (Fact("warn", "Frequency band: Failed, 3 Oct 2026, 14:02. Starting will ask first."),)
+    facts = training_facts(**TRAINING, how_long="Information comes here.", memory="The memory limit.", checks=checks,
+                           others_pending=("Step 2, Prior, has changes that are not applied.",),
+                           name_facts=(Fact("info", "The name."),), plan_lines=(Fact("info", "No plan."),))
+    said = _said(facts)
+    assert said[-6:] == [("info", "Information comes here."), ("info", "The memory limit."),
+                         ("warn", "Frequency band: Failed, 3 Oct 2026, 14:02. Starting will ask first."),
+                         ("warn", "Step 2, Prior, has changes that are not applied."), ("info", "The name."),
+                         ("info", "No plan.")], said
+    assert reason_beside(facts, live=False, nothing_to_apply=False) == ""
+    assert training_facts(**TRAINING) == training_facts(**TRAINING, checks=()), "no checks said something"
+    for kind in ("fine", "info", "warn"):
+        held = training_facts(**TRAINING, checks=(Fact(kind, "The two checks."),))
+        assert not any(fact.blocks for fact in held) and (kind, "The two checks.") in _said(held), kind

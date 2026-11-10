@@ -802,7 +802,7 @@ def new_set_question(*, batches, never: bool, own: str = "", sets=()) -> tuple:
 
 def training_facts(*, needs_prior: bool = False, uses: str = "", budget: str = "", reading=None, never: bool = False,
                    resume: str = "auto", batches=None, differences=None, how_long: str = "", memory: str = "",
-                   others_pending: Sequence[str] = (), name_facts: Sequence[Fact] = (),
+                   checks: Sequence[Fact] = (), others_pending: Sequence[str] = (), name_facts: Sequence[Fact] = (),
                    field_facts: Sequence[Fact] = (), plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
     """The facts of the third step, in the order of its table, those that block first. ``needs_prior``: no prior is in
     use, so nothing can be trained. ``uses`` and ``budget``: what the run uses and how many simulations it makes, said
@@ -810,14 +810,16 @@ def training_facts(*, needs_prior: bool = False, uses: str = "", budget: str = "
     simulations are not saved; ``resume``, the choice "Continue or start new", and ``batches``, the batches typed, for
     what the sets say and what the choice stops; ``differences``, what each set that does not match differs in, by the
     set's name, as the page names it. Then that the fit is saved and how a resume reads back, or that it cannot be
-    resumed; ``how_long`` and ``memory``, each one sentence or more; ``others_pending``, the sentences of the other
-    steps that hold changes not applied; the name's and the fields' facts; and what the plan in use says. Reads nothing,
-    and raises on nothing a reading or a session holds."""
+    resumed; ``how_long`` and ``memory``, each one sentence or more; ``checks``, what the two checks made before a
+    training read for the prior in use, which never blocks; ``others_pending``, the sentences of the other steps that
+    hold changes not applied; the name's and the fields' facts; and what the plan in use says. Reads nothing, and
+    raises on nothing a reading or a session holds."""
     facts = [Fact("lock", NEEDS_A_PRIOR, NEEDS_A_PRIOR_BLOCKS)] if needs_prior else []
     facts += [Fact("info", said) for said in (uses, budget) if said]
     facts += continue_facts(reading, never=never, resume=resume, batches=batches, differences=differences)
     facts += [Fact("warn", FIT_LOST_TEXT)] if never else [Fact("info", FIT_SAVED_TEXT), Fact("info", READ_BACK_TEXT)]
     facts += [Fact("info", said) for said in (how_long, memory) if said]
+    facts += list(checks)
     facts += [Fact("warn", said) for said in others_pending if said]
     return ordered((*facts, *name_facts, *field_facts, *plan_lines))
 

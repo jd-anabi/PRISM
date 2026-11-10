@@ -2667,8 +2667,9 @@ def test_before_you_start_reads_each_input_where_the_page_reads_it(tmp_path, mon
     that measured its batches when the last measured none; a saved set of these settings is continued, the time is for
     the batches still to simulate, and with "Automatic" the paces are asked at the width the reading gives; another
     step's change not applied, step 1's or step 2's, is said with the name of what is in use, as the page is shown
-    again, and the line of what the run uses still names the bounds file in use; the name's and every field's facts
-    stand with them. A limit set in the environment is set aside, so the window's own setting is said."""
+    again, and the line of what the run uses still names the bounds file in use; what the two checks made before a
+    training read stands after the memory limit; the name's and every field's facts stand with them. A limit set in the
+    environment is set aside, so the window's own setting is said."""
     from datetime import datetime, timedelta, timezone
     from core import config, orchestrator
     from core.gui.memory_limit import computer
@@ -2725,18 +2726,19 @@ def test_before_you_start_reads_each_input_where_the_page_reads_it(tmp_path, mon
             "minute per epoch.",
             "Information. Memory limit: 6 GiB for each batch of simulations (set in Settings, This computer). The last "
             "run on this computer (retrain_1, ended 8 Oct 2026, 15:00) ran with a limit of 6 GiB. Its largest batch "
-            "held 5.4 GiB."], said()
+            "held 5.4 GiB.",
+            "Information. The two pre-run checks do not apply: they need the frequency response."], said()
         monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", 4.0)
         page.redraw()
-        assert said()[-1].startswith("Information. Memory limit: 4 GiB for each batch"), said()[-1]
+        assert said()[-2].startswith("Information. Memory limit: 4 GiB for each batch"), said()[-2]
         write_history(controller().folder(), id="20261008T160000-prior-build", word="Prior build", name="later",
                       outcome="finished", started=started + timedelta(hours=4), ended=started + timedelta(hours=5),
                       memory_limit={"gib": 4.0, "source": "setting", "computer": computer()})
         page.read_facts()
-        assert said()[-1] == (
+        assert said()[-2] == (
             "Information. Memory limit: 4 GiB for each batch of simulations (set in Settings, This computer). The last "
             "run on this computer (later, ended 8 Oct 2026, 17:00) ran with a limit of 4 GiB. The last run that "
-            "measured its batches (retrain_1, ended 8 Oct 2026, 15:00): the largest held 5.4 GiB."), said()[-1]
+            "measured its batches (retrain_1, ended 8 Oct 2026, 15:00): the largest held 5.4 GiB."), said()[-2]
         _a_saved_set(page, 300)                          # 300 of the 777 batches of these settings simulated and saved
         page.read_facts()
         assert said()[2] == "Fine. Continues the saved simulation set: 300 of 777 batches are done.", said()[2]
@@ -4632,6 +4634,152 @@ def test_a_history_no_reading_foresaw_says_no_time_and_raises_nothing(tmp_path, 
         assert stand_in.started.wait(5)
         stand_in.release(None)
         turn_until(app, lambda: not controller().is_live(), 10.0)
+
+
+# ── the checks the Training page reads ──
+@contextlib.contextmanager
+def _third_step_of_the_frequency_response(tmp_path, monkeypatch):
+    """The third step as ``_third_step`` builds it with no posterior held, its configuration and its prior of the
+    frequency response."""
+    import tests._fixtures as fixtures
+    real = fixtures._nad_cfg
+    monkeypatch.setattr(fixtures, "_nad_cfg", lambda **over: real(**{"chi_mode": True, **over}))
+    try:
+        with _third_step(tmp_path, monkeypatch, held=False) as built:
+            yield built
+    finally:
+        monkeypatch.setattr(fixtures, "_nad_cfg", real)
+
+
+def _an_audit(screen, *, prior=None, created=None, **given) -> str:
+    """An audit of the prior in use (or of ``prior``, an id), as the probe check writes one on the configuration in use,
+    reading as ``given`` makes it; its id."""
+    from core.artifacts import default_store
+    from core.diagnostics.probes import _configured
+    from tests._fixtures import check_results, write_diagnostic
+    cfg = screen.session.cfg
+    held = check_results("audit", **given)
+    settings = {**held["settings"], "configured": {**_configured(cfg), "probe_count": {"drawn_per_batch_from": [2, 12]}}}
+    return write_diagnostic(default_store(), cfg, diagnostic="probes", variant="mask",
+                            parents={"prior": prior or screen.session.inf_prior.id}, settings=settings,
+                            results=held["results"], created=created)
+
+
+def _a_band(screen, *, created=None, **given) -> str:
+    """A frequency-band record made on the configuration in use, reading as ``given`` makes it; its id."""
+    from core.artifacts import default_store
+    from core.diagnostics.probes import _configured
+    from tests._fixtures import check_results, write_diagnostic
+    cfg = screen.session.cfg
+    held = check_results("band", **given)
+    return write_diagnostic(default_store(), cfg, diagnostic="probes", variant="band",
+                            settings={**held["settings"], "configured": _configured(cfg)}, results=held["results"],
+                            created=created)
+
+
+def _checks_line(page) -> "tuple[int, str] | None":
+    """Where "Before you start" says the two checks made before a training, and what it says; None when it does not."""
+    for at, row in enumerate(page.foot.facts.rows()):
+        said = row.sentence.plain_text()
+        if "Frequency band:" in said or "pre-run checks" in said:
+            return at, said
+    return None
+
+
+def test_the_training_page_says_the_pre_run_checks_as_it_reads_them(tmp_path, monkeypatch):
+    """"Before you start" on the Training page says what the frequency band and the audit of the prior in use read, as
+    the page's own reading finds them, after the memory limit and before the other steps' changes: "Attention." with
+    neither run; each as its record is written and the store changes, with its date; "Fine." with both passed; an audit
+    of another prior moves nothing. It never greys "Start training". With a configuration that is not of the frequency
+    response, "Information."."""
+    from core.gui.design import date_text
+    from tests._runs import at
+    qt_app()
+    with _third_step_of_the_frequency_response(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        place, said = _checks_line(page)
+        memory = next(n for n, row in enumerate(page.foot.facts.rows())
+                      if "memory" in row.sentence.plain_text().lower())
+        assert place > memory, (place, memory)
+        assert said == "Attention. Frequency band: Not run yet. Unusable driven recordings: audit: Not run yet."
+        assert page.foot.main_button.isEnabled()
+        _an_audit(screen, prior="20201010T101010", masked_fraction=0.5)
+        window._store_changed()
+        assert _checks_line(page)[1] == said, "an audit of another prior was counted"
+        _an_audit(screen, created=at(3, 14, 40))
+        window._store_changed()
+        assert _checks_line(page)[1] == "Attention. Frequency band: Not run yet."
+        _a_band(screen, created=at(3, 14, 2))
+        window._store_changed()
+        assert _checks_line(page)[1] == (
+            f"Fine. Frequency band: Passed, {date_text(at(3, 14, 2))}. Unusable driven recordings: audit: Passed, "
+            f"{date_text(at(3, 14, 40))}.")
+        _a_band(screen, created=at(4, 9, 0), band_holds=False)
+        window._store_changed()
+        assert _checks_line(page)[1] == (
+            f"Attention. Frequency band: Failed, {date_text(at(4, 9, 0))}. Starting will ask first.")
+        assert page.foot.main_button.isEnabled(), "a failed check greyed the start"
+        import tests._fixtures as fixtures
+        screen.session.cfg = fixtures._nad_cfg(chi_f0=0.2)
+        assert [row.state for row in screen.check_rows()[:2]] == ["Not run yet", "Not run yet"], (
+            "the records made at another drive amplitude counted for a configuration put in use since")
+    with _third_step(tmp_path / "plain", monkeypatch, held=False) as (window, screen, page, stand_in):
+        assert _checks_line(page)[1] == ("Information. The two pre-run checks do not apply: they need the frequency "
+                                         "response.")
+
+
+def test_a_failed_pre_run_check_asks_first_with_cancel_preselected(tmp_path, monkeypatch):
+    """After the audit of the prior in use read "Failed", "Start training" asks one question first, "Cancel"
+    preselected: its title and its other answer from the button's words, its text naming the check that failed with its
+    date and where to read why. "Cancel" starts nothing; "Start training anyway" goes on to the question before
+    simulating from zero, and asks nothing more with no saved set beside; when the stage then refuses a new set beside a
+    saved one, its own question is asked again and the failed check's is not. Once the check passes, nothing is asked."""
+    from core.gui.design import date_text
+    from core.refusals import Refusal
+    from tests._dialogs import answer_in_turn
+    from tests._runs import at
+    qt_app()
+    with _third_step_of_the_frequency_response(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        _a_budget(page)
+        _an_audit(screen, created=at(3, 14, 40), masked_fraction=0.5)
+        window._store_changed()
+        title, text = ("Start training although a check failed?",
+                       f"Unusable driven recordings: audit: Failed, {date_text(at(3, 14, 40))}. Step 4, Checks, says "
+                       "why.")
+        forget_asked()
+        choose(monkeypatch, default=True)
+        page._main_clicked()
+        question = asked()
+        assert (question.title, question.sentence, question.answers, question.default) == (
+            title, text, ("Start training anyway", "Cancel"), "Cancel"), question
+        assert stand_in.calls == [] and len(all_asked()) == 1
+        name = _a_set_beside(page, 40, n_runs=40)
+        forget_asked()
+        answer_in_turn(monkeypatch, ("Start training anyway", None), ("Cancel", None))
+        page._main_clicked()
+        assert [one.title for one in all_asked()] == [title, "Start a new simulation set?"]
+        assert stand_in.calls == []
+        import shutil
+        from core.artifacts import default_store
+        shutil.rmtree(default_store().kind_dir("simulation") / name)
+        page.read_facts()
+        forget_asked()
+        answer_in_turn(monkeypatch, ("Start training anyway", None), ("Cancel", None))
+        page._main_clicked()
+        _the_call(stand_in, 1)
+        assert [one.title for one in all_asked()] == [title], "a question was asked after the failed check's"
+        assert stand_in.calls[-1][1]["new_run"] is False
+        _a_set_beside(page, 4000, n_runs=4000)
+        stand_in.fail(Refusal(NEAR_MISS, field="new_run"))
+        _settle_the_run()
+        assert [one.title for one in all_asked()] == [title, "Start a new simulation set?"], (
+            "the failed check's question was asked again at the stage's refusal of a new set")
+        assert len(stand_in.calls) == 1
+        _an_audit(screen, created=at(4, 9, 0))
+        window._store_changed()
+        forget_asked()
+        choose(monkeypatch, words="Cancel")
+        page._main_clicked()
+        assert title not in [one.title for one in all_asked()], "a check that passed asked first"
 
 
 def test_the_checks_are_read_at_their_moments_and_never_while_a_run_is_live(tmp_path, monkeypatch):

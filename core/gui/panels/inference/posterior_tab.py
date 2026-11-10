@@ -24,7 +24,10 @@ new one only on its answer, which leaves each kept training as it is. Else a tra
 zero while saved sets of its model exist asks first, "Cancel" preselected, listing each set with what it differs in;
 with "Never" a set these very settings would continue heads the list. A yes hands the stage the consent to start a new
 set; so does a yes to the same question asked again when the stage refuses a new set it finds one setting away from
-another, whose own sentence is then not shown. Never both questions.
+another, whose own sentence is then not shown. Never both questions. Before either, a start after the frequency band
+or the audit of the prior in use read "Failed" asks once whether to start anyway, "Cancel" preselected; "Before you
+start" says what those two checks read, and never greys the start. The press's own question asked again after the
+stage's refusal of a new set does not ask it a second time.
 
 Nothing is read while a run is live: the saved simulation sets, the kept trainings, the run history, the saved
 posteriors' records and the records of earlier trainings are read by the page's reading alone, and the list of saved
@@ -44,7 +47,7 @@ from core import config, orchestrator
 from core.artifacts import Accept, default_store
 from core.refusals import Refusal, default_clause, require_at_least, require_positive
 
-from ... import continuing, design, fields, fonts, plans, record_words, settings, style, texts
+from ... import check_lineage, continuing, design, fields, fonts, plans, record_words, settings, style, texts
 from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...remembered import NUM_RUNS_KEY, POSTERIOR_KEY, RUN_SIZE_KEY, put_many
 from ...reported import reported
@@ -489,8 +492,22 @@ class PosteriorPanel(StepPage):
         differences = {one.name: self._differs(one) for one in of_this_model(getattr(reading, "sibling_diffs", ()))}
         return training_facts(needs_prior=prior is None, uses=uses, budget=budget, reading=reading,
                               never=self._never(), resume=self._resume(), batches=batches, differences=differences,
-                              how_long=how_long, memory=memory, others_pending=self._others_pending(),
-                              name_facts=names, field_facts=field_facts, plan_lines=self.plan_lines())
+                              how_long=how_long, memory=memory, checks=self._pre_run(),
+                              others_pending=self._others_pending(), name_facts=names, field_facts=field_facts,
+                              plan_lines=self.plan_lines())
+
+    def _check_rows(self) -> "tuple | None":
+        """The checks' rows as the screen last read them, with what is held now; None before its first reading."""
+        rows = getattr(self._screen, "check_rows", None)
+        return rows() if callable(rows) else None
+
+    def _pre_run(self) -> tuple:
+        """What "Before you start" says of the frequency band and the audit for the prior in use: nothing while no prior
+        is held, and nothing before the screen has read the checks. Reads nothing."""
+        rows = self._check_rows()
+        if rows is None or self._held()[1] is None:
+            return ()
+        return (check_lineage.pre_run_fact(rows),)
 
     def _load_facts(self) -> tuple:
         """The facts of the load view: what blocks a load, and the prior the posterior selected was trained with
@@ -919,9 +936,10 @@ class PosteriorPanel(StepPage):
 
     def main_pressed(self) -> None:
         """Start the training on the configuration and the prior held, or load the posterior selected: nothing is held
-        anew until the run returns its posterior. A training asks first when kept trainings match it, and else when it
-        would simulate from zero beside saved sets of its model; never both. The batches and the simulations per batch
-        are remembered once a training has started."""
+        anew until the run returns its posterior. A training asks first, "Cancel" preselected, when the frequency band
+        or the audit of the prior in use failed; then when kept trainings match it, and else when it would simulate from
+        zero beside saved sets of its model, never both. The batches and the simulations per batch are remembered once a
+        training has started."""
         if self.view == "load":
             self._load()
             return
@@ -933,6 +951,12 @@ class PosteriorPanel(StepPage):
         except Refusal as refused:
             self._refusal(refused)
             return
+        rows = self._check_rows()
+        failed = None if rows is None else check_lineage.pre_run_question(rows, start=self.main_words())
+        if failed is not None:
+            title, text, other = failed
+            if not ask(self, title, text, CANCEL, other):
+                return
         new_run = False
         if self._matches:
             title, sentence, items, beneath, other = new_training_question(
