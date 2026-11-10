@@ -1542,6 +1542,86 @@ def test_channel_ablation_refuses_a_cache_whose_width_disagrees_with_the_posteri
     assert len(store.list("diagnostic")) == before
 
 
+@pytest.mark.parametrize("case", ["no embedding network", "no simulation set", "a summary width not this build's",
+                                  "a set with no rows", "rows not the posterior's width"])
+def test_the_input_use_check_refuses_with_the_posterior_field_before_anything_is_spent(case, store, monkeypatch):
+    """Each of the input-use check's five refusals of the posterior it is handed names the posterior as its field, so
+    each front end can say where another posterior is chosen, and keeps its sentence. Each is raised before the
+    diagnostic's record is opened: a refused check leaves no record and sweeps nothing."""
+    from core import orchestrator
+    from core.diagnostics import channel_ablation
+    from core.SBI.statistics import SUMMARY_WIDTH
+    cfg = _nad_cfg()
+    width = SUMMARY_WIDTH + 1 + orchestrator.expected_forcing_dim(cfg)
+    if case == "no simulation set":
+        post = store.load_posterior(cfg, _posterior_artifact(store, cfg, name="abl_refused").id)
+        words = "names no simulation cache, so checkpointing was off for its training run"
+    else:
+        net_input_dim, cols, batches, words = SUMMARY_WIDTH + 1, width, 1, {
+            "no embedding network": "no EmbeddedNet inside this posterior's estimator",
+            "a summary width not this build's": "wide summary block",
+            "a set with no rows": "holds no committed rows",
+            "rows not the posterior's width": "do not describe the same measurement"}[case]
+        if case == "a summary width not this build's":
+            net_input_dim = SUMMARY_WIDTH
+        elif case == "rows not the posterior's width":
+            cols = width - 1
+        elif case == "a set with no rows":
+            batches = 0
+        post = _ablation_posterior_with_cache(store, cfg, name="abl_refused", net_input_dim=net_input_dim,
+                                              sim_cols=cols, batches_done=batches)
+        if case == "a set with no rows":                   # the set commits no batch and holds no shard
+            for shard in store.kind_dir("simulation").glob("*/shards/x_*.pt"):
+                shard.unlink()
+        if case == "no embedding network":
+            post.latent.posterior_estimator = torch.nn.Linear(2, 2)
+    def _opened(kind, *a, **k):
+        raise AssertionError(f"the {kind} record was opened before the refusal")
+
+    monkeypatch.setattr(store, "create", _opened)
+    with pytest.raises(Refusal) as e:
+        channel_ablation(cfg, post, rows=50, n_sweep=5, name="abl_refused_check")
+    assert (e.value.field, words in str(e.value)) == ("posterior", True), (e.value.field, str(e.value))
+    assert store.list("diagnostic") == []
+
+
+def test_identifiability_across_the_prior_refuses_a_posterior_with_no_training_prior(store, monkeypatch):
+    """With more than one point the check draws its points from the posterior's own training prior, so a posterior
+    that carries none is refused naming the posterior, before the diagnostic's record is opened. With one point,
+    the ground truth alone, no prior is read and the check goes on to open its record."""
+    from types import SimpleNamespace
+    from core.diagnostics import identifiability_laplace
+    cfg = _forced_nad_cfg()
+    post = SimpleNamespace(name="no_prior", id="20260910T110000", latent=SimpleNamespace(prior=None),
+                           posterior=SimpleNamespace(T=None))
+
+    class _Opened(Exception):
+        """The record opened: the check passed its refusals."""
+
+    def _create(*a, **k):
+        raise _Opened(a[0])
+
+    monkeypatch.setattr(store, "create", _create)
+    with pytest.raises(Refusal) as e:
+        identifiability_laplace(cfg, post, n_points=2, t_obs_s=4.5, name="lap_refused", store=store)
+    assert (e.value.field, "carries no latent training prior" in str(e.value)) == ("posterior", True), str(e.value)
+    with pytest.raises(_Opened):
+        identifiability_laplace(cfg, post, n_points=1, t_obs_s=4.5, name="lap_one_point", store=store)
+    assert store.list("diagnostic") == []
+
+
+def test_the_input_use_check_holds_no_plain_value_error():
+    """STANDING. Every refusal the input-use check makes is a refusal with its field, never a plain ValueError, which
+    a front end can only show as a failure with no setting to point at. Read off the module's source."""
+    import ast
+    import inspect
+    from core.diagnostics import ablation
+    plain = [node.lineno for node in ast.walk(ast.parse(inspect.getsource(ablation)))
+             if isinstance(node, ast.Raise) and node.exc is not None
+             and ast.unparse(node.exc.func if isinstance(node.exc, ast.Call) else node.exc) == "ValueError"]
+    assert plain == [], f"core/diagnostics/ablation.py raises a plain ValueError at lines {plain}"
+
+
 def test_channel_ablation_writes_a_non_finite_displacement_as_an_explicit_verdict(store, monkeypatch):
     """A channel whose sweep drove the network to NaN/Inf gets its OWN verdict --
     every numeric comparison against NaN is False, so before the fix it fell all the way through to

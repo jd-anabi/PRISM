@@ -1190,6 +1190,53 @@ def test_the_ablation_subcommand_forwards_its_knobs(tmp_path, monkeypatch):
     assert set(seen["kw"]) == {"name", "note", "fig_sink", "store"}
 
 
+def _refused_lines(err: str) -> list[str]:
+    return [line for line in err.splitlines() if ": refused: " in line]
+
+
+def test_the_input_use_refusal_names_the_posterior_flag(tmp_path, monkeypatch, capsys):
+    """`ablation` on a posterior whose training kept no simulation set prints one refusal line: the stage's sentence,
+    then the flag that names the posterior, with no class name and no place in the code."""
+    from core import tool
+    from core.artifacts import ArtifactStore
+    from core.tool import diagnostics as tool_diag
+    from tests._fixtures import _nad_cfg, _posterior_artifact
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
+    store, cfg = ArtifactStore(tmp_path / "A"), _nad_cfg()
+    loaded = store.load_posterior(cfg, _posterior_artifact(store, cfg, name="no_cache_post").id)
+    monkeypatch.setattr(tool_diag, "load_posterior_and_prior", lambda c, ref, accept, s: (loaded, None))
+    bounds = str(config.BOUNDS_PATH / "nadrowski" / "master.txt")
+    assert tool.main(["ablation", "--bounds", bounds, "--device", "cpu", "--posterior", "no_cache_post"]) == 1
+    err = capsys.readouterr().err
+    assert _refused_lines(err) == [
+        "prism ablation: refused: Posterior 'no_cache_post' names no simulation cache, so checkpointing was off for "
+        "its training run and its conditioning rows no longer exist. The ranges a channel is swept over have to be "
+        "the ranges THIS network was trained on; another cache's quantiles describe a different experiment. Retrain "
+        "with checkpointing on, or pick a posterior that has one. (--posterior)"], err
+    assert "ValueError" not in err and "[raised at" not in err, err
+
+
+def test_the_across_the_prior_refusal_names_the_posterior_flag(tmp_path, monkeypatch, capsys):
+    """`identifiability laplace` at more than one point, on a posterior that carries no training prior, prints one
+    refusal line ending with the flag that names the posterior."""
+    from core import tool
+    from core.tool import diagnostics as tool_diag
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
+    no_prior = SimpleNamespace(name="no_prior_post", id="20260910T110000", latent=SimpleNamespace(prior=None),
+                               posterior=SimpleNamespace(T=None))
+    monkeypatch.setattr(tool_diag, "load_posterior_and_prior", lambda c, ref, accept, s: (no_prior, None))
+    bounds = str(config.BOUNDS_PATH / "nadrowski" / "master.txt")
+    cell = str(config.CELL_PATH / "nadrowski" / "master_weak.txt")
+    assert tool.main(["identifiability", "laplace", "--bounds", bounds, "--device", "cpu", "--cell", cell,
+                      "--t-obs", "4.5", "--posterior", "no_prior_post", "--n-points", "2"]) == 1
+    err = capsys.readouterr().err
+    assert _refused_lines(err) == [
+        "prism identifiability: refused: this posterior carries no latent training prior (nothing with a `gen_dist` "
+        "under its `.prior`), so the off-ground-truth points cannot be drawn from the distribution the flow was "
+        "trained on. (--posterior)"], err
+    assert "ValueError" not in err and "[raised at" not in err, err
+
+
 def test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud(tool_env, tmp_path, capsys):
     """The four stages end to end at tiny size, then the drill the GPU smoke gate runs.
 

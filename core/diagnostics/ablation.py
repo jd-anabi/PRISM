@@ -22,7 +22,7 @@ import torch
 
 from core import orchestrator as orch
 from core.artifacts import resolve_store
-from core.refusals import require_at_least
+from core.refusals import Refusal, require_at_least
 from core.runs import public_entry
 
 # The report is information records: the window shows them plain, the tool prints them on stdout,
@@ -33,13 +33,14 @@ FLOAT32_EPS = 1.1920929e-07
 
 
 def _find_net(est):
-    """The EmbeddedNet inside a trained estimator, wherever sbi wrapped it."""
+    """The EmbeddedNet inside a trained estimator, wherever sbi wrapped it; a refusal naming the posterior when it
+    holds none."""
     from core.SBI import embedded_network
     for module in est.modules():
         if isinstance(module, embedded_network.EmbeddedNet):
             return module
-    raise ValueError("no EmbeddedNet inside this posterior's estimator, so there is no conditioning "
-                     "pathway to sweep.")
+    raise Refusal("no EmbeddedNet inside this posterior's estimator, so there is no conditioning "
+                  "pathway to sweep.", field="posterior")
 
 
 def _sweep_channels(emb, data, n_sum, n_sweep, labels):
@@ -102,21 +103,22 @@ def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
     label = posterior.name or posterior.id
     digest = posterior.manifest.parents.get("simulation")
     if digest is None:
-        raise ValueError(
+        raise Refusal(
             f"Posterior '{label}' names no simulation cache, so checkpointing was off for its training "
             f"run and its conditioning rows no longer exist. The ranges a channel is swept over have "
             f"to be the ranges THIS network was trained on; another cache's quantiles describe a "
-            f"different experiment. Retrain with checkpointing on, or pick a posterior that has one.")
+            f"different experiment. Retrain with checkpointing on, or pick a posterior that has one.",
+            field="posterior")
     sm = store.get("simulation", digest)
     est = posterior.latent.posterior_estimator
     net = _find_net(est)
     n_sum = int(net.input_dim)
     if n_sum != SUMMARY_WIDTH + 1:
-        raise ValueError(
+        raise Refusal(
             f"Posterior '{label}' has a {n_sum}-wide summary block; this build's layout is "
             f"{SUMMARY_WIDTH + 1} ({len(FEATURE_LABELS)} features + {len(VALID_FLAG_LABELS)} valid "
             f"flags + logT). Labelling its columns from the current list would silently misname them, "
-            f"which is exactly the table this diagnostic exists to read.")
+            f"which is exactly the table this diagnostic exists to read.", field="posterior")
     labels = list(FEATURE_LABELS) + list(VALID_FLAG_LABELS) + ["logT"]
     width = int(posterior.manifest.body["conditioning"]["width"])
     log.info(f"[artifact] {label}   summary {n_sum} + forcing {int(net.forcing_dim)} = {width}")
@@ -127,11 +129,11 @@ def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
                                            int(sm.body["identity"]["run_size"]),
                                            x_only=True, max_rows=int(rows))
     if data is None:
-        raise ValueError(f"the simulation cache {digest} holds no committed rows.")
+        raise Refusal(f"the simulation cache {digest} holds no committed rows.", field="posterior")
     if int(data.shape[1]) != width:
-        raise ValueError(
+        raise Refusal(
             f"the cache {digest} holds {int(data.shape[1])}-wide rows but posterior '{label}' "
-            f"conditions on {width}; they do not describe the same measurement.")
+            f"conditions on {width}; they do not describe the same measurement.", field="posterior")
     log.info(f"[data] {data.shape[0]:,} rows x {data.shape[1]} from {digest}")
 
     live_probes = None

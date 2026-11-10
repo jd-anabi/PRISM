@@ -453,3 +453,12 @@ From Task 2 (an observation's name and the six refusals), `.superpowers/sdd/2026
    would point at the inference's name. No front end meets it: the window asks for "unnamed", and the command line
    gives no observation's name. Cure if wanted: the compositions raise a name refusal of the observation stage again
    with the field `observation_name` (about 4 lines).
+5. **E6's last six refusals, registered for the audit (not a fault).** The input-use check's five plain `ValueError`s
+   (`core/diagnostics/ablation.py`: `_find_net`, and in `channel_ablation` a posterior naming no simulation set, a
+   summary width not this build's, a set with no rows, rows not the posterior's width) and the across-the-prior
+   check's one (`core/diagnostics/identifiability.py`, `_training_latent_prior`, reached only with more than one
+   point) are `Refusal(field="posterior")`, their sentences unchanged; `ablation.py` imports `Refusal`. All six are
+   raised before the diagnostic's record opens; the input-use check's last two come after the set's rows are read (up
+   to the `rows` asked for) and after two information records. On the command line each now ends ` (--posterior)` in
+   place of `ValueError:` and its place in the code. `identifiability.py`'s two later `ValueError`s, after simulating,
+   stay. Nothing moves a tensor.

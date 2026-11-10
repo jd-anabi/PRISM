@@ -235,10 +235,10 @@ def _training_latent_prior(latent):
         if gen is not None:
             return gen
         obj = getattr(obj, "prior", None)
-    raise ValueError(
+    raise Refusal(
         "this posterior carries no latent training prior (nothing with a `gen_dist` under its "
         "`.prior`), so the off-ground-truth points cannot be drawn from the distribution the flow "
-        "was trained on.")
+        "was trained on.", field="posterior")
 
 
 def _refuse_bad_arm_settings(m, rel, min_valid) -> None:
