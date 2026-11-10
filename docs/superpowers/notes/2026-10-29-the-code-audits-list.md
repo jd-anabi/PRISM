@@ -479,3 +479,19 @@ From Task 2 (an observation's name and the six refusals), `.superpowers/sdd/2026
    stopped or failed inference saying the observation was kept under its name, and the check of the name at the press
    reading that record) is carried to the task that builds the Inference page. Cure if wanted, in the engine: write
    the observation after the inference succeeds, or remove or unname it when the inference does not finish.
+
+From Task 3 (the checks' rules, the chain's words and Training's pre-run line), `.superpowers/sdd/2026-10-06-window-redesign/stage-5/briefs/task-03-brief.md`:
+8. **The numbers the deciding checks are judged by live in the window (item 104 of the first part, built).**
+   `core/gui/check_readings.py` holds them as named constants, each with its reason in words: the frequency band's
+   least simulations per point (24) and the four thresholds that define "holds" (0.2, 3.0, 0.5, 0.1, and the phase not
+   judged); the audit's expected share (37 %), how far from it it may read and pass or must fail (8 and 12 points) and
+   its least batches and simulations in each batch (100 and 32; the second by the owner's answer of 10 November); the
+   comparison after simulating's limits (3 and 5 points); the calibration's least test datasets, operating points and
+   samples for each dataset (2,000, 200, 1,000); and the two parts of the input whose reading decides the input-use
+   check with its least simulations read and points per sweep (200,000, 33). `tests/test_checks.py` holds the least
+   sizes, the audit's simulations in each batch among them, and the band's thresholds equal to the engine's usual
+   values; the audit's expected share, its two limits and its least batches are the retraining runbook's, the
+   comparison's two limits the owner's, and none of these exists in the engine. A check record is dated by its
+   writer's opening, so the window says when a check began, not when it ended (a calibration's date is up to its
+   whole length early): the engine writes no end time on a diagnostic or a calibration. Cure if wanted: give the
+   engine's checks their own verdicts and least sizes, and an end time on their records.

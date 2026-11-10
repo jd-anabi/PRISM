@@ -1065,9 +1065,9 @@ def _band(band_holds=True, drive_holds=True, repeats=24):
 
 
 def _audit(masked_fraction=0.379, num_runs=100, invariants_hold=True, attribution_holds=True, cross_check_holds=True,
-           nonfinite=0):
+           nonfinite=0, run_size=32):
     from core.diagnostics.probes import PROBE_LAYOUT
-    probes = num_runs * 32 * 7
+    probes = num_runs * run_size * 7
     masked = round(masked_fraction * probes)
     if not 0 <= nonfinite <= masked:
         raise ValueError(f"{nonfinite} non-finite lock-ins cannot be more than the {masked} masked probes")
@@ -1075,7 +1075,7 @@ def _audit(masked_fraction=0.379, num_runs=100, invariants_hold=True, attributio
             "non_finite_lock_in": nonfinite}
     counts = {"cycle_floor": masked - nonfinite, **leaf}
     first = max(leaf, key=lambda cause: leaf[cause])                 # a tie goes to the earlier cause
-    settings = {"num_runs": num_runs, "run_size": 32, "chi_k_fixed": None, "seed": 0,
+    settings = {"num_runs": num_runs, "run_size": run_size, "chi_k_fixed": None, "seed": 0,
                 "configured": {**_CONFIGURED, "probe_count": {"drawn_per_batch_from": [2, 12]}},
                 "probe_layout": PROBE_LAYOUT}
     results = {
@@ -1285,7 +1285,7 @@ def check_results(check: str, **given) -> dict:
     - ``audit``: ``masked_fraction`` (0.379; the record holds the probes masked over the probes, as the engine divides
       them), ``num_runs`` (100), ``invariants_hold``, ``attribution_holds``, ``cross_check_holds`` (True each; False
       puts one finding in that consistency record alone), ``nonfinite`` (the masked probes that are non-finite
-      lock-ins, 0).
+      lock-ins, 0), ``run_size`` (the simulations of each batch, 32).
     - ``input_use``: one row for each of the engine's summary channels, under its labels, sorted by displacement as the
       engine sorts them; ``a1``, ``d3`` (the verdicts of the channels ``A1_mean`` and ``D3_bimodality``: "healthy",
       "compressed", "severely compressed" or an ``ABLATION_*``), ``compressed`` (3), ``invisible``, ``nonfinite`` (0
