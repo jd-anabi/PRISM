@@ -73,8 +73,9 @@ class HomeFacts:
     """What Home states, read at one moment: the inference session, its six steps' states, the run's status (None
     for none: nothing runs, and no end waits to be seen), every record of the store in use, whether the records
     folder in use has a run in its history or a run is live, the latest runs of that folder, newest first, and what
-    was in use last time (None for nothing read); and the sentence a press left on Home ("" for none): where its chain
-    of loads stopped, or why it could not start one."""
+    was in use last time (None for nothing read); the sentence a press left on Home ("" for none): where its chain of
+    loads stopped, or why it could not start one; and the checks' summary Parameter inference last worked out (None
+    before it is built, and before it has read the checks)."""
     session: object
     states: tuple
     run: object
@@ -84,6 +85,7 @@ class HomeFacts:
     picks: object = None
     offers: tuple = ()
     notice: str = ""
+    checks: object = None
 
 
 def _capital(words: str) -> str:
@@ -331,7 +333,7 @@ class HomeScreen(QWidget):
         self._next_block.setVisible(not self._first)
         self._left.setVisible(not self._first)
         self._next = chain.next_step(facts.session, facts.states, run=facts.run, picks=facts.picks,
-                                     offers=facts.offers)
+                                     offers=facts.offers, checks=facts.checks)
         self.notice.set_sentence(facts.notice)
         self.notice.setVisible(bool(facts.notice) and not self._first)
         self.next_heading.set_text(self._next.heading)

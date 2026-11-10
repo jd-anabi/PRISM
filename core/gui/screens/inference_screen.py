@@ -20,6 +20,9 @@ And it runs a chain of loads: step 1 applied with a model and its options, then 
 a saved record, one after the other, each once the one before has returned its record; Home's "Continue with these"
 is one.
 """
+import json
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import Signal
@@ -27,7 +30,7 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from core import config
 
-from .. import chain, continuing, keys, record_words, remembered
+from .. import chain, check_lineage, check_readings, continuing, keys, record_words, remembered
 from .. import plans as window_plans
 from ..load_chain import LoadChain
 from ..panels.inference import resume as resuming
@@ -65,6 +68,38 @@ CHAIN_CANNOT_TAKE_TEXT = "{} stopped at {}: {}."
 CONTINUE_CANNOT_TEXT = "{} cannot start: {}."
 CONTINUE_PRIOR_GONE = "the prior it was trained with is no longer in Records"
 CONTINUE_BOUNDS_GONE = "the bounds file {} is no longer there"
+
+
+@dataclass(frozen=True)
+class ChecksHeld:
+    """The screen's last reading of what the checks need: what was in use then, every check record read, the run
+    history of the records folder in use, oldest first, each check's row and the summary, and when it was read."""
+    held: check_lineage.Held
+    records: tuple
+    histories: tuple
+    rows: tuple
+    summary: check_lineage.ChecksSummary
+    read_at: datetime
+
+
+def _ident(record) -> "str | None":
+    """A record's id, or None for none or a record that holds none."""
+    ident = getattr(record, "id", None)
+    return ident if isinstance(ident, str) and ident else None
+
+
+def _completed(text: "str | None") -> "datetime | None":
+    """When a simulation set was completed, in local time, from its manifest's text: its making and the seconds it took;
+    None when the text does not say both."""
+    try:
+        manifest = json.loads(text)
+        made = datetime.fromisoformat(manifest["created"])
+        seconds = manifest["body"]["wall_seconds"]
+        if made.tzinfo is None or isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+            return None
+        return (made + timedelta(seconds=float(seconds))).astimezone()
+    except (TypeError, ValueError, KeyError, OverflowError):
+        return None
 
 
 def _name_trouble(store, typed: str) -> "str | None":
@@ -111,6 +146,12 @@ class InferenceScreen(QWidget):
         # What the run history and the kept trainings offer, as last read: none before the first reading, and the last
         # kept while a run is live.
         self._offers: tuple = ()
+        # The last reading of what the checks need (``read_checks``): none before the first, the last kept while a run
+        # is live; the configuration the checks' words of it were last worked out for, with them; and the checks' rows
+        # last worked out, with what was in use for them.
+        self.checks_held: ChecksHeld | None = None
+        self._cfg_words: tuple = (None, None, None)
+        self._rows_for: tuple = (None, None)
 
         self.config_panel = ConfigPanel(self)
         self.prior_panel = PriorPanel(self)
@@ -133,6 +174,7 @@ class InferenceScreen(QWidget):
         layout.addWidget(self.pages, 1)
 
         controller().status_changed.connect(self._status_changed)
+        controller().run_ended.connect(self._run_ended)
         self.refresh_gates()
 
     def panels(self):
@@ -159,11 +201,154 @@ class InferenceScreen(QWidget):
         return first() if callable(first) else None
 
     def stale_store(self) -> None:
-        """The store changed: each step that reads it reads again now when it is shown, else at its next show."""
+        """The store changed: each step that reads it reads again now when it is shown, else at its next show; and what
+        the checks need is read again now, by a step in sight that reads the checks, else by the screen."""
         for panel in self.panels():
             told = getattr(panel, "stale_store", None)
             if callable(told):
                 told()
+        self._read_checks_unless_shown()
+
+    def _run_ended(self, _status) -> None:
+        """A run has ended: what the checks need is read again, by a step in sight that reads the checks at a run's end,
+        else by the screen."""
+        self._read_checks_unless_shown()
+
+    def _read_checks_unless_shown(self) -> None:
+        if not any(getattr(panel, "reads_the_checks", False) and panel.isVisible() for panel in self.panels()):
+            self.read_checks()
+
+    # ── what the checks need ──
+    def read_checks(self) -> None:
+        """The one reading of what the checks need, held as ``checks_held``: every check record's manifest, the run
+        history of the records folder in use, and for the posterior in use the counts of unusable driven recordings its
+        simulation set holds (from its saved state, else from the posterior's own text) and whether the engine refuses
+        the prior in use with it; then the steps' states worked out again. Nothing while a run is live, the last reading
+        standing."""
+        if controller().is_live():
+            return
+        from core.artifacts import default_store
+        from ..run import history
+        store = default_store()
+        records = check_lineage.read_records(store)
+        histories = tuple(history.runs_of(controller().folder(), records_root=str(store.root)))
+        held = self._checks_in_use(read=store)
+        rows = check_lineage.rows(held, records, histories)
+        self.checks_held = ChecksHeld(held, records, histories, rows, check_lineage.summary(rows, held=held),
+                                      controller().now())
+        self._rows_for = (held, rows)
+        self.recompute_states()
+
+    def check_rows(self) -> "tuple | None":
+        """Each check's row, from the last reading with what the session holds now, reading nothing: the counts of the
+        posterior's set and the engine's word on the prior with it are kept from the last reading for the same records,
+        else not known. None before the first reading."""
+        if self.checks_held is None:
+            return None
+        held = self._checks_in_use()
+        kept_for, kept = self._rows_for
+        if kept_for != held:
+            kept = check_lineage.rows(held, self.checks_held.records, self.checks_held.histories)
+            self._rows_for = (held, kept)
+        return kept
+
+    def checks_summary(self) -> "check_lineage.ChecksSummary | None":
+        """The checks' summary the chain of steps and Home read, worked out from the last reading with what the session
+        holds now, reading nothing; None before the first reading."""
+        found = self.check_rows()
+        return None if found is None else check_lineage.summary(found, held=self._checks_in_use())
+
+    def _cfg_checks(self, cfg) -> tuple:
+        """The fields of the configuration block a record made on ``cfg`` holds, by the engine's own writer, and the
+        settings of the frequency response a probe check's record states, by the engine's own (None without it, or for
+        a configuration that cannot say them); worked out once for each configuration put in use. Reads nothing."""
+        if self._cfg_words[0] is cfg and cfg is not None:
+            return self._cfg_words[1], self._cfg_words[2]
+        block = configured = None
+        if cfg is not None:
+            try:
+                from core.artifacts.manifest import config_from_cfg
+                whole = config_from_cfg(cfg)
+                block = {name: whole.get(name) for name in check_lineage.CONFIG_FIELDS}
+            except Exception:                    # noqa: BLE001 -- a configuration that cannot say them matches nothing
+                block = None
+            if getattr(cfg, "chi_mode", False) is True:
+                try:
+                    from core.diagnostics.probes import _configured
+                    configured = _configured(cfg)
+                except Exception:                # noqa: BLE001 -- as above
+                    configured = None
+        self._cfg_words = (cfg, block, configured)
+        return block, configured
+
+    def _checks_in_use(self, *, read=None) -> check_lineage.Held:
+        """What is in use, as the checks' rules read it. Handed the store to ``read``, the posterior's set and text are
+        read and the engine is asked about the prior in use with the posterior; else those are kept from the last
+        reading for the same prior, posterior and set, and are not known for others."""
+        session = self.session
+        cfg, prior, posterior = (getattr(session, name, None) for name in ("cfg", "inf_prior", "posterior"))
+        manifest = getattr(posterior, "manifest", None)
+        parents, body = getattr(manifest, "parents", None), getattr(manifest, "body", None)
+        parents = parents if isinstance(parents, dict) else {}
+        body = body if isinstance(body, dict) else {}
+        transform = body.get("transform") if isinstance(body.get("transform"), dict) else {}
+        simulation = parents.get("simulation") if isinstance(parents.get("simulation"), str) else None
+        trained_on = parents.get("prior") if isinstance(parents.get("prior"), str) else None
+        block, configured = self._cfg_checks(cfg)
+        chi = getattr(cfg, "chi_mode", None) if cfg is not None else None
+        ids = (_ident(prior), _ident(posterior), simulation)
+        if read is not None:
+            refused, counts, done, when = self._read_the_pair_and_the_set(read, prior, posterior, simulation)
+        else:
+            last = self.checks_held.held if self.checks_held is not None else None
+            same = last is not None and (last.prior, last.posterior, last.simulation) == ids
+            refused, counts, done, when = ((last.pair_refused, last.set_counts, last.set_done, last.set_when) if same
+                                           else ("", None, False, None))
+        return check_lineage.Held(
+            prior=ids[0], posterior=ids[1], posterior_prior=trained_on, simulation=simulation,
+            chi=chi if isinstance(chi, bool) else None, config=block, configured=configured,
+            rotated=posterior is not None and transform.get("V") is not None,
+            narrowed=getattr(getattr(posterior, "posterior", None), "truncation", None) is not None,
+            nadrowski=getattr(cfg, "model", None) == "NADROWSKI", forcing=getattr(cfg, "has_forcing", False) is True,
+            pair_refused=refused, set_counts=counts, set_done=done,
+            prior_words=record_words.phrase_of("prior", prior) if prior is not None else "",
+            posterior_words=record_words.phrase_of("posterior", posterior) if posterior is not None else "",
+            set_when=when)
+
+    @staticmethod
+    def _read_the_pair_and_the_set(store, prior, posterior, simulation) -> tuple:
+        """What the reading finds of the posterior in use: the engine's sentence refusing the prior in use with it (""
+        when it passes, or cannot tell); its set's counts of unusable driven recordings, from the set's saved state when
+        it holds one pair of counts for each batch done, else from the posterior's own text; whether the set is
+        complete; and when it was completed. With no posterior, nothing."""
+        if posterior is None:
+            return "", None, False, None
+        refused = ""
+        try:
+            from core.SBI.run_guards import _assert_prior_used_matches_posterior
+            _assert_prior_used_matches_posterior(getattr(posterior, "posterior", None), getattr(prior, "prior", None),
+                                                 "The calibration")
+        except Exception as error:               # noqa: BLE001 -- the engine's refusal, or a pair it cannot read
+            refused = str(getattr(error, "message", None) or error) if getattr(error, "field", None) == "prior" else ""
+        counts, done, when = None, False, None
+        if simulation is not None:
+            from core.SBI import training_checkpoint
+            folder = store.kind_dir("simulation") / simulation
+            state = training_checkpoint.peek(folder) or {}
+            masked, batches = state.get("chi_masked"), state.get("batches_done")
+            done = state.get("complete") is True
+            try:
+                if (isinstance(masked, list) and isinstance(batches, int) and batches > 0 and len(masked) == batches
+                        and all(isinstance(pair, (list, tuple)) and len(pair) == 2 for pair in masked)):
+                    counts = (int(sum(pair[0] for pair in masked)), int(sum(pair[1] for pair in masked)), batches,
+                              check_readings.WHOLE_SET_SCOPES[0])
+            except (TypeError, ValueError):      # a state of another shape holds no counts to read
+                counts = None
+            when = _completed(check_lineage.read_text(str(folder), check_lineage.MANIFEST))
+        if counts is None:
+            folder = getattr(posterior, "path", None)
+            counts = check_readings.first_masked(check_lineage.read_text(str(folder))) if folder is not None else None
+        return refused, counts, done, when
 
     def pending(self) -> frozenset[str]:
         """The steps whose page shows a choice other than what the step holds: each page that has rows that pick what
@@ -669,15 +854,16 @@ class InferenceScreen(QWidget):
     def recompute_states(self) -> None:
         """Work out again where each of the six steps stands, from the session, the step the live run is in
         (its place, as the run's status gives it) and whether it is stopping or waits to be tried again, what the run
-        history and the kept trainings offer step 3 as last read, and whether the narrowing round has an observation to
-        choose, and say so through ``states_changed``. No panel's gate is run: ``refresh_gates`` runs them first."""
+        history and the kept trainings offer step 3 as last read, the checks' summary from their last reading, and
+        whether the narrowing round has an observation to choose, and say so through ``states_changed``. No panel's
+        gate is run: ``refresh_gates`` runs them first. Nothing is read."""
         held = controller()
         status = held.status
         place = status.place if status.live else None
         live = place[1] if place is not None and place[0] == "inference" else None
         self.pending_shown = self.pending()
         self._states = chain.step_states(self.session, live=live, stopping=status.state == "stopping",
-                                         pending=self.pending_shown,
+                                         pending=self.pending_shown, checks=self.checks_summary(),
                                          observation_on_offer=self.tsnpe_panel.obs_picker.has_entries(),
                                          label=record_words.label_of, retrying=status.state == "retrying",
                                          kept=continuing.for_the_steps(self._offers))

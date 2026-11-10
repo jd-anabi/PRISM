@@ -605,8 +605,9 @@ class MainWindow(QMainWindow):
         # Once Parameter inference is built it holds what is offered, read at its own moments; before, Home's reading.
         offers = inference.offers() if inference is not None else self._offers
         notice = inference.notice_on("home") if inference is not None else ""
+        checks = inference.checks_summary() if inference is not None else None
         return HomeFacts(session, self._step_states(), status, records, has_runs=bool(runs) or status.live,
-                         runs=runs, picks=picks, offers=offers, notice=notice)
+                         runs=runs, picks=picks, offers=offers, notice=notice, checks=checks)
 
     def _home_pressed(self) -> None:
         """Home's main button pressed, whatever it does: the sentence a press left on Home goes."""

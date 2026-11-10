@@ -5,11 +5,12 @@ Pure and import-safe: each rule reads the session it is handed through ``getattr
 field holds (a test puts a bare ``object()`` on every field), and nothing here imports the toolkit or the
 engine, so the rail, Home and the refusal tables can share it without a window.
 
-The checks are not counted yet: until they are, Checks reads "Needs a prior" while no prior is in use, "Needs a
-posterior" while no posterior is, and "To come" otherwise (a calibration needs a posterior and the prior it was
-trained against), and it is never the step in hand, so after a training Home points to Inference.
+Checks reads the checks' summary the screen hands once it has read the checks' records: how many deciding checks
+passed, of how many, and whether one failed, needs a closer look or is still open. Handed none, Checks reads as before
+the checks were counted: "Needs a prior" while no prior is in use, "Needs a posterior" while no posterior is, and "To
+come" otherwise, and it is never the step in hand.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from . import keys
@@ -17,12 +18,12 @@ from . import keys
 # the word each marker is read with
 _WORDS = {"done": "Done", "now": "Now", "later": "To come", "warn": "Attention", "err": "Error", "half": "Unfinished"}
 
-# what a step in hand is doing; Checks and the narrowing round are never in hand
+# what a step in hand is doing; Checks says its count instead, and the narrowing round is never in hand
 _DOING = {"model": "Choose a model", "prior": "Choose a prior", "training": "Setting up", "infer": "Setting up"}
 
-# the steps that can be in hand, in order: the narrowing round is optional, and Checks waits until a check
-# that applies and is still open can be counted
-_IN_HAND = ("model", "prior", "training", "infer")
+# the steps that can be in hand, in order: the narrowing round is optional, and Checks is in hand only while its checks
+# are counted and a deciding check that applies is still open
+_IN_HAND = ("model", "prior", "training", "checks", "infer")
 
 # the built-in models, as the window names them; a model of your own keeps the name it was stored under
 _MODEL_NAMES = {"NADROWSKI": "Nadrowski", "HOPF": "Hopf", "BP": "BP"}
@@ -38,7 +39,8 @@ class StepState:
     """Where one step stands. ``detail`` is what Home's table says the step holds or waits for, whole;
     ``rail_words`` is the step's second line in the rail. A step that is done holds a record or a model, and its
     detail is that name; any other detail is words, which a sentence writes with a small first letter. ``pending``
-    says the step holds something and a choice on its page differs from it."""
+    says the step holds something and a choice on its page differs from it. ``may_be_in_hand`` says the step can be
+    the step in hand at all: Checks only while its checks are counted."""
     key: str
     number: int
     marker: str
@@ -48,6 +50,7 @@ class StepState:
     can_start: bool
     done: bool
     pending: bool = False
+    may_be_in_hand: bool = True
 
     @property
     def spoken(self) -> str:
@@ -75,9 +78,26 @@ def _narrowed(posterior) -> bool:
     return getattr(getattr(posterior, "posterior", None), "truncation", None) is not None
 
 
-def _state(key: str, marker: str, detail: str, rail_words: str, can_start: bool, pending: bool = False) -> StepState:
+def _state(key: str, marker: str, detail: str, rail_words: str, can_start: bool, pending: bool = False,
+           may_be_in_hand: bool = True) -> StepState:
     return StepState(key, keys.step_number(key), marker, _WORDS[marker], detail, rail_words, can_start,
-                     marker == "done", pending)
+                     marker == "done", pending, may_be_in_hand)
+
+
+def _counted(checks) -> "tuple[str | None, str, str, str]":
+    """What Checks says of the checks' summary ``checks``, read by its attributes: its marker, None while a deciding
+    check that applies is open and none failed or needs a closer look; its words in the rail; its detail, the headline
+    with the summary's second line in brackets after it; and its count, "2 of 6 passed"."""
+    count = f"{getattr(checks, 'passed', 0)} of {getattr(checks, 'of', 0)} passed"
+    headline, second = getattr(checks, "headline", ""), getattr(checks, "second_line", "")
+    detail = f"{headline} ({second})" if headline and second else str(headline or "")
+    if getattr(checks, "failed", False) is True:
+        return "err", f"Error: {count}", detail, count
+    if getattr(checks, "look_closer", False) is True:
+        return "warn", f"Attention: {count}", detail, count
+    if getattr(checks, "open", True) is False:
+        return "done", f"Done: {count}", detail, count
+    return None, f"To come: {count}", detail, count
 
 
 def step_states(session, *, live: str | None = None, stopping: bool = False, pending: frozenset = frozenset(),
@@ -88,10 +108,13 @@ def step_states(session, *, live: str | None = None, stopping: bool = False, pen
     ``live`` is the key of the step whose run is live, ``stopping`` whether that run is stopping, and ``retrying``
     whether it waits to be tried again; ``pending`` the keys of the steps whose choice was changed and not applied;
     ``observation_on_offer`` whether the narrowing round has an observation to choose. ``label`` names a record the
-    session holds; with none, a record is named by its own ``name``, or "unnamed" when it has none. ``checks`` is
-    accepted and not read while the checks are not counted. ``kept`` is what the run history and the kept trainings
-    offer step 3 (read by its attributes, as ``core.gui.continuing.Offer`` holds them; None for nothing): a kept
-    training to resume, after the epoch it holds, or a training to continue, or stopped, with the batches its
+    session holds; with none, a record is named by its own ``name``, or "unnamed" when it has none. ``checks`` is the
+    checks' summary (read by its attributes, as ``core.gui.check_lineage.ChecksSummary`` holds them), None while the
+    checks have not been read: with it Checks needs only a prior, and reads "Error", "Attention" or "Done" with its
+    count when a deciding check failed, needs a closer look, or every one that applies passed, else its count, in hand
+    while one is open; with none it reads as before the checks were counted. ``kept`` is what the run history and the kept
+    trainings offer step 3 (read by its attributes, as ``core.gui.continuing.Offer`` holds them; None for nothing): a
+    kept training to resume, after the epoch it holds, or a training to continue, or stopped, with the batches its
     simulation set holds; anything else it offers changes no step.
 
     For each step the first rule that holds decides: a live run, a change not applied, what the step holds, for step
@@ -102,6 +125,7 @@ def step_states(session, *, live: str | None = None, stopping: bool = False, pen
     posterior = getattr(session, "posterior", None)
     observation = getattr(session, "observation", None)
     narrowed = _narrowed(posterior)
+    counted = checks is not None
 
     def named(record) -> str:
         if label is not None:
@@ -121,34 +145,42 @@ def step_states(session, *, live: str | None = None, stopping: bool = False, pen
         "model": None,
         "prior": None if draft is not None else "Needs a model",
         "training": None if prior is not None else "Needs a prior",
-        "checks": "Needs a prior" if prior is None else "Needs a posterior" if posterior is None else None,
+        "checks": ((None if getattr(checks, "can_check", False) is True else "Needs a prior") if counted
+                   else "Needs a prior" if prior is None else "Needs a posterior" if posterior is None else None),
         "infer": None if posterior is not None else "Needs a posterior",
         "narrowing": ("Needs a posterior" if posterior is None else "Needs a prior" if prior is None
                       else None if observation_on_offer else "Needs an observation"),
     }
 
-    states, waiting = [], set()
+    states, waiting = [], {}
     for place in keys.STEPS:
         key, can_start = place.key, needs[place.key] is None
+        may = key != "checks" or counted              # Checks is in hand only while its checks are counted
         if key == live:
             words = "Stopping" if stopping else "Waiting to try again" if retrying else "Running"
-            states.append(_state(key, "now", words, f"Now: {words.lower()}", can_start))
+            states.append(_state(key, "now", words, f"Now: {words.lower()}", can_start, may_be_in_hand=may))
         elif key in pending:
             states.append(_state(key, "warn", "Changed, not applied", "Changed, not applied", can_start,
-                                 holds[key] is not None))
+                                 holds[key] is not None, may))
         elif holds[key] is not None:
             states.append(_state(key, "done", holds[key], f"Done: {holds[key]}", can_start))
         elif key == "training" and _unfinished(kept) is not None:
             states.append(_state(key, "half", *_unfinished(kept), True))
         elif not can_start:
-            states.append(_state(key, "later", needs[key], needs[key], False))
+            states.append(_state(key, "later", needs[key], needs[key], False, may_be_in_hand=may))
+        elif key == "checks" and counted:
+            marker, words, detail, count = _counted(checks)
+            states.append(_state(key, marker or "later", detail, words, True))
+            if marker is None:
+                waiting[key] = (detail, f"Now: {count}")
         else:
-            states.append(_state(key, "later", "", "To come", True))
-            waiting.add(key)
+            states.append(_state(key, "later", "", "To come", True, may_be_in_hand=may))
+            doing = _DOING.get(key, "")
+            waiting[key] = (doing, f"Now: {doing.lower()}")
     in_hand = step_in_hand(states)
     if in_hand in waiting:
-        doing = _DOING[in_hand]
-        states[keys.step_number(in_hand) - 1] = _state(in_hand, "now", doing, f"Now: {doing.lower()}", True)
+        detail, words = waiting[in_hand]
+        states[keys.step_number(in_hand) - 1] = _state(in_hand, "now", detail, words, True)
     return tuple(states)
 
 
@@ -166,11 +198,12 @@ def _unfinished(kept) -> "tuple[str, str] | None":
 
 def step_in_hand(states) -> str | None:
     """The key of the first step that is neither done nor unable to start, among the steps that can be in hand:
-    never Checks while the checks are not counted, never the narrowing round, which is optional, and never a step
+    never Checks while its checks are not counted, never the narrowing round, which is optional, and never a step
     that holds something with a choice changed and not applied, since what it holds is what the next steps read.
     None when no such step is open."""
     for state in states:
-        if state.key in _IN_HAND and not state.done and not state.pending and state.can_start:
+        if (state.key in _IN_HAND and getattr(state, "may_be_in_hand", True) and not state.done
+                and not state.pending and state.can_start):
             return state.key
     return None
 
@@ -204,28 +237,30 @@ _NEXT = {
     "prior": Next("Next: build or load a prior", "", "Open Prior", "inference", "prior"),
     "training": Next("Next: start a training", "The Training page says what it will cost before it starts.",
                      "Set up training", "inference", "training"),
+    "checks": Next("Next: check the posterior", "", "Open Checks", "inference", "checks"),
     "infer": Next("Next: run the posterior on a cell or on your recordings", "", "Open Inference", "inference",
                   "infer"),
 }
 
 
-def next_step(session, states, *, run=None, picks=None, offers=()) -> Next:
+def next_step(session, states, *, run=None, picks=None, offers=(), checks=None) -> Next:
     """The one next step Home offers. ``run`` is the run's status (read by its attributes: its state, word and name,
     place, the reason it needs someone and how it ended, in words), None for none; ``picks`` what was in use last time
     (read by its attributes, as ``last_time_sentence`` reads them), None for nothing; ``offers`` what the run history
     and the kept trainings offer, newest first (each read by its attributes, as ``core.gui.continuing.Offer`` holds
-    it). The first that holds decides, for a run with a place: a live run needs someone (its reason, and the button
-    goes to it); a run is live (nothing until it ends: it is running, stopping or waiting to be tried again); a run has
-    ended and nobody has seen how (how and when it ended and what it kept, and the button opens its page and
-    acknowledges it: "See the result" for a finished run, "Go to the run" for a stopped one, "See what happened" for a
+    it); ``checks`` the checks' summary, whose headline is the sentence while Checks is the step in hand (read by its
+    attributes; None for none). The first that holds decides, for a run with a place: a live run needs someone (its
+    reason, and the button goes to it); a run is live (nothing until it ends: it is running, stopping or waiting to be
+    tried again); a run has ended and nobody has seen how (how and when it ended and what it kept, and the button opens
+    its page and acknowledges it: "See the result" for a finished run, "Go to the run" for a stopped one, "See what happened" for a
     failure or a run not seen to end; but for a failure or a run not seen to end that something is offered for, the
     button takes the offer and "See what happened" stands beside it). Then the newest offer that can be taken, a
     training stopped with its set unfinished passed over: continue a training, fit it again, resume a kept training, or
     for a kept narrowing round its command and the step that shows it. Then, with no model chosen and a model in use
     last time, what was in use last time, which the button applies and loads, staying on Home. Then the step in hand
-    among ``states``, which reads the steps in their order (no model, no prior, no posterior, no observation);
-    otherwise nothing is waiting, and the narrowing round is offered, or Records once the posterior in use is a
-    narrowed one."""
+    among ``states``, which reads the steps in their order (no model, no prior, no posterior, a deciding check that
+    applies still open, no observation); otherwise nothing is waiting, and the narrowing round is offered, or Records
+    once the posterior in use is a narrowed one."""
     place = getattr(run, "place", None)
     if place is not None:
         part, page = place
@@ -255,6 +290,9 @@ def next_step(session, states, *, run=None, picks=None, offers=()) -> Next:
         return Next("Next: continue with what was in use last time", last_time_sentence(picks), "Continue with these",
                     "home", None, action="continue_with_these")
     in_hand = step_in_hand(states)
+    if in_hand == "checks":
+        headline = getattr(checks, "headline", "")
+        return replace(_NEXT["checks"], sentence=headline if isinstance(headline, str) else "")
     if in_hand is not None:
         return _NEXT[in_hand]
     if _narrowed(getattr(session, "posterior", None)):

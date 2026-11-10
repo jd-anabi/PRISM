@@ -204,7 +204,11 @@ def _label_of(kind: str, manifest) -> str:
 class PosteriorPanel(StepPage):
     """Step 3. The form's rows are read by their field keys; ``resume_choice`` is "Continue or start new"; the line of
     the prior in use stands in the block for the run. ``post_picker`` lists the saved posteriors; ``view`` is
-    "training" or "load"."""
+    "training" or "load". The page reads what the checks need at its own readings, so the screen does not read them
+    again while the page is in sight."""
+
+    #: Whether the page's reading reads what the checks need, which the screen then leaves to it while it is in sight.
+    reads_the_checks = True
 
     def __init__(self, screen, parent=None):
         super().__init__(screen, TITLE, SENTENCE, step="training", parent=parent)
@@ -513,12 +517,16 @@ class PosteriorPanel(StepPage):
 
     # ── the reading of the disk ──
     def read_disk(self) -> None:
-        """The run history (the last run on this computer and the last that measured its batches); and, while a prior is
-        held and the budget passes its rules, the saved simulation sets at this budget, the run history's paces for this
-        size, and the epochs the last finished training of this kind ran: only then has it looked for one."""
+        """What the run history and the kept trainings offer, and what the checks need, each read by the screen; the run
+        history (the last run on this computer and the last that measured its batches); and, while a prior is held and
+        the budget passes its rules, the saved simulation sets at this budget, the run history's paces for this size, and
+        the epochs the last finished training of this kind ran: only then has it looked for one. The reading after the
+        typing stops reads neither what is offered nor what the checks need: typing makes no record."""
         if not self._lists_wait and self._screen is not None and hasattr(self._screen, "read_offers"):
             self._said_on_row = {}
             self._screen.read_offers()
+        if not self._lists_wait and self._screen is not None and hasattr(self._screen, "read_checks"):
+            self._screen.read_checks()
         if self.view == "load":
             self._read_the_record()
             return

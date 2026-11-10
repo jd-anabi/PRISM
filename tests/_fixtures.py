@@ -1439,7 +1439,8 @@ COUNTED_READINGS = {"orchestrator": ("training_preview", "training_reading", "ma
                     "fit_state": ("kept_fits",), "training_checkpoint": ("checkpoints_using_prior", "peek"),
                     "history": ("read", "latest", "newest_unseen", "last_on", "last_measured_on", "duration",
                                 "estimate", "runs_of"),
-                    "plans": ("list_plans", "read_checked", "file_sha", "taken", "save_plan")}
+                    "plans": ("list_plans", "read_checked", "file_sha", "taken", "save_plan"),
+                    "check_lineage": ("read_records", "read_text")}
 # What ``card_and_programs`` answers with a stand-in of its own, and the ways it names to start a program: a module of the
 # window that bound one of these at its own import would be read past. The other public functions of the card's package
 # it passes through are not listed here.
@@ -1457,15 +1458,17 @@ def readings_of_a_run(monkeypatch) -> list:
     a run may be writing; the epochs a run is expected to take, which reads the store's posteriors, counted only while
     a run is live, for a run's own start asks it just before; a record's manifest read whole, a posterior's, a prior's,
     an observation's or a simulation set's, and the search for a prior by its fingerprint, which reads every prior's;
-    and the plans: a model's folder listed, a plan read and checked, the file of the plan in use read for its hash, a
-    name looked for among the plans and a plan written. Each is passed through to the real call. Home, whose "Last
-    runs" lists the live run, reads the history at every opening, so a test that opens Home during a run finds
-    ``latest`` and ``read`` here, and says so."""
+    the plans: a model's folder listed, a plan read and checked, the file of the plan in use read for its hash, a name
+    looked for among the plans and a plan written; and the checks' records: every check record's manifest, a record's
+    text by its folder, a list of the check records, which a check's run writes, and a record's text by the store,
+    which reads every manifest of its kind. Each is passed through to the real call. Home, whose "Last runs" lists the
+    live run, reads the history at every opening, so a test that opens Home during a run finds ``latest`` and ``read``
+    here, and says so."""
     import torch
     from core import orchestrator
     from core.artifacts import ArtifactStore
     from core.SBI import fit_state, training_checkpoint
-    from core.gui import plans
+    from core.gui import check_lineage, plans
     from core.gui.run import history
     from core.gui.run.controller import RunController
     calls = card_and_programs(monkeypatch)
@@ -1481,13 +1484,15 @@ def readings_of_a_run(monkeypatch) -> list:
         monkeypatch.setattr(space, name, stand_in)
 
     spaces = {"orchestrator": orchestrator, "fit_state": fit_state, "training_checkpoint": training_checkpoint,
-              "history": history, "plans": plans}
+              "history": history, "plans": plans, "check_lineage": check_lineage}
     for home, names in COUNTED_READINGS.items():
         for name in names:
             counted(spaces[home], name, name)
     counted(torch, "load", "a simulation set's file")
     counted(ArtifactStore, "assert_name_free", "assert_name_free")
-    counted(ArtifactStore, "list", "a list of what a run writes", lambda _store, kind: kind in ("fit", "simulation"))
+    counted(ArtifactStore, "list", "a list of what a run writes",
+            lambda _store, kind: kind in ("fit", "simulation", "diagnostic", "calibration"))
+    counted(ArtifactStore, "read_log", "a record's text")
     counted(RunController, "expected_epochs", "expected_epochs", lambda held, _spec: held.is_live())
     counted(ArtifactStore, "get", "a record's manifest",
             lambda _store, kind, *_args, **_kwargs: kind in ("posterior", "prior", "observation", "simulation"))

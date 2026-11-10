@@ -495,3 +495,12 @@ From Task 3 (the checks' rules, the chain's words and Training's pre-run line), 
    writer's opening, so the window says when a check began, not when it ended (a calibration's date is up to its
    whole length early): the engine writes no end time on a diagnostic or a calibration. Cure if wanted: give the
    engine's checks their own verdicts and least sizes, and an end time on their records.
+9. **The window calls two private engine functions without copying them.** `core.diagnostics.probes._configured` (the
+   settings of the frequency response a probe check's record states, compared with the configuration in use) and
+   `core.SBI.run_guards._assert_prior_used_matches_posterior` (whether the engine refuses the prior in use with the
+   posterior in use, called in a `try` and its sentence kept), both from `InferenceScreen` in
+   `core/gui/screens/inference_screen.py`, with the engine's public `config_from_cfg` and `training_checkpoint.peek`.
+   A rename in the engine leaves the window comparing nothing: no frequency-band record or audit counts, and the pair
+   is never refused; `tests/test_checks.py` and `tests/test_applied_and_pending.py` call through both. The second
+   reads the two priors' mixtures, a copy off the graphics card when they live there, which is why the window asks it
+   only at its reading, never while a run is live. Cure if wanted: make both public in the engine.

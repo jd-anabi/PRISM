@@ -248,8 +248,9 @@ def test_the_window_offers_three_appearance_choices_and_no_ticks():
 def test_every_step_opens_and_its_state_follows_the_session(store):
     """No step is ever disabled: whatever the session holds, each of the six steps opens as the page shown. The
     states the screen works out are the rules' own for that session, and which steps can start follows it: a
-    model lets the prior start, a prior the training, a posterior the inference, and the checks need the prior
-    with the posterior. A store with no observation keeps the narrowing round waiting for one."""
+    model lets the prior start, a prior the training, a posterior the inference, and the checks, before the screen
+    has read them, need the prior with the posterior, reading as the rules do with the screen's own summary of the
+    checks. A store with no observation keeps the narrowing round waiting for one."""
     from core.gui import chain, keys, record_words
     from core.gui.session import SbiSession
 
@@ -278,8 +279,10 @@ def test_every_step_opens_and_its_state_follows_the_session(store):
             setattr(inf.session, name, object())
         inf.refresh_gates()
         assert opened() == pages, held
+        assert inf.checks_summary() is None, "the checks were read with no reading asked for"
         assert inf.step_states() == chain.step_states(inf.session, observation_on_offer=False,
-                                                      label=record_words.label_of), held
+                                                      label=record_words.label_of,
+                                                      checks=inf.checks_summary()), held
         assert [state.can_start for state in inf.step_states()] == can_start, held
 
 def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():

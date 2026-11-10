@@ -1133,7 +1133,8 @@ def test_the_chain_follows_the_session_and_the_run(tmp_path):
     observation on offer when its list holds one and each held record by its label: at the window's start, after
     a config is installed, after a prior with no name is held, after a posterior is held (the narrowing round can
     then start, the store holding an observation), while a step's run is live (that step reads Now) and after it
-    ends. ``step_states`` is what was last worked out, and the rail shows it."""
+    ends, which reads the checks: Checks then reads its count. ``step_states`` is what was last worked out, and the
+    rail shows it."""
     from core import config
     from core.artifacts import ArtifactStore, use_store
     from core.gui.session import SbiSession
@@ -1148,7 +1149,7 @@ def test_the_chain_follows_the_session_and_the_run(tmp_path):
 
         def rules(live=None):
             return chain.step_states(inference.session, live=live, observation_on_offer=offered,
-                                     label=record_words.label_of)
+                                     label=record_words.label_of, checks=inference.checks_summary())
 
         def spoken():
             return [rail.row(step.key).accessibleName() for step in keys.STEPS]
@@ -1174,6 +1175,9 @@ def test_the_chain_follows_the_session_and_the_run(tmp_path):
             assert inference.step_states() == rules(live="training")
             assert spoken()[2] == "Step 3, Training. Now: running"
         assert inference.step_states() == rules() and spoken() == [state.spoken for state in rules()]
+        assert inference.checks_summary() is not None and spoken()[3] == (
+            "Step 4, Checks. Now: 0 of 3 deciding checks passed; 3 do not apply to this posterior (3 not run yet)"), (
+            spoken()[3])
 
 
 def test_the_narrowing_round_reads_an_observation_written_after_the_window_opened(tmp_path):
@@ -7921,8 +7925,9 @@ def test_one_press_applies_step_one_and_loads_the_prior_and_the_posterior(store,
     status = controller().status
     assert (status.live, status.unacknowledged_end, status.state) == (False, False, "idle"), status
     assert not (tmp_path / "runs").exists() or list((tmp_path / "runs").iterdir()) == [], "a load wrote a history"
-    assert (home.next_heading.label.text(), home.next_button.text()) == (
-        "Next: run the posterior on a cell or on your recordings", "&Open Inference")
+    assert (home.next_heading.label.text(), home._next_sentence.plain_text(), home.next_button.text()) == (
+        "Next: check the posterior", "0 of 3 deciding checks passed; 3 do not apply to this posterior",
+        "&Open Checks")
     first = inference.config_panel
     assert (first.plan_choice.currentText(), first.form.rows["plan"].line.words, first.fill_button.text()) == (
         "No plan", "", "Return the forms to the usual values")
@@ -8107,7 +8112,7 @@ def test_a_plan_gone_or_with_problems_is_left_out_and_the_press_goes_on(cause, w
     inference = window.part("inference")
     assert inference.plan_source is None and inference.session.posterior.id == held.posterior
     assert inference.prior_panel.form.rows["num_iterations"].value() != 40
-    assert home.next_heading.label.text() == "Next: run the posterior on a cell or on your recordings"
+    assert home.next_heading.label.text() == "Next: check the posterior"
 
 
 def test_the_person_stays_on_home_through_the_first_press(store, tmp_path, monkeypatch):
@@ -8140,7 +8145,7 @@ def test_the_person_stays_on_home_through_the_first_press(store, tmp_path, monke
     assert window.current_place() == ("home", None) and window.focusWidget() is home.next_button
     assert window._inference_opened is False
     window.go_to("inference")
-    assert window.current_place() == ("inference", "infer")
+    assert window.current_place() == ("inference", "checks")
 
 
 def test_a_double_click_on_continue_with_these_does_what_one_click_does(store, tmp_path, monkeypatch):
@@ -8221,7 +8226,7 @@ def test_home_reads_the_picks_once_until_something_changes(store, tmp_path, monk
     assert reads == ["picks"] * 4, reads
     _press_continue(window, home)
     assert reads == ["picks"] * 6, reads
-    assert home.next_heading.label.text() == "Next: run the posterior on a cell or on your recordings"
+    assert home.next_heading.label.text() == "Next: check the posterior"
 
 
 @pytest.mark.parametrize("why", ["the prior deleted since Home read", "the posterior deleted during the prior's load",
@@ -10586,3 +10591,28 @@ def test_continue_from_batch_n_finds_another_models_prior_and_bounds_file_where_
     home.next_button.click()
     assert (inference.notice_on("training"), inference.loads is not None) == ("", True), inference.notice_on("training")
     _settle(qt_app(), inference)
+
+
+def test_the_screen_still_starts_from_the_windows_last_reading_of_the_offers(store, tmp_path, monkeypatch):
+    """Parameter inference built after Home read what a reopened window offers starts from that reading: building it
+    reads neither the offers nor the checks' records, it holds what the window read, and the rail's Training row says
+    the kept training at once; the checks are then read at their first moment, never at the build."""
+    from core.gui import check_lineage
+    from core.gui.panels.inference import resume
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _a_kept_training(store, held)
+    window, _home = _home_of_last_time(tmp_path)
+    assert window._offers, "Home read nothing on offer"
+    reads = []
+    real_offers, real_records = resume.read_offers, check_lineage.read_records
+    monkeypatch.setattr(resume, "read_offers", lambda *args, **kwargs: (reads.append("offers"),
+                                                                        real_offers(*args, **kwargs))[1])
+    monkeypatch.setattr(check_lineage, "read_records", lambda *args, **kwargs: (reads.append("checks"),
+                                                                               real_records(*args, **kwargs))[1])
+    inference = window.part("inference")
+    assert reads == [], f"building Parameter inference read: {reads}"
+    assert inference.offers() == tuple(window._offers) and inference.checks_held is None
+    assert window.shell.rail.row("training").accessibleName() == (
+        "Step 3, Training. Unfinished: training kept after epoch 7")
+    window._store_changed()
+    assert reads.count("checks") == 1, reads

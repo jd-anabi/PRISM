@@ -8,6 +8,7 @@ session class, made by tests/_window_helpers.py. A test that reads the store's o
 them inside itself, and so does a test that builds the window.
 """
 import ast
+import itertools
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -574,17 +575,17 @@ _RULE_TABLE = {
     "step 3, open but not in hand": (
         {"inf_prior": _PRIOR}, {}, "training",
         ("later", "To come", "", "To come", True, False), "Step 3, Training. To come"),
-    "step 4, no prior": (
-        _MODEL, {"checks": object()}, "checks",
+    "step 4, no prior, no summary": (
+        _MODEL, {}, "checks",
         ("later", "To come", "Needs a prior", "Needs a prior", False, False), "Step 4, Checks. To come: needs a prior"),
-    "step 4, a posterior and no prior in use": (
+    "step 4, a posterior and no prior in use, no summary": (
         {"draft": _DRAFT, "posterior": _POSTERIOR}, {}, "checks",
         ("later", "To come", "Needs a prior", "Needs a prior", False, False), "Step 4, Checks. To come: needs a prior"),
-    "step 4, a prior and no posterior": (
-        _WITH_PRIOR, {"checks": object()}, "checks",
+    "step 4, a prior and no posterior, no summary": (
+        _WITH_PRIOR, {}, "checks",
         ("later", "To come", "Needs a posterior", "Needs a posterior", False, False),
         "Step 4, Checks. To come: needs a posterior"),
-    "step 4, never in hand": (
+    "step 4, no summary, never in hand": (
         _TRAINED, {}, "checks",
         ("later", "To come", "", "To come", True, False), "Step 4, Checks. To come"),
     "step 5, an observation": (
@@ -625,14 +626,66 @@ _RULE_TABLE = {
 
 @pytest.mark.parametrize("held, options, step, expected, spoken", list(_RULE_TABLE.values()), ids=list(_RULE_TABLE))
 def test_each_step_reads_as_the_rule_table_says(held, options, step, expected, spoken):
-    """One case for each rule of a step's state, the first rule that holds deciding; Checks reads "Needs a
-    prior" with no prior in use, then "Needs a posterior" with no posterior, and "To come" otherwise, with no
-    count, while the checks are not counted."""
+    """One case for each rule of a step's state, the first rule that holds deciding; handed no summary of the checks,
+    Checks reads "Needs a prior" with no prior in use, then "Needs a posterior" with no posterior, and "To come"
+    otherwise, with no count, as before the checks were counted."""
     states = chain.step_states(_session(**held), **options)
     assert [s.key for s in states] == [s.key for s in keys.STEPS] and [s.number for s in states] == [1, 2, 3, 4, 5, 6]
     state = states[keys.step_number(step) - 1]
     assert (state.marker, state.word, state.detail, state.rail_words, state.can_start, state.done) == expected
     assert state.spoken == spoken
+
+
+def _summary(passed=0, of=6, *, failed=False, look_closer=False, open_=True, can_check=True, second="",
+             headline=None, sentence=""):
+    """The checks' summary, as the screen hands it to the chain."""
+    from core.gui.check_lineage import ChecksSummary
+    return ChecksSummary(passed, of, failed, look_closer, open_, can_check, second,
+                         headline or f"{passed} of {of} deciding checks passed", sentence)
+
+
+_CHECKS_TABLE = {
+    "nothing can be checked yet": (
+        _TRAINED, _summary(can_check=False),
+        ("later", "To come", "Needs a prior", "Needs a prior", False, False), "Step 4, Checks. To come: needs a prior"),
+    "a check failed": (
+        _TRAINED, _summary(2, failed=True, look_closer=True, second="1 failed"),
+        ("err", "Error", "2 of 6 deciding checks passed (1 failed)", "Error: 2 of 6 passed", True, False),
+        "Step 4, Checks. Error: 2 of 6 deciding checks passed (1 failed)"),
+    "a check to look closer at": (
+        _TRAINED, _summary(2, look_closer=True, second="1 to look closer at"),
+        ("warn", "Attention", "2 of 6 deciding checks passed (1 to look closer at)", "Attention: 2 of 6 passed", True,
+         False), "Step 4, Checks. Attention: 2 of 6 deciding checks passed (1 to look closer at)"),
+    "every deciding check passed": (
+        _TRAINED, _summary(6, open_=False),
+        ("done", "Done", "6 of 6 deciding checks passed", "Done: 6 of 6 passed", True, True),
+        "Step 4, Checks. Done: 6 of 6 deciding checks passed"),
+    "every one of the three that apply passed": (
+        _TRAINED, _summary(3, 3, open_=False, headline="3 of 3 deciding checks passed; 3 do not apply to this posterior"),
+        ("done", "Done", "3 of 3 deciding checks passed; 3 do not apply to this posterior", "Done: 3 of 3 passed", True,
+         True), "Step 4, Checks. Done: 3 of 3 deciding checks passed; 3 do not apply to this posterior"),
+    "open and in hand": (
+        _TRAINED, _summary(2, second="4 not run yet"),
+        ("now", "Now", "2 of 6 deciding checks passed (4 not run yet)", "Now: 2 of 6 passed", True, False),
+        "Step 4, Checks. Now: 2 of 6 deciding checks passed (4 not run yet)"),
+    "open and not in hand": (
+        _WITH_PRIOR, _summary(0, second="4 wait for step 3"),
+        ("later", "To come", "0 of 6 deciding checks passed (4 wait for step 3)", "To come: 0 of 6 passed", True, False),
+        "Step 4, Checks. To come: 0 of 6 deciding checks passed (4 wait for step 3)"),
+}
+
+
+@pytest.mark.parametrize("held, checks, expected, spoken", list(_CHECKS_TABLE.values()), ids=list(_CHECKS_TABLE))
+def test_the_checks_step_reads_its_counts(held, checks, expected, spoken):
+    """Handed the checks' summary, Checks needs only a prior, and reads in the rail how many deciding checks passed of
+    how many: "Error" when one failed, "Attention" when one needs a closer look, "Done" when every one that applies
+    passed, else "Now" in hand or "To come"; its detail, which Home's table, its tool tip and its accessible name carry
+    whole, is the headline with the summary's second line in brackets. It never reads "Needs a posterior"."""
+    states = chain.step_states(_session(**held), checks=checks)
+    state = states[keys.step_number("checks") - 1]
+    assert (state.marker, state.word, state.detail, state.rail_words, state.can_start, state.done) == expected
+    assert state.spoken == spoken and state.may_be_in_hand
+    assert "Needs a posterior" not in (state.detail, state.rail_words)
 
 
 def test_the_rule_never_raises_on_what_a_session_may_hold():
@@ -647,14 +700,16 @@ def test_the_rule_never_raises_on_what_a_session_may_hold():
     fields = ("draft", "cfg", "inf_prior", "posterior", "observation")
     sessions = [_session(**{name: object() for name in fields}), _session(), SimpleNamespace(), None]
     sessions += [_session(**{name: object()}) for name in fields]
-    for session in sessions:
+    odd_checks = SimpleNamespace(can_check=True, passed=None, of=[], failed="yes", look_closer=1, open=None,
+                                 headline=7, second_line=object())
+    for session, checks in itertools.product(sessions, (None, object(), odd_checks)):
         for label in (None, record_words.label_of):
-            states = chain.step_states(session, label=label, observation_on_offer=True)
+            states = chain.step_states(session, label=label, observation_on_offer=True, checks=checks)
             assert [s.key for s in states] == [s.key for s in keys.STEPS]
             for state in states:
                 assert state.marker in paint.MARKERS and words[state.marker] == state.word, state
                 assert state.spoken.startswith(f"Step {state.number}, ")
-            assert isinstance(chain.next_step(session, states), chain.Next)
+            assert isinstance(chain.next_step(session, states, checks=checks), chain.Next)
             assert chain.first_time(has_records=False, has_runs=False, session=session) in (True, False)
     every = chain.step_states(sessions[0])
     assert isinstance(every, tuple) and hash(every) == hash(chain.step_states(sessions[0])), (
@@ -670,21 +725,41 @@ def test_the_rule_never_raises_on_what_a_session_may_hold():
         "Unnamed effective-temperature measurement")
 
 
-def test_the_step_in_hand_is_the_first_open_step_and_never_the_narrowing_round():
-    """The first step neither done nor unable to start: never Checks while the checks are not counted, never
-    the narrowing round, which is optional, never a step that holds something with a choice changed and not
-    applied; and the step in hand is the one step marked Now when nothing runs."""
+def test_checks_is_in_hand_while_a_deciding_check_that_applies_is_open():
+    """The first step neither done nor unable to start: Checks while its checks are counted and one that applies is
+    open, and never while they are not counted; never the narrowing round, which is optional, never a step that holds
+    something with a choice changed and not applied; and the step in hand is the one step marked Now when nothing
+    runs."""
     open_steps = [chain.StepState(s.key, n, "done", "Done", "x", "Done: x", True, True)
                   for n, s in enumerate(keys.STEPS, 1)]
-    open_steps[3] = chain.StepState("checks", 4, "now", "Now", "", "Now", True, False)
     open_steps[5] = chain.StepState("narrowing", 6, "now", "Now", "", "Now", True, False)
-    assert chain.step_in_hand(open_steps) is None, "Checks or the narrowing round was taken for the step in hand"
+    assert chain.step_in_hand(open_steps) is None, "the narrowing round was taken for the step in hand"
+    open_steps[3] = chain.StepState("checks", 4, "now", "Now", "", "Now", True, False)
+    assert chain.step_in_hand(open_steps) == "checks", "Checks counted and open was not the step in hand"
+    open_steps[3] = chain.StepState("checks", 4, "later", "To come", "", "To come", True, False, False, False)
+    assert chain.step_in_hand(open_steps) is None, "Checks not counted was taken for the step in hand"
     assert chain.step_in_hand(()) is None
+    trained = _session(**_TRAINED)
+    states = chain.step_states(trained, checks=_summary(2))
+    assert ([s.marker for s in states[3:5]], chain.step_in_hand(states)) == (["now", "later"], "checks")
+    assert (states[4].rail_words, states[4].word) == ("To come", "To come")
+    states = chain.step_states(trained, checks=_summary(6, open_=False))
+    assert ([s.marker for s in states[3:5]], chain.step_in_hand(states)) == (["done", "now"], "infer")
+    states = chain.step_states(trained, checks=_summary(2, failed=True))
+    assert (states[3].marker, chain.step_in_hand(states)) == ("err", "checks"), "a check that failed is still open"
+    states = chain.step_states(trained)
+    assert (states[3].may_be_in_hand, chain.step_in_hand(states)) == (False, "infer")
+    states = chain.step_states(_session(**_WITH_PRIOR), checks=_summary(0))
+    assert chain.step_in_hand(states) == "training" and states[3].rail_words == "To come: 0 of 6 passed"
     for held, in_hand in ((_EMPTY, "model"), (_MODEL, "prior"), (_WITH_PRIOR, "training"), (_TRAINED, "infer"),
                           (_OBSERVED, None), (_ROUND, None), ({"inf_prior": _PRIOR}, "model")):
         states = chain.step_states(_session(**held), observation_on_offer=True)
         assert chain.step_in_hand(states) == in_hand, held
         assert [s.key for s in states if s.marker == "now"] == ([in_hand] if in_hand else []), held
+    for held, in_hand in ((_TRAINED, "checks"), (_OBSERVED, "checks"), (_ROUND, "checks")):
+        states = chain.step_states(_session(**held), observation_on_offer=True, checks=_summary(1))
+        assert chain.step_in_hand(states) == in_hand, held
+        assert [s.key for s in states if s.marker == "now"] == [in_hand], held
     states = chain.step_states(_session(**_WITH_PRIOR), live="training")
     assert chain.step_in_hand(states) == "training"
     states = chain.step_states(_session(**_WITH_PRIOR), kept=SimpleNamespace(kind="continue", batch=4))
@@ -1131,6 +1206,11 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
             if hasattr(panel, "foot"):
                 assert not button.isEnabled() or state.can_start, (session, step.key)
                 assert button.isEnabled() or panel.foot.reason.text(), (session, step.key)
+            elif step.key == "checks":
+                # Today's Checks tab offers the calibration alone, which needs a posterior: with a prior and no
+                # posterior step 4 can start, the frequency band and the audit needing only a prior, and its one button
+                # stays greyed.
+                assert button.isEnabled() == (state.can_start and session == 3), (session, step.key, state)
             else:
                 assert button.isEnabled() == state.can_start, (session, step.key)
             assert panel.isEnabled() and inference.pages.isEnabled(), (session, step.key)
@@ -1231,3 +1311,88 @@ def test_parameter_inference_opens_the_step_in_hand_then_the_step_last_shown():
     assert chain.step_in_hand(done.part("inference").step_states()) is None
     assert opened(done, ("inference",)) == (("inference", "model"), "model"), (
         "with no step in hand the first opening is not at the first step")
+    counted = window_holding(SbiSession(draft=draft, cfg=object(), inf_prior=held("prior"),
+                                        posterior=held("posterior"), observation=held("observation")))
+    counted.part("inference").read_checks()
+    assert chain.step_in_hand(counted.part("inference").step_states()) == "checks"
+    assert opened(counted, ("inference",)) == (("inference", "checks"), "checks"), (
+        "with a deciding check open the first opening is not at Checks")
+
+
+def test_home_says_check_the_posterior_with_the_headline():
+    """With a deciding check that applies still open after a training, Home's next step is to check the posterior, the
+    headline its sentence and "Open Checks" its button; a live run, an offer to take and what was in use last time come
+    before it, as before every step in hand; once every one that applies has passed, the next step is the inference;
+    and with no summary, Checks is never Home's next step."""
+    from core.gui.run.model import RunStatus
+    trained = _session(**_TRAINED)
+    checks = _summary(2, headline="2 of 6 deciding checks passed", sentence="Inference can be run now; 4 deciding "
+                                                                            "checks are still open.")
+    states = chain.step_states(trained, checks=checks)
+    found = chain.next_step(trained, states, checks=checks)
+    assert (found.heading, found.sentence, found.button, found.part, found.page, found.action) == (
+        "Next: check the posterior", "2 of 6 deciding checks passed", "Open Checks", "inference", "checks", None)
+    three = _summary(1, 3, headline="1 of 3 deciding checks passed; 3 do not apply to this posterior")
+    assert chain.next_step(trained, chain.step_states(trained, checks=three), checks=three).sentence == (
+        "1 of 3 deciding checks passed; 3 do not apply to this posterior")
+    live = RunStatus(state="running", word="Check", name="Calibration", place=("inference", "checks"))
+    assert chain.next_step(trained, states, run=live, checks=checks).heading == "Next: nothing until the check ends"
+    offer = _offer("continue", run="20261008T190211-training", batch=4, label="retrain")
+    assert chain.next_step(trained, states, offers=(offer,), checks=checks).heading == "Next: continue the training"
+    passed = _summary(6, open_=False)
+    assert chain.next_step(trained, chain.step_states(trained, checks=passed), checks=passed).heading == (
+        "Next: run the posterior on a cell or on your recordings")
+    assert chain.next_step(trained, chain.step_states(trained)).heading == (
+        "Next: run the posterior on a cell or on your recordings")
+    assert chain.next_step(_session(**_WITH_PRIOR), chain.step_states(_session(**_WITH_PRIOR), checks=checks),
+                           checks=checks).heading == "Next: start a training"
+
+
+@pytest.mark.parametrize("step", ["checks", "infer", "narrowing"])
+def test_a_later_steps_change_not_applied_is_said_on_that_step_alone_and_never_in_hand(step):
+    """A change not applied on step 4, 5 or 6 reads "Changed, not applied" on that step alone, every other step reading
+    as it does with none; a step that holds something with such a change is never the step in hand, and the step in hand
+    is then the first other one; Checks, which holds nothing, stays in hand as an earlier step that holds nothing
+    does."""
+    session = _session(**_ROUND)
+    for checks, others in ((_summary(2), "checks"), (_summary(6, open_=False), None)):
+        plain = chain.step_states(session, checks=checks, observation_on_offer=True)
+        states = chain.step_states(session, checks=checks, observation_on_offer=True, pending=frozenset({step}))
+        number = keys.step_number(step) - 1
+        assert (states[number].marker, states[number].rail_words) == ("warn", "Changed, not applied")
+        assert [state for n, state in enumerate(states) if n != number] == [
+            state for n, state in enumerate(plain) if n != number], "another step's state moved"
+        assert states[number].pending == (step != "checks")
+        in_hand = chain.step_in_hand(states)
+        if step == "checks":
+            assert in_hand == "checks", "a step holding nothing was passed over for a change not applied"
+        else:
+            assert in_hand == others, (checks, in_hand)
+
+
+def test_steps_four_to_six_keep_the_chains_words_for_a_model_inference_cannot_take(monkeypatch):
+    """With a model of your own on step 1's form that parameter inference cannot take, nothing is applied: step 1 still
+    reads "Now: choose a model" in the rail, the reason it cannot be applied stands beside its own button, and steps 4
+    to 6 read the chain's own words, before and after the checks are read."""
+    from core import registry
+    from tests._fixtures import build_window, qt_app
+    qt_app()
+    monkeypatch.setattr(registry, "is_user_model", lambda name: name == "HOPF")
+    monkeypatch.setattr(registry, "is_sbi_user_model", lambda name: False)
+    monkeypatch.setattr(registry, "user_model_has_forcing", lambda name: False)
+    window = build_window()
+    inference = window.part("inference")
+    first = inference.config_panel
+    first.model_combo.setCurrentText("HOPF")
+    first.redraw()
+    for read in (False, True):
+        if read:
+            inference.read_checks()
+        inference.refresh_gates()
+        rail = window.shell.rail
+        assert inference.session.draft is None
+        assert [rail.row(key).accessibleName() for key in ("model", "checks", "infer", "narrowing")] == [
+            "Step 1, Model and options. Now: choose a model", "Step 4, Checks. To come: needs a prior",
+            "Step 5, Inference. To come: needs a posterior", "Step 6, Narrowing round. To come: needs a posterior"], read
+        assert not first.foot.main_button.isEnabled()
+        assert first.foot.reason.text() == "Cannot start: this model cannot be used.", first.foot.reason.text()

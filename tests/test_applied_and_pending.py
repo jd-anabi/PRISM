@@ -1303,11 +1303,13 @@ def test_a_build_that_ends_any_way_but_well_leaves_what_was_held(end, tmp_path, 
     """A build that is refused at the stage's entry, fails, is stopped or is taken back as it starts writes no slot: the
     configuration, the prior, the posterior and the observation held are the very objects they were, the name and the
     note stand as typed, the rail and "In use" say what they said, and the figures of the prior in use stand as they
-    stood, whatever the build drew before it ended."""
+    stood, whatever the build drew before it ended. The checks are read first, as a launch that put these records in use
+    by its runs has read them, since the build's end reads them."""
     choose(monkeypatch, words="Build and release the posterior")
     with _second_step(tmp_path, monkeypatch) as (window, screen, page, stand_in):
         session = screen.session
         held = (session.cfg, session.inf_prior, session.posterior, session.observation)
+        screen.read_checks()
         said = (screen.step_states(), page.in_use.line_text(), page.in_use.sentence.plain_text(),
                 window.shell.rail.row("prior").accessibleName())
         stack = page.figure_stack
@@ -4630,3 +4632,130 @@ def test_a_history_no_reading_foresaw_says_no_time_and_raises_nothing(tmp_path, 
         assert stand_in.started.wait(5)
         stand_in.release(None)
         turn_until(app, lambda: not controller().is_live(), 10.0)
+
+
+def test_the_checks_are_read_at_their_moments_and_never_while_a_run_is_live(tmp_path, monkeypatch):
+    """What the checks need is read once at each moment: at a store change, by the screen when no page that reads the
+    checks is in sight, and then by the Training page alone when it is; at the page's showing after that; at a run's end,
+    by the page in sight, or by the screen when the page is not; never while a run is live, whatever is pressed, shown or
+    worked out; every reading asked otherwise is made, two in one turn of the event loop as two; and working the steps'
+    states out reads nothing."""
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_run_host, readings_of_a_run
+    from tests._look_helpers import _settle
+    from tests._runs import running, turn_until
+    app = qt_app()
+    with _third_step(tmp_path, monkeypatch, held=False) as (window, screen, page, stand_in):
+        window.go_to("inference", "prior")
+        _settle()
+        calls = readings_of_a_run(monkeypatch)
+
+        def read() -> int:
+            return calls.count("read_records")
+
+        window._store_changed()
+        assert read() == 1, "a store change with no page that reads the checks in sight"
+        _settle()
+        calls.clear()
+        window.go_to("inference", "training")
+        _settle()
+        assert read() == 1, "the Training page's showing, marked to read by the store's change"
+        calls.clear()
+        window._store_changed()
+        _settle()
+        assert read() == 1, "a store change with the Training page in sight"
+        calls.clear()
+        page.form.rows["num_runs"].widget.setText("4321")
+        page.read_timer.timeout.emit()
+        assert read() == 0, "the reading after typing read the checks"
+        calls.clear()
+        screen.recompute_states()
+        screen.refresh_gates()
+        assert read() == 0, "the steps' states worked out read the checks"
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        calls.clear()
+        window._store_changed()
+        screen.refresh_gates()
+        screen.read_checks()
+        window.go_to("inference", "prior")
+        _settle()
+        window.go_to("inference", "training")
+        _settle()
+        assert read() == 0, f"read while a run is live: {calls}"
+        stand_in.release(SimpleNamespace(kind="posterior", id="p1", name="retrain_2", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        _settle()
+        assert read() == 1, "the run's end with the Training page in sight"
+        window.go_to("inference", "prior")
+        _settle()
+        calls.clear()
+        with running(build_run_host()):
+            pass
+        _settle()
+        assert read() == 1, "a run's end with no page that reads the checks in sight"
+        calls.clear()
+        screen.read_checks()
+        screen.read_checks()
+        assert read() == 2, "a reading asked was not made"
+
+
+def test_the_screen_reads_a_sets_counts_from_its_state_else_from_the_posteriors_text(tmp_path):
+    """The one reading of what the checks need reads, for the posterior in use, its simulation set's counts of unusable
+    driven recordings from the set's saved state when that holds one pair for each batch done, else the first total in
+    the posterior's own text, else none; and asks the engine whether the prior in use is the one the posterior was
+    trained with, keeping its sentence. Between readings these are kept for the same records, and are not known for
+    another posterior until the next reading."""
+    import torch
+    from torch.distributions import Categorical, MixtureSameFamily, Normal
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.check_readings import WHOLE_SET_SCOPES
+    from tests._fixtures import write_simulation_set
+    from tests._runs import masked_line, scope_part
+
+    def mixture(shift):
+        return MixtureSameFamily(Categorical(torch.ones(2)), Normal(torch.tensor([0.0, shift]), torch.ones(2)))
+
+    qt_app()
+    store = ArtifactStore(tmp_path / "Artifacts")
+    with use_store(store):
+        screen = build_inference()
+        identity = {"a set of": "the checks"}
+        folder = write_simulation_set(store.kind_dir("simulation"), identity, 3, complete=True,
+                                      chi_masked=[(1, 4), (2, 4), (3, 4)])
+        text = tmp_path / "posterior"
+        text.mkdir()
+        (text / "log.txt").write_text(f"10:00:00 info {masked_line(5, 50, 2, scope_part(7))}\n"
+                                      f"10:00:01 info {masked_line(1, 2, 1, WHOLE_SET_SCOPES[1])}\n", encoding="utf-8")
+        manifest = SimpleNamespace(parents={"prior": "20261001T222935", "simulation": folder.name},
+                                   body={"transform": {"V": [[1.0]]}}, created="2026-10-03T09:00:00+00:00")
+        posterior = SimpleNamespace(kind="posterior", id="20261003T031200", name="retrain", path=text,
+                                    manifest=manifest, posterior=SimpleNamespace(latent=SimpleNamespace(
+                                        prior=mixture(1.0)), truncation=None))
+        prior = SimpleNamespace(kind="prior", id="20261001T222935", name="retrain_prior", prior=mixture(1.0),
+                                manifest=None)
+        screen.session = SbiSession(inf_prior=prior, posterior=posterior)
+        screen.read_checks()
+        held = screen.checks_held.held
+        assert (held.set_counts, held.set_done, held.pair_refused) == ((6, 12, 3, WHOLE_SET_SCOPES[0]), True, ""), held
+        assert screen.check_rows()[2].state == "Waiting for the audit"
+        screen.session.posterior = SimpleNamespace(**{**posterior.__dict__, "id": "20261003T031201"})
+        assert screen.check_rows()[2].line == ("Not compared: the counts of unusable driven recordings could not be "
+                                              "read."), "another posterior's counts were taken as read"
+        screen.session.posterior = posterior
+        assert screen.check_rows()[2].state == "Waiting for the audit", "the counts read were not kept"
+        prior.prior = mixture(2.0)
+        torch.save({"batches_done": 3, "complete": True, "rng": None, "chi_masked": [[1, 4], [2, 4]]},
+                   folder / "state.pt")
+        screen.read_checks()
+        assert screen.checks_held.held.set_counts == (5, 50, 2, scope_part(7)), (
+            "counts for fewer batches than the set holds were taken for the whole set")
+        write_simulation_set(store.kind_dir("simulation"), identity, 3, complete=True)
+        screen.read_checks()
+        held = screen.checks_held.held
+        assert held.set_counts == (5, 50, 2, scope_part(7)), "the posterior's text was not read for the first total"
+        assert held.pair_refused.startswith("The calibration: the prior supplied is not the one this posterior was "
+                                            "trained with"), held.pair_refused
+        (text / "log.txt").unlink()
+        screen.read_checks()
+        assert screen.checks_held.held.set_counts is None
