@@ -3927,14 +3927,20 @@ def test_a_taken_observation_name_is_refused_before_the_cell_is_read(store, monk
     cfg = _spont_cfg()
     write_observation(store, cfg, name="cell_a_obs")
     held = [s.id for s in store.list("observation")]
-    reached = []
+    leg = []                                     # the call under way and the names it was given, for a tripwire to say
+
+    def _tripwire(what):
+        def reached(*a, **k):
+            raise AssertionError(f"{leg[-1]}: {what} was reached before the observation's name was refused")
+        return reached
+
     for owner, attr in ((orchestrator, "require_file"), (cli, "load_and_validate_gt"), (cli, "validate_gt_file"),
                         (file_manager, "parse_values_file"), (SimConfig, "inject_ground_truth"),
                         (orchestrator, "check_observation_in_distribution"), (orchestrator, "_file_ref"),
                         (file_manager, "load_experimental_data"), (orchestrator, "generate_observations"),
                         (orchestrator, "build_experiment_observation"), (orchestrator, "infer_and_visualize"),
                         (store, "create")):
-        monkeypatch.setattr(owner, attr, lambda *a, _what=attr, **k: reached.append(_what))
+        monkeypatch.setattr(owner, attr, _tripwire(attr))
     cell = str(CELL_PATH / "nadrowski" / "master_weak.txt")      # a forced cell: values these bounds ignore
     prior = SimpleNamespace(prior=None, force_prior=None)
     calls = {
@@ -3951,6 +3957,7 @@ def test_a_taken_observation_name_is_refused_before_the_cell_is_read(store, monk
         for given in ({"observation_name": "cell_a_obs"},
                       {"observation_name": "cell_a_obs", "if_name_taken": "unnamed"},
                       {"observation_name": "bad name!"}):
+            leg.append(f"{label}, given {given}")
             with warnings.catch_warnings(record=True) as said:
                 warnings.simplefilter("always")
                 with pytest.raises(Refusal) as e:
@@ -3959,7 +3966,7 @@ def test_a_taken_observation_name_is_refused_before_the_cell_is_read(store, monk
             words = ("a observation named 'cell_a_obs' already exists" if given["observation_name"] == "cell_a_obs"
                      else "bad artifact name 'bad name!'")
             assert words in str(e.value), (label, str(e.value))
-            assert (reached, [str(w.message) for w in said]) == ([], []), (label, given)
+            assert [str(w.message) for w in said] == [], (label, given)
     assert [s.id for s in store.list("observation")] == held and store.list("inference") == []
 
 
@@ -4228,9 +4235,14 @@ def test_the_compositions_forward_every_keyword_unchanged(store, monkeypatch):
     assert_cfg_unchanged(cfg, snap)
     assert seen["inf"] == {"name": "n2", "note": "t2", "fig_sink": sink, "store": store, "accept": acc}, \
         "n_samples must be ABSENT when the caller did not set it"
-    # with no observation's name given, the observation's stage is handed a blank one, which leaves it unnamed
+    # with no observation's name given, the observation's stage is handed a blank one, which leaves it unnamed, on
+    # both paths, though the inference is named: the observation never takes the inference's name
     orchestrator.experimental_inference(cfg, _sim_post(), rec, name="n3", fig_sink=sink, store=store)
     assert seen["exp"] == {"name": "", "fig_sink": sink, "store": store}
+    orchestrator.simulated_inference(cfg, _sim_post(), 1.0, name="n4", fig_sink=sink, store=store,
+                                     cell=str(CELL_PATH / "nadrowski" / "master_weak.txt"))
+    assert seen["gen"] == {"name": "", "fig_sink": sink, "store": store}
+    assert seen["inf"]["name"] == "n4"
 
 
 def test_the_config_snapshot_counts_nan_equal_to_nan_inside_a_tensor():
