@@ -1918,19 +1918,20 @@ def test_the_stand_in_refuses_a_page_whose_place_it_does_not_know():
 
 
 def test_the_stand_in_run_calls_on_stage_on_the_worker_in_order(tmp_path):
-    """A stand-in told its stages, and handed an ``on_stage`` as the engine's staged calls are (the card test's), calls it
-    for each stage in order as its run is released, on the thread the run is on and not the window's. At an event
-    "failed" it then raises, as the engine passes a failure on, and the stages after it are not called, so the run ends
-    as failed. A call handed no ``on_stage`` ignores its stages; an event that is none of the four the engine reports
-    is refused when the stand-in is made."""
+    """A stand-in told its stages at once (``stages``, the shorthand), and handed an ``on_stage`` as the engine's staged
+    calls are (the card test's), calls it for each stage in order as its run is released, on the thread the run is on
+    and not the window's: here the events the engine tells when only the prior and the training are asked for. At an
+    event "failed" it then raises, as the engine passes a failure on, and the stages after it are not called, so the run
+    ends as failed. A call handed no ``on_stage`` ignores its stages; an event that is none of the four the engine
+    reports, and a stage the card test does not have, are refused when the stand-in is made."""
     import threading
     from tests._fixtures import build_run_host, qt_app
-    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    from tests._runs import Clock, RunText, StandIn, say, start_run, turn_until
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
     text = RunText(held)
     stages = (("prior", "started", None), ("prior", "finished", 1.5), ("posterior", "started", None),
-              ("posterior", "finished", 2.5), ("validate", "skipped", None))
+              ("posterior", "finished", 2.5), ("validate", "skipped", None), ("infer", "skipped", None))
     here, seen = threading.get_ident(), []
 
     def on_stage(stage, event, seconds):
@@ -1938,9 +1939,11 @@ def test_the_stand_in_run_calls_on_stage_on_the_worker_in_order(tmp_path):
 
     with pytest.raises(ValueError, match="begun"):
         StandIn(stages=(("prior", "begun", None),))
+    with pytest.raises(ValueError, match="training"):
+        StandIn(stages=(("training", "started", None),))
     ordered = StandIn(stages=stages)
     start_run(build_run_host(), ordered, on_stage=on_stage)
-    turn_until(app, ordered.started.is_set)
+    say(app, ordered, text, "a line before the release")   # the run has passed its start: nothing is left to race
     assert seen == [], "the stages are passed as the run is released, not as the call begins"
     ordered.release()
     turn_until(app, lambda: not held.is_live(), 10)
@@ -1961,6 +1964,170 @@ def test_the_stand_in_run_calls_on_stage_on_the_worker_in_order(tmp_path):
     turn_until(app, lambda: not held.is_live(), 10)
     assert [call[:3] for call in seen] == [("prior", "started", None), ("prior", "failed", 0.5)]
     assert text.ended[-1].outcome == "failed"
+
+
+def test_the_stand_ins_queued_stages_come_in_their_turn_among_its_lines(tmp_path):
+    """A stand-in's stage events queued with ``stage`` are told in their turn among its lines, on the run's thread and
+    not the window's, as the engine tells its stages between the stages' own lines: a look at the live run after any
+    event finds it told, and a line said between two events is said between them. A stage ended with no seconds handed
+    is told the seconds since it was told it started. A stage the card test does not have, an event it never reports,
+    seconds for a stage skipped or begun, and an error to raise at an event other than "failed" are refused when the
+    item is queued."""
+    import logging
+    import threading
+    from core.diagnostics import card
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, say, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text = RunText(held)
+    lines = {"prior": "the prior's line", "posterior": "the training's line", "validate": "the calibration's line",
+             "infer": "the inference's line"}
+    here, said, told = threading.get_ident(), [], []
+
+    class Heard(logging.Handler):
+        def emit(self, record):
+            if threading.get_ident() != here and record.getMessage() in lines.values():
+                said.append(record.getMessage())
+
+    def on_stage(stage, event, seconds):
+        told.append((stage, event, seconds, threading.get_ident(), tuple(said)))
+
+    stand_in = StandIn()
+    for wrong in (("training", "started"), ("prior", "begun"), ("prior", "started", 1.0), ("prior", "skipped", 0.0)):
+        with pytest.raises(ValueError):
+            stand_in.stage(*wrong)
+    with pytest.raises(ValueError, match="failed"):
+        stand_in.stage("prior", "finished", 1.0, raises=RuntimeError("never raised"))
+    heard = Heard()
+    logging.getLogger("core").addHandler(heard)
+    try:
+        start_run(build_run_host(), stand_in, on_stage=on_stage)
+        for number, stage in enumerate(card.STAGES):
+            stand_in.stage(stage, "started")
+            turn_until(app, lambda: len(told) == 2 * number + 1)
+            assert held.is_live() and told[-1][:3] == (stage, "started", None), told
+            say(app, stand_in, text, lines[stage])
+            assert held.is_live() and len(told) == 2 * number + 1, told
+            if stage == "validate":
+                stand_in.stage(stage, "finished")
+            else:
+                stand_in.stage(stage, "finished", 1.5 + number)
+            turn_until(app, lambda: len(told) == 2 * number + 2)
+            assert held.is_live() and told[-1][:2] == (stage, "finished"), told
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live(), 10)
+    finally:
+        logging.getLogger("core").removeHandler(heard)
+    assert [call[:2] for call in told] == [(stage, event) for stage in card.STAGES for event in ("started", "finished")]
+    before = [tuple(lines[stage] for stage in card.STAGES[:number + ended])
+              for number in range(len(card.STAGES)) for ended in (0, 1)]
+    assert [call[4] for call in told] == before, "a line and an event were not told in the order they were queued"
+    finished = {call[0]: call[2] for call in told if call[1] == "finished"}
+    assert (finished["prior"], finished["posterior"], finished["infer"]) == (1.5, 2.5, 4.5), finished
+    assert isinstance(finished["validate"], float) and finished["validate"] > 0, finished
+    assert len({call[3] for call in told}) == 1 and told[0][3] != here, "the stages were not told on the run's thread"
+    assert text.ended[-1].outcome == "finished"
+
+
+def test_a_stage_left_by_a_stop_or_a_failure_is_told_failed_before_the_end_passes_on(tmp_path):
+    """As the engine tells "failed" for a stage left by any way out of it, a stand-in whose stage was told "started"
+    and not yet "finished" or "failed" tells it "failed", with the seconds since it started, before the end passes on:
+    a stop taken during the training is told as the training failed, then the run stops; a failure handed with ``fail``
+    during the prior is told as the prior failed, then the run fails with that failure. A stop taken between two
+    stages tells nothing more."""
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import STOP_LINE, Clock, RunText, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text, told, running = RunText(held), [], []
+
+    def on_stage(stage, event, seconds):
+        told.append((stage, event, seconds, running[-1].stopped.is_set()))
+
+    def run_to(*events):
+        told.clear()
+        stand_in = StandIn()
+        running.append(stand_in)
+        for event in events:                     # queued before the call: told in their turn as it begins
+            stand_in.stage(*event)
+        start_run(build_run_host(), stand_in, on_stage=on_stage)
+        turn_until(app, lambda: len(told) == len(events))
+        return stand_in
+
+    stopped = run_to(("prior", "started"), ("prior", "finished", 1.5), ("posterior", "started"))
+    held.request_stop()
+    turn_until(app, lambda: not held.is_live(), 10)
+    assert [call[:2] for call in told] == [("prior", "started"), ("prior", "finished"), ("posterior", "started"),
+                                          ("posterior", "failed")], told
+    seconds, stopping = told[-1][2:]
+    assert isinstance(seconds, float) and seconds > 0 and not stopping, told[-1]
+    assert stopped.stopped_at == STOP_LINE and text.ended[-1].outcome == "stopped"
+
+    run_to(("prior", "started"), ("prior", "finished", 1.5))
+    held.request_stop()
+    turn_until(app, lambda: not held.is_live(), 10)
+    assert [call[:2] for call in told] == [("prior", "started"), ("prior", "finished")], told
+    assert text.ended[-1].outcome == "stopped"
+
+    failing = run_to(("prior", "started"))
+    failing.fail(RuntimeError("the cell file could not be read"))
+    turn_until(app, lambda: not held.is_live(), 10)
+    assert [call[:2] for call in told] == [("prior", "started"), ("prior", "failed")] and told[-1][2] > 0, told
+    failure = history.read(tmp_path / "runs" / f"{held.status.run}.json")["failure"]
+    assert (text.ended[-1].outcome, failure["message"]) == ("failed", "the cell file could not be read"), failure
+
+
+def test_a_failed_stage_raises_its_own_error_and_a_call_with_no_on_stage_passes_its_stages_over(tmp_path):
+    """A stage told "failed" raises the error handed with it, the stage's own, so the run ends as that error ends a
+    run: a refusal made inside the calibration once the prior and the training have spent something is the run's
+    failure, kept by its kind and its words, as is a lack of the card's memory in the prior; with no error handed it
+    raises ``RuntimeError(STAGE_FAILED_TEXT)``. The stage is told "failed" once. A call handed no ``on_stage`` passes
+    over its stage items, a "failed" one among them, and goes on to the end its test gives it."""
+    from core.gui.run import history
+    from core.refusals import Refusal
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import STAGE_FAILED_TEXT, Clock, RunText, StandIn, say, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    text, told = RunText(held), []
+    refusal = Refusal("The number of test datasets must be at least 1.", field="n_cal")
+    calibration = (("prior", "started"), ("prior", "finished", 1.5), ("posterior", "started"),
+                   ("posterior", "finished", 2.5), ("validate", "started"))
+
+    def on_stage(stage, event, seconds):
+        told.append((stage, event, seconds))
+
+    def failed_at(events, raises=None):
+        told.clear()
+        stand_in = StandIn()
+        stand_in.solver(5)                       # something was spent, as the card test's prior and training spend
+        for event in events:
+            stand_in.stage(*event)
+        stand_in.stage(events[-1][0], "failed", 0.5, raises=raises)
+        start_run(build_run_host(), stand_in, on_stage=on_stage)
+        turn_until(app, lambda: not held.is_live(), 10)
+        return history.read(tmp_path / "runs" / f"{held.status.run}.json")["failure"]
+
+    failure = failed_at(calibration, refusal)
+    assert told == [(*event, None)[:3] for event in calibration] + [("validate", "failed", 0.5)], told
+    assert (text.ended[-1].outcome, failure["type"], failure["message"]) == ("failed", "Refusal", refusal.message)
+    failure = failed_at((("prior", "started"),), RuntimeError("CUDA error: out of memory"))
+    assert told == [("prior", "started", None), ("prior", "failed", 0.5)], told
+    assert (failure["type"], failure["kind"]) == ("RuntimeError", "out of memory"), failure
+    failure = failed_at((("prior", "started"),))
+    assert (failure["type"], failure["message"]) == ("RuntimeError", STAGE_FAILED_TEXT), failure
+
+    told.clear()
+    quiet = StandIn()
+    quiet.stage("prior", "started")
+    quiet.stage("prior", "failed", 0.5, raises=refusal)
+    start_run(build_run_host(), quiet)
+    say(app, quiet, text, "the run goes on")
+    quiet.release()
+    turn_until(app, lambda: not held.is_live(), 10)
+    assert told == [] and text.ended[-1].outcome == "finished"
 
 
 def test_a_step_page_stands_at_the_step_it_is_built_for(tmp_path):
@@ -1999,11 +2166,13 @@ def test_a_step_page_stands_at_the_step_it_is_built_for(tmp_path):
 def test_the_lines_the_helpers_say_are_the_ones_the_engine_writes():
     """The engine's lines that the helpers of tests/_runs.py write are held to the engine itself: the training's total of
     unusable driven recordings, in each of its forms, is the string the engine's own function builds and the run's
-    table reads as the row it names; the third scope is the engine's own words; a calibration's lines and a narrowing
-    round's are the engine's, found in its source or built by its own class, and the run's table reads those it has a
-    row for."""
+    table reads as the row it names; each scope is the engine's own, its whole line found in the engine's source, so
+    that a scope cut short or an engine that words it otherwise is seen; a calibration's lines and a narrowing
+    round's are the engine's, found in its source or built by its own class, the run total of failed simulations with
+    the engine's own limit on a trajectory's size, and a kept round resumed with the region line it says instead of a
+    new round's, and the run's table reads those it has a row for."""
     from core import orchestrator
-    from core.SBI import pipeline
+    from core.SBI import pipeline, summaries
     from core.SBI.truncate import TruncationRegion
     from core.gui.run.model import SIMULATION_ROW
     from tests import _runs
@@ -2016,9 +2185,11 @@ def test_the_lines_the_helpers_say_are_the_ones_the_engine_writes():
     for scope in (_runs.SCOPE_WHOLE, _runs.SCOPE_PROCESS, third):
         assert _runs.masked_line(1201, 3000, 3, scope) == counted.summary_line(scope)
         assert _runs.masked_none(scope) == pipeline._BatchProbeLedger().summary_line(scope)
-    for words in (_runs.SCOPE_WHOLE, _runs.SCOPE_PROCESS, "only the batches this process generated; the cache's first ",
-                  "batches were committed without per-batch counts"):
-        assert words in pipeline_text, words
+    for scope in (_runs.SCOPE_WHOLE, _runs.SCOPE_PROCESS):        # each the engine's whole line, quotes and all
+        assert f'\n            _scope = "{scope}"\n' in pipeline_text, scope
+    assert ('\n            _scope = (f"only the batches this process generated; the cache\'s first '
+            '{_ledger.first_batch} "\n                      f"batches were committed without per-batch counts")\n'
+            ) in pipeline_text
     total = readings.read(_runs.masked_line(1201, 3000, 3, third), "info")
     assert total.name == "chi_total"
     assert (total.values["masked"], total.values["total"], total.values["batches"], total.values["scope"]) == (
@@ -2030,14 +2201,17 @@ def test_the_lines_the_helpers_say_are_the_ones_the_engine_writes():
     frame, patho, sbc, tarp = _runs.CALIBRATION_LINES
     assert frame.startswith(f"{SIMULATION_ROW}:") and f'desc="{SIMULATION_ROW}"' in pipeline_text
     assert readings.read(patho, "info").name == "patho_total"
+    assert patho.endswith(f" over {summaries._PATHO_MAG:g}") and " over {_PATHO_MAG:g}" in pipeline_text, patho
     assert sbc == "SBC uniformity checks:" and f'log.info("{sbc}")' in orchestrator_text
     assert re.fullmatch(r"TARP: ATC=\S+  KS p=\d\.\d{3}", tarp)
     assert 'log.info(f"TARP: ATC={atc:.3g}  KS p={tarp_kspval:.3f}")' in orchestrator_text
 
     region, writing, masked, epoch = _runs.ROUND_LINES
     shown = TruncationRegion([0, 2], [-1.2, -0.5], [1.1, 0.8], level=0.9)
-    assert region == f"[tsnpe] region from observation obs_1: {shown!r}"
+    assert region == _runs.region_line() == f"[tsnpe] region from observation obs_1: {shown!r}"
     assert "[tsnpe] region from observation {observation.name or observation.id}: {region!r}" in orchestrator_text
+    assert _runs.region_line("20261010T120000") == f"[tsnpe] region of the kept training 20261010T120000: {shown!r}"
+    assert "[tsnpe] region of the kept training {kept.id}: {region!r}" in orchestrator_text
     assert [readings.read(line, "info").name for line in (writing, masked, epoch)] == [
         "simulation_writing", "chi_total", "fit_epoch"]
     assert epoch == _runs.epoch_line(1)

@@ -14,10 +14,11 @@ test's own clock and folder (``controller_on``), a training as its page hands it
 training brought to a stage by the engine's own lines (``say``, ``to_the_simulation``, ``to_the_fit``) and those lines
 (``writing``, ``complete``, ``epoch_line``).
 
-A stand-in told its ``stages`` calls the ``on_stage`` it is handed as the engine's staged calls (the card test's) do,
-and the engine's lines of a check and of a narrowing round stand ready to be said: ``masked_line`` and ``masked_none``
-(the training's total of unusable driven recordings, in each form it is written), ``progress_frame``,
-``CALIBRATION_LINES`` and ``ROUND_LINES``.
+A stand-in tells the ``on_stage`` it is handed of its stages as the engine's staged calls (the card test's) do, each
+in its turn among its lines (``stage``) or all at once as it is released (``stages``), and the engine's lines of a
+check and of a narrowing round stand ready to be said: ``masked_line`` and ``masked_none`` (the training's total of
+unusable driven recordings, in each form it is written), ``progress_frame``, ``CALIBRATION_LINES``, ``region_line``
+and ``ROUND_LINES``.
 
 At module level this file imports the standard library and the toolkit's core, nothing of torch and nothing of the
 program: what it needs of the program it imports where it needs it.
@@ -58,10 +59,27 @@ BUDGET = "[budget] 10,000 batches x 2,048 rows = 20,480,000 training rows"
 ROTATING = "Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)..."
 ROTATED = "[fisher] eigenvalue spread (best/worst direction): 412"
 NOT_SAVED = "[fit] saving is switched off: this training is not saved as it goes and cannot be resumed."
-#: What a stand-in told to fail a stage raises, as the engine passes a failure on.
+#: What a stand-in's stage told "failed" raises when no error of the stage's own is handed with it.
 STAGE_FAILED_TEXT = "stand-in stage failed"
 #: The events the engine's staged calls report: a stage is skipped, begins, ends with its seconds, or fails with them.
 STAGE_EVENTS = ("skipped", "started", "finished", "failed")
+
+
+def _stage_item(stage, event, seconds=None, raises=None) -> tuple:
+    """One event of a staged call as the stand-in keeps it, ``("stage", stage, event, seconds, raises)``. ValueError
+    for one the engine never tells: a stage the card test does not have, an event that is none of ``STAGE_EVENTS``,
+    seconds for a stage skipped or begun (the engine tells those with none), or an error to raise at an event other
+    than "failed"."""
+    from core.diagnostics.card import STAGES
+    if stage not in STAGES:
+        raise ValueError(f"a stage is one of the card test's {STAGES}, not {stage!r}")
+    if event not in STAGE_EVENTS:
+        raise ValueError(f"a stage's event is one of {STAGE_EVENTS}, not {event!r}")
+    if seconds is not None and event in ("skipped", "started"):
+        raise ValueError(f"the engine tells a stage {event} with no seconds, not {seconds!r}")
+    if raises is not None and event != "failed":
+        raise ValueError(f"only a stage told failed raises an error, not one told {event!r}")
+    return ("stage", stage, event, seconds, raises)
 
 
 class Clock:
@@ -96,19 +114,21 @@ class StandIn:
     a run or the repeat of its call is: ``calls`` holds the arguments of each call, in order, and each call ends at
     the end its test gives it after the call began.
 
-    ``stages`` are the staged calls of an engine function that is handed an ``on_stage`` (the card test), each
-    ``(stage, event, seconds)`` with the event one of ``STAGE_EVENTS``; a call handed ``on_stage`` as a keyword makes
-    them, in order, on the thread the run is on, as its run is released and before it returns. At an event "failed" it
-    then raises ``RuntimeError(STAGE_FAILED_TEXT)``, as the engine passes a failure on, and the stages after it are not
-    called. A run ended by ``fail`` raises its own error and makes none; a call handed no ``on_stage`` ignores them."""
+    A call handed an ``on_stage`` as a keyword (the card test's) tells it its stages on the thread the run is on, as the
+    engine's staged call does: each event queued with ``stage`` is told in its turn among the lines, so that a test can
+    look at the live run after any event and say lines between two. A stage told "started" and not yet "finished" or
+    "failed" is told "failed", with the seconds since it started, when the call ends any other way (a stop, ``fail``,
+    the wait's limit), before that end passes on, as the engine tells a stage left by any way out of it. ``stages`` is
+    the shorthand, ``(stage, event, seconds)`` each, told in order as the run is released, just before it returns; with
+    it no stage is told while the run is live, no line comes between two events, a stop or a ``fail`` tells nothing,
+    and a "failed" raises ``RuntimeError(STAGE_FAILED_TEXT)``, never the stage's own error: a test that needs any of
+    these queues its events with ``stage``. A call handed no ``on_stage`` is told nothing and passes over its stage
+    items, a "failed" one among them."""
 
     def __init__(self, *, word: str = "Training", lines=(), takes_stops: bool = True, stages=()):
         self.word = word
         self.takes_stops = takes_stops
-        self.stages = tuple((str(stage), event, seconds) for stage, event, seconds in stages)
-        unknown = [event for _stage, event, _seconds in self.stages if event not in STAGE_EVENTS]
-        if unknown:
-            raise ValueError(f"a stage's event is one of {STAGE_EVENTS}, not {unknown[0]!r}")
+        self.stages = tuple(_stage_item(stage, event, seconds)[1:4] for stage, event, seconds in stages)
         self.kept_fit = None
         self.calls: list[tuple[tuple, dict]] = []
         self.started = threading.Event()
@@ -119,6 +139,7 @@ class StandIn:
         self._wake = threading.Event()
         self._end = None
         self._said_stop = False
+        self._open = None                     # the stage told "started" and not yet ended in this call, and when
 
     # ── what a test tells it, from the test's thread ──
     def _put(self, item) -> None:
@@ -145,6 +166,16 @@ class StandIn:
         """Queue steps of the solver, counted on the run's own thread as the solver counts them."""
         self._put(("solver", steps))
 
+    def stage(self, stage: str, event: str, seconds: "float | None" = None,
+              raises: "BaseException | None" = None) -> None:
+        """Queue one event of a staged call, told in its turn among the lines: ``stage`` one of the card test's stages
+        (``core.diagnostics.card.STAGES``), ``event`` one of ``STAGE_EVENTS``. "skipped" and "started" carry no
+        seconds; "finished" and "failed" carry ``seconds``, or, when it is None, the seconds since the stage was told
+        "started" in this call. At "failed" the call then raises ``raises``, the stage's own error (a refusal, a lack
+        of the card's memory), or ``RuntimeError(STAGE_FAILED_TEXT)`` when none is handed. ValueError, as it is
+        queued, for an event the engine never tells (``_stage_item``)."""
+        self._put(_stage_item(stage, event, seconds, raises))
+
     def release(self, result=None) -> None:
         """End the run: it returns ``result``."""
         with self._lock:
@@ -164,10 +195,11 @@ class StandIn:
         from tests import _built
         with self._lock:
             self.calls.append((args, dict(kwargs)))
-        self._said_stop = False
+        self._said_stop, self._open = False, None
         self.started.set()
         token = getattr(getattr(controller(), "_run", None), "token", None)       # this run's own
         log, saying, framed, ending_at = logging.getLogger("core"), None, False, None
+        on_stage = kwargs.get("on_stage")
         heard = time.monotonic()
         try:
             while True:
@@ -178,7 +210,10 @@ class StandIn:
                         self._end = None                 # this call's end: a call after it waits for its own
                 for item in items:
                     saying = item[1] if item[0] == "say" else None
-                    framed = self._do(item, log, fig_sink) or framed
+                    if item[0] == "stage":
+                        self._tell(item, on_stage)
+                    else:
+                        framed = self._do(item, log, fig_sink) or framed
                 saying = None
                 if items:
                     heard = time.monotonic()
@@ -189,7 +224,7 @@ class StandIn:
                         if self.kept_fit is not None:
                             end[1].kept_fit = self.kept_fit
                         raise end[1]
-                    self._pass_stages(kwargs.get("on_stage"))
+                    self._pass_stages(on_stage)
                     return end[1]
                 asked = controller().status.stop_requested or (token is not None and token.requested.is_set())
                 # the held stop's fallback, armed only once the end of the test has asked
@@ -203,25 +238,45 @@ class StandIn:
                     self._said_stop = False          # a stop withdrawn: the next one is taken at its line again
                 self._wake.wait(0.01)
                 self._wake.clear()
-        except WorkerCancelled as stop:
-            self.stopped_at = saying
-            if self.kept_fit is not None:
-                stop.kept_fit = self.kept_fit
-            self.stopped.set()
+        except BaseException as leaving:
+            if self._open is not None:           # a stage left by any other way out is told "failed" first
+                stage, began = self._open
+                self._open = None
+                on_stage(stage, "failed", time.perf_counter() - began)
+            if isinstance(leaving, WorkerCancelled):
+                self.stopped_at = saying
+                if self.kept_fit is not None:
+                    leaving.kept_fit = self.kept_fit
+                self.stopped.set()
             raise
         finally:
             if framed:
                 sys.stderr.write("\r")           # the bar's row is let go, as a bar that does not stay goes
 
     def _pass_stages(self, on_stage) -> None:
-        """Call ``on_stage`` for each of the stand-in's stages, in order, on the thread this is called on (the run's);
-        at an event "failed", raise as the engine passes a failure on. Nothing when no ``on_stage`` was handed."""
+        """The shorthand's stages, told in order on the thread this is called on (the run's), as queued ones are."""
+        for stage, event, seconds in self.stages:
+            self._tell(("stage", stage, event, seconds, None), on_stage)
+
+    def _tell(self, item, on_stage) -> None:
+        """Tell ``on_stage`` one stage event, on the run's thread, keeping which stage is open as the engine does: its
+        "started" is told before the stage's work and its "finished" after it, so neither is a way out of the stage,
+        and "failed" ends the stage, then raises the stage's error. Nothing at all when no ``on_stage`` was handed. A
+        stage's seconds are read off the fine clock: the coarse one moves only every sixtieth of a second or so here."""
         if on_stage is None:
             return
-        for stage, event, seconds in self.stages:
-            on_stage(stage, event, seconds)
-            if event == "failed":
-                raise RuntimeError(STAGE_FAILED_TEXT)
+        _, stage, event, seconds, raises = item
+        if event == "started":
+            began = time.perf_counter()
+            on_stage(stage, event, None)
+            self._open = (stage, began)
+            return
+        opened, self._open = self._open, None
+        if seconds is None and event in ("finished", "failed"):
+            seconds = time.perf_counter() - opened[1] if opened is not None and opened[0] == stage else 0.0
+        on_stage(stage, event, seconds)
+        if event == "failed":
+            raise raises if raises is not None else RuntimeError(STAGE_FAILED_TEXT)
 
     @staticmethod
     def _do(item, log, fig_sink) -> bool:
@@ -396,20 +451,32 @@ def progress_frame(desc: str, done: int, total: int) -> str:
 
 #: The four lines a calibration's stages begin at, as the engine writes them. The first is a frame of the bar that counts
 #: the calibration's simulations, which a run shows with ``stand_in.row``; the other three are records, said with
-#: ``say``.
+#: ``say``. The run total ends with the size beyond which the engine counts a trajectory as failed, 1e15.
 CALIBRATION_LINES = (
     progress_frame("Generating training data", 3, 10),
     "[patho] run total: 0 pathological of 2,000 simulated trajectories (0.0000%) -- 0 non-finite, 0 exactly constant, "
-    "0 over 1e+06",
+    "0 over 1e+15",
     "SBC uniformity checks:",
     "TARP: ATC=0.0123  KS p=0.512",
 )
 #: The simulation set a narrowing round writes to, as the round's lines name it.
 ROUND_FOLDER = r"C:\Users\J\PRISM\Artifacts\simulations\3f9a2c1d7b04"
-#: A narrowing round's lines, in the order the engine says them: its region, its simulation set, its total of unusable
-#: driven recordings and its first epoch.
+#: The region a narrowing round's lines name, as the region's own class writes itself.
+ROUND_REGION = "TruncationRegion(level=0.9, d0:[-1.2,1.1], d2:[-0.5,0.8], basis=unrotated)"
+
+
+def region_line(kept: "str | None" = None) -> str:
+    """A narrowing round's first line, its region: drawn from the observation ``obs_1`` for a new round, or, for a kept
+    round resumed, read from the kept training whose id is ``kept``."""
+    if kept is None:
+        return f"[tsnpe] region from observation obs_1: {ROUND_REGION}"
+    return f"[tsnpe] region of the kept training {kept}: {ROUND_REGION}"
+
+
+#: A new narrowing round's lines, in the order the engine says them: its region, its simulation set, its total of
+#: unusable driven recordings and its first epoch. A kept round resumed says ``region_line(<its id>)`` first instead.
 ROUND_LINES = (
-    "[tsnpe] region from observation obs_1: TruncationRegion(level=0.9, d0:[-1.2,1.1], d2:[-0.5,0.8], basis=unrotated)",
+    region_line(),
     writing(ROUND_FOLDER),
     masked_line(1201, 3000, 3, SCOPE_WHOLE),
     epoch_line(1),
