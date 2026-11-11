@@ -1769,6 +1769,181 @@ def test_the_comparison_is_read_afterwards_from_the_sets_counts_or_the_log(tmp_p
         turn_until(app, lambda: not controller().is_live())
 
 
+def _heading_labels(widget) -> list:
+    """Every label in ``widget`` set as a heading: by the heading's class, or at its size or larger."""
+    from PySide6.QtWidgets import QLabel
+    from core.gui import fonts
+    heading = fonts.inter("head")
+    big = heading.pixelSize() if heading.pixelSize() > 0 else heading.pointSizeF()
+    return [label for label in widget.findChildren(QLabel)
+            if label.property("cls") == "head" or (_label_size(label) >= big and label.font().weight() >= heading.weight())]
+
+
+def _every_record(store, cfg, prior, posterior) -> None:
+    """A passing record of each check that writes one, made for what is in use."""
+    from tests._fixtures import check_results, write_calibration, write_diagnostic
+    write_calibration(store, cfg, posterior=posterior, prior=prior,
+                      figures=("SBC ranks (CDF)", "SBC ranks (histogram)", "TARP coverage"))
+    for one in check_catalogue.CHECKS:
+        if one.kind != "diagnostic":
+            continue
+        parents = ({"prior": prior} if one.key == "audit" else {"posterior": posterior, "prior": prior}
+                   if one.key in ("input_use", "identifiability", "fixed_number", "across_prior") else {})
+        write_diagnostic(store, cfg, diagnostic=one.diagnostic,
+                         variant="pooled" if one.key == "fixed_number" else one.variant, parents=parents,
+                         cell=str(_cell_file()) if one.key in ("band", "pin_down", "drive_study") else None,
+                         **check_results(one.key))
+
+
+def test_a_checks_verdict_is_a_message_row_never_a_heading(tmp_path):
+    """STANDING. No check's verdict is a heading, boxed or coloured: with a passing record of every check, no label of
+    the page set as a heading holds "PASS" or "Passed", on the list or on any check's page; each verdict is the first
+    message row of its result, its sentence beginning with the check's name."""
+    from core.gui.widgets.message_row import MessageRow
+    with _checks_page(tmp_path, records=_every_record) as (_window, _screen, page, _store):
+        for key in [None, *(one.key for one in check_catalogue.CHECKS)]:
+            page.open_check(key)
+            loud = [label.text() for label in _heading_labels(page) if label.isVisibleTo(page)
+                    and ("PASS" in label.text() or "Passed" in label.text())]
+            assert loud == [], (key, loud)
+        for key, one in page.check_pages.items():
+            if one.result is None:
+                continue
+            assert isinstance(one.result.verdict, MessageRow), key
+            assert one.result.verdict.sentence.plain_text().startswith(check_readings.said_name(key)), key
+
+
+def test_no_sentence_says_a_posterior_passed_below_every_check_that_applies():
+    """STANDING. Over every combination of the deciding states, a check no run can pass among them: the headline's
+    sentence says the posterior passed only when every deciding check that applies passed, and nothing below that
+    says it, a check no run can pass included."""
+    seen = 0
+    for states in _never_cases():
+        rows = _with_never(states)
+        held = _held()
+        _head, sentence = check_lineage.headline(rows, held=held)
+        every = all(row.state in ("Passed", "Does not apply") for row in rows if row.key in check_catalogue.DECIDING)
+        assert ("passed every deciding check" in sentence) == every, (states, sentence)
+        seen += 1
+    assert seen == 4 * 4 * 5 * 4 * 5 * 5
+    for states, posterior, chi in _cases():
+        rows = _rows_of(states)
+        held = _held(posterior=POSTERIOR if posterior else None, chi=chi)
+        _head, sentence = check_lineage.headline(rows, held=held)
+        every = posterior and all(state in ("Passed", "Does not apply") for state in states)
+        assert ("passed every deciding check" in sentence) == every, (states, posterior, chi, sentence)
+
+
+@pytest.mark.parametrize("others", [0, 1, 2, "one no run can pass"])
+def test_a_passed_calibration_with_others_open_says_it_alone_is_not_enough(others, tmp_path):
+    """Under a passed calibration, while other deciding checks that apply are still open, its result says the
+    calibration alone does not show the posterior is sound, counting them; with none open it says nothing of it; a
+    check no run can pass for the posterior, its input use when it was trained without keeping its simulations, is not
+    counted among them; a failed calibration never says it."""
+    never = others == "one no run can pass"
+    written = 0 if never else 2 - others
+    from tests._fixtures import check_results, write_calibration, write_diagnostic
+
+    def records(store, cfg, prior, posterior):
+        write_calibration(store, cfg, posterior=posterior, prior=prior)
+        write_diagnostic(store, cfg, diagnostic="probes", variant="band", cell=str(_cell_file()),
+                         **check_results("band"))
+        write_diagnostic(store, cfg, diagnostic="probes", variant="mask", parents={"prior": prior},
+                         **check_results("audit"))
+        for key in ("input_use", "identifiability")[:written]:
+            one = check_catalogue.entry(key)
+            write_diagnostic(store, cfg, diagnostic=one.diagnostic, variant=one.variant,
+                             parents={"posterior": posterior, "prior": prior}, **check_results(key))
+
+    with _checks_page(tmp_path, chi=False, records=records, simulation=None if never else SET) as (
+            _window, screen, page, _store):
+        assert [_row(screen.check_rows(), key).state for key in check_catalogue.DECIDING[3:]].count("Passed") == (
+            1 if never else 3 - others)
+        assert check_lineage.no_run_passes(_row(screen.check_rows(), "input_use"), held=screen.checks_in_use()) is never
+        said = page.check_pages["calibration"].result.verdict.sentence.plain_text()
+        alone = {0: "", 1: " Calibration alone does not show that the posterior is sound: 1 deciding check is still "
+                           "open.",
+                 2: " Calibration alone does not show that the posterior is sound: 2 deciding checks are still open."}
+        assert said == ("Calibration: passed. All 2 parameters pass the rank test, and the joint coverage test passes. "
+                        "Made on 2,000 test datasets at 200 operating points (pairs of time scale and recording "
+                        "length), seed 1840273." + alone[1 if never else others])
+    failed = check_readings.verdict_sentence("calibration", {"body": check_results("calibration", passed=False)},
+                                             others_open=2)
+    assert "alone does not show" not in failed
+
+
+def test_no_passed_or_failed_for_an_informing_check_a_tool_or_a_reduced_record(tmp_path):
+    """STANDING. An informing check or a tool reads "Done" once run, and its result says "done", never "Passed",
+    "Failed", "passed" or "failed", whatever its record holds; a record made at a reduced size is no pass nor failure:
+    its row reads "Not run yet" with why, its page shows no result for it, and its sentence says it does not count."""
+    from tests._fixtures import check_results, write_calibration
+
+    def records(store, cfg, prior, posterior):
+        _every_record(store, cfg, prior, posterior)
+        write_calibration(store, cfg, posterior=posterior, prior=prior, created=_at(30, 9, 0),
+                          results=check_results("calibration", n_cal=40, passed=False)["results"])
+
+    informing = [one.key for one in check_catalogue.CHECKS if one.role != "Decides"]
+    with _checks_page(tmp_path, chi=False, records=records) as (_window, screen, page, _store):
+        rows = {row.key: row for row in screen.check_rows()}
+        for key in informing:
+            assert rows[key].state in ("Done", "Not run yet", "Does not apply"), (key, rows[key])
+            one = page.check_pages[key]
+            if one.result is not None:
+                said = one.result.verdict.sentence.plain_text()
+                assert ": done" in said and not {"passed", "failed", "Passed", "Failed"} & set(
+                    said.replace(".", " ").replace(",", " ").split()), (key, said)
+        assert rows["calibration"].state == "Passed", "the older record that counts no longer decided"
+    with _checks_page(tmp_path / "reduced", records=lambda store, cfg, prior, posterior: write_calibration(
+            store, cfg, posterior=posterior, prior=prior,
+            results=check_results("calibration", n_cal=40, passed=False)["results"])) as (_window, screen, page, _s):
+        row = _row(screen.check_rows(), "calibration")
+        assert (row.state, row.record) == ("Not run yet", None)
+        assert row.line == ("Not run yet. Run only at a reduced size (40 test datasets; the usual is 2,000), which "
+                            "does not count.")
+        assert page.check_pages["calibration"].result is None, "a reduced record's result was shown"
+        assert page.check_pages["calibration"].earlier.text().endswith("; does not count")
+    reduced = check_readings.verdict_sentence("calibration", {"body": check_results("calibration", n_cal=40)})
+    assert reduced == ("Calibration: not run yet. Run only at a reduced size (40 test datasets; the usual is 2,000), "
+                       "which does not count.")
+
+
+def test_the_engines_verdict_line_is_shown_only_in_the_full_text(tmp_path, monkeypatch):
+    """STANDING. The engine's verdict line of a calibration, "[verdict] PASS: ...", is never one of the window's words:
+    while the calibration runs and after it, no label of the window and no message of the run's page holds "PASS",
+    and the run's full text holds the line as the engine wrote it."""
+    from PySide6.QtWidgets import QLabel
+    from core import orchestrator
+    from tests._runs import RunText, StandIn, say, turn_until
+    verdict = ("[verdict] PASS: every parameter's rank test at KS p >= 0.05/13 = 0.003846 and the joint coverage test "
+               "at KS p >= 0.05 (calibration seed 1840273)")
+    stand_in = StandIn(word="Check")
+    monkeypatch.setattr(orchestrator, "validate_calibration", stand_in)
+    app = qt_app()
+
+    def shown(window, page) -> list:
+        """Every label of the window in sight that holds "PASS", and every line of the run's page but its full text's."""
+        labels = [label.text() for label in window.findChildren(QLabel)
+                  if label.isVisible() and "PASS" in label.text()
+                  and not page.run_view.full_text.isAncestorOf(label)]
+        return labels
+
+    with _checks_page(tmp_path) as (window, _screen, page, _store):
+        text = RunText(controller())
+        page.open_check("calibration")
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        say(app, stand_in, text, verdict)
+        _settle()
+        assert page.results.currentWidget() is page.run_view
+        assert shown(window, page) == [], shown(window, page)
+        assert any(verdict in line for line in page.run_view.full_text.lines()), "the full text lost the line"
+        stand_in.release()
+        turn_until(app, lambda: not controller().is_live())
+        _settle()
+        assert shown(window, page) == [], shown(window, page)
+
+
 def test_a_record_that_moves_or_cannot_be_read_is_said_and_raises_nothing(tmp_path):
     """A record that moves under the page, or cannot be read, is read again when Records changes the store, said in
     words, and raises nothing, the drawing guard silent: a calibration renamed still counts, by its id; a torn manifest
