@@ -1148,8 +1148,8 @@ def test_each_store_kind_has_one_word():
 
 
 # the main button of each step's page, by the step; a rebuilt page's is its foot's
-_MAIN = {"model": "foot.main_button", "prior": "foot.main_button", "training": "foot.main_button", "checks": "btn_validate",
-         "infer": "btn_infer", "narrowing": "btn_round"}
+_MAIN = {"model": "foot.main_button", "prior": "foot.main_button", "training": "foot.main_button",
+         "checks": "foot.main_button", "infer": "btn_infer", "narrowing": "btn_round"}
 
 
 def _main_button(panel, step):
@@ -1229,11 +1229,6 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
             if hasattr(panel, "foot"):
                 assert not button.isEnabled() or state.can_start, (session, step.key)
                 assert button.isEnabled() or panel.foot.reason.text(), (session, step.key)
-            elif step.key == "checks":
-                # Today's Checks tab offers the calibration alone, which needs a posterior: with a prior and no
-                # posterior step 4 can start, the frequency band and the audit needing only a prior, and its one button
-                # stays greyed.
-                assert button.isEnabled() == (state.can_start and session == 3), (session, step.key, state)
             else:
                 assert button.isEnabled() == state.can_start, (session, step.key)
             assert panel.isEnabled() and inference.pages.isEnabled(), (session, step.key)

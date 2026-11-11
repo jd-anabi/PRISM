@@ -1,26 +1,36 @@
-"""The checks as values: what each of the twelve is, how a record of a deciding check is read, which records count for
-what is in use, the headline over the six deciding checks and the summary the chain and Home read, the comparison of
-the unusable driven recordings a training simulated with its prior's audit, and the line "Before you start" says of the
-two checks made before a training.
+"""The checks: what each of the twelve is, how a record of a deciding check is read, which records count for what is in
+use, the headline over the six deciding checks and the summary the chain and Home read, the comparison of the unusable
+driven recordings a training simulated with its prior's audit, and the line "Before you start" says of the two checks
+made before a training; then the Checks list, a check's page and the result of every check, and what a check's page
+never shows.
 
-No widget: the rules are pure functions over plain values, handed records as the store writes them, either read back
-from the test's own store or written out here as the engine writes them.
+The rules are pure functions over plain values, handed records as the store writes them, either read back from the
+test's own store or written out here as the engine writes them; the list and its pages are read in a whole window shown
+off the screen, over records written in the test's own store.
 """
 import ast
+import contextlib
 import inspect
 import itertools
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
 
 from core.gui import check_catalogue, check_lineage, check_readings
 from core.gui.check_lineage import CheckRow, Held, RecordRead
 from core.gui.check_readings import Reading
+from core.gui.run.controller import controller
 from core.gui.texts import date_text
+from tests._fixtures import qt_app
+from tests._look_helpers import _settle, text_size
 from tests._runs import SCOPE_PROCESS as PROCESS
 from tests._runs import SCOPE_WHOLE as WHOLE
 
@@ -847,8 +857,8 @@ def test_the_checks_rules_import_neither_the_toolkit_nor_torch(module):
     import statements name only the standard library and the window's own modules of rules and words; and a fresh
     interpreter that imports one of them first, alone, then the others, and calls every rule down its branches, holds
     none of them."""
-    allowed = {"collections.abc", "dataclasses", "datetime", "json", "pathlib", "re", ".", ".check_catalogue",
-               ".check_readings", ".run", ".step_facts", ".texts"}
+    allowed = {"collections.abc", "dataclasses", "datetime", "json", "pathlib", "re", "statistics", ".",
+               ".check_catalogue", ".check_readings", ".run", ".step_facts", ".texts"}
     path = REPO / (module.replace(".", "/") + ".py")
     named = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -987,3 +997,1152 @@ def test_the_pre_run_fact_for_each_state():
         "Continue from batch 236 although a check failed?",
         f"Frequency band: Failed, {band_at}. Unusable driven recordings: audit: Failed, {audit_at}. Step 4, Checks, "
         "says why.", "Continue from batch 236 anyway")
+
+
+# ── the Checks list and a check's page ──
+@contextlib.contextmanager
+def _checks_page(tmp_path, *, chi=True, prior=True, posterior=True, records=None, size=(1300, 820), shown=True,
+                 model="NADROWSKI", **made):
+    """The Checks page in a whole window, in sight off the screen at ``size`` when ``shown``, on the test's own clock and
+    store: the configuration of the master bounds file, with the frequency response or without it (``chi``), the first
+    step applied with it, a real prior of it in use with ``prior`` and with ``posterior`` a stand-in posterior trained on
+    it that says what the checks read of it (``_held_posterior``'s keywords in ``made``), the records ``records`` writes
+    first (handed the store, the configuration, the prior's id and the posterior's), and the page read:
+    (window, screen, page, store)."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.session import SbiSession
+    from tests._fixtures import _nad_cfg, _prior_artifact, build_window, qt_app
+    from tests._look_helpers import _settle
+    from tests._runs import Clock, at, controller_on
+    from tests._window_helpers import shown_off_screen
+    qt_app()
+    store = ArtifactStore(tmp_path / "Artifacts")
+    with use_store(store):
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        window = build_window()
+        screen = window.part("inference")
+        cfg = _nad_cfg(chi_mode=chi)
+        if model != "NADROWSKI":
+            cfg.model = model
+        held = store.load_prior(cfg, _prior_artifact(store, cfg, name="retrain_prior").id) if prior else None
+        loaded = _held_posterior(tmp_path, prior=held, **made) if prior and posterior else None
+        if records is not None:
+            records(store, cfg, getattr(held, "id", None), getattr(loaded, "id", None))
+        first = screen.config_panel
+        first.kind_choice.setCurrentIndex(first.kind_choice.findData(chi))
+        first.foot.main_button.click()               # step 1 applied by its own button, so that it holds what it shows
+        screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=held, posterior=loaded)
+        screen.prior_panel.bounds_picker.restore_key("master.txt")
+        screen.refresh_gates()
+        if shown:
+            shown_off_screen(window, *size)
+            window.go_to("inference", "checks")
+            _settle()
+        try:
+            yield window, screen, screen.validate_panel, store
+        finally:
+            window.hide()
+
+
+def _held_posterior(tmp_path, *, prior, ident=POSTERIOR, name="retrain", simulation=None, rotated=True,
+                    other_prior=False, narrowed=False, text=""):
+    """A posterior in use as a stand-in that says what the checks read of it: trained on ``prior``, with the network's
+    own prior that prior's or another (``other_prior``), its simulation set ``simulation`` (None: not kept), the
+    rotation or not, narrowed in a round or not, and the text of its record (``text``) in a folder of its own."""
+    import torch
+    from torch.distributions import Categorical, MixtureSameFamily, Normal
+    folder = tmp_path / f"posterior_{ident}"
+    folder.mkdir(exist_ok=True)
+    (folder / "log.txt").write_bytes(text.encode("utf-8"))
+    parents = {"prior": prior.id, **({"simulation": simulation} if simulation else {})}
+    manifest = SimpleNamespace(parents=parents, body={"transform": {"V": [[1.0]] if rotated else None}},
+                               created="2026-10-03T09:00:00+00:00")
+    own = (MixtureSameFamily(Categorical(torch.ones(2)), Normal(torch.tensor([0.0, 9.0]), torch.ones(2)))
+           if other_prior else prior.prior)
+    network = SimpleNamespace(latent=SimpleNamespace(prior=own), truncation=object() if narrowed else None)
+    return SimpleNamespace(kind="posterior", id=ident, name=name, path=folder, manifest=manifest, posterior=network)
+
+
+def _shown_rows(page) -> list:
+    """The whole table's rows as they are drawn: each row's cells' words, a heading's alone."""
+    model = page.listing.whole.view.model()
+    return [tuple(str(model.data(model.index(row, column)) or "") for column in range(model.columnCount()))
+            for row in range(model.rowCount())]
+
+
+def _texts(widget) -> list:
+    """Every label's words in ``widget`` that stands in sight, in the order they were made."""
+    from PySide6.QtWidgets import QLabel
+    return [label.text() for label in widget.findChildren(QLabel) if label.isVisibleTo(widget) and label.text()]
+
+
+def test_the_list_shows_twelve_checks_in_four_groups_with_role_state_and_last_run(tmp_path):
+    """One ruled table, its columns "Check", "Role", "State" and "Last run": the four groups' headings as rows across it,
+    each check under its group in the list's order, with its role, the state its row reads and the date of the record
+    that decides it. Before the checks are first read the names stand alone."""
+    def records(store, cfg, prior, posterior):
+        from tests._fixtures import write_calibration
+        write_calibration(store, cfg, posterior=posterior, prior=prior, created=_at(12, 14, 5))
+
+    with _checks_page(tmp_path, records=records) as (_window, screen, page, _store):
+        table = page.listing.whole.view
+        assert [table.model().headerData(at, Qt.Horizontal) for at in range(4)] == ["Check", "Role", "State",
+                                                                                  "Last run"]
+        shown = _shown_rows(page)
+        groups = [row[0] for at, row in enumerate(shown) if at in page.listing.headings]
+        assert groups == list(check_catalogue.GROUPS) and len(shown) == 16
+        for at in page.listing.headings:
+            assert table.columnSpan(at, 0) == 4, at
+        rows = {row.key: row for row in screen.check_rows()}
+        for one in check_catalogue.CHECKS:
+            cells = shown[page.listing.row_of[one.key]]
+            assert cells[:3] == (one.name, one.role, rows[one.key].state), one.key
+        assert shown[page.listing.row_of["calibration"]][3] == _said(_at(12, 14, 5))
+        assert shown[page.listing.row_of["band"]][3] == ""
+        order = [page.listing.key_at[at] for at in sorted(page.listing.key_at)]
+        assert order == [one.key for group in check_catalogue.GROUPS for one in check_catalogue.CHECKS
+                         if one.group == group]
+    from core.gui.panels.inference.validate_tab import _Listing
+    from tests._fixtures import qt_app
+    qt_app()
+    bare = _Listing()
+    try:
+        model = bare.whole.view.model()
+        assert [str(model.data(model.index(bare.row_of["band"], column)) or "") for column in range(4)] == [
+            "Frequency band", "Decides", "", ""], "a state was drawn before the checks were read"
+    finally:
+        bare.deleteLater()
+
+
+@pytest.mark.parametrize("held", ["nothing", "a prior", "a prior, the frequency response off", "a posterior",
+                                  "a posterior trained without the frequency response", "a posterior of another prior"])
+def test_the_heading_sentence_and_in_use_follow_what_is_held(held, tmp_path):
+    """The heading names the posterior in use, or, with a prior alone, the prior a training would be made on, or neither;
+    the sentence under it counts the deciding checks that apply to the posterior, all six with no posterior whatever
+    the frequency response; and "In use" names the posterior and the prior it was trained on, or both when the prior
+    in use is another, or the prior alone."""
+    chi = held not in ("a posterior trained without the frequency response", "a prior, the frequency response off")
+    with _checks_page(tmp_path, chi=chi, prior=held != "nothing", posterior=held.startswith("a posterior"),
+                      shown=False) as (_window, screen, page, _store):
+        if held == "a posterior of another prior":
+            screen.session.posterior.manifest.parents["prior"] = OTHER_PRIOR
+            page.refresh_local_gates()
+        want = {"nothing": ("Checks", "A posterior passes when all six deciding checks have passed.",
+                            "In use: nothing yet."),
+                "a prior": ("Checks before training on retrain_prior", "A posterior passes when all six deciding "
+                            "checks have passed.", "In use: prior retrain_prior"),
+                "a prior, the frequency response off": (
+                    "Checks before training on retrain_prior", "A posterior passes when all six deciding checks have "
+                    "passed.", "In use: prior retrain_prior"),
+                "a posterior": ("Checks of retrain", "A posterior passes when all six deciding checks have passed.",
+                                "In use: posterior retrain, trained on prior retrain_prior"),
+                "a posterior trained without the frequency response": (
+                    "Checks of retrain", "A posterior passes when the three deciding checks that apply to it have "
+                    "passed.", "In use: posterior retrain, trained on prior retrain_prior"),
+                "a posterior of another prior": ("Checks of retrain", "A posterior passes when all six deciding "
+                                                 "checks have passed.", "In use: posterior retrain and prior "
+                                                                        "retrain_prior")}[held]
+        assert (page.head.title.text(), page.head.sentence.plain_text(), page.in_use.line_text()) == want
+
+
+def _label_size(label) -> float:
+    """How large a label's words are set: its font's pixels, or its points."""
+    font = label.font()
+    return font.pixelSize() if font.pixelSize() > 0 else font.pointSizeF()
+
+
+def test_the_headline_is_the_pages_only_large_line(tmp_path):
+    """With no check open, the headline is the one line of the page's body set in the heading's type, its size and its
+    weight, the count of the deciding checks passed, and the sentence under it is in the book face; the page's own
+    heading stands above the body. Before the checks are first read there is no headline."""
+    from PySide6.QtWidgets import QLabel
+    from core.gui import fonts
+    from core.gui.widgets.page import Sentence
+    with _checks_page(tmp_path) as (_window, screen, page, _store):
+        heading = fonts.inter("head")
+        big = heading.pixelSize() if heading.pixelSize() > 0 else heading.pointSizeF()
+        large = [label for label in page.scroller.body.findChildren(QLabel)
+                 if label.isVisibleTo(page) and label.text() and _label_size(label) >= big
+                 and label.font().weight() >= heading.weight()]
+        assert large == [page.headline], [label.text() for label in large]
+        assert page.headline.text() == screen.checks_summary().headline == "0 of 6 deciding checks passed"
+        assert isinstance(page.headline_sentence, Sentence) and page.headline_sentence.isVisibleTo(page)
+        assert page.headline_sentence.plain_text() == screen.checks_summary().sentence
+        assert page.headline_sentence.font().weight() < heading.weight()
+        screen.checks_held = None
+        page.refresh_local_gates()
+        assert page.headline_block.isHidden() and page.headline.text() == ""
+
+
+def _row_point(view, row: int):
+    """The middle of the row ``row`` of ``view``, in its viewport."""
+    return view.visualRect(view.model().index(row, 0)).center()
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_choosing_a_check_opens_its_page_beside_the_list_or_in_its_place(factor, tmp_path):
+    """A click on a check's row, Space or Enter on it, opens its page: beside the list, the list told narrow to its name
+    and its state, where the page's body is at least the width the page names, grown with the text; in the list's place
+    under "All checks" where it is narrower; the switch reading the width alone. The calibration's first setting takes
+    the keyboard, and "All checks" on a check with no setting; "All checks" brings the whole list back, the keyboard on
+    the row of the check left. A group's heading opens nothing."""
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from core.gui import design
+    from tests._look_helpers import _settle, text_size
+    from tests._window_helpers import in_front
+    with text_size(factor), _checks_page(tmp_path, size=(design.scaled(1400), design.scaled(600))) as (
+            window, _screen, page, _store):
+        assert page.list_detail.beside_width == design.scaled(890)
+        calibration = page.check_pages["calibration"]
+        with in_front(window):
+            view = page.listing.whole.view
+            QTest.mouseClick(view.viewport(), Qt.LeftButton, pos=_row_point(view, page.listing.headings[1]))
+            _settle()
+            assert page.open_key is None, "a group's heading opened a check"
+            QTest.mouseClick(view.viewport(), Qt.LeftButton, pos=_row_point(view, page.listing.row_of["calibration"]))
+            _settle()
+            assert (page.open_key, page.list_detail.beside(), page.listing.narrowed) == ("calibration", True, True)
+            assert page.listing.narrow.isVisibleTo(page) and not page.listing.whole.isVisibleTo(page), (
+                "beside a check's page the whole table stayed in sight")
+            assert [column.wrap for column in page.listing.narrow.view._columns] == [False, True], (
+                "the narrow table's state does not wrap")
+            assert page.list_detail.detail is calibration and calibration.isVisibleTo(page)
+            assert QApplication.focusWidget() is calibration.form.rows["n_cal"].widget
+            assert page.form is calibration.form, "the foot was not handed the check's form"
+            narrow = page.listing.narrow.view
+            narrow.setFocus(Qt.TabFocusReason)
+            narrow.setCurrentIndex(narrow.model().index(page.listing.row_of["band"], 0))
+            QTest.keyClick(narrow, Qt.Key_Return)
+            _settle()
+            assert page.open_key == "band" and page.list_detail.detail is page.check_pages["band"]
+            narrow.setFocus(Qt.TabFocusReason)
+            narrow.setCurrentIndex(narrow.model().index(page.listing.row_of["audit"], 0))
+            QTest.keyClick(narrow, Qt.Key_Space)
+            _settle()
+            assert page.open_key == "audit"
+            window.resize(design.scaled(900), design.scaled(800))
+            _settle()
+            assert page.open_key == "audit" and not page.list_detail.beside()
+            assert not page.listing.isVisibleTo(page) and page.list_detail.back.isVisibleTo(page)
+            assert page.check_pages["audit"].isVisibleTo(page)
+            page.list_detail.back.setFocus(Qt.TabFocusReason)
+            QTest.keyClick(page.list_detail.back, Qt.Key_Space)
+            _settle()
+            assert page.open_key is None and page.list_detail.detail is None and page.form is page._own_form
+            assert page.listing.isVisibleTo(page) and not page.listing.narrowed
+            whole = page.listing.whole.view
+            assert QApplication.focusWidget() is whole and whole.currentIndex().row() == page.listing.row_of["audit"]
+            page.open_check("calibration")
+            _settle()
+            assert QApplication.focusWidget() is calibration.form.rows["n_cal"].widget
+            page.open_check("comparison")
+            _settle()
+            assert QApplication.focusWidget() is page.list_detail.back, "a check with no setting left the keyboard"
+        with pytest.raises(KeyError):
+            page.open_check("calibrate")
+
+
+def test_a_checks_page_reads_name_sentence_state_result_earlier_runs_and_form_in_that_order(tmp_path):
+    """A check's page, top to bottom: its name, the sentence under it, its state line with its state's marker, the
+    result of the record that decides it, its earlier runs newest first, each with its state and its date, a run at a
+    reduced size said not to count, and its form."""
+    from core.gui.check_readings import STATE_MARKERS
+
+    def records(store, cfg, prior, posterior):
+        from tests._fixtures import check_results, write_calibration
+        write_calibration(store, cfg, posterior=posterior, prior=prior, created=_at(10, 15, 0),
+                          results=check_results("calibration", n_cal=40)["results"])
+        write_calibration(store, cfg, posterior=posterior, prior=prior, created=_at(11, 9, 30),
+                          results=check_results("calibration", passed=False)["results"])
+        write_calibration(store, cfg, posterior=posterior, prior=prior, created=_at(12, 14, 5),
+                          results=_calibration_of(["k", "x_scale", "t_scale"], ks=[0.5] * 3))
+
+    with _checks_page(tmp_path, records=records) as (_window, _screen, page, _store):
+        page.open_check("calibration")
+        one = page.check_pages["calibration"]
+        parts = [one.heading, one.sentence, one.state_line, one.result, one.earlier_head, one.earlier, one.form]
+        assert all(part.isVisibleTo(page) for part in parts), [part.isVisibleTo(page) for part in parts]
+        tops = [part.mapTo(one, part.rect().topLeft()).y() for part in parts]
+        assert tops == sorted(tops) and len(set(tops)) == len(tops), tops
+        assert (one.heading.text(), one.sentence.plain_text()) == (
+            "Calibration", "Is the posterior honest about its uncertainty?")
+        assert one.state_line.sentence.plain_text() == (f"Passed, {_said(_at(12, 14, 5))}. An earlier run failed "
+                                                        f"({_said(_at(11, 9, 30))}).")
+        assert one.state_line.kind == STATE_MARKERS["Passed"] == "fine"
+        assert one.result.verdict.sentence.plain_text().startswith("Calibration: passed.")
+        assert one.earlier_head.text() == "Earlier runs"
+        assert one.earlier.text().split("\n") == [f"Failed, {_said(_at(11, 9, 30))}",
+                                                  f"Run at a reduced size, {_said(_at(10, 15, 0))}; does not count"]
+        assert list(one.form.rows) == ["n_cal", "cal_n_scales"]
+        assert [row[:2] for row in one.result.table_words().rows[:3]] == [("k", ""), ("x_scale", "nm"),
+                                                                         ("t_scale", "ms")], "the units were not read"
+
+
+#: Each check's greyed button, as values: the check, what is in use that holds it there, the facts that grey it and
+#: the words beside it.
+_GREYED = {
+    "the calibration with no posterior": (
+        "calibration", dict(posterior=None), [("lock", "Needs a posterior: train one in step 3, or load a saved one.")],
+        "Cannot start yet: needs a posterior."),
+    "the calibration with the prior of another": (
+        "calibration", dict(pair_refused="refused", posterior_prior_words="older_prior"),
+        [("lock", "The prior in use is not the one this posterior was trained on (older_prior). Load it in step 2.")],
+        "Cannot start yet: the prior in use is not the posterior's own."),
+    "the calibration with the prior of another, its record gone": (
+        "calibration", dict(pair_refused="refused"),
+        [("lock", "The prior in use is not the one this posterior was trained on. Load it in step 2.")],
+        "Cannot start yet: the prior in use is not the posterior's own."),
+    "the calibration with no prior": (
+        "calibration", dict(prior=None), [("lock", "Needs a prior: build or load one in step 2, Prior.")],
+        "Cannot start yet: needs a prior."),
+    "the input use, trained without its simulations": (
+        "input_use", dict(simulation=None),
+        [("lock", "This check cannot be run from the window yet."),
+         ("lock", "This posterior was trained without keeping its simulations, and this check reads them.")],
+        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+    "the identifiability, trained without the rotation": (
+        "identifiability", dict(rotated=False),
+        [("lock", "This check cannot be run from the window yet."),
+         ("lock", "This posterior was trained without the rotation, so there are no directions to read.")],
+        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+    "the frequency band without the frequency response": (
+        "band", dict(chi=False), [("lock", "This check cannot be run from the window yet."),
+                                  ("lock", "Applies only with the frequency response.")],
+        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+    "the audit without the frequency response": (
+        "audit", dict(chi=False), [("lock", "This check cannot be run from the window yet."),
+                                   ("lock", "Applies only with the frequency response.")],
+        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+    "what the observations pin down, of another model": (
+        "pin_down", dict(nadrowski=False), [("lock", "This check cannot be run from the window yet."),
+                                            ("lock", "Applies only to the Nadrowski model.")],
+        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+    "what the observations pin down, with no forcing and no frequency response": (
+        "pin_down", dict(chi=False, forcing=False),
+        [("lock", "This check cannot be run from the window yet."),
+         ("lock", "Needs a bounds file with a forcing section.")],
+        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+    "the drive study with no forcing section": (
+        "drive_study", dict(forcing=False), [("lock", "This check cannot be run from the window yet."),
+                                             ("lock", "Needs a bounds file with a forcing section.")],
+        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+    "identifiability across the prior with the frequency response": (
+        "across_prior", dict(), [("lock", "This check cannot be run from the window yet."),
+                                 ("lock", "Does not apply with the frequency response.")],
+        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+    "identifiability across the prior with no forcing section": (
+        "across_prior", dict(chi=False, forcing=False),
+        [("lock", "This check cannot be run from the window yet."),
+         ("lock", "Needs a bounds file with a forcing section.")],
+        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+    "the calibration repeated, with the prior of another": (
+        "fixed_number", dict(pair_refused="refused", posterior_prior_words="older_prior"),
+        [("lock", "This check cannot be run from the window yet."),
+         ("lock", "The prior in use is not the one this posterior was trained on (older_prior). Load it in step 2.")],
+        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+    "the timing, which the window cannot run yet": (
+        "timing", dict(), [("lock", "This check cannot be run from the window yet.")],
+        "Cannot start: this check cannot be run from the window yet."),
+    "the calibration, free to run": ("calibration", dict(), [], ""),
+}
+
+
+#: The words beside a check's greyed button for each reason, by the start of its sentence, and the lead they read alone:
+#: a load lifts the first three; waiting lifts none of the others.
+_BLOCK_WORDS = (("Needs a prior", "needs a prior", "Cannot start yet:"),
+                ("Needs a posterior", "needs a posterior", "Cannot start yet:"),
+                ("The prior in use is not", "the prior in use is not the posterior's own", "Cannot start yet:"),
+                ("This check cannot be run", "this check cannot be run from the window yet", "Cannot start:"),
+                ("This posterior was trained without keeping", "the posterior was trained without keeping its simulations",
+                 "Cannot start:"),
+                ("This posterior was trained without the rotation", "the posterior was trained without the rotation",
+                 "Cannot start:"),
+                ("Applies only with", "it applies only with the frequency response", "Cannot start:"),
+                ("Applies only to the Nadrowski", "it applies only to the Nadrowski model", "Cannot start:"),
+                ("Needs a bounds file", "the bounds file has no forcing section", "Cannot start:"),
+                ("Does not apply with", "it does not apply with the frequency response", "Cannot start:"))
+
+
+@pytest.mark.parametrize("case", list(_GREYED))
+def test_each_checks_button_is_greyed_with_the_reason_of_its_table(case):
+    """Each check's button is greyed by the reason its row gives, each in its table's exact words: a block a load lifts,
+    the prior, the posterior or the posterior's own prior, says "Cannot start yet:"; one that waiting will not lift, a
+    posterior trained without what the check reads, a model, a kind of observation or a bounds file the check does not
+    apply to, and a check the window cannot run yet, says "Cannot start:". The prior a posterior was trained on is named
+    when the reading found its record, and said without its name when it is gone. Each reason has its own words beside
+    the button, read alone after their lead. A live run is said first."""
+    from core.gui.panels.inference.check_forms import FORMS, NOT_BUILT_TEXT
+    from core.gui.step_facts import reason_beside
+    key, given, facts, beside = _GREYED[case]
+    row = _row(check_lineage.rows(_held(**given), (), ()), key)
+    made = check_lineage.button_facts(row, not_built="" if key in FORMS else NOT_BUILT_TEXT)
+    assert [(fact.kind, fact.sentence) for fact in made] == facts, made
+    assert reason_beside(made, live=False, nothing_to_apply=False) == beside
+    for fact in made:
+        _start, words, lead = next(one for one in _BLOCK_WORDS if fact.sentence.startswith(one[0]))
+        assert fact.blocks == words, (fact.sentence, fact.blocks)
+        assert reason_beside((fact,), live=False, nothing_to_apply=False) == f"{lead} {words}.", fact
+    assert reason_beside(made, live=True, nothing_to_apply=False) == "A run is live. Only one runs at a time."
+
+
+@pytest.mark.parametrize("pair", ["the posterior's own prior", "another prior, its record kept",
+                                  "another prior, its record gone", "a prior of another id and the same fingerprint"])
+def test_the_prior_pair_greys_the_calibration_by_the_engines_guard_and_names_the_posteriors_prior(pair, tmp_path):
+    """On the page, the calibration's button is greyed for the prior in use only where the engine's own guard refuses
+    the pair, by the prior's fingerprint: greyed beside a posterior trained on another prior, which is named when its
+    record is in the store and said without its name when it is gone; live beside its own prior, and beside a prior of
+    another id with the same fingerprint, which the engine takes."""
+    from tests._fixtures import _prior_artifact, check_results, write_diagnostic
+    kept = {}
+
+    def records(store, cfg, prior, posterior):
+        kept["older"] = store.load_prior(cfg, _prior_artifact(store, cfg, name="older_prior", seed=5).id)
+        write_diagnostic(store, cfg, diagnostic="probes", variant="mask", parents={"prior": kept["older"].id},
+                         **check_results("audit"))
+
+    with _checks_page(tmp_path, records=records) as (_window, screen, page, store):
+        held = screen.session.inf_prior
+        if pair != "the posterior's own prior":
+            older = kept["older"]
+            screen.session.posterior = _held_posterior(tmp_path, prior=older)
+            if pair == "a prior of another id and the same fingerprint":
+                screen.session.posterior.posterior.latent.prior = held.prior
+            if pair == "another prior, its record gone":
+                store.delete("prior", older.id, force=True)
+        page.read_facts()
+        page.open_check("calibration")
+        live = pair in ("the posterior's own prior", "a prior of another id and the same fingerprint")
+        assert page.foot.main_button.isEnabled() == live, (pair, page.foot.reason.text())
+        named = "" if pair == "another prior, its record gone" else " (older_prior)"
+        assert page.foot.reason.text() == ("" if live else "Cannot start yet: the prior in use is not the posterior's "
+                                                           "own.")
+        facts = [fact.sentence for fact in page.facts_from_form()]
+        sentence = f"The prior in use is not the one this posterior was trained on{named}. Load it in step 2."
+        assert (sentence in facts) == (not live), facts
+        if pair == "another prior, its record kept":
+            audit = page.check_pages["audit"].result.verdict.sentence.plain_text()
+            assert "simulated from the prior older_prior were unusable" in audit, audit
+
+
+def test_the_foot_with_no_check_open_offers_the_next_check(tmp_path):
+    """With no check open the foot's main button opens the first deciding check that applies, has not passed and that a
+    run can still pass, named for it, and goes to Inference once none is left; it says no fact of its own, and with no
+    prior in use it is greyed with the reason of a step not done. A check open reads its own button's words, and "Run
+    again" once a record of it exists."""
+    from tests._fixtures import check_results, write_diagnostic
+    with _checks_page(tmp_path, prior=False) as (_window, _screen, page, _store):
+        assert (page.foot.main_button.text().replace("&", ""), page.foot.main_button.isEnabled(),
+                page.foot.reason.text()) == ("Open Frequency band", False, "Cannot start yet: needs a prior.")
+        assert [(fact.kind, fact.sentence) for fact in page.facts_from_form()] == [
+            ("lock", "Needs a prior: build or load one in step 2, Prior.")]
+    with _checks_page(tmp_path / "held", posterior=False) as (window, screen, page, store):
+        assert page.foot.main_button.text().replace("&", "") == "Open Frequency band"
+        assert page.foot.main_button.isEnabled() and page.facts_from_form() == ()
+        page.foot.main_button.click()
+        assert page.open_key == "band" and page.list_detail.detail is page.check_pages["band"]
+        page.open_check(None)
+        prior = screen.session.inf_prior.id
+        write_diagnostic(store, screen.session.cfg, diagnostic="probes", variant="band",
+                         cell=str(_cell_file()), **check_results("band"))
+        write_diagnostic(store, screen.session.cfg, diagnostic="probes", variant="mask", parents={"prior": prior},
+                         **check_results("audit"))
+        page.read_facts()
+        assert page.foot.main_button.text().replace("&", "") == (
+            "Open Unusable driven recordings: simulation set against the audit")
+        screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior)
+        page.read_facts()
+        assert _row(screen.check_rows(), "comparison").state == "Not compared"
+        assert page.foot.main_button.text().replace("&", "") == "Open Calibration", (
+            "a check no run can pass was offered next")
+        page.foot.main_button.click()
+        assert page.open_key == "calibration"
+        assert page.foot.main_button.text().replace("&", "") == "Run the calibration"
+        page.open_check(None)
+        for key, made in (("calibration", None), ("input_use", None), ("identifiability", None)):
+            posterior = screen.session.posterior.id
+            if key == "calibration":
+                from tests._fixtures import write_calibration
+                write_calibration(store, screen.session.cfg, posterior=posterior, prior=prior)
+            else:
+                one = check_catalogue.entry(key)
+                write_diagnostic(store, screen.session.cfg, diagnostic=one.diagnostic, variant=one.variant,
+                                 parents={"posterior": posterior, "prior": prior}, **check_results(key))
+        page.read_facts()
+        page.open_check("calibration")
+        assert page.foot.main_button.text().replace("&", "") == "Run again"
+        page.open_check(None)
+        assert page.foot.main_button.text().replace("&", "") == "Go to Inference"
+        page.foot.main_button.click()
+        assert window.current_place() == ("inference", "infer")
+
+
+def _cell_file() -> Path:
+    """A cell file the store can record a record was made on: the master's spontaneous cell, read and never written."""
+    from core import config
+    return Path(config.RESOURCES_ROOT) / "Cells" / "nadrowski" / "master_spont.txt"
+
+
+#: What a record of each check holds that says its verdict, its reading or its reasons in the engine's own words.
+_OWN_WORDS = ("verdict", "reading", "reasons", "summary", "caveats", "description")
+
+
+def _own_words(found, said: set) -> set:
+    """Every string a record holds under one of ``_OWN_WORDS``, at any depth."""
+    if isinstance(found, dict):
+        for name, value in found.items():
+            if name in _OWN_WORDS:
+                for one in (value if isinstance(value, list) else [value]):
+                    if isinstance(one, str) and one:
+                        said.add(one)
+            _own_words(value, said)
+    elif isinstance(found, list):
+        for one in found:
+            _own_words(one, said)
+    return said
+
+
+def _block_words(region) -> list:
+    """Every word a result region says: its verdict, its sentences, each cell of its table, its caption and its footnote,
+    and its pictures' captions."""
+    words = [region.verdict.sentence.plain_text()] if region.verdict is not None else []
+    words += [fact.sentence for fact in region.sentences()]
+    table = region.table_words()
+    if table is not None:
+        words += [cell for row in table.rows for cell in row] + [table.caption, table.footnote]
+    words += [caption.text() for caption, _picture in region.pictures]
+    return [word for word in words if word]
+
+
+#: Each check's result from the record each fixture writes by default, the sentence it begins with.
+_RESULT_SENTENCES = {
+    "band": "Frequency band: passed for cell master_spont. Every frequency inside the band (0.03 to 0.3 times the "
+            "cell's own) can be measured at every recording length tried, and the drive amplitude 0.15 does not take "
+            "over the cell.",
+    "audit": "Unusable driven recordings, audit: passed. 37.9 % of 22,400 driven recordings simulated from the prior "
+             "retrain_prior were unusable. The expected share is 37 %; within 8 points is fine. Every one was too "
+             "short or too slow to hold two cycles of the drive.",
+    "calibration": "Calibration: passed. All 2 parameters pass the rank test, and the joint coverage test passes. Made "
+                   "on 2,000 test datasets at 200 operating points (pairs of time scale and recording length), seed "
+                   "1840273.",
+    "input_use": "Use of each part of the input: passed. The network responds to 50 of the 50 parts of an "
+                 "observation's summary; every part varies in the training simulations; none is invisible to it.",
+    "identifiability": "Identifiability of the posterior: passed. The record holds how strongly each of the 6 "
+                       "directions is pinned down: the strongest 333 times the weakest. This check passes when those "
+                       "figures are on record; the table says what they are.",
+    "pin_down": "What the observations can pin down: done. At 4.5 s, every parameter has local information and no "
+                "pair moves an observation alike.",
+    "fixed_number": "Calibration repeated at fixed numbers of driven recordings: done. With the number of driven "
+                    "recordings mixed, as in training, 10 of 10 repeats pass the rank test. This is the rank half "
+                    "only; the joint coverage test is Calibration's.",
+    "drive_study": "Drive study: done. The cell keeps its own oscillation up to a drive of 0.3 pN and is captured from "
+                   "1.6 pN.",
+    "across_prior": "Identifiability across the prior: done, at 6 points across the prior. The table gives each "
+                    "parameter's spread at each point and the share of points where recordings pin it down.",
+}
+
+
+@pytest.mark.parametrize("key", [one.key for one in check_catalogue.CHECKS])
+def test_every_result_block_says_its_record_in_the_windows_words(key, tmp_path):
+    """Each check's result begins with its sentence in the window's words, a message row with the marker of the state
+    its record reads: of a record, from its manifest and its folder; of the comparison, from the counts; of a check that
+    keeps nothing but its result, from its run in the history. No string of the record's own verdicts, readings or
+    reasons stands in it, and a string of several words of them nowhere within its words."""
+    from core.artifacts import ArtifactStore
+    from core.gui.panels.inference import check_results as blocks
+    from tests._fixtures import check_results, qt_app, write_calibration, write_diagnostic
+    qt_app()
+    if key == "comparison":
+        compared = check_readings.compare(unusable=8_412, total=22_144, scope=WHOLE, audit_fraction=0.3789,
+                                          batches=100)
+        region = blocks.comparison_block(check_readings.compared_sentence(compared, unusable=8_412, total=22_144,
+                                                                          audit_fraction=0.3789), compared.state)
+        said = ("Unusable driven recordings, simulation set against the audit: passed. 38.0 % in the simulation set; "
+                "the audit read 37.9 %. The difference is 0.1 points: within 3 is fine, up to 5 look closer, beyond 5 "
+                "stop.")
+        assert (region.verdict.kind, region.verdict.sentence.plain_text()) == ("fine", said)
+        region.deleteLater()
+        return
+    if key in ("timing", "card_test"):
+        for outcome, marker, word in (("finished", "done", "done"), ("failed", "err", "failed")):
+            region = blocks.history_block(key, {"check": {"key": key}, "outcome": outcome})
+            assert (region.verdict.kind, region.verdict.sentence.plain_text()) == (
+                marker, f"{check_catalogue.entry(key).name}: {word}."), outcome
+            region.deleteLater()
+        return
+    store = ArtifactStore(tmp_path / "Artifacts")
+    one = check_catalogue.entry(key)
+    if key == "calibration":
+        ident = write_calibration(store, None, posterior=POSTERIOR, prior=PRIOR)
+    else:
+        variant = "pooled" if key == "fixed_number" else one.variant
+        ident = write_diagnostic(store, None, diagnostic=one.diagnostic, variant=variant, parents={"prior": PRIOR},
+                                 cell=str(_cell_file()) if key == "band" else None, **check_results(key))
+    folder = store.path(one.kind, ident)
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    region = blocks.result_block(key, manifest, folder, prior_words="the prior retrain_prior", force_unit="pN")
+    try:
+        state = check_readings.read(key, manifest).state
+        assert region.verdict.kind == check_readings.STATE_MARKERS[state]
+        assert region.verdict.sentence.plain_text() == _RESULT_SENTENCES[key]
+        words = _block_words(region)
+        own = _own_words(manifest, set())
+        assert not [mine for mine in own if mine.lower() in {word.lower() for word in words}], own
+        assert not [mine for mine in own if " " in mine and any(mine.lower() in word.lower() for word in words)]
+    finally:
+        region.deleteLater()
+
+
+def _calibration_of(names, *, ks, assumed=(), seed=1840273, tarp=0.5, accepted=()):
+    """A calibration's results as the stage writes them, over the parameters ``names`` with the rank tests' p-values
+    ``ks``, by the engine's own verdict."""
+    from core import config, orchestrator
+    return {"sbc": {"per_param": [{"name": name, "ks_p": p, "c2st_ranks": 0.5, "c2st_dap": 0.5}
+                                  for name, p in zip(names, ks)]},
+            "tarp": {"atc": 0.0123, "ks_p": tarp, "num_bins": config.TARP_NUM_BINS},
+            "informativeness": {"total_nats": 2.31, "sem_nats": 0.05, "per_param": None, "per_direction": None,
+                                "n_used": 2000, "n_dropped": 0, "description": "the engine's own description"},
+            "kept_fraction": None, "n_cal": 2000, "cal_n_scales": 200, "num_posterior_samples": 1000,
+            "verdict": orchestrator.calibration_verdict(ks, names, list(assumed), tarp), "seed": seed,
+            "accepted": list(accepted)}
+
+
+def test_the_calibrations_result_names_its_verdict_and_its_seed(tmp_path):
+    """The calibration's result: its sentence names how many parameters pass the rank test, whether the joint coverage
+    test passes, its sizes and the seed it was drawn with; its table holds a row for each parameter with its unit, its
+    p-value, its result and the window's remark for an assumed input and for the time scale, then "All together" and the
+    reading of what it learned; the footnote says the rank test's threshold from the record's own count of parameters
+    and level, never a fixed number; and its three pictures are captioned in the window's words. A failed one names the
+    parameters that fail, and one made in a narrowed region says so."""
+    from core.artifacts import ArtifactStore
+    from core.gui.panels.inference.check_results import FIGURE_CAPTIONS, result_block
+    from core.artifacts.store import slug
+    from tests._fixtures import qt_app, write_calibration
+    qt_app()
+    store = ArtifactStore(tmp_path / "Artifacts")
+    names = ["k", "lam", "f_max", "tau", "tau_c", "s", "a", "b", "c", "d", "x_scale", "t_scale", "T"]
+    ident = write_calibration(store, None, posterior=POSTERIOR, prior=PRIOR,
+                              results=_calibration_of(names, ks=[0.5] * 13, assumed=["T"]),
+                              figures=("SBC ranks (CDF)", "SBC ranks (histogram)", "TARP coverage"))
+    folder = store.path("calibration", ident)
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    region = result_block("calibration", manifest, folder, units={"x_scale": "nm", "t_scale": "ms", "T": "K"})
+    try:
+        assert region.verdict.sentence.plain_text() == (
+            "Calibration: passed. All 13 parameters pass the rank test, and the joint coverage test passes. Made on "
+            "2,000 test datasets at 200 operating points (pairs of time scale and recording length), seed 1840273.")
+        table = region.table_words()
+        assert table.columns == ("Parameter", "Unit", "p-value", "Result", "Remark") and table.right == {2}
+        assert [row[0] for row in table.rows] == [*names, "All together", "A reading, not a test", "Information "
+                                                  "gained", "Its standard error"]
+        assert table.rows[0] == ("k", "", "0.5", "Passes", "")
+        assert table.rows[names.index("t_scale")] == (
+            "t_scale", "ms", "0.5", "Passes", "Rests on the operating points, not the datasets, so it has less power")
+        assert table.rows[names.index("T")] == ("T", "K", "0.5", "Passes", "An assumed input")
+        assert table.rows[13] == ("All together", "", "0.5", "Passes", "The joint coverage test; it passes at p = 0.05 "
+                                                                      "or more")
+        assert table.rows[15:] == (("Information gained", "nats", "2.31", "", ""),
+                                   ("Its standard error", "nats", "0.05", "", "")) and 14 in table.headings
+        assert table.footnote == "Rank test: a parameter passes at p = 0.0038 or more (0.05 divided by 13)."
+        assert [caption.text() for caption, _picture in region.pictures] == [
+            "Rank test, cumulative", "Rank test, histogram", "Joint coverage test"]
+        assert set(FIGURE_CAPTIONS) == {slug("SBC ranks (CDF)"), slug("SBC ranks (histogram)"), slug("TARP coverage")}
+    finally:
+        region.deleteLater()
+    twelve = write_calibration(store, None, posterior=POSTERIOR, prior=PRIOR, created=_at(13, 9, 0),
+                               results=_calibration_of(names[:12], ks=[0.5] * 10 + [0.001, 0.002], tarp=0.01,
+                                                       accepted=["truncated"]),
+                               figures=("SBC ranks (CDF)", "another figure"))
+    folder = store.path("calibration", twelve)
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    region = result_block("calibration", manifest, folder)
+    try:
+        assert region.verdict.sentence.plain_text() == (
+            "Calibration: failed. 2 of 12 parameters fail the rank test: x_scale, t_scale; the joint coverage test "
+            "fails. Made on 2,000 test datasets at 200 operating points (pairs of time scale and recording length), "
+            "seed 1840273. It was made inside the region its posterior was narrowed to.")
+        assert region.verdict.kind == "err"
+        assert region.table_words().footnote == ("Rank test: a parameter passes at p = 0.0042 or more (0.05 divided "
+                                                 "by 12).")
+        assert [caption.text() for caption, _picture in region.pictures] == ["Rank test, cumulative",
+                                                                             "Calibration, figure 2"]
+    finally:
+        region.deleteLater()
+
+
+def test_a_checks_result_is_made_at_the_pages_reading_and_never_as_it_draws(tmp_path, monkeypatch):
+    """A check's result, figures and all, is made at the page's own reading of the disk, never as the page draws: a
+    calibration written while the page is out of sight and read by the screen shows no result and reads no figure when
+    the page is drawn; the page's reading makes it, its figures read; drawn again, or the check opened, it is the same
+    result, kept, and no figure is read again."""
+    from tests._fixtures import readings_of_a_run, write_calibration
+    with _checks_page(tmp_path) as (window, screen, page, store):
+        window.go_to("inference", "prior")
+        _settle()
+        write_calibration(store, screen.session.cfg, posterior=screen.session.posterior.id,
+                          prior=screen.session.inf_prior.id,
+                          figures=("SBC ranks (CDF)", "SBC ranks (histogram)", "TARP coverage"))
+        screen.read_checks()
+        calls = readings_of_a_run(monkeypatch)
+        page.refresh_local_gates()
+        one = page.check_pages["calibration"]
+        assert _row(screen.check_rows(), "calibration").state == "Passed"
+        assert one.result is None and "a record's figures" not in calls, calls
+        window.go_to("inference", "checks")
+        _settle()
+        page.read_facts()
+        assert one.result is not None and len(one.result.pictures) == 3, "the page's reading made no result"
+        made, read = one.result, calls.count("a record's figures")
+        assert read >= 1, calls
+        page.refresh_local_gates()
+        page.open_check("calibration")
+        page.redraw()
+        assert one.result is made and calls.count("a record's figures") == read, calls
+
+
+def test_the_comparison_is_read_afterwards_from_the_sets_counts_or_the_log(tmp_path, monkeypatch):
+    """With no run live, the comparison after simulating is worked out afresh from the posterior's simulation set: the
+    counts its saved state holds for each batch, summed while there is one pair for each batch done; else, with the set
+    gone, the first total of unusable driven recordings in the posterior's own text. Its page says the two shares and
+    their difference; for a posterior from a narrowing round, that the audit measured the whole prior. While a run is
+    live nothing of the set is read: the page shows what it read last, and while a training is live, that the
+    comparison is counted when its simulation ends."""
+    from core.artifacts import default_store
+    from tests._fixtures import check_results, readings_of_a_run, write_diagnostic, write_simulation_set
+    from tests._look_helpers import _settle
+    from tests._runs import StandIn, masked_line, start_run, training_spec, turn_until
+
+    def records(store, cfg, prior, posterior):
+        write_diagnostic(store, cfg, diagnostic="probes", variant="mask", parents={"prior": prior},
+                         **check_results("audit"))
+
+    app = qt_app()
+    with _checks_page(tmp_path, records=records) as (window, screen, page, store):
+        folder = write_simulation_set(store.kind_dir("simulation"), {"a set of": "the comparison"}, 100,
+                                      complete=True, chi_masked=[(84, 221)] * 100)
+        prior = screen.session.inf_prior
+        screen.session.posterior = _held_posterior(tmp_path, prior=prior, simulation=folder.name, text=(
+            f"10:00:00 info {masked_line(8_400, 20_000, 100, WHOLE)}\n"))
+        page.read_facts()
+        page.open_check("comparison")
+        one = page.check_pages["comparison"]
+        assert _row(screen.check_rows(), "comparison").state == "Passed"
+        assert one.result.verdict.sentence.plain_text() == (
+            "Unusable driven recordings, simulation set against the audit: passed. 38.0 % in the simulation set; the "
+            "audit read 37.9 %. The difference is 0.1 points: within 3 is fine, up to 5 look closer, beyond 5 stop.")
+        assert one.result.sentences() == (), "a posterior trained on the whole prior was said to be narrowed"
+        import shutil
+        shutil.rmtree(folder)
+        page.read_facts()
+        assert _row(screen.check_rows(), "comparison").state == "Look closer"
+        assert one.result.verdict.sentence.plain_text().startswith(
+            "Unusable driven recordings, simulation set against the audit: look closer. 42.0 % in the simulation set; "
+            "the audit read 37.9 %. The difference is 4.1 points"), "the posterior's text was not read with the set gone"
+        assert _row(screen.check_rows(), "comparison").state == "Look closer"
+        screen.session.posterior = _held_posterior(tmp_path, prior=prior, ident=OTHER_POSTERIOR, narrowed=True,
+                                                   text=f"10:00:00 info {masked_line(8_400, 22_144, 100, WHOLE)}\n")
+        page.read_facts()
+        assert [fact.sentence for fact in one.result.sentences()] == [
+            "The audit measured the whole prior; this round simulated inside a narrowed region."]
+        calls = readings_of_a_run(monkeypatch)
+        stand_in = StandIn(word="Reduction")
+        start_run(window.part("reduction"), stand_in)
+        shown = one.result
+        page.read_facts()
+        page.stale_store()
+        screen.read_checks()
+        page.refresh_local_gates()
+        _settle()
+        assert calls == [] and one.result is shown, f"read while a run is live: {calls}"
+        stand_in.release()
+        turn_until(app, lambda: not controller().is_live())
+        _settle()
+        calls.clear()                        # what the run's end read, as the end of every run reads
+        training = StandIn(word="Training")
+        start_run(window.part("reduction"), training, spec=training_spec(place=("reduction", None)))
+        page.refresh_local_gates()
+        _settle()
+        assert one.result.verdict.sentence.plain_text() == "Counted when simulation ends.", (
+            "the comparison was worked out while a training is live")
+        assert calls == [], f"read while a training is live: {calls}"
+        training.release()
+        turn_until(app, lambda: not controller().is_live())
+
+
+def test_a_record_that_moves_or_cannot_be_read_is_said_and_raises_nothing(tmp_path):
+    """A record that moves under the page, or cannot be read, is read again when Records changes the store, said in
+    words, and raises nothing, the drawing guard silent: a calibration renamed still counts, by its id; a torn manifest
+    is said on the list as a record that counts for no check; a calibration whose manifest holds no results, and one of
+    an older shape, read "Not run yet" saying their record cannot be read; the posterior in use whose record went from
+    under it is checked with what is read, its counts not; and with no posterior every row waits for one."""
+    from core.gui import reported
+    from tests._fixtures import write_calibration
+    kept = {}
+
+    def records(store, cfg, prior, posterior):
+        kept["calibration"] = write_calibration(store, cfg, posterior=posterior, prior=prior, created=_at(12, 14, 5),
+                                                name="first_try")
+
+    with _checks_page(tmp_path, records=records) as (window, screen, page, store):
+        reported.forget()
+        store.rename("calibration", kept["calibration"], "renamed_since")
+        window._store_changed()
+        assert _row(screen.check_rows(), "calibration").state == "Passed", "a renamed record no longer counted"
+        torn = write_calibration(store, screen.session.cfg, posterior=POSTERIOR, prior=PRIOR, created=_at(13, 9, 0))
+        torn_folder = store.path("calibration", torn)
+        (torn_folder / "manifest.json").write_bytes(b'{"kind": "calibration", "id": ')
+        window._store_changed()
+        said = [fact.sentence for fact in page.facts_from_form()]
+        assert f"The record {torn_folder.name} cannot be read, so it counts for no check." in said, said
+        assert _row(screen.check_rows(), "calibration").state == "Passed"
+        for minute, shape in ((0, {"results": {"n_cal": 2000, "cal_n_scales": 200, "num_posterior_samples": 1000}}),
+                              (1, {"verdict": "PASS", "seed": 1})):
+            ident = write_calibration(store, screen.session.cfg, posterior=screen.session.posterior.id,
+                                      prior=screen.session.inf_prior.id, created=_at(14, 9, minute))
+            folder = store.path("calibration", ident)
+            manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+            manifest["body"] = shape
+            (folder / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+            window._store_changed()
+            row = _row(screen.check_rows(), "calibration")
+            assert row.state == "Passed", "a record that cannot be read decided"
+            assert f"Its record cannot be read, {_said(_at(14, 9, minute))}; does not count" in (
+                page.check_pages["calibration"].earlier.text().splitlines())
+        posterior = screen.session.posterior
+        import shutil
+        shutil.rmtree(posterior.path)
+        window._store_changed()
+        assert _row(screen.check_rows(), "comparison").line == (
+            "Not compared: the counts of unusable driven recordings could not be read.")
+        screen.session.posterior = None
+        screen.refresh_gates()
+        window._store_changed()
+        assert {row.state for row in screen.check_rows() if row.key in ("calibration", "input_use",
+                                                                         "identifiability")} == {"Waiting for a posterior"}
+        page.open_check("calibration")
+        page.redraw()
+        assert reported.ERRORS == [] and reported.COUNTS == {}, reported.ERRORS
+
+
+def test_the_calibrations_stop_asks_with_keep_it_running_preselected(tmp_path, monkeypatch):
+    """The calibration started from its page is a check's run named for it: its stop button reads "Stop the
+    calibration…", and pressed it asks before it stops anything, "Keep it running" preselected, the other answer drawn
+    as losing work, saying a check writes its record only when it finishes; kept running, nothing stops. The figure it
+    draws stands on its run's page alone: once it is over the page shows no figure area of its own."""
+    from core import orchestrator
+    from tests._dialogs import asked
+    from tests._runs import StandIn, turn_until
+    stand_in = StandIn(word="Check")
+    monkeypatch.setattr(orchestrator, "validate_calibration", stand_in)
+    app = qt_app()
+    with _checks_page(tmp_path) as (_window, _screen, page, _store):
+        page.open_check("calibration")
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        _settle()
+        stop = page.run_view.stop_button
+        assert stop.text().replace("&", "") == "Stop the calibration…"
+        stop.click()
+        _settle()
+        question = asked()
+        assert (question.title, question.sentence, question.safe, question.loses_work) == (
+            "Stop the calibration?", "A check writes its record only when it finishes, so nothing of this one is kept.",
+            "Keep it running", True)
+        assert question.answers == ("Stop and discard it", "Keep it running") and question.default == "Keep it running"
+        assert controller().is_live() and stand_in.stopped_at is None
+        stand_in.figure("SBC ranks (CDF)")
+        turn_until(app, lambda: page.figure_stack.count() == 1)
+        stand_in.release()
+        turn_until(app, lambda: not controller().is_live())
+        _settle()
+        assert page.scroller.isAncestorOf(page.figure_stack) and page.figure_stack.count() == 1
+        assert not page.figure_stack.isVisibleTo(page), "the run's figure stood on the page after its run"
+
+
+def test_the_checks_page_writes_nothing_to_the_settings_file(tmp_path, monkeypatch):
+    """STANDING. The Checks page remembers nothing: shown, read, a check opened, its form edited, a check run and the
+    window closed, no value is written under a key of its own, and nothing of a check's form, the calibration's sizes
+    included."""
+    from PySide6.QtCore import QSettings
+    from core import orchestrator
+    from tests._runs import StandIn, turn_until
+    written = []
+    real = QSettings.setValue
+    monkeypatch.setattr(QSettings, "setValue", lambda held, key, value: (written.append(key), real(held, key, value)))
+    stand_in = StandIn(word="Check")
+    monkeypatch.setattr(orchestrator, "validate_calibration", stand_in)
+    app = qt_app()
+    with _checks_page(tmp_path) as (window, _screen, page, _store):
+        page.open_check("calibration")
+        page.form.rows["n_cal"].widget.setText("40")
+        page.open_check("band")
+        page.open_check("calibration")
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        stand_in.release()
+        turn_until(app, lambda: not controller().is_live())
+        window._save_state()
+    ours = [key for key in written if key.split("/")[0] in ("inference_validate", "inference_checks", "checks")
+            or any(name in key for name in ("n_cal", "cal_n_scales", "cal_scales", "cal_n"))]
+    assert ours == [], ours
+
+
+def test_a_checks_form_is_locked_while_a_run_is_live_whichever_is_in_sight(tmp_path):
+    """STANDING. While a run is live every check's form is locked, the one in sight and every other, a check opened
+    during the run shows its form locked, and the table can still be read and a check opened; when the run ends every
+    form is unlocked, the one in sight at its start included."""
+    from tests._runs import StandIn, start_run, turn_until
+    app = qt_app()
+    with _checks_page(tmp_path) as (window, _screen, page, _store):
+        page.open_check("calibration")
+        stand_in = StandIn(word="Reduction")
+        start_run(window.part("reduction"), stand_in)
+        _settle()
+        assert not any(one.form.isEnabled() for one in page.check_pages.values())
+        assert page.listing.isEnabled() and page.list_detail.isEnabled()
+        page.open_check(None)
+        page.open_check("audit")
+        page.open_check("calibration")
+        assert not page.form.isEnabled() and not page.check_pages["calibration"].form.rows["n_cal"].widget.isEnabled()
+        stand_in.release()
+        turn_until(app, lambda: not controller().is_live())
+        _settle()
+        assert all(one.form.isEnabled() for one in page.check_pages.values())
+        assert page.check_pages["calibration"].form.rows["n_cal"].widget.isEnabled()
+
+
+def test_the_checks_page_says_the_earlier_steps_changes_not_applied(tmp_path):
+    """A choice of step 2 not applied is said on the list's facts and in the calibration's "Before you start" as a
+    warning naming what the run uses, and the calibration's button stays live: a check reads what the earlier steps
+    hold."""
+    with _checks_page(tmp_path) as (_window, screen, page, _store):
+        assert [fact for fact in page.facts_from_form() if fact.kind == "warn"] == []
+        prior_page = screen.prior_panel
+        prior_page.bounds_picker.restore_key("master_tier1.txt")
+        prior_page._edited()
+        assert "prior" in screen.pending()
+        sentence = "Step 2, Prior, has changes that are not applied. This run uses what is in use: retrain_prior."
+        assert [(fact.kind, fact.sentence) for fact in page.facts_from_form()] == [("warn", sentence)]
+        page.open_check("calibration")
+        page.redraw()
+        assert ("warn", sentence) in [(fact.kind, fact.sentence) for fact in page.facts_from_form()]
+        assert page.foot.main_button.isEnabled() and page.foot.reason.text() == ""
+
+
+@pytest.mark.parametrize("in_use", ["HOPF", "NADROWSKI"])
+def test_the_checks_read_the_records_of_the_model_in_use_alone(in_use, tmp_path):
+    """The frequency band's and the audit's records count for the model they were made on alone: Nadrowski's records
+    count nothing while another model's configuration and prior are in use, and the other model's count nothing while
+    Nadrowski's are; each row then reads as it reads with no record."""
+    from core.artifacts import ArtifactStore
+    from tests._fixtures import _nad_cfg, check_results, write_diagnostic
+    other = ArtifactStore(tmp_path / "elsewhere")
+
+    def records(store, cfg, prior, posterior):
+        made_on = _nad_cfg(chi_mode=True)
+        if in_use == "NADROWSKI":
+            made_on.model = "HOPF"
+            prior = "20261001T000001"
+        else:
+            cfg.model = "HOPF"
+        write_diagnostic(store, made_on, diagnostic="probes", variant="band", cell=str(_cell_file()),
+                         **check_results("band"))
+        write_diagnostic(store, made_on, diagnostic="probes", variant="mask",
+                         parents={"prior": prior if in_use == "NADROWSKI" else "20261001T000002"},
+                         **check_results("audit"))
+
+    with _checks_page(tmp_path, records=records, posterior=False) as (_window, screen, page, _store):
+        rows = {row.key: row for row in screen.check_rows()}
+        assert (rows["band"].state, rows["band"].line, rows["audit"].state, rows["audit"].line) == (
+            "Not run yet", "Not run yet.", "Not run yet", "Not run yet."), (rows["band"], rows["audit"])
+        assert screen.checks_summary().passed == 0
+    del other
+
+
+def test_a_checks_run_hands_its_plan_and_no_settings(tmp_path, monkeypatch):
+    """The calibration's run is handed the calibration's call, the configuration, the posterior and the prior in use
+    and the form's sizes with a seed drawn afresh at each press; its run is a check named for the calibration, writing
+    one calibration record, and keeps the plan in use and the check's key and sizes, and no settings."""
+    import random
+    from core import orchestrator
+    from core.gui.run.controller import RunController
+    seen = {}
+    monkeypatch.setattr(RunController, "dispatch", lambda held, fn, *args, **kwargs: seen.update(
+        fn=fn, args=args, kwargs=kwargs) or True)
+    drawn = iter((1840273, 77))
+    monkeypatch.setattr(random, "randrange", lambda top: next(drawn) if top == 2 ** 31 else 0)
+    with _checks_page(tmp_path) as (_window, screen, page, _store):
+        screen.plan_source = SimpleNamespace(kind="prior", ident=PRIOR, name="retrain_prior")
+        page.open_check("calibration")
+        page.form.rows["n_cal"].widget.setText("2500")
+        page._main_clicked()
+        spec = seen["kwargs"]["spec"]
+        assert seen["fn"] is orchestrator.validate_calibration
+        assert seen["args"] == (screen.session.cfg, screen.session.posterior, screen.session.inf_prior)
+        assert (seen["kwargs"]["n_cal"], seen["kwargs"]["cal_n_scales"]) == (2500, 200)
+        assert seen["kwargs"]["seed"] == 1840273 and seen["kwargs"]["provide_fig_sink"] is True
+        assert (spec.word, spec.place, spec.name, spec.stop_button, spec.kinds) == (
+            "Check", ("inference", "checks"), "Calibration", "Stop the calibration…", ("calibration",))
+        assert spec.plan == {"kind": "prior", "id": PRIOR, "name": "retrain_prior"} == screen.plan_entry()
+        assert spec.settings is None
+        assert spec.check == {"key": "calibration", "sizes": {"n_cal": 2500, "cal_n_scales": 200}}
+        page._main_clicked()
+        assert seen["kwargs"]["seed"] == 77, "the seed of the press before was handed again"
+
+
+def test_a_check_no_run_can_pass_no_longer_holds_the_step_open(tmp_path):
+    """A deciding check that no run can pass for the posterior in use, the input use of a posterior trained without
+    keeping its simulations, the identifiability of one trained without the rotation and the comparison not compared,
+    is shown not passed with its reason and counts in the headline's denominator, but no longer holds the step open:
+    with every other deciding check passed the rail reads "Attention" with the count, Checks is no longer the step in
+    hand and Home goes on to Inference, the headline's sentence names what no run can pass, and the foot goes to
+    Inference. A check a load or a run can still lift holds the step open as before: the prior of another, a record at a
+    reduced size, one that cannot be read, a comparison waiting for the audit."""
+    from core.gui import chain
+    from tests._fixtures import check_results, write_calibration, write_diagnostic
+
+    def records(store, cfg, prior, posterior):
+        write_diagnostic(store, cfg, diagnostic="probes", variant="band", cell=str(_cell_file()),
+                         **check_results("band"))
+        write_diagnostic(store, cfg, diagnostic="probes", variant="mask", parents={"prior": prior},
+                         **check_results("audit"))
+        write_calibration(store, cfg, posterior=posterior, prior=prior)
+        one = check_catalogue.entry("identifiability")
+        write_diagnostic(store, cfg, diagnostic=one.diagnostic, variant=one.variant,
+                         parents={"posterior": posterior, "prior": prior}, **check_results("identifiability"))
+
+    with _checks_page(tmp_path, records=records) as (window, screen, page, _store):
+        rows = {row.key: row for row in screen.check_rows()}
+        assert (rows["comparison"].state, rows["input_use"].state) == ("Not compared", "Not run yet")
+        summary = screen.checks_summary()
+        assert (summary.passed, summary.of, summary.open, summary.cannot_pass) == (4, 6, False, 2)
+        assert summary.headline == "4 of 6 deciding checks passed"
+        assert summary.sentence == ("Inference can be run now; no run can pass Unusable driven recordings: simulation "
+                                    "set against the audit, Use of each part of the input for this posterior.")
+        assert summary.second_line == "2 that no run can pass"
+        checks = screen.step_states()[3]
+        assert (checks.marker, checks.rail_words, checks.done) == ("warn", "Attention: 4 of 6 passed", False)
+        assert chain.step_in_hand(screen.step_states()) == "infer"
+        nxt = chain.next_step(screen.session, screen.step_states(), checks=summary)
+        assert (nxt.heading, nxt.button) == ("Next: run the posterior on a cell or on your recordings", "Open Inference")
+        assert page.foot.main_button.text().replace("&", "") == "Go to Inference"
+        page.open_check("input_use")
+        assert page.check_pages["input_use"].state_line.sentence.plain_text() == (
+            "Not run yet. This posterior was trained without keeping its simulations, and this check reads them.")
+        held = screen.checks_in_use()
+        for lifted in (replace(rows["calibration"], state="Not run yet", record=None,
+                               reason=check_lineage.OTHER_PRIOR_TEXT),
+                       replace(rows["calibration"], state="Not run yet", record=None,
+                               line="Not run yet. Run only at a reduced size (40 test datasets; the usual is 2,000), "
+                                    "which does not count."),
+                       replace(rows["calibration"], state="Not run yet", record=None,
+                               line=f"Not run yet. {check_readings.UNREADABLE_TEXT}"),
+                       replace(rows["comparison"], state="Waiting for the audit")):
+            assert not check_lineage.no_run_passes(lifted, held=held), lifted
+            found = tuple(lifted if row.key == lifted.key else row for row in screen.check_rows())
+            assert check_lineage.summary(found, held=held).open is True, lifted
+        for unread in (replace(held, set_read=False), replace(held, posterior=None)):
+            assert not check_lineage.no_run_passes(rows["comparison"], held=unread)
+        kept = screen.session.posterior
+        screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior, ident=OTHER_POSTERIOR)
+        screen.refresh_gates()
+        assert screen.checks_in_use().set_read is False, "a posterior just come into use was taken for read"
+        assert not check_lineage.no_run_passes(_row(screen.check_rows(), "comparison"), held=screen.checks_in_use())
+        screen.read_checks()
+        assert screen.checks_in_use().set_read is True
+        assert check_lineage.no_run_passes(_row(screen.check_rows(), "comparison"), held=screen.checks_in_use())
+        screen.session.posterior = kept
+        screen.read_checks()
+        window.go_to("home", None)
+        _settle()
+        home = window.part("home")
+        assert home.next_heading.label.text() == "Next: run the posterior on a cell or on your recordings"
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_keyboards_row_of_the_list_stays_in_view(factor, tmp_path):
+    """At the window's least size the list of sixteen rows is higher than the page's view: the row the keyboard moves
+    to, down to the last and back up to the first, stands whole in the view, with its ring's room, and so does the row
+    it stands on when the Tab key brings the keyboard back to the list."""
+    from PySide6.QtTest import QTest
+    from core.gui import design
+    from tests._window_helpers import in_front
+    with text_size(factor), _checks_page(tmp_path, size=(design.scaled(900), design.scaled(600))) as (
+            window, _screen, page, _store):
+        view, port = page.listing.whole.view, page.scroller.viewport()
+        assert view.height() > port.height(), "the list was not higher than its view"
+
+        def row_in_view() -> bool:
+            rect = view.visualRect(view.currentIndex())
+            top = view.viewport().mapTo(port, rect.topLeft()).y()
+            return 0 <= top and top + rect.height() <= port.height()
+
+        with in_front(window):
+            view.setFocus(Qt.TabFocusReason)
+            view.setCurrentIndex(view.model().index(0, 0))
+            _settle()
+            for _ in range(view.model().rowCount() - 1):
+                QTest.keyClick(view, Qt.Key_Down)
+                _settle()
+                assert row_in_view(), view.currentIndex().row()
+            assert view.currentIndex().row() == view.model().rowCount() - 1
+            for _ in range(view.model().rowCount() - 1):
+                QTest.keyClick(view, Qt.Key_Up)
+                _settle()
+                assert row_in_view(), view.currentIndex().row()
+            view.setCurrentIndex(view.model().index(view.model().rowCount() - 1, 0))
+            page.help_button.setFocus(Qt.TabFocusReason)
+            page.scroller.verticalScrollBar().setValue(0)
+            _settle()
+            QTest.keyClick(page.help_button, Qt.Key_Tab)
+            _settle()
+            assert QApplication.focusWidget() is view and row_in_view()
+
+
+def test_each_checks_page_is_made_inside_the_list_out_of_sight_and_reading_nothing(tmp_path, monkeypatch):
+    """The twelve check pages are made with the list, each its page's child from the start and out of sight until it
+    is opened, with a form of its own, in sight only while it holds rows; the list's own form holds nothing and stands
+    out of sight; and building the page reads nothing and starts no timer."""
+    from PySide6.QtCore import QTimer
+    from core.gui.panels.inference.check_page import CheckPage
+    from core.gui.panels.inference.validate_tab import ValidatePanel
+    from tests._fixtures import build_step_page, build_window, qt_app, readings_of_a_run
+    qt_app()
+    window = build_window()
+    window.part("inference")
+    calls = readings_of_a_run(monkeypatch)
+    page = build_step_page(ValidatePanel, window=window, step="checks")
+    _settle()
+    assert calls == [] and not [timer for timer in page.findChildren(QTimer) if timer.isActive()]
+    assert list(page.check_pages) == [one.key for one in check_catalogue.CHECKS]
+    for key, one in page.check_pages.items():
+        assert isinstance(one, CheckPage) and one.parent() is page and one.isHidden(), key
+        assert one.form.isHidden() == (not one.form.rows), key
+    assert not page._own_form.rows and page._own_form.isHidden()
+
+
+#: The walk of the Checks list at the larger size, run alone in a process of its own.
+CHECKS_WALKED_ALONE = ("tests/test_pages.py::test_tab_walks_the_page_in_view_at_every_size"
+                       "[(1300, 820)-1.0-checks-the calibration open-fold shut]")
+
+
+def test_the_checks_lists_walk_run_alone_ends_its_process_cleanly(tmp_path):
+    """The walk of the Checks list with the calibration's page open beside it, run alone in a process of its own, ends
+    that process as a test run ends. Twelve check pages, each with a form, stand in the window: a page with a form made
+    with no parent and never shown, standing while the program's style sheet was changed and put back and let go after
+    its window, once corrupted the process's memory as the test ended (the exit 0xC0000374). The process sees the card
+    as the run that starts it does."""
+    import os
+    import subprocess
+    root = Path(__file__).resolve().parents[1]
+    environment = {**os.environ, "QT_QPA_PLATFORM": "offscreen", "KMP_DUPLICATE_LIB_OK": "TRUE",
+                   "PRISM_ARTIFACTS": str(tmp_path / "Artifacts")}
+    for name in ("PRISM_VRAM_CEILING_GIB", "PYTEST_CURRENT_TEST", "PYTEST_ADDOPTS"):
+        environment.pop(name, None)
+    (tmp_path / "Artifacts").mkdir()
+    child = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", CHECKS_WALKED_ALONE],
+                           cwd=root, env=environment, capture_output=True, text=True, encoding="utf-8", timeout=300)
+    code = child.returncode & 0xFFFFFFFF
+    assert code == 0, (f"the process ended with 0x{code:08X}" + (", a corrupted heap" if code == 0xC0000374 else ""),
+                       child.stdout[-2000:], child.stderr[-2000:])
+    assert "1 passed" in child.stdout, child.stdout[-2000:]

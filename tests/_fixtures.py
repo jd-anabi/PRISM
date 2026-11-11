@@ -1056,12 +1056,42 @@ _CONFIGURED = {"chi_f0": 0.15, "chi_freq_bounds": [0.03, 0.3], "chi_k_pad": 12, 
                "chi_max_cycles": 20.0, "probe_count": 6}
 
 
+def _band_point(length, multiplier, drive, *, noisy=False, captured=False):
+    """One measured point of the frequency band as the engine records it: its measures at full length and under the
+    cycle ceiling, each with the engine's verdict on them, and the share of the cell's own oscillation it keeps."""
+    sup = 0.2 if captured else 0.9
+    measure = {"cv": 0.3 if noisy else 0.1, "phase": 0.0, "snr": 10.0, "cycles": 5.0, "chi_mag": 1.0,
+               "floor_masked": 1.0}
+    verdict = ", ".join(tag for tag, on in (("noisy", noisy), ("captured", captured)) if on) or "pass"
+    return {"length_s": length, "multiplier": multiplier, "drive": drive, "n_valid": 24, "nyquist_masked": 0,
+            "harmonic": False, "sup": sup, "full": {**measure, "verdict": verdict},
+            "capped": {**measure, "verdict": verdict},
+            "caps": [{"cap": 20.0, **{key: measure[key] for key in ("cv", "phase", "snr", "cycles")},
+                      "verdict": "noisy" if noisy else "pass"}]}
+
+
 def _band(band_holds=True, drive_holds=True, repeats=24):
     from core.diagnostics.probes import DRIVE_PHASE
     settings = {"lengths": [3.1, 6.2], "multipliers": [0.03, 0.1, 0.3], "drives": [0.15], "repeats": repeats,
                 "cycle_caps": [20.0], "cv_max": 0.2, "phase_max": None, "snr_min": 3.0, "sup_min": 0.5,
                 "peak_window": 0.1, "seed": 0, "drive_phase": DRIVE_PHASE, "configured": dict(_CONFIGURED)}
-    return {"settings": settings, "results": {"band_holds": band_holds, "drive_holds": drive_holds}}
+    points = [_band_point(length, multiplier, drive, noisy=band_holds is False and (length, multiplier) == (6.2, 0.1),
+                          captured=drive_holds is False and (length, multiplier) == (3.1, 0.3))
+              for length in settings["lengths"] for multiplier in settings["multipliers"] for drive in settings["drives"]]
+    frequencies = []
+    for multiplier in settings["multipliers"]:
+        own = [point for point in points if point["multiplier"] == multiplier]
+        frequencies.append({"multiplier": multiplier, "in_band": 0.03 <= multiplier <= 0.3, "harmonic": False,
+                            "passes_full": all(point["full"]["verdict"] == "pass" for point in own),
+                            "passes_capped": all(point["capped"]["verdict"] == "pass" for point in own),
+                            "reasons": [f"{point['capped']['verdict']} at {point['length_s']:.2f} s, drive "
+                                        f"{point['drive']:g}" for point in own if point["capped"]["verdict"] != "pass"]})
+    drives = [{"drive": drive, "configured": True,
+               "captured_in_band": [{"length_s": point["length_s"], "multiplier": point["multiplier"], "sup": point["sup"]}
+                                    for point in points if point["drive"] == drive and point["sup"] < 0.5]}
+              for drive in settings["drives"]]
+    return {"settings": settings, "results": {"band_holds": band_holds, "drive_holds": drive_holds, "points": points,
+                                              "frequencies": frequencies, "drives": drives}}
 
 
 def _audit(masked_fraction=0.379, num_runs=100, invariants_hold=True, attribution_holds=True, cross_check_holds=True,
@@ -1440,7 +1470,7 @@ COUNTED_READINGS = {"orchestrator": ("training_preview", "training_reading", "ma
                     "history": ("read", "latest", "newest_unseen", "last_on", "last_measured_on", "duration",
                                 "estimate", "runs_of", "last_check"),
                     "plans": ("list_plans", "read_checked", "file_sha", "taken", "save_plan"),
-                    "check_lineage": ("read_records", "read_text")}
+                    "check_lineage": ("read_records", "read_text"), "inference_screen": ("prior_label",)}
 # What ``card_and_programs`` answers with a stand-in of its own, and the ways it names to start a program: a module of the
 # window that bound one of these at its own import would be read past. The other public functions of the card's package
 # it passes through are not listed here.
@@ -1460,8 +1490,9 @@ def readings_of_a_run(monkeypatch) -> list:
     an observation's or a simulation set's, and the search for a prior by its fingerprint, which reads every prior's;
     the plans: a model's folder listed, a plan read and checked, the file of the plan in use read for its hash, a name
     looked for among the plans and a plan written; and the checks' records: every check record's manifest, a record's
-    text by its folder, a list of the check records, which a check's run writes, and a record's text by the store,
-    which reads every manifest of its kind. Each is passed through to the real call. Home, whose "Last runs" lists the
+    text by its folder, a list of the check records, which a check's run writes, a record's text by the store, which
+    reads every manifest of its kind, the label of the prior a posterior was trained on, which lists every prior, and a
+    record's figures, read as its result is made. Each is passed through to the real call. Home, whose "Last runs" lists the
     live run, reads the history at every opening, so a test that opens Home during a run finds ``latest`` and ``read``
     here, and says so."""
     import torch
@@ -1471,6 +1502,8 @@ def readings_of_a_run(monkeypatch) -> list:
     from core.gui import check_lineage, plans
     from core.gui.run import history
     from core.gui.run.controller import RunController
+    from core.gui.screens import inference_screen
+    from core.gui.widgets.result_region import ResultRegion
     calls = card_and_programs(monkeypatch)
 
     def counted(space, name, words, when=lambda *_args, **_kwargs: True):
@@ -1484,7 +1517,8 @@ def readings_of_a_run(monkeypatch) -> list:
         monkeypatch.setattr(space, name, stand_in)
 
     spaces = {"orchestrator": orchestrator, "fit_state": fit_state, "training_checkpoint": training_checkpoint,
-              "history": history, "plans": plans, "check_lineage": check_lineage}
+              "history": history, "plans": plans, "check_lineage": check_lineage,
+              "inference_screen": inference_screen}
     for home, names in COUNTED_READINGS.items():
         for name in names:
             counted(spaces[home], name, name)
@@ -1497,6 +1531,7 @@ def readings_of_a_run(monkeypatch) -> list:
     counted(ArtifactStore, "get", "a record's manifest",
             lambda _store, kind, *_args, **_kwargs: kind in ("posterior", "prior", "observation", "simulation"))
     counted(ArtifactStore, "find_prior_by_fingerprint", "find_prior_by_fingerprint")
+    counted(ResultRegion, "set_pictures", "a record's figures", lambda _region, pictures: bool(pictures))
     return calls
 
 
@@ -1935,6 +1970,10 @@ def build_step_page(cls=None, *, session=None, window=None, step: str = "trainin
     old, at = getattr(screen, slot), screen.pages.indexOf(getattr(screen, slot))
     assert at == number and screen.panels()[number] is old, (step, at)
     screen.pages.removeWidget(old)
+    # The page taken out of its slot is let go with its test, as everything a builder made is: dropped, it is the
+    # collector's to delete, and the collector deleting a page that holds a form while its parts are collected with it
+    # ends the process.
+    _built.keep(old)
     screen.pages.insertWidget(at, page)
     setattr(screen, slot, page)
     if window is not None:

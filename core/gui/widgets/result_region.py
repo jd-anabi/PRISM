@@ -1,5 +1,7 @@
-"""What a page says after its run, under what the step holds: sentences, a ruled table, pictures with their captions,
-and up to two plain buttons for the next steps, each of which carries what the step it opens is to take.
+"""What a page says after its run, under what the step holds: a verdict, sentences, a ruled table, pictures with their
+captions, and up to two plain buttons for the next steps, each of which carries what the step it opens is to take.
+A verdict is a check's: one message row with the marker of its state and no lead word, its sentence beginning with
+the check's name.
 
 The region reads nothing but the pictures a page hands it by their paths, which ``set_pictures`` reads: a page calls
 it once its run has ended, never while a run is live. The words a page hands it it shows. It is hidden while it holds
@@ -43,12 +45,16 @@ class ResultRegion(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self._facts: tuple = ()
+        self.verdict: "MessageRow | None" = None   # a check's verdict, first in the region
         self._rows: list = []               # the message row of each fact said
         self._table: "TableWords | None" = None
         self._steps: tuple = ()
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(design.scaled(design.GAP["head_table"]))
+        self._verdict_box = QVBoxLayout()
+        self._verdict_box.setContentsMargins(0, 0, 0, 0)
+        box.addLayout(self._verdict_box)
         self._sentences = QVBoxLayout()
         self._sentences.setContentsMargins(0, 0, 0, 0)
         self._sentences.setSpacing(design.scaled(design.GAP["gate_rows"]))
@@ -98,6 +104,19 @@ class ResultRegion(QWidget):
         self._rows = [MessageRow(fact.kind, fact.sentence, lead=LEADS[fact.kind]) for fact in self._facts]
         for row in self._rows:
             self._sentences.addWidget(row)
+        self._judge()
+
+    def set_verdict(self, marker: str, sentence: str) -> None:
+        """Say a check's verdict first in the region: a message row with the marker ``marker`` of its state and no lead
+        word; an empty sentence says none."""
+        if self.verdict is not None:
+            self._verdict_box.removeWidget(self.verdict)
+            self.verdict.hide()
+            self.verdict.deleteLater()
+            self.verdict = None
+        if sentence:
+            self.verdict = MessageRow(marker, sentence)
+            self._verdict_box.addWidget(self.verdict)
         self._judge()
 
     def sentences(self) -> tuple:
@@ -179,6 +198,7 @@ class ResultRegion(QWidget):
 
     def clear(self) -> None:
         """Nothing said, shown or offered: the region hidden."""
+        self.set_verdict("", "")
         self.set_sentences(())
         self.set_table(None)
         self.set_pictures(())
@@ -189,7 +209,7 @@ class ResultRegion(QWidget):
         return [button for button in self.next_buttons[:len(self._steps)]]
 
     def is_empty(self) -> bool:
-        return not (self._facts or self._table is not None or self.pictures or self._steps)
+        return not (self.verdict is not None or self._facts or self._table is not None or self.pictures or self._steps)
 
     def _judge(self) -> None:
         self.setVisible(not self.is_empty())

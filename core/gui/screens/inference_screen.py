@@ -21,7 +21,8 @@ a saved record, one after the other, each once the one before has returned its r
 is one.
 """
 import json
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -73,13 +74,15 @@ CONTINUE_BOUNDS_GONE = "the bounds file {} is no longer there"
 @dataclass(frozen=True)
 class ChecksHeld:
     """The screen's last reading of what the checks need: what was in use then, every check record read, the run
-    history of the records folder in use, oldest first, each check's row and the summary, and when it was read."""
+    history of the records folder in use, oldest first, each check's row and the summary, when it was read, and the
+    text of each record whose result reads its text, by the record's folder (what the observations can pin down)."""
     held: check_lineage.Held
     records: tuple
     histories: tuple
     rows: tuple
     summary: check_lineage.ChecksSummary
     read_at: datetime
+    texts: Mapping = field(default_factory=dict)
 
 
 def _ident(record) -> "str | None":
@@ -90,6 +93,26 @@ def _ident(record) -> "str | None":
 
 #: The file of a simulation set's newest saved state, as the engine's reading of a set names the file it read.
 NEWEST_STATE = "state.pt"
+#: The checks whose result reads its record's text as well as its manifest.
+TEXT_READ = ("pin_down",)
+
+
+def prior_label(store, ident: "str | None") -> str:
+    """The label of the prior whose id is ``ident``, as Records names it, from the store's listing of priors; "" when it
+    is no longer there. A reading of the disk: the screen makes it only with no run live."""
+    if not ident:
+        return ""
+    try:
+        found = next((one for one in store.list("prior") if one.id == ident), None)
+    except Exception:                            # noqa: BLE001 -- a store that cannot list its priors names none
+        return ""
+    if found is None:
+        return ""
+    try:
+        made = datetime.fromisoformat(found.created).astimezone()
+    except (TypeError, ValueError, OverflowError, OSError):
+        made = None
+    return record_words.record_label("prior", found.name or "", made)
 
 
 def _completed(text: "str | None") -> "datetime | None":
@@ -238,10 +261,19 @@ class InferenceScreen(QWidget):
         histories = tuple(history.runs_of(controller().folder(), records_root=str(store.root)))
         held = self._checks_in_use(read=store)
         rows = check_lineage.rows(held, records, histories)
+        # What the observations can pin down says from its text from which recording length the low end of the band
+        # holds enough cycles: the text of the record that decides it, read by its folder.
+        texts = {row.record.folder: check_lineage.read_text(row.record.folder) for row in rows
+                 if row.key in TEXT_READ and row.record is not None}
         self.checks_held = ChecksHeld(held, records, histories, rows, check_lineage.summary(rows, held=held),
-                                      controller().now())
+                                      controller().now(), texts)
         self._rows_for = (held, rows)
         self.recompute_states()
+
+    def checks_in_use(self) -> check_lineage.Held:
+        """What is in use, as the checks' rules read it, with what the last reading found of the posterior's set and of
+        the prior it was trained on when the posterior is the one it read; reads nothing."""
+        return self._checks_in_use()
 
     def check_rows(self) -> "tuple | None":
         """Each check's row, from the last reading with what the session holds now, reading nothing: the counts of the
@@ -313,12 +345,14 @@ class InferenceScreen(QWidget):
         ids = (_ident(prior), _ident(posterior), simulation)
         if read is not None:
             refused, counts, done, when = self._read_the_pair_and_the_set(read, prior, posterior, simulation)
+            words = prior_label(read, trained_on) if refused else ""
             same = True
         else:
             last = self.checks_held.held if self.checks_held is not None else None
             same = last is not None and (last.prior, last.posterior, last.simulation) == ids
-            refused, counts, done, when = ((last.pair_refused, last.set_counts, last.set_done, last.set_when) if same
-                                           else ("", None, False, None))
+            refused, counts, done, when, words = ((last.pair_refused, last.set_counts, last.set_done, last.set_when,
+                                                   last.posterior_prior_words) if same
+                                                  else ("", None, False, None, ""))
         return check_lineage.Held(
             prior=ids[0], posterior=ids[1], posterior_prior=trained_on, simulation=simulation,
             chi=chi if isinstance(chi, bool) else None, config=block, configured=configured,
@@ -328,7 +362,7 @@ class InferenceScreen(QWidget):
             pair_refused=refused, set_counts=counts, set_done=done,
             prior_words=record_words.phrase_of("prior", prior) if prior is not None else "",
             posterior_words=record_words.phrase_of("posterior", posterior) if posterior is not None else "",
-            set_when=when, set_read=same)
+            set_when=when, set_read=same, posterior_prior_words=words)
 
     @staticmethod
     def _read_the_pair_and_the_set(store, prior, posterior, simulation) -> tuple:

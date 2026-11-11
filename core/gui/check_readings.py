@@ -1,21 +1,26 @@
 """How a check's record is read, as values: the state a record of each deciding check reads, by the rules a deciding
 check is judged by, and the comparison of the share of unusable driven recordings a training's simulation set holds
-with the audit of its prior.
+with the audit of its prior; and what each check's record says, in the window's words: the sentence its result begins
+with and its table.
 
 The engine decides the frequency band and the calibration itself, and their records hold the verdict. The audit, the
 comparison, the use of each part of the input and the identifiability of the posterior are judged by rules that live
 here, each number a named constant with its reason; they are science numbers that live outside the engine. A record
 made at less than its check's usual size never decides, whichever way it came out.
 
-Nothing here imports the toolkit, torch or the engine's settings: only the window's table of the engine's lines and
-its words for a date and a number, beside the standard library.
+Nothing here imports the toolkit, torch or the engine's settings: only the window's table of the engine's lines, the
+twelve checks, its words for a date and a number and its table as words, beside the standard library.
 """
 import re
+import statistics
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import PureWindowsPath
 
+from .check_catalogue import entry
 from .run import readings
+from .step_facts import TableWords
 from .texts import date_text, number_text
 
 #: Every state a check's row can read, as the list and a check's page show it.
@@ -343,3 +348,580 @@ def first_masked(text: str) -> tuple[int, int, int, str] | None:
         if reading.name == "chi_none":
             return 0, 0, 0, reading.values["scope"]
     return None
+
+
+# ── what a record says, in the window's words ──
+#: The marker each state is drawn with: waiting or not run yet, running, passed, to look closer at or not compared,
+#: failed, not applying, and an informing check's or a tool's done.
+STATE_MARKERS = {"Not run yet": "later", "Running": "now", "Passed": "fine", "Look closer": "warn", "Failed": "err",
+                 "Waiting for a prior": "later", "Waiting for a posterior": "later",
+                 "Waiting for the simulations": "later", "Waiting for the audit": "later", "Not compared": "warn",
+                 "Does not apply": "none", "Done": "done"}
+#: How a verdict sentence says a deciding check's state after the check's name; an informing check or a tool says it
+#: is done.
+VERDICT_WORDS = {"Passed": "passed", "Look closer": "look closer", "Failed": "failed"}
+DONE_WORDS = "done"
+#: What a result says when the record holds less than its sentence reads.
+SHORT_TEXT = "{}: {}."
+
+#: The frequency band's sentence: the cell, the band and the drive amplitude, each clause by its verdict (true, false,
+#: or not judged).
+BAND_HEAD_TEXT = "{}: {} for cell {}."
+BAND_CLAUSES = {
+    True: "Every frequency inside the band ({} to {} times the cell's own) can be measured at every recording length "
+          "tried",
+    False: "Not every frequency inside the band ({} to {} times the cell's own) can be measured at every recording "
+           "length tried",
+    None: "Whether the frequencies inside the band ({} to {} times the cell's own) can be measured was not judged"}
+DRIVE_CLAUSES = {True: "the drive amplitude {} does not take over the cell",
+                 False: "the drive amplitude {} takes over the cell",
+                 None: "whether the drive amplitude {} takes over the cell was not judged"}
+#: The audit's sentence.
+AUDIT_SHARE_TEXT = "{} % of {} driven recordings simulated from {} were unusable."
+AUDIT_EXPECTED_TEXT = "The expected share is {} %; within {} points is fine."
+AUDIT_ALL_SHORT_TEXT = "Every one was too short or too slow to hold {} of the drive."
+AUDIT_SOME_SHORT_TEXT = "{} were too short or too slow to hold {} of the drive, and {} gave no finite reading."
+AUDIT_UNHELD_TEXT = "One of its consistency records does not hold, so its share cannot be relied on."
+#: The comparison's sentence once it is made.
+COMPARED_TEXT = ("{}: {}. {} % in the simulation set; the audit read {} %. The difference is {} points: within 3 is "
+                 "fine, up to 5 look closer, beyond 5 stop.")
+#: The narrowing round's sentence under the comparison.
+NARROWED_COMPARISON_TEXT = "The audit measured the whole prior; this round simulated inside a narrowed region."
+#: The calibration's sentence: the rank test, the joint coverage test, and what it was made on.
+RANKS_ALL_TEXT = "All {} parameters pass the rank test"
+RANKS_SOME_TEXT = "{} of {} parameters fail the rank test: {}"
+JOINT_WORDS = {True: "passes", False: "fails"}
+CALIBRATION_MADE_TEXT = ("Made on {} test datasets at {} operating points (pairs of time scale and recording "
+                         "length){}.")
+SEED_TEXT = ", seed {}"
+NARROWED_CALIBRATION_TEXT = "It was made inside the region its posterior was narrowed to."
+ALONE_TEXT = "Calibration alone does not show that the posterior is sound: {} still open."
+#: The input-use check's sentence.
+INPUT_USE_TEXT = "The network responds to {} of the {} parts of an observation's summary; {}; {}{}."
+CONSTANT_WORDS = ("every part varies in the training simulations", "1 never varies in the training simulations",
+                  "{} never vary in the training simulations")
+INVISIBLE_WORDS = ("none is invisible to it", "1 is invisible to it", "{} are invisible to it")
+NONFINITE_WORDS = ("", "; 1 drives it to no finite output", "; {} drive it to no finite output")
+NAMED_PARTS_TEXT = "Of the two parts it is judged by, {} do not respond as the typical part does."
+#: The identifiability of the posterior's sentence.
+DIRECTIONS_TEXT = ("The record holds how strongly each of the {} directions is pinned down: the strongest {} times the "
+                   "weakest. This check passes when those figures are on record; the table says what they are.")
+NO_DIRECTIONS_TEXT = "The record does not hold how strongly the directions are pinned down: its figures were not kept."
+#: The informing checks' and the tools' sentences.
+PIN_DOWN_TEXT = "At {} s, {} and {}."
+NO_INFORMATION_WORDS = ("every parameter has local information", "1 parameter has no local information",
+                        "{} parameters have no local information")
+ALIKE_WORDS = ("no pair moves an observation alike", "1 pair moves an observation alike",
+               "{} pairs move an observation alike")
+FIXED_TEXT = ("{}, {} of {} repeats pass the rank test. This is the rank half only; the joint coverage test is "
+              "Calibration's.")
+FIXED_WORDS = "With {} driven recordings"
+MIXED_WORDS = "With the number of driven recordings mixed, as in training"
+DRIVE_BOTH_TEXT = "The cell keeps its own oscillation up to a drive of {} and is captured from {}."
+DRIVE_FREE_TEXT = "The cell keeps its own oscillation up to a drive of {}; no drive tried captures it."
+DRIVE_CAPTURED_TEXT = "The cell is captured from a drive of {}; it keeps its own oscillation at no drive tried."
+DRIVE_NONE_TEXT = "No drive tried was judged free-running or captured."
+NOT_OSCILLATING_TEXT = "The cell shows no clear oscillation of its own, so no drive was judged."
+ACROSS_TEXT = ("{}: {}, at {} points across the prior. The table gives each parameter's spread at each point and the "
+               "share of points where recordings pin it down.")
+#: A check that keeps nothing but its result, said from the run that made it.
+RUN_WORDS = {"finished": "done", "failed": "failed", "stopped": "stopped", "not seen to end": "not seen to end"}
+
+#: The frequency band's table.
+BAND_COLUMNS = ("Multiple of the cell's own frequency", "Inside the band", "Result", "Reasons")
+BAND_FREQUENCIES_HEAD = "Each frequency"
+BAND_DRIVES_HEAD = "Each drive amplitude"
+YES_NO = {True: "Yes", False: "No"}
+BAND_RESULTS = ("Measured at every length", "Measured within the cycle ceiling", "Not measured at every length")
+DRIVE_RESULTS = {True: "Does not take over the cell", None: "Not judged"}
+DRIVE_TAKES_TEXT = "Takes over the cell at {} inside the band"
+#: What a point of the band says when it does not pass, built from its measures against the thresholds it was judged
+#: by, and where it stood.
+POINT_CAUSES = ("varies between runs", "weak over the noise", "taken over by the drive")
+POINT_MASKED = "too fast to sample at {} s"
+POINT_UNMEASURED = "not measured"
+POINT_AT = "{} at {} s"
+POINT_FULL = " without the ceiling"
+POINT_DRIVE = ", drive {}"
+#: The audit's table.
+AUDIT_COLUMNS = ("Cause", "Driven recordings", "Share")
+AUDIT_RIGHT = frozenset({1, 2})
+AUDIT_CAUSES = (("too_slow_at_band_top", "Too slow to hold {} of the drive"),
+                ("shortened_by_duration_draw", "Too short to hold {} of the drive"),
+                ("non_finite_lock_in", "Gave no finite reading"))
+AUDIT_ALL = "All unusable"
+PER_BATCH_TEXT = "Per batch: mean {} %, spread {} points, over {}."
+BATCH_WORDS = ("no batch", "1 batch", "{} batches")
+#: The calibration's table.
+CALIBRATION_COLUMNS = ("Parameter", "Unit", "p-value", "Result", "Remark")
+CALIBRATION_RIGHT = frozenset({2})
+PASS_WORDS = {True: "Passes", False: "Fails"}
+TOGETHER = "All together"
+TOGETHER_REMARK = "The joint coverage test; it passes at p = {} or more"
+ASSUMED_REMARK = "An assumed input"
+TIME_SCALE = "t_scale"
+TIME_SCALE_REMARK = "Rests on the operating points, not the datasets, so it has less power"
+RANK_FOOTNOTE = "Rank test: a parameter passes at p = {} or more ({} divided by {})."
+READING_HEAD = "A reading, not a test"
+INFORMATION_ROWS = (("total_nats", "Information gained"), ("sem_nats", "Its standard error"))
+NATS = "nats"
+#: The input-use check's table, weakest first, and its readings of each part.
+INPUT_USE_COLUMNS = ("Part", "Response", "Against the typical part", "Range in training", "Reading")
+INPUT_USE_RIGHT = frozenset({1, 2})
+PART_READINGS = {"healthy": "Responds as the typical part does", "compressed": "Responds weakly",
+                 "severely compressed": "Responds very weakly"}
+INVISIBLE_READING = "Invisible to the network"
+NONFINITE_READING = "Drives it to no finite output"
+CONSTANT_READING = "Never varies in training"
+RANGE_TEXT = "{} to {}"
+#: The identifiability of the posterior's table.
+DIRECTION_COLUMNS = ("Parameter or direction", "Figure", "Reading")
+DIRECTION_RIGHT = frozenset({1})
+PARAMETERS_HEAD = "Each parameter: its share in the weakest directions"
+DIRECTIONS_HEAD = "Each direction: its strength and its largest contributions"
+DIRECTION_NAME = "Direction {}"
+PARAMETER_READINGS = {"good": "Well pinned down", "moderate": "Moderately pinned down", "poor": "Poorly pinned down",
+                      "very poor": "Very poorly pinned down", "UNMEASURED": "Not pinned down"}
+SHARE_TEXT = "{} %"
+#: What the observations can pin down: its table, and the line of its text that says from which recording length the
+#: driven recordings at the low end of the band hold enough cycles.
+PIN_DOWN_COLUMNS = ("Parameter or pair", "Reading")
+NO_INFORMATION_HEAD = "No local information"
+ALIKE_HEAD = "Move an observation alike"
+PAIR_TEXT = "{} and {}"
+ALIKE_TEXT = "Alike to {}"
+LOW_EDGE = re.compile(r"low edge \S+x clears (?P<cycles>[0-9.]+) cycles at T_obs >= (?P<seconds>[0-9.e+-]+) s")
+LOW_EDGE_TEXT = "Driven recordings at the low end of the band hold {} from {} s."
+#: The calibration repeated at fixed numbers' table.
+FIXED_COLUMNS = ("Parameter", "Median p-value", "Lowest", "Repeats below 0.05")
+FIXED_RIGHT = frozenset({1, 2, 3})
+#: The drive study's table.
+DRIVE_COLUMNS = ("Strength", "Force", "Own oscillation kept", "Reading")
+DRIVE_RIGHT = frozenset({1, 2})
+DRIVE_READINGS = {"free-running": "Keeps its own oscillation", "captured": "Captured by the drive",
+                  "in between": "Partly kept"}
+#: Identifiability across the prior's table.
+ACROSS_COLUMNS = ("Parameter", "Spread at each point", "Median", "Points pinned down")
+ACROSS_RIGHT = frozenset({2, 3})
+#: The cycles of the drive a sentence says in a word: the engine's usual floor.
+CYCLE_WORDS = {2: "two cycles"}
+#: The most significant figures a measured number is said to.
+FIGURES = 3
+#: From how large, and below how small, a number is said with its power of ten; and the figures of a large ratio, as
+#: a sentence says how much the strongest direction is pinned down beyond the weakest.
+POWER_FROM = 10_000
+SMALL_FROM = 0.001
+RATIO_FIGURES = 2
+
+
+def said_name(key: str) -> str:
+    """A check's name as its sentences begin with it: a name in two parts is said with a comma between them."""
+    return entry(key).name.replace(": ", ", ")
+
+
+def _figure(value, figures: int = FIGURES) -> str:
+    """A measured number to ``figures`` significant figures, with its power of ten when it is very large or very small
+    ("1.2e6", "1.05e-9"), its thousands grouped otherwise; "" for none."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return ""
+    size = abs(value)
+    if size and (size >= POWER_FROM or size < SMALL_FROM):
+        mantissa, power = f"{value:.{figures - 1}e}".split("e")
+        return f"{mantissa}e{int(power)}"
+    rounded = float(f"{value:.{figures}g}")
+    return number_text(int(rounded) if rounded.is_integer() else rounded)
+
+
+def _ratio(value: float) -> str:
+    """A ratio as a sentence says it: with its power of ten when it is large ("1.2e6"), else to its figures."""
+    return _figure(value, RATIO_FIGURES) if value >= POWER_FROM else _figure(value)
+
+
+def _counts_said(count: int, words: tuple) -> str:
+    """``count`` by the three forms of ``words``: none, one, and several."""
+    none, one, several = words
+    return none if count == 0 else one if count == 1 else several.format(number_text(count))
+
+
+def _cycles(value) -> str:
+    """How many cycles of the drive, as a sentence says it."""
+    return CYCLE_WORDS.get(value, f"{value:g} cycles")
+
+
+def _cell_name(manifest: Mapping) -> str:
+    """The name of the cell file a record was made on, without its folder or its ending; "" for none."""
+    inputs = manifest.get("inputs")
+    cell = inputs.get("cell") if isinstance(inputs, Mapping) else None
+    path = cell.get("path") if isinstance(cell, Mapping) else None
+    return PureWindowsPath(path).stem if isinstance(path, str) and path else ""
+
+
+def _body(manifest: Mapping) -> Mapping:
+    body = manifest.get("body")
+    return body if isinstance(body, Mapping) else {}
+
+
+def verdict_sentence(key: str, manifest: Mapping, *, others_open: int = 0, prior_words: str = "",
+                     force_unit: str = "") -> str:
+    """The sentence a check's result begins with, from its record's manifest, in the window's words and never the
+    engine's own: the check's name, its state, and what its record holds. ``others_open``, for a passed calibration,
+    how many other deciding checks that apply have not passed; ``prior_words``, the audit's prior as a sentence names
+    it; ``force_unit``, the cell's unit of force, for the drive study. A record that holds less than its sentence reads
+    is said by its name and its state alone, and a deciding record that does not count by its name and what its row
+    says of it. Never raises; KeyError for a check that writes no record."""
+    reading = read(key, manifest)
+    name = said_name(key)
+    if entry(key).role == "Decides" and reading.state not in VERDICT_WORDS:
+        return f"{SHORT_TEXT.format(name, reading.state.lower())} {reading.words}".rstrip()
+    word = VERDICT_WORDS[reading.state] if entry(key).role == "Decides" else DONE_WORDS
+    try:
+        return _SENTENCES[key](name, word, _body(manifest), manifest, others_open=others_open,
+                               prior_words=prior_words, force_unit=force_unit)
+    except (KeyError, TypeError, ValueError, AttributeError, IndexError, ZeroDivisionError):
+        return SHORT_TEXT.format(name, word)
+
+
+def _band_sentence(name, word, body, manifest, **_given) -> str:
+    configured, results = body["settings"]["configured"], body["results"]
+    low, high = (number_text(float(value)) for value in configured["chi_freq_bounds"])
+    drive = number_text(float(configured["chi_f0"]))
+    cell = _cell_name(manifest)
+    head = BAND_HEAD_TEXT.format(name, word, cell) if cell else SHORT_TEXT.format(name, word)
+    return (f"{head} {BAND_CLAUSES[results['band_holds']].format(low, high)}, and "
+            f"{DRIVE_CLAUSES[results['drive_holds']].format(drive)}.")
+
+
+def _audit_sentence(name, word, body, _manifest, *, prior_words, **_given) -> str:
+    settings, results = body["settings"], body["results"]
+    cycles = _cycles(settings["configured"]["chi_min_cycles"])
+    said = [SHORT_TEXT.format(name, word),
+            AUDIT_SHARE_TEXT.format(f"{_real(results['masked_fraction']) * 100:.1f}",
+                                    number_text(_whole(results["probes"])), prior_words or "its prior"),
+            AUDIT_EXPECTED_TEXT.format(f"{AUDIT_EXPECTED_SHARE * 100:g}", f"{AUDIT_FINE_POINTS:g}")]
+    masked = _whole(results["masked"])
+    lock_ins = _whole(results["causes"]["non_finite_lock_in"]["count"])
+    if masked and not lock_ins:
+        said.append(AUDIT_ALL_SHORT_TEXT.format(cycles))
+    elif masked:
+        said.append(AUDIT_SOME_SHORT_TEXT.format(number_text(masked - lock_ins), cycles, number_text(lock_ins)))
+    holds = (results["invariants"]["hold"], results["attribution"]["holds"], results["cross_check"]["holds"])
+    if not all(value is True for value in holds):
+        said.append(AUDIT_UNHELD_TEXT)
+    return " ".join(said)
+
+
+def _calibration_sentence(name, word, body, _manifest, *, others_open, **_given) -> str:
+    results = body["results"]
+    verdict = results["verdict"]
+    parameters = verdict["parameters"]
+    failing = [one["name"] for one in parameters if one["passed"] is not True]
+    joint = verdict["tarp"]["passed"] is True
+    if failing:
+        ranks = f"{RANKS_SOME_TEXT.format(len(failing), len(parameters), ', '.join(failing))}; the joint coverage " \
+                f"test {JOINT_WORDS[joint]}."
+    else:
+        ranks = (f"{RANKS_ALL_TEXT.format(len(parameters))}, {'and' if joint else 'but'} the joint coverage test "
+                 f"{JOINT_WORDS[joint]}.")
+    seed = results.get("seed")
+    made = CALIBRATION_MADE_TEXT.format(number_text(_whole(results["n_cal"])), number_text(_whole(results["cal_n_scales"])),
+                                        SEED_TEXT.format(seed) if isinstance(seed, int) and not isinstance(seed, bool)
+                                        else "")
+    said = [SHORT_TEXT.format(name, word), ranks, made]
+    if "truncated" in (results.get("accepted") or ()):
+        said.append(NARROWED_CALIBRATION_TEXT)
+    if word == VERDICT_WORDS["Passed"] and others_open > 0:
+        said.append(ALONE_TEXT.format("1 deciding check is" if others_open == 1
+                                      else f"{number_text(others_open)} deciding checks are"))
+    return " ".join(said)
+
+
+def _input_use_sentence(name, word, body, _manifest, **_given) -> str:
+    results = body["results"]
+    counts = results["counts"]
+    total, constant = _whole(counts["total"]), _whole(counts["constant"])
+    invisible, nonfinite = _whole(counts["invisible"]), _whole(counts["nonfinite"])
+    parts = INPUT_USE_TEXT.format(number_text(total - constant - invisible - nonfinite), number_text(total),
+                                  _counts_said(constant, CONSTANT_WORDS), _counts_said(invisible, INVISIBLE_WORDS),
+                                  _counts_said(nonfinite, NONFINITE_WORDS))
+    said = [SHORT_TEXT.format(name, word), parts]
+    verdicts = {channel["label"]: channel["verdict"] for channel in results["channels"]}
+    weak = [label for label in INPUT_USE_PARTS if verdicts.get(label) != HEALTHY]
+    if weak:
+        said.append(NAMED_PARTS_TEXT.format(" and ".join(weak)))
+    return " ".join(said)
+
+
+def _identifiability_sentence(name, word, body, _manifest, **_given) -> str:
+    eigenvalues = body["results"]["eigenvalues"]
+    if eigenvalues is None:
+        return f"{SHORT_TEXT.format(name, word)} {NO_DIRECTIONS_TEXT}"
+    strengths = [_real(value) for value in eigenvalues]
+    return (f"{SHORT_TEXT.format(name, word)} "
+            f"{DIRECTIONS_TEXT.format(number_text(len(strengths)), _ratio(max(strengths) / min(strengths)))}")
+
+
+def _pin_down_sentence(name, word, body, _manifest, **_given) -> str:
+    results = body["results"]
+    length = f"{_real(results['T_obs_s']):g}"
+    said = PIN_DOWN_TEXT.format(length, _counts_said(len(results["unmeasurable"]), NO_INFORMATION_WORDS),
+                                _counts_said(len(results["degenerate_pairs"]), ALIKE_WORDS))
+    return f"{SHORT_TEXT.format(name, word)} {said}"
+
+
+def _fixed_sentence(name, word, body, _manifest, **_given) -> str:
+    fixed, verdict = body["settings"]["chi_k_fixed"], body["results"]["rank_verdict"]
+    repeats = verdict["per_repeat"]
+    how = MIXED_WORDS if fixed is None else FIXED_WORDS.format(number_text(_whole(fixed)))
+    return (f"{SHORT_TEXT.format(name, word)} "
+            f"{FIXED_TEXT.format(how, number_text(sum(one is True for one in repeats)), number_text(len(repeats)))}")
+
+
+def _drive_sentence(name, word, body, _manifest, *, force_unit, **_given) -> str:
+    results = body["results"]
+    if results["oscillating"] is not True:
+        return f"{SHORT_TEXT.format(name, word)} {NOT_OSCILLATING_TEXT}"
+
+    def force(pick):
+        return None if pick is None else f"{_figure(_real(pick['cell_force']))} {force_unit}".rstrip()
+
+    free, captured = force(results["strongest_free_running"]), force(results["weakest_captured"])
+    said = (DRIVE_BOTH_TEXT.format(free, captured) if free and captured else DRIVE_FREE_TEXT.format(free) if free
+            else DRIVE_CAPTURED_TEXT.format(captured) if captured else DRIVE_NONE_TEXT)
+    return f"{SHORT_TEXT.format(name, word)} {said}"
+
+
+def _across_sentence(name, word, body, _manifest, **_given) -> str:
+    return ACROSS_TEXT.format(name, word, number_text(len(body["results"]["points"])))
+
+
+#: How each check that writes a record says its result.
+_SENTENCES = {"band": _band_sentence, "audit": _audit_sentence, "calibration": _calibration_sentence,
+              "input_use": _input_use_sentence, "identifiability": _identifiability_sentence,
+              "pin_down": _pin_down_sentence, "fixed_number": _fixed_sentence, "drive_study": _drive_sentence,
+              "across_prior": _across_sentence}
+
+
+def compared_sentence(compared: Comparison, *, unusable: int, total: int, audit_fraction) -> str:
+    """The comparison after simulating as its result says it once it is made: its state and the two shares with their
+    difference; else, nothing compared, waiting for the audit or a part of the set, the comparison's own sentence."""
+    if compared.difference is None or compared.state not in VERDICT_WORDS:
+        return compared.sentence
+    limit = COMPARISON_FINE_POINTS if compared.difference <= COMPARISON_FAILED_POINTS else COMPARISON_FAILED_POINTS
+    return COMPARED_TEXT.format(said_name("comparison"), VERDICT_WORDS[compared.state], _share(unusable / total),
+                                _share(audit_fraction), _points(compared.difference, limit))
+
+
+def run_sentence(key: str, entry_: Mapping) -> str:
+    """The sentence of a check that keeps nothing but its result, from the run of it the history holds: its name and
+    how the run ended."""
+    outcome = entry_.get("outcome") if isinstance(entry_, Mapping) else None
+    return SHORT_TEXT.format(said_name(key), RUN_WORDS.get(outcome, RUN_WORDS["not seen to end"]))
+
+
+def table_words(key: str, manifest: Mapping, *, units: Mapping[str, str] = {}, force_unit: str = "",
+                text: str | None = None) -> TableWords | None:
+    """The table of a check's result, from its record's manifest: its columns in the window's words, every row, and
+    the record's own strings never shown. ``units``, each parameter's unit by its name; ``force_unit``, the cell's
+    unit of force; ``text``, the record's text, for what the observations can pin down. None for a check whose record
+    holds no table, or a record that holds less than its table reads. Never raises."""
+    maker = _TABLES.get(key)
+    if maker is None:
+        return None
+    try:
+        return maker(_body(manifest), units=units, force_unit=force_unit, text=text)
+    except (KeyError, TypeError, ValueError, AttributeError, IndexError, ZeroDivisionError):
+        return None
+
+
+def _point_causes(measure: Mapping, sup, settings: Mapping) -> str:
+    """What a point of the band misses, by its measures against the thresholds it was judged by."""
+    misses = [words for words, missed in zip(POINT_CAUSES, (
+        isinstance(measure.get("cv"), (int, float)) and measure["cv"] > settings["cv_max"],
+        isinstance(measure.get("snr"), (int, float)) and measure["snr"] < settings["snr_min"],
+        isinstance(sup, (int, float)) and sup < settings["sup_min"])) if missed]
+    return ", ".join(misses) or POINT_UNMEASURED
+
+
+def _band_reasons(points, multiplier, settings) -> str:
+    """Why the frequency ``multiplier`` is not measured at every length, from its points, the lengths of each reason
+    together; "" when it is."""
+    several = len(settings.get("drives") or ()) > 1
+    lengths: dict = {}
+    for point in points:
+        if point.get("multiplier") != multiplier:
+            continue
+        capped, full = point.get("capped") or {}, point.get("full") or {}
+        drive = POINT_DRIVE.format(f"{_real(point['drive']):g}") if several and "drive" in point else ""
+        if capped.get("verdict") == "masked":
+            why = (POINT_MASKED, drive)
+        elif capped.get("verdict") != "pass":
+            why = (POINT_AT.format(_point_causes(capped, point.get("sup"), settings), "{}"), drive)
+        elif full.get("verdict") != "pass":
+            why = (POINT_AT.format(_point_causes(full, point.get("sup"), settings), "{}") + POINT_FULL, drive)
+        else:
+            continue
+        said = lengths.setdefault(why, [])
+        length = f"{_real(point['length_s']):g}"
+        if length not in said:
+            said.append(length)
+    said = "; ".join(words.format(_listed(lengths_)) + drive for (words, drive), lengths_ in lengths.items())
+    return said[:1].upper() + said[1:]
+
+
+def _listed(words: list) -> str:
+    """Words listed as a sentence lists them: the last after "and"."""
+    return words[0] if len(words) == 1 else f"{', '.join(words[:-1])} and {words[-1]}"
+
+
+def _band_table(body, **_given) -> TableWords:
+    settings, results = body["settings"], body["results"]
+    points = results.get("points") or ()
+    measured, capped, not_measured = BAND_RESULTS
+    rows, headings = [], set()
+    headings.add(len(rows))
+    rows.append((BAND_FREQUENCIES_HEAD, "", "", ""))
+    for one in results["frequencies"]:
+        result = (measured if one["passes_full"] is True else capped if one["passes_capped"] is True
+                  else not_measured)
+        rows.append((f"{_real(one['multiplier']):g}", YES_NO[one["in_band"] is True], result,
+                     _band_reasons(points, one["multiplier"], settings)))
+    headings.add(len(rows))
+    rows.append((BAND_DRIVES_HEAD, "", "", ""))
+    for one in results["drives"]:
+        captured = one["captured_in_band"]
+        result = (DRIVE_TAKES_TEXT.format(_counts_said(len(captured), ("", "1 point", "{} points")))
+                  if captured else DRIVE_RESULTS[True])
+        rows.append((f"{_real(one['drive']):g}", "", result, ""))
+    return TableWords(BAND_COLUMNS, tuple(rows), headings=frozenset(headings))
+
+
+def _audit_table(body, **_given) -> TableWords:
+    settings, results = body["settings"], body["results"]
+    cycles = _cycles(settings["configured"]["chi_min_cycles"])
+    causes = results["causes"]
+    rows = [(words.format(cycles) if "{}" in words else words, number_text(_whole(causes[cause]["count"])),
+             SHARE_TEXT.format(f"{_real(causes[cause]['share']) * 100:.1f}")) for cause, words in AUDIT_CAUSES]
+    rows.append((AUDIT_ALL, number_text(_whole(results["masked"])),
+                 SHARE_TEXT.format(f"{_real(results['masked_fraction']) * 100:.1f}")))
+    footnote = ""
+    per_batch = (results.get("per_batch") or {}).get("fractions")
+    if isinstance(per_batch, list) and per_batch:
+        shares = [_real(value) * 100 for value in per_batch]
+        footnote = PER_BATCH_TEXT.format(f"{statistics.fmean(shares):.1f}", f"{statistics.pstdev(shares):.1f}",
+                                         _counts_said(len(shares), BATCH_WORDS))
+    return TableWords(AUDIT_COLUMNS, tuple(rows), right=AUDIT_RIGHT, footnote=footnote)
+
+
+def _calibration_table(body, *, units, **_given) -> TableWords:
+    results = body["results"]
+    verdict = results["verdict"]
+    caveat = bool(verdict.get("caveat"))
+    rows = []
+    for one in verdict["parameters"]:
+        remarks = [words for words, holds in ((ASSUMED_REMARK, one.get("assumed") is True),
+                                              (TIME_SCALE_REMARK, caveat and one["name"] == TIME_SCALE)) if holds]
+        rows.append((one["name"], units.get(one["name"], ""), _figure(one["ks_p"]), PASS_WORDS[one["passed"] is True],
+                     "; ".join(remarks)))
+    tarp, alpha = verdict["tarp"], _real(verdict["alpha"])
+    rows.append((TOGETHER, "", _figure(tarp["ks_p"]), PASS_WORDS[tarp["passed"] is True],
+                 TOGETHER_REMARK.format(f"{alpha:g}")))
+    headings = set()
+    information = results.get("informativeness")
+    if isinstance(information, Mapping):
+        headings.add(len(rows))
+        rows.append((READING_HEAD, "", "", "", ""))
+        rows += [(words, NATS, _figure(information.get(name)), "", "") for name, words in INFORMATION_ROWS]
+    footnote = RANK_FOOTNOTE.format(f"{_real(verdict['threshold']):.2g}", f"{alpha:g}",
+                                    number_text(len(verdict["parameters"])))
+    return TableWords(CALIBRATION_COLUMNS, tuple(rows), right=CALIBRATION_RIGHT, headings=frozenset(headings),
+                      footnote=footnote)
+
+
+def _part_reading(verdict) -> str:
+    """The window's reading of the engine's verdict on one part of the input."""
+    if not isinstance(verdict, str):
+        return ""
+    if verdict in PART_READINGS:
+        return PART_READINGS[verdict]
+    if "INVISIBLE" in verdict:
+        return INVISIBLE_READING
+    if verdict.startswith("NON-FINITE"):
+        return NONFINITE_READING
+    return CONSTANT_READING if verdict.startswith("constant") else ""
+
+
+def _input_use_table(body, **_given) -> TableWords:
+    rows = tuple((one["label"], _figure(one["max_disp"]), _figure(one["rel_median"]),
+                  RANGE_TEXT.format(_figure(one["p1"]), _figure(one["p99"])) if one.get("p1") is not None else "",
+                  _part_reading(one["verdict"])) for one in body["results"]["channels"])
+    return TableWords(INPUT_USE_COLUMNS, rows, right=INPUT_USE_RIGHT)
+
+
+def _identifiability_table(body, **_given) -> TableWords:
+    results = body["results"]
+    rows, headings = [], {0}
+    rows.append((PARAMETERS_HEAD, "", ""))
+    rows += [(one["name"], SHARE_TEXT.format(f"{_real(one['bottom_share']) * 100:.0f}"),
+              PARAMETER_READINGS.get(one.get("verdict"), "")) for one in results["per_param"]]
+    if results.get("eigenvalues") is not None:
+        headings.add(len(rows))
+        rows.append((DIRECTIONS_HEAD, "", ""))
+        rows += [(DIRECTION_NAME.format(_whole(one["index"]) + 1), _ratio(_real(one["eigenvalue"])),
+                  ", ".join(f"{part['name']} {_real(part['loading']):.2f}" for part in one["loadings"]))
+                 for one in results["directions"]]
+    return TableWords(DIRECTION_COLUMNS, tuple(rows), right=DIRECTION_RIGHT, headings=frozenset(headings))
+
+
+def low_edge_words(text: str | None) -> str:
+    """From a record's text of what the observations can pin down, the recording length from which the driven
+    recordings at the low end of the band hold enough cycles, as a sentence; "" when the text says none."""
+    found = LOW_EDGE.search(text) if isinstance(text, str) else None
+    if found is None:
+        return ""
+    return LOW_EDGE_TEXT.format(_cycles(float(found["cycles"])), found["seconds"])
+
+
+def _pin_down_table(body, *, text, **_given) -> TableWords | None:
+    results = body["results"]
+    unmeasurable, pairs = results["unmeasurable"], results["degenerate_pairs"]
+    caption = low_edge_words(text)
+    if not unmeasurable and not pairs and not caption:
+        return None
+    rows, headings = [], set()
+    if unmeasurable:
+        headings.add(len(rows))
+        rows.append((NO_INFORMATION_HEAD, ""))
+        rows += [(str(name), "") for name in unmeasurable]
+    if pairs:
+        headings.add(len(rows))
+        rows.append((ALIKE_HEAD, ""))
+        rows += [(PAIR_TEXT.format(one["a"], one["b"]), ALIKE_TEXT.format(_figure(one["cos"]))) for one in pairs]
+    return TableWords(PIN_DOWN_COLUMNS, tuple(rows), headings=frozenset(headings), caption=caption)
+
+
+def _fixed_table(body, **_given) -> TableWords:
+    rows = tuple((one["name"], _figure(one["ks_p_median"]), _figure(one["ks_p_min"]),
+                  SHARE_TEXT.format(f"{_real(one['frac_ks_below_05']) * 100:.0f}"))
+                 for one in body["results"]["per_param"])
+    return TableWords(FIXED_COLUMNS, rows, right=FIXED_RIGHT)
+
+
+def _drive_table(body, *, force_unit, **_given) -> TableWords:
+    rows = tuple((f"{_real(one['strength']):g}", f"{_figure(one['cell_force'])} {force_unit}".rstrip(),
+                  SHARE_TEXT.format(f"{_real(one['own_peak_ratio']) * 100:.0f}")
+                  if isinstance(one.get("own_peak_ratio"), (int, float)) else "",
+                  DRIVE_READINGS.get(one.get("verdict"), "")) for one in body["results"]["strengths"])
+    return TableWords(DRIVE_COLUMNS, rows, right=DRIVE_RIGHT)
+
+
+def _across_table(body, **_given) -> TableWords:
+    rows = tuple((one["name"], ", ".join(_figure(value) for value in one["sd"]), _figure(one["median_sd"]),
+                  SHARE_TEXT.format(f"{_real(one['frac_identified']) * 100:.0f}"))
+                 for one in body["results"]["per_param"])
+    return TableWords(ACROSS_COLUMNS, rows, right=ACROSS_RIGHT)
+
+
+#: How each check that writes a record lays out its table.
+_TABLES = {"band": _band_table, "audit": _audit_table, "calibration": _calibration_table,
+           "input_use": _input_use_table, "identifiability": _identifiability_table, "pin_down": _pin_down_table,
+           "fixed_number": _fixed_table, "drive_study": _drive_table, "across_prior": _across_table}

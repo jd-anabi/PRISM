@@ -17,7 +17,9 @@ from tests._fixtures import build_inference, build_window, qt_app
 from tests._window_helpers import _apply, _line, _pick, _units_file
 
 #: The pages of Parameter inference built on the step page, by their files beside it.
-REBUILT = ("config_tab.py", "prior_tab.py", "posterior_tab.py")
+REBUILT = ("config_tab.py", "prior_tab.py", "posterior_tab.py", "validate_tab.py")
+#: The files of a check's page, its form and its result, beside the Checks list's.
+CHECK_FILES = ("check_page.py", "check_results.py", "check_forms.py")
 #: What every step's "Before you start" says last while no plan is in use and every setting it reads is at its usual
 #: value.
 NO_PLAN = "Information. No plan. Every setting is at its usual value."
@@ -1110,12 +1112,12 @@ def test_the_first_step_reads_nothing_saved_and_says_no_reading():
 
 
 def test_a_rebuilt_page_keeps_no_message_box():
-    """A rebuilt page asks and tells through the one shared question: neither the step page nor any page built on it names
-    the toolkit's message box, or keeps a log pane of its own."""
+    """A rebuilt page asks and tells through the one shared question: neither the step page nor any page built on it,
+    nor a check's page, form or result, names the toolkit's message box, or keeps a log pane of its own."""
     folder = Path(__file__).resolve().parents[1] / "core" / "gui" / "panels" / "inference"
     from tests._fixtures import step_pages
     assert sorted({file for file, _step in step_pages().values()}) == sorted(REBUILT), step_pages()
-    for name in ("step_page.py", *REBUILT):
+    for name in ("step_page.py", *REBUILT, *CHECK_FILES):
         tree = ast.parse((folder / name).read_text(encoding="utf-8"))
         named = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
         named |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
@@ -5003,3 +5005,66 @@ def test_the_screen_reads_a_sets_counts_from_its_state_else_from_the_posteriors_
         screen.read_checks()
         assert screen.checks_held.held.set_counts == (5, 50, 2, scope_part(7)), (
             "the counts of the state kept from before the newest were taken for the whole set")
+
+
+def test_the_checks_list_reads_once_and_never_while_a_run_is_live(tmp_path, monkeypatch):
+    """The Checks list reads what the checks need once at each moment, by its own reading, the screen leaving it to the
+    page while the page is in sight: at its first showing, at a store change, on "Check again", at a run's end; a check
+    opened or the page drawn again reads nothing; and while a run is live nothing of the checks, the run history or a
+    simulation set is read, whatever is shown, opened, pressed or worked out, the page showing what it read last."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.run.controller import controller
+    from tests._fixtures import build_window, readings_of_a_run
+    from tests._look_helpers import _settle
+    from tests._runs import Clock, StandIn, at, controller_on, start_run, turn_until
+    from tests._window_helpers import shown_off_screen
+    app = qt_app()
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        window = build_window()
+        shown_off_screen(window, 1300, 820)
+        window.go_to("inference", "prior")
+        _settle()
+        calls = readings_of_a_run(monkeypatch)
+        page = window.part("inference").validate_panel
+
+        def read() -> int:
+            return calls.count("read_records")
+
+        window.go_to("inference", "checks")
+        _settle()
+        assert read() == 1, "the list's first showing"
+        calls.clear()
+        page.open_check("calibration")
+        page.open_check(None)
+        page.refresh_local_gates()
+        window.part("inference").refresh_gates()
+        assert read() == 0, "opening a check or drawing the page read the checks"
+        window._store_changed()
+        assert read() == 1, "a store change with the list in sight"
+        calls.clear()
+        page.foot.check_again.click()
+        assert read() == 1, "Check again"
+        calls.clear()
+        stand_in = StandIn(word="Reduction")
+        start_run(window.part("reduction"), stand_in)
+        window.go_to("inference", "prior")
+        _settle()
+        window.go_to("inference", "checks")
+        _settle()
+        shown = page.listing.whole.view.model().rowCount()
+        page.open_check("audit")
+        page.foot.check_again.click()
+        page.read_facts()
+        page.stale_store()
+        window._store_changed()
+        window.part("inference").read_checks()
+        page.refresh_local_gates()
+        _settle()
+        assert calls == [], f"read while a run is live: {calls}"
+        assert page.listing.whole.view.model().rowCount() == shown
+        stand_in.release()
+        turn_until(app, lambda: not controller().is_live())
+        _settle()
+        assert read() == 1, "the run's end with the list in sight"
+        window.hide()

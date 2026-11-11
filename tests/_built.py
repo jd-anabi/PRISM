@@ -45,13 +45,18 @@ def keep(widget):
 def let_go(since: int) -> None:
     """Delete everything a builder made after the first ``since`` entries of the record, the newest first, each by
     its own deferred delete, and take those entries out. One that is already gone (deleted by its parent or by the
-    test itself) is passed over. Never closed: closing a window writes settings. On the window's thread: what the
-    record held is let go here, and the collection after it takes the cycles that held it."""
+    test itself) is passed over. A window among them is hidden first, never closed: closing a window writes settings,
+    and a page shown as the page in front of it goes would read through pages let go already. On the window's
+    thread: what the record held is let go here, and the collection after it takes the cycles that held it."""
     import gc
     import shiboken6
     from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QWidget
     made = BUILT[since:]
     del BUILT[since:]
+    for widget in made:
+        if isinstance(widget, QWidget) and shiboken6.isValid(widget) and widget.isWindow() and widget.isVisible():
+            widget.hide()
     for widget in reversed(made):
         if shiboken6.isValid(widget):
             widget.deleteLater()

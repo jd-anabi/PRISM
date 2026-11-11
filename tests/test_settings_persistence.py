@@ -893,7 +893,7 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
         closing = at_the_moment()
         groups = {key.split("/")[0] for key in closing}
         assert "window/geometry" in closing
-        assert groups <= {"window", "layout", "inference_validate", "inference_infer", "inference_tsnpe", "fdt",
+        assert groups <= {"window", "layout", "inference_infer", "inference_tsnpe", "fdt",
                           "crossval", "reduction", "simulate", "artifacts"}, sorted(groups)
         assert not groups & {"inference_config", "inference_prior", "inference_posterior", "plans"}, closing
 
@@ -1195,7 +1195,7 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
              "ReductionPanel", "ModelBuilderScreen", "ArtifactScreen", "ConfigPanel", "PriorPanel",
              "PosteriorPanel", "ValidatePanel", "InferPanel", "TSNPEPanel", "BasePanel",
              "HomeScreen", "SettingsScreen", "TemperatureScreen", "RecordViewer", "Shell", "HelpScreen",
-             "ModelsScreen", "PartError", "RunView", "StepPage"}
+             "ModelsScreen", "PartError", "RunView", "StepPage", "CheckPage"}
     # The list is kept closed over the program. Every class with a base that a file of the window's own
     # folder, of its screens, of its panels or of its runs defines under a public name is named above, or here among
     # those a suite still builds itself, or among the classes of the window's folder that are no window,
@@ -1682,8 +1682,12 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
         return str(default + 1) if isinstance(default, int) else str(default / 2)
 
     def box(inf, attr, key):
-        """The knob's box: the panel's attribute, or the field of a page's form row, a ticked field's own box."""
+        """The knob's box: the panel's attribute, or the field of a page's form row, a ticked field's own box; the
+        calibration's sizes on its check's page's form, by the stage's names for the keys an older build wrote."""
         panel = getattr(inf, attr)
+        if attr == "validate_panel":
+            widget = panel.check_pages["calibration"].form.rows[{"cal_n": "n_cal", "cal_scales": "cal_n_scales"}[key]]
+            return getattr(widget.widget, "field", widget.widget)
         rows = getattr(getattr(panel, "form", None), "rows", None)
         if rows is None:
             return getattr(panel, key)

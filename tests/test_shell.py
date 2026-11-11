@@ -3729,7 +3729,7 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
                     _shown_off_screen(window, 1300, design.small_below() - 1 if low else 820)
                     assert window.shell._small == low, (factor, low)
                     for place in keys.PARTS[1:]:
-                        window.go_to(place.key, "checks" if place.key == "inference" else None)
+                        window.go_to(place.key, "infer" if place.key == "inference" else None)
                         QApplication.processEvents()
                         if place.key != "settings":
                             assert _margins(window, place.key) == (design.scaled(12),) * 4, (factor, low, place.key)
@@ -6849,7 +6849,7 @@ def test_the_step_shown_hears_the_low_window_and_names_where_the_keyboard_starts
     _shown_off_screen(window, 1300, 820)
     today = window.part("inference")
     assert today.first_focus() is today.config_panel.model_combo and today.pending() == frozenset()
-    window.go_to("inference", "checks")
+    window.go_to("inference", "infer")
     assert today.first_focus() is None
     assert window.focusWidget() is window._start_of(today) is _first_control(today), "today's steps moved"
     window.resize(1300, design.small_below() - 1)

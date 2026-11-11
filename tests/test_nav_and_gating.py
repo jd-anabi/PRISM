@@ -387,7 +387,7 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
 
 
 def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
-    """Prior and Validate gained fields. Each must reach its orchestrator function as an ARGUMENT --
+    """Prior and the calibration gained fields. Each must reach its orchestrator function as an ARGUMENT --
     orchestrator snapshots those constants at import, so writing them would be a silent no-op and the
     run would use the defaults with nothing to say so. The Training page's call is held whole by its
     own test, its every argument from its form."""
@@ -402,9 +402,12 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     for panel in (inf.prior_panel, inf.validate_panel):
         panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
 
-    inf.validate_panel.cal_n.setText("77")
-    inf.validate_panel.cal_scales.setText("11")
-    inf.validate_panel._validate()
+    checks = inf.validate_panel
+    checks.open_check("calibration")
+    rows = checks.check_pages["calibration"].form.rows
+    rows["n_cal"].widget.setText("77")
+    rows["cal_n_scales"].widget.setText("11")
+    checks._main_clicked()
     assert cap["kwargs"]["n_cal"] == 77 and cap["kwargs"]["cal_n_scales"] == 11, cap["kwargs"]
     assert _cfg.SBC_N_CAL != 77, "the panel wrote the config constant instead of passing an argument"
 
@@ -3547,14 +3550,13 @@ def test_a_list_read_again_keeps_its_selection_and_never_falls_to_the_first_file
     assert today.combo.currentIndex() == 0
 
 
-def test_the_validate_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
-    """On the Validate tab, both boxes were clamped with max(1, ...) at the click, so a blank or a 0
-    became a 1 nobody typed -- and for the operating points a 1 is a DIFFERENT measurement, not a
-    smaller one: the calibration's operating-point count, cal_n_scales, is t_scale's effective sample
-    size, which is why the stage now refuses it instead of clamping. A refused box is the yellow box
-    (stubbed here as _refusal) naming the box, its place (step 4, Checks) and the default, and NOTHING is
-    dispatched; a typed value in rule reaches validate_calibration as an int, and 1 operating point is
-    allowed -- it is a choice, not a typo."""
+def test_a_blank_or_bad_calibration_size_is_said_under_its_field_and_blocks():
+    """The calibration's two sizes are read through the stage's own rule, at least 1, and never clamped: a 1 operating
+    point is a DIFFERENT measurement, not a smaller one, since the operating points are t_scale's effective sample
+    size, which is why the stage refuses a 0 instead of clamping it. A blank or bad size is said under its field, the
+    page's main button greyed with the words of a setting that cannot be used, and NOTHING is dispatched; pressed
+    anyway, the stage's own sentence is the refusal, naming the default and the field on this page. A size in rule
+    reaches validate_calibration as an int, and 1 operating point is allowed: it is a choice, not a typo."""
     from core import config, orchestrator
     from core.gui import fields as gui_fields
     from core.gui.session import SbiSession
@@ -3564,27 +3566,37 @@ def test_the_validate_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(
     qt_app()
     inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub(),
                                              posterior=_posterior_stub()))
-    vp = inf.validate_panel
+    page = inf.validate_panel
     sent, refused = {}, []
-    vp.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
-    vp._refusal = lambda exc: refused.append(exc)
-    vp._on_error = lambda exc, tb: pytest.fail(f"a refused box reached _on_error: {exc!r}")
+    page.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
+    page._refusal = lambda exc: refused.append(exc)
+    page._on_error = lambda exc, tb: pytest.fail(f"a refused size reached _on_error: {exc!r}")
+    page.open_check("calibration")
+    rows = page.check_pages["calibration"].form.rows
 
-    def click(cal_n, cal_scales):
-        vp.cal_n.setText(cal_n)
-        vp.cal_scales.setText(cal_scales)
+    def typed(cal_n, cal_scales):
+        rows["n_cal"].widget.setText(cal_n)
+        rows["cal_n_scales"].widget.setText(cal_scales)
         sent.clear()
         refused.clear()
-        vp._validate()
 
-    for cal_n, cal_scales, field, rule in (("", "200", "n_cal", "is blank"),
-                                          ("0", "200", "n_cal", "must be at least 1; got 0"),
-                                          ("2000", "", "cal_n_scales", "is blank"),
-                                          ("2000", "0", "cal_n_scales", "must be at least 1; got 0"),
-                                          ("2000", "-3", "cal_n_scales", "must be at least 1; got -3")):
-        click(cal_n, cal_scales)
-        assert sent == {}, (
-            f"a calibration was dispatched with cal_n={cal_n!r} cal_scales={cal_scales!r}: {sent}")
+    for cal_n, cal_scales, field, line, rule in (
+            ("", "200", "n_cal", "Calibration datasets is blank.", "is blank"),
+            ("0", "200", "n_cal", "Calibration datasets must be at least 1.", "must be at least 1; got 0"),
+            ("2000", "", "cal_n_scales", "(t_scale, T_obs) operating points is blank.", "is blank"),
+            ("2000", "0", "cal_n_scales", "(t_scale, T_obs) operating points must be at least 1.",
+             "must be at least 1; got 0"),
+            ("2000", "-3", "cal_n_scales", "(t_scale, T_obs) operating points must be at least 1.",
+             "must be at least 1; got -3")):
+        typed(cal_n, cal_scales)
+        page.redraw()
+        assert (rows[field].line.kind, rows[field].line.words) == ("err", line), (cal_n, cal_scales)
+        assert not page.foot.main_button.isEnabled()
+        assert page.foot.reason.text() == "Cannot start yet: a setting cannot be used.", page.foot.reason.text()
+        page._main_clicked()
+        assert sent == {} and refused == [], (cal_n, cal_scales, sent, refused)
+        page._start_calibration()
+        assert sent == {}, f"a calibration was dispatched with cal_n={cal_n!r} cal_scales={cal_scales!r}: {sent}"
         assert len(refused) == 1 and isinstance(refused[0], Refusal), refused
         e = refused[0]
         assert e.field == field and rule in str(e), (e.field, str(e))
@@ -3593,30 +3605,14 @@ def test_the_validate_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(
         fix = gui_fields.fix_sentence(e.field)
         assert gui_fields.label(field) in fix and "in step 4, Checks" in fix, fix
 
-    click("2000", "1")
+    typed("2000", "1")
+    page.redraw()
+    assert page.foot.main_button.isEnabled() and rows["cal_n_scales"].line.words == ""
+    page._main_clicked()
     assert refused == [] and sent["fn"] is orchestrator.validate_calibration, (refused, sent)
     assert sent["kwargs"]["n_cal"] == 2000 and sent["kwargs"]["cal_n_scales"] == 1, sent["kwargs"]
     seed = sent["kwargs"]["seed"]
     assert type(seed) is int and 0 <= seed < 2 ** 31
-
-
-def test_the_validate_tab_summary_names_the_verdict_and_the_seed():
-    """The tab's closing line leads with the calibration verdict and the seed the run drew, so the
-    log pane says whether the posterior passed and how to repeat the calibration."""
-    from types import SimpleNamespace
-    from core.gui.session import SbiSession
-    from tests._fixtures import qt_app
-
-    qt_app()
-    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub(),
-                                             posterior=_posterior_stub()))
-    vp = inf.validate_panel
-    lines = []
-    vp.log_pane.append_line = lines.append
-    vp._on_calibration(SimpleNamespace(name="c1", id="x", results={
-        "tarp": {"atc": 0.01, "ks_p": 0.4}, "informativeness": None, "verdict": {"passed": False},
-        "seed": 11}))
-    assert lines[-1].startswith("Calibration verdict FAIL (seed 11), recorded as c1: TARP ATC=0.01, KS p=0.400")
 
 
 def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(monkeypatch):
@@ -3695,20 +3691,18 @@ def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(mon
     assert k["level"] == _tr.DEFAULT_HPD and k["num_runs"] == 3 and sent["args"][3] is sentinel, sent
 
 
-def test_the_validate_and_tsnpe_rows_are_named_from_the_control_table():
+def test_the_narrowing_rounds_rows_are_named_from_the_control_table():
     """The rows' names are the CONTROL table's, through label(key), so the refusal's "Set it in the
     '<label>' box in <its places>" and the row on screen can never disagree: renaming a control is
     one edit in core/gui/fields.py, and the control table's read-back pins the rendered text. A
     literal here would be a second copy of the name -- the kind that goes stale the day the first one
-    moves."""
+    moves. The calibration's rows are a check's form's, named by their keys, and read back on its page."""
     from core.gui import fields as gui_fields
     from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
-    from core.gui.panels.inference.validate_tab import ValidatePanel
     from tests._fixtures import code_only
 
-    for panel, keys in ((ValidatePanel, ("n_cal", "cal_n_scales")),
-                        (TSNPEPanel, ("observation", "hpd_level", "n_directions", "num_runs",
-                                      "run_size_cap"))):
+    for panel, keys in ((TSNPEPanel, ("observation", "hpd_level", "n_directions", "num_runs",
+                                      "run_size_cap")),):
         src = code_only(panel.__init__)
         for key in keys:
             assert f"label({key!r})" in src, (
@@ -4211,12 +4205,13 @@ def test_each_identity_row_names_the_step_where_its_settings_are_changed():
 
 
 def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
-    """STANDING. No string the three rebuilt pages show names a place of the old pages, a tab by its old name or the
+    """STANDING. No string the four rebuilt pages show names a place of the old pages, a tab by its old name or the
     word "tab": every widget's words and tips in each view, with records held and saved, a posterior from a narrowing
-    round listed and selected; every question and refusal the Training page asks, as they are asked; every fix
-    sentence a refusal on the page gives; and every string the five modules that make the three pages and their facts
-    hold, which is every question's and fact's words, whether or not a state here shows it. The scan is held
-    to finding the old words where they are planted, so that a walk that reads nothing fails here too."""
+    round listed and selected, and the Checks list with each check's page open; every question and refusal the
+    Training page asks, as they are asked; every fix sentence a refusal on the page gives; and every string the modules
+    that make the four pages, the checks' pages and their facts hold, which is every question's and fact's words,
+    whether or not a state here shows it. The scan is held to finding the old words where they are planted, so that a
+    walk that reads nothing fails here too."""
     import re as _re
     from core import orchestrator
     from core.artifacts import ArtifactStore, default_store, use_store
@@ -4243,7 +4238,7 @@ def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
                                            x_obs_digest="d" * 16)
         screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior)
         screen.refresh_gates()
-        pages = (screen.config_panel, screen.prior_panel, screen.posterior_panel)
+        pages = (screen.config_panel, screen.prior_panel, screen.posterior_panel, screen.validate_panel)
         window.go_to("inference", "training")
         screen.posterior_panel.show_view("load")
         screen.posterior_panel.read_facts()             # no posterior saved yet: what the load view says then
@@ -4280,6 +4275,12 @@ def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
                                                   "Check your inputs"], asked
         seen += [words for said in asked for words in (said.title, said.sentence, said.beneath, *said.items,
                                                        *said.answers)]
+        window.go_to("inference", "checks")
+        checks = screen.validate_panel
+        for key in [None, *checks.check_pages]:
+            checks.open_check(key)
+            checks.read_facts()
+            seen += _on_screen(checks)
         seen += [gui_fields.fix_sentence(key, here=page.step) for page in pages for key in FIELDS]
         seen = [words for words in seen if words]
         named = [words for words in seen if OLD_PLACES.search(words)]
@@ -4288,13 +4289,16 @@ def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
         assert OLD_PLACES.search("the Infer tab") and OLD_PLACES.search("narrowed (TSNPE)") and not OLD_PLACES.search(
             "Step 2, Prior, has changes"), "the scan's pattern finds nothing it must"
         assert _re.search(r"Load a posterior from a narrowing round", " ".join(seen))
-    from core.gui import step_facts
-    from core.gui.panels.inference import config_tab, posterior_tab, prior_tab, step_page
+    from core.gui import check_catalogue, check_lineage, check_readings, step_facts
+    from core.gui.panels.inference import (check_forms, check_page, check_results, config_tab, posterior_tab,
+                                           prior_tab, step_page, validate_tab)
     held = []
     from tests._fixtures import step_pages
-    assert sorted(f"{page.__name__.rpartition('.')[2]}.py" for page in (config_tab, prior_tab, posterior_tab)) == (
+    assert sorted(f"{page.__name__.rpartition('.')[2]}.py" for page in (config_tab, prior_tab, posterior_tab,
+                                                                         validate_tab)) == (
         sorted(file for file, _step in step_pages().values())), step_pages()
-    for module in (config_tab, prior_tab, posterior_tab, step_facts, step_page):
+    for module in (config_tab, prior_tab, posterior_tab, validate_tab, step_facts, step_page, check_page,
+                   check_results, check_forms, check_catalogue, check_readings, check_lineage):
         for node in ast.walk(ast.parse(inspect.getsource(module))):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 held.append((module.__name__, node.value))
@@ -4340,13 +4344,16 @@ def _refusal_keys(*names) -> set:
 
 
 def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
-    """STANDING. Every refusal key a stage started from the three rebuilt pages can give, read off the engine's own
+    """STANDING. Every refusal key a stage started from the four rebuilt pages can give, read off the engine's own
     text, has a row or a sentence on the page that started it: what a refusal says under its message there is never
-    empty, but for the device, which the window never exposes. The key set read is held to the keys each stage is known
-    to give, so that a walk that reads too little fails here too."""
+    empty, but for the device, which the window never exposes, and the calibration's samples per dataset, which the
+    window does not hand the stage, whose own usual value it never refuses. The key set read is held to the keys each
+    stage is known to give, so that a walk that reads too little fails here too."""
     from core.gui import fields as gui_fields
     from core.refusals import FIELDS
     built, trained = _refusal_keys("build_prior"), _refusal_keys("build_posterior")
+    calibrated = _refusal_keys("validate_calibration")
+    assert {"n_cal", "cal_n_scales", "num_posterior_samples", "prior", "name"} <= calibrated, sorted(calibrated)
     assert {"num_iterations", "sweep_batch", "max_sets", "walk_step", "stability_units", "min_cluster_size",
             "min_samples", "name"} <= built, sorted(built)
     assert {"num_runs", "run_size_cap", "checkpoint_every", "hidden_features", "num_transforms", "learning_rate",
@@ -4354,11 +4361,12 @@ def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
             "posterior", "accept_truncated", "prior", "name", "resume_fit"} <= trained, sorted(trained)
     unanswered = {"device"}
     from tests._fixtures import step_pages
-    assert {step for _file, step in step_pages().values()} == {"model", "prior", "training"}, (
+    assert {step for _file, step in step_pages().values()} == {"model", "prior", "training", "checks"}, (
         "a page whose stage is not read here")
-    for step, keys_ in (("prior", built), ("training", trained)):
+    for step, keys_ in (("prior", built), ("training", trained), ("checks", calibrated)):
         assert keys_ <= set(FIELDS), sorted(keys_ - set(FIELDS))
-        silent = sorted(key for key in keys_ - unanswered if not gui_fields.fix_sentence(key, here=step))
+        silent = sorted(key for key in keys_ - unanswered - ({"num_posterior_samples"} if step == "checks" else set())
+                        if not gui_fields.fix_sentence(key, here=step))
         assert silent == [], (step, silent)
 
 
@@ -4432,6 +4440,8 @@ def test_the_gui_control_table_matches_the_tabs_labels():
             return top
         in_sight = [panel for panel in top.panels() if panel.isVisibleTo(top)] if hasattr(top, "panels") else [top]
         assert len(in_sight) == 1, (name, in_sight)
+        if name == "checks":
+            in_sight[0].open_check("calibration")        # its rows stand on its own page
         return in_sight[0]
 
     def read(name) -> list:

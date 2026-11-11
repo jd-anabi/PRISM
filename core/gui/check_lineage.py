@@ -8,7 +8,8 @@ differently; the frequency band is judged on each cell by that cell's newest, an
 use reaches here as plain values (``Held``), worked out by the screen: nothing here reads the session, and nothing here
 imports the toolkit, torch or the engine's settings. A deciding check that no run can pass for the posterior in use,
 since the posterior was made without what it reads, is not passed and no longer holds the checks open; a check that a
-run or a load can still pass holds them open.
+run or a load can still pass holds them open. What stops a check's button, and the words beside it, follow from its
+row.
 
 The two readings of the disk here are the ones the screen makes, with no run live: every check record's manifest, each
 read once by its folder, and one record's text or manifest by its folder. Neither goes through the store's lookup by
@@ -20,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import check_readings
+from . import check_readings, step_facts
 from .check_catalogue import CHECKS, DECIDING, entry
 from .step_facts import Fact
 from .texts import date_text
@@ -42,6 +43,7 @@ _NOT_RUN = ("Not run yet", "Waiting for the audit")
 NEEDS_PRIOR_TEXT = "Needs a prior: build or load one in step 2."
 NEEDS_POSTERIOR_TEXT = "Needs a posterior: train one in step 3, or load a saved one."
 OTHER_PRIOR_TEXT = "The prior in use is not the one this posterior was trained on. Load it in step 2."
+OTHER_PRIOR_NAMED_TEXT = "The prior in use is not the one this posterior was trained on ({}). Load it in step 2."
 NO_SIMULATIONS_TEXT = "This posterior was trained without keeping its simulations, and this check reads them."
 NO_ROTATION_TEXT = "This posterior was trained without the rotation, so there are no directions to read."
 FREQUENCY_ONLY_TEXT = "Applies only with the frequency response."
@@ -106,9 +108,10 @@ class Held:
     bounds file has a forcing section; the engine's sentence refusing the prior in use with the posterior ("" when it
     passes, or was not read); the set's counts of unusable driven recordings, its unusable, its total, its batches
     counted and the scope the engine names them by (None when not read or not there), whether the set is complete and
-    when it was completed; the prior and the posterior as a sentence names them; and whether the posterior's set and
-    text were read for the posterior now in use (``set_read``: False between a posterior coming into use and the next
-    reading)."""
+    when it was completed; the prior and the posterior as a sentence names them; whether the posterior's set and text
+    were read for the posterior now in use (``set_read``: False between a posterior coming into use and the next
+    reading); and the label of the prior the posterior was trained on, as a reading found it ("" when not read, or
+    when that prior's record is gone)."""
     prior: str | None
     posterior: str | None
     posterior_prior: str | None
@@ -127,6 +130,7 @@ class Held:
     posterior_words: str
     set_when: datetime | None = None
     set_read: bool = True
+    posterior_prior_words: str = ""
 
 
 @dataclass(frozen=True)
@@ -355,6 +359,27 @@ def _newest_training(held: Held, histories: Sequence[Mapping]) -> Mapping | None
     return found
 
 
+def audit_fraction(found: Sequence[CheckRow]):
+    """The share of unusable driven recordings the audit that decides its row read, from the rows; None when no
+    audit decides it."""
+    audit = next((row for row in found if row.key == "audit"), None)
+    if audit is None or audit.record is None or audit.state not in _DECIDED:
+        return None
+    results = _body(audit.record).get("results")
+    return results.get("masked_fraction") if isinstance(results, Mapping) else None
+
+
+def comparison_of(held: Held, found: Sequence[CheckRow]) -> "check_readings.Comparison | None":
+    """The comparison of the posterior's simulation set with the audit, from the set's counts the reading found and the
+    audit that decides among ``found``, the rows made before it; None with no posterior in use or no counts."""
+    if held.posterior is None or held.set_counts is None:
+        return None
+    unusable, total, batches, scope = held.set_counts
+    return check_readings.compare(unusable=unusable, total=total, scope=scope, audit_fraction=audit_fraction(found),
+                                  batches=batches, prior_words=held.prior_words or "the prior in use",
+                                  kept_set=held.simulation is not None)
+
+
 def _comparison(one, held: Held, _records, histories, made) -> CheckRow:
     if held.chi is False:
         return _row(one.key, "Does not apply", FREQUENCY_ONLY_TEXT, reason=FREQUENCY_ONLY_TEXT)
@@ -365,17 +390,9 @@ def _comparison(one, held: Held, _records, histories, made) -> CheckRow:
         if state in check_readings.STATES:
             return _row(one.key, state)
         return _row(one.key, "Waiting for the simulations")
-    if held.set_counts is None:
+    compared = comparison_of(held, made)
+    if compared is None:
         return CheckRow(one.key, "Not compared", UNREAD_COUNTS_TEXT, None, None, (), "")
-    audit = made[DECIDING.index("audit")]
-    fraction = None
-    if audit.record is not None and audit.state in _DECIDED:
-        results = _body(audit.record).get("results")
-        fraction = results.get("masked_fraction") if isinstance(results, Mapping) else None
-    unusable, total, batches, scope = held.set_counts
-    compared = check_readings.compare(unusable=unusable, total=total, scope=scope, audit_fraction=fraction,
-                                      batches=batches, prior_words=held.prior_words or "the prior in use",
-                                      kept_set=held.simulation is not None)
     if compared.state == "Not compared":
         return CheckRow(one.key, compared.state, compared.sentence, None, None, (), "")
     when = held.set_when if compared.state in _DECIDED else None
@@ -389,8 +406,17 @@ def _of_posterior(one, held: Held, records, *, reason: str = "") -> CheckRow:
     return _decided(one, own, reason=reason)
 
 
+def _other_prior(held: Held) -> str:
+    """Why the prior in use cannot be checked with the posterior, naming the prior it was trained on when the reading
+    found it; "" when the engine takes the pair."""
+    if not held.pair_refused:
+        return ""
+    return (OTHER_PRIOR_NAMED_TEXT.format(held.posterior_prior_words) if held.posterior_prior_words
+            else OTHER_PRIOR_TEXT)
+
+
 def _calibration(one, held: Held, records, _histories, _made) -> CheckRow:
-    return _of_posterior(one, held, records, reason=OTHER_PRIOR_TEXT if held.pair_refused else "")
+    return _of_posterior(one, held, records, reason=_other_prior(held))
 
 
 def _input_use(one, held: Held, records, _histories, _made) -> CheckRow:
@@ -427,7 +453,7 @@ def _of_history(one, _held: Held, _records, histories, _made) -> CheckRow:
 
 
 def _fixed_number(one, held: Held, records, _histories, _made) -> CheckRow:
-    return _of_posterior(one, held, records, reason=OTHER_PRIOR_TEXT if held.pair_refused else "")
+    return _of_posterior(one, held, records, reason=_other_prior(held))
 
 
 def _drive_study(one, held: Held, records, _histories, _made) -> CheckRow:
@@ -581,3 +607,72 @@ def pre_run_question(found: Sequence[CheckRow], *, start: str = "Start training"
         return None
     return (QUESTION_TITLE.format(start), " ".join([*(_said(row) for row in failed), QUESTION_WHY_TEXT]),
             QUESTION_OTHER.format(start))
+
+
+# ── a check's earlier runs ──
+#: How a check's page says each earlier run: what it read and when, and for one that does not count why, by what its
+#: reading says.
+EARLIER_LINE_TEXT = "{}, {}"
+EARLIER_UNCOUNTED_TEXT = "{}, {}; does not count"
+EARLIER_WHY = ((check_readings.REDUCED_TEXT.split(" (", 1)[0], "Run at a reduced size"),
+               (check_readings.OTHER_THRESHOLDS_TEXT, "Run with other thresholds"),
+               (check_readings.FIXED_AUDIT_TEXT, "Run at a fixed number of driven recordings"),
+               (check_readings.UNREADABLE_TEXT, "Its record cannot be read"))
+EARLIER_CELL_TEXT = "{}; cell {}"
+EARLIER_VARIANT_TEXT = "{}; {}"
+EARLIER_FIXED_WORDS = "with {} driven recordings"
+EARLIER_MIXED_WORDS = "mixed, as in training"
+
+
+def earlier_lines(row: CheckRow, records: Sequence[RecordRead]) -> tuple[str, ...]:
+    """The earlier runs of the check of ``row``, one line each, newest first: what each read and when, why one that
+    does not count does not, the cell of a frequency band, and how many driven recordings a calibration repeated at
+    fixed numbers held. A record no longer among ``records`` is passed over."""
+    by_id = {_ident(record): record for record in records if record.manifest}
+    said = []
+    for ident in row.earlier:
+        record = by_id.get(ident)
+        if record is None:
+            continue
+        reading = check_readings.read(row.key, record.manifest)
+        when = _date(_local(record))
+        why = next((words for start, words in EARLIER_WHY if reading.words.startswith(start)), "")
+        if why:
+            line = EARLIER_UNCOUNTED_TEXT.format(why, when) if when else f"{why}; does not count"
+        else:
+            line = EARLIER_LINE_TEXT.format(reading.state, when) if when else reading.state
+        if row.key == "band" and _cell(record):
+            line = EARLIER_CELL_TEXT.format(line, Path(str(_cell(record)).replace("\\", "/")).stem)
+        if row.key == "fixed_number":
+            fixed = _settings(record).get("chi_k_fixed")
+            line = EARLIER_VARIANT_TEXT.format(line, EARLIER_MIXED_WORDS if fixed is None
+                                               else EARLIER_FIXED_WORDS.format(fixed))
+        said.append(line)
+    return tuple(said)
+
+
+# ── a check's button ──
+#: What stops a check's button for each reason its row gives, as a blocking fact: its sentence, and the words beside
+#: the button. A prior or a posterior that a load brings lifts the first three; the others are what the posterior,
+#: the model, the kind of observation or the bounds file is, which waiting will not change.
+_BUTTON_FACTS = {NEEDS_PRIOR_TEXT: (step_facts.NEEDS_A_PRIOR, step_facts.NEEDS_A_PRIOR_BLOCKS),
+                 NEEDS_POSTERIOR_TEXT: (NEEDS_POSTERIOR_TEXT, step_facts.NEEDS_A_POSTERIOR_BLOCKS),
+                 NO_SIMULATIONS_TEXT: (NO_SIMULATIONS_TEXT, step_facts.NO_SIMULATIONS_KEPT_BLOCKS),
+                 NO_ROTATION_TEXT: (NO_ROTATION_TEXT, step_facts.NO_ROTATION_BLOCKS),
+                 FREQUENCY_ONLY_TEXT: (FREQUENCY_ONLY_TEXT, step_facts.FREQUENCY_ONLY_BLOCKS),
+                 NADROWSKI_ONLY_TEXT: (NADROWSKI_ONLY_TEXT, step_facts.NADROWSKI_ONLY_BLOCKS),
+                 NEEDS_FORCING_TEXT: (NEEDS_FORCING_TEXT, step_facts.NO_FORCING_BLOCKS),
+                 NOT_WITH_FREQUENCY_TEXT: (NOT_WITH_FREQUENCY_TEXT, step_facts.NOT_WITH_FREQUENCY_BLOCKS)}
+
+
+def button_facts(row: CheckRow, *, not_built: str = "") -> tuple[Fact, ...]:
+    """What stops the button of the check of ``row``, as blocking facts: ``not_built``, the sentence of a check that
+    cannot be run from the window yet ("" for one that can), first, then the reason its row gives. A prior in use that
+    is not the posterior's own is said with that prior's name when the reading found it. None for a check its row
+    leaves free to run."""
+    facts = [Fact("lock", not_built, step_facts.NOT_BUILT_BLOCKS)] if not_built else []
+    if row.reason.startswith(OTHER_PRIOR_TEXT.split(".", 1)[0]):
+        facts.append(Fact("lock", row.reason, step_facts.OTHER_PRIOR_BLOCKS))
+    elif row.reason in _BUTTON_FACTS:
+        facts.append(Fact("lock", *_BUTTON_FACTS[row.reason]))
+    return tuple(facts)

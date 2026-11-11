@@ -5,6 +5,7 @@ when it reads and how it hosts a run. They are read here on a stand-in page as a
 """
 import itertools
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from core.gui import design, fields, fonts, style
 from core.gui.panels.inference.config_tab import ConfigPanel
 from core.gui.panels.inference.posterior_tab import PosteriorPanel
 from core.gui.panels.inference.prior_tab import PriorPanel
+from core.gui.panels.inference.validate_tab import ValidatePanel
 from core.gui.run.controller import LIVE_TEXT, NOT_READ_YET_TEXT, controller
 from core.gui.step_facts import (LEADS, REFUSED_BLOCKS, Fact, about_words, ordered, origin_words, reading_words,
                                   reason_beside, refused_facts)
@@ -36,9 +38,14 @@ from tests._window_helpers import in_front, shown_off_screen
 BLOCKS = "the name cannot be used"
 #: Each rebuilt page by its step, as the standing tests a page joins in its own task name it: the stand-in, then the
 #: pages of the window.
-PAGES = {"the stand-in": None, "Model and options": ConfigPanel, "Prior": PriorPanel, "Training": PosteriorPanel}
-#: A field of each page an edit is typed into, by the page's class.
-EDITED = {None: "num_runs", ConfigPanel: "chi_n_freqs", PriorPanel: "num_iterations", PosteriorPanel: "num_runs"}
+PAGES = {"the stand-in": None, "Model and options": ConfigPanel, "Prior": PriorPanel, "Training": PosteriorPanel,
+         "Checks": ValidatePanel}
+#: A field of each page an edit is typed into, by the page's class: of a page that shows a form only for what it has
+#: open, the form of what ``OPENED`` opens on it.
+EDITED = {None: "num_runs", ConfigPanel: "chi_n_freqs", PriorPanel: "num_iterations", PosteriorPanel: "num_runs",
+          ValidatePanel: "n_cal"}
+#: What a page opens to show the form an edit is typed into: on the Checks list, the calibration's page.
+OPENED = {ValidatePanel: lambda page: page.open_check("calibration")}
 #: A record's name of the length the store lets stand, which no line of an origin holds at the window's least width.
 LONG_NAME = "retrain_narrowing_round_of_the_second_of_november"
 
@@ -1120,11 +1127,20 @@ def _a_detail_open(page) -> None:
     page.open_detail()
 
 
+def _the_calibration_in_error(page) -> None:
+    """The Checks list with the calibration's page open, beside the list or in its place as the width says, and its
+    first setting blank, said under it."""
+    page.open_check("calibration")
+    page.form.rows["n_cal"].widget.setText("")
+
+
 #: The pages the foot is held over at the smallest window, by a name: the stand-in, a table of rows on a page of the later
-#: steps, and a list with a detail open; each with the class's maker, the step it stands on, and what is done to it.
+#: steps, a list with a detail open, and the Checks list with the calibration open; each with the class's maker (or the
+#: class), the step it stands on, and what is done to it.
 FOOT_PAGES = {"the stand-in": (None, "training", None),
               "a table of rows": ("stand_in_table_page", "infer", _twelve_rows_one_in_error),
-              "a list with a detail open": ("stand_in_list_page", "checks", _a_detail_open)}
+              "a list with a detail open": ("stand_in_list_page", "checks", _a_detail_open),
+              "the Checks list, the calibration open": (ValidatePanel, "checks", _the_calibration_in_error)}
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])
@@ -1138,28 +1154,35 @@ def test_the_foot_stays_over_nothing_at_the_smallest_window(held, factor, count,
     keeps at least the room of a scrolling part, and is no wider than what shows it, which has no bar to reach the rest.
     Read in the window's own coordinates, and asked of the toolkit at each edge, for a part drawn over another or cut by a
     parent reads right by its edges alone. The facts open in the same region, and their growing moves nothing out of the
-    window. On the stand-in page, on a page with a table of twelve rows, one with a reading in error, and on a list with
-    a detail open."""
+    window. On the stand-in page, on a page with a table of twelve rows, one with a reading in error, on a list with
+    a detail open, and on the Checks list with the calibration's page open, its form holding no fold yet."""
     from tests import _fixtures
     maker, step, shaped = FOOT_PAGES[held]
     with text_size(factor), _the_look(False):
-        cls = None if maker is None else getattr(_fixtures, maker)()
+        cls = None if maker is None else maker if isinstance(maker, type) else getattr(_fixtures, maker)()
         window, page, _clock = _a_page(tmp_path, shown=False, cls=cls, step=step)
         wide, high = design.scaled(size[0]), design.scaled(size[1])
         shown_off_screen(window, wide, high)
         window.go_to("inference", step)
         if shaped is not None:
             shaped(page)
-        page.form.fold.rows()[0].set_line("err", "Learning rate must be above 0.")
+        folded = page.form.fold.rows()
+        if folded:
+            folded[0].set_line("err", "Learning rate must be above 0.")
         if page.names is not None:
             page.names.name.setText("a name that is far too long " * 3)
             page.names.check_now()
         page.form.rows[next(iter(page.form.rows))].set_origin("from record " + LONG_NAME)
-        page.said = tuple(Fact("warn" if at % 2 else "info", f"{TWO_LINES} ({at})") for at in range(count))
+        said = tuple(Fact("warn" if at % 2 else "info", f"{TWO_LINES} ({at})") for at in range(count))
+        if hasattr(page, "said"):
+            page.said = said
+        else:
+            own = page.facts_from_form
+            page.facts_from_form = lambda: (*own(), *said)
         page.redraw()
         _settle()
         foot = page.foot
-        assert page.form.fold.is_open() and (window.width(), window.height()) == (wide, high)
+        assert (page.form.fold.is_open() or not folded) and (window.width(), window.height()) == (wide, high)
 
         def measured(why):
             facts = _edge_of(foot.facts, window)
@@ -1505,6 +1528,7 @@ def test_no_reading_happens_between_a_runs_start_and_its_end(left_for, page_clas
         monkeypatch.setattr(page, "read_disk" if name == "readings" else "main_pressed",
                             lambda name=name, kept=kept: (counted.__setitem__(name, counted[name] + 1), kept())[1])
     readings = 0
+    OPENED.get(page_class, lambda page: None)(page)
     page.form.rows[EDITED[page_class]].widget.setText("7")
     stand_in = StandIn(word="Reduction")
     calls = readings_of_a_run(monkeypatch)
@@ -2931,6 +2955,53 @@ def test_a_reason_that_waiting_will_not_lift_reads_cannot_start(tmp_path):
         stand_in.release()
         turn_until(qt_app(), lambda: not controller().is_live())
         window.hide()
+    _the_checks_lists_blocks(tmp_path / "checks")
+
+
+def _the_checks_lists_blocks(tmp_path) -> None:
+    """The Checks list's own blocks, each in the state that makes it, read beside its main button: no prior, a posterior
+    needed, the prior in use not the posterior's own, a setting blank, each a load or an edit lifts; a check the window
+    cannot run yet, and one a posterior trained without what it reads cannot run, which waiting will not lift; a run
+    live, said alone."""
+    from types import SimpleNamespace
+    from core.gui.session import SbiSession
+    from tests._fixtures import _nad_cfg, prior_stub
+    window, page = _a_stand_in(tmp_path, ValidatePanel, "checks")
+    screen = page._screen
+    held = prior_stub(name="retrain_prior")
+    posterior = SimpleNamespace(kind="posterior", id="20261003T031200", name="retrain", path=tmp_path,
+                                manifest=SimpleNamespace(parents={"prior": held.id}, body={"transform": {"V": None}}),
+                                posterior=None)
+
+    def beside(session, key) -> str:
+        screen.session = session
+        screen.read_checks()
+        page.open_check(key)
+        page.read_facts()
+        return page.foot.reason.text()
+
+    cfg = _nad_cfg(chi_mode=True)
+    assert beside(SbiSession(), None) == "Cannot start yet: needs a prior."
+    assert beside(SbiSession(cfg=cfg, inf_prior=held), "calibration") == "Cannot start yet: needs a posterior."
+    assert beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "band") == (
+        "Cannot start: this check cannot be run from the window yet.")
+    assert beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "identifiability") == (
+        "Cannot start: this check cannot be run from the window yet, and 1 more above.")
+    beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "calibration")
+    page.form.rows["n_cal"].widget.setText("")
+    assert page.foot.reason.text() == "Cannot start yet: a setting cannot be used."
+    page.form.rows["n_cal"].widget.setText("2000")
+    screen.checks_held = replace(screen.checks_held, held=replace(screen.checks_held.held, pair_refused="refused"))
+    page.refresh_local_gates()
+    assert page.foot.reason.text() == "Cannot start yet: the prior in use is not the posterior's own."
+    stand_in = StandIn(word="Reduction")
+    start_run(window.part("reduction"), stand_in)
+    _settle()
+    page.redraw()
+    assert page.foot.reason.text() == "A run is live. Only one runs at a time."
+    stand_in.release()
+    turn_until(qt_app(), lambda: not controller().is_live())
+    window.hide()
 
 
 def test_the_low_window_keeps_show_all_n_for_a_new_pages_facts(tmp_path):
@@ -3326,6 +3397,35 @@ def _a_plan_shown(page) -> None:
     page.plan_choice.setCurrentIndex(page.plan_choice.findData("walked"))
 
 
+def _a_check_open(key: "str | None"):
+    """What opens the check ``key`` on the Checks list, beside the list or in its place as the width says, or the whole
+    list with None."""
+    def opened(page) -> None:
+        page.open_check(key)
+        page.read_facts()
+    return opened
+
+
+def _the_check_list_or_back(page) -> list:
+    """The heading's button, then the list told narrow beside a check's page, or the way back to it above a check's page
+    in its place."""
+    return [page.help_button, page.listing.narrow.view if page.list_detail.beside() else page.list_detail.back]
+
+
+#: The Checks list's shapes, as ``WALKED`` reads them: no prior in use, so the foot's main button is greyed and its one
+#: fact says why, whatever the window's height.
+WALKED_CHECKS = {
+    "the whole list": (_a_check_open(None), lambda page: [page.help_button, page.listing.whole.view],
+                       lambda page: [], lambda page: None, lambda page: [],
+                       lambda page, small: [page.foot.check_again]),
+    "the calibration open": (_a_check_open("calibration"), _the_check_list_or_back,
+                             lambda page: [page.form.rows["n_cal"].widget, page.form.rows["cal_n_scales"].widget],
+                             lambda page: None, lambda page: [], lambda page, small: [page.foot.check_again]),
+    "a check with no setting open": (_a_check_open("band"), _the_check_list_or_back, lambda page: [],
+                                     lambda page: None, lambda page: [], lambda page, small: [page.foot.check_again]),
+}
+
+
 #: The rebuilt pages of the window, by the step each stands on, and the shapes its walk is read in: by the name of the
 #: shape, what is done to the page after its first show; the heading's buttons and the way to the next step that stand
 #: in that shape; the controls of its main settings; those of the fold, while it is open, or None for a shape with no
@@ -3373,6 +3473,7 @@ WALKED = {
             lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again, page.foot.main_button]),
     },
     "training": WALKED_TRAINING,
+    "checks": WALKED_CHECKS,
 }
 
 
@@ -3478,7 +3579,9 @@ def test_tab_walks_the_page_in_view_at_every_size(size, factor, step, shape, fol
                     out.append(type(walked[-1]).__name__)
         assert walked == [*expected, rail], [type(widget).__name__ for widget in walked]
         assert out == [], out
-        first = next(at for at, stop in enumerate(walked) if form.isAncestorOf(stop))
+        first = next((at for at, stop in enumerate(walked) if form.isAncestorOf(stop)), None)
+        if first is None:                    # a shape with no setting in sight: the page names its first stop itself
+            first = walked.index(page.first_focus())
         assert walked[first] is page.first_focus(), "the walk reached a setting before the page's first"
         assert not any(stop in walked[:first] for stop in foot.stops()), "a button that applies came before the form"
         inside = page.form.fold.stops()[1:]
@@ -4510,6 +4613,82 @@ def test_the_training_buttons_stand_inside_the_smallest_window_with_real_metrics
             app.processEvents()
     assert user32.GetForegroundWindow() == front, "the front was taken from the window the person works in"
 
+
+@pytest.mark.display
+def test_the_checks_buttons_stand_inside_the_smallest_window_with_real_metrics(tmp_path):
+    """Needs QT_QPA_PLATFORM=windows (the root conftest defaults to offscreen, where this is skipped). With the real
+    platform's fonts and their metrics, at the least size the window takes on the screen it stands on, at the ordinary
+    text size and at one and a half times it, the Checks list's main button and the words beside it stand inside the
+    window with nothing drawn over them: with the longest words its button has, the next check the comparison after
+    simulating; and with a check open in the list's place whose two blocks are said beside the greyed button. The
+    window is laid out where no screen shows it and is never shown or brought to the front: the window in front stays
+    in front."""
+    import ctypes
+    from types import SimpleNamespace
+    from PySide6.QtCore import QPoint, QRect, Qt
+    from PySide6.QtGui import QGuiApplication
+    from core.gui.session import SbiSession
+    from tests._fixtures import _nad_cfg, check_results, prior_stub, write_diagnostic
+    from core.artifacts import ArtifactStore, use_store
+    app = QApplication.instance() or QApplication([])
+    if QGuiApplication.platformName() != "windows":
+        pytest.skip(f"needs the windows platform, got {QGuiApplication.platformName()!r}")
+    user32 = ctypes.WinDLL("user32")
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    front = user32.GetForegroundWindow()
+    for factor in (1.0, 1.5):
+        store = ArtifactStore(tmp_path / f"Artifacts{factor}")
+        with text_size(factor), _the_look(False), use_store(store):
+            fonts.load_app_font(app)
+            controller_on(tmp_path, Clock(at(8, 12, 4)))
+            window = build_window()
+            window.setAttribute(Qt.WA_DontShowOnScreen)
+            available = window.screen().availableGeometry()
+            _opening, least = design.window_sizes((available.width(), available.height()))
+            window.setMinimumSize(1, 1)
+            window.resize(*least)
+            window.show()
+            screen = window.part("inference")
+            cfg = _nad_cfg(chi_mode=True)
+            held = prior_stub(id_="20261001T222935", name="retrain_prior")
+            write_diagnostic(store, cfg, diagnostic="probes", variant="band", **check_results("band"))
+            write_diagnostic(store, cfg, diagnostic="probes", variant="mask", parents={"prior": held.id},
+                             **check_results("audit"))
+            screen.session = SbiSession(cfg=cfg, inf_prior=held)
+            screen.refresh_gates()
+            window.go_to("inference", "checks")
+            page = screen.validate_panel
+            page.read_facts()
+            words = page.foot.main_button.text().replace("&", "")
+            assert words == "Open Unusable driven recordings: simulation set against the audit", words
+            posterior = SimpleNamespace(kind="posterior", id="20261003T031200", name="retrain", path=tmp_path,
+                                        manifest=SimpleNamespace(parents={"prior": held.id},
+                                                                 body={"transform": {"V": None}}), posterior=None)
+            for state in ("the longest words", "a check open in the list's place"):
+                if state != "the longest words":
+                    screen.session = SbiSession(cfg=cfg, inf_prior=held, posterior=posterior)
+                    page.read_facts()
+                    page.open_check("identifiability")
+                    assert page.foot.reason.text() == (
+                        "Cannot start: this check cannot be run from the window yet, and 1 more above.")
+                for _ in range(5):
+                    app.processEvents()
+                inside = QRect(0, 0, window.width(), window.height())
+                for part in (page.foot.main_button, page.foot.reason):
+                    if part is page.foot.reason and not part.text():
+                        continue
+                    edge = QRect(part.mapTo(window, QPoint(0, 0)), part.size())
+                    assert part.isVisible() and inside.contains(edge), (factor, state, type(part).__name__, edge,
+                                                                        inside)
+                    for x, y in ((edge.left() + 2, edge.center().y()), (edge.center().x(), edge.center().y()),
+                                 (edge.right() - 2, edge.center().y())):
+                        found = window.childAt(QPoint(x, y))
+                        assert found is part or (found is not None and part.isAncestorOf(found)), (
+                            factor, state, type(part).__name__, "something stands over it", x, y, found)
+            assert not user32.IsWindowVisible(int(window.winId())), "the window was shown on the screen"
+            window.hide()
+            app.processEvents()
+    assert user32.GetForegroundWindow() == front, "the front was taken from the window the person works in"
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])

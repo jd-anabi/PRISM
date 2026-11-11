@@ -5719,7 +5719,7 @@ def test_with_no_message_the_figures_stand_where_they_stand_after_the_messages(f
 _LARGE_SCREEN, _SMALL_SCREEN = (3400, 1380), (1240, 660)
 # The pages that keep the form beside the run's page, by a name for a test and the place the window opens each at. A
 # video stands its run's page among Live simulation's figures, whole; the other runs stand theirs in the column's stack.
-_FORM_BESIDE_THE_COLUMN = {"checks": ("inference", "checks"), "inference": ("inference", "infer"),
+_FORM_BESIDE_THE_COLUMN = {"inference": ("inference", "infer"),
                            "narrowing round": ("inference", "narrowing"), "one cell": ("temperature", "one_cell"),
                            "sweep": ("temperature", "sweep"), "reduction map": ("reduction", None),
                            "video": ("live", None)}
@@ -5813,7 +5813,7 @@ def test_nothing_of_the_run_page_is_hidden_under_the_form_at_any_width(page, fac
         _settle()
         _the_two_share_the_width(window, host, (page, factor, "left and come back to"))
         _in_its_column(host.run_view, host.results, (page, factor))
-        elsewhere = ("inference", "checks") if place == ("reduction", None) else ("reduction", None)
+        elsewhere = ("inference", "infer") if place == ("reduction", None) else ("reduction", None)
         window.go_to(*elsewhere)
         other = next(panel for panel, at in window._places.items() if at == elsewhere)
         assert other.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W, "a page with no run gave up its width"
@@ -6039,7 +6039,8 @@ def test_a_past_view_on_the_live_simulations_page_shares_the_width_too(tmp_path)
 
 
 @pytest.mark.parametrize("step", ["the stand-in", "Prior", "Training", "a list beside its detail",
-                                  "a list with its detail in its place"])
+                                  "a list with its detail in its place", "the Checks list beside a check",
+                                  "the Checks list with a check in its place"])
 @pytest.mark.parametrize("factor, room", [(1.0, _LARGE_SCREEN), (1.5, _LARGE_SCREEN), (1.5, _SMALL_SCREEN)],
                          ids=["text 1.0", "text 1.5", "text 1.5 on a small screen"])
 def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room, step, tmp_path):
@@ -6048,9 +6049,10 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
     the window with nothing over them, what stands hidden behind them in the page's stack not widening it, with the
     longest main button a page has and a block for the run beside the form: on a stand-in page, and on the Prior page
     and the Training page, each with its fold open and a name typed; and on a list with a detail open, beside it at the
-    opening width or in its place at the least, which the run's page hides as it stood. The window is made as narrow as
-    it can be and as wide as the screen, then narrow again. Back at the list after the run, its detail stands as the
-    width says, the page no wider than what shows it."""
+    opening width or in its place at the least, which the run's page hides as it stood; and on the Checks list with the
+    calibration's page open, beside it or in its place the same way. The window is made as narrow as it can be and as
+    wide as the screen, then narrow again. Back at the list after the run, its detail stands as the width says, the page
+    no wider than what shows it."""
     from core.gui import design
     from core.gui.run import history
     from core.gui.run.controller import controller
@@ -6059,10 +6061,12 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
     from tests._runs import Clock, StandIn, start_run, turn_until
     from tests._window_helpers import shown_off_screen
     app = qt_app()
-    listed = step.startswith("a list")
+    checks = step.startswith("the Checks list")
+    listed = step.startswith("a list") or checks
+    in_its_place = step in ("a list with its detail in its place", "the Checks list with a check in its place")
     place = ("inference", "prior") if step == "Prior" else ("inference", "checks") if listed else (
         "inference", "training")
-    word = "Prior build" if step == "Prior" else "Training"
+    word = "Prior build" if step == "Prior" else "Check" if checks else "Training"
     past = f"20261001T090000-{place[1]}"
     with text_size(factor), _the_look(False):
         _controller_on(tmp_path, Clock(_at(9, 18, 0)))
@@ -6074,6 +6078,8 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
         opening, least = design.window_sizes(room)
         if step == "the stand-in":
             host = build_step_page(window=window)
+        elif checks:
+            host = window.part("inference").validate_panel
         elif listed:
             host = build_step_page(stand_in_list_page(), window=window, step="checks")
         elif step == "Prior":
@@ -6085,7 +6091,7 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
             host = window.part("inference").posterior_panel
             host.form.fold.set_open(True)
             host.names.name.setText("retrain_3")
-        shown_off_screen(window, *(least if step == "a list with its detail in its place" else opening))
+        shown_off_screen(window, *(least if in_its_place else opening))
         window.go_to(*place)
         split = getattr(host, "list_detail", None)
 
@@ -6094,7 +6100,12 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
             assert split._width is not None and split.beside() == (split._width >= split.beside_width), (
                 why, factor, split._width)
 
-        if listed:
+        if checks:
+            _settle()
+            host.open_check("calibration")
+            _settle()
+            as_the_width_says("opened")
+        elif listed:
             _settle()
             host.open_detail()
             host.detail.form.fold.set_open(True)
@@ -6118,10 +6129,10 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
         host.past_view.back_button.click()
         _settle()
         if listed:
-            window.resize(*(opening if step == "a list beside its detail" else least))
+            window.resize(*(least if in_its_place else opening))
             _settle()
             as_the_width_says("before the run")
-            assert split.beside() == (step == "a list beside its detail" and room == _LARGE_SCREEN), (
+            assert split.beside() == (not in_its_place and room == _LARGE_SCREEN), (
                 "the leg measures another arrangement than its name", factor, room)
         stand_in = StandIn(word=word)
         start_run(host, stand_in, spec=_training(word, stop_button="Stop the run…", place=place))
@@ -6469,8 +6480,8 @@ window.setMinimumSize(1, 1)
 shown_off_screen(window, 1300, 820)
 window.go_to("inference", "narrowing")
 frame = window.part("inference").tsnpe_panel
+checks = window.part("inference").validate_panel
 rebuilt = build_step_page(window=window)
-listed = build_step_page(stand_in_list_page(), window=window, step="checks")
 
 
 def settle():
@@ -6499,16 +6510,22 @@ def measured(host, form):
 
 
 report = {"ratio": window.devicePixelRatioF()}
-for name, host, form in (("frame", frame, frame.controls_scroll), ("rebuilt", rebuilt, None), ("listed", listed, None)):
+for name, host, form in (("frame", frame, frame.controls_scroll), ("rebuilt", rebuilt, None), ("checks", checks, None),
+                         ("listed", None, None)):
     if host is rebuilt:
         window.go_to("inference", "training")
-    if host is listed:
+    if name in ("checks", "listed"):
+        if name == "listed":
+            host = build_step_page(stand_in_list_page(), window=window, step="checks")
         window.resize(1300, 820)
         window.go_to("inference", "checks")
         settle()
-        listed.open_detail()
+        if name == "checks":
+            host.open_check("calibration")
+        else:
+            host.open_detail()
         settle()
-        report["beside"] = listed.list_detail.beside()
+        report[f"{name}_beside"] = host.list_detail.beside()
     stand_in = StandIn()
     spec = RunSpec("Run", None, stop_button="Stop the run…", keeps_files=False)
     host.run_spec = lambda fn, *a, **k: spec
@@ -6518,13 +6535,13 @@ for name, host, form in (("frame", frame, frame.controls_scroll), ("rebuilt", re
     report[name] = measured(host, form)
     stand_in.release()
     turn_until(app, lambda: not held.is_live(), 30)
-    if host is listed:
-        report["listed_after"] = []
+    if name in ("checks", "listed"):
+        report[f"{name}_after"] = []
         for width in (900, 1300):
             window.resize(width, 600)
             settle()
-            report["listed_after"].append([width, listed.list_detail.beside(), listed.scroller.widget().width(),
-                                           listed.scroller.viewport().width()])
+            report[f"{name}_after"].append([width, host.list_detail.beside(), host.scroller.widget().width(),
+                                            host.scroller.viewport().width()])
 print(json.dumps(report), file=sys.__stdout__, flush=True)
 QThreadPool.globalInstance().waitForDone(10000)
 '''
@@ -6533,8 +6550,8 @@ QThreadPool.globalInstance().waitForDone(10000)
 def test_nothing_of_the_run_page_is_hidden_at_150_percent_display_scaling(tmp_path):
     """The same measure at one and a half times the display's scaling, in a process of its own, for a process has one
     scaling, set before its application exists: on today's frame, on a page whose stack takes the form's place, and on
-    a list whose detail stood beside it as the run began. The window is told the width in its own pixels, which the
-    scaling does not change."""
+    a list whose detail stood beside it as the run began, the Checks list with the calibration's page open and the
+    stand-in list. The window is told the width in its own pixels, which the scaling does not change."""
     import json
     import os
     import subprocess
@@ -6548,13 +6565,16 @@ def test_nothing_of_the_run_page_is_hidden_at_150_percent_display_scaling(tmp_pa
     assert child.returncode == 0, child.stderr[-2000:]
     report = json.loads(child.stdout.splitlines()[-1])
     assert report["ratio"] == 1.5, "the scaling was not in force"
-    assert len(report["frame"]) == len(report["rebuilt"]) == len(report["listed"]) == 9, "a leg measured nothing"
-    assert report["beside"], "the list's detail did not stand beside it as the run began"
-    assert [beside for _width, beside, _wide, _shows in report["listed_after"]] == [False, True], (
-        "after the run the detail did not stand in the list's place, then beside it", report["listed_after"])
-    for width, _beside, wide, shows in report["listed_after"]:
-        assert wide <= shows, ("after the run the list's page is wider than what shows it", width, wide, shows)
-    for name in ("frame", "rebuilt", "listed"):
+    assert len(report["frame"]) == len(report["rebuilt"]) == len(report["checks"]) == len(report["listed"]) == 9, (
+        "a leg measured nothing")
+    for name in ("checks", "listed"):
+        assert report[f"{name}_beside"], (name, "the list's detail did not stand beside it as the run began")
+        after = report[f"{name}_after"]
+        assert [beside for _width, beside, _wide, _shows in after] == [False, True], (
+            name, "after the run the detail did not stand in the list's place, then beside it", after)
+        for width, _beside, wide, shows in after:
+            assert wide <= shows, (name, "after the run the list's page is wider than what shows it", width, wide, shows)
+    for name in ("frame", "rebuilt", "checks", "listed"):
         for row in report[name]:
             assert row["window"] == row["width"], (name, row)
             assert row["form_right"] <= row["left"], (name, "the form is drawn over the run's page", row)

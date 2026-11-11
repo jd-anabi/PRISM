@@ -795,26 +795,32 @@ def test_plan_facts_read_the_form_of_their_own_step_and_what_the_others_hold():
 
 # ── the lead beside the button ──
 #: The blocks that neither waiting nor an edit on the page lifts: a model inference cannot take, a file or a record
-#: that cannot be read, a record made for another model, nothing to continue.
+#: that cannot be read, a record made for another model, nothing to continue, a posterior trained without what a check
+#: reads, a model, a kind of observation or a bounds file a check does not apply to, and a check the window cannot run
+#: yet.
 FINAL = ("this model cannot be used", "the bounds file cannot be read", "the prior cannot be read",
          "this prior is for another model", "there is nothing to continue", "the posterior cannot be read",
-         "this posterior is for another model")
-#: The blocks a person lifts on the page: a field, a choice, a name, a step applied, a record chosen or made.
+         "this posterior is for another model", "the posterior was trained without keeping its simulations",
+         "the posterior was trained without the rotation", "it applies only with the frequency response",
+         "it applies only to the Nadrowski model", "the bounds file has no forcing section",
+         "it does not apply with the frequency response", "this check cannot be run from the window yet")
+#: The blocks a person lifts on the page: a field, a choice, a name, a step applied, a record chosen or made, a prior
+#: or a posterior loaded.
 YET = ("a setting cannot be used", "the limits typed cannot be used", "the last start was refused", "needs a model",
        "no bounds file is chosen", "no saved prior is chosen", "no prior is saved yet", "needs a prior",
        "a saved simulation set would be continued", "no saved posterior is chosen", "no posterior is saved yet",
        "the name cannot be used", "a name is needed", "the note cannot be used",
-       "the units file chosen cannot be used")
+       "the units file chosen cannot be used", "needs a posterior", "the prior in use is not the posterior's own")
 
 
 def test_every_block_the_pages_say_is_known_to_be_lifted_on_the_page_or_not():
-    """Every block a page of the three steps can say beside its button, read from the names of the facts' module, the
-    form's and the three pages' that end in BLOCKS, is either lifted on the page and reads "Cannot start yet:", or is
+    """Every block a page of the four steps can say beside its button, read from the names of the facts' module, the
+    form's and the four pages' that end in BLOCKS, is either lifted on the page and reads "Cannot start yet:", or is
     not and reads "Cannot start:". A block added without a place in one of the two fails here."""
     from core.gui import step_facts
-    from core.gui.panels.inference import config_tab, posterior_tab, prior_tab
+    from core.gui.panels.inference import config_tab, posterior_tab, prior_tab, validate_tab
     from core.gui.widgets import form
-    said = {value for module in (step_facts, form, config_tab, prior_tab, posterior_tab)
+    said = {value for module in (step_facts, form, config_tab, prior_tab, posterior_tab, validate_tab)
             for name, value in vars(module).items() if name.endswith("BLOCKS") and isinstance(value, str)}
     said |= {form.NEEDS_A_NAME}
     assert set(step_facts.FINAL_BLOCKS) == set(FINAL)
