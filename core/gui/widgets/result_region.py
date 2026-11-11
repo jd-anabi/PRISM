@@ -42,6 +42,7 @@ class ResultRegion(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self._facts: tuple = ()
+        self._rows: list = []               # the message row of each fact said
         self._table: "TableWords | None" = None
         self._steps: tuple = ()
         box = QVBoxLayout(self)
@@ -88,13 +89,14 @@ class ResultRegion(QWidget):
 
     def set_sentences(self, facts: Sequence[Fact]) -> None:
         """Say ``facts``, each a message row with its marker and its lead word."""
-        while self._sentences.count():
-            row = self._sentences.takeAt(0).widget()
+        for row in self._rows:
+            self._sentences.removeWidget(row)
             row.hide()
             row.deleteLater()
         self._facts = tuple(facts)
-        for fact in self._facts:
-            self._sentences.addWidget(MessageRow(fact.kind, fact.sentence, lead=LEADS[fact.kind]))
+        self._rows = [MessageRow(fact.kind, fact.sentence, lead=LEADS[fact.kind]) for fact in self._facts]
+        for row in self._rows:
+            self._sentences.addWidget(row)
         self._judge()
 
     def sentences(self) -> tuple:

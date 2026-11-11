@@ -32,6 +32,7 @@ class ModelsScreen(QWidget):
         models_box = QGroupBox("User-defined models")
         mv = QVBoxLayout(models_box)
         self._models_list = QVBoxLayout()          # rebuilt by refresh_models()
+        self._model_rows: list = []                # what the list holds, each a row of it, kept to take away again
         mv.addLayout(self._models_list)
         self._open = QPushButton("Open model builder")
         self._open.setProperty("accent", True)
@@ -140,18 +141,20 @@ class ModelsScreen(QWidget):
         self._on_saved("")
 
     def refresh_models(self) -> None:
-        """Rebuild the user-model list (one row per registered model + any startup load failures)."""
-        while self._models_list.count():
-            item = self._models_list.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.setParent(None)
-                w.deleteLater()
+        """Rebuild the user-model list (one row per registered model + any startup load failures). The rows it held are
+        taken away by name, never through the layout's items: the wrapper of an item stays registered after its
+        layout has let the item go."""
+        for w in self._model_rows:
+            self._models_list.removeWidget(w)
+            w.setParent(None)
+            w.deleteLater()
+        self._model_rows = []
         names = registry.user_model_names()
         if not names and not registry.load_errors:
             empty = QLabel("No user-defined models yet. Build one to add it to every model list.")
             empty.setProperty("type", "caption")
             self._models_list.addWidget(empty)
+            self._model_rows.append(empty)
         for name in names:
             row = QWidget()
             h = QHBoxLayout(row)
@@ -165,8 +168,10 @@ class ModelsScreen(QWidget):
             h.addWidget(btn_edit)
             h.addWidget(btn_del)
             self._models_list.addWidget(row)
+            self._model_rows.append(row)
         for path, msg in registry.load_errors:
             err = QLabel(f"Failed to load {path.name}: {msg}")
             err.setProperty("type", "caption")
             err.setWordWrap(True)
             self._models_list.addWidget(err)
+            self._model_rows.append(err)

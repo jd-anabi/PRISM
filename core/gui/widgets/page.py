@@ -53,15 +53,15 @@ def bold_weight(family: str) -> int:
 def _tell(part, small: bool) -> None:
     """Tell ``part`` the page's form when it offers ``set_small``. A layout is looked into when it is told, so that
     every widget in it, or in a layout inside it, that offers ``set_small`` is told, one put there after the
-    layout was handed in among them."""
+    layout was handed in among them. Its widgets are found among its widget's children and its layouts among its
+    own, never through its items: the wrapper of an item stays registered after its layout has let the item go."""
     if isinstance(part, QLayout):
-        for index in range(part.count()):
-            item = part.itemAt(index)
-            widget, inner = item.widget(), item.layout()
-            if widget is not None:
-                _tell(widget, small)
-            elif inner is not None:
-                _tell(inner, small)
+        owner = part.parentWidget()
+        held = owner.findChildren(QWidget, "", Qt.FindDirectChildrenOnly) if owner is not None else []
+        for widget in sorted((widget for widget in held if part.indexOf(widget) >= 0), key=part.indexOf):
+            _tell(widget, small)
+        for inner in part.findChildren(QLayout, "", Qt.FindDirectChildrenOnly):
+            _tell(inner, small)
         return
     tell = getattr(part, "set_small", None)
     if tell is not None:

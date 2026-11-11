@@ -2763,6 +2763,100 @@ def test_a_page_hands_its_foot_and_its_keys_to_the_form_in_sight(tmp_path):
     window.hide()
 
 
+def _item_wrappers() -> set:
+    """Where each wrapper the bindings hold of a layout's widget item stands."""
+    from PySide6.QtWidgets import QWidgetItem
+    return {shiboken6.getCppPointer(wrapper)[0] for wrapper in shiboken6.getAllValidWrappers()
+            if isinstance(wrapper, QWidgetItem)}
+
+
+def _items_in(window) -> set:
+    """Where each item of a layout in ``window`` stands. Reading an item makes a wrapper of it that would outlive it, so
+    each wrapper the reading made is put away again before this returns."""
+    held = shiboken6.getAllValidWrappers()    # held while the reading runs: no new wrapper takes an id of theirs
+    there = {id(wrapper) for wrapper in held}
+    live, made = set(), []
+
+    def walk(layout):
+        for at in range(layout.count()):
+            item = layout.itemAt(at)
+            live.add(shiboken6.getCppPointer(item)[0])
+            if id(item) not in there:
+                made.append(item)
+            if item.layout() is not None:
+                walk(item.layout())
+
+    for widget in [window, *window.findChildren(QWidget)]:
+        if widget.layout() is not None:
+            walk(widget.layout())
+    for item in made:
+        shiboken6.invalidate(item)
+    return live
+
+
+@pytest.mark.parametrize("maker", [None, "stand_in_list_page"], ids=["the stand-in", "a list beside its detail"])
+def test_runs_and_resizes_of_a_page_leave_no_wrapper_of_a_layout_item_gone(maker, tmp_path):
+    """A page's body and its parts are told their width at every resize, and a run fills and empties them; none of it
+    reads the items of a layout. The bindings keep the wrapper of each item read, and one whose item the layout has since
+    deleted stands at an address a widget made later may take, which the toolkit then hands to the program's style in
+    place of that widget. Counted from a reading taken before the page is built: through resizes across its widths and
+    into the low window and out, runs, and a result said, said again and emptied, every wrapper of a layout item made
+    stands at an item still there."""
+    from tests import _fixtures
+    app = qt_app()
+    before = _item_wrappers()
+    if maker is None:
+        window, page, _clock = _a_page(tmp_path)
+    else:
+        window, page = _a_stand_in(tmp_path, getattr(_fixtures, maker)(), "checks")
+        page.open_detail()
+        _settle()
+    for width in range(900, 1700, 40):
+        window.resize(width, 820)
+        _settle()
+    for turn in range(3):
+        stand_in = StandIn()
+        _start(page, stand_in)
+        _settle()
+        for width in (900, 1300):
+            window.resize(width, 820)
+            _settle()
+        stand_in.release()
+        turn_until(app, lambda: not controller().is_live())
+        page.result.set_sentences([Fact("fine", f"The run of turn {turn} went.")])
+        page.result.set_sentences([Fact("fine", "It went."), Fact("warn", "One of its checks did not.")])
+        for width in (1000, 1400, 1300):
+            window.resize(width, 820)
+            _settle()
+        page.result.clear()
+        _settle()
+        for height in (design.small_below() - 40, 820):          # into the low window and out: each part is told
+            window.resize(1300, height)
+            _settle()
+    made = _item_wrappers() - before
+    gone = made - _items_in(window)
+    assert gone == set(), f"{len(gone)} of the {len(made)} wrappers of layout items made stand at no item"
+    window.hide()
+
+
+#: Each line under ``core/gui/`` that reads or takes a layout's item, with the reason it may: none. A line that runs once,
+#: as a page is built, may stand here with its reason; one that runs at a resize, a run or a redraw may not.
+ITEMS_READ_ALLOWED: dict = {}
+
+
+def test_no_code_of_the_window_reads_the_items_of_a_layout():
+    """No line of the window's code reads or takes a layout's item: the bindings keep a wrapper of each item read, which
+    outlives the item when the layout deletes it, and the toolkit can later hand it to the program's style in place of a
+    widget that took its address. The window reads its child widgets, or keeps its own list of what it holds."""
+    root = Path(__file__).resolve().parents[1]
+    found = {}
+    for path in sorted((root / "core" / "gui").rglob("*.py")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if re.search(r"\b(itemAt\w*|takeAt)\(", line):
+                found[f"{path.relative_to(root).as_posix()}: {line.strip()}"] = None
+    assert set(found) == set(ITEMS_READ_ALLOWED), sorted(set(found) ^ set(ITEMS_READ_ALLOWED))
+
+
 def test_go_to_the_run_goes_to_the_run(tmp_path):
     app = qt_app()
     window, page, _clock = _a_page(tmp_path)
@@ -3121,6 +3215,32 @@ def test_tab_walks_the_page_in_view_at_every_size(size, factor, step, shape, fol
         inside = page.form.fold.stops()[1:]
         assert [stop for stop in walked if stop in inside] == (rows if rows is not None and fold_open else []), (
             "the fold's rows that stand are not the shape's")
+
+
+#: The walk of the whole list at the larger size, the one leg that once ended its process when it was run alone.
+WALKED_ALONE = ("tests/test_pages.py::test_tab_walks_the_page_in_view_at_every_size"
+                "[(1300, 820)-1.0-a list beside its detail-the whole list-fold shut]")
+
+
+def test_the_walk_of_the_whole_list_run_alone_ends_its_process_cleanly(tmp_path):
+    """The walk of the whole list, run alone in a process of its own, ends that process as a test run ends. A check's
+    page made with no parent and never shown, standing while the program's style sheet was changed and put back, and let
+    go after its window, once corrupted the process's memory as the test ended, which a run of the whole file never
+    showed: a check's page is made inside its list's page. The process sees the card as the run that starts it does:
+    with the card hidden, the process of the same fault ended cleanly."""
+    import os
+    import subprocess
+    import sys
+    root = Path(__file__).resolve().parents[1]
+    environment = {**os.environ, "QT_QPA_PLATFORM": "offscreen", "KMP_DUPLICATE_LIB_OK": "TRUE",
+                   "PRISM_ARTIFACTS": str(tmp_path / "Artifacts")}
+    for name in ("PRISM_VRAM_CEILING_GIB", "PYTEST_CURRENT_TEST", "PYTEST_ADDOPTS"):
+        environment.pop(name, None)
+    (tmp_path / "Artifacts").mkdir()
+    child = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", WALKED_ALONE], cwd=root,
+                           env=environment, capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert child.returncode == 0, (child.returncode, child.stdout[-2000:], child.stderr[-2000:])
+    assert "1 passed" in child.stdout, child.stdout[-2000:]
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])

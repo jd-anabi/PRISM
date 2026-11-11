@@ -1645,8 +1645,10 @@ def stand_in_list_page(step: str = "checks"):
     in use, a list of the twelve checks in their four groups, sixteen rows of a ruled table (four columns, or "Check"
     and "State" while a detail is open), beside a detail of its own once ``open_detail`` opens it: a heading, three rows
     of a form of its own, one of them folded, and a warning of two lines. The page's own form holds one row, and stands
-    out of sight while the detail's form is handed the foot. It keeps what it is told as the stand-in page does:
-    ``readings``, ``pressed``, ``said``."""
+    out of sight while the detail's form is handed the foot. The detail is the page's child from the start, out of
+    sight until it is opened, as a check's page is: a widget kept with no parent until it is opened, built under the
+    application's style sheet and let go after its window, can corrupt the process's memory. It keeps what it is
+    told as the stand-in page does: ``readings``, ``pressed``, ``said``."""
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
     from core.gui import check_catalogue, design, style
@@ -1701,8 +1703,8 @@ def stand_in_list_page(step: str = "checks"):
     class _Detail(QWidget):
         """A check's page as a stand-in: its heading, a form of three rows, one folded, and a warning of two lines."""
 
-        def __init__(self):
-            super().__init__()
+        def __init__(self, parent=None):
+            super().__init__(parent)
             box = QVBoxLayout(self)
             box.setContentsMargins(0, 0, 0, 0)
             box.setSpacing(design.scaled(design.GAP["block"]))
@@ -1731,7 +1733,8 @@ def stand_in_list_page(step: str = "checks"):
             self.said, self.held, self.words = (), ("", ""), "Run the calibration"
             self.own_form = self.form
             self.own_form.add("num_runs", IntField(5000, grouped=True), "batches", usual=5000)
-            self.listing, self.detail = _Listing(), _Detail()
+            self.listing, self.detail = _Listing(), _Detail(self)
+            self.detail.hide()
             self.list_detail = ListAndDetail(self.listing, beside_width=design.scaled(LISTED_BESIDE))
             self.list_detail.back_pressed.connect(self.close_detail)
             self._body.insertWidget(self._body.indexOf(self.in_use) + 1, self.list_detail)

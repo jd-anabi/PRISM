@@ -64,14 +64,15 @@ _LINE_KINDS = {"info": "info", "warning": "warn", "error": "warn"}
 
 class _Body(QWidget):
     """The scrolling body of a page: it hands the width the scroller tells it to every part it holds that is told a
-    width, the form and a list beside its detail among them."""
+    width, the form and a list beside its detail among them. The parts are its own child widgets, read as widgets: a
+    layout's items are never read here, for the wrapper of an item stays registered after its layout has let the item
+    go, and the toolkit can later hand that address to the style for a widget."""
 
     form = None
 
     def fit(self, width: int) -> None:
-        box = self.layout()
-        for at in range(box.count() if box is not None else 0):
-            told = getattr(box.itemAt(at).widget(), "fit", None)
+        for part in self.findChildren(QWidget, "", Qt.FindDirectChildrenOnly):
+            told = getattr(part, "fit", None)
             if callable(told):
                 told(width)
 
