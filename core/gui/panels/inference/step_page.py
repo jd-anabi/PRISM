@@ -50,6 +50,7 @@ from ...widgets.in_use import InUse
 from ...widgets.marker import painted_icon
 from ...widgets.message_row import MessageRow
 from ...widgets.page import Page, PageHead, Scroller, _ring_room
+from ...widgets.result_region import ResultRegion
 from ..run_host import RunHost
 
 HELP_TEXT = "Help"
@@ -139,6 +140,8 @@ class StepPage(RunHost, QWidget):
         self.next_row.addWidget(self.next_button)
         self.next_row.addStretch(1)
         self._next_step = None
+        self.result = ResultRegion()
+        self.result.next_pressed.connect(self._next_step_pressed)
         self.form = self.controls = Form()
         self.form.edited.connect(self._edited)
         self.form.joined.connect(self._a_stop_joined)
@@ -159,6 +162,7 @@ class StepPage(RunHost, QWidget):
         self.plan_line.setVisible(step in plans.HEADING_OF)
         self._body.addWidget(self.plan_line)
         self._body.addWidget(self.in_use)
+        self._body.addWidget(self.result)
         self._body.addWidget(self.run_view.how_link, 0, Qt.AlignLeft)
         self._body.addWidget(self.figure_stack)
         self._body.addLayout(self.next_row)
@@ -272,8 +276,9 @@ class StepPage(RunHost, QWidget):
         has."""
         region, after = self.region_stops(), self.region_after_the_form()
         stops = [*self.head.findChildren(QPushButton), *self.run_view.stops(), *([] if after else region),
-                 self.run_view.how_link, *self.figure_stack.stops(), self.next_button, *self.form.stops(),
-                 *(region if after else []), self.scroller, self.foot.facts.scroller, *self.foot.stops()]
+                 *self.result.next_buttons, self.run_view.how_link, *self.figure_stack.stops(), self.next_button,
+                 *self.form.stops(), *(region if after else []), self.scroller, self.foot.facts.scroller,
+                 *self.foot.stops()]
         policies = [(stop, stop.focusPolicy()) for stop in stops]
         for stop, policy in policies:
             stop.setFocusPolicy(policy | Qt.TabFocus)
@@ -321,6 +326,16 @@ class StepPage(RunHost, QWidget):
 
     def _next_pressed(self) -> None:
         self._screen.navigate.emit("inference", self._next_step)
+
+    def _next_step_pressed(self, step) -> None:
+        """A next step under the result was pressed: its step opens and takes what it carries."""
+        self._screen.open_with(step.step, step.carries)
+
+    def take_carried(self, carries) -> None:
+        """What a next step of another step's result carries here, the step opened: nothing, but on a page that takes
+        something. What it carries that the step holds is loaded by the step's own load, after the step's one question
+        when something held would be let go; what it carries that picks a row of the form is chosen in that row. Neither
+        leaves a choice "Changed, not applied"."""
 
     def save_settings(self, qs) -> None:
         """Nothing: what a step remembers is written as it comes into use."""

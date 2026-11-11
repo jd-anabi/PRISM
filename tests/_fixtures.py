@@ -1635,13 +1635,15 @@ def stand_in_table_page(step: str = "infer"):
     each row a recording's path and the frequency it was driven at, on two lines; a file row with a grid of values
     under it; a whole number in the fold; and the two names of a run that makes an observation and an inference, the
     observation's required, and the note. Each row of the table is typed when either field holds anything. It keeps
-    what it is told as the stand-in page does: ``readings``, ``pressed``, ``said``."""
+    what it is told as the stand-in page does: ``readings``, ``pressed``, ``said``; and ``carried``, every mapping
+    ``take_carried`` was handed, with the step shown at that moment, and ``chosen``, the observation it took."""
     from collections import OrderedDict
 
     from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
     from core.gui import design
     from core.gui.panels.inference.step_page import StepPage
     from core.gui.step_facts import Fact, RemoveQuestion
+    from core.gui.widgets.ask import ask
     from core.gui.widgets.form import NameAndNote, OtherName, RowTable
     from core.gui.widgets.labeled_inputs import FloatField, IntField, PathField
     from core.gui.widgets.param_grid import ValuesGrid
@@ -1679,7 +1681,7 @@ def stand_in_table_page(step: str = "infer"):
             super().__init__(screen, "Inference", "One plain sentence under the page's title.", step=step,
                              parent=parent)
             self.readings = self.pressed = 0
-            self.said, self.held, self.words = (), ("", ""), "Run inference"
+            self.said, self.held, self.words, self.carried, self.chosen = (), ("", ""), "Run inference", [], None
             form = self.form
             form.set_side_heading("This run")
             self.table = RowTable(_Recording, typed=lambda row: bool(row.path.edit.text().strip() or
@@ -1698,6 +1700,17 @@ def stand_in_table_page(step: str = "infer"):
                                        other=OtherName("observation_name", "observation", "Name of the observation",
                                                        True)))
             self.refresh_local_gates()
+
+        def take_carried(self, carries):
+            """What a next step carries, kept with the step shown as it came; an observation other than the one held is
+            taken only once the one question is answered with its other answer, as a step's own load takes it."""
+            self.carried.append((dict(carries), self._screen.current_step()))
+            held, wanted = getattr(self.session.observation, "id", None), carries.get("observation")
+            if wanted is not None and held is not None and wanted != held and not ask(
+                    self, "Use another observation?", "This step holds another observation.", "Keep the observation",
+                    "Use this observation"):
+                return
+            self.chosen = wanted
 
         def main_words(self):
             return self.words

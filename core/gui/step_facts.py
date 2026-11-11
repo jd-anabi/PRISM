@@ -615,6 +615,48 @@ class RemoveQuestion:
     remove: str
 
 
+@dataclass(frozen=True)
+class TableWords:
+    """A ruled table as words: the titles of its ``columns`` and its ``rows``, each a cell's words to a column. The
+    columns in ``right`` hold numbers and stand at the right; the rows in ``headings`` are headings over the rows after
+    them, their words in the first cell and the other cells empty, set across the table's width. ``caption`` stands
+    above the table and ``footnote`` below it, both in the small type. ValueError for a row of another length, a
+    heading that holds words past its first cell, or a column or a row named that is not there."""
+    columns: tuple
+    rows: tuple
+    right: frozenset = frozenset()
+    headings: frozenset = frozenset()
+    caption: str = ""
+    footnote: str = ""
+
+    def __post_init__(self):
+        count = len(self.columns)
+        if any(len(row) != count for row in self.rows):
+            raise ValueError(f"a row of another length than the table's {count} columns")
+        if any(not 0 <= column < count for column in self.right):
+            raise ValueError(f"a column at the right that the table does not hold: {sorted(self.right)}")
+        if any(not 0 <= row < len(self.rows) for row in self.headings):
+            raise ValueError(f"a heading row that the table does not hold: {sorted(self.headings)}")
+        if any(any(cell for cell in self.rows[row][1:]) for row in self.headings):
+            raise ValueError("a heading holds its words in its first cell alone")
+
+
+#: The kinds of a dimensional parameter that a configuration names a unit for.
+UNIT_KINDS = ("length", "time", "force")
+#: The unit of the one input a box assumes, its temperature, in kelvin as its bounds file gives it.
+ASSUMED_UNIT = "K"
+
+
+def parameter_units(rescale_kinds, units, assumed=()) -> dict:
+    """Each parameter's unit, by its name: a dimensional one by its kind (``rescale_kinds``, its name to "length",
+    "time", "force" or None) in the configuration's unit of that kind (``units``, a kind to its unit or None), an
+    assumed one, a temperature, in kelvin; "" where a parameter has none. A parameter named in neither, one of the
+    model's own, has no unit and is left out: a caller reads ``.get(name, "")``. Reads nothing."""
+    said = {name: (units.get(kind) or "") if kind in UNIT_KINDS else "" for name, kind in rescale_kinds.items()}
+    said.update({name: ASSUMED_UNIT for name in assumed})
+    return said
+
+
 def posterior_in_use(label: str, training, config, prior: str, narrowed: bool = False) -> tuple[str, str]:
     """What the third step holds, as "In use" says it: the posterior's label, and from its record how many epochs it
     was fitted for, its network, the simulations it was trained on and its prior, that it came from a narrowing round

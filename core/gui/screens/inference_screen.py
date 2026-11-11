@@ -380,6 +380,16 @@ class InferenceScreen(QWidget):
 
     show_page = show_step
 
+    def open_with(self, step: str, carries) -> None:
+        """A next step of a result was pressed: the step ``step`` opens, then its page takes what the next step
+        ``carries``, on a page that takes anything; a page of the old frame takes nothing. KeyError, naming it, for a key
+        that is no step's, before anything moves."""
+        page = self.panels()[keys.step_number(step) - 1]
+        self.navigate.emit("inference", step)
+        take = getattr(page, "take_carried", None)
+        if callable(take):
+            take(carries)
+
     def current_step(self) -> str:
         """The key of the step shown: the first, Model and options, until another is shown."""
         return keys.STEPS[self.pages.currentIndex()].key

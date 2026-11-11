@@ -61,10 +61,10 @@ def _the_programs_font_put_back():
     assert held() == found, "the program's font stayed after the test"
 
 
-def _a_page(tmp_path, *, clock=None, shown=True, size=(1300, 820), programs_font=True, cls=None):
-    """The stand-in page, or ``cls``, in a whole window on the test's own clock, in the program's own font at the text size
-    in force, in sight at ``size`` when ``shown``, with what is read as it comes into sight forgotten: (window, page, the
-    clock)."""
+def _a_page(tmp_path, *, clock=None, shown=True, size=(1300, 820), programs_font=True, cls=None, step="training"):
+    """The stand-in page, or ``cls``, at ``step``, in a whole window on the test's own clock, in the program's own font at
+    the text size in force, in sight at ``size`` when ``shown``, with what is read as it comes into sight forgotten:
+    (window, page, the clock)."""
     app = qt_app()
     if programs_font:
         fonts.load_app_font(app)
@@ -73,10 +73,10 @@ def _a_page(tmp_path, *, clock=None, shown=True, size=(1300, 820), programs_font
     window = build_window()
     design.set_room((3400, 1380))
     window.setMinimumSize(1, 1)
-    page = build_step_page(cls, window=window)
+    page = build_step_page(cls, window=window, step=step)
     if shown:
         shown_off_screen(window, *size)
-        window.go_to("inference", "training")
+        window.go_to("inference", step)
         _settle()
     if page.names is not None:
         page.names.name.setText("retrain_3")
@@ -2328,6 +2328,161 @@ def test_a_taken_second_name_the_stage_refuses_is_said_in_the_windows_words(tmp_
     assert asked().sentence == said
     row = page.form.rows["observation_name"]
     assert row.refused() == said and row.in_error()
+
+
+def _png(path, colour, size=(400, 300)):
+    from PySide6.QtGui import QColor, QImage
+    image = QImage(*size, QImage.Format_RGB32)
+    image.fill(QColor(colour))
+    assert image.save(str(path))
+    return path
+
+
+def test_the_result_region_shows_a_ruled_table_pictures_and_at_most_two_next_steps(tmp_path):
+    """A page's result stands under what is in use and before the link to the run, hidden while it holds nothing. Its
+    table is the look's ruled table, every row shown, the columns of numbers at the right as values, a heading row across
+    the table's width, the caption above it and the footnote below it in the small type. A picture stands under its
+    caption no wider than the page, made smaller and never larger, shown as it was drawn in both themes. Two next steps
+    are plain buttons, the Tab key's stops; a third is refused before anything changes; a press says its next step."""
+    from core.gui.step_facts import TableWords
+    from core.gui.widgets.result_region import NextStep, ResultRegion
+    from core.gui.widgets.rule_table import TextCell, ValueCell
+    from tests._look_helpers import theme
+    window, page = _a_table_page(tmp_path)
+    region = page.result
+    body = page._body
+    assert isinstance(region, ResultRegion) and region.isHidden() and region.is_empty()
+    assert body.indexOf(page.in_use) < body.indexOf(region) < body.indexOf(page.run_view.how_link)
+    words = TableWords(("Parameter", "5 %", "50 %", "95 %", "Unit"),
+                       (("Of the model", "", "", "", ""), ("k", "0.41", "0.52", "0.66", ""),
+                        ("Dimensional", "", "", "", ""), ("x_scale", "11.2", "12.3", "13.9", "nm")),
+                       right=frozenset({1, 2, 3}), headings=frozenset({0, 2}), caption="Each parameter's interval.",
+                       footnote="Assumed inputs are marked.")
+    region.set_table(words)
+    _settle()
+    view = region.table.view
+    assert not region.isHidden() and region.table.isVisibleTo(window)
+    assert [view.columnSpan(row, 0) for row in range(4)] == [5, 1, 5, 1]
+    cells = [[view.model().index(row, column).data(Qt.UserRole) for column in range(5)] for row in range(4)]
+    assert isinstance(cells[1][2], ValueCell) and cells[1][2].figure == "0.52" and isinstance(cells[1][4], TextCell)
+    assert [view._columns[at].right for at in range(5)] == [False, True, True, True, False]
+    assert view.height() == view.horizontalHeader().height() + sum(view.rowHeight(row) for row in range(4))
+    assert region.caption.text() == "Each parameter's interval." and region.caption.property("cls") == "small"
+    assert region.footnote.property("cls") == "small"
+    assert region.caption.y() + region.caption.height() <= region.table.y() < region.footnote.y()
+    with pytest.raises(ValueError):
+        TableWords(("a", "b"), (("1",),))
+    with pytest.raises(ValueError):
+        TableWords(("a", "b"), (("heading", "words"),), headings=frozenset({0}))
+    light = _png(tmp_path / "light.png", "#ffffff", (3000, 200))
+    for dark in (False, True):
+        with theme(dark):
+            region.set_pictures([("Posterior corner", light), ("Nothing here", tmp_path / "missing.png")])
+            _settle()
+            assert [caption.text() for caption, _picture in region.pictures] == ["Posterior corner"]
+            caption, picture = region.pictures[0]
+            shown = picture.pixmap()
+            assert caption.property("cls") == "small" and caption.y() < picture.y()
+            assert shown.width() <= picture.width() <= page.scroller.viewport().width() and shown.width() < 3000
+            assert shown.toImage().pixelColor(5, 5).name() == "#ffffff", ("a picture took the theme's colours", dark)
+    small = _png(tmp_path / "small.png", "#ffffff", (40, 30))
+    region.set_pictures([("A small figure", small)])
+    _settle()
+    assert region.pictures[0][1].pixmap().width() == 40, "a picture was made larger"
+    pressed = []
+    region.next_pressed.connect(pressed.append)
+    steps = (NextStep("Narrow around this observation", "narrowing", {"observation": "20261003T031200"}),
+             NextStep("Run another inference", "infer"))
+    region.set_next_steps(steps)
+    assert [button.text() for button in region.stops()] == ["Narrow around this observation", "Run another inference"]
+    assert all(button.property("cls") is None for button in region.stops())
+    from PySide6.QtTest import QTest
+    with in_front(window):
+        page.help_button.setFocus(Qt.TabFocusReason)
+        walked = []
+        for _ in range(3):
+            QTest.keyClick(QApplication.focusWidget(), Qt.Key_Tab)
+            _settle()
+            walked.append(QApplication.focusWidget())
+    assert walked == [*region.stops(), page.form.stops()[0]], "the next steps are not where the page is read"
+    with pytest.raises(ValueError):
+        region.set_next_steps(steps + (NextStep("A third", "checks"),))
+    assert region.next_steps() == steps
+    region.next_buttons[1].click()
+    assert pressed == [steps[1]]
+    region.clear()
+    assert region.isHidden() and region.is_empty() and region.stops() == []
+    window.hide()
+
+
+def test_a_next_step_opens_its_step_with_what_it_carries(tmp_path, monkeypatch):
+    """A next step of a result opens its step, and the page of that step is then handed what it carries, once, with the
+    step already shown. A page that would let go of what its step holds asks its one question there, over the step
+    shown: kept, the step stays shown, holding what it held, its form as it was; answered, the page takes what was
+    carried. Opened on any of the six steps, a page that takes nothing, the old frame's among them, opens and nothing
+    raises. No step reads "Changed, not applied" and no run starts; a key that is no step's opens nothing."""
+    from types import SimpleNamespace
+    from core.gui.widgets.result_region import NextStep
+    from tests._dialogs import answer_in_turn, forget_asked
+    from tests._fixtures import stand_in_table_page
+    window, listed, _clock = _a_page(tmp_path, step="checks")
+    table = build_step_page(stand_in_table_page(), window=window, step="infer")
+    screen = window.part("inference")
+    carries = {"observation": "20261003T031200", "posterior": "20261001T222935"}
+    listed.result.set_next_steps([NextStep("Run inference on the same observation", "infer", carries)])
+    listed.result.next_buttons[0].click()
+    _settle()
+    assert window.current_place() == ("inference", "infer")
+    assert table.carried == [(carries, "infer")] and table.chosen == "20261003T031200"
+    held = SimpleNamespace(id="20261002T101010", name="cell_b")
+    screen.session.observation = held
+    for answer, chosen in ((None, None), ("Use this observation", "20261003T031200")):
+        table.chosen = None
+        window.go_to("inference", "checks")
+        forget_asked()
+        if answer is not None:
+            answer_in_turn(monkeypatch, (answer, None))
+        listed.result.next_buttons[0].click()
+        _settle()
+        assert asked().title == "Use another observation?" and asked().default == "Keep the observation"
+        assert (window.current_place(), table.chosen, screen.session.observation) == (("inference", "infer"), chosen,
+                                                                                       held), answer
+    for step in ("model", "prior", "training", "checks", "narrowing"):
+        screen.open_with(step, {"a": 1})
+        _settle()
+        assert window.current_place() == ("inference", step)
+    assert len(table.carried) == 3
+    with pytest.raises(KeyError):
+        screen.open_with("nowhere", {})
+    assert window.current_place() == ("inference", "narrowing")
+    screen.recompute_states()
+    assert screen.pending() == frozenset()
+    assert [state.key for state in screen.step_states() if state.word == "Changed, not applied"] == []
+    assert not controller().is_live()
+    window.hide()
+
+
+def test_a_parameters_unit_is_its_kinds_in_the_configuration():
+    """A dimensional parameter's unit is the configuration's unit of its kind, an assumed one, the temperature, is in
+    kelvin, and a parameter of the model has none: read off the master box and its tier-1 twin as built, nanometres,
+    milliseconds and piconewtons; the model's own temperature ratio has no unit."""
+    from core import cli, registry
+    from core.config import BOUNDS_PATH, VALID_LABELS, VALID_MODELS
+    from core.gui.step_facts import parameter_units
+    from core.Helpers import labels
+    model_labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
+    said = {}
+    for box in ("master.txt", "master_tier1.txt"):
+        cfg = cli.make_sim_config("NADROWSKI", model_labels, registry.state_dep_drift("NADROWSKI"),
+                                  str(BOUNDS_PATH / "nadrowski" / box))
+        kinds = {name: labels._RESCALE_KIND.get(name) for name in cfg.rescale_idx}
+        units = {"length": cfg.length_unit, "time": cfg.time_unit, "force": cfg.force_unit}
+        said[box] = parameter_units(kinds, units, cfg.assumed_params)
+        assert "temp" in cfg.params_dict and said[box].get("temp", "") == ""
+    assert said == {"master.txt": {"x_scale": "nm", "t_scale": "ms", "f_scale": "pN"},
+                    "master_tier1.txt": {"x_scale": "nm", "t_scale": "ms", "T": "K"}}
+    assert parameter_units({"x_scale": "length", "x_offset": "length", "odd": None}, {"length": None}) == {
+        "x_scale": "", "x_offset": "", "odd": ""}
 
 
 def test_go_to_the_run_goes_to_the_run(tmp_path):
