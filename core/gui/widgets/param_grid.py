@@ -27,6 +27,11 @@ NOT_NUMBERS_TEXT = "The limits of {} must both be numbers."
 CROSSED_TEXT = "The lower limit of {}, {:g}, must be less than its upper limit, {:g}."
 #: A limit typed that the field itself refuses, a comma for a point: its words, then the field's own.
 FIELD_SAYS_TEXT = "The {} limit of {} reads {}. {}"
+NO_VALUES_TEXT = "No values: choose a cell file, or type them."
+TYPE_A_VALUE_TEXT = "Type a value for {}."
+NOT_A_VALUE_TEXT = "The value of {} must be a number; got {!r}."
+#: A value typed that the field itself refuses, a comma for a point: its words, then the field's own.
+VALUE_SAYS_TEXT = "The value of {} reads {}. {}"
 
 
 def limit_problems(limits) -> list:
@@ -183,18 +188,25 @@ class ValuesGrid(QWidget):
     """One value field per initial condition and per parameter -- a hand-editable cell file.
 
     Produces ``file_manager.parse_values_file``'s shape: (inits, params, rescale, forcing) plain
-    ``{name: value}`` dicts, ready for ``SimConfig.inject_ground_truth``."""
+    ``{name: value}`` dicts, ready for ``SimConfig.inject_ground_truth``.
 
-    def __init__(self, parent=None):
+    ``scrolls`` puts the rows in a scroll area of their own, as ``BoundsGrid``'s does; a page that scrolls as a whole
+    asks for none, and its fields stand as a rebuilt page's number fields stand: right aligned, their digits of equal
+    width, the look's width."""
+
+    changed = Signal()                             # a value was typed or refused, or the rows were made again
+
+    def __init__(self, parent=None, *, scrolls: bool = True):
         super().__init__(parent)
         self._fields = OrderedDict()               # (section, name) -> FloatField
         self._sections = OrderedDict()
         inner = QWidget()
         self._form = make_form(inner)
         self._form.setContentsMargins(0, 0, 0, 0)
+        self._dressed = not scrolls
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(_scrollable(inner))
+        outer.addWidget(_scrollable(inner) if scrolls else inner)
         self._placeholder = QLabel("(load a cell file to edit its values)")
         self._placeholder.setProperty("type", "caption")
         self._form.addRow(self._placeholder)
@@ -217,15 +229,32 @@ class ValuesGrid(QWidget):
                 fld = FloatField(float(v))
                 self._fields[(section, name)] = fld
                 self._form.addRow(name, fld)
+                if self._dressed:
+                    fld.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    fld.setFont(fonts.inter("body", tabular=True))
+                    fld.setFixedWidth(design.scaled(design.SIZE["number_w"]))
+                fld.textChanged.connect(self.changed)
+                fld.error_changed.connect(self.changed)
+        self.changed.emit()
 
     def is_loaded(self) -> bool:
         return bool(self._fields)
 
     def problems(self) -> list:
+        """Each thing wrong with the values typed, in a sentence, in the rows' order, each parameter by the name the grid
+        shows it under; none when they can be used."""
         if not self.is_loaded():
-            return ["no values loaded — pick a cell file to start from, then edit it"]
-        return [f"{name}: must be a number" for (_s, name), fld in self._fields.items()
-                if _num(fld) is None]
+            return [NO_VALUES_TEXT]
+        out = []
+        for (_section, name), fld in self._fields.items():
+            text = fld.text().strip()
+            if fld.error():
+                out.append(VALUE_SAYS_TEXT.format(name, text, fld.error()))
+            elif not text:
+                out.append(TYPE_A_VALUE_TEXT.format(name))
+            elif _num(fld) is None:
+                out.append(NOT_A_VALUE_TEXT.format(name, text))
+        return out
 
     def to_dicts(self) -> tuple:
         """(inits, params, rescale, forcing). Call only when problems() is empty."""

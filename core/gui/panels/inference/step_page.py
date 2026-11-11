@@ -635,8 +635,12 @@ class StepPage(RunHost, QWidget):
         keeps the sentence and takes the keyboard; a refusal with no row on this page stands first among the facts."""
         fix = fields.fix_sentence(exc.field, here=self.step)
         said = exc.message
-        if exc.field == "name" and self.names is not None and self.names.name_value():
-            said = name_words(self.names.kind, self.names.name_value())     # the store's sentence names an "artifact"
+        names = self.names
+        # the store's sentence names an "artifact", or "a observation", and asks for a rename the window cannot make
+        if exc.field == "name" and names is not None and names.name_value():
+            said = name_words(names.kind, names.name_value())
+        elif names is not None and names.other is not None and exc.field == names.other.key and names.other_value():
+            said = name_words(names.other.kind, names.other_value())
         ask(self, REFUSAL_TITLE, said, OK_TEXT, beneath=fix or None)
         row = self.form.rows.get(exc.field)
         if row is None or row.widget is None or not row.is_shown():

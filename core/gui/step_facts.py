@@ -604,6 +604,17 @@ def pending_words(number: int, name: str, held: str) -> str:
     return PENDING_TEXT.format(number, name, held)
 
 
+@dataclass(frozen=True)
+class RemoveQuestion:
+    """What a table of rows asks before it drops a row that holds something typed: the question's ``title`` and
+    ``sentence``, the answer that keeps the row, ``keep``, which is preselected, and the one that removes it,
+    ``remove``. The title without its question mark names the row's remove button."""
+    title: str
+    sentence: str
+    keep: str
+    remove: str
+
+
 def posterior_in_use(label: str, training, config, prior: str, narrowed: bool = False) -> tuple[str, str]:
     """What the third step holds, as "In use" says it: the posterior's label, and from its record how many epochs it
     was fitted for, its network, the simulations it was trained on and its prior, that it came from a narrowing round

@@ -13,9 +13,11 @@ The name is checked 300 ms after the last keystroke and again at the press, sinc
 records of its kind; never while a run is live, so that an edit waiting as a run starts is read when it ends. The note
 is checked at every keystroke and reads nothing.
 """
+from dataclasses import dataclass
+
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+                               QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
 from core.artifacts import default_store
 from core.artifacts import manifest
@@ -25,12 +27,14 @@ from core.refusals import Refusal, require_note
 from .. import design, fields, fonts, record_words, style
 from ..reported import reported
 from ..run.controller import controller
-from ..step_facts import Fact
+from ..step_facts import LEADS, Fact
 from . import labeled_inputs
+from .ask import ask
 from .choice import Choice
 from .help_badge import HelpBadge
 from .labeled_inputs import _NumberField
 from .marker import Marker, painted_icon
+from .message_row import MessageRow
 from .page import Columns, Sentence, _may_wrap
 from .ruled import Ruled, SectionHead
 
@@ -52,6 +56,8 @@ NAME_ID_TEXT = ("A name cannot be shaped like a record's id: a date and a time, 
                 "digits and the letters a to f.")
 NAME_TAKEN_BY_TEXT = "The name '{}' is taken by another {}. Choose another name."
 TYPE_A_NAME_TEXT = "Type a name."
+#: The same, for the second name of a block that names two records, by the word for the record it names.
+TYPE_A_NAME_FOR_TEXT = "Type a name for the {}."
 NAME_BLOCKS = "the name cannot be used"
 NEEDS_A_NAME = "a name is needed"
 NOTE_BLOCKS = "the note cannot be used"
@@ -211,7 +217,8 @@ class Row:
         self._parts = [self.label, self.origin]
         self._in_sight: list = []
         if widget is not None:
-            self.label.setBuddy(widget.field if isinstance(widget, TickedField) else widget)
+            self.label.setBuddy(widget.field if isinstance(widget, TickedField) else
+                                widget.edit if isinstance(widget, labeled_inputs.PathField) else widget)
             _dress(widget)
             self._listen(widget)
 
@@ -220,6 +227,8 @@ class Row:
         number = _number_of(widget)
         if number is not None:
             number.error_changed.connect(self._field_error)
+        elif isinstance(widget, labeled_inputs.PathField):
+            widget.error_changed.connect(self._field_error)
         said = (widget.currentIndexChanged if isinstance(widget, QComboBox) else
                 widget.toggled if isinstance(widget, QCheckBox) else
                 widget.textChanged if isinstance(widget, QLineEdit) else getattr(widget, "changed", None))
@@ -292,6 +301,8 @@ class Row:
                 widget.setCurrentIndex(found)
         elif isinstance(widget, QCheckBox):
             widget.setChecked(bool(value))
+        elif isinstance(widget, labeled_inputs.PathField):
+            widget.set_value(value)
         else:
             widget.setText("" if value is None else str(value))
 
@@ -320,7 +331,8 @@ class Row:
         elif isinstance(widget, TickedField) and widget.is_ticked():
             return widget.words()
         else:
-            said = widget.words() if isinstance(widget, TickedField) else widget.text().strip()
+            said = widget.words() if isinstance(widget, (TickedField, labeled_inputs.PathField, RowTable)) else (
+                widget.text().strip())
         return f"{said} {self._unit}".rstrip() if said else BLANK_WORDS
 
     def set_origin(self, text: str) -> None:
@@ -346,6 +358,8 @@ class Row:
             number.set_error((sentence if kind == "err" else "") or number.own_error())
             if number.error():
                 kind, sentence = "err", number.error()
+        elif isinstance(self.widget, labeled_inputs.PathField):
+            self.widget.set_error(sentence if kind == "err" else "")
         elif isinstance(self.widget, QLineEdit):
             style.set_class(self.widget, state="error" if kind == "err" else "")
         for box in self._heard:
@@ -406,19 +420,33 @@ class Row:
         return labeled_inputs.reading(number, self._label)
 
     def stops(self) -> list:
-        """The controls the Tab key stops at in this row, in their order, what stands under the field among them."""
+        """The controls the Tab key stops at in this row, in their order, what stands under the field among them. A part
+        that names its own stops, a file row or a table of rows, is taken in its order; any other in the order its
+        controls were made."""
         stops = []
         for part in (self.widget, *self.under):
-            if part is not None:
-                stops += [stop for stop in ([part] if part.focusPolicy() & Qt.TabFocus else part.findChildren(QWidget))
-                          if stop.focusPolicy() & Qt.TabFocus]
+            if part is None:
+                continue
+            own = getattr(part, "stops", None)
+            found = own() if callable(own) else (
+                [part] if part.focusPolicy() & Qt.TabFocus else part.findChildren(QWidget))
+            stops += [stop for stop in found if stop.focusPolicy() & Qt.TabFocus]
         return stops
 
     def focus_target(self) -> "QWidget | None":
-        """The control that takes the keyboard for this row, or None for a row with no control that can."""
+        """The control that takes the keyboard for this row, or None for a row with no control that can: of a part that
+        names its own stops, a file row or a table of rows, the first of them, since a widget whose own controls are
+        stops of the Tab key may hand the keyboard on to none of them, or the key goes round them for ever; else the one
+        a part hands the keyboard on to."""
         widget = self.widget
         if isinstance(widget, TickedField):
             widget = widget.ticked_box if widget.is_ticked() else widget.field
+        own = getattr(widget, "stops", None)
+        if callable(own):
+            stops = [stop for stop in own() if stop.focusPolicy() & Qt.TabFocus]
+            widget = stops[0] if stops else None
+        while widget is not None and widget.focusProxy() is not None:
+            widget = widget.focusProxy()
         return widget if widget is not None and widget.isEnabled() else None
 
     # ── on the page ──
@@ -445,10 +473,29 @@ class Row:
         if self._on_mark is not None:
             self._on_mark()
 
-    def stand_in(self, grid: QGridLayout, at: int) -> None:
+    def stand_in(self, grid: QGridLayout, at: int, *, wide: bool = False) -> None:
         """Take the row ``at`` of ``grid``: the label and its badge in the first column, and in the second the field with
         its unit and origin, the line under them. A value that is only shown is a sentence, with no column of its own,
-        and its origin stands after it."""
+        and its origin stands after it. A ``wide`` row, a table of rows, stands under its label across both columns,
+        since beside the label column a row of the table has no room at the window's least width."""
+        if wide:
+            left = QHBoxLayout()
+            left.setContentsMargins(0, 0, 0, 0)
+            left.setSpacing(design.scaled(design.GAP["marker_text"]))
+            left.addWidget(self.label, 1 if self.badge is None else 0)
+            if self.badge is not None:
+                left.addWidget(self.badge, 0, Qt.AlignVCenter)
+                left.addStretch(1)
+            self.unit.setVisible(False)
+            self.cell = QVBoxLayout()
+            self.cell.setContentsMargins(0, 0, 0, 0)
+            self.cell.setSpacing(design.scaled(design.GAP["field_message"]))
+            self.cell.addLayout(left)
+            self.cell.addWidget(self.widget)
+            self.cell.addWidget(self.origin)
+            self.cell.addWidget(self.line)
+            grid.addLayout(self.cell, at, 0, 1, 2)
+            return
         left = QHBoxLayout()
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(design.scaled(design.GAP["marker_text"]))
@@ -570,6 +617,158 @@ class Fold(Ruled):
             self.set_open(True)
 
 
+class RowTable(QWidget):
+    """A table of rows inside a form, which a person adds to and takes from: each row the caller's own, made by
+    ``make_row``, with its remove button at its end and the line under it for its reading, and under them all the button
+    that adds one, ``add_words``. A row for which ``typed`` says nothing is typed goes at once; one that holds something
+    goes only once ``question`` is answered with its other answer, the answer that keeps it preselected, so that Escape,
+    the frame's close and Enter keep the row and what is typed. A press of the remove button is the same by a click and
+    by Enter on its ring. ``least_width`` is the least the table stands at, used as given: a caller hands a width it has
+    scaled, and builds rows that stand within it. ``changed`` says a row was added or removed or a value in one changed;
+    ``joined``, that a row was added or removed, whose controls then take their place in the Tab key's order. A row's
+    value is its own ``value()``; the table's, the list of its rows' values."""
+
+    changed = Signal()
+    joined = Signal()
+
+    def __init__(self, make_row, *, typed, question, add_words: str, least_width: int) -> None:
+        super().__init__()
+        self._make, self._typed, self.question = make_row, typed, question
+        self._rows: list = []                # (row, its remove button, its reading, what holds the three)
+        self._box = QVBoxLayout(self)
+        self._box.setContentsMargins(0, 0, 0, 0)
+        self._box.setSpacing(design.scaled(design.SIZE["row_gap"]))
+        self.add_button = QPushButton(add_words)
+        self.add_button.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.add_button.clicked.connect(self._add_pressed)
+        self._box.addWidget(self.add_button, 0, Qt.AlignLeft)
+        self.setMinimumWidth(least_width)
+
+    # ── the rows ──
+    def rows(self) -> list:
+        """The rows, in their order."""
+        return [row for row, _button, _reading, _holder in self._rows]
+
+    def add_row(self) -> QWidget:
+        """A row more, at the end, made by the caller; its edits are the table's."""
+        row = self._make()
+        holder = QWidget()
+        column = QVBoxLayout(holder)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(design.scaled(design.GAP["field_message"]))
+        line = QHBoxLayout()
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(design.scaled(design.SIZE["row_gap"]))
+        line.addWidget(row, 1)
+        button = QPushButton()
+        button.setObjectName("iconButton")
+        button.setIcon(painted_icon("close"))
+        side = design.scaled(design.SIZE["marker"])
+        button.setIconSize(QSize(side, side))
+        button.setFixedWidth(design.scaled(design.SIZE["field_h"]))
+        words = self.question.title.rstrip("?").rstrip()
+        button.setToolTip(words)
+        button.setAccessibleName(words)
+        button.clicked.connect(self._remove_pressed)
+        line.addWidget(button, 0, Qt.AlignTop)
+        column.addLayout(line)
+        reading = MessageRow("info", "")
+        reading.setVisible(False)
+        column.addWidget(reading)
+        self._box.insertWidget(len(self._rows), holder)
+        self._rows.append((row, button, reading, holder))
+        for said in (getattr(row, "changed", None), *(field.textChanged for field in row.findChildren(QLineEdit))):
+            if said is not None:
+                said.connect(self.changed)
+        self.joined.emit()
+        self.changed.emit()
+        return row
+
+    def _add_pressed(self) -> None:
+        """"Add …": a row more, the keyboard in its first control."""
+        row = self.add_row()
+        first = self._stops_of(row)
+        if first:
+            first[0].setFocus(Qt.TabFocusReason)
+
+    def _remove_pressed(self) -> None:
+        """A remove button was pressed: its row, removed as ``remove`` says."""
+        button = self.sender()
+        for row, held, _reading, _holder in self._rows:
+            if held is button:
+                self.remove(row)
+                return
+
+    def remove(self, row: QWidget) -> None:
+        """Take ``row`` away: at once when nothing is typed in it, else once the question is answered with its other
+        answer. The keyboard, if it was in the row, goes to the button that adds one."""
+        entry = next((entry for entry in self._rows if entry[0] is row), None)
+        if entry is None:
+            return
+        if self._typed(row) and not ask(self, self.question.title, self.question.sentence, self.question.keep,
+                                        self.question.remove):
+            return
+        _row, button, _reading, holder = entry
+        held = QApplication.focusWidget()
+        had = held is not None and (held is button or holder.isAncestorOf(held))
+        self._rows.remove(entry)
+        self._box.removeWidget(holder)
+        holder.hide()
+        holder.deleteLater()
+        if had:
+            self.add_button.setFocus(Qt.TabFocusReason)
+        self.joined.emit()
+        self.changed.emit()
+
+    # ── what is said under a row ──
+    def set_reading(self, row: QWidget, kind: str, sentence: str) -> None:
+        """Say ``sentence`` with the marker of ``kind`` on the line under ``row``; an empty sentence says nothing."""
+        for held, _button, reading, _holder in self._rows:
+            if held is row:
+                if sentence:
+                    reading.set_kind(kind)
+                    reading.set_sentence(sentence, lead=LEADS[kind])
+                reading.setVisible(bool(sentence))
+                return
+
+    def reading_of(self, row: QWidget) -> tuple:
+        """What the line under ``row`` says: its marker and its sentence, ("", "") for nothing."""
+        for held, _button, reading, _holder in self._rows:
+            if held is row and not reading.isHidden():
+                return reading.kind, reading.sentence.plain_text()
+        return "", ""
+
+    def clear_readings(self) -> None:
+        """Every row's line said nothing again."""
+        for _row, _button, reading, _holder in self._rows:
+            reading.setVisible(False)
+
+    def remove_button(self, row: QWidget) -> "QPushButton | None":
+        """The button that takes ``row`` away."""
+        return next((button for held, button, _reading, _holder in self._rows if held is row), None)
+
+    # ── what the form asks ──
+    def value_or_none(self) -> list:
+        """The list of the rows' values, in their order: each row's own ``value()``."""
+        return [row.value() for row in self.rows()]
+
+    def words(self) -> str:
+        """How many rows there are, as a sentence says it."""
+        count = len(self._rows)
+        return "1 row" if count == 1 else f"{count} rows"
+
+    @staticmethod
+    def _stops_of(part: QWidget) -> list:
+        own = getattr(part, "stops", None)
+        found = own() if callable(own) else part.findChildren(QWidget)
+        return [stop for stop in found if stop.focusPolicy() & Qt.TabFocus]
+
+    def stops(self) -> list:
+        """Each row's controls in their order and its remove button, row by row, then the button that adds one."""
+        return [*(stop for row, button, _reading, _holder in self._rows for stop in (*self._stops_of(row), button)),
+                self.add_button]
+
+
 def name_words(kind: str, name: str) -> str:
     """The window's sentence for a name the store refuses for a record of ``kind``, judged as the store judges it: its
     shape first, then a shape a record's id has, else taken. The store's own sentence names an "artifact" and asks for a
@@ -593,18 +792,35 @@ def name_trouble(kind: str, name: str, *, store=None) -> "str | None":
     return None
 
 
+@dataclass(frozen=True)
+class OtherName:
+    """The second name of a block for a run that makes two records: its field ``key``, the store's ``kind`` of the
+    record it names, its ``label`` on the page, and whether a name must be typed, ``required``."""
+    key: str
+    kind: str
+    label: str
+    required: bool
+
+
 class NameAndNote(QWidget):
     """The block of a run that makes a record: "Name" and "Note". A required name left blank blocks with its own words;
     a name the store refuses is outlined, with the store's sentence under it, and blocks; a note its rule refuses does
-    the same. ``changed`` says the block's verdict may have moved. Nothing here is emptied but by ``clear``."""
+    the same. ``changed`` says the block's verdict may have moved. Nothing here is emptied but by ``clear``.
+
+    ``label`` is the name's own label where a page words it otherwise. With ``other``, the run makes a second record and
+    the block names it too, on a row of its own between the name and the note: each name is checked against its own
+    kind of record, 300 ms after its own last keystroke and both at the press, and neither while a run is live."""
 
     changed = Signal()
 
-    def __init__(self, kind: str, *, required: bool, store=None, read_after_ms: int = READ_AFTER_MS) -> None:
+    def __init__(self, kind: str, *, required: bool, store=None, read_after_ms: int = READ_AFTER_MS,
+                 label: str = "Name", other: "OtherName | None" = None) -> None:
         super().__init__()
-        self.kind, self.required, self._store = kind, required, store
+        self.kind, self.required, self._store, self.other = kind, required, store, other
         self._refused = self._free = self._note_refused = ""
+        self._other_refused = self._other_free = ""
         self.name, self.note = QLineEdit(), QLineEdit()
+        self.other_name = QLineEdit() if other is not None else None
         self.hint = style.set_class(QLabel(), cls="quiet")
         self.hint.setTextFormat(Qt.PlainText)
         self.hint.setWordWrap(True)
@@ -615,20 +831,77 @@ class NameAndNote(QWidget):
         grid.setVerticalSpacing(design.scaled(design.SIZE["row_gap"]))
         grid.setColumnMinimumWidth(0, design.scaled(design.SIZE["label_w"][1]))
         grid.setColumnStretch(1, 1)
-        self.rows = {"name": Row("name", self.name, "Name", None), "note": Row("note", self.note, "Note", None)}
+        self.rows = {"name": Row("name", self.name, label, None)}
+        if other is not None:
+            self.rows[other.key] = Row(other.key, self.other_name, other.label, None)
+        self.rows["note"] = Row("note", self.note, "Note", None)
         for at, row in enumerate(self.rows.values()):
             row.stand_in(grid, at)
         self.rows["name"].add_under(self.hint)
         self.read_timer = QTimer(self)
         self.read_timer.setSingleShot(True)
         self.read_timer.setInterval(read_after_ms)
-        self.read_timer.timeout.connect(self.check_now)
+        self.read_timer.timeout.connect(self._check_name)
+        self.other_timer = QTimer(self)
+        self.other_timer.setSingleShot(True)
+        self.other_timer.setInterval(read_after_ms)
+        self.other_timer.timeout.connect(self._check_other)
         self.name.textChanged.connect(self._name_edited)
         self.note.textChanged.connect(self._note_edited)
+        if self.other_name is not None:
+            self.other_name.textChanged.connect(self._other_edited)
 
     def name_value(self) -> str:
         """The name as it is sent: the text, stripped."""
         return self.name.text().strip()
+
+    def other_value(self) -> str:
+        """The second name as it is sent: the text, stripped; "" for a block that names one record."""
+        return self.other_name.text().strip() if self.other_name is not None else ""
+
+    def other_fact(self) -> "Fact | None":
+        """What stops the start about the second name, as a fact; None for nothing, and for a block of one name."""
+        if self.other is None:
+            return None
+        if self._other_refused:
+            return Fact("err", self._other_refused, NAME_BLOCKS)
+        if self.other.required and not self.other_value():
+            return Fact("err", TYPE_A_NAME_FOR_TEXT.format(record_words.kind_word(self.other.kind)), NEEDS_A_NAME)
+        return None
+
+    def _other_edited(self) -> None:
+        self._other_free = ""
+        if self.other_value():
+            self.other_timer.start()
+        else:
+            self.other_timer.stop()
+            self._other_refused = ""
+        self._say_other()
+
+    def _check_other(self) -> None:
+        """Read the second name against its own kind of record, now, unless a run is live."""
+        self.other_timer.stop()
+        name = self.other_value()
+        if self.other is None or controller().is_live() or not name:
+            return
+        self._other_refused, self._other_free = "", NAME_FREE_TEXT
+        try:
+            (self._store or default_store()).assert_name_free(self.other.kind, name)
+        except Refusal:
+            self._other_refused, self._other_free = name_words(self.other.kind, name), ""
+        except OSError:
+            self._other_free = ""
+        self._say_other()
+
+    def _say_other(self) -> None:
+        if self.other is None:
+            return
+        row = self.rows[self.other.key]
+        if self._other_refused:
+            row.set_line("err", self._other_refused)
+        else:
+            row.set_line("fine" if self._other_free else "", self._other_free)
+        self.changed.emit()
 
     def note_value(self) -> str:
         """The note as it is sent: what its rule hands back; "" for a note it refuses."""
@@ -657,7 +930,13 @@ class NameAndNote(QWidget):
 
     def check_now(self) -> None:
         """Read the name against the store, now, unless a run is live: what is waiting then is read by the page when the
-        run ends, through this. A store that cannot be read says nothing: the stage reads it again at its entry."""
+        run ends, through this; and the second name against its own kind, where the block has one. A store that cannot
+        be read says nothing: the stage reads it again at its entry."""
+        self._check_name()
+        self._check_other()
+
+    def _check_name(self) -> None:
+        """Read the name against its kind of record, now, unless a run is live."""
         self.read_timer.stop()
         name = self.name_value()
         if controller().is_live() or not name:
@@ -690,8 +969,10 @@ class NameAndNote(QWidget):
         self.changed.emit()
 
     def clear(self) -> None:
-        """Both fields emptied and the hint dropped, nothing read: only after a run that made its record."""
+        """Every field emptied and the hint dropped, nothing read: only after a run that made its records."""
         self.name.clear()
+        if self.other_name is not None:
+            self.other_name.clear()
         self.note.clear()
         self.set_hint("")
 
@@ -756,6 +1037,30 @@ class Form(QWidget):
                   edited=self._changed, marked=self.fold.judge, help_text=help_text)
         self._place(row, folded=folded, side=side)
         self.rows[field_key] = row
+        self.fold.judge()
+        self.joined.emit()
+        return row
+
+    def add_path(self, field_key: str, field: labeled_inputs.PathField, *, usual=None, folded: bool = False,
+                 help_text: str = "", label: "str | None" = None) -> Row:
+        """Add the file row ``field_key``, as ``add`` adds a setting: its box, then "Browse…", in the Tab key's order;
+        its error outlined and said under it. TypeError for a field that is no file row."""
+        if not isinstance(field, labeled_inputs.PathField):
+            raise TypeError(f"a file row holds a path field: {type(field).__name__}")
+        return self.add(field_key, field, usual=usual, folded=folded, help_text=help_text, label=label)
+
+    def add_table(self, field_key: str, table: RowTable, *, label: "str | None" = None, usual=None) -> Row:
+        """Add the table of rows ``field_key`` among the main settings, under its label and across the form's width:
+        its value is the list of its rows' values, its least width the table's, and a row it adds or removes takes its
+        place in the Tab key's order. TypeError for what is no table of rows."""
+        if not isinstance(table, RowTable):
+            raise TypeError(f"a table row holds a table of rows: {type(table).__name__}")
+        row = Row(field_key, table, fields.label(field_key) if label is None else label, usual,
+                  edited=self._changed, marked=self.fold.judge)
+        row.stand_in(self._grid, len(self._main_rows), wide=True)
+        self._main_rows.append(row)
+        self.rows[field_key] = row
+        table.joined.connect(self.joined)
         self.fold.judge()
         self.joined.emit()
         return row

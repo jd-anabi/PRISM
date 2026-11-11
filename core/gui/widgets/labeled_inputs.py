@@ -261,6 +261,16 @@ class IntField(_NumberField):
 
 
 class PathField(QWidget):
+    """A file's path: a line of text and "Browse…", which opens the file chooser. ``changed`` says the path came to be
+    another, once editing ended or the chooser chose, never at each keystroke. A path that is blank, or spaces only,
+    reads as None. In error the box is outlined as every field in error is, its sentence its accessible description,
+    and ``error_changed`` carries the sentence, so that the form says it under the row. The Tab key stops at the box,
+    then at "Browse…" (``stops``). It hands the keyboard on to neither by a focus proxy: a widget whose own controls are
+    stops, handed one, is taken by the Tab key's order as a whole and stood after the foot of a page."""
+
+    changed = Signal()                       # the path is another, editing having ended or the chooser having chosen
+    error_changed = Signal(str)              # the sentence now in force; "" when the error is taken back
+
     def __init__(self, file_filter: str = "Data (*.csv *.npy);;All files (*)", parent=None):
         super().__init__(parent)
         self.edit = QLineEdit()
@@ -268,18 +278,61 @@ class PathField(QWidget):
         # Absolute paths elide at the FRONT, so the filename stays visible; the tooltip carries the
         # whole thing (a per-frequency chi row leaves only ~120px of line edit).
         self.edit.textChanged.connect(lambda t: self.edit.setToolTip(t))
-        browse = QPushButton("Browse…")
-        browse.clicked.connect(self._browse)
+        self.browse = QPushButton("Browse…")
+        self.browse.clicked.connect(self._browse)
         self._filter = file_filter
+        self._error = ""
+        self._said = ""                      # the path the field last said it came to hold
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.edit, 1)
-        layout.addWidget(browse)
+        layout.addWidget(self.browse)
+        self.edit.editingFinished.connect(self._ended)
 
     def _browse(self):
         path = choose_file(self, "Select file", "", self._filter, save=False)
         if path:
             self.edit.setText(path)
+            self._ended()
+
+    def _ended(self) -> None:
+        """Editing ended, or the chooser chose: said once for each path the field comes to hold, so that a field the
+        keyboard passes through is no edit."""
+        if self.edit.text() != self._said:
+            self._said = self.edit.text()
+            self.changed.emit()
 
     def value(self) -> str:
         return self.edit.text().strip()
+
+    def value_or_none(self) -> "str | None":
+        """The path, stripped, or None for a blank one."""
+        return self.edit.text().strip() or None
+
+    def set_value(self, value: "str | None") -> None:
+        """Show ``value``, None as a blank box, as a plan or a remembered row fills it."""
+        self.edit.setText("" if value is None else str(value))
+        self._ended()
+
+    def words(self) -> str:
+        """The path as a sentence says it."""
+        return self.edit.text().strip()
+
+    def error(self) -> str:
+        """The error sentence in force, "" for none."""
+        return self._error
+
+    def set_error(self, sentence: "str | None") -> None:
+        """Put the field in error under ``sentence``, or take the error back with None or an empty one; the sentence in
+        force again does nothing."""
+        sentence = sentence or ""
+        if sentence == self._error:
+            return
+        self._error = sentence
+        set_class(self.edit, state="error" if sentence else "")
+        self.edit.setAccessibleDescription(sentence)
+        self.error_changed.emit(sentence)
+
+    def stops(self) -> list:
+        """The box, then "Browse…"."""
+        return [self.edit, self.browse]

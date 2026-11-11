@@ -1953,6 +1953,383 @@ def test_a_page_asks_the_window_for_help_and_for_the_next_step_through_its_scree
     assert window.current_place() == ("help", None)
 
 
+# ── the pieces of the later steps ──
+def _a_stand_in(tmp_path, cls, step, *, size=(1300, 820)):
+    """The stand-in page ``cls``, built for ``step``, in a whole window on the test's own clock, in the program's own font
+    at the text size in force, in sight at ``size`` (in the look's pixels at the ordinary text size): (window, page)."""
+    app = qt_app()
+    fonts.load_app_font(app)
+    controller_on(tmp_path, Clock(at(8, 12, 4)))
+    window = build_window()
+    design.set_room((3400, 1380))
+    window.setMinimumSize(1, 1)
+    page = build_step_page(cls, window=window, step=step)
+    shown_off_screen(window, design.scaled(size[0]), design.scaled(size[1]))
+    window.go_to("inference", step)
+    _settle()
+    page.readings = 0
+    return window, page
+
+
+def _a_table_page(tmp_path, **kwargs):
+    from tests._fixtures import stand_in_table_page
+    return _a_stand_in(tmp_path, stand_in_table_page(), "infer", **kwargs)
+
+
+def test_a_file_row_reads_blank_as_none_and_says_its_error_under_it(tmp_path):
+    """A file row reads a blank path, or one of spaces, as None, and a path stripped; it says it changed once editing
+    ends or the chooser chooses, never at a keystroke, and not when the keyboard only passes through. In error its box is
+    outlined as every field in error is, the sentence stands under the row with the error's marker and is the box's
+    accessible description, until the error is taken back. A refusal marked on the row stays until the path is edited:
+    the keyboard passing through is no edit. A plan's value is set through the row."""
+    _window, page = _a_table_page(tmp_path)
+    row, field = page.cell_row, page.cell
+    heard = []
+    field.changed.connect(lambda: heard.append(field.value_or_none()))
+    assert (row.value(), field.value_or_none(), page.form.rows["cell"] is row) == (None, None, True)
+    field.edit.setText("   ")
+    assert row.value() is None and heard == []
+    field.edit.setText("  C:/cells/a.txt ")
+    assert heard == [], "a keystroke said the path changed"
+    field.edit.editingFinished.emit()
+    assert (row.value(), heard) == ("C:/cells/a.txt", ["C:/cells/a.txt"])
+    field.edit.editingFinished.emit()
+    assert heard == ["C:/cells/a.txt"], "the keyboard passing through said the path changed"
+    field.set_error("This cell file cannot be read.")
+    assert (row.line.kind, row.line.words, row.in_error()) == ("err", "This cell file cannot be read.", True)
+    assert not row.line.isHidden() and field.edit.property("state") == "error"
+    assert field.edit.accessibleDescription() == "This cell file cannot be read."
+    field.set_error(None)
+    assert (row.line.says(), field.edit.property("state"), field.edit.accessibleDescription()) == (False, "", "")
+    row.set_line("err", "Set by the page.")
+    assert (field.error(), field.edit.property("state")) == ("Set by the page.", "error")
+    row.set_line("", "")
+    row.mark("The engine refused this file.")
+    field.edit.editingFinished.emit()
+    assert row.refused() == "The engine refused this file.", "a pass of the keyboard took the refusal away"
+    field.edit.setText("C:/cells/b.txt")
+    field.edit.editingFinished.emit()
+    assert row.refused() == "" and not row.in_error()
+    row.set_value(None)
+    assert (field.edit.text(), heard[-1]) == ("", None)
+    row.set_value("C:/cells/c.txt")
+    assert (row.value(), row.words(), heard[-1]) == ("C:/cells/c.txt", "C:/cells/c.txt", "C:/cells/c.txt")
+    with pytest.raises(TypeError):
+        page.form.add_path("t_obs", FloatField("1"))
+
+
+def test_a_file_rows_browse_button_follows_its_field_in_the_tab_order(tmp_path, monkeypatch):
+    """The row's stops are its box, then "Browse…"; its label hands the keyboard to the box, and so does the row, with no
+    focus proxy, which would have the Tab key's order take the field as a whole and stand it after the page's foot; and a
+    path the chooser chooses is said as a change. Walked with real keys from the control before it, on to the control
+    after it; and from the foot's last button the walk leaves the page."""
+    from PySide6.QtTest import QTest
+    from tests._dialogs import answer_chooser
+    window, page = _a_table_page(tmp_path)
+    row, field = page.cell_row, page.cell
+    assert row.stops()[:2] == [field.edit, field.browse] and row.focus_target() is field.edit
+    assert row.label.buddy() is field.edit and field.focusProxy() is None and page.table.focusProxy() is None
+    with in_front(window):
+        page.table.add_button.setFocus(Qt.TabFocusReason)
+        _settle()
+        QTest.keyClick(page.table.add_button, Qt.Key_Tab)
+        _settle()
+        assert QApplication.focusWidget() is field.edit
+        QTest.keyClick(field.edit, Qt.Key_Tab)
+        _settle()
+        assert QApplication.focusWidget() is field.browse
+        QTest.keyClick(field.browse, Qt.Key_Tab)
+        _settle()
+        assert QApplication.focusWidget() is next(iter(page.grid._fields.values()))
+        page.foot.main_button.setEnabled(True)
+        page.foot.main_button.setFocus(Qt.TabFocusReason)
+        QTest.keyClick(page.foot.main_button, Qt.Key_Tab)
+        _settle()
+        assert QApplication.focusWidget() is window.shell.rail.row("infer"), "the walk went back into the page"
+    heard = []
+    field.changed.connect(lambda: heard.append(field.value_or_none()))
+    answer_chooser(monkeypatch, "C:/cells/chosen.txt")
+    field.browse.click()
+    assert heard == ["C:/cells/chosen.txt"] and row.value() == "C:/cells/chosen.txt"
+    window.hide()
+
+
+def test_a_grid_on_a_page_scrolls_with_the_page_and_says_its_problems_in_words(tmp_path):
+    """A grid of values on a page has no scroll area of its own, so the page's own scroll reaches every field; its fields
+    stand as a rebuilt page's numbers do, right aligned at the look's width. It says a change of any value and its rows
+    made again; and what is wrong with it in the window's words, each parameter by the name it is shown under: nothing
+    loaded, a value blank, a value that is no number, a comma. A grid of the old frame keeps its own scroll."""
+    from PySide6.QtWidgets import QScrollArea
+    from core.gui.widgets.param_grid import ValuesGrid
+    _window, page = _a_table_page(tmp_path)
+    grid = page.grid
+    assert grid.findChildren(QScrollArea) == [] and page.scroller.isAncestorOf(grid)
+    assert build_part(ValuesGrid).findChildren(QScrollArea), "a grid of the old frame lost its own scroll"
+    field = grid._fields[("RESCALE", "T")]
+    assert field.alignment() & Qt.AlignRight and field.width() == design.scaled(design.SIZE["number_w"])
+    heard = []
+    grid.changed.connect(lambda: heard.append(1))
+    assert grid.problems() == []
+    field.setText("")
+    assert grid.problems() == ["Type a value for T."] and heard
+    field.setText("1e")
+    assert grid.problems() == ["The value of T must be a number; got '1e'."]
+    field.setText("30,5")
+    field.editingFinished.emit()
+    assert grid.problems() == ["The value of T reads 30,5. Use a point as the decimal sign."]
+    field.setText("300")
+    grid._fields[("PARAM", "k")].setText("")
+    assert grid.problems() == ["Type a value for k."]
+    assert page.facts_from_form()[0] == Fact("err", "Type a value for k.", "the values cannot be used")
+    count = len(heard)
+    grid.load({}, {"k": 1.0}, {}, {})
+    assert len(heard) == count + 1 and grid.problems() == []
+    assert build_part(ValuesGrid, scrolls=False).problems() == ["No values: choose a cell file, or type them."]
+    assert build_part(ValuesGrid).problems() == ["No values: choose a cell file, or type them."]
+
+
+def _typed(row, path="", hz=""):
+    row.path.edit.setText(path)
+    row.hz.setText(hz)
+
+
+def test_a_table_of_rows_adds_removes_and_keeps_each_rows_reading(tmp_path):
+    """"Add a driven recording" adds a row at the end, the keyboard in its first field; a row's reading stands with its
+    marker on the line under its row and stays with that row when a row before it goes; ``clear_readings`` says nothing
+    again under every row. The table's value is its rows' values in their order, read as the form reads a row; an edit in
+    a row, a row added and a row removed are each an edit of the form, and a row added or removed takes its place in the
+    Tab key's order, row by row, each row's remove button at its end and the button that adds one last."""
+    window, page = _a_table_page(tmp_path)
+    table, form = page.table, page.form
+    edits, joined = [], []
+    form.edited.connect(lambda: edits.append(1))
+    form.joined.connect(lambda: joined.append(1))
+    with in_front(window):
+        table.add_button.setFocus(Qt.TabFocusReason)
+        table.add_button.click()
+        _settle()
+        first = table.rows()[0]
+        assert QApplication.focusWidget() is first.path.edit, "the keyboard did not go into the row added"
+    second, third = table.add_row(), table.add_row()
+    assert table.rows() == [first, second, third] and len(joined) == 3 and len(edits) == 3
+    _typed(first, "a.npy", "1.5")
+    third.hz.setText("3")
+    assert len(edits) > 3
+    assert form.rows["recording_probe"].value() == [("a.npy", 1.5), (None, None), (None, 3.0)]
+    table.set_reading(first, "fine", "Fine, 23 drive cycles.")
+    table.set_reading(third, "err", "Too short: 1 drive cycle; at least 2 are needed.")
+    _settle()
+    assert table.reading_of(first) == ("fine", "Fine. Fine, 23 drive cycles.")
+    assert table.reading_of(second) == ("", "")
+    line = table._rows[0][2]
+    assert table._rows[0][3].isAncestorOf(line) and line.y() >= first.y() + first.height(), (
+        "the reading does not stand under its row")
+    count = len(edits)
+    table.remove(second)
+    _settle()
+    assert table.rows() == [first, third] and len(edits) == count + 1 and len(joined) == 4
+    assert table.reading_of(third) == ("err", "Error. Too short: 1 drive cycle; at least 2 are needed.")
+    assert table.stops() == [first.path.edit, first.path.browse, first.hz, table.remove_button(first),
+                             third.path.edit, third.path.browse, third.hz, table.remove_button(third), table.add_button]
+    assert form.stops()[:len(table.stops())] == table.stops(), "the page's order does not take the table's"
+    table.clear_readings()
+    assert (table.reading_of(first), table.reading_of(third)) == (("", ""), ("", ""))
+    window.hide()
+
+
+def _escape(dialog) -> None:
+    """The question answered by Escape, as a person presses it."""
+    from PySide6.QtTest import QTest
+    QTest.keyClick(dialog, Qt.Key_Escape)
+
+
+def _closed(dialog) -> None:
+    """The question shut by its frame's close button."""
+    dialog.close()
+
+
+@pytest.mark.parametrize("by", ["a click", "Enter on its ring"])
+def test_removing_a_row_that_holds_something_asks_first(by, tmp_path, monkeypatch):
+    """STANDING. A press of a row's remove button, by a click or by Enter on its ring, takes a row with nothing typed away
+    at once and asks nothing. A row that holds anything typed, a path or a frequency, still being typed or not, asks first
+    in the shared question, the answer that keeps it preselected; "Keep it", Escape, the frame's close and no answer keep
+    the row and what is typed in it, and "Remove it" takes it away, the keyboard on the button that adds one. Enter keeps
+    pressing the ringed button, as everywhere in the window."""
+    from tests._fixtures import stand_in_table_page, whole_program
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    with whole_program() as (_app, window):
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        page = build_step_page(stand_in_table_page(), window=window, step="infer")
+        shown_off_screen(window, 1300, 820)
+        window.go_to("inference", "infer")
+        _settle()
+        _remove_the_rows(by, window, page, monkeypatch)
+        window.hide()
+
+
+def _remove_the_rows(by, window, page, monkeypatch):
+    """The legs of the test above, on a page of the whole program, whose window presses the ringed button on Enter."""
+    from PySide6.QtTest import QTest
+    from tests._dialogs import answer_in_turn, forget_asked
+    from tests._look_helpers import _arrive
+    table = page.table
+    rows = [table.add_row() for _ in range(3)]
+    _settle()
+
+    def press(row):
+        button = table.remove_button(row)
+        if by == "a click":
+            button.click()
+            return
+        button.setFocus(Qt.TabFocusReason)
+        _arrive(button, Qt.TabFocusReason)
+        assert style.current_follower().target() is button
+        QTest.keyClick(button, Qt.Key_Return)
+
+    with in_front(window):
+        forget_asked()
+        press(rows[1])
+        assert table.rows() == [rows[0], rows[2]] and all_asked() == [], "a blank row asked before it went"
+        row = rows[0]
+        row.hz.setFocus(Qt.TabFocusReason)
+        QTest.keyClicks(row.hz, "2.5")                     # typed, the field still holding the keyboard
+        for answer in (("Keep it", None), _escape, _closed, None):            # None: no answer at all
+            answer_in_turn(monkeypatch, *(() if answer is None else (answer,)))
+            forget_asked()
+            press(row)
+            said = asked()
+            assert (said.title, said.sentence, said.answers, said.default, said.safe) == (
+                "Remove this driven recording?", "Its path and its frequency are dropped.", ("Remove it", "Keep it"),
+                "Keep it", "Keep it"), said
+            assert table.rows() == [row, rows[2]] and row.hz.text() == "2.5", (answer, "the typed row went")
+        _typed(row, "C:/a.npy")
+        answer_in_turn(monkeypatch, ("Remove it", None))
+        forget_asked()
+        press(row)
+        assert len(all_asked()) == 1 and table.rows() == [rows[2]]
+        _settle()
+        assert QApplication.focusWidget() is table.add_button
+    from PySide6.QtCore import QSize
+    from core.gui.widgets.marker import painted_icon
+    button = table.remove_button(rows[2])
+    assert (button.toolTip(), button.accessibleName(), button.objectName(), button.text()) == (
+        "Remove this driven recording", "Remove this driven recording", "iconButton", "")
+    side = design.scaled(design.SIZE["marker"])
+    assert (button.iconSize().width(), button.iconSize().height()) == (side, side)
+    for ratio in (1.0, 1.5):
+        assert (button.icon().pixmap(QSize(side, side), ratio).toImage()
+                == painted_icon("close").pixmap(QSize(side, side), ratio).toImage()), "the button is not the look's cross"
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+@pytest.mark.parametrize("size", [(900, 600), (1300, 820)], ids=str)
+def test_a_table_of_rows_holds_its_least_width_and_never_cuts_a_row(size, factor, tmp_path):
+    """A table of rows stands under its label across the form's width, never narrower than its least width. With twelve
+    rows, one with a reading in error of two lines, at the window's least size and at a larger one, at both text sizes:
+    every row and its remove button stand inside the page's view, the reading no wider than the table, and the form is no
+    wider than what shows it."""
+    from PySide6.QtCore import QPoint
+    with text_size(factor), _the_look(False):
+        window, page = _a_table_page(tmp_path, size=size)
+        table = page.table
+        rows = [table.add_row() for _ in range(12)]
+        table.set_reading(rows[4], "err", TWO_LINES)
+        _settle()
+        port = page.scroller.viewport()
+        assert table.width() >= table.minimumWidth() == design.scaled(330)
+        label = page.form.rows["recording_probe"].label
+        assert label.mapTo(window, QPoint(0, 0)).y() + label.height() <= table.mapTo(window, QPoint(0, 0)).y(), (
+            "the table does not stand under its label")
+        for row in rows:
+            for part in (row, table.remove_button(row)):
+                right = part.mapTo(port, QPoint(part.width(), 0)).x()
+                assert 0 <= part.mapTo(port, QPoint(0, 0)).x() and right <= port.width(), (factor, size, right)
+        line = table._rows[4][2]
+        assert line.width() <= table.width() and line.mapTo(port, QPoint(line.width(), 0)).x() <= port.width()
+        assert page.scroller.widget().width() <= port.width(), "the form runs off the page"
+        window.hide()
+
+
+def test_two_names_in_one_block_are_each_checked_against_their_own_kind(tmp_path):
+    """With a second name, the block stands its three rows in their order, the name of the inference, the name of the
+    observation and the note, the Tab key in that order too. Each name is checked against its own kind of record, 300 ms
+    after its own last keystroke on a timer of its own, and both at the press; a required one left blank blocks with its
+    own words, an optional one does not; a taken one is said in the window's words for its kind. ``clear`` empties all
+    three. While a run is live neither is read, a check waiting as the run starts among them; the run's end reads both."""
+    window, page = _a_table_page(tmp_path)
+    names = page.names
+    store = _Store(taken=("cell_a", "taken_inference"))
+    names._store = store
+    assert list(names.rows) == ["name", "observation_name", "note"]
+    assert [row.label_text() for row in names.rows.values()] == ["Name of the inference", "Name of the observation",
+                                                                 "Note"]
+    tops = [row.widget.y() for row in names.rows.values()]
+    assert tops == sorted(tops) and len(set(tops)) == 3
+    assert page.form.stops()[-3:] == [names.name, names.other_name, names.note]
+    assert (names.name_fact(), names.other_fact().sentence, names.other_fact().blocks) == (
+        None, "Type a name for the observation.", "a name is needed")
+    assert names.other_timer.interval() == 300 and names.other_timer is not names.read_timer
+    names.other_name.setText("cell_a")
+    assert names.other_timer.isActive() and not names.read_timer.isActive() and store.asked == []
+    names.other_timer.timeout.emit()
+    assert store.asked == [("observation", "cell_a")]
+    fact = names.other_fact()
+    assert (fact.kind, fact.sentence, fact.blocks) == (
+        "err", "The name 'cell_a' is taken by another observation. Choose another name.", "the name cannot be used")
+    assert names.rows["observation_name"].line.words == fact.sentence and names.name_fact() is None
+    names.name.setText("taken_inference")
+    assert names.read_timer.isActive() and not names.other_timer.isActive()
+    names.read_timer.timeout.emit()
+    assert store.asked[-1] == ("inference", "taken_inference")
+    assert names.name_fact().sentence == ("The name 'taken_inference' is taken by another inference result. Choose "
+                                          "another name.")
+    names.other_name.setText("cell_b")
+    names.name.setText("")
+    store.asked.clear()
+    names.check_now()
+    assert store.asked == [("observation", "cell_b")] and names.other_fact() is None and names.name_fact() is None
+    names.name.setText("an_inference")
+    names.check_now()
+    assert store.asked == [("observation", "cell_b"), ("inference", "an_inference"), ("observation", "cell_b")]
+    assert names.other_value() == "cell_b"
+    store.asked.clear()
+    names.other_name.setText("cell_a")
+    stand_in = StandIn()
+    _start(page, stand_in)
+    names.other_timer.timeout.emit()
+    names.read_timer.timeout.emit()
+    names.check_now()
+    page.read_facts()
+    assert store.asked == [], "a name was read during a run"
+    stand_in.release()
+    turn_until(qt_app(), lambda: not controller().is_live())
+    page.show_figures()
+    _settle()
+    assert ("observation", "cell_a") in store.asked and ("inference", "an_inference") in store.asked
+    assert names.other_fact().blocks == "the name cannot be used"
+    names.clear()
+    assert (names.name.text(), names.other_name.text(), names.note.text()) == ("", "", "")
+    plain = build_part(NameAndNote, kind="prior", required=True, store=_Store())
+    assert (list(plain.rows), plain.other_value(), plain.other_fact()) == (["name", "note"], "", None)
+    window.hide()
+
+
+def test_a_taken_second_name_the_stage_refuses_is_said_in_the_windows_words(tmp_path):
+    """A stage that refuses the second name as taken says so in the store's own sentence, which reads "a observation" and
+    asks for a rename the window cannot make: the page says the window's sentence for its kind in the question and under
+    its row, as it does for the first name, and marks that row."""
+    from core.artifacts import StoreError
+    from core.refusals import Refusal
+    _window, page = _a_table_page(tmp_path)
+    page.names.other_name.setText("cell_a")
+    page._refusal(Refusal(str(StoreError("a observation named 'cell_a' already exists; rename or delete it first",
+                                         field="name")), field="observation_name"))
+    said = "The name 'cell_a' is taken by another observation. Choose another name."
+    assert asked().sentence == said
+    row = page.form.rows["observation_name"]
+    assert row.refused() == said and row.in_error()
+
+
 def test_go_to_the_run_goes_to_the_run(tmp_path):
     app = qt_app()
     window, page, _clock = _a_page(tmp_path)

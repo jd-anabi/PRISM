@@ -1630,6 +1630,95 @@ def _the_stand_in_page(step: str = "training"):
     return _Page
 
 
+def stand_in_table_page(step: str = "infer"):
+    """The class of a step page as awkward as Inference, built for the step ``step``: a table of driven recordings,
+    each row a recording's path and the frequency it was driven at, on two lines; a file row with a grid of values
+    under it; a whole number in the fold; and the two names of a run that makes an observation and an inference, the
+    observation's required, and the note. Each row of the table is typed when either field holds anything. It keeps
+    what it is told as the stand-in page does: ``readings``, ``pressed``, ``said``."""
+    from collections import OrderedDict
+
+    from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+    from core.gui import design
+    from core.gui.panels.inference.step_page import StepPage
+    from core.gui.step_facts import Fact, RemoveQuestion
+    from core.gui.widgets.form import NameAndNote, OtherName, RowTable
+    from core.gui.widgets.labeled_inputs import FloatField, IntField, PathField
+    from core.gui.widgets.param_grid import ValuesGrid
+
+    class _Recording(QWidget):
+        """One driven recording: its path on the first line, the frequency it was driven at on the second."""
+
+        def __init__(self):
+            super().__init__()
+            self.path, self.hz = PathField(), FloatField(None)
+            self.hz.setFixedWidth(design.scaled(design.SIZE["number_w"]))
+            box = QVBoxLayout(self)
+            box.setContentsMargins(0, 0, 0, 0)
+            box.setSpacing(design.scaled(design.GAP["field_message"]))
+            box.addWidget(self.path)
+            line = QHBoxLayout()
+            line.setContentsMargins(0, 0, 0, 0)
+            line.addWidget(QLabel("at"))
+            line.addWidget(self.hz)
+            line.addWidget(QLabel("Hz"))
+            line.addStretch(1)
+            box.addLayout(line)
+
+        def value(self):
+            return self.path.value_or_none(), self.hz.value_or_none()
+
+        def stops(self):
+            return [*self.path.stops(), self.hz]
+
+    class _TablePage(StepPage):
+        question = RemoveQuestion("Remove this driven recording?", "Its path and its frequency are dropped.",
+                                  "Keep it", "Remove it")
+
+        def __init__(self, screen, parent=None):
+            super().__init__(screen, "Inference", "One plain sentence under the page's title.", step=step,
+                             parent=parent)
+            self.readings = self.pressed = 0
+            self.said, self.held, self.words = (), ("", ""), "Run inference"
+            form = self.form
+            form.set_side_heading("This run")
+            self.table = RowTable(_Recording, typed=lambda row: bool(row.path.edit.text().strip() or
+                                                                         row.hz.text().strip()),
+                                  question=self.question, add_words="Add a driven recording",
+                                  least_width=design.scaled(330))
+            form.add_table("recording_probe", self.table, label="Driven recordings")
+            self.cell = PathField("Cells (*.txt)")
+            self.cell_row = form.add_path("cell", self.cell)
+            self.grid = ValuesGrid(scrolls=False)
+            self.grid.load(OrderedDict(x=0.0), OrderedDict(k=0.5, lam=3.0), OrderedDict(T=300.0), OrderedDict())
+            self.cell_row.add_under(self.grid)
+            self.cell_row.hear(self.grid)
+            form.add("n_samples", IntField(1000, grouped=True), usual=1000, folded=True, label="Posterior draws")
+            self.use_names(NameAndNote("inference", required=False, label="Name of the inference",
+                                       other=OtherName("observation_name", "observation", "Name of the observation",
+                                                       True)))
+            self.refresh_local_gates()
+
+        def main_words(self):
+            return self.words
+
+        def main_pressed(self):
+            self.pressed += 1
+
+        def read_disk(self):
+            self.readings += 1
+
+        def facts_from_form(self):
+            grid = tuple(Fact("err", said, "the values cannot be used") for said in self.grid.problems())
+            names = (self.names.name_fact(), self.names.other_fact(), self.names.note_fact())
+            return (*grid, *(fact for fact in names if fact), *self.said)
+
+        def in_use_words(self):
+            return self.held
+
+    return _TablePage
+
+
 # The attribute of the inference screen that holds the page of each step, by the step's key.
 _STEP_SLOTS = {"model": "config_panel", "prior": "prior_panel", "training": "posterior_panel",
                "checks": "validate_panel", "infer": "infer_panel", "narrowing": "tsnpe_panel"}

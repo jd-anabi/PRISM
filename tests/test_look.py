@@ -3632,13 +3632,13 @@ _MARK_SHOWS = {
     "warn": ((5, 12.5, "warn"), (8, 8, "warn_mark"), (8, 12.1, "warn_mark"), (8, 14.3, "warn_edge")),
     "err": ((2, 8, "err"), (8, 8, "on_err"), (5.5, 5.5, "on_err")), "stop": ((8, 8, "err"),),
     "chev_right": ((10.5, 8, "ink"),), "chev_down": ((8, 10.5, "ink"),), "chev_up": ((8, 5.5, "ink"),),
-    "help": ((8, 1, "ink"), (8, 12, "ink")),
+    "help": ((8, 1, "ink"), (8, 12, "ink")), "close": ((8, 8, "ink"), (5, 5, "ink"), (11, 5, "ink")),
 }
 _MARK_BARE = {
     "done": ((0.5, 0.5),), "now": ((1.5, 1.5),), "later": ((8, 8), (13.78, 10.97)), "lock": ((8, 5.5),),
     "half": ((0.5, 0.5),), "none": ((8, 4),), "fine": ((10, 12),), "info": ((5, 8),), "warn": ((2, 3),),
     "err": ((0.1, 0.1),), "chev_right": ((4, 8), (12.5, 8)), "chev_down": ((8, 5.5),),
-    "chev_up": ((8, 10.5),), "help": ((3.5, 8),), "stop": ((1.5, 8),),
+    "chev_up": ((8, 10.5),), "help": ((3.5, 8),), "stop": ((1.5, 8),), "close": ((8, 3), (3, 8)),
 }
 _MARK_INNER = ("paper", "on_err", "warn_mark")       # the marks that stand ON a filled shape
 
@@ -3658,10 +3658,29 @@ def _device_edge(value):
     return int(math.floor(value + 0.5))
 
 
-def test_the_ten_states_and_the_five_glyphs_are_named_once():
+def test_the_ten_states_and_the_six_glyphs_are_named_once():
     assert paint.MARKERS == ("done", "now", "later", "lock", "half", "none", "fine", "info", "warn", "err")
-    assert paint.GLYPHS == ("chev_right", "chev_down", "chev_up", "help", "stop")
+    assert paint.GLYPHS == ("chev_right", "chev_down", "chev_up", "help", "stop", "close")
     assert set(_MARK_SHOWS) == set(_MARK_BARE) == set(paint.MARKERS + paint.GLYPHS)
+
+
+def test_a_table_rows_remove_glyph_draws_at_every_scaling():
+    """The glyph a table's row is removed by is the look's own cross, painted, never a letter of a font: as an icon at a
+    row's marker size, the cross in the ink at its middle and the ground bare between its arms, in both themes, at the
+    four scalings, each scaling drawn at its own device pixels. (The table's button is held to this icon in the window's
+    suite of pages, which may load the engine.)"""
+    with _the_look(False):
+        side = design.scaled(design.SIZE["marker"])
+        for dark in (False, True):
+            with theme(dark):
+                for ratio in _SCALINGS:
+                    image = painted_icon("close").pixmap(QSize(side, side), ratio).toImage()
+                    assert image.width() == math.ceil(side * ratio), (dark, ratio, image.width())
+                    middle = image.pixelColor(image.width() // 2, image.height() // 2)
+                    assert middle.name().upper() == design.hex_colour("ink").upper(), (dark, ratio, middle.name())
+                    assert image.pixelColor(image.width() // 2, int(image.height() * 0.15)).alpha() == 0, (
+                        dark, ratio, "the ground between the arms is not bare")
+                    assert image.pixelColor(int(image.width() * 0.15), image.height() // 2).alpha() == 0, (dark, ratio)
 
 
 def test_each_marker_and_glyph_shows_its_colours_in_both_themes_at_four_scalings(monkeypatch):

@@ -47,7 +47,7 @@ def paint_indicator(painter, kind: str, box: QRectF, *, on: bool, enabled: bool)
 
 
 MARKERS = ("done", "now", "later", "lock", "half", "none", "fine", "info", "warn", "err")    # one shape to a state
-GLYPHS = ("chev_right", "chev_down", "chev_up", "help", "stop")                              # the glyphs of controls
+GLYPHS = ("chev_right", "chev_down", "chev_up", "help", "stop", "close")                     # the glyphs of controls
 _ON_A_SHAPE = ("paper", "on_err", "warn_mark")      # the marks that stand on a filled shape
 
 
@@ -61,7 +61,7 @@ def _shade(name: str, disabled: bool) -> QColor:
 
 
 def paint_marker(painter, kind: str, box: QRectF, disabled: bool = False) -> None:
-    """One of the ten state markers or the five glyphs of controls, drawn in a 16-unit square that is scaled
+    """One of the ten state markers or the six glyphs of controls, drawn in a 16-unit square that is scaled
     to ``box``: one shape to a state, so that a state is told without its colour. Every colour is read from
     the look's table when the function paints. Drawn disabled, a shape is the colour of disabled text and
     the mark that stands on it keeps the page's colour. A kind that is neither a marker nor a glyph paints
@@ -163,6 +163,9 @@ def paint_marker(painter, kind: str, box: QRectF, disabled: bool = False) -> Non
             painter.setPen(Qt.NoPen)
             painter.setBrush(_shade("err", disabled))
             painter.drawRect(QRectF(3, 3, 10, 10))
+        elif kind == "close":                       # a cross: what takes a row away
+            stroke(line((4, 4), (12, 12)), "ink")
+            stroke(line((12, 4), (4, 12)), "ink")
     finally:
         painter.restore()
 
