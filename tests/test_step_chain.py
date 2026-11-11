@@ -644,6 +644,29 @@ def _summary(passed=0, of=6, *, failed=False, look_closer=False, open_=True, can
                          headline or f"{passed} of {of} deciding checks passed", sentence)
 
 
+def test_checks_no_run_can_pass_read_attention_and_leave_the_step_in_hand_to_inference():
+    """With no deciding check open, failed or to look closer at, and some that no run can pass for the posterior in use,
+    Checks reads "Attention" with its count, the warning's marker, and is never the step in hand: Inference is, and
+    Home offers it. With none that no run can pass it reads Done; a check failed or to look closer at, or one still
+    open, holds the step in hand as before, the checks no run can pass among them or not."""
+    from dataclasses import replace
+    trained = _session(**_TRAINED)
+    left = replace(_summary(4, open_=False), cannot_pass=2)
+    states = chain.step_states(trained, checks=left)
+    assert (states[3].marker, states[3].rail_words, states[3].done, states[3].may_be_in_hand) == (
+        "warn", "Attention: 4 of 6 passed", False, False)
+    assert chain.step_in_hand(states) == "infer"
+    assert chain.next_step(trained, states, checks=left).button == "Open Inference"
+    states = chain.step_states(trained, checks=replace(_summary(6, open_=False), cannot_pass=0))
+    assert (states[3].marker, states[3].rail_words, chain.step_in_hand(states)) == ("done", "Done: 6 of 6 passed",
+                                                                                     "infer")
+    for summary, marker in ((replace(_summary(3, failed=True, open_=False), cannot_pass=2), "err"),
+                            (replace(_summary(3, look_closer=True, open_=False), cannot_pass=2), "warn"),
+                            (replace(_summary(3), cannot_pass=2), "now")):
+        states = chain.step_states(trained, checks=summary)
+        assert (states[3].marker, chain.step_in_hand(states)) == (marker, "checks"), summary
+
+
 _CHECKS_TABLE = {
     "nothing can be checked yet": (
         _TRAINED, _summary(can_check=False),

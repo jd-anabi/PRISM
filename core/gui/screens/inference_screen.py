@@ -313,6 +313,7 @@ class InferenceScreen(QWidget):
         ids = (_ident(prior), _ident(posterior), simulation)
         if read is not None:
             refused, counts, done, when = self._read_the_pair_and_the_set(read, prior, posterior, simulation)
+            same = True
         else:
             last = self.checks_held.held if self.checks_held is not None else None
             same = last is not None and (last.prior, last.posterior, last.simulation) == ids
@@ -327,7 +328,7 @@ class InferenceScreen(QWidget):
             pair_refused=refused, set_counts=counts, set_done=done,
             prior_words=record_words.phrase_of("prior", prior) if prior is not None else "",
             posterior_words=record_words.phrase_of("posterior", posterior) if posterior is not None else "",
-            set_when=when)
+            set_when=when, set_read=same)
 
     @staticmethod
     def _read_the_pair_and_the_set(store, prior, posterior, simulation) -> tuple:

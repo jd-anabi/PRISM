@@ -84,20 +84,25 @@ def _state(key: str, marker: str, detail: str, rail_words: str, can_start: bool,
                      marker == "done", pending, may_be_in_hand)
 
 
-def _counted(checks) -> "tuple[str | None, str, str, str]":
+def _counted(checks) -> "tuple[str | None, str, str, str, bool]":
     """What Checks says of the checks' summary ``checks``, read by its attributes: its marker, None while a deciding
     check that applies is open and none failed or needs a closer look; its words in the rail; its detail, the headline
-    with the summary's second line in brackets after it; and its count, "2 of 6 passed"."""
+    with the summary's second line in brackets after it; its count, "2 of 6 passed"; and whether it may be the step in
+    hand. With none open, failed or to look closer at, a deciding check no run can pass for the posterior in use reads
+    "Attention" and leaves the step in hand to the next step: it is not passed, and no run of this step can pass it."""
     count = f"{getattr(checks, 'passed', 0)} of {getattr(checks, 'of', 0)} passed"
     headline, second = getattr(checks, "headline", ""), getattr(checks, "second_line", "")
     detail = f"{headline} ({second})" if headline and second else str(headline or "")
+    cannot = getattr(checks, "cannot_pass", 0)
     if getattr(checks, "failed", False) is True:
-        return "err", f"Error: {count}", detail, count
+        return "err", f"Error: {count}", detail, count, True
     if getattr(checks, "look_closer", False) is True:
-        return "warn", f"Attention: {count}", detail, count
+        return "warn", f"Attention: {count}", detail, count, True
+    if getattr(checks, "open", True) is False and isinstance(cannot, int) and not isinstance(cannot, bool) and cannot:
+        return "warn", f"Attention: {count}", detail, count, False
     if getattr(checks, "open", True) is False:
-        return "done", f"Done: {count}", detail, count
-    return None, f"To come: {count}", detail, count
+        return "done", f"Done: {count}", detail, count, True
+    return None, f"To come: {count}", detail, count, True
 
 
 def step_states(session, *, live: str | None = None, stopping: bool = False, pending: frozenset = frozenset(),
@@ -112,7 +117,8 @@ def step_states(session, *, live: str | None = None, stopping: bool = False, pen
     checks' summary (read by its attributes, as ``core.gui.check_lineage.ChecksSummary`` holds them), None while the
     checks have not been read: with it Checks needs only a prior, and reads "Error", "Attention" or "Done" with its
     count when a deciding check failed, needs a closer look, or every one that applies passed, else its count, in hand
-    while one is open; with none it reads as before the checks were counted. ``kept`` is what the run history and the kept
+    while one is open; with none open and one that no run can pass for the posterior in use, "Attention" with its count,
+    never in hand; with none it reads as before the checks were counted. ``kept`` is what the run history and the kept
     trainings offer step 3 (read by its attributes, as ``core.gui.continuing.Offer`` holds them; None for nothing): a
     kept training to resume, after the epoch it holds, or a training to continue, or stopped, with the batches its
     simulation set holds; anything else it offers changes no step.
@@ -169,8 +175,8 @@ def step_states(session, *, live: str | None = None, stopping: bool = False, pen
         elif not can_start:
             states.append(_state(key, "later", needs[key], needs[key], False, may_be_in_hand=may))
         elif key == "checks" and counted:
-            marker, words, detail, count = _counted(checks)
-            states.append(_state(key, marker or "later", detail, words, True))
+            marker, words, detail, count, may = _counted(checks)
+            states.append(_state(key, marker or "later", detail, words, True, may_be_in_hand=may))
             if marker is None:
                 waiting[key] = (detail, f"Now: {count}")
         else:

@@ -1176,7 +1176,7 @@ def test_the_chain_follows_the_session_and_the_run(tmp_path):
             assert spoken()[2] == "Step 3, Training. Now: running"
         assert inference.step_states() == rules() and spoken() == [state.spoken for state in rules()]
         assert inference.checks_summary() is not None and spoken()[3] == (
-            "Step 4, Checks. Now: 0 of 3 deciding checks passed; 3 do not apply to this posterior (3 not run yet)"), (
+            "Step 4, Checks. Now: 0 of 3 deciding checks passed; 3 do not apply to this posterior (1 not run yet)"), (
             spoken()[3])
 
 

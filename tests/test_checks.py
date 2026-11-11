@@ -459,6 +459,62 @@ def _expected(states, *, posterior: bool, chi: bool) -> dict:
             "look_closer": bool(closer), "open": bool(still), "can_check": True, "second_line": second}
 
 
+def _with_never(states):
+    """``_rows_of`` with the rows no run can pass for the posterior in use given their reasons: the comparison not
+    compared, and the input use and the identifiability not run as a posterior trained without what they read."""
+    reasons = {"input_use": check_lineage.NO_SIMULATIONS_TEXT, "identifiability": check_lineage.NO_ROTATION_TEXT}
+    made = []
+    for row in _rows_of([state if state != "never" else "Not run yet" for state in states]):
+        never = row.key in check_catalogue.DECIDING and states[check_catalogue.DECIDING.index(row.key)] == "never"
+        if never and row.key == "comparison":
+            row = CheckRow(row.key, "Not compared", "Not compared.", None, None, (), "")
+        elif never:
+            row = CheckRow(row.key, row.state, row.line, None, None, (), reasons[row.key])
+        made.append(row)
+    return tuple(made)
+
+
+def _never_cases():
+    """Every combination of the deciding states a posterior with the frequency response can hold, a check no run can
+    pass among the comparison's, the input use's and the identifiability's states."""
+    open_ = _OPEN_STATES
+    for states in itertools.product(open_, open_, (*open_, "never"), open_, (*open_, "never"), (*open_, "never")):
+        yield list(states)
+
+
+def _expected_never(states) -> dict:
+    """What the headline, its sentence and the summary say of six deciding states of a posterior trained with the
+    frequency response, among them "never" for a check no run can pass for it, worked out here from the states alone:
+    such a check is not passed, counts in the six, holds nothing open, is named in the sentence once nothing failed or
+    needs a closer look, and is counted last on the second line."""
+    names = [one.name for one in check_catalogue.CHECKS[:6]]
+    passed = states.count("Passed")
+    failed = [name for name, state in zip(names, states) if state == "Failed"]
+    closer = [name for name, state in zip(names, states) if state == "Look closer"]
+    never = [name for name, state in zip(names, states) if state == "never"]
+    still = sum(1 for state in states if state not in ("Passed", "never"))
+    opened = ("" if not still else "Inference can be run now; 1 deciding check is still open." if still == 1
+              else f"Inference can be run now; {still} deciding checks are still open.")
+    if failed:
+        sentence = "Failed: " + ", ".join(failed) + "."
+    elif closer:
+        sentence = "Look closer: " + ", ".join(closer) + "."
+    elif opened and never:
+        sentence = f"{opened} No run can pass {', '.join(never)} for this posterior."
+    elif opened:
+        sentence = opened
+    elif never:
+        sentence = f"Inference can be run now; no run can pass {', '.join(never)} for this posterior."
+    else:
+        sentence = "This posterior has passed every deciding check."
+    second = (f"{len(failed)} failed" if failed else f"{len(closer)} to look closer at" if closer
+              else f"{states.count('Not run yet')} not run yet" if "Not run yet" in states
+              else f"{len(never)} that no run can pass" if never else "")
+    return {"headline": f"{passed} of 6 deciding checks passed", "sentence": sentence, "passed": passed, "of": 6,
+            "failed": bool(failed), "look_closer": bool(closer), "open": bool(still), "can_check": True,
+            "second_line": second, "cannot_pass": len(never)}
+
+
 def _cases():
     """Every combination of the deciding states a posterior can hold, with the frequency response and without, and the
     ones with no posterior."""
@@ -473,9 +529,10 @@ def _cases():
 
 def test_the_headline_over_every_combination_of_states():
     """For every combination of the six deciding states, with a posterior trained with the frequency response, one
-    trained without it, and with none, the headline, its sentence and every field of the summary are what the rules
-    give from the states alone: n of 6, or n of 3 with the three that do not apply said for a posterior trained without
-    it; the first sentence that applies; and the first count of the second line."""
+    trained without it, and with none, and for every combination with a check no run can pass among them, the headline,
+    its sentence and every field of the summary are what the rules give from the states alone: n of 6, or n of 3 with
+    the three that do not apply said for a posterior trained without it; the first sentence that applies; and the first
+    count of the second line."""
     seen = 0
     for states, posterior, chi in _cases():
         held = _held(posterior=POSTERIOR if posterior else None, chi=chi)
@@ -485,7 +542,13 @@ def test_the_headline_over_every_combination_of_states():
         assert check_lineage.headline(rows, held=held) == (want["headline"], want["sentence"]), (states, posterior, chi)
         assert {name: getattr(said, name) for name in want} == want, (states, posterior, chi)
         seen += 1
-    assert seen == 4 ** 6 + 4 ** 3 + 4 ** 2 + 1
+    for states in _never_cases():
+        rows, held, want = _with_never(states), _held(), _expected_never(states)
+        said = check_lineage.summary(rows, held=held)
+        assert check_lineage.headline(rows, held=held) == (want["headline"], want["sentence"]), states
+        assert {name: getattr(said, name) for name in want} == want, states
+        seen += 1
+    assert seen == 4 ** 6 + 4 ** 3 + 4 ** 2 + 1 + 4 * 4 * 5 * 4 * 5 * 5
     nothing = check_lineage.rows(_held(prior=None), (), ())
     said = check_lineage.summary(nothing, held=_held(prior=None))
     assert {row.state for row in nothing} == {"Waiting for a prior"}
@@ -532,7 +595,7 @@ def test_the_summarys_second_line_counts_the_first_that_applies():
     assert second(["Does not apply"] * 3 + ["Waiting for a posterior"] * 3, posterior=None, chi=False) == (
         "3 wait for step 3")
     assert second(["Passed", "Passed", "Waiting for the audit", "Not run yet", "Passed", "Passed"]) == "2 not run yet"
-    assert second(["Passed", "Passed", "Not compared", "Passed", "Passed", "Passed"]) == ""
+    assert second(["Passed", "Passed", "Not compared", "Passed", "Passed", "Passed"]) == "1 that no run can pass"
     assert second(["Passed"] * 6) == ""
 
 

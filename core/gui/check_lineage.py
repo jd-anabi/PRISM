@@ -6,7 +6,9 @@ A record counts only for the record it was made for, matched by id and never by 
 and keeps its id. Of several, the newest that counts decides, and the row says when an earlier one came out
 differently; the frequency band is judged on each cell by that cell's newest, and reads the worst of them. What is in
 use reaches here as plain values (``Held``), worked out by the screen: nothing here reads the session, and nothing here
-imports the toolkit, torch or the engine's settings.
+imports the toolkit, torch or the engine's settings. A deciding check that no run can pass for the posterior in use,
+since the posterior was made without what it reads, is not passed and no longer holds the checks open; a check that a
+run or a load can still pass holds them open.
 
 The two readings of the disk here are the ones the screen makes, with no run live: every check record's manifest, each
 read once by its folder, and one record's text or manifest by its folder. Neither goes through the store's lookup by
@@ -63,12 +65,18 @@ ONE_OPEN_TEXT = "Inference can be run now; 1 deciding check is still open."
 SEVERAL_OPEN_TEXT = "Inference can be run now; {} deciding checks are still open."
 ALL_PASSED_TEXT = "This posterior has passed every deciding check."
 ALL_THAT_APPLY_TEXT = "This posterior has passed every deciding check that applies to it."
+NO_RUN_PASSES_TEXT = "Inference can be run now; no run can pass {} for this posterior."
+OPEN_AND_NO_RUN_TEXT = "{} No run can pass {} for this posterior."
+#: The reasons a deciding check's row gives that no run can lift for the posterior in use: it was made without what
+#: the check reads.
+CANNOT_PASS_REASONS = (NO_SIMULATIONS_TEXT, NO_ROTATION_TEXT)
 #: The summary's second line.
 FAILED_COUNT_TEXT = "{} failed"
 CLOSER_COUNT_TEXT = "{} to look closer at"
 ONE_WAITS_TEXT = "1 waits for step 3"
 SEVERAL_WAIT_TEXT = "{} wait for step 3"
 NOT_RUN_COUNT_TEXT = "{} not run yet"
+NO_RUN_COUNT_TEXT = "{} that no run can pass"
 
 #: The two checks made before a training, as "Before you start" says them, and the question a start asks after one
 #: failed.
@@ -98,7 +106,9 @@ class Held:
     bounds file has a forcing section; the engine's sentence refusing the prior in use with the posterior ("" when it
     passes, or was not read); the set's counts of unusable driven recordings, its unusable, its total, its batches
     counted and the scope the engine names them by (None when not read or not there), whether the set is complete and
-    when it was completed; and the prior and the posterior as a sentence names them."""
+    when it was completed; the prior and the posterior as a sentence names them; and whether the posterior's set and
+    text were read for the posterior now in use (``set_read``: False between a posterior coming into use and the next
+    reading)."""
     prior: str | None
     posterior: str | None
     posterior_prior: str | None
@@ -116,6 +126,7 @@ class Held:
     prior_words: str
     posterior_words: str
     set_when: datetime | None = None
+    set_read: bool = True
 
 
 @dataclass(frozen=True)
@@ -137,9 +148,11 @@ class CheckRow:
 class ChecksSummary:
     """What the chain of steps and Home read of the checks: how many deciding checks ``passed``, ``of`` how many (six,
     or the three that apply to a posterior trained without the frequency response); whether any ``failed`` or reads
-    ``look_closer``; whether one that applies is still ``open``; whether anything ``can_check`` yet (a prior is in use);
-    the ``second_line``, the first of what failed, what to look closer at, what waits for step 3 and what is not run yet
-    ("" for none); and the ``headline`` and the ``sentence`` under it."""
+    ``look_closer``; whether one that applies is still ``open``, a run able to pass it; whether anything ``can_check``
+    yet (a prior is in use); the ``second_line``, the first of what failed, what to look closer at, what waits for step
+    3, what is not run yet and what no run can pass ("" for none); the ``headline`` and the ``sentence`` under it; and
+    ``cannot_pass``, how many deciding checks no run can pass for the posterior in use, none of them passed and none
+    of them open."""
     passed: int
     of: int
     failed: bool
@@ -149,6 +162,7 @@ class ChecksSummary:
     second_line: str
     headline: str
     sentence: str
+    cannot_pass: int = 0
 
 
 # ── the two readings ──
@@ -453,6 +467,26 @@ def _deciding(found) -> list:
     return [row for row in found if row.key in DECIDING]
 
 
+def no_run_passes(row: CheckRow, *, held: Held) -> bool:
+    """Whether no run can pass the deciding check of ``row`` for the posterior in use, so that the row no longer holds
+    the step open though it does not count as passed: the use of each part of the input for a posterior trained without
+    keeping its simulations, the identifiability of one trained without the rotation, each with no record that counts,
+    and the comparison after simulating not compared, as a reading of the posterior's simulation set found it. A row
+    that passed or does not apply, a check that does not decide, and every row while no posterior is in use are none of
+    these: a load, a run or a reading lifts what they wait for."""
+    if held.posterior is None or row.key not in DECIDING or row.state in ("Passed", "Does not apply"):
+        return False
+    if row.key == "comparison":
+        return row.state == "Not compared" and held.set_read
+    return row.record is None and row.reason in CANNOT_PASS_REASONS
+
+
+def _still_open(deciding, held: Held) -> list:
+    """The deciding rows that apply and have not passed, a run or a load able to pass each."""
+    return [row for row in deciding if row.state not in ("Passed", "Does not apply")
+            and not no_run_passes(row, held=held)]
+
+
 def _counts(found, held: Held) -> tuple[int, int, int]:
     """How many deciding checks passed, of how many, and how many do not apply to a posterior trained without the
     frequency response (none counted otherwise: with no such posterior the headline is of all six)."""
@@ -481,32 +515,40 @@ def headline(found: Sequence[CheckRow], *, held: Held) -> tuple[str, str]:
     if held.posterior is None:
         none_apply = sum(row.state == "Does not apply" for row in deciding)
         return said, THREE_DO_NOT_APPLY_TEXT if none_apply == 3 else OTHER_FOUR_TEXT
-    still = sum(row.state not in ("Passed", "Does not apply") for row in deciding)
-    if still:
-        return said, ONE_OPEN_TEXT if still == 1 else SEVERAL_OPEN_TEXT.format(still)
+    still = len(_still_open(deciding, held))
+    never = ", ".join(entry(row.key).name for row in deciding if no_run_passes(row, held=held))
+    opened = (ONE_OPEN_TEXT if still == 1 else SEVERAL_OPEN_TEXT.format(still)) if still else ""
+    if opened and never:
+        return said, OPEN_AND_NO_RUN_TEXT.format(opened, never)
+    if opened:
+        return said, opened
+    if never:
+        return said, NO_RUN_PASSES_TEXT.format(never)
     return said, ALL_THAT_APPLY_TEXT if away else ALL_PASSED_TEXT
 
 
-def _second_line(deciding) -> str:
+def _second_line(deciding, held: Held) -> str:
+    never = [row for row in deciding if no_run_passes(row, held=held)]
     for states, one, several in ((("Failed",), FAILED_COUNT_TEXT, FAILED_COUNT_TEXT),
                                  (("Look closer",), CLOSER_COUNT_TEXT, CLOSER_COUNT_TEXT),
                                  (_WAITING_FOR_TRAINING, ONE_WAITS_TEXT, SEVERAL_WAIT_TEXT),
                                  (_NOT_RUN, NOT_RUN_COUNT_TEXT, NOT_RUN_COUNT_TEXT)):
-        count = sum(row.state in states for row in deciding)
+        count = sum(row.state in states and row not in never for row in deciding)
         if count:
             return (one if count == 1 else several).format(count)
-    return ""
+    return NO_RUN_COUNT_TEXT.format(len(never)) if never else ""
 
 
 def summary(found: Sequence[CheckRow], *, held: Held) -> ChecksSummary:
-    """What the chain of steps and Home read of the checks, from their rows."""
+    """What the chain of steps and Home read of the checks, from their rows. A deciding check no run can pass for the
+    posterior in use is not passed, and no longer holds the checks open."""
     passed, of, _away = _counts(found, held)
     deciding = _deciding(found)
     said, sentence = headline(found, held=held)
     return ChecksSummary(passed, of, any(row.state == "Failed" for row in deciding),
-                         any(row.state == "Look closer" for row in deciding),
-                         any(row.state not in ("Passed", "Does not apply") for row in deciding),
-                         held.prior is not None, _second_line(deciding), said, sentence)
+                         any(row.state == "Look closer" for row in deciding), bool(_still_open(deciding, held)),
+                         held.prior is not None, _second_line(deciding, held), said, sentence,
+                         sum(no_run_passes(row, held=held) for row in deciding))
 
 
 # ── before a training ──
