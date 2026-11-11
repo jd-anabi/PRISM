@@ -311,17 +311,18 @@ def answer_in_turn(monkeypatch, *answers) -> None:
     """Answer each shared question in its turn, from now until the test ends or until the next ``choose``: the first
     by the first of ``answers``, and so on. An answer is a pair, the words of the button to click and the line to type
     first into a question that asks for one (None types nothing), or a function handed the question as it stands, which
-    reads it or types into it and clicks nothing. Every question is recorded first; one past the last answer, or whose
-    answer is greyed, is answered with nothing, as the session guard answers it. A message box is left to the guard.
-    Undone with the test's ``monkeypatch``."""
+    reads it, types into it or presses a key in it and clicks nothing; what it hands back, when it is a whole number,
+    is the question's answer (its ``result()`` after a key, say), and anything else answers nothing. Every question is
+    recorded first; one past the last answer, or whose answer is greyed, is answered with nothing, as the session guard
+    answers it. A message box is left to the guard. Undone with the test's ``monkeypatch``."""
     left = list(answers)
 
     def answer(dialog) -> int:
         record(dialog)
         then = left.pop(0) if left else (None, None)
         if callable(then):
-            then(dialog)
-            return 0
+            got = then(dialog)
+            return got if isinstance(got, int) and not isinstance(got, bool) else 0
         words, text = then
         if text is not None and dialog.field is not None:
             dialog.field.setText(text)

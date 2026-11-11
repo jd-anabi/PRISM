@@ -16,8 +16,8 @@ is checked at every keystroke and reads nothing.
 from dataclasses import dataclass
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QSizePolicy, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                               QSizePolicy, QVBoxLayout, QWidget)
 
 from core.artifacts import default_store
 from core.artifacts import manifest
@@ -223,7 +223,9 @@ class Row:
             self._listen(widget)
 
     def _listen(self, widget: QWidget) -> None:
-        """Hear every change of the field, however its kind says one."""
+        """Hear every change of the field, however its kind says one: a file row's at each keystroke in its box, as any
+        box of text is heard, so that its facts follow every edit; its ``changed``, said once a path is chosen, is a
+        page's to hear."""
         number = _number_of(widget)
         if number is not None:
             number.error_changed.connect(self._field_error)
@@ -231,6 +233,7 @@ class Row:
             widget.error_changed.connect(self._field_error)
         said = (widget.currentIndexChanged if isinstance(widget, QComboBox) else
                 widget.toggled if isinstance(widget, QCheckBox) else
+                widget.edit.textChanged if isinstance(widget, labeled_inputs.PathField) else
                 widget.textChanged if isinstance(widget, QLineEdit) else getattr(widget, "changed", None))
         if said is not None:
             said.connect(self._edited)
@@ -287,7 +290,8 @@ class Row:
 
     def set_value(self, value) -> None:
         """Show ``value``, as a plan fills a form: nothing is judged here. In a list, the item that holds it; a list
-        that holds no such item stays as it stands."""
+        that holds no such item stays as it stands. A table of rows is filled with a row for each value, and emptied
+        with none, asking nothing."""
         widget = self.widget
         if widget is None:
             self._label = str(value)
@@ -301,7 +305,7 @@ class Row:
                 widget.setCurrentIndex(found)
         elif isinstance(widget, QCheckBox):
             widget.setChecked(bool(value))
-        elif isinstance(widget, labeled_inputs.PathField):
+        elif isinstance(widget, (labeled_inputs.PathField, RowTable)):
             widget.set_value(value)
         else:
             widget.setText("" if value is None else str(value))
@@ -651,7 +655,17 @@ class RowTable(QWidget):
 
     def add_row(self) -> QWidget:
         """A row more, at the end, made by the caller; its edits are the table's."""
+        row = self._made()
+        self.joined.emit()
+        self.changed.emit()
+        return row
+
+    def _made(self, *value) -> QWidget:
+        """A row made by the caller, given ``value`` when one is handed, its remove button and its reading, put at the
+        end, saying nothing: its edits are heard from then on."""
         row = self._make()
+        if value:
+            row.set_value(value[0])
         holder = QWidget()
         column = QVBoxLayout(holder)
         column.setContentsMargins(0, 0, 0, 0)
@@ -680,9 +694,21 @@ class RowTable(QWidget):
         for said in (getattr(row, "changed", None), *(field.textChanged for field in row.findChildren(QLineEdit))):
             if said is not None:
                 said.connect(self.changed)
+        return row
+
+    def set_value(self, values) -> None:
+        """The table filled with a row for each of ``values``, each given its value by its own ``set_value``, and
+        emptied with none (None or no values), asking nothing: as a plan fills a form or a page puts back what it
+        remembers. Said once, as one edit."""
+        for _row, _button, _reading, holder in self._rows:
+            self._box.removeWidget(holder)
+            holder.hide()
+            holder.deleteLater()
+        self._rows = []
+        for value in values or ():
+            self._made(value)
         self.joined.emit()
         self.changed.emit()
-        return row
 
     def _add_pressed(self) -> None:
         """"Add …": a row more, the keyboard in its first control."""
@@ -701,16 +727,17 @@ class RowTable(QWidget):
 
     def remove(self, row: QWidget) -> None:
         """Take ``row`` away: at once when nothing is typed in it, else once the question is answered with its other
-        answer. The keyboard, if it was in the row, goes to the button that adds one."""
+        answer. The keyboard, if it was in the row as the press came, goes to the button that adds one: where it is is
+        read before the question, which takes it while it stands."""
         entry = next((entry for entry in self._rows if entry[0] is row), None)
         if entry is None:
             return
+        _row, button, _reading, holder = entry
+        held = self.window().focusWidget()
+        had = held is not None and (held is button or holder.isAncestorOf(held))
         if self._typed(row) and not ask(self, self.question.title, self.question.sentence, self.question.keep,
                                         self.question.remove):
             return
-        _row, button, _reading, holder = entry
-        held = QApplication.focusWidget()
-        had = held is not None and (held is button or holder.isAncestorOf(held))
         self._rows.remove(entry)
         self._box.removeWidget(holder)
         holder.hide()

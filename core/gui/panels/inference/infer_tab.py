@@ -401,7 +401,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             if self.cell_source.is_direct():
                 problems = self.values_grid.problems()
                 if problems:
-                    raise Refusal("Fix the values first: " + "; ".join(problems), field="cell")
+                    raise Refusal("Fix the values first: " + " ".join(problems), field="cell")
                 v["cell"] = self.values_grid.to_dicts()
                 return v
             v["cell"] = require_file("cell", self.cell_picker.selected_path(), "cell")

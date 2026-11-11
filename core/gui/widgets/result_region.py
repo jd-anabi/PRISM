@@ -1,8 +1,9 @@
 """What a page says after its run, under what the step holds: sentences, a ruled table, pictures with their captions,
 and up to two plain buttons for the next steps, each of which carries what the step it opens is to take.
 
-The region reads nothing: a page hands it words and the paths of pictures it has, and it shows them. It is hidden while
-it holds nothing, so that a page with no result has no gap where one would stand. A table shows every row, its
+The region reads nothing but the pictures a page hands it by their paths, which ``set_pictures`` reads: a page calls
+it once its run has ended, never while a run is live. The words a page hands it it shows. It is hidden while it holds
+nothing, so that a page with no result has no gap where one would stand. A table shows every row, its
 numbers at the right, its headings across its width, its caption above it and its footnote below it in the small type.
 A picture is the figure the engine drew, shown as it is, light in both themes, and no wider than the page: it is made
 smaller, never larger.
@@ -133,7 +134,8 @@ class ResultRegion(QWidget):
 
     def set_pictures(self, pictures: Sequence[tuple]) -> None:
         """Show each ``(caption, path)`` of ``pictures``: its caption in the small type over the picture, made no wider
-        than the page. A file that holds no picture is left out."""
+        than the page. Each file is read here, so a page calls this once its run has ended, never while a run is live.
+        A file that holds no picture is left out."""
         for caption, picture in self.pictures:
             for part in (caption, picture):
                 self._pictures.removeWidget(part)

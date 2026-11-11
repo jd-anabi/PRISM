@@ -465,6 +465,8 @@ EPOCH_TAKES_TEXT = "Fit: {}."
 NO_ESTIMATE_TEXT = ("No time estimate: no training of this size has run on this computer, and the timing of a short "
                     "fit has not been run.")
 PENDING_TEXT = "Step {}, {}, has changes that are not applied. This run uses what is in use: {}."
+#: The same, for a step that holds nothing: there is nothing in use to name.
+PENDING_NOTHING_TEXT = "Step {}, {}, has changes that are not applied."
 POSTERIOR_IN_USE_TEXT = "{:,} epochs, network {} by {}, on {:,} simulations, prior {}. Saved as a record."
 POSTERIOR_SAVED_TEXT = "Saved as a record."
 FROM_ROUND_TEXT = "From a narrowing round."
@@ -600,8 +602,9 @@ def how_long_words(*, per_batch=None, per_epoch=None, batches=0, epochs=None) ->
 
 
 def pending_words(number: int, name: str, held: str) -> str:
-    """Another step whose page shows changes it has not applied: this run uses what that step holds, ``held``."""
-    return PENDING_TEXT.format(number, name, held)
+    """Another step whose page shows changes it has not applied: this run uses what that step holds, ``held``; of a
+    step that holds nothing, "" here, the changes alone are said."""
+    return PENDING_TEXT.format(number, name, held) if held else PENDING_NOTHING_TEXT.format(number, name)
 
 
 @dataclass(frozen=True)

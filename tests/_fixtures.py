@@ -1643,18 +1643,19 @@ LISTED_BESIDE, LISTED_NARROW = 890, 436
 def stand_in_list_page(step: str = "checks"):
     """The class of a step page as awkward as the Checks list, built for the step ``step``: in its body, under what is
     in use, a list of the twelve checks in their four groups, sixteen rows of a ruled table (four columns, or "Check"
-    and "State" while a detail is open), beside a detail of its own once ``open_detail`` opens it: a heading, three rows
-    of a form of its own, one of them folded, and a warning of two lines. The page's own form holds one row, and stands
-    out of sight while the detail's form is handed the foot. The detail is the page's child from the start, out of
-    sight until it is opened, as a check's page is: a widget kept with no parent until it is opened, built under the
-    application's style sheet and let go after its window, can corrupt the process's memory. It keeps what it is
-    told as the stand-in page does: ``readings``, ``pressed``, ``said``."""
+    and "State" while a detail is open), beside a detail of its own once ``open_detail`` opens it: a heading, a warning
+    of two lines, a link before its form, three rows of a form of its own, one of them folded, and the name and note of
+    the record its run makes. The detail is the page's child from the start, out of sight until it is opened, as a
+    check's page is: a widget kept with no parent until it is opened, built under the application's style sheet and let
+    go after its window, can corrupt the process's memory. The page's own form holds one row, and stands out of sight
+    while the detail's form is handed the foot. It keeps what it is told as the stand-in page does: ``readings``,
+    ``pressed``, ``said``."""
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+    from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
     from core.gui import check_catalogue, design, style
     from core.gui.panels.inference.step_page import StepPage
     from core.gui.step_facts import Fact
-    from core.gui.widgets.form import Form
+    from core.gui.widgets.form import Form, NameAndNote
     from core.gui.widgets.labeled_inputs import FloatField, IntField
     from core.gui.widgets.list_detail import ListAndDetail
     from core.gui.widgets.message_row import MessageRow
@@ -1665,13 +1666,14 @@ def stand_in_list_page(step: str = "checks"):
 
         def __init__(self):
             super().__init__()
-            whole, narrow, self.headings = [], [], []
+            whole, narrow, self.headings, self.row_of = [], [], [], {}
             for group in check_catalogue.GROUPS:
                 self.headings.append(len(whole))
                 whole.append([TextCell(group, wrap=True), TextCell(""), TextCell(""), TextCell("")])
                 narrow.append([TextCell(group, wrap=True), TextCell("")])
                 for entry in (entry for entry in check_catalogue.CHECKS if entry.group == group):
                     state = StateCell("warn", LISTED_STATES[entry.number])
+                    self.row_of[entry.key] = len(whole)
                     whole.append([TextCell(entry.name, wrap=True), TextCell(entry.role), state,
                                   TextCell("3 Oct 2026, 14:02")])
                     narrow.append([TextCell(entry.name, wrap=True), state])
@@ -1700,8 +1702,21 @@ def stand_in_list_page(step: str = "checks"):
         def stops(self):
             return [(self.narrow if self.narrowed else self.whole).view]
 
+        def take_the_keyboard(self, detail):
+            """The keyboard on the row of the check ``detail`` shows, in the table in sight."""
+            row = self.row_of.get(getattr(detail, "key", None))
+            if row is None:
+                return False
+            view = (self.narrow if self.narrowed else self.whole).view
+            view.setCurrentIndex(view.model().index(row, 0))
+            view.setFocus(Qt.TabFocusReason)
+            return True
+
     class _Detail(QWidget):
-        """A check's page as a stand-in: its heading, a form of three rows, one folded, and a warning of two lines."""
+        """A check's page as a stand-in, the calibration's: its heading, a warning of two lines, a link that stands before
+        its form, and a form of three rows, one folded, with the name and note of the record its run makes."""
+
+        key = "calibration"
 
         def __init__(self, parent=None):
             super().__init__(parent)
@@ -1713,17 +1728,21 @@ def stand_in_list_page(step: str = "checks"):
             box.addWidget(self.heading)
             self.warning = MessageRow("warn", TWO_LINES)
             box.addWidget(self.warning)
+            self.earlier = style.set_class(QPushButton("Earlier runs"), cls="link")
+            box.addWidget(self.earlier, 0, Qt.AlignLeft)
             self.form = Form()
             self.form.add("n_cal", IntField(2000, grouped=True), "datasets", usual=2000, label="Test datasets")
             self.form.add("cal_n_scales", IntField(200, grouped=True), "points", usual=200, label="Operating points")
             self.form.add("learning_rate", FloatField("0.0005"), usual=0.0005, folded=True)
+            self.names = NameAndNote("calibration", required=False)
+            self.form.add_name(self.names)
             box.addWidget(self.form)
 
         def fit(self, width):
             self.form.fit(width)
 
         def stops(self):
-            return []                        # its form's stops are the foot's, handed the form
+            return [self.earlier]            # what stands before its form: the form's are the foot's, handed the form
 
     class _ListPage(StepPage):
         def __init__(self, screen, parent=None):
@@ -1818,6 +1837,11 @@ def stand_in_table_page(step: str = "infer"):
 
         def value(self):
             return self.path.value_or_none(), self.hz.value_or_none()
+
+        def set_value(self, value):
+            path, hz = value
+            self.path.set_value(path)
+            self.hz.setText("" if hz is None else str(hz))
 
         def stops(self):
             return [*self.path.stops(), self.hz]

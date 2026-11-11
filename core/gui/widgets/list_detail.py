@@ -4,10 +4,10 @@ the list's place, with a plain link above it that goes back to the whole list.
 
 The switch reads the page's width, as the page's body is told it, and nothing else: the low window is a rule on the
 window's height and says nothing of the room beside a list. Beside, neither part is ever narrower than it needs to be:
-the detail stands beside the list only where the width holds the list's least width, the gap and the detail's least
-width, and from the width the caller names, which it scales.
+the detail stands beside the list only where the width holds the width the list asks for, the gap and the detail's least
+width as it stands in the room left, and from the width the caller names, which it scales.
 """
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from .. import design, style
@@ -18,6 +18,15 @@ BACK_WORDS = "All checks"
 def _least(part: QWidget) -> int:
     """The least width ``part`` stands at: what its layout asks, or what it was given, whichever is wider."""
     return max(part.minimumSizeHint().width(), part.minimumWidth(), 0)
+
+
+def _least_as_told(part: QWidget) -> int:
+    """The least width ``part`` stands at as it was last told its width. A part told a width lays itself out again only
+    when the layouts it asked for come round, and until then each layout above reads its parts' least widths as they
+    were: the layouts inside ``part`` are laid out first, the deepest first, each telling the one above it."""
+    for widget in [*reversed(part.findChildren(QWidget)), part]:
+        QCoreApplication.sendPostedEvents(widget, QEvent.LayoutRequest)
+    return _least(part)
 
 
 def _wanted(part: QWidget) -> int:
@@ -34,8 +43,10 @@ def _stops_of(part: QWidget) -> list:
 
 class ListAndDetail(QWidget):
     """``listing`` and the detail ``show_detail`` hands it. The listing answers ``set_narrow(on)``: told True while a detail
-    is open, it shows less of itself. ``back_pressed`` is said when the link above a detail in the list's place is
-    pressed, once the whole list stands again."""
+    is open, it shows less of itself; and it may answer ``take_the_keyboard(detail)``, putting the keyboard on the row
+    of ``detail`` and saying True, which "All checks" asks when it held the keyboard, else the list's first stop takes
+    it. ``back_pressed`` is said when the link above a detail in the list's place is pressed, once the whole list
+    stands again."""
 
     back_pressed = Signal()
 
@@ -62,6 +73,7 @@ class ListAndDetail(QWidget):
         self._row.setSpacing(self._gap)
         self._row.addWidget(listing, 1)
         box.addLayout(self._row)
+        self._listing_widths = (listing.minimumWidth(), listing.maximumWidth())   # its own, put back in place
         listing.set_narrow(False)
 
     def show_detail(self, detail: "QWidget | None") -> None:
@@ -88,29 +100,53 @@ class ListAndDetail(QWidget):
 
     def _arrange(self) -> None:
         """Beside where the width holds both, else in the list's place; the whole list with no detail. Beside, the list
-        stands at the width it asks for, told narrow, and the detail takes the rest, which it is told, as it is told the
-        whole width in the list's place."""
+        is held at the width it asks for, told narrow, and the detail takes the rest, which it is told, as it is told the
+        whole width in the list's place. The detail's least width is read as it would stand beside, told that room
+        first, so that one width gives one arrangement, however the window came to it and whatever the detail was told
+        before."""
         detail = self.detail
+        self._hold_the_list(None)
         if detail is None:
             self._beside = False
             self.back.setVisible(False)
             self.listing.setVisible(True)
-            self._row.setStretchFactor(self.listing, 1)
             return
         listing = _wanted(self.listing)
-        need = listing + self._gap + _least(detail)
-        self._beside = self._width is not None and self._width >= max(self.beside_width, need)
-        self.back.setVisible(not self._beside)
-        self.listing.setVisible(self._beside)
-        self._row.setStretchFactor(self.listing, 0 if self._beside else 1)
-        detail.setVisible(True)
         told = getattr(detail, "fit", None)
-        if callable(told) and self._width is not None:
-            told(self._width - listing - self._gap if self._beside else self._width)
+        room = None if self._width is None else self._width - listing - self._gap
+        detail.setVisible(True)
+        if callable(told) and room is not None:
+            told(room)
+        self._beside = room is not None and self._width >= self.beside_width and room >= _least_as_told(detail)
+        self.back.setVisible(not self._beside)
+        self._hold_the_list(listing if self._beside else None)
+        self.listing.setVisible(self._beside)
+        if callable(told) and room is not None and not self._beside:
+            told(self._width)
+
+    def _hold_the_list(self, width: "int | None") -> None:
+        """Hold the list at ``width``, or let it have its own least and most widths again with None."""
+        if width is None:
+            self.listing.setMinimumWidth(self._listing_widths[0])
+            self.listing.setMaximumWidth(self._listing_widths[1])
+        else:
+            self.listing.setFixedWidth(width)
 
     def _back_pressed(self) -> None:
+        """"All checks": the whole list again, and the keyboard, when the link held it, back on the list: on the row of
+        the detail just left where the list names one, else at its first stop."""
+        held = self.window().focusWidget() is self.back
+        left = self.detail
         self.show_detail(None)
         self.back_pressed.emit()
+        if not held:
+            return
+        take = getattr(self.listing, "take_the_keyboard", None)
+        if callable(take) and take(left):
+            return
+        stops = _stops_of(self.listing)
+        if stops:
+            stops[0].setFocus(Qt.TabFocusReason)
 
     def stops(self) -> list:
         """What the Tab key stops at, in the order it is read: the link and the detail in the list's place; else the

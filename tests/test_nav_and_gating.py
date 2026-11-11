@@ -4011,6 +4011,12 @@ def test_the_simulated_branch_refuses_a_missing_or_misfitting_cell_at_the_click(
     panel.cell_source.is_direct = lambda: True
     panel.values_grid.problems = lambda: ["k: must be a number"]
     assert click() == "Fix the values first: k: must be a number"
+    # a real grid: its sentences stand one after another, joined as sentences are
+    del panel.values_grid.problems
+    panel.values_grid.load({}, {"k": 1.0, "lam": 2.0}, {}, {})
+    panel.values_grid._fields[("PARAM", "k")].setText("1e")
+    panel.values_grid._fields[("PARAM", "lam")].setText("")
+    assert click() == "Fix the values first: The value of k must be a number; got '1e'. Type a value for lam."
 
 
 def test_the_probe_planner_refuses_a_blank_t_obs_through_the_yellow_box(tmp_path):

@@ -6518,6 +6518,13 @@ for name, host, form in (("frame", frame, frame.controls_scroll), ("rebuilt", re
     report[name] = measured(host, form)
     stand_in.release()
     turn_until(app, lambda: not held.is_live(), 30)
+    if host is listed:
+        report["listed_after"] = []
+        for width in (900, 1300):
+            window.resize(width, 600)
+            settle()
+            report["listed_after"].append([width, listed.list_detail.beside(), listed.scroller.widget().width(),
+                                           listed.scroller.viewport().width()])
 print(json.dumps(report), file=sys.__stdout__, flush=True)
 QThreadPool.globalInstance().waitForDone(10000)
 '''
@@ -6543,6 +6550,10 @@ def test_nothing_of_the_run_page_is_hidden_at_150_percent_display_scaling(tmp_pa
     assert report["ratio"] == 1.5, "the scaling was not in force"
     assert len(report["frame"]) == len(report["rebuilt"]) == len(report["listed"]) == 9, "a leg measured nothing"
     assert report["beside"], "the list's detail did not stand beside it as the run began"
+    assert [beside for _width, beside, _wide, _shows in report["listed_after"]] == [False, True], (
+        "after the run the detail did not stand in the list's place, then beside it", report["listed_after"])
+    for width, _beside, wide, shows in report["listed_after"]:
+        assert wide <= shows, ("after the run the list's page is wider than what shows it", width, wide, shows)
     for name in ("frame", "rebuilt", "listed"):
         for row in report[name]:
             assert row["window"] == row["width"], (name, row)

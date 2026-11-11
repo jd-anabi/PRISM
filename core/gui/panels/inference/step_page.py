@@ -152,6 +152,7 @@ class StepPage(RunHost, QWidget):
         self.form.edited.connect(self._edited)
         self.form.joined.connect(self._a_stop_joined)
         self._forms = [self.form]            # every form the page has handed the foot, all of which a run locks
+        self._own_form = self.form           # the page's own, in its body; one handed stands in what it lists
         self._locked = False                 # a run is live and the page's forms are locked
         body = _Body()
         body.form = self.form
@@ -281,12 +282,15 @@ class StepPage(RunHost, QWidget):
         page adds its rows after this page is built, so the order is set here, once they stand, as a page first comes into
         sight, and again as a row joins the form or a figure joins the stack. A part that is a stop only at times has its
         place all the same. A control that makes its own fields again after that, as a grid does, calls this when it
-        has."""
+        has. A form the page handed the foot (``use_form``) stands inside what the page lists, a detail's: its stops come
+        right after the stops the page lists before it."""
         region, after = self.region_stops(), self.region_after_the_form()
-        stops = [*self.head.findChildren(QPushButton), *self.run_view.stops(), *([] if after else region),
+        own = self.form is self._own_form
+        listed = region if own else [*region, *self.form.stops()]
+        stops = [*self.head.findChildren(QPushButton), *self.run_view.stops(), *([] if after else listed),
                  *self.result.next_buttons, self.run_view.how_link, *self.figure_stack.stops(), self.next_button,
-                 *self.form.stops(), *(region if after else []), self.scroller, self.foot.facts.scroller,
-                 *self.foot.stops()]
+                 *(self.form.stops() if own else []), *(listed if after else []), self.scroller,
+                 self.foot.facts.scroller, *self.foot.stops()]
         policies = [(stop, stop.focusPolicy()) for stop in stops]
         for stop, policy in policies:
             stop.setFocusPolicy(policy | Qt.TabFocus)
@@ -428,10 +432,17 @@ class StepPage(RunHost, QWidget):
             return []
         session, said = getattr(screen, "session", None), []
         # Checks holds nothing, so a run reads nothing of its page and its changes are never said here.
-        held = {"model": lambda: model_label(getattr(getattr(session, "draft", None), "model", None)),
-                "prior": lambda: record_words.label_of(getattr(session, "inf_prior", None)),
-                "training": lambda: record_words.label_of(getattr(session, "posterior", None)),
-                "infer": lambda: record_words.label_of(getattr(session, "observation", None))}
+        # A step that holds nothing has nothing in use to name: its sentence says the changes alone.
+        def label(slot):
+            record = getattr(session, slot, None)
+            return "" if record is None else record_words.label_of(record)
+
+        def model():
+            draft = getattr(session, "draft", None)
+            return "" if draft is None else model_label(getattr(draft, "model", None))
+
+        held = {"model": model, "prior": lambda: label("inf_prior"), "training": lambda: label("posterior"),
+                "infer": lambda: label("observation")}
         for step in held:
             if step in pending and keys.step_number(step) < keys.step_number(self.step):
                 said.append(pending_words(keys.step_number(step), keys.step(step).name, held[step]()))
@@ -590,10 +601,11 @@ class StepPage(RunHost, QWidget):
     figures_until_returned = False
 
     def _run_began(self, spec) -> None:
-        """A run of this page's own takes away the page's own line, and empties its figures and takes its column; on a
-        page whose figures stay until the run returns its record, its figures are kept apart instead, out of sight on
-        the run's page. A run that only loads a record keeps them while it runs, and leaves the last run that took the
-        column its figures and its link: the figures the load adds are kept apart."""
+        """A run of this page's own takes away the page's own line, and empties its figures and its result and takes its
+        column; on a page whose figures stay until the run returns its record, its figures and its result are kept
+        instead, the figures apart, out of sight on the run's page, the result until the page says the new one. A run
+        that only loads a record keeps them while it runs, and leaves the last run that took the column its figures and
+        its link: the figures the load adds are kept apart."""
         self.in_use.say(None)
         self._hand_back = False
         if spec.loads_only:
@@ -603,6 +615,7 @@ class StepPage(RunHost, QWidget):
                 self._build_from = self.figure_stack.mark()
             else:
                 self.figure_stack.clear_all()
+                self.result.clear()
             self._link_withdrawn = False
         super()._run_began(spec)
 

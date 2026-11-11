@@ -2084,9 +2084,39 @@ def test_a_file_rows_browse_button_follows_its_field_in_the_tab_order(tmp_path, 
     window.hide()
 
 
+def test_a_corrected_path_typed_into_a_file_row_frees_the_start_at_once(tmp_path):
+    """After a refused start on a file row, the row is marked and the start greyed; a corrected path typed into its box,
+    the keyboard still in it, takes the mark away and frees the main button at the first keystroke: a file row's facts
+    follow every edit, as every field's do. Leaving the box says the path changed once, as before."""
+    from PySide6.QtTest import QTest
+    from core.refusals import Refusal
+    window, page = _a_table_page(tmp_path)
+    page.names.other_name.setText("cell_a")
+    page.names.check_now()
+    row, field = page.cell_row, page.cell
+    heard = []
+    field.changed.connect(lambda: heard.append(field.value_or_none()))
+    with in_front(window):
+        page._refusal(Refusal("This cell file was not found: C:/cells/gone.txt.", field="cell"))
+        _settle()
+        assert row.refused() and not page.foot.main_button.isEnabled()
+        assert QApplication.focusWidget() is field.edit
+        QTest.keyClicks(field.edit, "C")
+        _settle()
+        assert QApplication.focusWidget() is field.edit, "the keyboard left the box"
+        assert row.refused() == "" and page.foot.main_button.isEnabled(), (
+            "a keystroke in a file row left its refusal standing", row.refused(), page.foot.reason.text())
+        assert heard == [], "a keystroke said the path was chosen"
+        QTest.keyClicks(field.edit, ":/cells/a.txt")
+        page.foot.main_button.setFocus(Qt.TabFocusReason)
+        _settle()
+    assert heard == ["C:/cells/a.txt"]
+    window.hide()
+
+
 def test_a_grid_on_a_page_scrolls_with_the_page_and_says_its_problems_in_words(tmp_path):
     """A grid of values on a page has no scroll area of its own, so the page's own scroll reaches every field; its fields
-    stand as a rebuilt page's numbers do, right aligned at the look's width. It says a change of any value and its rows
+    stand as a rebuilt page's numbers do, right aligned in digits of equal width at the look's width. It says a change of any value and its rows
     made again; and what is wrong with it in the window's words, each parameter by the name it is shown under: nothing
     loaded, a value blank, a value that is no number, a comma. A grid of the old frame keeps its own scroll."""
     from PySide6.QtWidgets import QScrollArea
@@ -2097,6 +2127,7 @@ def test_a_grid_on_a_page_scrolls_with_the_page_and_says_its_problems_in_words(t
     assert build_part(ValuesGrid).findChildren(QScrollArea), "a grid of the old frame lost its own scroll"
     field = grid._fields[("RESCALE", "T")]
     assert field.alignment() & Qt.AlignRight and field.width() == design.scaled(design.SIZE["number_w"])
+    assert field.font() == fonts.inter("body", tabular=True), "the grid's digits are not of equal width"
     heard = []
     grid.changed.connect(lambda: heard.append(1))
     assert grid.problems() == []
@@ -2162,20 +2193,46 @@ def test_a_table_of_rows_adds_removes_and_keeps_each_rows_reading(tmp_path):
     assert table.stops() == [first.path.edit, first.path.browse, first.hz, table.remove_button(first),
                              third.path.edit, third.path.browse, third.hz, table.remove_button(third), table.add_button]
     assert form.stops()[:len(table.stops())] == table.stops(), "the page's order does not take the table's"
+    last = table._rows[-1][3]
+    assert table.add_button.y() >= last.y() + last.height(), "'Add' does not stand under the last row"
     table.clear_readings()
     assert (table.reading_of(first), table.reading_of(third)) == (("", ""), ("", ""))
     window.hide()
 
 
-def _escape(dialog) -> None:
-    """The question answered by Escape, as a person presses it."""
+def test_a_table_of_rows_is_filled_and_emptied_quietly(tmp_path):
+    """A table of rows is filled through its row, as a plan fills a form or a page puts back what it remembers: a row
+    for each value, each given its value, in their order, the rows it held let go with no question even where something
+    was typed; and emptied with none, or with None. Each is one edit of the form, and the value reads back as filled."""
+    _window, page = _a_table_page(tmp_path)
+    table, row = page.table, page.form.rows["recording_probe"]
+    _typed(table.add_row(), "C:/kept.npy", "9")
+    edits = []
+    page.form.edited.connect(lambda: edits.append(1))
+    row.set_value([("C:/a.npy", 1.5), ("C:/b.npy", None)])
+    _settle()
+    assert all_asked() == [] and len(edits) == 1, "a fill asked, or was more than one edit"
+    assert row.value() == [("C:/a.npy", 1.5), ("C:/b.npy", None)] and len(table.rows()) == 2
+    assert [(each.path.edit.text(), each.hz.text()) for each in table.rows()] == [("C:/a.npy", "1.5"), ("C:/b.npy", "")]
+    assert table.stops()[-1] is table.add_button and len(table.stops()) == 9
+    row.set_value([])
+    assert (table.rows(), row.value(), len(edits), all_asked()) == ([], [], 2, [])
+    row.set_value([("C:/c.npy", 2.0)])
+    row.set_value(None)
+    assert table.rows() == [] and table.stops() == [table.add_button]
+
+
+def _escape(dialog) -> int:
+    """The question answered by Escape, as a person presses it: its answer is what the key made it."""
     from PySide6.QtTest import QTest
     QTest.keyClick(dialog, Qt.Key_Escape)
+    return dialog.result()
 
 
-def _closed(dialog) -> None:
-    """The question shut by its frame's close button."""
+def _closed(dialog) -> int:
+    """The question shut by its frame's close button: its answer is what the close made it."""
     dialog.close()
+    return dialog.result()
 
 
 @pytest.mark.parametrize("by", ["a click", "Enter on its ring"])
@@ -2183,8 +2240,9 @@ def test_removing_a_row_that_holds_something_asks_first(by, tmp_path, monkeypatc
     """STANDING. A press of a row's remove button, by a click or by Enter on its ring, takes a row with nothing typed away
     at once and asks nothing. A row that holds anything typed, a path or a frequency, still being typed or not, asks first
     in the shared question, the answer that keeps it preselected; "Keep it", Escape, the frame's close and no answer keep
-    the row and what is typed in it, and "Remove it" takes it away, the keyboard on the button that adds one. Enter keeps
-    pressing the ringed button, as everywhere in the window."""
+    the row and what is typed in it, each answer read as the question took it; "Remove it" takes it away, the keyboard
+    on the button that adds one when it was in the row as the press came, read before the question takes it, and left
+    where it was in another field. Enter keeps pressing the ringed button, as everywhere in the window."""
     from tests._fixtures import stand_in_table_page, whole_program
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     with whole_program() as (_app, window):
@@ -2200,7 +2258,7 @@ def test_removing_a_row_that_holds_something_asks_first(by, tmp_path, monkeypatc
 def _remove_the_rows(by, window, page, monkeypatch):
     """The legs of the test above, on a page of the whole program, whose window presses the ringed button on Enter."""
     from PySide6.QtTest import QTest
-    from tests._dialogs import answer_in_turn, forget_asked
+    from tests._dialogs import answer_in_turn, choose, forget_asked
     from tests._look_helpers import _arrive
     table = page.table
     rows = [table.add_row() for _ in range(3)]
@@ -2233,12 +2291,23 @@ def _remove_the_rows(by, window, page, monkeypatch):
                 "Keep it", "Keep it"), said
             assert table.rows() == [row, rows[2]] and row.hz.text() == "2.5", (answer, "the typed row went")
         _typed(row, "C:/a.npy")
-        answer_in_turn(monkeypatch, ("Remove it", None))
+        # the question takes the keyboard while it stands: where it was is read before it is asked
+        choose(monkeypatch, words="Remove it", during=lambda: page.help_button.setFocus(Qt.OtherFocusReason))
         forget_asked()
+        if by == "a click":
+            row.path.edit.setFocus(Qt.TabFocusReason)
         press(row)
         assert len(all_asked()) == 1 and table.rows() == [rows[2]]
         _settle()
-        assert QApplication.focusWidget() is table.add_button
+        assert QApplication.focusWidget() is table.add_button, QApplication.focusWidget()
+        if by == "a click":                    # with the keyboard in another field, a removal leaves it there
+            blank = table.add_row()
+            page.names.name.setFocus(Qt.TabFocusReason)
+            _settle()
+            press(blank)
+            _settle()
+            assert table.rows() == [rows[2]] and QApplication.focusWidget() is page.names.name, (
+                "a removal took the keyboard from another field", QApplication.focusWidget())
     from PySide6.QtCore import QSize
     from core.gui.widgets.marker import painted_icon
     button = table.remove_button(rows[2])
@@ -2284,7 +2353,8 @@ def test_two_names_in_one_block_are_each_checked_against_their_own_kind(tmp_path
     """With a second name, the block stands its three rows in their order, the name of the inference, the name of the
     observation and the note, the Tab key in that order too. Each name is checked against its own kind of record, 300 ms
     after its own last keystroke on a timer of its own, and both at the press; a required one left blank blocks with its
-    own words, an optional one does not; a taken one is said in the window's words for its kind. ``clear`` empties all
+    own words, an optional one does not; a taken one is said in the window's words for its kind, and emptied, says it
+    must be typed. ``clear`` empties all
     three. While a run is live neither is read, a check waiting as the run starts among them; the run's end reads both."""
     window, page = _a_table_page(tmp_path)
     names = page.names
@@ -2307,6 +2377,10 @@ def test_two_names_in_one_block_are_each_checked_against_their_own_kind(tmp_path
     assert (fact.kind, fact.sentence, fact.blocks) == (
         "err", "The name 'cell_a' is taken by another observation. Choose another name.", "the name cannot be used")
     assert names.rows["observation_name"].line.words == fact.sentence and names.name_fact() is None
+    names.other_name.setText("")
+    assert names.other_fact().sentence == "Type a name for the observation.", "a refused name emptied is still taken"
+    names.other_name.setText("cell_a")
+    names.other_timer.timeout.emit()
     names.name.setText("taken_inference")
     assert names.read_timer.isActive() and not names.other_timer.isActive()
     names.read_timer.timeout.emit()
@@ -2341,6 +2415,10 @@ def test_two_names_in_one_block_are_each_checked_against_their_own_kind(tmp_path
     assert (names.name.text(), names.other_name.text(), names.note.text()) == ("", "", "")
     plain = build_part(NameAndNote, kind="prior", required=True, store=_Store())
     assert (list(plain.rows), plain.other_value(), plain.other_fact()) == (["name", "note"], "", None)
+    from core.gui.widgets.form import OtherName
+    optional = build_part(NameAndNote, kind="inference", required=False, store=_Store(),
+                          other=OtherName("observation_name", "observation", "Name of the observation", False))
+    assert (optional.name_fact(), optional.other_fact()) == (None, None), "an optional second name left blank blocks"
     window.hide()
 
 
@@ -2383,6 +2461,12 @@ def test_the_result_region_shows_a_ruled_table_pictures_and_at_most_two_next_ste
     body = page._body
     assert isinstance(region, ResultRegion) and region.isHidden() and region.is_empty()
     assert body.indexOf(page.in_use) < body.indexOf(region) < body.indexOf(page.run_view.how_link)
+    said = (Fact("fine", "Saved as the inference retrain_3."),)
+    region.set_sentences(said)
+    assert (region.isHidden(), region.sentences()) == (False, said), "a result of sentences alone stands hidden"
+    assert [row.sentence.plain_text() for row in region._rows] == ["Fine. Saved as the inference retrain_3."]
+    region.set_sentences(())
+    assert region.isHidden() and region._rows == []
     words = TableWords(("Parameter", "5 %", "50 %", "95 %", "Unit"),
                        (("Of the model", "", "", "", ""), ("k", "0.41", "0.52", "0.66", ""),
                         ("Dimensional", "", "", "", ""), ("x_scale", "11.2", "12.3", "13.9", "nm")),
@@ -2404,6 +2488,10 @@ def test_the_result_region_shows_a_ruled_table_pictures_and_at_most_two_next_ste
         TableWords(("a", "b"), (("1",),))
     with pytest.raises(ValueError):
         TableWords(("a", "b"), (("heading", "words"),), headings=frozenset({0}))
+    with pytest.raises(ValueError):
+        TableWords(("a", "b"), (("1", "2"),), right=frozenset({2}))
+    with pytest.raises(ValueError):
+        TableWords(("a", "b"), (("1", "2"),), headings=frozenset({1}))
     light = _png(tmp_path / "light.png", "#ffffff", (3000, 200))
     for dark in (False, True):
         with theme(dark):
@@ -2443,6 +2531,28 @@ def test_the_result_region_shows_a_ruled_table_pictures_and_at_most_two_next_ste
     region.clear()
     assert region.isHidden() and region.is_empty() and region.stops() == []
     window.hide()
+
+
+@pytest.mark.parametrize("kept", [False, True], ids=["figures emptied", "figures kept until returned"])
+def test_a_run_begun_empties_the_result_where_it_empties_the_figures(kept, tmp_path):
+    """A run of the page's own that takes its column empties the result where it empties the figures: the region is
+    hidden as the run begins and stays empty to its end. On a page whose figures stay until its run returns its record,
+    the result stays too, until the page says the new one."""
+    from core.gui.widgets.result_region import NextStep
+    _window, page = _a_table_page(tmp_path)
+    page.figures_until_returned = kept
+    region = page.result
+    region.set_sentences((Fact("fine", "Saved as the inference retrain_3."),))
+    region.set_next_steps((NextStep("Run another inference", "infer"),))
+    stand_in = StandIn()
+    _start(page, stand_in)
+    _settle()
+    began = (region.is_empty(), region.isHidden())
+    stand_in.release()
+    turn_until(qt_app(), lambda: not controller().is_live())
+    _settle()
+    assert began == (not kept, not kept), (kept, "the result as the run began")
+    assert region.is_empty() == (not kept), (kept, "the result after the run")
 
 
 def test_a_next_step_opens_its_step_with_what_it_carries(tmp_path, monkeypatch):
@@ -2586,6 +2696,127 @@ def test_a_list_stands_beside_its_detail_from_a_width_and_in_its_place_below_it(
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_detail_stands_beside_only_in_the_room_both_need_and_one_width_gives_one_arrangement(factor, tmp_path):
+    """Beside, the list stands at the width it asks for, a detail with a wide preferred width taking only the rest; the
+    detail stands beside only where the width holds the list, the gap and the detail's least width as it would stand
+    there, one pixel less standing it in the list's place; its form, told the room beside, stands in one column where
+    that room is narrower than two need; and the same width gives the same arrangement whether the window grew to it
+    from where the detail stood in the list's place in two columns or shrank to it from where it stood beside, at the
+    caller's width and at one where the detail in the list's place is told enough for two columns."""
+    with text_size(factor), _the_look(False):
+        window, page = _a_list_page(tmp_path, size=(1600, 900))
+        split, detail = page.list_detail, page.detail
+        page.open_detail()
+        _settle()
+        apart = window.width() - split._width
+        gap = design.scaled(design.SIZE["col_gap"])
+
+        def at(width):
+            window.resize(width + apart, window.height())
+            _settle()
+            assert split._width == width, ("the body handed another width", factor, width, split._width)
+            return split.beside()
+
+        wide = QLabel("a sentence of a check's page that asks for more room than it has " * 4)
+        wide.setMinimumWidth(design.scaled(40))        # it asks for a line of its own, and needs little
+        detail.layout().insertWidget(1, wide)
+        _settle()
+        asked = page.listing.sizeHint().width()
+        room = split._width - asked - gap
+        assert detail.sizeHint().width() > room, "the detail asks for no more than the room beside"
+        assert at(split._width) and page.listing.width() == asked, ("beside, the list is not at the width it asks",
+                                                                      page.listing.width(), asked)
+        assert room < design.two_columns_from() and detail.form.columns.stacked(), (
+            "the detail's form, beside, was laid out for more room than it has", room)
+        assert page.scroller.widget().width() <= page.scroller.viewport().width()
+        least = split.beside_width - asked - gap + design.scaled(20)
+        detail.setMinimumWidth(least)
+        need = asked + gap + least
+        assert (at(need - 1), at(need)) == (False, True), ("the room both need, and one pixel less", factor, need)
+        detail.setMinimumWidth(0)
+        for beside_width in (split.beside_width, design.two_columns_from() + design.scaled(100)):
+            split.beside_width = beside_width
+            widths = list(range(beside_width - 6, beside_width + 7, 3))
+            at(beside_width - design.scaled(60))
+            grown = [at(width) for width in widths]
+            at(beside_width + design.scaled(300))
+            shrunk = [at(width) for width in reversed(widths)][::-1]
+            assert grown == shrunk == [width >= beside_width for width in widths], (factor, beside_width, grown, shrunk)
+        window.hide()
+
+
+@pytest.mark.parametrize("by", ["a click", "Enter on its ring"])
+def test_all_checks_hands_the_keyboard_back_to_the_list(by, tmp_path, monkeypatch):
+    """"All checks", pressed with the keyboard on it, by a click or by Enter on its ring, hands the keyboard back to the
+    list, on the row of the check just left, never to the page's foot; pressed with the keyboard elsewhere it leaves the
+    keyboard where it was."""
+    from PySide6.QtTest import QTest
+    from tests._fixtures import stand_in_list_page, whole_program
+    from tests._look_helpers import _arrive
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    with whole_program() as (_app, window):
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        page = build_step_page(stand_in_list_page(), window=window, step="checks")
+        shown_off_screen(window, 900, 600)
+        window.go_to("inference", "checks")
+        _settle()
+        split = page.list_detail
+        with in_front(window):
+            for keyboard_on_it in (True, False):
+                page.open_detail()
+                _settle()
+                assert not split.beside() and not split.back.isHidden()
+                held = split.back if keyboard_on_it else page.detail.form.rows["n_cal"].widget
+                held.setFocus(Qt.TabFocusReason)
+                _arrive(held, Qt.TabFocusReason)
+                _settle()
+                if by == "a click":
+                    split.back.click()
+                else:
+                    split.back.setFocus(Qt.TabFocusReason)
+                    _arrive(split.back, Qt.TabFocusReason)
+                    QTest.keyClick(split.back, Qt.Key_Return)
+                _settle()
+                view = page.listing.whole.view
+                assert split.detail is None, "the link did not bring the whole list back"
+                if keyboard_on_it or by != "a click":
+                    assert QApplication.focusWidget() is view, ("the keyboard did not come back to the list",
+                                                                QApplication.focusWidget())
+                    assert view.currentIndex().row() == page.listing.row_of["calibration"]
+                else:
+                    assert QApplication.focusWidget() is not view
+        window.hide()
+
+
+def test_the_tab_key_takes_a_handed_form_where_it_stands_after_a_run(tmp_path):
+    """After a run of the page's own with a figure, "How the run went" and the figure stand in the body under the list
+    and its detail: the Tab key goes from the list to what the detail holds before its form, through the detail's form,
+    then to the link to the run and the figure, as the page is read."""
+    app = qt_app()
+    window, page = _a_list_page(tmp_path)
+    page.open_detail()
+    _settle()
+    assert page.list_detail.beside()
+    stand_in = StandIn()
+    _start(page, stand_in, provide_fig_sink=True)
+    stand_in.figure("A figure")
+    turn_until(app, lambda: page.figure_stack.count() == 1)
+    stand_in.release()
+    turn_until(app, lambda: not controller().is_live())
+    _settle()
+    assert not page.run_view.how_link.isHidden() and not page.figure_stack.isHidden()
+    form = page.detail.form
+    expected = [page.help_button, page.listing.narrow.view, page.detail.earlier, form.rows["n_cal"].widget,
+                form.rows["cal_n_scales"].widget, form.fold.button, page.detail.names.name, page.detail.names.note,
+                page.run_view.how_link, page.figure_stack.tabBar()]
+    with in_front(window):
+        page.help_button.setFocus(Qt.TabFocusReason)
+        walked = _walked(window, len(expected))
+    assert walked == expected, [type(widget).__name__ for widget in walked]
+    window.hide()
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
 def test_the_list_beside_a_detail_shows_its_two_columns_and_a_state_word_wraps(factor, tmp_path):
     """Beside a detail the list shows two columns, "Check" and "State", and the longest state, "Waiting for the
     simulations", stands whole on two lines beside its marker, its row as high as both; never cut. The whole list shows
@@ -2646,6 +2877,30 @@ def test_a_later_step_says_the_changes_of_every_earlier_step_not_applied(step, p
     assert all(f"Step {keys.step_number(step)}," not in said for said in expected)
 
 
+@pytest.mark.parametrize("step, pending, slot, said", [
+    ("infer", "training", "posterior", "Step 3, Training, has changes that are not applied."),
+    ("narrowing", "infer", "observation", "Step 5, Inference, has changes that are not applied."),
+    ("checks", "prior", "inf_prior", "Step 2, Prior, has changes that are not applied."),
+    ("checks", "model", "draft", "Step 1, Model and options, has changes that are not applied.")],
+    ids=["Training on Inference", "Inference on the round", "Prior on Checks", "the model on Checks"])
+def test_a_later_step_says_of_an_earlier_step_that_holds_nothing_its_changes_alone(step, pending, slot, said, tmp_path,
+                                                                                   monkeypatch):
+    """Of an earlier step whose page shows changes not applied and which holds nothing, a later step says the changes
+    alone: there is nothing in use for its run to use, and no "Unnamed record" is named."""
+    from types import SimpleNamespace
+    from tests._fixtures import prior_stub, stand_in_table_page
+    _window, page = _a_stand_in(tmp_path, stand_in_table_page(step), step)
+    screen = page._screen
+    session = screen.session
+    session.draft = SimpleNamespace(model="NADROWSKI")
+    session.inf_prior = prior_stub(name="retrain_prior")
+    session.posterior = SimpleNamespace(name="retrain_posterior")
+    session.observation = SimpleNamespace(name="cell_a")
+    setattr(session, slot, None)
+    monkeypatch.setattr(type(screen), "pending", lambda _screen: frozenset({pending}))
+    assert page._others_pending() == [said]
+
+
 def test_a_reason_that_waiting_will_not_lift_reads_cannot_start(tmp_path):
     """STANDING. Beside each rebuilt page's main button, a block that neither waiting nor a press elsewhere lifts, one of
     the facts' table of such blocks, reads "Cannot start: …"; one that a run's end or a press on this page or another
@@ -2703,7 +2958,8 @@ def test_a_page_hands_its_foot_and_its_keys_to_the_form_in_sight(tmp_path):
     key walks its rows and no longer the first form's, what a run locks is it, and the page hears its edits and no
     longer the first form's, once however often it is handed; handed back, the first form is all that again. A run locks
     every form the page has handed, whichever is in sight, one handed during the run among them, and its end frees them;
-    meanwhile the main button is greyed, saying that a run is live."""
+    meanwhile the main button is greyed, saying that a run is live. A form handed again after the run's end is free,
+    and a handed form deleted before the next run is passed over by its lock."""
     from PySide6.QtTest import QTest
     window, page = _a_list_page(tmp_path)
     own, detail = page.own_form, page.detail.form
@@ -2760,6 +3016,18 @@ def test_a_page_hands_its_foot_and_its_keys_to_the_form_in_sight(tmp_path):
     own.rows["num_runs"].widget.setText("5000")
     detail.rows["n_cal"].widget.setText("")
     assert len(drawn) == 1, "after the hand back the page hears the wrong form"
+    page.use_form(fresh)
+    assert fresh.isEnabled(), "a form handed again after the run's end was held locked"
+    page.use_form(own)
+    shiboken6.delete(fresh)                                # a handed form gone before the next run
+    second = StandIn(word="Reduction")
+    start_run(window.part("reduction"), second)
+    _settle()
+    assert not own.isEnabled() and not detail.isEnabled(), "the next run did not lock the forms the page has handed"
+    second.release()
+    turn_until(qt_app(), lambda: not controller().is_live())
+    _settle()
+    assert own.isEnabled() and detail.isEnabled()
     window.hide()
 
 
@@ -3136,10 +3404,11 @@ STAND_IN_WALKED = {
         "the whole list": (lambda page: None, lambda page: [page.help_button, page.listing.whole.view],
                            lambda page: [page.own_form.rows["num_runs"].widget], lambda page: None, lambda page: [],
                            lambda page, small: [page.foot.check_again, page.foot.main_button]),
-        "a check open": (_a_detail_open, _the_list_or_back,
+        "a check open": (_a_detail_open, lambda page: [*_the_list_or_back(page), page.detail.earlier],
                          lambda page: [page.detail.form.rows["n_cal"].widget,
                                        page.detail.form.rows["cal_n_scales"].widget],
-                         lambda page: [page.detail.form.rows["learning_rate"].widget], lambda page: [],
+                         lambda page: [page.detail.form.rows["learning_rate"].widget],
+                         lambda page: [page.detail.names.name, page.detail.names.note],
                          lambda page, small: [page.foot.check_again, page.foot.main_button]),
     }),
     "a table of rows": ("stand_in_table_page", "infer", {
