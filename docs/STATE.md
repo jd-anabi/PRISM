@@ -1,5 +1,48 @@
 # PRISM — state
 
+**Last updated:** 2026-11-10, night (23:05 by the clock; the weekly bar 52 %, resetting on 15 November at 04:00 UTC):
+STAGE 5'S TASKS 3 AND 4 ARE COMPLETE, each with its review clean and its fast gate green on the same head; Tasks 0 to 4
+are done. The chat started at 09:22 from the owner's pasted prompt
+(`docs/superpowers/prompts/2026-11-09-window-redesign-stage-5-build-from-task-3.md`); it hands over here (two tasks done,
+each with a fix round, as its rule asks). The hand-off prompt for the next chat is
+`docs/superpowers/prompts/2026-11-10-window-redesign-stage-5-build-from-task-5.md`.
+
+- **Task 3, the checks' rules, the chain's words and Training's pre-run line:** `core/gui/check_readings.py` holds the
+  numbers the deciding checks are judged by, each with its reason; the chain's step 4 words; the Training page's pre-run
+  line and question read for the prior in use (`InferenceScreen.pre_run_rows()`). `eaa0db8`, `45bb3cc`, `34e7446`,
+  `debb2b4`, departures 428 to 434 `f8ae21b`, its fix round `713f4a7`. The owner's two answers: "Yes, require 32
+  (Recommended)" (the audit's least simulations in each batch, 434) and "Let it close the step (Recommended)" (a deciding
+  check no run can pass no longer holds step 4 open; built in Task 5). About 9 points of the weekly bar.
+- **Task 4, the pieces the later pages share**, tried on stand-in step pages: a file row, a grid that scrolls with its
+  page, a table of rows with an asked removal, two names in one block, a result region with next steps that carry what
+  they open, a list beside its detail, a form handed to the foot, `parameter_units`, the final blocks of a step.
+  `6112e6a`, `68fb239`, `c403bd4`, departures 435 to 442 `0ab5bc9`, its fix round `7a5f3a8`, `4f664c6`, departures 443 to
+  449 `8662e52`. The first gate's one error came and went: the page's body read its layout's items at every resize, and
+  the toolkit keeps a wrapper of each item read after the item is gone, so a later widget at that address reached the
+  style as a stale item. Now no line under `core/gui/` reads a layout's items (a scan, its allow-list empty), and a test
+  holds at 0 the stale wrappers a page's runs and resizes leave. One walk test run alone ended its process with a
+  corrupted heap; its cause lies in the toolkit and is open; the stand-in makes its check's page inside its list, as
+  the Checks list must. About 10 points of the weekly bar.
+- **The fast gate:** 3836 passed, 11 skipped, 5 deselected at `8662e52` (3852 collected), 34 min 08 s, on a machine not certified quiet (3711 passed at `713f4a7` after Task 3, 33 min 41 s); every gate's listing of `Artifacts/` after equals the one before (428 entries);
+  `PRISM.ini` unchanged.
+- **The code audit's list** gains items 8 to 12 of its stage 5 part
+  (`docs/superpowers/notes/2026-10-29-the-code-audits-list.md`): the checks' numbers living in the window; two private
+  engine functions the window calls; the input-use check judged on the simulations asked for; the units' private table;
+  the open heap corruption.
+- **Carried to later tasks** (the prompt and `stage-5/briefs/task-NN-carried.md` list each): to Task 5, the owner's "Let
+  it close the step", the Checks list's shape, each check's page made inside the window, `take_the_keyboard`; to Tasks 6
+  and 8, the run's check fields unread; to Task 8, the stand-in run's order of stage events; to Task 9, check 3's
+  reading; to Task 10, the Inference page's items; to Task 11, `pre_run_rows()` and the round's `take_carried`; to Task
+  12, `RowTable.set_value`; to the last review, a tautology in Task 1's lines test; to the exit, three guide sentences,
+  G8's words and the owner's list.
+- **Unpushed:** 27 commits after `cdc80d2`, this one included.
+
+NEXT: stage 5's build from Task 5, in a new chat the owner starts from
+`docs/superpowers/prompts/2026-11-10-window-redesign-stage-5-build-from-task-5.md`, the weekly bar read first. Then Tasks 6
+to 13, the last review, Task 14 (the exit, with the owner), stages 6 to 9, the code audit, the retrain from the window.
+
+What follows is the head as the evening of 9 November left it:
+
 **Last updated:** 2026-11-09, evening (21:48 by the clock; the weekly bar 33 %, resetting on 15 November at 04:00 UTC):
 STAGE 5'S BUILD HAS BEGUN: TASKS 0, 1 AND 2 ARE COMPLETE, each building task with its review clean and its fast gate green
 on the same head. The chat started at 14:21 from the owner's pasted prompt

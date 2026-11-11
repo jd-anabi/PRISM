@@ -511,3 +511,21 @@ From Task 3 (the checks' rules, the chain's words and Training's pre-run line), 
     it read. As the design's rule gives it; whether reading the whole of a small set is the usual size is the owner's,
     heard at the stage's exit (Task 3's fix round). Cure if wanted: judge the smaller of the two, or say "simulations
     asked for".
+
+From Task 4 (the pieces the later pages share), `.superpowers/sdd/2026-10-06-window-redesign/stage-5/briefs/task-04-brief.md` and its fix round's `task-04-fix1-brief.md`:
+11. **The window's units of the parameters come from a private name of the engine.** `core/gui/step_facts.py`'s
+    `parameter_units` says each parameter's unit from its kind of unit as it is handed; the engine's only table of
+    those kinds is `core.Helpers.labels._RESCALE_KIND`, a private name, which `tests/test_pages.py` reads today and the
+    Inference page will read when it is rebuilt, since the engine was closed for the stage. A rename in the engine
+    leaves the window's units wrong, which the tests of `parameter_units` catch. The plots say "nm/ND" where the
+    window's tables say "nm". Cure if wanted: give the table a public name.
+12. **A widget with no parent, never shown, corrupts the process's heap at its end in one case (the cause is open;
+    the toolkit's, not found in the window).** Found when one walk test was run alone: a widget with no parent and
+    never shown, holding a form of three rows or more, standing while the application's style sheet is changed and
+    put back, and let go after its window, ends the process with 0xC0000374 (a corrupted heap) on PySide6 6.9.3, only
+    while the graphics card is in view (with it hidden the same run ends cleanly). The form's folded row, its kinds of
+    row, its event filter and its deletion with its page were each ruled out; what is left lies in the toolkit's
+    handling of the style sheet. Only a test's stand-in page was seen to do it; it is now made inside its list's page
+    and hidden, as the Checks list will make a check's page, and `tests/test_pages.py`'s
+    `test_the_walk_of_the_whole_list_run_alone_ends_its_process_cleanly` runs that walk alone in a process of its own.
+    Cure if wanted: trace it inside the toolkit, or try a later PySide6.
