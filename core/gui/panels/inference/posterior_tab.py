@@ -496,15 +496,15 @@ class PosteriorPanel(StepPage):
                               others_pending=self._others_pending(), name_facts=names, field_facts=field_facts,
                               plan_lines=self.plan_lines())
 
-    def _check_rows(self) -> "tuple | None":
-        """The checks' rows as the screen last read them, with what is held now; None before its first reading."""
-        rows = getattr(self._screen, "check_rows", None)
+    def _pre_run_rows(self) -> "tuple | None":
+        """The checks' rows for the prior in use alone, as the screen last read them; None before its first reading."""
+        rows = getattr(self._screen, "pre_run_rows", None)
         return rows() if callable(rows) else None
 
     def _pre_run(self) -> tuple:
         """What "Before you start" says of the frequency band and the audit for the prior in use: nothing while no prior
         is held, and nothing before the screen has read the checks. Reads nothing."""
-        rows = self._check_rows()
+        rows = self._pre_run_rows()
         if rows is None or self._held()[1] is None:
             return ()
         return (check_lineage.pre_run_fact(rows),)
@@ -951,7 +951,7 @@ class PosteriorPanel(StepPage):
         except Refusal as refused:
             self._refusal(refused)
             return
-        rows = self._check_rows()
+        rows = self._pre_run_rows()
         failed = None if rows is None else check_lineage.pre_run_question(rows, start=self.main_words())
         if failed is not None:
             title, text, other = failed

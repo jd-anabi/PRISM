@@ -21,7 +21,7 @@ a saved record, one after the other, each once the one before has returned its r
 is one.
 """
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -86,6 +86,10 @@ def _ident(record) -> "str | None":
     """A record's id, or None for none or a record that holds none."""
     ident = getattr(record, "id", None)
     return ident if isinstance(ident, str) and ident else None
+
+
+#: The file of a simulation set's newest saved state, as the engine's reading of a set names the file it read.
+NEWEST_STATE = "state.pt"
 
 
 def _completed(text: "str | None") -> "datetime | None":
@@ -252,6 +256,16 @@ class InferenceScreen(QWidget):
             self._rows_for = (held, kept)
         return kept
 
+    def pre_run_rows(self) -> "tuple | None":
+        """The checks' rows for what a training started now would use, from the last reading, reading nothing: the
+        prior in use alone, never the prior a posterior held beside it was trained on, so that the frequency band and
+        the audit said before a training are the configuration's and the prior's in use. None before the first
+        reading."""
+        if self.checks_held is None:
+            return None
+        held = replace(self._checks_in_use(), posterior=None, posterior_prior=None, simulation=None)
+        return check_lineage.rows(held, self.checks_held.records, self.checks_held.histories)
+
     def checks_summary(self) -> "check_lineage.ChecksSummary | None":
         """The checks' summary the chain of steps and Home read, worked out from the last reading with what the session
         holds now, reading nothing; None before the first reading."""
@@ -319,8 +333,10 @@ class InferenceScreen(QWidget):
     def _read_the_pair_and_the_set(store, prior, posterior, simulation) -> tuple:
         """What the reading finds of the posterior in use: the engine's sentence refusing the prior in use with it (""
         when it passes, or cannot tell); its set's counts of unusable driven recordings, from the set's saved state when
-        it holds one pair of counts for each batch done, else from the posterior's own text; whether the set is
-        complete; and when it was completed. With no posterior, nothing."""
+        that is the set's newest state and holds one pair of counts for each batch done, else from the posterior's own
+        text; whether the set is complete; and when it was completed. With no posterior, nothing. The state kept from
+        before the newest, which is read when the newest cannot be, counts an older number of batches than the set
+        holds, so its counts are not taken for the set's."""
         if posterior is None:
             return "", None, False, None
         refused = ""
@@ -338,7 +354,8 @@ class InferenceScreen(QWidget):
             masked, batches = state.get("chi_masked"), state.get("batches_done")
             done = state.get("complete") is True
             try:
-                if (isinstance(masked, list) and isinstance(batches, int) and batches > 0 and len(masked) == batches
+                if (state.get("_state_file") == NEWEST_STATE and isinstance(masked, list)
+                        and isinstance(batches, int) and batches > 0 and len(masked) == batches
                         and all(isinstance(pair, (list, tuple)) and len(pair) == 2 for pair in masked)):
                     counts = (int(sum(pair[0] for pair in masked)), int(sum(pair[1] for pair in masked)), batches,
                               check_readings.WHOLE_SET_SCOPES[0])

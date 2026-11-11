@@ -4691,7 +4691,7 @@ def test_the_training_page_says_the_pre_run_checks_as_it_reads_them(tmp_path, mo
     the page's own reading finds them, after the memory limit and before the other steps' changes: "Attention." with
     neither run; each as its record is written and the store changes, with its date; "Fine." with both passed; an audit
     of another prior moves nothing. It never greys "Start training". With a configuration that is not of the frequency
-    response, "Information."."""
+    response, "Information.". With no prior in use it says nothing of them."""
     from core.gui.design import date_text
     from tests._runs import at
     qt_app()
@@ -4718,6 +4718,10 @@ def test_the_training_page_says_the_pre_run_checks_as_it_reads_them(tmp_path, mo
         assert _checks_line(page)[1] == (
             f"Attention. Frequency band: Failed, {date_text(at(4, 9, 0))}. Starting will ask first.")
         assert page.foot.main_button.isEnabled(), "a failed check greyed the start"
+        prior, screen.session.inf_prior = screen.session.inf_prior, None
+        page.read_facts()
+        assert _checks_line(page) is None, "the pre-run checks were said with no prior in use"
+        screen.session.inf_prior = prior
         import tests._fixtures as fixtures
         screen.session.cfg = fixtures._nad_cfg(chi_f0=0.2)
         assert [row.state for row in screen.check_rows()[:2]] == ["Not run yet", "Not run yet"], (
@@ -4732,7 +4736,9 @@ def test_a_failed_pre_run_check_asks_first_with_cancel_preselected(tmp_path, mon
     preselected: its title and its other answer from the button's words, its text naming the check that failed with its
     date and where to read why. "Cancel" starts nothing; "Start training anyway" goes on to the question before
     simulating from zero, and asks nothing more with no saved set beside; when the stage then refuses a new set beside a
-    saved one, its own question is asked again and the failed check's is not. Once the check passes, nothing is asked."""
+    saved one, its own question is asked again and the failed check's is not. Once the check passes, nothing is asked.
+    After it fails again, a press on "Continue from batch 236" asks in those words, and a kept training's Resume asks
+    nothing."""
     from core.gui.design import date_text
     from core.refusals import Refusal
     from tests._dialogs import answer_in_turn
@@ -4780,16 +4786,84 @@ def test_a_failed_pre_run_check_asks_first_with_cancel_preselected(tmp_path, mon
         choose(monkeypatch, words="Cancel")
         page._main_clicked()
         assert title not in [one.title for one in all_asked()], "a check that passed asked first"
+        _an_audit(screen, created=at(5, 9, 0), masked_fraction=0.5)
+        _a_set_beside(page, 236, complete=False)
+        _pick(page.resume_choice, "require")
+        window._store_changed()
+        assert page.main_words() == "Continue from batch 236", page.main_words()
+        forget_asked()
+        choose(monkeypatch, words="Cancel")
+        page._main_clicked()
+        question = all_asked()[0]
+        assert (question.title, question.answers, question.default) == (
+            "Continue from batch 236 although a check failed?", ("Continue from batch 236 anyway", "Cancel"),
+            "Cancel"), question
+        assert len(stand_in.calls) == 1
+        forget_asked()
+        choose(monkeypatch, default=True)
+        kept = SimpleNamespace(id="20261005T090000", config={"model": "NADROWSKI", "chi_mode": True}, inputs={},
+                               note="")
+        assert page.resume(kept) is True, "the Resume did not start"
+        _the_call(stand_in, 2)
+        assert all_asked() == [], "a Resume asked the pre-run question"
+        assert stand_in.calls[-1][1]["resume_fit"] == "20261005T090000"
+        stand_in.release(None)
+        _settle_the_run()
+
+
+def test_the_pre_run_checks_read_the_prior_in_use_whatever_posterior_is_held(tmp_path, monkeypatch):
+    """With a posterior trained on another prior held beside the prior in use, as a load on the Training step allows,
+    "Before you start" and the question before a training read the audit of the prior in use, which the training will
+    use, never the audit of the posterior's own prior; the Checks step's rows go on reading the posterior's own. The
+    prior in use's audit failed and the other's passed: the line names the failure and the press asks first. The
+    reverse: the line says the audit passed, with the prior in use's date, and nothing is asked."""
+    from core.gui.design import date_text
+    from tests._runs import at
+    qt_app()
+    other = "20200101T000000"
+    with _third_step_of_the_frequency_response(tmp_path, monkeypatch) as (window, screen, page, stand_in):
+        _a_budget(page)
+        manifest = SimpleNamespace(parents={"prior": other}, body={}, created="2026-10-02T09:00:00+00:00")
+        screen.session.posterior = SimpleNamespace(kind="posterior", id="20261002T090000", name="retrain_other",
+                                                   manifest=manifest, path=None, posterior=None)
+        _an_audit(screen, prior=other, created=at(3, 14, 0))
+        _an_audit(screen, created=at(3, 14, 40), masked_fraction=0.5)
+        window._store_changed()
+        assert _checks_line(page)[1] == ("Attention. Frequency band: Not run yet. Unusable driven recordings: audit: "
+                                         f"Failed, {date_text(at(3, 14, 40))}. Starting will ask first.")
+        audit = screen.check_rows()[1]
+        assert (audit.state, audit.when) == ("Passed", at(3, 14, 0)), "the Checks step read the prior in use's audit"
+        forget_asked()
+        choose(monkeypatch, default=True)
+        page._main_clicked()
+        assert [one.title for one in all_asked()] == ["Start training although a check failed?"]
+        assert stand_in.calls == []
+        _an_audit(screen, prior=other, created=at(4, 9, 0), masked_fraction=0.5)
+        _an_audit(screen, created=at(4, 9, 30))
+        _a_band(screen, created=at(4, 8, 0))
+        window._store_changed()
+        assert _checks_line(page)[1] == (f"Fine. Frequency band: Passed, {date_text(at(4, 8, 0))}. Unusable driven "
+                                         f"recordings: audit: Passed, {date_text(at(4, 9, 30))}.")
+        assert screen.check_rows()[1].state == "Failed", "the Checks step read the prior in use's audit"
+        forget_asked()
+        choose(monkeypatch, default=True)
+        page._main_clicked()
+        _the_call(stand_in, 1)
+        assert all_asked() == [], "the failed audit of the posterior's own prior asked first"
+        stand_in.release(None)
+        _settle_the_run()
 
 
 def test_the_checks_are_read_at_their_moments_and_never_while_a_run_is_live(tmp_path, monkeypatch):
     """What the checks need is read once at each moment: at a store change, by the screen when no page that reads the
     checks is in sight, and then by the Training page alone when it is; at the page's showing after that; at a run's end,
     by the page in sight, or by the screen when the page is not; never while a run is live, whatever is pressed, shown or
-    worked out; every reading asked otherwise is made, two in one turn of the event loop as two; and working the steps'
-    states out reads nothing."""
+    worked out, with a posterior and its simulation set held, nothing of the run's or the checks' read at all; every
+    reading asked otherwise is made, two in one turn of the event loop as two; and working the steps' states out reads
+    nothing."""
+    from core.artifacts import default_store
     from core.gui.run.controller import controller
-    from tests._fixtures import build_run_host, readings_of_a_run
+    from tests._fixtures import build_run_host, readings_of_a_run, write_simulation_set
     from tests._look_helpers import _settle
     from tests._runs import running, turn_until
     app = qt_app()
@@ -4822,6 +4896,15 @@ def test_the_checks_are_read_at_their_moments_and_never_while_a_run_is_live(tmp_
         assert read() == 0, "the steps' states worked out read the checks"
         page._main_clicked()
         assert stand_in.started.wait(5)
+        folder = write_simulation_set(default_store().kind_dir("simulation"), {"a set of": "the moments"}, 2,
+                                      complete=True, chi_masked=[(1, 4), (2, 4)])
+        text = tmp_path / "posterior"
+        text.mkdir()
+        (text / "log.txt").write_text("", encoding="utf-8")
+        manifest = SimpleNamespace(parents={"prior": screen.session.inf_prior.id, "simulation": folder.name}, body={},
+                                   created="2026-10-03T09:00:00+00:00")
+        screen.session.posterior = SimpleNamespace(kind="posterior", id="20261003T090000", name="retrain_1", path=text,
+                                                   manifest=manifest, posterior=None)
         calls.clear()
         window._store_changed()
         screen.refresh_gates()
@@ -4830,7 +4913,7 @@ def test_the_checks_are_read_at_their_moments_and_never_while_a_run_is_live(tmp_
         _settle()
         window.go_to("inference", "training")
         _settle()
-        assert read() == 0, f"read while a run is live: {calls}"
+        assert calls == [], f"read while a run is live: {calls}"
         stand_in.release(SimpleNamespace(kind="posterior", id="p1", name="retrain_2", manifest=None))
         turn_until(app, lambda: not controller().is_live(), 10.0)
         _settle()
@@ -4852,8 +4935,11 @@ def test_the_screen_reads_a_sets_counts_from_its_state_else_from_the_posteriors_
     """The one reading of what the checks need reads, for the posterior in use, its simulation set's counts of unusable
     driven recordings from the set's saved state when that holds one pair for each batch done, else the first total in
     the posterior's own text, else none; and asks the engine whether the prior in use is the one the posterior was
-    trained with, keeping its sentence. Between readings these are kept for the same records, and are not known for
-    another posterior until the next reading."""
+    trained with, keeping its sentence; and when the set was completed, its making and the seconds it took. Between
+    readings these are kept for the same records, and are not known for another posterior until the next reading. The
+    state kept from before the newest, read when the newest cannot be, is never taken for the whole set's counts."""
+    import json
+    from datetime import datetime, timezone
     import torch
     from torch.distributions import Categorical, MixtureSameFamily, Normal
     from core.artifacts import ArtifactStore, use_store
@@ -4882,10 +4968,13 @@ def test_the_screen_reads_a_sets_counts_from_its_state_else_from_the_posteriors_
                                         prior=mixture(1.0)), truncation=None))
         prior = SimpleNamespace(kind="prior", id="20261001T222935", name="retrain_prior", prior=mixture(1.0),
                                 manifest=None)
+        (folder / "manifest.json").write_text(json.dumps({"created": "2026-10-03T08:00:00+00:00",
+                                                          "body": {"wall_seconds": 3600}}), encoding="utf-8")
         screen.session = SbiSession(inf_prior=prior, posterior=posterior)
         screen.read_checks()
         held = screen.checks_held.held
         assert (held.set_counts, held.set_done, held.pair_refused) == ((6, 12, 3, WHOLE_SET_SCOPES[0]), True, ""), held
+        assert held.set_when == datetime(2026, 10, 3, 9, 0, tzinfo=timezone.utc), "the set's making taken as its end"
         assert screen.check_rows()[2].state == "Waiting for the audit"
         screen.session.posterior = SimpleNamespace(**{**posterior.__dict__, "id": "20261003T031201"})
         assert screen.check_rows()[2].line == ("Not compared: the counts of unusable driven recordings could not be "
@@ -4907,3 +4996,10 @@ def test_the_screen_reads_a_sets_counts_from_its_state_else_from_the_posteriors_
         (text / "log.txt").unlink()
         screen.read_checks()
         assert screen.checks_held.held.set_counts is None
+        (text / "log.txt").write_text(f"10:00:00 info {masked_line(5, 50, 2, scope_part(7))}\n", encoding="utf-8")
+        (folder / "state.pt").write_bytes(b"torn")
+        torch.save({"batches_done": 2, "complete": False, "rng": None, "chi_masked": [[1, 4], [2, 4]]},
+                   folder / "state.prev.pt")
+        screen.read_checks()
+        assert screen.checks_held.held.set_counts == (5, 50, 2, scope_part(7)), (
+            "the counts of the state kept from before the newest were taken for the whole set")

@@ -228,6 +228,29 @@ _REDUCED = {
     "an audit of 100 batches of 8": ("audit", {"run_size": 8},
                                      "Run only at a reduced size (100 batches of 8 simulations; the usual is 100 of "
                                      "32), which does not count."),
+    "an audit of 100 batches of 31": ("audit", {"run_size": 31},
+                                      "Run only at a reduced size (100 batches of 31 simulations; the usual is 100 of "
+                                      "32), which does not count."),
+    "an audit of 99 batches": ("audit", {"num_runs": 99},
+                               "Run only at a reduced size (99 batches; the usual is 100), which does not count."),
+    "a band of 23 simulations per point": ("band", {"repeats": 23},
+                                           "Run only at a reduced size (23 simulations per point; the usual is 24), "
+                                           "which does not count."),
+    "a calibration of 1,999 test datasets": ("calibration", {"n_cal": 1_999},
+                                             "Run only at a reduced size (1,999 test datasets; the usual is 2,000), "
+                                             "which does not count."),
+    "a calibration at 199 operating points": ("calibration", {"cal_n_scales": 199},
+                                              "Run only at a reduced size (199 operating points; the usual is 200), "
+                                              "which does not count."),
+    "a calibration of 999 samples": ("calibration", {"samples": 999},
+                                     "Run only at a reduced size (999 samples per dataset; the usual is 1,000), which "
+                                     "does not count."),
+    "an input use of 199,999 simulations": ("input_use", {"rows": 199_999},
+                                            "Run only at a reduced size (199,999 simulations read; the usual is "
+                                            "200,000), which does not count."),
+    "an input use of 32 points per sweep": ("input_use", {"n_sweep": 32},
+                                            "Run only at a reduced size (32 points per sweep; the usual is 33), which "
+                                            "does not count."),
     "an audit of 1 batch of 1": ("audit", {"num_runs": 1, "run_size": 1},
                                  "Run only at a reduced size (1 batch of 1 simulation; the usual is 100 of 32), which "
                                  "does not count."),
@@ -335,7 +358,8 @@ def _with_configured(configured) -> dict:
 def test_the_newest_record_decides_and_says_when_an_earlier_one_differed():
     """Of several records that count, the newest decides, and its line says when the newest earlier one that counts came
     out otherwise; one made at a reduced size is no earlier run. Two made in the same second are told apart by the id
-    the store gives the later one, whatever order they are listed in; the others are named, newest first."""
+    the store gives the later one, whatever order they are listed in and whatever they are named; the others are named,
+    newest first, by their ids."""
     failed = _record("calibration", created=_at(11, 9, 30), passed=False)
     passed = _record("calibration", created=_at(12, 14, 5))
     small = _record("calibration", created=_at(13, 8, 0), n_cal=40, passed=False)
@@ -356,6 +380,11 @@ def test_the_newest_record_decides_and_says_when_an_earlier_one_differed():
         assert _row(check_lineage.rows(_held(), listed, ()), "calibration").record is second, listed
     for listed in ([first, second, tenth], [tenth, second, first]):
         assert _row(check_lineage.rows(_held(), listed, ()), "calibration").record is tenth, listed
+    named = [RecordRead(one.folder, {**one.manifest, "name": name}) for one, name in ((first, "z_first"),
+                                                                                      (second, "a_second"))]
+    for listed in (named, named[::-1]):
+        row = _row(check_lineage.rows(_held(), listed, ()), "calibration")
+        assert (row.record, row.earlier) == (named[1], ("20261014T170000",)), "a record was told by its name"
     look = _record("audit", created=_at(12, 14, 5), masked_fraction=0.46)
     plain = _record("audit", created=_at(11, 9, 30))
     assert _row(check_lineage.rows(_held(), [plain, look], ()), "audit").line == (
@@ -375,6 +404,8 @@ def test_the_band_is_judged_by_its_worst_cell():
     b_passed = _record("band", created=_at(13, 9, 0), cell="Cells/nadrowski/b.txt")
     row = _row(check_lineage.rows(_held(), [a_passed, b_failed, b_passed], ()), "band")
     assert (row.state, row.record) == ("Passed", b_passed), row
+    row = _row(check_lineage.rows(_held(), [b_failed, a_passed, b_passed], ()), "band")
+    assert row.earlier == (a_passed.manifest["id"], b_failed.manifest["id"]), "the earlier records not newest first"
     a_look = _record("band", created=_at(14, 9, 0), cell="Cells/nadrowski/a.txt", drive_holds=None)
     row = _row(check_lineage.rows(_held(), [a_passed, b_failed, b_passed, a_look], ()), "band")
     assert (row.state, row.record) == ("Look closer", a_look), row
@@ -632,8 +663,9 @@ def test_check_three_reads_only_the_counts_that_are_there():
                           "whole simulation set; the first 90 were saved without their counts.")):
         found = _row(check_lineage.rows(_held(set_counts=counts), [audit], ()), "comparison")
         assert (found.state, found.line, found.when) == ("Not compared", line, None), counts
-    assert _row(check_lineage.rows(_held(set_counts=(8_412, 22_144, 100, WHOLE)), [], ()), "comparison").state == (
-        "Waiting for the audit")
+    waiting = _row(check_lineage.rows(_held(set_counts=(8_412, 22_144, 100, WHOLE)), [], ()), "comparison")
+    assert (waiting.state, waiting.when, waiting.line) == ("Waiting for the audit", None, "Waiting for the audit."), (
+        "check 3 was dated while it waits for the audit")
     assert _row(check_lineage.rows(_held(chi=False), [audit], ()), "comparison").state == "Does not apply"
     for counts in (None, (0, 0, 0, WHOLE), (900, 2_200, 10, check_readings_part())):
         for records in ([audit], [], [_record("audit", masked_fraction=0.5)]):
@@ -843,6 +875,9 @@ def test_the_informing_checks_and_the_tools_read_done_from_their_own_records():
     assert [(_row(rows, key).state, _row(rows, key).when) for key in
             ("pin_down", "timing", "fixed_number", "card_test", "drive_study", "across_prior")] == [
         ("Done", _at(5)), ("Done", _at(9)), ("Done", _at(7)), ("Not run yet", None), ("Done", _at(6)), ("Done", _at(8))]
+    twice = (histories[0], {"word": "Check", "check": {"key": "timing"}, "outcome": "finished",
+                            "started": _at(12).isoformat()})
+    assert _row(check_lineage.rows(_held(chi=False), records, twice), "timing").when == _at(12), "an older run decided"
     elsewhere = check_lineage.rows(_held(chi=False, config={**CONFIG, "model": "HOPF"}, posterior=OTHER_POSTERIOR),
                                    records, ())
     assert [_row(elsewhere, key).state for key in ("pin_down", "fixed_number", "drive_study", "across_prior")] == [

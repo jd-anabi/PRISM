@@ -1353,7 +1353,8 @@ def test_a_later_steps_change_not_applied_is_said_on_that_step_alone_and_never_i
     """A change not applied on step 4, 5 or 6 reads "Changed, not applied" on that step alone, every other step reading
     as it does with none; a step that holds something with such a change is never the step in hand, and the step in hand
     is then the first other one; Checks, which holds nothing, stays in hand as an earlier step that holds nothing
-    does."""
+    does, but only while its checks are counted: handed no summary, it is never in hand, a change not applied or
+    none."""
     session = _session(**_ROUND)
     for checks, others in ((_summary(2), "checks"), (_summary(6, open_=False), None)):
         plain = chain.step_states(session, checks=checks, observation_on_offer=True)
@@ -1368,6 +1369,10 @@ def test_a_later_steps_change_not_applied_is_said_on_that_step_alone_and_never_i
             assert in_hand == "checks", "a step holding nothing was passed over for a change not applied"
         else:
             assert in_hand == others, (checks, in_hand)
+    if step == "checks":
+        unread = chain.step_states(session, observation_on_offer=True, pending=frozenset({step}))
+        assert (unread[3].rail_words, unread[3].may_be_in_hand) == ("Changed, not applied", False)
+        assert chain.step_in_hand(unread) != "checks", "Checks was in hand with no summary of its checks"
 
 
 def test_steps_four_to_six_keep_the_chains_words_for_a_model_inference_cannot_take(monkeypatch):

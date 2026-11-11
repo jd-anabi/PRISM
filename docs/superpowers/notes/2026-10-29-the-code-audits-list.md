@@ -504,3 +504,10 @@ From Task 3 (the checks' rules, the chain's words and Training's pre-run line), 
    is never refused; `tests/test_checks.py` and `tests/test_applied_and_pending.py` call through both. The second
    reads the two priors' mixtures, a copy off the graphics card when they live there, which is why the window asks it
    only at its reading, never while a run is live. Cure if wanted: make both public in the engine.
+10. **The input-use check's least size is judged on the simulations asked for, beside item 8.** `check_readings`
+    judges `body.settings.rows`, the rows the check was asked to read, not `body.results.n_rows`, the rows it read
+    (the engine stops at the end of the set). A posterior whose simulation set holds fewer than 200,000 rows, checked
+    at the default, counts at the usual size while reading fewer, and its words "the usual is 200,000" say more than
+    it read. As the design's rule gives it; whether reading the whole of a small set is the usual size is the owner's,
+    heard at the stage's exit (Task 3's fix round). Cure if wanted: judge the smaller of the two, or say "simulations
+    asked for".
