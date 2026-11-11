@@ -29,6 +29,7 @@ come back, and back to the main button once its failure has been told.
 """
 from datetime import datetime
 
+import shiboken6
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
@@ -62,13 +63,17 @@ _LINE_KINDS = {"info": "info", "warning": "warn", "error": "warn"}
 
 
 class _Body(QWidget):
-    """The scrolling body of a page: it hands the width the scroller tells it to the form."""
+    """The scrolling body of a page: it hands the width the scroller tells it to every part it holds that is told a
+    width, the form and a list beside its detail among them."""
 
     form = None
 
     def fit(self, width: int) -> None:
-        if self.form is not None:
-            self.form.fit(width)
+        box = self.layout()
+        for at in range(box.count() if box is not None else 0):
+            told = getattr(box.itemAt(at).widget(), "fit", None)
+            if callable(told):
+                told(width)
 
 
 class _Column(QWidget):
@@ -145,6 +150,8 @@ class StepPage(RunHost, QWidget):
         self.form = self.controls = Form()
         self.form.edited.connect(self._edited)
         self.form.joined.connect(self._a_stop_joined)
+        self._forms = [self.form]            # every form the page has handed the foot, all of which a run locks
+        self._locked = False                 # a run is live and the page's forms are locked
         body = _Body()
         body.form = self.form
         self._body = QVBoxLayout(body)
@@ -337,6 +344,24 @@ class StepPage(RunHost, QWidget):
         when something held would be let go; what it carries that picks a row of the form is chosen in that row. Neither
         leaves a choice "Changed, not applied"."""
 
+    def use_form(self, form: Form) -> None:
+        """Hand the foot and the keys ``form``, the one in sight on a page that holds several: what a run locks, what the
+        main button reads and where the keyboard goes, with its edits and its rows heard, once. A run locks every form
+        a page has handed, whichever is in sight; one handed while a run is live is locked as it is handed."""
+        if form is self.form:
+            return
+        for said, heard in ((self.form.edited, self._edited), (self.form.joined, self._a_stop_joined)):
+            said.disconnect(heard)
+        self.form = self.controls = form
+        form.edited.connect(self._edited)
+        form.joined.connect(self._a_stop_joined)
+        if form not in self._forms:
+            self._forms.append(form)
+        form.setEnabled(not self._locked)
+        if self._keys_ordered:
+            self.order_the_keys()
+        self.redraw()
+
     def save_settings(self, qs) -> None:
         """Nothing: what a step remembers is written as it comes into use."""
 
@@ -401,8 +426,11 @@ class StepPage(RunHost, QWidget):
         except Exception:                    # noqa: BLE001 -- a page's facts never raise
             return []
         session, said = getattr(screen, "session", None), []
+        # Checks holds nothing, so a run reads nothing of its page and its changes are never said here.
         held = {"model": lambda: model_label(getattr(getattr(session, "draft", None), "model", None)),
-                "prior": lambda: record_words.label_of(getattr(session, "inf_prior", None))}
+                "prior": lambda: record_words.label_of(getattr(session, "inf_prior", None)),
+                "training": lambda: record_words.label_of(getattr(session, "posterior", None)),
+                "infer": lambda: record_words.label_of(getattr(session, "observation", None))}
         for step in held:
             if step in pending and keys.step_number(step) < keys.step_number(self.step):
                 said.append(pending_words(keys.step_number(step), keys.step(step).name, held[step]()))
@@ -621,7 +649,12 @@ class StepPage(RunHost, QWidget):
             self.run_view.how_link.setVisible(False)
 
     def set_controls_enabled(self, enabled: bool) -> None:
-        """A run locks the form and the foot's two buttons; the facts stay readable."""
+        """A run locks the form and the foot's two buttons, and every form the page has handed the foot; the facts stay
+        readable."""
+        self._locked = not enabled
+        self._forms = [form for form in self._forms if shiboken6.isValid(form)]
+        for form in self._forms:
+            form.setEnabled(enabled)
         self.controls.setEnabled(enabled)
         self.foot.set_live(not enabled)
         if enabled:

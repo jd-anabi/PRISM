@@ -99,10 +99,14 @@ def _edge_of(widget, window) -> QRect:
 
 def _in_view(page, widget) -> bool:
     """Whether the whole of ``widget``, in the page's body, lies in the viewport, with the room over and under it for its
-    focus ring."""
+    focus ring; for a widget higher than the viewport, which cannot, a list of sixteen rows at the least size, whether
+    its top does, as the page brings a part too high for it into view."""
     port = page.scroller.viewport()
     room = design.SIZE["focus_ring"] + design.SIZE["focus_gap"]
-    return port.rect().contains(_edge_of(widget, port).adjusted(0, -room, 0, room))
+    edge = _edge_of(widget, port).adjusted(0, -room, 0, room)
+    if edge.height() > port.height():
+        return 0 <= edge.top() < port.height() and port.rect().left() <= edge.left() and edge.right() <= port.rect().right()
+    return port.rect().contains(edge)
 
 
 def _walked(window, count) -> list:
@@ -1105,26 +1109,52 @@ def test_show_all_stays_open_through_a_reading_a_move_and_a_run(tmp_path):
     assert foot.more.text() == "Show all 3", "the low form came back open"
 
 
+def _twelve_rows_one_in_error(page) -> None:
+    """The table of rows of the stand-in, twelve rows, one with its frequency refused under it in two lines."""
+    rows = [page.table.add_row() for _ in range(12)]
+    page.table.set_reading(rows[7], "err", TWO_LINES)
+
+
+def _a_detail_open(page) -> None:
+    """The stand-in list with its detail open, beside or in its place as the width says."""
+    page.open_detail()
+
+
+#: The pages the foot is held over at the smallest window, by a name: the stand-in, a table of rows on a page of the later
+#: steps, and a list with a detail open; each with the class's maker, the step it stands on, and what is done to it.
+FOOT_PAGES = {"the stand-in": (None, "training", None),
+              "a table of rows": ("stand_in_table_page", "infer", _twelve_rows_one_in_error),
+              "a list with a detail open": ("stand_in_list_page", "checks", _a_detail_open)}
+
+
 @pytest.mark.parametrize("factor", [1.0, 1.5])
 @pytest.mark.parametrize("count", [0, 9, 12])
 @pytest.mark.parametrize("size", [(900, 600), (1000, 699), (1000, 700), (1000, 820)], ids=str)
-def test_the_foot_stays_over_nothing_at_the_smallest_window(factor, count, size, tmp_path):
+@pytest.mark.parametrize("held", list(FOOT_PAGES))
+def test_the_foot_stays_over_nothing_at_the_smallest_window(held, factor, count, size, tmp_path):
     """At the window's least size and at the sizes on each side of the low form, with the fold open, a field in error and
     the facts of two lines each and a record's long name for an origin: the facts stand under their heading, no higher than
     the look's height, over nothing; the reason and the two buttons meet nothing and stand inside the window; the form
     keeps at least the room of a scrolling part, and is no wider than what shows it, which has no bar to reach the rest.
     Read in the window's own coordinates, and asked of the toolkit at each edge, for a part drawn over another or cut by a
     parent reads right by its edges alone. The facts open in the same region, and their growing moves nothing out of the
-    window."""
+    window. On the stand-in page, on a page with a table of twelve rows, one with a reading in error, and on a list with
+    a detail open."""
+    from tests import _fixtures
+    maker, step, shaped = FOOT_PAGES[held]
     with text_size(factor), _the_look(False):
-        window, page, _clock = _a_page(tmp_path, shown=False)
+        cls = None if maker is None else getattr(_fixtures, maker)()
+        window, page, _clock = _a_page(tmp_path, shown=False, cls=cls, step=step)
         wide, high = design.scaled(size[0]), design.scaled(size[1])
         shown_off_screen(window, wide, high)
-        window.go_to("inference", "training")
-        page.form.rows["learning_rate"].set_line("err", "Learning rate must be above 0.")
-        page.names.name.setText("a name that is far too long " * 3)
-        page.names.check_now()
-        page.form.rows["num_runs"].set_origin("from record " + LONG_NAME)
+        window.go_to("inference", step)
+        if shaped is not None:
+            shaped(page)
+        page.form.fold.rows()[0].set_line("err", "Learning rate must be above 0.")
+        if page.names is not None:
+            page.names.name.setText("a name that is far too long " * 3)
+            page.names.check_now()
+        page.form.rows[next(iter(page.form.rows))].set_origin("from record " + LONG_NAME)
         page.said = tuple(Fact("warn" if at % 2 else "info", f"{TWO_LINES} ({at})") for at in range(count))
         page.redraw()
         _settle()
@@ -2485,6 +2515,254 @@ def test_a_parameters_unit_is_its_kinds_in_the_configuration():
         "x_scale": "", "x_offset": "", "odd": ""}
 
 
+def _a_list_page(tmp_path, **kwargs):
+    from tests._fixtures import stand_in_list_page
+    return _a_stand_in(tmp_path, stand_in_list_page(), "checks", **kwargs)
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_a_list_stands_beside_its_detail_from_a_width_and_in_its_place_below_it(factor, tmp_path):
+    """No detail: the whole list. A detail: beside the list, the list told narrow, from the width the caller names,
+    scaled, the width being the one the page's body hands; below it, in the list's place under "All checks", which brings
+    the whole list back and hands the page's own form back. A window 1400 by 600, low, stands the two side by side, and
+    one 900 by 800, not low, stands the detail in the list's place: the switch reads the width, never the low window. At
+    each width the page's body is no wider than what shows it."""
+    with text_size(factor), _the_look(False):
+        window, page = _a_list_page(tmp_path)
+        split = page.list_detail
+        beside = split.beside_width
+        assert beside == design.scaled(890)
+        assert (split.detail, page.listing.narrowed, split.back.isHidden(), page.listing.isVisibleTo(window)) == (
+            None, False, True, True)
+        page.open_detail()
+        _settle()
+        assert split._width is not None, "the page's body handed the list no width"
+        apart = window.width() - split._width        # what the window holds beside the width its body hands
+        for width, wanted in ((beside - 1, False), (beside, True), (beside + 200, True)):
+            window.resize(width + apart, window.height())
+            _settle()
+            assert split._width == width, ("the body handed another width", factor, width, split._width)
+            assert (split.beside(), page.listing.isHidden(), split.back.isHidden()) == (wanted, not wanted, wanted), (
+                factor, width)
+            assert page.listing.narrowed and not page.detail.isHidden()
+            assert page.listing.width() == page.listing.sizeHint().width() or not wanted, (
+                "beside a detail the list does not stand at the width it asks for", factor, width)
+        page.detail.setMinimumWidth(beside)                # a detail too wide to stand beside the list at this width
+        split.fit(split._width)
+        assert split._width >= beside and not split.beside(), "a detail stood beside the list in less room than both need"
+        page.detail.setMinimumWidth(0)
+        split.fit(split._width)
+        assert split.beside()
+        for size, small, wanted in (((1400, 600), True, True), ((900, 800), False, False)):
+            shown_off_screen(window, design.scaled(size[0]), design.scaled(size[1]))
+            _settle()
+            assert window.shell._small == small, size
+            assert split.beside() == wanted, (factor, size, split._width)
+            assert page.scroller.widget().width() <= page.scroller.viewport().width(), (factor, size)
+        assert not split.back.isHidden() and split.back.text() == "All checks" and page.form is page.detail.form
+        pressed = []
+        split.back_pressed.connect(lambda: pressed.append(1))
+        split.back.click()
+        _settle()
+        assert (pressed, split.detail, page.listing.narrowed, page.listing.isHidden(), split.back.isHidden()) == (
+            [1], None, False, False, True)
+        assert page.form is page.own_form and not page.own_form.isHidden() and page.detail.isHidden()
+        window.hide()
+    from PySide6.QtWidgets import QLabel as _Label
+    from core.gui.widgets.list_detail import ListAndDetail
+
+    class _Listing(QWidget):
+        narrowed = None
+
+        def set_narrow(self, on):
+            self.narrowed = on
+
+    bare = build_part(ListAndDetail, listing=_Listing(), beside_width=10_000)
+    bare.show_detail(_Label("a detail"))
+    bare.fit(500)
+    bare.back.click()
+    assert (bare.detail, bare.listing.narrowed, bare.back.isHidden()) == (None, False, True), (
+        "the way back left the detail, whoever hears it")
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_list_beside_a_detail_shows_its_two_columns_and_a_state_word_wraps(factor, tmp_path):
+    """Beside a detail the list shows two columns, "Check" and "State", and the longest state, "Waiting for the
+    simulations", stands whole on two lines beside its marker, its row as high as both; never cut. The whole list shows
+    its four columns while no check is open."""
+    from core.gui.widgets.rule_table import _face, _pads, _wrapped
+    with text_size(factor), _the_look(False):
+        window, page = _a_list_page(tmp_path)
+        whole = page.listing.whole.view
+        assert [whole.model().headerData(at, Qt.Horizontal) for at in range(4)] == ["Check", "Role", "State",
+                                                                                     "Last run"]
+        page.open_detail()
+        _settle()
+        assert page.list_detail.beside()
+        view = page.listing.narrow.view
+        assert page.listing.whole.isHidden() and not page.listing.narrow.isHidden()
+        assert [view.model().headerData(at, Qt.Horizontal) for at in range(2)] == ["Check", "State"]
+        row = next(row for row in range(view.model().rowCount())
+                   if getattr(view.model().index(row, 1).data(Qt.UserRole), "word", "") == "Waiting for the simulations")
+        lead, gap = _pads(1, 2)
+        room = view.columnWidth(1) - lead - gap - design.scaled(design.SIZE["marker"]) - design.scaled(
+            design.SIZE["state_gap"])
+        line = design.scaled(design.TYPE["body"][1])
+        layout, lines = _wrapped("Waiting for the simulations", _face("word"), room, line)
+        drawn = " ".join(layout.text()[layout.lineAt(at).textStart():][:layout.lineAt(at).textLength()].strip()
+                         for at in range(lines))
+        assert (lines, drawn) == (2, "Waiting for the simulations"), (factor, room, drawn)
+        assert view.rowHeight(row) >= 2 * line + 2 * design.scaled(design.SIZE["table_pad"])
+        assert view.columnWidth(0) + view.columnWidth(1) <= page.listing.width()
+        window.hide()
+
+
+@pytest.mark.parametrize("step, pending", [
+    ("checks", ("model",)), ("checks", ("prior", "training")), ("infer", ("model", "prior", "training", "checks")),
+    ("infer", ("infer", "narrowing")), ("narrowing", ("training", "infer")), ("narrowing", ("narrowing", "checks"))])
+def test_a_later_step_says_the_changes_of_every_earlier_step_not_applied(step, pending, tmp_path, monkeypatch):
+    """A later step says, of every earlier step whose page shows changes not applied, that its run uses what that step
+    holds, each by its number, its name and what is in use, in the steps' order: Model and options by the model, Prior
+    by the prior, Training by the posterior, Inference by the observation. Checks holds nothing, so nothing is said of it.
+    A step pending is never said on its own page nor on a step before it, and a step not pending is never said."""
+    from types import SimpleNamespace
+    from core.gui import keys
+    from core.gui.chain import model_label
+    from tests._fixtures import prior_stub, stand_in_table_page
+    _window, page = _a_stand_in(tmp_path, stand_in_table_page(step), step)
+    screen = page._screen
+    session = screen.session
+    session.draft = SimpleNamespace(model="NADROWSKI")
+    session.inf_prior = prior_stub(name="retrain_prior")
+    session.posterior = SimpleNamespace(name="retrain_posterior")
+    session.observation = SimpleNamespace(name="cell_a")
+    monkeypatch.setattr(type(screen), "pending", lambda _screen: frozenset(pending))
+    held = {"model": model_label("NADROWSKI"), "prior": "retrain_prior", "training": "retrain_posterior",
+            "infer": "cell_a"}
+    expected = [f"Step {keys.step_number(key)}, {keys.step(key).name}, has changes that are not applied. This run uses "
+                f"what is in use: {held[key]}." for key in held
+                if key in pending and keys.step_number(key) < keys.step_number(step)]
+    assert page._others_pending() == expected
+    assert all(f"Step {keys.step_number(step)}," not in said for said in expected)
+
+
+def test_a_reason_that_waiting_will_not_lift_reads_cannot_start(tmp_path):
+    """STANDING. Beside each rebuilt page's main button, a block that neither waiting nor a press elsewhere lifts, one of
+    the facts' table of such blocks, reads "Cannot start: …"; one that a run's end or a press on this page or another
+    lifts reads "Cannot start yet: …"; a run live says only that it is, whatever blocks. Every stand-in page in its turn;
+    a page built later joins with its own blocks."""
+    from core.gui import step_facts
+    from tests._fixtures import stand_in_list_page, stand_in_table_page
+    lifted = ("needs a prior", "needs a model", "the name cannot be used", "a name is needed",
+              "a setting cannot be used", "the last start was refused")
+    for cls, step in ((None, "training"), (stand_in_list_page(), "checks"), (stand_in_table_page(), "infer")):
+        window, page = _a_stand_in(tmp_path, cls, step)
+        if page.names is not None:
+            page.names.name.setText("retrain_3")
+            if page.names.other is not None:
+                page.names.other_name.setText("cell_a")
+            page.names.check_now()
+        for words in (*sorted(step_facts.FINAL_BLOCKS), *lifted):
+            page.said = (Fact("err", "A sentence of this block.", words),)
+            page.redraw()
+            lead = "Cannot start:" if words in step_facts.FINAL_BLOCKS else "Cannot start yet:"
+            assert page.foot.reason.text() == f"{lead} {words}.", (step, words)
+            assert not page.foot.main_button.isEnabled()
+        stand_in = StandIn(word="Reduction")
+        start_run(window.part("reduction"), stand_in)
+        _settle()
+        page.redraw()
+        assert page.foot.reason.text() == "A run is live. Only one runs at a time."
+        stand_in.release()
+        turn_until(qt_app(), lambda: not controller().is_live())
+        window.hide()
+
+
+def test_the_low_window_keeps_show_all_n_for_a_new_pages_facts(tmp_path):
+    """On a page of the later steps with nine facts, in a window 1000 by 699, low: what blocks and what needs attention
+    stand, the link reads "Show all 9", opens them all and reads "Show fewer", and shuts them again."""
+    window, page = _a_table_page(tmp_path, size=(1000, 699))
+    page.names.other_name.setText("cell_a")
+    page.names.check_now()
+    page.said = (Fact("warn", "a"), Fact("warn", "b"), *(Fact("info", f"line {at}") for at in range(7)))
+    page.redraw()
+    _settle()
+    foot = page.foot
+    assert window.shell._small and foot.facts.count() == 9
+    assert (foot.more.isHidden(), foot.more.text()) == (False, "Show all 9")
+    assert [row.isHidden() for row in foot.facts.rows()] == [False, False] + [True] * 7
+    foot.more.click()
+    assert foot.more.text() == "Show fewer" and not any(row.isHidden() for row in foot.facts.rows())
+    foot.more.click()
+    assert foot.more.text() == "Show all 9"
+    window.hide()
+
+
+def test_a_page_hands_its_foot_and_its_keys_to_the_form_in_sight(tmp_path):
+    """A page that holds several forms hands the foot the one in sight: the main button reads that form's facts, the Tab
+    key walks its rows and no longer the first form's, what a run locks is it, and the page hears its edits and no
+    longer the first form's, once however often it is handed; handed back, the first form is all that again. A run locks
+    every form the page has handed, whichever is in sight, one handed during the run among them, and its end frees them;
+    meanwhile the main button is greyed, saying that a run is live."""
+    from PySide6.QtTest import QTest
+    window, page = _a_list_page(tmp_path)
+    own, detail = page.own_form, page.detail.form
+    own.rows["num_runs"].widget.setText("")
+    page.redraw()
+    assert page.foot.reason.text() == "Cannot start yet: a setting is not a number."
+    drawn = []
+    real = page.redraw
+
+    def counted():
+        drawn.append(1)
+        real()
+
+    page.redraw = counted
+    page.open_detail()
+    page.open_detail()
+    _settle()
+    assert page.form is page.controls is detail and page.foot.main_button.isEnabled()
+    assert page.foot.main_button.text().replace("&", "") == "Run the calibration"
+    drawn.clear()
+    detail.rows["n_cal"].widget.setText("")
+    assert len(drawn) == 1, "an edit of the form in sight was heard more than once"
+    assert page.foot.reason.text() == "Cannot start yet: a setting is not a number."
+    assert not page.foot.main_button.isEnabled()
+    drawn.clear()
+    own.rows["num_runs"].widget.setText("7000")
+    assert drawn == [], "the first form's edits are still heard"
+    detail.rows["n_cal"].widget.setText("2000")
+    with in_front(window):
+        page.help_button.setFocus(Qt.TabFocusReason)
+        walked = []
+        for _ in range(8):
+            QTest.keyClick(QApplication.focusWidget(), Qt.Key_Tab)
+            _settle()
+            walked.append(QApplication.focusWidget())
+    assert detail.rows["n_cal"].widget in walked and own.rows["num_runs"].widget not in walked
+    stand_in = StandIn(word="Reduction")
+    start_run(window.part("reduction"), stand_in)
+    _settle()
+    assert not detail.isEnabled() and not own.isEnabled()
+    assert page.foot.reason.text() == "A run is live. Only one runs at a time." and not page.foot.main_button.isEnabled()
+    page.close_detail()
+    assert page.form is own and not own.isEnabled(), "a form handed back during a run was left editable"
+    fresh = Form()                                         # a form the page hands for the first time during the run
+    fresh.setParent(page)
+    page.use_form(fresh)
+    assert not fresh.isEnabled(), "a form handed first during a run was left editable"
+    page.use_form(own)
+    stand_in.release()
+    turn_until(qt_app(), lambda: not controller().is_live())
+    _settle()
+    assert own.isEnabled() and detail.isEnabled() and fresh.isEnabled()
+    drawn.clear()
+    own.rows["num_runs"].widget.setText("5000")
+    detail.rows["n_cal"].widget.setText("")
+    assert len(drawn) == 1, "after the hand back the page hears the wrong form"
+    window.hide()
+
+
 def test_go_to_the_run_goes_to_the_run(tmp_path):
     app = qt_app()
     window, page, _clock = _a_page(tmp_path)
@@ -2736,8 +3014,53 @@ WALKED = {
 }
 
 
+def _rows_typed(page) -> None:
+    """The stand-in table with two driven recordings typed, and the observation named."""
+    for path in ("C:/a.npy", "C:/b.npy"):
+        _typed(page.table.add_row(), path, "1.5")
+    page.names.other_name.setText("cell_a")
+    page.names.check_now()
+
+
+def _the_tables_settings(page) -> list:
+    """The stand-in table's rows, each row's fields and remove button, the button that adds one, then the file row and
+    the grid of values under it, in their order."""
+    return [*page.table.stops(), page.cell.edit, page.cell.browse, *page.grid._fields.values()]
+
+
+def _the_list_or_back(page) -> list:
+    """The heading's button, then the list told narrow beside a detail, or the way back to it above a detail in its
+    place."""
+    return [page.help_button, page.listing.narrow.view if page.list_detail.beside() else page.list_detail.back]
+
+
+#: The stand-in pages of the pieces the later steps are built of, walked as the rebuilt pages are, beside them: each by a
+#: name, with the maker of its class, the step it stands on and its shapes, written as WALKED's are; the controls the
+#: page lists under what is in use stand with the heading's.
+STAND_IN_WALKED = {
+    "a list beside its detail": ("stand_in_list_page", "checks", {
+        "the whole list": (lambda page: None, lambda page: [page.help_button, page.listing.whole.view],
+                           lambda page: [page.own_form.rows["num_runs"].widget], lambda page: None, lambda page: [],
+                           lambda page, small: [page.foot.check_again, page.foot.main_button]),
+        "a check open": (_a_detail_open, _the_list_or_back,
+                         lambda page: [page.detail.form.rows["n_cal"].widget,
+                                       page.detail.form.rows["cal_n_scales"].widget],
+                         lambda page: [page.detail.form.rows["learning_rate"].widget], lambda page: [],
+                         lambda page, small: [page.foot.check_again, page.foot.main_button]),
+    }),
+    "a table of rows": ("stand_in_table_page", "infer", {
+        "two rows typed": (_rows_typed, lambda page: [page.help_button], _the_tables_settings,
+                           lambda page: [page.form.rows["n_samples"].widget],
+                           lambda page: [page.names.name, page.names.other_name, page.names.note],
+                           lambda page, small: [page.foot.check_again, page.foot.main_button]),
+    }),
+}
+
+
 @pytest.mark.parametrize("fold_open", [False, True], ids=["fold shut", "fold open"])
-@pytest.mark.parametrize("step, shape", [(step, shape) for step, shapes in WALKED.items() for shape in shapes])
+@pytest.mark.parametrize("step, shape", [*((step, shape) for step, shapes in WALKED.items() for shape in shapes),
+                                         *((name, shape) for name, (_maker, _step, shapes) in STAND_IN_WALKED.items()
+                                           for shape in shapes)])
 @pytest.mark.parametrize("factor", [1.0, 1.5])
 @pytest.mark.parametrize("size", [(900, 600), (1300, 820)], ids=str)
 def test_tab_walks_the_page_in_view_at_every_size(size, factor, step, shape, fold_open, tmp_path, monkeypatch):
@@ -2746,9 +3069,11 @@ def test_tab_walks_the_page_in_view_at_every_size(size, factor, step, shape, fol
     starts or applies anything; every field in reading order, the fold and what it holds, a row the page shows only for
     a choice made after its first show in its place among them; what scrolls; the foot; and back to the row of the rail
     it began from. Each stop in the scrolling body stands whole in its viewport as it takes the keyboard, at the window's
-    least size and a larger one, at both text sizes. The window lists the test's own folder of plans."""
+    least size and a larger one, at both text sizes. The window lists the test's own folder of plans. The stand-in pages
+    of the pieces are walked beside the rebuilt pages, each built in its step's place first."""
     from PySide6.QtTest import QTest
     from core.gui import plans
+    from tests import _fixtures
     monkeypatch.setattr(plans, "PLAN_FOLDER", tmp_path / "plans")
     with text_size(factor), _the_look(False):
         fonts.load_app_font(qt_app())
@@ -2756,11 +3081,15 @@ def test_tab_walks_the_page_in_view_at_every_size(size, factor, step, shape, fol
         window = build_window()
         design.set_room((3400, 1380))
         window.setMinimumSize(1, 1)
+        shapes = WALKED.get(step)
+        if shapes is None:
+            maker, step, shapes = STAND_IN_WALKED[step]
+            build_step_page(getattr(_fixtures, maker)(), window=window, step=step)
         shown_off_screen(window, design.scaled(size[0]), design.scaled(size[1]))
         window.go_to("inference", step)
         page = window.part("inference").pages.currentWidget()
         _settle()
-        shaped, head, main, folded, block, at_the_foot = WALKED[step][shape]
+        shaped, head, main, folded, block, at_the_foot = shapes[shape]
         shaped(page)
         page.form.fold.set_open(fold_open)
         _settle()

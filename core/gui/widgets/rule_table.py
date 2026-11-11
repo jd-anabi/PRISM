@@ -50,7 +50,8 @@ class ValueCell:
 class StateCell:
     """A state in a cell: its marker and, after it, the word for it. Too long for its column the word is cut
     at its end and an ellipsis stands there; with no room for the ellipsis itself the marker stands alone.
-    ``_as_drawn`` says it in full, a single letter included."""
+    ``_as_drawn`` says it in full, a single letter included. In a fitted column that wraps, the words are set in
+    as many lines as they need beside the marker, which stands by the first, and never cut."""
     kind: str                 # one of paint.MARKERS
     word: str
 
@@ -248,7 +249,14 @@ class RuleDelegate(QStyledItemDelegate):
             height = design.scaled(design.TYPE["body"][1])
             box = rect.adjusted(lead, pad, -gap, -pad)
             line = QRectF(box.left(), box.top(), box.width(), height)
-            if isinstance(cell, StateCell):
+            if isinstance(cell, StateCell) and self.parent()._columns[index.column()].wrap:
+                side = design.scaled(design.SIZE["marker"])
+                at = side + design.scaled(design.SIZE["state_gap"])          # where its words begin
+                layout, _lines = _wrapped(cell.word, _face("word"), box.width() - at, height)
+                paint.paint_marker(painter, cell.kind, QRectF(box.left(), box.top() + (height - side) / 2, side, side))
+                painter.setPen(design.colour("ink"))
+                layout.draw(painter, box.topLeft() + QPointF(at, 0))
+            elif isinstance(cell, StateCell):
                 side = design.scaled(design.SIZE["marker"])
                 at = side + design.scaled(design.SIZE["state_gap"])          # where its word begins
                 # Asked before the marker is painted: if the asking fails the toolkit draws this cell itself,
@@ -466,7 +474,9 @@ class RuleView(QTableView):
                 words = [(_face("figure"), cell.figure)] + [(_face("unit"), word) for word in cell.unit.split()]
             elif isinstance(cell, StateCell):
                 marker = design.scaled(design.SIZE["marker"]) + design.scaled(design.SIZE["state_gap"])
-                widest = max(widest, marker + QFontMetricsF(_face("word")).horizontalAdvance(cell.word))
+                metrics = QFontMetricsF(_face("word"))
+                parts = cell.word.split() if self._columns[column].wrap else [cell.word]
+                widest = max([widest] + [marker + metrics.horizontalAdvance(part) for part in parts])
                 continue
             else:
                 words = [(_face("selected" if semibold else "text"), word) for word in cell.text.split()]
@@ -523,6 +533,11 @@ class RuleView(QTableView):
             semibold = index.column() == 0 and self.selectionMode() != QAbstractItemView.NoSelection
             font = _face("selected" if semibold else "text")
             lines = line * _wrapped(cell.text, font, self._column_width(index.column()) - lead - gap, line)[1]
+        elif isinstance(cell, StateCell) and self._columns[index.column()].wrap:
+            lead, gap = _pads(index.column(), len(self._columns))
+            at = design.scaled(design.SIZE["marker"]) + design.scaled(design.SIZE["state_gap"])
+            lines = line * _wrapped(cell.word, _face("word"), self._column_width(index.column()) - lead - gap - at,
+                                    line)[1]
         elif isinstance(cell, ValueCell) and self._columns[index.column()].wrap:
             lead, gap = _pads(index.column(), len(self._columns))
             lines = line * _wrapped_value(cell, self._column_width(index.column()) - lead - gap, line)[1]

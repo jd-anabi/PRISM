@@ -3683,6 +3683,31 @@ def test_a_table_rows_remove_glyph_draws_at_every_scaling():
                     assert image.pixelColor(int(image.width() * 0.15), image.height() // 2).alpha() == 0, (dark, ratio)
 
 
+def test_a_states_words_in_a_column_that_wraps_take_the_lines_they_need_beside_the_marker():
+    """In a fitted column that wraps, a state's words too long for one line take as many lines as they need beside its
+    marker, never cut, the row as high as its lines; the column holds the marker and the widest word of a state whole;
+    a state in a column that does not wrap keeps one line, cut at its end. Heights and widths only: no pixel of a letter
+    is read."""
+    rt = _rt()
+    long_state = "Waiting for the simulations"
+    table = rt.RuleTable([rt.Column(""), rt.Column("", "fit", wrap=True)],
+                         [[rt.TextCell("a"), rt.StateCell("warn", long_state)], [rt.TextCell("b"),
+                                                                                 rt.StateCell("fine", "Passed")]])
+    with _on_a_page(table, width=500):
+        at = design.scaled(design.SIZE["marker"]) + design.scaled(design.SIZE["state_gap"])
+        lead, gap = rt._pads(1, 2)
+        room = table.view.columnWidth(1) - lead - gap - at
+        lines = rt._wrapped(long_state, rt._face("word"), room, 20)[1]
+        assert QFontMetricsF(rt._face("word")).horizontalAdvance(long_state) > room and lines == 2
+        assert table.view.rowHeight(0) == 10 + 20 * lines and table.view.rowHeight(1) == 30
+        widest = math.ceil(at + QFontMetricsF(rt._face("word")).horizontalAdvance("simulations")) + gap
+        assert table.view._widest(1) == max(widest, design.scaled(design.SIZE["table_section_least"]))
+        table.view.viewport().grab()                  # painted: the drawing guard sees a failure of the wrapped state
+    one = rt.RuleTable([rt.Column(""), rt.Column("", "fit")], [[rt.TextCell("a"), rt.StateCell("warn", long_state)]])
+    with _on_a_page(one, width=500):
+        assert one.view.rowHeight(0) == 30
+
+
 def test_each_marker_and_glyph_shows_its_colours_in_both_themes_at_four_scalings(monkeypatch):
     QApplication.instance() or QApplication([])
 

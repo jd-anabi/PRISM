@@ -1630,6 +1630,152 @@ def _the_stand_in_page(step: str = "training"):
     return _Page
 
 
+#: The words each check's row of the stand-in list says as its state, by the check's number: the longest a row reads
+#: among them.
+LISTED_STATES = {1: "Passed", 2: "Look closer", 3: "Waiting for the simulations", 4: "Not run yet", 5: "Failed",
+                 6: "Waiting for a posterior", 7: "Done", 8: "Not run yet", 9: "Waiting for a posterior",
+                 10: "Done", 11: "Not run yet", 12: "Waiting for a posterior"}
+#: The width from which the stand-in list stands its detail beside it, in the look's pixels at the ordinary text size;
+#: and the width the list asks for beside it, a check's name in two lines and its state beside it.
+LISTED_BESIDE, LISTED_NARROW = 890, 436
+
+
+def stand_in_list_page(step: str = "checks"):
+    """The class of a step page as awkward as the Checks list, built for the step ``step``: in its body, under what is
+    in use, a list of the twelve checks in their four groups, sixteen rows of a ruled table (four columns, or "Check"
+    and "State" while a detail is open), beside a detail of its own once ``open_detail`` opens it: a heading, three rows
+    of a form of its own, one of them folded, and a warning of two lines. The page's own form holds one row, and stands
+    out of sight while the detail's form is handed the foot. It keeps what it is told as the stand-in page does:
+    ``readings``, ``pressed``, ``said``."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+    from core.gui import check_catalogue, design, style
+    from core.gui.panels.inference.step_page import StepPage
+    from core.gui.step_facts import Fact
+    from core.gui.widgets.form import Form
+    from core.gui.widgets.labeled_inputs import FloatField, IntField
+    from core.gui.widgets.list_detail import ListAndDetail
+    from core.gui.widgets.message_row import MessageRow
+    from core.gui.widgets.rule_table import Column, RuleTable, StateCell, TextCell
+
+    class _Listing(QWidget):
+        """The twelve checks under their groups' headings, whole, or told narrow, the name and the state alone."""
+
+        def __init__(self):
+            super().__init__()
+            whole, narrow, self.headings = [], [], []
+            for group in check_catalogue.GROUPS:
+                self.headings.append(len(whole))
+                whole.append([TextCell(group, wrap=True), TextCell(""), TextCell(""), TextCell("")])
+                narrow.append([TextCell(group, wrap=True), TextCell("")])
+                for entry in (entry for entry in check_catalogue.CHECKS if entry.group == group):
+                    state = StateCell("warn", LISTED_STATES[entry.number])
+                    whole.append([TextCell(entry.name, wrap=True), TextCell(entry.role), state,
+                                  TextCell("3 Oct 2026, 14:02")])
+                    narrow.append([TextCell(entry.name, wrap=True), state])
+            self.whole = RuleTable([Column("Check"), Column("Role", "fit"), Column("State", "fit", wrap=True),
+                                    Column("Last run", "fit")], whole)
+            self.narrow = RuleTable([Column("Check"), Column("State", "fit", wrap=True)], narrow)
+            box = QVBoxLayout(self)
+            box.setContentsMargins(0, 0, 0, 0)
+            for table in (self.whole, self.narrow):
+                for row in self.headings:
+                    table.view.setSpan(row, 0, 1, table.view.model().columnCount())
+                box.addWidget(table)
+            self.narrowed = None
+
+        def set_narrow(self, on):
+            self.narrowed = bool(on)
+            self.whole.setVisible(not on)
+            self.narrow.setVisible(bool(on))
+
+        def sizeHint(self):
+            hint = super().sizeHint()
+            if self.narrowed:
+                hint.setWidth(design.scaled(LISTED_NARROW))
+            return hint
+
+        def stops(self):
+            return [(self.narrow if self.narrowed else self.whole).view]
+
+    class _Detail(QWidget):
+        """A check's page as a stand-in: its heading, a form of three rows, one folded, and a warning of two lines."""
+
+        def __init__(self):
+            super().__init__()
+            box = QVBoxLayout(self)
+            box.setContentsMargins(0, 0, 0, 0)
+            box.setSpacing(design.scaled(design.GAP["block"]))
+            self.heading = style.set_class(QLabel("Calibration"), cls="head")
+            self.heading.setTextFormat(Qt.PlainText)
+            box.addWidget(self.heading)
+            self.warning = MessageRow("warn", TWO_LINES)
+            box.addWidget(self.warning)
+            self.form = Form()
+            self.form.add("n_cal", IntField(2000, grouped=True), "datasets", usual=2000, label="Test datasets")
+            self.form.add("cal_n_scales", IntField(200, grouped=True), "points", usual=200, label="Operating points")
+            self.form.add("learning_rate", FloatField("0.0005"), usual=0.0005, folded=True)
+            box.addWidget(self.form)
+
+        def fit(self, width):
+            self.form.fit(width)
+
+        def stops(self):
+            return []                        # its form's stops are the foot's, handed the form
+
+    class _ListPage(StepPage):
+        def __init__(self, screen, parent=None):
+            super().__init__(screen, "Checks", "One plain sentence under the page's title.", step=step,
+                             parent=parent)
+            self.readings = self.pressed = 0
+            self.said, self.held, self.words = (), ("", ""), "Run the calibration"
+            self.own_form = self.form
+            self.own_form.add("num_runs", IntField(5000, grouped=True), "batches", usual=5000)
+            self.listing, self.detail = _Listing(), _Detail()
+            self.list_detail = ListAndDetail(self.listing, beside_width=design.scaled(LISTED_BESIDE))
+            self.list_detail.back_pressed.connect(self.close_detail)
+            self._body.insertWidget(self._body.indexOf(self.in_use) + 1, self.list_detail)
+            self.refresh_local_gates()
+
+        def open_detail(self):
+            """The detail opened, beside the list or in its place, and its form handed the foot."""
+            self.own_form.setVisible(False)
+            self.list_detail.show_detail(self.detail)
+            self.use_form(self.detail.form)
+
+        def close_detail(self):
+            """The whole list again, and the page's own form handed back."""
+            self.list_detail.show_detail(None)
+            self.own_form.setVisible(True)
+            self.use_form(self.own_form)
+
+        def region_stops(self):
+            return self.list_detail.stops()
+
+        def main_words(self):
+            return self.words
+
+        def main_pressed(self):
+            self.pressed += 1
+
+        def read_disk(self):
+            self.readings += 1
+
+        def facts_from_form(self):
+            facts = []
+            for row in self.form.rows.values():
+                words = row.reading()
+                row.set_line("err" if words else "", words or "")
+                if words:
+                    facts.append(Fact("err", words, "a setting is not a number"))
+            return (*facts, *self.said)
+
+        def in_use_words(self):
+            return self.held
+
+    return _ListPage
+
+
 def stand_in_table_page(step: str = "infer"):
     """The class of a step page as awkward as Inference, built for the step ``step``: a table of driven recordings,
     each row a recording's path and the frequency it was driven at, on two lines; a file row with a grid of values
