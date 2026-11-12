@@ -331,6 +331,22 @@ def test_loose_files_sees_what_no_listing_can_and_removes_one_by_name(store):
     assert store.loose_files("prior") == [], "a kind directory that does not exist has no loose files"
 
 
+def test_a_record_whose_folder_will_not_go_after_a_failure_warns_and_keeps_the_runs_own_error(store, monkeypatch):
+    """When the removal on the failure path itself fails (a held handle on Windows), the writer warns rather than let a
+    PermissionError replace the exception that ended the run. The directory left behind has no manifest, and the
+    warning says the store ignores it; it names the caller's ``with`` line, not the store's own frames."""
+    def _held(path, **kw):
+        raise PermissionError("held open by a preview pane")
+    monkeypatch.setattr(st, "_rmtree_retry", _held)
+
+    with pytest.warns(UserWarning, match="it has no manifest, so the store ignores it") as rec:
+        with pytest.raises(RuntimeError, match="the run failed"):
+            with store.create("calibration", None, name="held_cal") as w:
+                w.payload("results.json").write_text("{}", encoding="utf-8")
+                raise RuntimeError("the run failed")
+    assert {Path(r.filename).name for r in rec if "could not remove" in str(r.message)} == {Path(__file__).name}
+
+
 def _an_older_prisms_fdt_folder(root, *, holding: bool) -> dict:
     """``<root>/fdt`` as an older PRISM left it: empty, or holding one record of the effective temperature it
     measured, written here as raw files -- its manifest in the shape that build of the store wrote, its numbers and
@@ -374,7 +390,7 @@ def test_an_fdt_folder_an_older_prism_left_is_neither_listed_nor_touched(tmp_pat
     ids = build_browse_store(root)
     store = st.ArtifactStore(root)
     before = _an_older_prisms_fdt_folder(root, holding=holding)
-    backdate_tree(root / "fdt")                                  # old enough that no recency guard spares it
+    backdate_tree(root)          # the whole store old enough that no recency guard spares it, so a sweep acts
 
     def untouched(what):
         now = {path: (path.read_bytes() if path.is_file() else None) for path in sorted((root / "fdt").rglob("*"))}
@@ -397,8 +413,8 @@ def test_an_fdt_folder_an_older_prism_left_is_neither_listed_nor_touched(tmp_pat
     monkeypatch.setenv("PRISM_ARTIFACTS", str(root))
     capsys.readouterr()
     for argv in (["artifacts", "list"], ["artifacts", "sweep"], ["artifacts", "sweep", "--yes"],
-                 ["artifacts", "summary"]):
-        main(argv)
+                 ["artifacts", "summary", "posterior", ids["posterior"]]):
+        assert main(argv) == 0, argv
         said = capsys.readouterr()
         never_named(said.out + said.err)
         untouched(" ".join(argv))

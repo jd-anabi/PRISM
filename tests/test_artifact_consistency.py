@@ -152,6 +152,51 @@ def test_cell_sources_records_the_bounds_file_that_actually_resolved():
                                                "model": "HOPF"}
 
 
+def test_cell_sources_names_exactly_the_files_parse_cell_opens(monkeypatch):
+    """``parse_cell`` keeps its 7-tuple and throws the bounds and units paths it resolved away, so
+    ``cli.cell_sources`` RE-DERIVES them for the record -- two copies of one resolution rule (a
+    same-named sibling, else the model's master; the units file only on the decoupled branch), and
+    that is a hazard: a record that names the wrong bounds file is worse than one that names none.
+    Nothing tied the copies together. Here the two file readers ``parse_cell`` calls are wrapped to
+    record what it OPENS, for every shipped cell, with the model argument both callers pass, and
+    ``cell_sources`` must name exactly those files (None on the legacy inline branch, which opens
+    neither).
+
+    A cell ``parse_cell`` refuses is skipped: ``master_spont_tier1.txt`` resolves to the Nadrowski
+    master and is refused (its missing ``f_scale``) AFTER opening the bounds file and BEFORE the units
+    file, so there is nothing to compare for it."""
+    from core import cli, config
+    from core.Helpers import file_manager
+    from core.refusals import Refusal
+
+    opened = {}
+    real_bounds, real_units = file_manager.parse_bounds_file, file_manager.parse_units_file
+
+    def _bounds(path, *a, **k):
+        opened["bounds"] = str(path)
+        return real_bounds(path, *a, **k)
+
+    def _units(path, *a, **k):
+        opened["units"] = str(path)
+        return real_units(path, *a, **k)
+
+    monkeypatch.setattr(file_manager, "parse_bounds_file", _bounds)
+    monkeypatch.setattr(file_manager, "parse_units_file", _units)
+    compared = []
+    for cell in sorted(config.CELL_PATH.glob("*/*.txt")):
+        model = cell.parent.name.upper()
+        opened.clear()
+        try:
+            cli.parse_cell(str(cell), model=model)
+        except Refusal:
+            continue
+        sources = cli.cell_sources(str(cell), model)
+        assert (sources["bounds"], sources["units"]) == (opened.get("bounds"), opened.get("units")), \
+            (cell.name, sources, opened)
+        compared.append(cell.name)
+    assert len(compared) >= 8, f"the shipped cells went missing: {compared}"
+
+
 # ── prior identity ────────────────────────────────────────────────────────────────────────────────
 def _write_prior(path, lows, highs, keys, model="NADROWSKI"):
     """A minimal on-disk prior file, still used by the atomic-write test below (build_prior's load
