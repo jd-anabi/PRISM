@@ -1,5 +1,46 @@
 # PRISM — state
 
+**Last updated:** 2026-11-12, afternoon (14:22 by the clock; the weekly bar 77 %, resetting on 15 November at 04:00 UTC):
+STAGE 5'S TASK 5B, THE OWNER'S CUT, IS COMPLETE: PRISM is a program for inference by simulation alone. The chat started
+at 09:08 from the owner's pasted prompt (`docs/superpowers/prompts/2026-11-11-sbi-only-cut-and-stage-5-from-task-5b.md`)
+and hands over here, by the usage rule. The hand-off prompt for the next chat is
+`docs/superpowers/prompts/2026-11-12-window-redesign-stage-5-from-task-6-7.md`.
+
+- **The cut** (one Opus builder, the leaner way): `7181a56` (the window's pages: Effective temperature, Live simulation
+  and the Reduction map go), `5853027` (the command line, the engine and the store), `7d8f064` (the guide, the walkthrough
+  and the audit's list), its fix round `f07f4db`, `f2214da`. Removed: `core/FDT/`, `core/Reduction/` with its tests,
+  `core/Helpers/fdt.py`, `core/tool/fdt.py`, ten window modules, `tests/test_simulate.py`, `test_fdt_user.py`,
+  `test_fdt_compare.py`; the subcommands `fdt`, `crossval`, `compare`; the `fdt` kind and the progressive record.
+  `core.refusals.FIELDS` 115 to 98. The five inference folders changed in comments only (so no card gate); no line of
+  the seventeen named training functions touched; the simulation set's identity `eda5c2a1e468` before and after;
+  `config.py` lost only the FDT thresholds and `FDTConfig` from an import line. The rail has six parts, their keys
+  Ctrl+1 to Ctrl+6 in rail order (Records moved from Ctrl+6 to Ctrl+3, Help from Ctrl+9 to Ctrl+6: departure 469, to
+  tell the owner). An older PRISM's `Artifacts/fdt/` folder is no kind: never listed or touched (the owner's is empty);
+  `PRISM.ini`'s groups for the removed pages are read by nothing and left as they are; old runs of removed places stay
+  in the history, opening one says its page is gone. What only removed code used is kept for the code audit
+  (departure 473), the five unused packages still pinned. Departures 469 to 475 (`fd541a6`).
+- **Its review:** reader one (sonnet) 1 Important, 3 Minor; reader two (opus) 4 Important, 2 Minor, its eleven faults
+  run (two showed tests lost with the removed files: the store's warning for a folder that will not go, and
+  `cli.parse_cell`'s); ten rulings, one fix round, the re-read CLEAN (one Minor carried to Task 6-7).
+- **The gates on `f2214da`:** the fast gate 3708 passed, 12 skipped, 3 deselected, 34 min 35 s (3723 collected; not
+  certified quiet); the slow set, three tests now, 3 passed in 49 min 12 s, alone; the real-screen run 12 passed; the
+  listing of `Artifacts/` after equals the one before (428 entries); `PRISM.ini` unchanged.
+- **`CLAUDE.md` shortened to its rules on the owner's yes** ("Commit as drafted", `767870b`): 389 lines to 223; the card
+  gate's block and the test guards' list are left to `docs/guide/testing.md`, which held them word for word, and this
+  file's gate table; the launcher's details to `getting-started.md`; the removed parts' sentences out.
+- **The exit's checks re-based** on `f2214da`: `exit_fence.py` also reads `stage-5/gates/digests-at-5b.json` (the
+  seventeen digests equal to Task 0's); the plan's Task 14 Step 1 names the engine files Task 2 and Task 5b changed and
+  `FIELDS` 98; none of Task 14's walkthrough rows uses a removed page. The carried-over list: 77 rows closed naming the
+  cut, 6 born, 1777 rows, missing 0.
+- **Measured:** Task 5b cost about 5 points of the weekly bar (72 % to 77 %), against about 20 for Task 5 the old way.
+- **Unpushed:** everything after `cdc80d2`.
+
+NEXT: Task 6-7 (the forms and runs of every check), in a new chat the owner starts from the prompt above, after the
+reset of 15 November at 04:00 UTC unless the bar leaves room to finish it below 90 %; then Tasks 8-9, 10-11, 12-13; the
+last review; Task 14 (the exit, with the owner); the code audit; the retrain from the window; one last stage.
+
+What follows is the head as the evening of 11 November left it:
+
 **Last updated:** 2026-11-11, evening (17:05 by the clock; the weekly bar 72 %, resetting on 15 November at 04:00 UTC):
 STAGE 5'S TASK 5 IS COMPLETE, and THE OWNER CUT THE PROGRAM DOWN AND RE-PLANNED THE REST. The chat started from the
 owner's pasted prompt (`docs/superpowers/prompts/2026-11-10-window-redesign-stage-5-build-from-task-5.md`). The
@@ -3628,9 +3669,11 @@ Piece 3
 | **display-marked run, stage 3**, `QT_QPA_PLATFORM=windows pytest -m display -q` | 2026-10-29, 16:31, at `e17f1ec`: **9 passed**, 2015 deselected, none skipped, 12 s, exit 0; Windows' foreground window the same before and after, nothing shown; `powercfg /requests` afterwards, read by the owner in an elevated prompt with PRISM closed: nothing of PRISM's. |
 | **`pytest --collect-only -q` after stage 3** | 2026-10-29 at `e17f1ec`: **2024 collected**; `-m "not slow"` 2019/2024 (5 deselected); the carried-over list's check `all rows 950; twice []; missing 0: []; gone 41`. |
 | **pictures, stage 3** (not a gate) | Three rounds, each in three sets (plain, 150 % text, 150 % scaling), light and dark, on hidden windows with the real settings folder and `Artifacts/` unchanged: 28 October at `5573d6f` (266 pictures a set; the owner's fifteen answers); 29 October at `7f560af` (320; two of task A's cures found not to hold); 29 October at `e17f1ec` (324; both cures hold, no fault). |
+| **slow set after the owner's cut** (stage 5, Task 5b; not the stage's gate of record), `pytest -m slow -q --durations=5` | 2026-11-12, 13:28 to 14:17, at `f2214da`, alone: **3 passed**, 3720 deselected, **49 min 12 s**: `test_chi_mode_full_sbi_pipeline` 1811 s (1528 at `e17f1ec`), `test_smoke_runs_every_stage_on_the_tier1_box` 1120 s (1142), the probes' twin-cell check 7 s. The two tests of the effective temperature left with it. The fast gate there, beside no agent for most of its run but not certified quiet: 3708 passed, 12 skipped, 3 deselected, 34 min 35 s (3723 collected); the real-screen run 12 passed. |
 
-**The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
-copied verbatim; keep the copies identical (the documents review compares them). Run it from the
+**The GPU gate, as command lines.** This is the recipe of record as `docs/guide/testing.md` ("The card smoke
+gate") carries it, copied verbatim; since 12 November `CLAUDE.md` points there instead of holding a third copy. Keep the
+two copies identical (the documents review compares them). Run it from the
 repository root, with `$S` set to an empty scratch directory. `PRISM_ARTIFACTS` is not needed for
 the five `smoke` runs, which touch
 only `--store-root`; the diagnostic card runs need it pointed at the same store.
