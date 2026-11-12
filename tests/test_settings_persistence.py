@@ -261,195 +261,17 @@ def test_the_budget_lines_only_format_the_preview(monkeypatch):
     override = names(TSNPEPanel._budget_checkpoint)
     assert not (override & {"config", "TRAINING_CHECKPOINT_EVERY", "orchestrator"}), sorted(override)
 
-def test_settings_round_trip_reduction_and_fdt():
-    from core.gui import settings as st
-    from core.gui.panels.reduction_panel import ReductionPanel
-    from core.gui.panels.fdt_panel import FdtPanel
-
-    qt_app()
-    red = build_part(ReductionPanel)
-    red.f0.setText("0.123")
-    if red.cell_picker.combo.count():
-        red.cell_picker.combo.setCurrentIndex(red.cell_picker.combo.count() - 1)
-    want_cell = red.cell_picker.key()
-
-    fdt = build_part(FdtPanel)
-    fdt.n_freqs.setText("77")
-    fdt.skip_sanity.setChecked(True)
-    fdt.confirm_production.setChecked(False)
-
-    qs = st.settings()
-    red.save_settings(qs)
-    fdt.save_settings(qs)
-    qs.sync()
-
-    red2 = build_part(ReductionPanel)
-    fdt2 = build_part(FdtPanel)
-    assert red2.f0.value() == 0.123
-    assert red2.cell_picker.key() == want_cell
-    assert fdt2.n_freqs.value() == 77
-    # The two FDT boxes are consents, and a consent is never remembered: saved flipped, they still
-    # open at the construction defaults -- the sanity checks run, and the production sweep follows
-    # them.
-    assert fdt2.skip_sanity.isChecked() is False
-    assert fdt2.confirm_production.isChecked() is True
-
-def test_the_fdt_panel_remembers_its_saved_run_pick_and_never_its_seed(monkeypatch):
-    """The record picker is a SELECTION and is restored at construction, like the cell picker beside
-    it; the Seed box is not, and neither are the record's name and note.
-
-    A remembered seed is the defect this pins: the box is how a run is made a deliberate repeat of an
-    earlier one, so a value carried over from the last session would silently turn every later run
-    into that repeat, and the spread across repeats -- the measurement error -- would collapse to
-    zero without anyone touching the box. A remembered NAME is the same defect wearing a different
-    hat: a progressive record occupies its name from its first moment, so the next launch's first
-    click would be refused by ``assert_name_free`` for a name nobody typed.
-    """
-    import types
-    from core.gui import settings as st
-    from core.gui.panels.fdt_panel import FdtPanel
-    from core.gui.widgets.artifact_picker import StorePicker
-    from tests._fixtures import qt_app
-
-    qt_app()
-    rows = [types.SimpleNamespace(complete=True, finished=True, study="single", label=label, id=id_,
-                                 created="2026-09-22T12:00:00", mode=None, width=None, amortized=None)
-            for label, id_ in (("first", "20260922T120000"), ("second", "20260922T130000"))]
-    store = types.SimpleNamespace(list=lambda kind: list(rows) if kind == "fdt" else [])
-    monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
-    fdt = build_part(FdtPanel)
-    fdt.record_picker.combo.setCurrentIndex(1)
-    fdt.seed.setText("4242")
-    fdt.record_name.setText("keep_me")
-    fdt.record_note.setText("a note about this run")
-    fdt.n_freqs.setText("77")
-
-    qs = st.settings()
-    fdt.save_settings(qs)
-    qs.sync()
-    qs.beginGroup("fdt")
-    written = set(qs.childKeys())
-    qs.endGroup()
-    assert not (written & {"seed", "record_name", "record_note"}), \
-        f"[fdt] writes a per-run value: {sorted(written)}"
-
-    again = build_part(FdtPanel)
-    assert again.record_picker.key() == "20260922T130000", "the saved run pick is a selection"
-    assert again.n_freqs.text() == "77", "the campaign knobs are still remembered"
-    assert again.seed.text() == "", "a remembered seed repeats the last run in silence"
-    assert again.record_name.text() == "" and again.record_note.text() == ""
-
 def test_missing_picker_key_restores_to_default_not_blank():
     """A saved selection whose file is gone must leave the picker at its default, never blank it via
     setCurrentIndex(-1)."""
-    from core.gui import settings as st
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.config import CELL_PATH
+    from core.gui.widgets.artifact_picker import ArtifactPicker
 
     qt_app()
-    qs = st.settings()
-    qs.beginGroup("reduction")
-    qs.setValue("cell", "nadrowski/does_not_exist.txt")
-    qs.setValue("f0", "0.05")
-    qs.endGroup()
-    qs.sync()
-
-    red = build_part(ReductionPanel)
-    assert red.cell_picker.combo.currentIndex() >= 0, "a stale key blanked the combo"
-
-def test_crossval_does_not_persist_cell_derived_bounds():
-    """The S/T grid lo/hi are re-derived from the cell file; a saved value from a different cell would
-    be a stale, wrong bound. Only the free knobs (points, f0, freqs_per_batch, preset, cell) persist."""
-    from core.gui import settings as st
-    from core.gui.panels.crossval_panel import CrossValPanel
-
-    qt_app()
-    xv = build_part(CrossValPanel)
-    derived_hi = xv.s_grid.hi.text()          # set by _on_cell_changed from the cell file
-    xv.s_grid.hi.setText("999.0")             # user 'edits' it to a bogus value
-    xv.s_grid.points.setText("13")
-    xv.f0.setText("0.077")
-
-    qs = st.settings()
-    xv.save_settings(qs)
-    qs.sync()
-    # the bogus hi must NOT have been written
-    qs.beginGroup("crossval")
-    assert qs.value("s_hi") is None, "cell-derived s_grid.hi was persisted -- it must not be"
-    qs.endGroup()
-
-    xv2 = build_part(CrossValPanel)
-    assert xv2.s_grid.points.text() == "13", "the free `points` knob was not restored"
-    assert xv2.f0.value() == 0.077
-    assert xv2.s_grid.hi.text() == derived_hi, "the grid bound must be RE-DERIVED, not restored"
-
-def test_the_crossval_panel_remembers_its_saved_sweep_pick_and_never_its_seed(monkeypatch):
-    """The CrossVal half of the never-remembered seed, with the same reasoning as the FDT panel's:
-    the picker is a selection and is restored, the study's one seed is not. Here the cost of a
-    remembered seed is larger -- one seed is recorded on BOTH of the study's records, so a
-    carried-over value would make every later study a bitwise repeat of the last one at every
-    operating point, and the two sweeps would agree for a reason that has nothing to do with the
-    physics.
-
-    The tail pins the rows' labels: the nine registered rows are built from label(key), and the
-    two literal ones -- "Record name" and "Note", whose keys are sentence entries with no label() --
-    are read back off the form and must be the words the ``name`` and ``note`` fix sentences quote,
-    because the control-table read-back skips sentence entries and nothing else would catch a drift."""
-    import types
-    from PySide6.QtWidgets import QFormLayout, QLabel
-    from core.gui import fields as gui_fields
-    from core.gui import settings as st
-    from core.gui.panels.crossval_panel import CrossValPanel
-    from core.gui.widgets.artifact_picker import StorePicker
-    from tests._fixtures import qt_app
-
-    qt_app()
-    rows = [types.SimpleNamespace(complete=True, finished=True, study=study, label=label, id=label,
-                                  created="2026-09-22T12:00:00", mode=None, width=None,
-                                  amortized=None)
-            for study, label in (("sweep", "s_run"), ("sweep", "t_run"), ("single", "one_cell"))]
-    store = types.SimpleNamespace(list=lambda kind: list(rows) if kind == "fdt" else [])
-    monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
-    xv = build_part(CrossValPanel)
-    combo = xv.record_picker.combo
-    assert [combo.itemData(i) for i in range(combo.count())] == ["s_run", "t_run"], \
-        "the CrossVal picker must show sweeps only"
-    combo.setCurrentIndex(1)
-    xv.seed.setText("99")
-    xv.record_name.setText("study_one")
-    xv.f0.setText("0.077")
-
-    qs = st.settings()
-    xv.save_settings(qs)
-    qs.sync()
-    qs.beginGroup("crossval")
-    written = set(qs.childKeys())
-    qs.endGroup()
-    assert not (written & {"seed", "record_name", "record_note"}), sorted(written)
-
-    again = build_part(CrossValPanel)
-    assert again.record_picker.key() == "t_run"
-    assert again.f0.value() == 0.077, "the free knobs are still remembered"
-    assert again.seed.text() == "" and again.record_name.text() == ""
-
-    from tests._fixtures import code_only
-    src = code_only(CrossValPanel._build_controls)
-    for key in ("cell", "preset", "s_grid", "t_grid", "n_freqs", "ensemble_m", "freqs_per_batch",
-                "f0", "seed"):
-        assert f"label({key!r})" in src, f"the CrossVal panel must build its {key} row from label({key!r})"
-
-    shown = []
-    for form in again.findChildren(QFormLayout):
-        for i in range(form.rowCount()):
-            item = form.itemAt(i, QFormLayout.LabelRole)
-            w = item.widget() if item is not None else None
-            lab = w if isinstance(w, QLabel) else (w.findChild(QLabel) if w is not None else None)
-            if lab is not None:
-                shown.append(lab.text())
-    for key, text in (("name", "Record name"), ("note", "Note")):
-        assert text in shown, f"the CrossVal panel shows no {text!r} row: {shown}"
-        assert f"'{text}'" in gui_fields.fix_sentence(key), \
-            f"the {key} fix sentence does not name the {text!r} box: {gui_fields.fix_sentence(key)!r}"
-        assert "in Effective temperature, Sweep study" in gui_fields.fix_sentence(key), gui_fields.fix_sentence(key)
+    picker = ArtifactPicker(CELL_PATH / "nadrowski")
+    picker.restore_key("nadrowski/does_not_exist.txt")
+    assert picker.combo.currentIndex() >= 0, "a stale key blanked the combo"
+    picker.deleteLater()
 
 def test_panel_splitter_is_sized_and_not_collapsible():
     """Every panel opens with a usable controls column that cannot be dragged to nothing.
@@ -504,13 +326,11 @@ def test_forms_grow_their_fields_and_numeric_boxes_have_a_floor():
     (not a fixed list) means a newly added form is covered too.
     """
     from PySide6.QtWidgets import QFormLayout, QLineEdit
-    from core.gui.panels.crossval_panel import CrossValPanel
-    from core.gui.panels.fdt_panel import FdtPanel
-    from core.gui.panels.reduction_panel import ReductionPanel
     from core.gui.widgets.labeled_inputs import FloatField, IntField
 
     qt_app()
-    panels = [build_part(CrossValPanel), build_part(FdtPanel), build_part(ReductionPanel)]
+    inference = build_inference()
+    panels = [inference.infer_panel, inference.tsnpe_panel]
     forms = [f for p in panels for f in p.findChildren(QFormLayout)]
     assert forms, "no QFormLayouts discovered — the test is not exercising anything"
     bad = [f for f in forms
@@ -524,17 +344,13 @@ def test_forms_grow_their_fields_and_numeric_boxes_have_a_floor():
         f"{narrow[0].minimumWidth()}px)"
 
 def test_long_diagnostics_are_readable_without_horizontal_scrolling():
-    """Panels emit long single-line diagnostics; the log pane must wrap them, and the crossval cell
-    label (which receives an unbounded str(e)) must not force the whole column wider."""
+    """Panels emit long single-line diagnostics; the log pane must wrap them."""
     from PySide6.QtWidgets import QPlainTextEdit
-    from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.widgets.log_pane import LogPane
 
     qt_app()
     assert LogPane().lineWrapMode() == QPlainTextEdit.WidgetWidth, \
         "log pane still truncates long lines instead of wrapping them"
-    assert build_part(CrossValPanel).cell_values.wordWrap(), \
-        "the crossval cell-values label does not wrap, so a long error widens the whole column"
 
 def test_the_memory_limit_is_remembered_per_computer_and_still_read_live(monkeypatch):
     """The memory limit is set in Settings and remembered for this computer, as text, when a change of it is accepted,
@@ -815,6 +631,44 @@ def test_a_one_field_near_miss_blocks_a_fresh_run_until_confirmed():
         # An identity that MATCHES a checkpoint is a resume, so there is nothing to confirm.
         assert tc.near_miss_siblings(sib, root) == [] or             all(r["name"] != d.name for r in tc.near_miss_siblings(sib, root)),             "a checkpoint must never be a near miss of itself"
 
+def test_what_a_page_this_window_no_longer_has_wrote_is_read_by_nothing_and_left_as_it_was(monkeypatch):
+    """A settings file an older PRISM wrote holds the groups of pages this window no longer has -- the effective
+    temperature's two pages, the reduction map, the live simulation -- and their panels' layouts. The window opens over
+    it, and every part is opened, as over a file without them: no box of any page shows a value of theirs; and closing
+    the window, which writes what the parts opened remember, writes none of their keys and deletes none: each is in
+    the file as it was, value for value."""
+    from PySide6.QtCore import QByteArray, QSettings
+    from PySide6.QtWidgets import QLineEdit
+    from core.gui import keys
+    from core.gui import settings as st
+    from tests._fixtures import build_window
+    qt_app()
+    old = {"fdt/cell": "nadrowski/aaa_left_by_an_older_prism.txt", "fdt/n_freqs": "7731", "fdt/seed": "4242",
+           "crossval/preset": "production", "crossval/s_lo": "0.5125",
+           "reduction/cell": "nadrowski/aaa_left_by_an_older_prism.txt", "reduction/f0": "0.0731",
+           "simulate/cell": "nadrowski/aaa_left_by_an_older_prism.txt", "simulate/t_obs": "12.75",
+           "simulate/fps": "24", "layout/ReductionPanel/splitter": QByteArray(b"\x00\x00\x00\xff kept"),
+           "layout/SimulatePanel/results": QByteArray(b"\x00\x00\x00\xff kept too")}
+    held = st.settings()
+    for key, value in old.items():
+        held.setValue(key, value)
+    held.sync()
+    path = held.fileName()
+    written = []
+    kept = QSettings.setValue
+    monkeypatch.setattr(QSettings, "setValue", lambda qs, key, value: (
+        written.append(f"{qs.group()}/{key}" if qs.group() else key), kept(qs, key, value))[1])
+    window = build_window()
+    for place in keys.PARTS:
+        window.go_to(place.key)
+    shown = {box.text() for box in window.findChildren(QLineEdit)}
+    assert not shown & {"7731", "4242", "0.5125", "0.0731", "12.75"}, "a page shows what a removed page wrote"
+    window.close()
+    assert not set(written) & set(old), f"the close wrote a removed page's key: {sorted(set(written) & set(old))}"
+    after = QSettings(path, QSettings.IniFormat)
+    assert {key: after.value(key) for key in old} == old, "a removed page's key was deleted or changed"
+
+
 def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch):
     """What the window writes of steps 1 to 3 into the settings file, each key at its moment and at no other: the model
     and the kind of observation as step 1 is applied; the bounds file, the model it came into use with and the prior as a
@@ -846,7 +700,7 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
     with use_store(ArtifactStore(tmp_path / "Artifacts")):
         controller_on(tmp_path, Clock(at(8, 12, 4)))
         window = build_window()
-        for part in ("temperature", "reduction", "live", "records", "inference"):
+        for part in ("records", "inference"):
             window.part(part)
         screen = window.part("inference")
         first, prior_page, page = screen.config_panel, screen.prior_panel, screen.posterior_panel
@@ -893,8 +747,7 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
         closing = at_the_moment()
         groups = {key.split("/")[0] for key in closing}
         assert "window/geometry" in closing
-        assert groups <= {"window", "layout", "inference_infer", "inference_tsnpe", "fdt",
-                          "crossval", "reduction", "simulate", "artifacts"}, sorted(groups)
+        assert groups <= {"window", "layout", "inference_infer", "inference_tsnpe", "artifacts"}, sorted(groups)
         assert not groups & {"inference_config", "inference_prior", "inference_posterior", "plans"}, closing
 
 
@@ -941,10 +794,10 @@ def _panel_built_at_module_scope(tmp_path_factory):
     module in no set a run locks."""
     from PySide6.QtCore import QCoreApplication, QEvent
     from core.gui import settings as st
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     seen = st._override_path
-    panel = build_part(ReductionPanel)        # __init__ ends with restore_settings(st.settings())
+    panel = build_part(InferPanel, screen=None)            # __init__ ends with restore_settings(st.settings())
     yield panel, seen, tmp_path_factory.getbasetemp()
     panel.deleteLater()
     QCoreApplication.sendPostedEvents(panel, QEvent.DeferredDelete)
@@ -1037,7 +890,7 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
     from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.inference.config_tab import ConfigPanel
     from core.gui.panels.inference.step_page import StepPage
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from tests import _fixtures
@@ -1052,8 +905,8 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
                 held.append(name)
         return held
 
-    first, second = build_part(ReductionPanel), build_part(ReductionPanel)
-    assert type(first) is ReductionPanel and type(second) is ReductionPanel and first is not second
+    first, second = build_part(InferPanel, screen=None), build_part(InferPanel, screen=None)
+    assert type(first) is InferPanel and type(second) is InferPanel and first is not second
     step = build_part(ConfigPanel, screen=None)
     assert type(step) is ConfigPanel and step._screen is None
 
@@ -1137,12 +990,12 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
     from core.gui import design, reported
     from core.gui import settings as st
     from core.gui.panels.base_panel import BasePanel
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._fixtures import build_step_page, build_window
 
     module_panel = _panel_built_at_module_scope[0]
     if turn == "builds":
-        gone = build_part(ReductionPanel)
+        gone = build_part(InferPanel, screen=None)
         gone.deleteLater()
         QCoreApplication.sendPostedEvents(gone, QEvent.DeferredDelete)
         dropped = build_part(QWidget)
@@ -1155,7 +1008,7 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
         reported.COUNTS["unread"] = 0        # a mark the drawing check takes away once it has read the record
         watched.destroyed.connect(lambda *_: _SEEN_AS_IT_WENT.extend(
             [st._override_path, "unread" in reported.COUNTS, design._room]))
-        _MADE_IN_THE_FIRST_TURN[:] = [build_window(), build_part(ReductionPanel), build_inference(),
+        _MADE_IN_THE_FIRST_TURN[:] = [build_window(), build_part(InferPanel, screen=None), build_inference(),
                                       build_run_host(), build_run_host(BasePanel), build_step_page(), watched, gone,
                                       st._override_path]
         assert [shiboken6.isValid(widget) for widget in _MADE_IN_THE_FIRST_TURN[:8]] == [True] * 7 + [False]
@@ -1191,10 +1044,9 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
     makes. A class called through a variable is not seen here; the builders take the class as an
     argument, so no suite has a reason to hold one and call it."""
     import ast
-    built = {"MainWindow", "InferenceScreen", "FdtPanel", "CrossValPanel", "SimulatePanel",
-             "ReductionPanel", "ModelBuilderScreen", "ArtifactScreen", "ConfigPanel", "PriorPanel",
+    built = {"MainWindow", "InferenceScreen", "ModelBuilderScreen", "ArtifactScreen", "ConfigPanel", "PriorPanel",
              "PosteriorPanel", "ValidatePanel", "InferPanel", "TSNPEPanel", "BasePanel",
-             "HomeScreen", "SettingsScreen", "TemperatureScreen", "RecordViewer", "Shell", "HelpScreen",
+             "HomeScreen", "SettingsScreen", "Shell", "HelpScreen",
              "ModelsScreen", "PartError", "RunView", "StepPage", "CheckPage"}
     # The list is kept closed over the program. Every class with a base that a file of the window's own
     # folder, of its screens, of its panels or of its runs defines under a public name is named above, or here among
@@ -1765,16 +1617,12 @@ def test_the_tsnpe_tab_restores_its_observation_and_budget_only(monkeypatch):
     import types
     from core import config
     from core.gui import settings as st
-    from core.gui.panels.crossval_panel import CrossValPanel
-    from core.gui.panels.fdt_panel import FdtPanel
     from core.gui.panels.inference.config_tab import ConfigPanel
     from core.gui.panels.inference.infer_tab import InferPanel
     from core.gui.panels.inference.posterior_tab import PosteriorPanel
     from core.gui.panels.inference.prior_tab import PriorPanel
     from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
     from core.gui.panels.inference.validate_tab import ValidatePanel
-    from core.gui.panels.reduction_panel import ReductionPanel
-    from core.gui.panels.simulate_panel import SimulatePanel
     from core.gui.widgets.artifact_picker import StorePicker
     from core.SBI import truncate as _tr
     from tests._fixtures import code_only, qt_app
@@ -1839,8 +1687,7 @@ def test_the_tsnpe_tab_restores_its_observation_and_budget_only(monkeypatch):
 
     # (d) the defect class: a restore_settings its own __init__ never calls is dead code
     call = "self.restore_settings(settings.settings())"
-    for cls in (ConfigPanel, PriorPanel, PosteriorPanel, ValidatePanel, InferPanel, TSNPEPanel,
-                SimulatePanel, ReductionPanel, FdtPanel, CrossValPanel):
+    for cls in (ConfigPanel, PriorPanel, PosteriorPanel, ValidatePanel, InferPanel, TSNPEPanel):
         if "restore_settings" in vars(cls):
             assert call in code_only(cls.__init__), \
                 f"{cls.__name__} defines restore_settings and its __init__ never calls it"
@@ -1850,66 +1697,50 @@ def test_the_tsnpe_tab_restores_its_observation_and_budget_only(monkeypatch):
 
 
 def test_consents_are_never_persisted(tmp_path):
-    """A CONSENT is answered per run and never remembered -- all four of them. The TSNPE tab's "Start
+    """A CONSENT is answered per run and never remembered -- both of the window's. The TSNPE tab's "Start
     a new simulation even if a cache one setting away exists" (the near-miss consent) and the Infer
-    tab's "Run on a different observation" (the narrowed-posterior consent) were already unpersisted;
-    the FDT panel's "Skip sanity checks" and "Proceed to the production sweep after sanity" were saved
-    and restored like campaign knobs, so one session's "skip the checks" silently dropped them from
-    every later session. Every consent now opens at its construction default. For the FDT pair that
-    is skip UNTICKED and proceed TICKED, not both unticked: unticking proceed would make a default
-    click stop after the sanity checks, where today and on the command line (--no-production is
-    opt-in) it runs the sweep.
+    tab's "Run on a different observation" (the narrowed-posterior consent) open at their construction
+    defaults at every launch.
 
-    Three legs: no save_settings or restore_settings names a consent; a save after all four were
-    flipped writes none of them; an old PRISM.ini that holds all four answers opens at the defaults.
+    Three legs: no save_settings or restore_settings names a consent; a save after both were flipped
+    writes neither of them; an old PRISM.ini that holds both answers opens at the defaults.
     """
     from PySide6.QtCore import QSettings
     from core.gui import settings as st
-    from core.gui.panels.fdt_panel import FdtPanel
     from core.gui.panels.inference.infer_tab import InferPanel
     from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
     from tests._fixtures import code_only, qt_app
 
     qt_app()
     # (a) the source: executable code only, so a comment explaining the rule cannot trip it
-    for cls, names in ((TSNPEPanel, ("new_run",)), (InferPanel, ("other_obs",)),
-                       (FdtPanel, ("skip_sanity", "confirm_production"))):
+    for cls, names in ((TSNPEPanel, ("new_run",)), (InferPanel, ("other_obs",))):
         for method in (cls.save_settings, cls.restore_settings):
             src = code_only(method)
             for name in names:
                 assert name not in src, f"{cls.__name__}.{method.__name__} names the consent {name}"
 
-    # (b) all four flipped, then saved: the groups are written, and no consent is in them
+    # (b) both flipped, then saved: the groups are written, and no consent is in them
     inf = build_inference()
     inf.tsnpe_panel.new_run.setChecked(True)
     inf.infer_panel.other_obs.setChecked(True)            # setChecked ignores the disabled state
-    fdt = build_part(FdtPanel)
-    fdt.skip_sanity.setChecked(True)
-    fdt.confirm_production.setChecked(False)
     out = QSettings(str(tmp_path / "saved.ini"), QSettings.IniFormat)
-    for panel in (inf.tsnpe_panel, inf.infer_panel, fdt):
+    for panel in (inf.tsnpe_panel, inf.infer_panel):
         panel.save_settings(out)
     out.sync()
-    for group, names in (("inference_tsnpe", {"new_run"}), ("inference_infer", {"other_obs"}),
-                         ("fdt", {"skip_sanity", "confirm_production"})):
+    for group, names in (("inference_tsnpe", {"new_run"}), ("inference_infer", {"other_obs"})):
         out.beginGroup(group)
         written = set(out.childKeys())
         out.endGroup()
         assert written and not (written & names), f"[{group}] writes a consent: {sorted(written)}"
 
-    # (c) an old PRISM.ini holding all four answers: a relaunch opens every box at its default
+    # (c) an old PRISM.ini holding both answers: a relaunch opens every box at its default
     qs = st.settings()
-    for key, value in (("inference_tsnpe/new_run", "1"), ("inference_infer/other_obs", "1"),
-                       ("fdt/skip_sanity", "1"), ("fdt/confirm_production", "0")):
+    for key, value in (("inference_tsnpe/new_run", "1"), ("inference_infer/other_obs", "1")):
         qs.setValue(key, value)
     qs.sync()
     inf2 = build_inference()
-    fdt2 = build_part(FdtPanel)
     assert inf2.tsnpe_panel.new_run.isChecked() is False
     assert inf2.infer_panel.other_obs.isChecked() is False
-    assert fdt2.skip_sanity.isChecked() is False, "the sanity checks run unless THIS session says skip"
-    assert fdt2.confirm_production.isChecked() is True, "the production sweep follows the checks by default"
-    assert fdt2.confirm_production.isEnabled() is True, "proceed is greyed out only while skip is ticked"
 
 
 def test_get_bool_falls_back_on_an_unparseable_value():

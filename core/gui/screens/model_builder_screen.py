@@ -3,9 +3,9 @@
 Declare state variables, then per variable type the deterministic RHS of dx/dt, the white-noise
 strength D (the solver diffusion is g = sqrt(2*D); parameters and numbers give additive noise, a state
 variable multiplicative noise), and optionally one time-driven forcing. Equations are NONDIMENSIONAL
-(nothing auto-nondimensionalizes). x_scale / t_scale redimensionalize the Simulate axes, and for a model
-eligible for inference (no forcing, at least one parameter) both are also inferred, within half to twice
-the values given. Variable 1 is the observable Simulate plots.
+(nothing auto-nondimensionalizes). x_scale / t_scale redimensionalize the model's displacement and time, and
+for a model eligible for inference (no forcing, at least one parameter) both are also inferred, within half to
+twice the values given. Variable 1 is the observable, the one a recording measures.
 
 Everything here is light (sympy parse + a 100-step batch-1 smoke integration, milliseconds), so it all
 runs on the GUI thread -- no BasePanel/dispatch. Saving is refused while a task runs anywhere in the
@@ -40,7 +40,8 @@ from ..widgets.adaptive_stack import AdaptiveStack
 HELP = {
     "name": "The model's name as it appears in every model dropdown. Letters/digits/_ (max 24).",
     "variables": "Comma-separated state variable names, e.g. `x, y`. One first-order equation per "
-                 "variable; the FIRST variable is the observable Simulate plots. A 2nd-order system "
+                 "variable; the FIRST variable is the observable, the one a recording measures. A "
+                 "2nd-order system "
                  "must be written as two first-order equations.",
     "drift": "The deterministic right-hand side of dx/dt (nondimensional; may be nonlinear). Use the "
              "declared variables, parameters (any new name), numbers, + - * / ^ ( ) and "
@@ -51,10 +52,10 @@ HELP = {
     "init": "Initial condition for this variable (nondimensional).",
     "forcing": "Optional time-driven external force added to this variable's RHS. For a restoring "
                "(spring) force, put -k*(x - x0) directly in the RHS instead -- it depends on state.",
-    "x_scale": "Length scale (nm per ND unit). It redimensionalizes the Simulate displacement axis, and "
+    "x_scale": "Length scale (nm per ND unit). It redimensionalizes the model's displacement, and "
                "for a model eligible for inference (no forcing, at least one parameter) it is also "
                "inferred, within half to twice this value.",
-    "t_scale": "Time scale (seconds per ND time unit). It maps ND time to the Simulate seconds axis, and "
+    "t_scale": "Time scale (seconds per ND time unit). It maps ND time to seconds, and "
                "for a model eligible for inference (no forcing, at least one parameter) it is also "
                "inferred, within half to twice this value.",
 }

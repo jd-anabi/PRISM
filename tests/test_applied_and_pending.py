@@ -2906,7 +2906,7 @@ def test_the_load_view_reads_nothing_while_a_run_is_live(tmp_path, monkeypatch):
     shown again read no record and no list but the picker's own; a load by code reads nothing, starts nothing and
     changes nothing. The run's end reads the record selected once, with the prior it was trained with and the
     observation it was narrowed around."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run.controller import controller
     from tests._fixtures import readings_of_a_run
     from tests._look_helpers import _settle
@@ -2917,7 +2917,7 @@ def test_the_load_view_reads_nothing_while_a_run_is_live(tmp_path, monkeypatch):
         _to_the_load_view(page)
         page.post_picker.restore_key(trained)
         page.read_facts()
-        with running(window.panel(ReductionPanel)):
+        with running(window.panel(InferPanel)):
             calls = readings_of_a_run(monkeypatch)
             window.go_to("inference", "prior")              # the page left and shown again with nothing owed
             _settle()
@@ -2950,7 +2950,7 @@ def test_a_load_by_code_while_a_run_is_live_changes_nothing(step, tmp_path, monk
     """A load by code, as Records will call it, during another page's run: the Prior page and the Training page each
     answer that nothing was started and change nothing, neither the view shown, nor what the list selects, nor what the
     session holds."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run.controller import controller
     from tests._runs import running, turn_until
     app = qt_app()
@@ -2965,7 +2965,7 @@ def test_a_load_by_code_while_a_run_is_live_changes_nothing(step, tmp_path, monk
         picker.restore_key("")
         session = screen.session
         held = (session.cfg, session.inf_prior, session.posterior, session.observation)
-        with running(window.panel(ReductionPanel)):
+        with running(window.panel(InferPanel)):
             assert page.load_record(ref) is False
             assert (page.view, picker.key()) == (view, "")
         turn_until(app, lambda: not controller().is_live(), 10.0)
@@ -2978,14 +2978,14 @@ def test_the_training_page_built_during_a_run_says_it_has_read_nothing(tmp_path,
     """A Training page first built while a run is live reads nothing, says so beside "Before you start", and reads once
     the run has ended."""
     from core.gui.panels.inference.posterior_tab import PosteriorPanel
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run.controller import NOT_READ_YET_TEXT, controller
     from tests._fixtures import build_step_page, readings_of_a_run
     from tests._look_helpers import _settle
     from tests._runs import running, turn_until
     app = qt_app()
     window, screen, first = _shown_first_step(tmp_path)
-    with running(window.panel(ReductionPanel)):
+    with running(window.panel(InferPanel)):
         calls = readings_of_a_run(monkeypatch)
         page = build_step_page(PosteriorPanel, window=window)
         window.go_to("inference", "training")
@@ -3671,7 +3671,7 @@ def test_a_posterior_a_narrowing_round_brings_moves_the_list_and_leaves_nothing_
     is not moved. A posterior chosen in the list after that is the person's choice, which the end of another run
     leaves as it is."""
     from core.gui import settings as st
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.remembered import POSTERIOR_KEY
     from core.gui.run.controller import controller
     from tests._look_helpers import _settle
@@ -3711,7 +3711,7 @@ def test_a_posterior_a_narrowing_round_brings_moves_the_list_and_leaves_nothing_
         assert qs.value(POSTERIOR_KEY) == narrowed
         page.post_picker.restore_key(trained)
         page.read_facts()
-        with running(window.panel(ReductionPanel)):
+        with running(window.panel(InferPanel)):
             pass
         assert page.post_picker.key() == trained and screen.pending() == {"training"}, "the end of a run undid a choice"
 
@@ -5048,8 +5048,8 @@ def test_the_checks_list_reads_once_and_never_while_a_run_is_live(tmp_path, monk
         page.foot.check_again.click()
         assert read() == 1, "Check again"
         calls.clear()
-        stand_in = StandIn(word="Reduction")
-        start_run(window.part("reduction"), stand_in)
+        stand_in = StandIn(word="Inference")
+        start_run(window.part("inference").tsnpe_panel, stand_in)
         window.go_to("inference", "prior")
         _settle()
         window.go_to("inference", "checks")

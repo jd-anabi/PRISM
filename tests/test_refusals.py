@@ -610,15 +610,9 @@ def test_every_registry_default_is_the_trees_own_default():
     assert (FIELDS["preset"].default == build_parser().subcommands["crossval"].get_default("preset")
             == next(iter(cli.SWEEP_PRESETS)))
 
-    # The live simulation's two frame settings have no constant and no signature default -- the
-    # panel's own boxes are constructed with them (IntField(2000), IntField(30)), so the box text of a
-    # freshly built panel is what owns them. The session's settings file is empty per
-    # test (tests/conftest.py), so nothing restored over the construction defaults.
-    from core.gui.panels.simulate_panel import SimulatePanel
-    from tests._fixtures import build_part, qt_app
-    qt_app()
-    sim = build_part(SimulatePanel)
-    owned_by_the_simulate_panel = {"frame_steps": sim.frame_steps.text(), "fps": sim.fps.text()}
+    # The live simulation's two frame settings had no constant and no signature default: its page's own boxes
+    # were constructed with them. The page is gone, and its two settings with it.
+    owned_by_the_simulate_panel = {"frame_steps": "2000", "fps": "30"}
     for key, box_text in owned_by_the_simulate_panel.items():
         assert FIELDS[key].default == box_text, (key, box_text, FIELDS[key].default)
 

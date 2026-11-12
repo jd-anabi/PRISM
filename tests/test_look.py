@@ -2530,11 +2530,11 @@ _NOT_GUARDED_FILES = {
                                 "drawing code, which cannot be made to report, so the binding still reports "
                                 "what is raised in that window",
 }
-# NOT in that table, and read like every other file: widgets/live_hair_bundle.py, the live simulation's
-# plotting widget, which stands inside the main window. A method this program writes in its class carries
-# the guard. What no scan of this program's text can reach is the code the class inherits: the paint and
-# resize events of the plotting library's view and its items' painting are that library's own, written in
-# Python, and cannot be made to report. An error raised there during a repaint is dropped by the binding
+# NOT in that table, and read like every other file: a class built on another plotting library's view, which
+# would stand inside the main window. A method this program writes in such a class carries the guard. What no
+# scan of this program's text can reach is the code the class inherits: the paint and resize events of the
+# library's view and its items' painting are that library's own, written in Python, and cannot be made to
+# report. An error raised there during a repaint is dropped by the binding
 # whenever another method written in Python is entered after it in the same handling, and is still reported
 # when it was the last.
 # The methods of those names that carry no guard, each with its reason: what must not have one, and any
@@ -2742,24 +2742,21 @@ def test_every_method_the_toolkit_calls_while_drawing_reports_its_errors():
         f"Two ways out. Give it the guard: put it under @reported(...) of core/gui/reported.py, with what it "
         f"answers when it fails. Or, if the toolkit does not call it (a helper that only shares the name of "
         f"one of the toolkit's methods), name it in _NOT_GUARDED in this file, with the reason. {listed}")
-    # The live simulation's plotting widget is read like any other file: what this program writes in that
-    # class carries the guard. Shown on the file's own text, with a method written into the class in memory.
-    live = "widgets/live_hair_bundle.py"
-    text = (gui / live).read_text(encoding="utf-8").splitlines(keepends=True)
-    view, = [node for node in ast.walk(modules[live]) if isinstance(node, ast.ClassDef)
-             and node.name == "LiveHairBundleView"]
+    # A class built on another plotting library's view is read like any other file: what this program writes in
+    # that class carries the guard. Shown on a file written here in memory, a method written into its class.
+    view = ("import pyqtgraph as pg\n\n\nclass View(pg.GraphicsLayoutWidget):\n"
+            "    def __init__(self):\n        super().__init__()\n")
 
     def with_in_the_view(method, start=""):
-        lines = text[:view.end_lineno] + ["\n", method] + text[view.end_lineno:]
-        return {**modules, live: ast.parse(start + "".join(lines))}
+        return {**modules, "widgets/view.py": ast.parse(start + view + "\n" + method)}
 
     paints = "    def paintEvent(self, event):\n        super().paintEvent(event)\n"
-    assert refused(with_in_the_view(paints)) == ["LiveHairBundleView.paintEvent"]
+    assert refused(with_in_the_view(paints)) == ["View.paintEvent"]
     assert refused(with_in_the_view("    @reported()\n" + paints, "from ..reported import reported\n")) == []
     # one of the ten there: the class is built on the plotting library's, which the scan cannot place, so
     # the method is refused with that said until it is guarded
     shows = "    def showEvent(self, event):\n        super().showEvent(event)\n"
-    assert refused(with_in_the_view(shows)) == ["LiveHairBundleView.showEvent (cannot follow pg.GraphicsLayoutWidget)"]
+    assert refused(with_in_the_view(shows)) == ["View.showEvent (cannot follow pg.GraphicsLayoutWidget)"]
     # the other way out of a refusal, for a method of such a name that the toolkit does not call
     table = ast.parse("class Table(QWidget):\n    def data(self): return self.rows\n")
     helper = {**modules, "widgets/helper.py": table}
@@ -7219,20 +7216,19 @@ def _tab_stops(window):
 
 
 def test_the_rail_lists_the_parts_in_order_with_the_chain_under_parameter_inference():
-    """The nine parts in their order, and the six steps under parameter inference only while that part is open;
-    top to bottom under the name, a gap before Effective temperature and a wider one before Records, the stretch
-    above the last three, which stand on the foot. Each row is a part's or a step's by its key, its tool tip
+    """The six parts in their order, and the six steps under parameter inference only while that part is open;
+    top to bottom under the name, a gap before Records, the stretch above the last three, which stand on the foot. Each row is a part's or a step's by its key, its tool tip
     names the keys that open its place, and a click on a row tells which part and which step it opens."""
     with _railed() as held:
         rail, kit = held.rail, held.kit
         parts, steps = [place.name for place in kit.keys.PARTS], [place.name for place in kit.keys.STEPS]
         shown = rail.visible_rows()
         assert [row.text() for row in shown] == parts                           # nothing open: the chain is folded
-        # top to bottom in that order, a gap of 5 before Effective temperature and one of 12 before Records, the
-        # stretch before Your own models, and the last three rows standing on the foot
+        # top to bottom in that order, a gap of 12 before Records, the stretch before Your own models, and the last
+        # three rows standing on the foot
         tops = [row.mapTo(rail, QPoint(0, 0)).y() for row in shown]
         gaps = [tops[n + 1] - tops[n] - shown[n].height() for n in range(len(shown) - 1)]
-        assert (tops[0], gaps[:5], gaps[5] > 0, gaps[6:]) == (rail.brand.height(), [0, 5, 0, 0, 12], True, [0, 0]), gaps
+        assert (tops[0], gaps[:2], gaps[2] > 0, gaps[3:]) == (rail.brand.height(), [0, 12], True, [0, 0]), gaps
         assert tops[-1] + shown[-1].height() == rail.foot.mapTo(rail, QPoint(0, 0)).y()
         assert rail.brand.text() == "PRISM" and isinstance(rail.foot, kit.rail.RunFoot)
         for part, step in (("inference", "model"), ("inference", None), ("inference", "narrowing")):
@@ -7246,15 +7242,15 @@ def test_the_rail_lists_the_parts_in_order_with_the_chain_under_parameter_infere
         with pytest.raises(KeyError):
             rail.row("nowhere")
         assert rail.row("inference").toolTip() == "Parameter inference (Ctrl+2)"
-        assert rail.row("help").toolTip() == "Help (Ctrl+9, F1)"
+        assert rail.row("help").toolTip() == "Help (Ctrl+6, F1)"
         assert rail.row("training").toolTip() == "Step 3, Training (Alt+3)"
         heard = []
         rail.opened.connect(lambda part, step: heard.append((part, step)))
         rail.set_place("inference", "model")
         _settle()
-        for key in ("live", "infer", "home"):
+        for key in ("records", "infer", "home"):
             QTest.mouseClick(rail.row(key), Qt.LeftButton)
-        assert heard == [("live", None), ("inference", "infer"), ("home", None)]
+        assert heard == [("records", None), ("inference", "infer"), ("home", None)]
 
 
 def test_the_rail_marks_exactly_one_row():
@@ -7354,7 +7350,7 @@ def test_the_open_parts_group_stands_on_the_page_between_two_hairlines():
                         quiet = design.colour("rule_light").rgb()      # down to the foot: one hairline under the band
                         runs = [n for pixel, n in _down(image, int(_RAIL_FREE * ratio)) if pixel == quiet]
                         assert runs[-1] == _HAIR_RULE[ratio], where
-    with _railed(600) as held:
+    with _railed(480) as held:
         rail, bar = held.rail, held.rail._scroll.verticalScrollBar()
         rail.set_small(True)
         rail.set_place("inference", "training")
@@ -7475,7 +7471,7 @@ def test_the_rows_keep_their_heights_and_lettering_through_a_change_of_place_and
         with text_size(factor), _railed() as held:
             rail, kit = held.rail, held.kit
             places = kit.keys.PARTS + kit.keys.STEPS
-            for dark, (part, step) in itertools.product((False, True), (("live", None), ("inference", "prior"),
+            for dark, (part, step) in itertools.product((False, True), (("records", None), ("inference", "prior"),
                                                                         ("inference", None), ("settings", None))):
                 with _the_look(dark):
                     rail.set_place(part, step)
@@ -7522,8 +7518,8 @@ def test_the_rails_rows_stay_put_when_another_part_is_opened():
 def test_the_small_rail_shortens_its_rows_and_keeps_two_steps_whole(monkeypatch):
     """In a low window the name and the rows are shorter, and a step keeps its second line only when it is the
     step in hand, the first that cannot start or the open one; back in a high window everything is as before.
-    With every part's row and the six steps showing and the step in hand open, the rail needs 774 pixels in the
-    usual layout and 672 in the low one at the ordinary text size; a step of one line writes no words."""
+    With every part's row and the six steps showing and the step in hand open, the rail needs 661 pixels in the
+    usual layout and 571 in the low one at the ordinary text size; a step of one line writes no words."""
     with _railed() as held:
         rail, kit = held.rail, held.kit
 
@@ -7537,22 +7533,22 @@ def test_the_small_rail_shortens_its_rows_and_keeps_two_steps_whole(monkeypatch)
         rail.set_place("inference", "prior")
         _settle()
         usual = heights()
-        assert usual == (58, [36] * 9, [46] * 6) and needed() == 774
+        assert usual == (58, [36] * 6, [46] * 6) and needed() == 661
         rail.set_small(True)
         _settle()
-        assert heights() == (48, [32] * 9, [32, 46, 32, 32, 32, 32])    # no state shown: the open step alone
+        assert heights() == (48, [32] * 6, [32, 46, 32, 32, 32, 32])    # no state shown: the open step alone
         states = kit.chain.step_states(session(draft=SimpleNamespace(model="NADROWSKI")))
         assert (kit.chain.step_in_hand(states), [s.key for s in states if not s.can_start][0]) == ("prior", "training")
         rail.set_step_states(states)
         _settle()
-        assert heights() == (48, [32] * 9, [32, 46, 46, 32, 32, 32]) and needed() == 672
+        assert heights() == (48, [32] * 6, [32, 46, 46, 32, 32, 32]) and needed() == 571
         assert [len(_painted_words(monkeypatch, rail.row(p.key))) for p in kit.keys.STEPS] == [2, 3, 3, 2, 2, 2]
         rail.set_place("inference", "infer")                           # a step opened that can wait keeps its words
         _settle()
-        assert heights()[2] == [32, 46, 46, 32, 46, 32] and needed() == 672 + 46 - 32
+        assert heights()[2] == [32, 46, 46, 32, 46, 32] and needed() == 571 + 46 - 32
         rail.set_small(False)
         _settle()
-        assert heights() == usual and needed() == 774
+        assert heights() == usual and needed() == 661
     with text_size(1.5), _railed() as held:
         rail, kit = held.rail, held.kit
         rail.set_step_states(kit.chain.step_states(session()))
@@ -7564,12 +7560,12 @@ def test_the_small_rail_shortens_its_rows_and_keeps_two_steps_whole(monkeypatch)
 
 
 def test_the_rail_scrolls_its_list_under_a_fixed_name_and_above_a_fixed_foot():
-    """In a window 600 high with the chain open the list is taller than its room: at the ordinary text size and
+    """In a rail 480 high with the chain open the list is taller than its room: at the ordinary text size and
     at one and a half times it, it scrolls between the name and the foot, which stay where they are; the look's
     scroll bar stands beside it while it scrolls; and opening a place brings its row whole into view, at the top
     of the list, at its foot and in the chain. In the window's usual height nothing scrolls."""
     for factor in (1.0, 1.5):
-        with text_size(factor), _railed(600) as held:
+        with text_size(factor), _railed(480) as held:
             rail, kit = held.rail, held.kit
             scroll = rail._scroll
             bar = scroll.verticalScrollBar()
@@ -7581,7 +7577,7 @@ def test_the_rail_scrolls_its_list_under_a_fixed_name_and_above_a_fixed_foot():
             assert scroll.geometry().top() == fixed[0].bottom() + 1 and scroll.geometry().bottom() + 1 == fixed[1].top()
             assert bar.maximum() > 0 and bar.isVisibleTo(rail), factor
             if factor == 1.0:
-                assert bar.maximum() == 672 - 600
+                assert bar.maximum() == 571 - 480
             for value in (bar.maximum(), 0, bar.maximum() // 2):
                 bar.setValue(value)
                 _settle()
@@ -7643,17 +7639,17 @@ def test_the_rail_is_one_tab_stop_and_its_arrows_move_in_the_order_seen(monkeypa
                 design.hex_colour("accent"), design.hex_colour("focus"))
             order = [row.text() for row in rail.visible_rows()]
             walked = []
-            for key in [Qt.Key_Home] + [Qt.Key_Down] * 15:
+            for key in [Qt.Key_Home] + [Qt.Key_Down] * len(order):
                 QTest.keyClick(given[-1], key)
                 walked.append(given[-1].text())
                 assert _tab_stops(window) == [held.before, given[-1], held.after]
                 assert follows.target() is given[-1] and follows.ring().widget() is given[-1]
             assert walked == order + [order[-1]]
             checks = rail.row("checks")
-            for key in [Qt.Key_End] + [Qt.Key_Up] * 15:
+            for key in [Qt.Key_End] + [Qt.Key_Up] * len(order):
                 QTest.keyClick(given[-1], key)
                 walked.append(given[-1].text())
-            assert walked[16:] == order[::-1] + [order[0]]
+            assert walked[len(order) + 1:] == order[::-1] + [order[0]]
             for key in (Qt.Key_Down,) * 5:
                 QTest.keyClick(given[-1], key)
             assert given[-1] is checks and window.focusWidget() is checks
@@ -7671,11 +7667,11 @@ def test_the_rail_is_one_tab_stop_and_its_arrows_move_in_the_order_seen(monkeypa
             QTest.keyClick(rail.row("records"), Qt.Key_Home)
             QTest.keyClick(given[-1], Qt.Key_Down)
             QTest.keyClick(given[-1], Qt.Key_Down)
-            assert given[-1].text() == "Effective temperature"               # the folded chain is skipped
+            assert given[-1].text() == "Records"                             # the folded chain is skipped
             QTest.keyClick(given[-1], Qt.Key_Enter)
             count = len(given)
             QTest.mouseClick(rail.row("help"), Qt.LeftButton)
-            assert opened[-2:] == [("temperature", None), ("help", None)] and len(given) == count
+            assert opened[-2:] == [("records", None), ("help", None)] and len(given) == count
             assert not any(row.focusPolicy() & Qt.ClickFocus for row in rail.visible_rows())
         finally:
             follows.stop()                   # first: the ring holds its row by address
@@ -7741,13 +7737,13 @@ def test_the_foot_is_one_button_while_a_run_is_shown_and_its_title_may_wrap(monk
         for dark, ratio in itertools.product((False, True), _SCALINGS):
             with _the_look(dark):
                 assert _at(_rendered(window, ratio), 20 + 8, 1 + 12 + 2 + 8) == design.hex_colour("accent"), (dark, ratio)
-        foot.set_state("now", "Running: Effective temperature, One cell", "1:02:03 so far. Settings are locked.",
+        foot.set_state("now", "Running: Training, nadrowski_master_oct", "1:02:03 so far. Settings are locked.",
                        button=True)
         _settle()
         written = _painted_words(monkeypatch, foot)
         title, words = [line[0] for line in written if line[1] == 600], [line[0] for line in written if line[1] == 400]
         assert (len(title), " ".join(title), " ".join(words)) == (
-            2, "Running: Effective temperature, One cell", "1:02:03 so far. Settings are locked.")
+            2, "Running: Training, nadrowski_master_oct", "1:02:03 so far. Settings are locked.")
         assert foot.height() == 99
         long, many = "Running: " + " ".join(["a long place name"] * 6), " ".join(["words"] * 30)
         foot.set_state("now", long, many, button=True)
@@ -7772,7 +7768,7 @@ def test_the_foot_keeps_one_height_in_every_state_and_the_rows_above_it_stay_whe
     from core.gui.run.model import OUTCOMES, RunStatus
     now = dt.datetime(2026, 10, 9, 18, 0, tzinfo=dt.timezone.utc)
     statuses = [RunStatus()]
-    for word in ("Training", "Narrowing round", "Measurement", "Sweep study", "Live simulation", "Prior build"):
+    for word in ("Training", "Narrowing round", "Check", "Inference", "Prior load", "Prior build"):
         statuses += [RunStatus(state="running", word=word, stage_words="Simulating, batch 6,150 of 10,000"),
                      RunStatus(state="running", word=word, loading=True),
                      RunStatus(state="retrying", word=word),
@@ -7802,25 +7798,25 @@ def test_the_foot_keeps_one_height_in_every_state_and_the_rows_above_it_stay_whe
 def test_the_page_names_mark_the_current_page_and_move_with_the_arrows(monkeypatch):
     """The row of a part's page names: the current name semibold in the first ink with the accent's line under it
     as wide as its words, the others in the second ink, a hairline under the whole row, at four scalings in both
-    themes. It is one stop of the Tab key, at the current name; Left and Right choose the name beside it, stopping
-    at either end, and the ring follows; a click chooses a name; a choice is told, a mark set from the program is
-    not, and a page the row does not hold is refused."""
+    themes, shown on a row of two pages made here. It is one stop of the Tab key, at the current name; Left and
+    Right choose the name beside it, stopping at either end, and the ring follows; a click chooses a name; a choice
+    is told, a mark set from the program is not, and a page the row does not hold is refused."""
     from core.gui import style
     app = QApplication.instance() or QApplication([])
     from PySide6.QtWidgets import QAbstractButton
     kit = _rail_kit()
-    names = kit.names.PageNames(kit.keys.PAGES["temperature"])
+    names = kit.names.PageNames((kit.keys.Place("list", "Your models"), kit.keys.Place("builder", "Model builder")))
     one, sweep = names.findChildren(QAbstractButton)
     with _standing(names, 400, 80) as window, _focus_as_on_a_screen(monkeypatch) as given:
         chosen = []
         names.chosen.connect(chosen.append)
         assert (names.current(), [w.text() for w in (one, sweep)], _tab_stops(window)) == (
-            "one_cell", ["One cell", "Sweep study"], [one])
+            "list", ["Your models", "Model builder"], [one])
         for dark, ratio in itertools.product((False, True), _SCALINGS):
             with _the_look(dark):
                 image = _rendered(window, ratio)
                 where = _spots(image, "accent")[1]
-                wide = QFontMetricsF(fonts.inter("strong")).horizontalAdvance("One cell")
+                wide = QFontMetricsF(fonts.inter("strong")).horizontalAdvance("Your models")
                 under = _device_edge(one.mapTo(window, QPoint(0, 0)).y() * ratio + one.height() * ratio)
                 assert (where.left(), where.bottom() + 1, where.height()) == (0, under, _HEAVY_RULE[ratio]), (dark, ratio)
                 assert abs(where.width() - wide * ratio) <= 1.5, (dark, ratio, where, wide)
@@ -7834,18 +7830,18 @@ def test_the_page_names_mark_the_current_page_and_move_with_the_arrows(monkeypat
             QApplication.sendEvent(QObject(), QKeyEvent(QEvent.KeyPress, Qt.Key_Tab, Qt.NoModifier))
             QApplication.sendEvent(one, QFocusEvent(QEvent.FocusIn, Qt.TabFocusReason))
             QTest.keyClick(one, Qt.Key_Right)
-            assert (chosen, names.current(), given, _tab_stops(window)) == (["sweep"], "sweep", [sweep], [sweep])
+            assert (chosen, names.current(), given, _tab_stops(window)) == (["builder"], "builder", [sweep], [sweep])
             assert follows.target() is sweep and follows.ring().geometry() == sweep.geometry().adjusted(-4, -4, 4, 4)
             QTest.keyClick(sweep, Qt.Key_Right)
             QTest.keyClick(sweep, Qt.Key_Left)
             QTest.keyClick(one, Qt.Key_Left)
-            assert (chosen, names.current(), given[-1]) == (["sweep", "one_cell"], "one_cell", one)
+            assert (chosen, names.current(), given[-1]) == (["builder", "list"], "list", one)
         finally:
             follows.stop()
         QTest.mouseClick(sweep, Qt.LeftButton)
         QTest.mouseClick(sweep, Qt.LeftButton)
-        names.set_current("one_cell")
-        assert (chosen, names.current()) == (["sweep", "one_cell", "sweep"], "one_cell")
+        names.set_current("list")
+        assert (chosen, names.current()) == (["builder", "list", "builder"], "list")
         with pytest.raises(KeyError):
             names.set_current("compare")
         assert one.geometry().topLeft() == QPoint(0, 0) and sweep.x() == one.width() + 16
@@ -7856,10 +7852,10 @@ def test_the_rail_ignores_a_place_it_does_not_list():
     raises nothing, and a step it does not list leaves parameter inference's own row marked with its chain open."""
     with _railed() as held:
         rail, kit = held.rail, held.kit
-        rail.set_place("temperature", "sweep")
+        rail.set_place("models", "builder")
         _settle()
         image = _rendered(rail, 1.0)
-        first, last = _device_rows(rail.row("temperature"), rail, 1.0)
+        first, last = _device_rows(rail.row("models"), rail, 1.0)
         tint = _spots(image, "accent_tint")[1]
         hair = _HAIR_RULE[1.0]                  # the open part's two lines lie over its row's top and bottom
         assert (tint.top(), tint.bottom()) == (first + hair, last - hair)
@@ -7872,7 +7868,7 @@ def test_the_rail_ignores_a_place_it_does_not_list():
         _settle()
         first, last = _device_rows(rail.row("inference"), rail, 1.0)
         tint = _spots(_rendered(rail, 1.0), "accent_tint")[1]
-        assert (tint.top(), tint.bottom()) == (first + hair, last) and len(rail.visible_rows()) == 15
+        assert (tint.top(), tint.bottom()) == (first + hair, last) and len(rail.visible_rows()) == 12
 
 
 def _written_with_fonts(monkeypatch, widget):

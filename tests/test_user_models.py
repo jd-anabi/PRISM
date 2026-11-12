@@ -1,4 +1,4 @@
-"""User-defined model tests: parser/codegen, forcing kinds, registry, persistence, Simulate stream,
+"""User-defined model tests: parser/codegen, forcing kinds, registry, persistence,
 and the appearance: the palette and the sheet from the look's table, and the application's font.
 
 WHAT THESE LOCK DOWN
@@ -8,8 +8,7 @@ WHAT THESE LOCK DOWN
       IDENTICAL to the original math (SBI training data depends on it), and the new step/triangular/
       exponential kinds + the per-variable user force tensor follow the same nondimensionalization.
     * registry appends user models WITHOUT moving the built-ins (positional VALID_LABELS consumers),
-      model_store's emitted Bounds/Cells/Units triple round-trips through the untouched config path,
-      and a saved model streams end-to-end through the Simulate worker (incl. the divergence guard).
+      and model_store's emitted Bounds/Cells/Units triple round-trips through the untouched config path.
 
 Round-trip tests write a throwaway model (name UMTEST*) into the real Resources tree and remove it in
 a finally -- the exact code path the app takes, no path monkey-patching.
@@ -906,7 +905,8 @@ def test_stale_bounds_file_is_detected():
     """A hand-edited JSON whose param discovery order no longer matches the emitted Bounds file must
     raise a clear out-of-sync error instead of silently mis-binding values by position."""
     import json as _json
-    from core.gui.panels import simulate_runner as sr
+    from core import cli
+    from core.SBI import run_guards
     name = "UMTESTSYNC"
     doc = {"schema_version": 1, "name": name,
            "variables": [{"name": "x", "drift": "mu*x - nu*x^3", "D": "d0", "init": 0.1,
@@ -920,8 +920,10 @@ def test_stale_bounds_file_is_detected():
         stale["variables"][0]["drift"] = "-nu*x^3 + mu*x"          # same math, swapped discovery order
         json_path.write_text(_json.dumps(stale), encoding="utf-8")
         registry.load_user_models()
+        cfg = cli.make_sim_config(name, list(registry.get(name).labels), registry.state_dep_drift(name),
+                                  str(config.BOUNDS_PATH / name.lower() / "default.txt"))
         try:
-            sr.build_stream_config(name, str(config.CELL_PATH / name.lower() / "default.txt"))
+            run_guards._assert_user_model_in_sync(cfg)
         except ValueError as e:
             assert "out of sync" in str(e), e
         else:
@@ -933,7 +935,7 @@ def test_stale_bounds_file_is_detected():
 
 def test_registry_load_collects_errors_without_raising():
     """One valid + one corrupt file: the valid one registers, the corrupt one lands in load_errors --
-    a bad file must never brick startup (the CrossValPanel launch-guard rule)."""
+    a bad file must never brick startup."""
     name = "UMTESTOK"
     config.MODELS_PATH.mkdir(parents=True, exist_ok=True)
     corrupt = config.MODELS_PATH / "UMTESTBAD.json"
@@ -950,65 +952,26 @@ def test_registry_load_collects_errors_without_raising():
     assert name not in config.VALID_MODELS
 
 
-# ── the Simulate path, end to end ────────────────────────────────────────────────────────────────
-def test_user_model_streams_through_the_simulate_path():
-    """Save -> register -> build_stream_config/plan_stream/run_simulation_stream emit finite frames,
-    and a blow-up model raises the divergence RuntimeError instead of flatlining."""
-    from core.gui.panels import simulate_runner as sr
-    sin = {"kind": "sin", "params": {"amp": 0.5, "freq": 10.0, "phase": 0.0, "offset": 0.0}}
-    name = "UMTEST"
-    boom = "UMTESTBOOM"
-    try:
-        model_store.save_user_model(_doc(name, sin))
-        model_store.save_user_model({
-            "schema_version": 1, "name": boom,
-            "variables": [{"name": "x", "drift": "x^3", "D": "0", "init": 2.0, "forcing": None}],
-            "params": {}, "rescale": {"x_scale": 10.0, "t_scale": 0.01}})
-        registry.load_user_models()
-
-        cfg = sr.build_stream_config(name, str(config.CELL_PATH / name.lower() / "default.txt"))
-        assert cfg.state_dep_drift is False and cfg.labels == ["k1", "d0"]
-        plan = sr.plan_stream(cfg, 0.2)
-        assert plan.user_spec is registry.get(name) and plan.n_channels == 2
-        chunks = []
-        sr.run_simulation_stream(cfg, 0.2, frame_steps=500, fps=0.0, emit_chunk=chunks.append)
-        data = np.concatenate(chunks, axis=0)
-        assert data.shape[1] == 2 and np.isfinite(data).all() and data.shape[0] > 50
-        assert abs(data[:, 1]).max() < 100.0                       # x_scale=10 * O(1) ND state
-
-        cfg_boom = sr.build_stream_config(boom, str(config.CELL_PATH / boom.lower() / "default.txt"))
-        try:
-            sr.run_simulation_stream(cfg_boom, 0.2, frame_steps=500, fps=0.0, emit_chunk=lambda c: None)
-        except RuntimeError as e:
-            assert "diverged" in str(e)
-        else:
-            raise AssertionError("blow-up not detected")
-    finally:
-        _remove_user_model(name)
-        _remove_user_model(boom)
-
-
-# ── GUI: combo refresh + builder guards ──────────────────────────────────────────────────────────
-def test_combo_refresh_preserves_picker_selections():
-    """A user-model save/delete must NOT reset the cell/bounds pickers when the panel's model
-    selection did not change (the model-changed hook resets pickers to their first entry)."""
-    from core.gui.panels.fdt_panel import FdtPanel
+def test_combo_refresh_preserves_picker_selections(monkeypatch):
+    """A user-model save/delete must NOT re-fire a panel's model-changed hook when the panel's model
+    selection did not change (the hook resets the panel's pickers to their first entry); a DELETED
+    selected model falls back to NADROWSKI and re-fires it."""
     qt_app()
     window = build_window()
-    fdt = window.panel(FdtPanel)
-    assert fdt.cell_picker.combo.count() > 1, "needs >1 nadrowski cells to be meaningful"
-    fdt.cell_picker.combo.setCurrentIndex(1)
-    chosen = fdt.cell_picker.combo.currentText()
+    first = window.part("inference").config_panel
+    fired = []
+    monkeypatch.setattr(first, "_on_model_changed", lambda model: fired.append(model))
     registry.register(registry.ModelSpec("UMTESTCOMBO", ["a"], is_user_model=True, n_vars=1))
     try:
         window._on_user_models_changed()
-        assert fdt.cell_picker.combo.currentText() == chosen   # unchanged model -> untouched picker
-        # A DELETED selected model must still fall back and re-fire the hook.
-        fdt.model_combo.setCurrentText("UMTESTCOMBO")
+        listed = [first.model_combo.itemText(n) for n in range(first.model_combo.count())]
+        assert "UMTESTCOMBO" in listed and fired == [], fired   # unchanged model -> no hook, untouched pickers
+        first.model_combo.setCurrentText("UMTESTCOMBO")
     finally:
         registry.unregister("UMTESTCOMBO")
+    del fired[:]
     window._on_user_models_changed()
-    assert fdt.model_combo.currentText() == "NADROWSKI"
+    assert first.model_combo.currentText() == "NADROWSKI" and fired == ["NADROWSKI"]
     window.close()
 
 

@@ -21,11 +21,10 @@ decides, and an Appearance's first apply always goes on.
 
 ``build_app`` constructs the one Appearance. A test that builds the window directly has none.
 
-One drawing surface sits outside the palette and follows the theme through the ``theme_changed``
-signal: the pyqtgraph live view (live_hair_bundle.py). The figures the engine draws do not follow
-it: their settings are the light ones, written once when the application is built
-(mpl_theme.install, called in app.build_app), and the Simulate video export pins its own white
-page (simulate_export.py).
+The ``theme_changed`` signal is for a drawing surface that sits outside the palette and follows the
+theme; none listens to it now, since the live view of a simulation that did was removed. The figures the
+engine draws do not follow the theme: their settings are the light ones, written once when the
+application is built (mpl_theme.install, called in app.build_app).
 """
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QWidget
@@ -41,7 +40,7 @@ _ACTIVE: "Appearance | None" = None
 
 def active_appearance():
     """The app's live Appearance (constructed in build_app), or None when nothing has built one (a
-    test that builds the window directly). Lets non-QSS surfaces (e.g. the pyqtgraph live view) read
+    test that builds the window directly). Lets a surface the style sheet does not reach read
     the current theme + subscribe to changes without a hard import."""
     return _ACTIVE
 

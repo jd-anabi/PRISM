@@ -38,13 +38,13 @@ for name in sys.argv[2].split(","):
 from core.gui import chain, keys
 from core.gui.run.model import RunStatus
 run = "20261008T190211-training"
-runs = (RunStatus(state="running", word="Sweep study", place=("temperature", "sweep")),
+runs = (RunStatus(state="running", word="Check", place=("inference", "checks")),
         RunStatus(state="stopping", word="Training", name="retrain_3", place=("inference", "training")),
         RunStatus(state="retrying", word="Training", name="retrain_3", place=("inference", "training")),
         RunStatus(state="running", word="Training", place=("inference", "training"), needs_you="Nothing heard."),
         RunStatus(state="ended", word="Training", outcome="finished", run=run, place=("inference", "training")),
         RunStatus(state="ended", word="Training", outcome="stopped", run=run, place=("inference", "training")),
-        RunStatus(state="not_seen", word="Training", outcome="not seen to end", run=run, place=("live", None)),
+        RunStatus(state="not_seen", word="Training", outcome="not seen to end", run=run, place=("records", None)),
         RunStatus(state="running", word="Run"), RunStatus())
 some = held(draft=held(model="NADROWSKI"), cfg=None, inf_prior=None, posterior=None, observation=None)
 every = held(draft=held(model="SHM"), cfg=None, inf_prior=held(name="p"), observation=held(name="o"),
@@ -205,14 +205,13 @@ for run in runs:
     look(run)
     run.ended("stopped", kept_fit=held(id="x", passes=8, resumed=False, saved_here=True, processes=1))
     look(run)
-cell = model.RunModel(model.RunSpec("Measurement", ("temperature", "cell"), name="c",
-                                    stages=(model.Stage("Checks"), model.Stage("Spontaneous",
-                                                                               ("fdt_campaign_spontaneous",)))),
+cell = model.RunModel(model.RunSpec("Check", ("inference", "checks"), name="c",
+                                    stages=(model.Stage("Checks"), model.Stage("Calibrating"))),
                       clock=clock)
-for line in ("Writing", "Skipping sanity checks.", "Campaign 1: spontaneous fluctuations -> PSD"):
+for line in ("Writing", "the next line"):
     cell.feed([(line, "info")])
     look(cell)
-own = model.RunModel(model.RunSpec("Live simulation", ("live", None)), clock=clock)
+own = model.RunModel(model.RunSpec("Export", ("inference", "infer")), clock=clock)
 own.set_count(1, 9, "samples")
 look(own)
 own.set_stage("Watching")
@@ -222,8 +221,7 @@ counted.rows([row("Calibrating", "3/9 [00:01<00:02]", 9)])
 look(counted)
 counted.ended("finished")
 look(counted)
-for others in ("Prior build", "Check", "Inference", "Measurement", "Sweep study", "Comparison", "Reduction map",
-               "Video", "Run", "Narrowing round"):
+for others in ("Prior build", "Check", "Inference", "Run", "Narrowing round"):
     look(model.RunModel(model.RunSpec(others, ("inference", "checks"), name="n"), clock=clock))
 look(model.RunModel(model.RunSpec("Prior load", ("inference", "prior"), stop_asks=False), clock=clock))
 said = [questions.keep_question(held(passes=n, resumed=resumed, saved_here=here, processes=2))
@@ -392,21 +390,17 @@ def test_the_requests_made_of_windows_load_no_torch():
 
 # the places and the keys
 def test_the_parts_and_steps_are_the_rails_in_order():
-    """Nine parts and six steps, in the rail's order, under the names the window shows, each with its keys,
-    and each part but Home with the one line Home's table gives it; and the two pages of Effective temperature."""
-    assert [p.key for p in keys.PARTS] == ["home", "inference", "temperature", "live", "reduction", "records",
-                                           "models", "settings", "help"]
-    assert [p.name for p in keys.PARTS] == ["Home", "Parameter inference", "Effective temperature",
-                                            "Live simulation", "Reduction map", "Records", "Your own models",
-                                            "Settings", "Help"]
-    assert [p.keys[0] for p in keys.PARTS] == [f"Ctrl+{n}" for n in range(1, 10)]
-    assert keys.PARTS[8].keys == ("Ctrl+9", "F1") and all(len(p.keys) == 1 for p in keys.PARTS[:8])
+    """Six parts and six steps, in the rail's order, under the names the window shows, each with its keys, the
+    parts' keys numbered in the rail's order, and each part but Home with the one line Home's table gives it; and no
+    part with pages of its own."""
+    assert [p.key for p in keys.PARTS] == ["home", "inference", "records", "models", "settings", "help"]
+    assert [p.name for p in keys.PARTS] == ["Home", "Parameter inference", "Records", "Your own models", "Settings",
+                                            "Help"]
+    assert [p.keys[0] for p in keys.PARTS] == [f"Ctrl+{n}" for n in range(1, 7)]
+    assert keys.PARTS[5].keys == ("Ctrl+6", "F1") and all(len(p.keys) == 1 for p in keys.PARTS[:5])
     assert [p.line for p in keys.PARTS] == [
         "",
         "Infer a cell's model parameters from recordings, in six steps.",
-        "Measure it on one cell, or in a sweep study over two parameters; compare saved runs.",
-        "Watch a cell's bundle move as it is simulated; save a video.",
-        "The analytical map from the Nadrowski model to the Hopf normal form.",
         "Everything PRISM has written, and what each record was made from.",
         "Define a model of your own.",
         "Appearance, and this computer.",
@@ -417,8 +411,8 @@ def test_the_parts_and_steps_are_the_rails_in_order():
                                             "Narrowing round"]
     assert [s.keys for s in keys.STEPS] == [(f"Alt+{n}",) for n in range(1, 7)]
     assert all(s.line == "" for s in keys.STEPS)
-    assert keys.PAGES == {"temperature": (keys.Place("one_cell", "One cell"), keys.Place("sweep", "Sweep study"))}
-    assert keys.part("records") is keys.PARTS[5] and keys.step("infer") is keys.STEPS[4]
+    assert keys.PAGES == {}
+    assert keys.part("records") is keys.PARTS[2] and keys.step("infer") is keys.STEPS[4]
     assert [keys.step_number(s.key) for s in keys.STEPS] == [1, 2, 3, 4, 5, 6]
     for lookup, name in ((keys.part, "training"), (keys.step, "records"), (keys.step_number, "home")):
         with pytest.raises(KeyError):
@@ -427,24 +421,24 @@ def test_the_parts_and_steps_are_the_rails_in_order():
 
 def test_the_window_shortcuts_are_the_places_keys_and_three_more():
     """One shortcut for each key of a part or a step, then the two keys between the rail and the page and the
-    key to the run, no key twice, each a key sequence the toolkit reads back as written; and the rows Help
-    prints, in their order and words."""
+    key to the run, no key twice, each a key sequence the toolkit reads back as written, and none for Ctrl+7 to
+    Ctrl+9, past the six parts; and the rows Help prints, in their order and words."""
     from PySide6.QtGui import QKeySequence
     sequences = [sequence for sequence, _ in keys.BINDINGS]
     assert len(set(sequences)) == len(sequences), "a key is bound twice"
     portable = QKeySequence.SequenceFormat.PortableText
     assert [QKeySequence.fromString(s, portable).toString(portable) for s in sequences] == sequences
     assert keys.BINDINGS == (
-        ("Ctrl+1", "part home"), ("Ctrl+2", "part inference"), ("Ctrl+3", "part temperature"),
-        ("Ctrl+4", "part live"), ("Ctrl+5", "part reduction"), ("Ctrl+6", "part records"),
-        ("Ctrl+7", "part models"), ("Ctrl+8", "part settings"), ("Ctrl+9", "part help"), ("F1", "part help"),
+        ("Ctrl+1", "part home"), ("Ctrl+2", "part inference"), ("Ctrl+3", "part records"),
+        ("Ctrl+4", "part models"), ("Ctrl+5", "part settings"), ("Ctrl+6", "part help"), ("F1", "part help"),
         ("Alt+1", "step model"), ("Alt+2", "step prior"), ("Alt+3", "step training"), ("Alt+4", "step checks"),
         ("Alt+5", "step infer"), ("Alt+6", "step narrowing"),
         ("F6", "rail or page"), ("Shift+F6", "rail or page"), ("Ctrl+R", "run"),
     )
+    assert not {"Ctrl+7", "Ctrl+8", "Ctrl+9"} & set(sequences), "a key past the six parts is bound"
     assert keys.KEYS == (
         ("F6, Shift+F6", "Moves the keyboard between the rail and the page."),
-        ("Ctrl+1 to Ctrl+9", "Opens the nine parts in rail order."),
+        ("Ctrl+1 to Ctrl+6", "Opens the six parts in rail order."),
         ("Alt+1 to Alt+6", "Opens steps 1 to 6 from anywhere."),
         ("Ctrl+R", "Goes to the run, whenever the foot is a button."),
         ("F1", "Opens Help."),
@@ -457,22 +451,21 @@ def test_the_window_shortcuts_are_the_places_keys_and_three_more():
 
 
 def test_a_place_is_written_as_the_window_names_it():
-    """A part by its name, a step by its number and name, a page of a part by both names, and several places
-    joined as a sentence names them after its "in": each keeps its own comma, a step after another place
-    begins with its own number, and a part or a page after another place takes its own "in"."""
+    """A part by its name, a step by its number and name, a step named as a page of Parameter inference by the step
+    alone, and several places joined as a sentence names them after its "in": each keeps its own comma, a step after
+    another place begins with its own number, and a part after another place takes its own "in". A page of a part
+    that has none, the effective temperature's pages among them, is no place."""
     assert keys.place_words("training") == "step 3, Training"
     assert keys.place_words("records") == "Records"
     assert keys.place_words("inference") == "Parameter inference"
-    assert keys.place_words("temperature/sweep") == "Effective temperature, Sweep study"
-    assert keys.place_words("temperature/one_cell") == "Effective temperature, One cell"
     assert keys.place_words("inference/narrowing") == "step 6, Narrowing round"
     assert keys.places_words(("training", "narrowing")) == "step 3, Training, or step 6, Narrowing round"
     assert keys.places_words(("help",)) == "Help"
-    assert keys.places_words(("model", "infer", "live")) == (
-        "step 1, Model and options, or step 5, Inference, or in Live simulation")
-    assert keys.places_words(("temperature/one_cell", "temperature/sweep", "inference/narrowing")) == (
-        "Effective temperature, One cell, or in Effective temperature, Sweep study, or step 6, Narrowing round")
-    for unknown in ("training/sweep", "temperature/compare", "records/prior", "nowhere", "inference/home"):
+    assert keys.places_words(("model", "infer", "records")) == (
+        "step 1, Model and options, or step 5, Inference, or in Records")
+    assert keys.places_words(("records", "inference/narrowing")) == "Records, or step 6, Narrowing round"
+    for unknown in ("training/sweep", "temperature/sweep", "temperature/one_cell", "temperature", "live", "reduction",
+                    "records/prior", "nowhere", "inference/home"):
         with pytest.raises(KeyError):
             keys.place_words(unknown)
 
@@ -509,7 +502,7 @@ _RULE_TABLE = {
         ("warn", "Attention", "Changed, not applied", "Changed, not applied", True, False),
         "Step 1, Model and options. Attention: changed, not applied"),
     "any step, a live run elsewhere changes nothing": (
-        _WITH_PRIOR, {"live": "temperature"}, "training",
+        _WITH_PRIOR, {"live": "records"}, "training",
         ("now", "Now", "Setting up", "Now: setting up", True, False), "Step 3, Training. Now: setting up"),
     "any step, its run live before its needs are met": (
         _MODEL, {"live": "training"}, "training",
@@ -843,12 +836,12 @@ def test_home_picks_its_one_next_step_in_order():
         (_EMPTY, {"picks": _LAST}, RunStatus(state="running", word="Run"),
          ("Next: continue with what was in use last time", _LAST_SAID, "Continue with these", "home", None, None)),
         (_MODEL, {"picks": _LAST}, None, ("Next: build or load a prior", "", "Open Prior", "inference", "prior", None)),
-        (_OBSERVED, {}, RunStatus(state="running", word="Sweep study", place=("temperature", "sweep")),
-         ("Next: nothing until the sweep study ends", f"Sweep study is running, {_LIVE}", "Go to the run",
-          "temperature", "sweep", None)),
-        (_EMPTY, {}, RunStatus(state="starting", word="Live simulation", place=("live", None)),
-         ("Next: nothing until the live simulation ends", f"Live simulation is running, {_LIVE}", "Go to the run",
-          "live", None, None)),
+        (_OBSERVED, {}, RunStatus(state="running", word="Check", place=("inference", "checks")),
+         ("Next: nothing until the check ends", f"Check is running, {_LIVE}", "Go to the run",
+          "inference", "checks", None)),
+        (_EMPTY, {}, RunStatus(state="starting", word="Prior build", place=("inference", "prior")),
+         ("Next: nothing until the prior build ends", f"Prior build is running, {_LIVE}", "Go to the run",
+          "inference", "prior", None)),
         (_EMPTY, {}, RunStatus(state="running", word="Run"),
          ("Next: choose a model", "Nothing is loaded: PRISM starts every launch with nothing loaded.",
           "Open Model and options", "inference", "model", None)),
@@ -1318,7 +1311,7 @@ def test_parameter_inference_opens_the_step_in_hand_then_the_step_last_shown():
         window.go_to("inference", "nowhere")
     assert opened(window, ("inference",)) == (("inference", "prior"), "prior"), (
         "the first opening is not at the step in hand")
-    assert opened(window, ("inference", "infer"), ("live",), ("inference",)) == (("inference", "infer"), "infer"), (
+    assert opened(window, ("inference", "infer"), ("records",), ("inference",)) == (("inference", "infer"), "infer"), (
         "a later opening is not at the step last shown")
     assert window.shell.rail.row("infer").property("ring_left"), "the rail does not mark the step shown"
     named = window_holding(SbiSession(draft=draft))

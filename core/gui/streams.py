@@ -46,7 +46,7 @@ class WorkerCancelled(BaseException):
     """Unwinds a cooperatively-cancelled worker run.
 
     Derived from BaseException, NOT Exception, ON PURPOSE: the pipeline is full of `except Exception`
-    (in sbi, in core/FDT/cross_validation.py, in Worker.run itself) and a cancel must sail straight
+    (in sbi, in the engine's own loops, in Worker.run itself) and a cancel must sail straight
     through all of them to reach Worker.run, which catches it by name. Verified: a BaseException
     subclass is not caught by `except Exception`.
     """

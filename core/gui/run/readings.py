@@ -92,7 +92,6 @@ def _row(name, form, module, *, sentence=None, formatter=None, message=None) -> 
 
 
 _ORCH, _PIPE, _FIT, _TRAIN = "core.orchestrator", "core.SBI.pipeline", "core.SBI.fit_state", "core.SBI.train"
-_FDT, _SWEEP = "core.FDT.fdt_pipeline", "core.FDT.cross_validation"
 # Said where a line of the training's fit-saving holds an error the window has no words of its own for.
 _NOT_SAVED = "a stop or a failure during its fit loses the fit."
 
@@ -209,13 +208,6 @@ ROWS: tuple[Row, ...] = (
          "page.", "core.gui.run.textfile",
          sentence="The run's text file could not be written (<error>); the full text is still on the page.",
          message="warning"),
-    # One cell and Sweep study
-    _row("fdt_sanity_skipped", "Skipping sanity checks.", _FDT),
-    _row("fdt_campaign_spontaneous", "Campaign 1: spontaneous fluctuations -> PSD", _FDT),
-    _row("fdt_campaign_driven", "Campaign 2: forced response -> chi via lock-in", _FDT),
-    _row("sweep_phase", "--- Phase A (<param> sweep): spontaneous PSD + omega_0 detection ---", _SWEEP),
-    _row("sweep_point_a", "[A <i>/<n>] <param>=<value> (<fixed>)", _SWEEP),
-    _row("sweep_point_b", "[B <i>/<n>] <param>=<value>", _SWEEP),
 )
 NAMES: tuple[str, ...] = tuple(row.name for row in ROWS)
 _BY_NAME = {row.name: row for row in ROWS}

@@ -6,7 +6,7 @@ here, so the words are read and tested with no window.
 
 Each question's first answer is the safe one: it changes nothing, it is the default, and Enter and Escape mean it.
 The other answer is drawn as losing work where taking it loses what cannot be had again. A run whose stop loses
-nothing (a live simulation, a run that only loads a record) is stopped with no question.
+nothing (a run that only loads a record) is stopped with no question.
 """
 from dataclasses import dataclass
 
@@ -67,20 +67,7 @@ _OTHERS = {
               "kept.", "Keep it running", "Stop and discard it"),
     "Inference": ("Stop the inference?", "The inference is not kept. An observation it has already written stays in "
                   "Records.", "Keep it running", "Stop the inference"),
-    "Measurement": ("Stop measurement?", "The record {name}is kept, marked unfinished, with what it has measured so "
-                    "far. A measurement cannot be continued; to finish it, it is measured again from the start.",
-                    "Keep measuring", "Stop and keep what is measured"),
-    "Sweep study": ("Stop sweep study?", "What the study has measured is kept, marked unfinished; a study cannot be "
-                    "continued.", "Keep measuring", "Stop the study"),
-    "Comparison": ("Stop the comparison?", "A comparison writes its record only when it finishes, so nothing of this "
-                   "one is kept.", "Keep comparing", "Stop the comparison"),
-    "Reduction map": ("Stop computing the map?", "The map will not be shown. If its table is already written, that "
-                      "file stays in the reduction folder.", "Keep computing", "Stop computing"),
-    "Video": ("Stop saving the video?", "The unfinished file is removed. The trace stays and can be saved again.",
-              "Keep saving", "Stop saving"),
 }
-# The two kinds of run whose stop question says first how long the run has run.
-_SAYS_HOW_LONG = ("Measurement", "Sweep study")
 # A run the window has no words of its own for (a test's bare run): its stop keeps nothing it has not written.
 _ANY = ("Stop the run?", "What the run has not written yet is not kept.", "Keep it running", "Stop the run")
 
@@ -106,7 +93,7 @@ def stop_question(status, model) -> "Question | None":
     if spec.word in TRAINING_WORDS:
         return _training_question(spec, model)
     title, kept, safe, other = _OTHERS.get(spec.word, _ANY)
-    return Question(title, _ran(spec, model) + _kept(spec, kept), "", safe, other, True)
+    return Question(title, _kept(spec, kept), "", safe, other, True)
 
 
 def close_question(status, model) -> Question:
@@ -223,13 +210,6 @@ def _training_question(spec, model) -> "Question | None":
     if spec.facts.get("rotated") is not False:
         sentence += " The rotation will be computed again next time."
     return Question(title, sentence, "", "Keep training", "Stop training", False)
-
-
-def _ran(spec, model) -> str:
-    """How long the run has run, for the kinds of run whose stop says it first."""
-    if spec.word not in _SAYS_HOW_LONG:
-        return ""
-    return f"It has run for {duration_text((model.now() - model.started).total_seconds())}. "
 
 
 def _kept(spec, kept: str) -> str:

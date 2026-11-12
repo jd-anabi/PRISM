@@ -44,16 +44,6 @@ def _png_bytes(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     return buf.getvalue()
-# ── Simulate section: "Save video…" export ───────────────────────────────────────────────────────
-def _tiny_series():
-    import numpy as np
-    t = np.arange(600) * 1e-3                                   # 0.6 s -> several video frames at 30 fps
-    x = np.sin(2 * np.pi * 8 * t) * 1.5 + 0.2
-    return np.column_stack((t, x))
-def _export_kwargs():
-    import numpy as np
-    return dict(window_pts=2000, grid_x=np.linspace(0, 2.6, 60), grid_y=np.linspace(0, 1, 24),
-                sigma_x=0.10, sigma_y=0.20, aspect=2.6, margin=0.35, video_fps=30)
 @contextlib.contextmanager
 def _rcparams_guard():
     """Snapshot + restore matplotlib rcParams (process-global), so a test that writes figure settings
@@ -660,11 +650,9 @@ def test_gui_form_labels_are_prettified():
     holder = help_label("F0 (ND forcing amplitude)", "help text")
     lbl = holder.findChild(QLabel)
     assert lbl is not None and "F<sub>0</sub>" in lbl.text()
-    # panels still build with the prettify hook in place
-    from core.gui.panels.crossval_panel import CrossValPanel
-    from core.gui.panels.fdt_panel import FdtPanel
-    from core.gui.panels.simulate_panel import SimulatePanel
-    build_part(FdtPanel); build_part(CrossValPanel); build_part(SimulatePanel)
+    # a panel still builds with the prettify hook in place
+    from core.gui.panels.inference_tabs import InferPanel
+    build_part(InferPanel, screen=None)
 
 def test_a_theme_flip_between_build_and_save_cannot_split_a_figure():
     """THE 2026-08-25 RENDERING FAILURE, pinned, with its own counterfactual.
@@ -810,22 +798,6 @@ def test_plot_ppc_summary_box_takes_its_ground_from_the_figure_settings():
                 [p.get_facecolor() for p in boxes]
         finally:
             plt.close(fig)
-
-def test_export_animation_page_stays_white_under_dark_figure_settings():
-    """The Simulate video export pins its own page: it stays white even when matplotlib's process-wide
-    settings are dark, so the page of an exported video does not depend on the settings in force."""
-    import os
-    import tempfile
-    import matplotlib
-    from core.gui.panels.simulate_export import export_animation
-    with _rcparams_guard():
-        matplotlib.rcParams.update(_DARK_BY_HAND)                  # dark settings in force
-        path = os.path.join(tempfile.mkdtemp(), "dark.gif")
-        export_animation(_tiny_series(), path, **_export_kwargs())
-        import imageio
-        frame0 = imageio.mimread(path)[0]
-        corner = frame0[0, 0][:3]                                  # top-left = figure background margin
-        assert min(int(c) for c in corner) > 230, corner          # near-white, not the dark page
 
 # ── what a figure draws, its colours left out ────────────────────────────────────────────────────
 def _plain(value):

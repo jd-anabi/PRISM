@@ -12,14 +12,10 @@ from ..design import HELP_VIEWER_MIN_H
 from ..reported import reported
 from ..widgets.rule_table import Column, RuleTable, TextCell
 
-# (module path, human title) for the five user-facing sections, in display order. Each module opens with
-# a "<MODE> mode: ..." docstring line and (most) carry a per-control HELP dict.
+# (module path, human title) for the user-facing sections, in display order. Each module opens with a
+# "<MODE> mode: ..." docstring line and may carry a per-control HELP dict.
 _HELP_SECTIONS = (
-    ("core.gui.panels.reduction_panel", "Reduction Map"),
-    ("core.gui.panels.fdt_panel", "FDT Analysis"),
-    ("core.gui.panels.crossval_panel", "Cross-validation (sweep study)"),
     ("core.gui.panels.inference_tabs", "Parameter Inference"),
-    ("core.gui.panels.simulate_panel", "Simulate"),
 )
 
 

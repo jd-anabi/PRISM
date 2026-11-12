@@ -56,8 +56,8 @@ _DIGITS = re.compile(r"\d+")
 _RATE = re.compile(r"(?P<n>\d+(?:\.\d+)?)(?P<unit>it/s|s/it)")
 
 # The solver bar is identified by its DESC, never by its row: its tqdm `pos` is 0, 1 or 2 depending on
-# the phase and the panel (during a posterior build it sits under two other bars; during FDT Campaign 1
-# it is the only bar there is). This prefix is unique across the repo -- core/Solvers/sdeint.py is its
+# the phase and the panel (during a posterior build it sits under two other bars; in a run with no other
+# bar it is the only bar there is). This prefix is unique across the repo -- core/Solvers/sdeint.py is its
 # sole producer.
 #
 # WHAT THIS IS FOR HAS CHANGED. It used to identify the bar whose rendered `it/s` was scraped for the
@@ -211,7 +211,7 @@ class StreamRouter:
         terminal shows -- and retire the row.
 
         Without this a finished leave=True bar (Priors.prior "Constructing latent
-        prior...", FDT.campaigns "Campaign 2") would sit in the progress pane at 100% for
+        prior...") would sit in the progress pane at 100% for
         the rest of the run AND, being `informative`, would peg the overall bar at 100% -- reading as
         "done" or "hung" while the pipeline is still working.
         """

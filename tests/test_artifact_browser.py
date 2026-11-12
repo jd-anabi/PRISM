@@ -382,7 +382,7 @@ def test_an_incomplete_directorys_pane_shows_its_reason_its_path_and_its_folder(
 
 
 def test_save_writes_exactly_what_the_pane_shows(tmp_path, monkeypatch):
-    """Save writes a FILE, chosen through QFileDialog the way simulate_panel._save_video chooses one,
+    """Save writes a FILE, chosen through QFileDialog the way the window's other file choosers choose one,
     holding byte-for-byte what is on screen. Cancelling writes nothing and says nothing."""
     from tests._fixtures import CHOOSER_CALLS, answer_chooser
 
@@ -456,9 +456,7 @@ def test_an_over_long_note_is_refused_with_its_fix_sentence(store):
     box = asked()
     assert (box.kind, box.marker) == ("refusal", "warn")
     assert "200" in box.sentence and "201" in box.sentence, box.sentence
-    assert box.beneath == (
-        "Edit it in the Note box in Records, or in the 'Note' or 'Comparison note' box in Effective "
-        "temperature, One cell, or in Effective temperature, Sweep study.")
+    assert box.beneath == "Edit it in the Note box in Records."
     assert store.get("prior", p.id).note == ""
 
 
@@ -1111,9 +1109,7 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
         ids = [picker.combo.itemData(i) for i in range(picker.combo.count())]
         assert doomed.id not in ids, "the picker still offers the deleted prior"
         assert keep.id in ids and picker.key() != doomed.id
-        # and it is EVERY picker of the parts built, not just the one that happened to be looked at: Effective
-        # temperature built too, so that its saved-run picker is among them
-        w.part("temperature")
+        # and it is EVERY picker of the parts built, not just the one that happened to be looked at
         seen = []
         real = StorePicker.refresh
         monkeypatch.setattr(StorePicker, "refresh",
@@ -1121,10 +1117,8 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
         w._refresh_store_pickers()
         # A SUBSET, not an equality: the pickers are found by type, so a screen that gains one is
         # covered by construction, and an equality would make the change that adds it break this
-        # test instead. The FDT screen's saved-run picker is the first such addition. No page lists the
-        # saved posteriors while the Training page has no view that loads one.
+        # test instead. No page lists the saved posteriors while the Training page has no view that loads one.
         assert {"observation", "prior"} <= set(seen), seen
-        assert "fdt" in seen, seen
     finally:
         w.close()
 

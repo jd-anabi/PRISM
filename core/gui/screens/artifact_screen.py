@@ -430,7 +430,7 @@ class ArtifactScreen(QWidget):
 
         A FILE, never a store kind of its own -- a report DESCRIBES the store and must not be mistaken
         for something the store holds. The file is chosen through the one file chooser
-        (core/gui/file_chooser.py), as simulate_panel._save_video and figure_window choose theirs;
+        (core/gui/file_chooser.py), as figure_window chooses its own;
         cancelling returns "" and writes nothing.
         """
         text = self.detail.toPlainText()
@@ -489,7 +489,7 @@ class ArtifactScreen(QWidget):
         if not path:
             return
         if not path.lower().endswith(".txt"):
-            path += ".txt"                   # the courtesy simulate_panel._save_video does for .mp4
+            path += ".txt"                   # the extension, when the name was given without it
         try:
             Path(path).write_text(text, encoding="utf-8", newline="\n")
         except OSError as e:

@@ -100,7 +100,7 @@ class _TrainingBudgetMixin:
         Word-wrapped and PlainText on purpose: these carry generated strings that can be long (a
         checkpoint directory name and the field it differs in), and an unwrapped label widens the
         whole controls column -- the same unwrapped-label defect that once put a permanent
-        horizontal scrollbar on the crossval panel.
+        horizontal scrollbar on a page with a wide grid of boxes.
         """
         lab = QLabel()
         lab.setWordWrap(True)

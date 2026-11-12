@@ -207,7 +207,7 @@ class RunHost:
         """Lock the whole left-hand column while a task runs.
 
         The WHOLE column, not just the run button: a model combo changed mid-run repoints the cell
-        picker and re-seeds the panel's inputs (simulate_panel / fdt_panel / config_tab
+        picker and re-seeds the panel's inputs (config_tab
         ._on_model_changed) while the worker is still reporting against the selection it started
         from. The stdout hazard this used to name is gone: file_manager.list_dir returns its listing
         and prints nothing, so ArtifactPicker.refresh() no longer swaps the process-wide sys.stdout

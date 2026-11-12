@@ -12,11 +12,10 @@ against the QLabels shown at the place a tuple names.
 Three shapes of entry:
 
 * ``(place, label)`` for a box or a picker: ``place`` is a place of the window by its key in
-  ``core/gui/keys.py`` -- a step ("infer"), a part that has neither steps nor pages ("live") or a
-  page of a part ("temperature/sweep") -- and the label is the row as the panel passes it to
-  ``add_help_row``. A tuple of places is how one input names every place it appears, in the window's
-  order (the parts as the rail lists them, a part's steps or pages as it shows them): the cell picker
-  is in five of them.
+  ``core/gui/keys.py`` -- a step ("infer") or a part that has no steps ("models") -- and the label is
+  the row as the panel passes it to ``add_help_row``. A tuple of places is how one input names every
+  place it appears, in the window's order (the parts as the rail lists them, a part's steps as it
+  shows them): the batch count is in two of them.
 * one sentence, for a consent, a dialog, a table, the name box, a value fixed by measurement, a
   control in Records, whose list and Note box are not form rows, the model builder's forcing
   fields, whose rows are labelled by parameter name, or a plan, whose file is what is corrected; the
@@ -24,7 +23,7 @@ Three shapes of entry:
   a box's sentence does.
 * ``None`` for a key the window has no control for: the tool-only diagnostics knobs, the three
   settings the window never exposes (the device and the two sample counts), the name of the observation
-  an inference makes, which no page asks for, and the five FDT settings neither front end exposes.
+  an inference makes, which no page asks for, and the random seed, which the window draws itself.
 
 Four settings stand only on the Training page, for its own run: the checkpoint cadence, the resume
 policy, the epoch limit and the expected epochs. A page of the old kind, whose run reads none of them
@@ -64,13 +63,13 @@ def _drive(name: str) -> str:
 def _in(place) -> str:
     """Where a control is, as a sentence says it: ``"in step 5, Inference"``, and for a tuple its places in
     their turn as ``keys.places_words`` joins them: ``"in step 3, Training, or step 6, Narrowing round"``,
-    ``"in step 5, Inference, or in Live simulation"``. KeyError for a place the window does not have."""
+    ``"in step 5, Inference, or in Records"``. KeyError for a place the window does not have."""
     return "in " + keys.places_words(place if isinstance(place, tuple) else (place,))
 
 
 CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # the observation and the training budget
-    "t_obs": (("infer", "live"), "T_obs (s)"),   # Live simulation's box too
+    "t_obs": ("infer", "T_obs (s)"),
     "num_runs": (("training", "narrowing"), "Batches"),
     "run_size_cap": (("training", "narrowing"), "Simulations per batch"),
     "checkpoint_every": ("training", "Save the simulations every … batches"),
@@ -110,38 +109,23 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "accept_truncated": (f"Answer 'Load this posterior' in the question that loading a posterior from a narrowing "
                          f"round asks {_in('training')}."),
     "accept_other_observation": f"Tick 'Run on a different observation' {_in('infer')}.",
-    # A name and a note are typed in several boxes, and each sentence lists them all: 'Name' on step 2 names the
-    # prior a build makes, 'Name' on step 3 the posterior a training makes, and a run's record and a comparison's
-    # are named in boxes of their own on the two pages of Effective temperature, so a taken comparison name is sent
-    # to the 'Comparison name' box, not the run's.
-    "name": (f"Choose another name in 'Name' {_in(('prior', 'training'))}, or in the 'Record name' or 'Comparison "
-             f"name' box {_in(('temperature/one_cell', 'temperature/sweep'))}."),
+    # A name is typed in two boxes, and the sentence lists both: 'Name' on step 2 names the prior a build makes,
+    # 'Name' on step 3 the posterior a training makes.
+    "name": f"Choose another name in 'Name' {_in(('prior', 'training'))}.",
     # the observation an inference makes: no page names it, so no control answers its name
     "observation_name": None,
     # Records. Sentences, not (place, label), although Records is a place: the list is not a box, and
     # the Note box sits in its action row, not in a form row the read-back pin reads.
     "artifact": f"Select an artifact in the list {_in('records')}.",
-    "note": (f"Edit it in the Note box {_in('records')}, or in the 'Note' or 'Comparison note' "
-             f"box {_in(('temperature/one_cell', 'temperature/sweep'))}."),
-    # A sentence and not a (place, label) pair: the comparison list is one control that appears on
-    # both pages of Effective temperature, under a different row on each. Both rows are quoted, and the
-    # verb is "Choose", not "Add": a mode's ceiling ("at most 2") and a run named twice are fixed by
-    # REMOVING one.
-    "compare_records": (f"Choose the records in the 'Runs to compare' list {_in('temperature/one_cell')}, "
-                        f"or in the 'Sweeps to compare' list {_in('temperature/sweep')}."),
-    # The two mode settings, each a box the comparison controls build: the renormalise mode's
-    # constant on One cell, the sweeps mode's slice point on Sweep study.
-    "prefactor": ("temperature/one_cell", "Normalisation constant"),
-    "slice_at": ("temperature/sweep", "Slice at"),
-    # inputs. The cell picker and the model combo appear in several places at once and each entry
-    # names them ALL: a bad cell chosen for the effective temperature used to be answered with step 5
-    # alone. ``units`` is NOT widened -- one units control exists in the whole application (the
-    # choice of step 1); everywhere else the units file is resolved from the model and there is no
-    # control to name.
+    "note": f"Edit it in the Note box {_in('records')}.",
+    # comparing saved records of the effective temperature: the window no longer has a control for any of the three
+    "compare_records": None, "prefactor": None, "slice_at": None,
+    # inputs. ``units`` is NOT widened -- one units control exists in the whole application (the choice of step 1);
+    # everywhere else the units file is resolved from the model and there is no control to name.
     "bounds": ("prior", "Bounds file"),
-    "cell": (("infer", "temperature/one_cell", "temperature/sweep", "live", "reduction"), "Cell"),
+    "cell": ("infer", "Cell"),
     "units": ("model", "Units"),
-    "model": (("model", "temperature/one_cell", "live"), "Model"),
+    "model": ("model", "Model"),
     "device": None,
     "prior": ("prior", "Saved prior"),
     "posterior": ("training", "Saved posterior"),
@@ -165,23 +149,12 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # a run plan: the thing to correct is the file, so the sentence names no box
     "plan": "Correct the file, then choose the plan again.",
     "expected_epochs": ("training", "Expected epochs (for the time estimate only)"),
-    # the two secondary analyses, one page each: the label is the row the panel builds, so label(key)
-    # keeps a box and its hint sentence from drifting apart; the Seed rows too are built from
-    # label("seed") on both panels.
-    # The two labels are the words the rows SHOW: the raw forms "ensemble_M" and "freqs_per_batch"
-    # rendered as "M_ensemble" and "freqs / batch", so the fix sentence named a box the page does not
-    # show. pretty_gui still renders "M_ensemble" with its subscript; no QSettings key is a label
-    # (each panel writes its own literal key names).
-    "n_freqs": (("temperature/one_cell", "temperature/sweep"), "n_freqs"),
-    "ensemble_m": (("temperature/one_cell", "temperature/sweep"), "M_ensemble"),
-    "freqs_per_batch": (("temperature/one_cell", "temperature/sweep"), "freqs / batch"),
-    "f0": (("temperature/one_cell", "temperature/sweep", "reduction"), "F0 (ND forcing amplitude)"),
-    "preset": ("temperature/sweep", "Preset"),
-    "s_grid": ("temperature/sweep", "S grid  (T_a/T = 1)"),
-    "t_grid": ("temperature/sweep", "T_a/T grid  (S = 0)"),
-    "seed": (("temperature/one_cell", "temperature/sweep"), "Seed"),
-    # the five FDT settings NEITHER front end exposes: no control, so fix_sentence returns "" and
-    # the refusal names the setting and offers no fix
+    # the effective temperature's settings: the window no longer has a control for any of them
+    "n_freqs": None, "ensemble_m": None, "freqs_per_batch": None, "f0": None, "preset": None, "s_grid": None,
+    "t_grid": None,
+    # the random seed: the window draws one itself, and no page asks for it
+    "seed": None,
+    # the effective temperature's settings that neither front end exposes
     "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None, "dt_nd": None, "psd_t_obs_nd": None,
     # the model builder, in Your own models. The parameter rows repeat per parameter, so the label is
     # the row's own ("value" / "min" / "max") and the message names which parameter.
@@ -195,9 +168,8 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # tau, ...), built per kind, so there is no one label(key) to build a row from.
     "forcing_value": ("Set it in the forcing parameter's own box, beneath the variable's 'forcing' "
                       f"choice, {_in('models')}."),
-    # the live simulation
-    "frame_steps": ("live", "Steps / frame"),
-    "fps": ("live", "Max FPS"),
+    # the live simulation's two settings: the window no longer has a control for either
+    "frame_steps": None, "fps": None,
     # tool-only: the diagnostics' knobs; no window sentence
     "repeats": None, "n_points": None, "n_worst": None, "top_n": None, "m": None, "m_noise": None,
     "rel": None, "min_valid": None, "rows": None, "n_sweep": None, "chi_k_fixed": None,
@@ -401,8 +373,8 @@ def label(key: str) -> str:
 
 
 def fix_sentence(key: str | None, here: str | None = None) -> str:
-    """What the yellow box says under the message: ``"Set it in the 'T_obs (s)' box in step 5, Inference,
-    or in Live simulation."`` for a box entry, the sentence itself for a sentence entry, ``""`` for
+    """What the yellow box says under the message: ``"Set it in the 'T_obs (s)' box in step 5, Inference."``
+    for a box entry, the sentence itself for a sentence entry, ``""`` for
     ``field=None``, a None entry or an unknown key. It runs while a refusal is being shown, so it never
     raises for a key of the table: every place the table names is a place of the window, and the pin
     renders every entry.

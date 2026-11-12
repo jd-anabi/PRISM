@@ -48,8 +48,8 @@ SIMULATION_ROW = "Generating training data"
 #: What the model itself says when a record of the fit shows that the fit has ended: its count since the best
 #: has reached the patience, or its epoch is the limit plus one. A stage may begin with it.
 FIT_ENDED = "fit_ended"
-#: The readings that leave out the stage in progress: it is not drawn on the stage line.
-LEAVES_OUT = ("fdt_sanity_skipped",)
+#: The readings that leave out the stage in progress: it is not drawn on the stage line. No reading does so now.
+LEAVES_OUT: tuple[str, ...] = ()
 #: The opening word of a message of each kind.
 LEADS = {"warn": "Attention", "err": "Error", "info": "Information"}
 
@@ -838,7 +838,7 @@ class RunModel:
 
     def _counted_by(self, counts) -> int | None:
         """The stage a count belongs to: the stage running, when it is counted so; else the first stage after it,
-        not yet begun, that is. Two stages counted alike (the two sweeps of a study) are counted in turn."""
+        not yet begun, that is. Two stages counted alike are counted in turn."""
         if self._current is not None and counts(self._stages[self._current]):
             return self._current
         return next((i for i, stage in enumerate(self._stages) if counts(stage) and i not in self._began

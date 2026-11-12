@@ -155,7 +155,7 @@ class BasePanel(RunHost, QWidget):
         self.log_pane = LogPane()
 
         # Stored as attributes so a subclass can insert its own primary view above the figure stack
-        # (e.g. SimulatePanel mounts a live pyqtgraph view here and hides the static figure stack).
+        # (a panel may mount a live view of its own here and hide the static figure stack).
         # The figures and the lines are a VERTICAL SPLITTER, not a fixed 3:1 stretch. The log pane used to
         # hold ~25% of the height whether it had one line in it or a thousand, with no handle to drag
         # -- that is the other half of "panes have to be dragged to show everything": here there was
@@ -253,7 +253,7 @@ class BasePanel(RunHost, QWidget):
     def insert_result_widget(self, index: int, widget, stretch: int = 1) -> None:
         """Mount a panel-specific primary view in the results column, above the figure stack.
 
-        SimulatePanel puts a live pyqtgraph view here and hides the static figure stack. The figures
+        A panel may put a live view of its own here and hide the static figure stack. The figures
         and the lines are a QSplitter, so a view inserted beside them by hand would land in the wrong
         parent; this is the supported seam. Going through it also means the live view gets a drag
         handle like everything else in that column.
@@ -292,7 +292,7 @@ class BasePanel(RunHost, QWidget):
         blob = qs.value(f"layout/{self.layout_key()}/splitter")
         if blob is not None and not self.splitter.restoreState(blob):
             self.splitter.setSizes(list(DEFAULT_SPLIT))     # stale/incompatible -> sane default
-        # The results split has a variable child count (SimulatePanel inserts a live view), so
+        # The results split has a variable child count (a panel may insert a live view), so
         # restoreState legitimately fails after such a change -- fall back rather than ignore.
         rblob = qs.value(f"layout/{self.layout_key()}/results")
         if rblob is not None and not self.results_split.restoreState(rblob):

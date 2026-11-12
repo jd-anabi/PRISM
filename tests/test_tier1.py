@@ -12,14 +12,13 @@ to ``x_scale / t_scale`` -- 16.66 at the same cell -- so a drive recorded withou
 means a caller handed a builder neither name. The retrain trains on this box, so every place a
 simulation is set up from a draw is pinned here: the training rows, the calibration set, the Fisher
 operating points, a simulated observation and its predictive checks, the two simulating
-identifiability diagnostics, the Simulate panel's live runner, a narrowing round, and loading a prior
+identifiability diagnostics, a narrowing round, and loading a prior
 built on the master box. So is what the records say about it: the relation and the assumed parameters
 in every record's config, and the force scale a simulated observation ran at.
 
-Cheap by design: every fast test but the live runner's replaces ``pipeline.gen_obs`` with
-``stand_in_gen_obs`` and records the force scale each drive is divided by with ``force_scale_spy``;
-recordings are one to two seconds and batches are two of four rows. The live runner solves five
-milliseconds for real. One slow test runs the real ``smoke`` chain on the tier-1 box.
+Cheap by design: every fast test replaces ``pipeline.gen_obs`` with ``stand_in_gen_obs`` and records
+the force scale each drive is divided by with ``force_scale_spy``; recordings are one to two seconds
+and batches are two of four rows. One slow test runs the real ``smoke`` chain on the tier-1 box.
 """
 import warnings
 from types import SimpleNamespace
@@ -400,22 +399,6 @@ def test_jacobian_simulates_a_tier1_box_at_its_derived_force_scale(monkeypatch, 
                                                     4, True)
     assert np.allclose(got, want, rtol=1e-4, atol=1e-8, equal_nan=True)
     _assert_every_drive_used_the_derived_scale(spy[:n_tier1], derived_force_scale(cfg), rtol=1e-5)
-
-
-def test_the_live_simulation_derives_the_force_scale_on_a_tier1_box(monkeypatch):
-    """The Simulate panel's live runner plans with the simulator's block and index, keeps reading the
-    length scale from the inferred block, and builds every frame's drive at the derived force scale."""
-    from core.gui.panels import simulate_runner
-    cfg = with_truth(tier1_cfg(chi=False))
-    f = derived_force_scale(cfg)
-    plan = simulate_runner.plan_stream(cfg, 0.005)
-    assert plan.rescale_idx == {"x_scale": 0, "t_scale": 1, "f_scale": 2}
-    assert float(plan.rescale_gt[0, 2]) == pytest.approx(f, rel=1e-5)
-    assert plan.x_scale == pytest.approx(62.14)
-    spy, chunks = force_scale_spy(monkeypatch), []
-    simulate_runner.run_simulation_stream(cfg, 0.005, frame_steps=500, fps=0.0, emit_chunk=chunks.append)
-    assert chunks
-    _assert_every_drive_used_the_derived_scale(spy, f, rtol=1e-5)
 
 
 def test_temperature_is_the_one_assumed_parameter_and_reports_carry_its_unit_and_mark():

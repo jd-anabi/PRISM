@@ -31,9 +31,9 @@ stage after the run's first has begun, and the store holds no record of a kind t
 Its two files are removed, the controller is idle again with nothing to acknowledge, and the page shows the refusal
 as it shows one made at the click.
 
-A run that only loads a record, a live simulation and a video export keep no file and end straight into idle, with
-nothing to acknowledge; but a live simulation or a video export that fails leaves an end of its own, its failure, which
-the foot says until it is seen or the next run starts, with nothing written for it: its id names no file, and the end
+A run that only loads a record keeps no file and ends straight into idle, with nothing to acknowledge; a run that
+keeps no file and does more than load (no page of the window starts one now) ends so too, but when it fails it leaves
+an end of its own, its failure, which the foot says until it is seen or the next run starts, with nothing written for it: its id names no file, and the end
 that waited to be seen as it started is given back once its own is seen, as a run that ends into idle gives it back.
 
 A stop asked for (``request_stop``) is taken at the run's next point where a stop is taken and can be withdrawn
@@ -434,8 +434,8 @@ class RunController(QObject):
 
             worker, token = self._worker(run, kwargs)
             stack = getattr(host, "figure_stack", None)
-            # One watcher for each folder: a watcher reads one folder and not the folders under it, and a sweep
-            # study writes two records. The controller holds them, so a page deleted during the run takes none
+            # One watcher for each folder: a watcher reads one folder and not the folders under it, and a run may
+            # write more than one record. The controller holds them, so a page deleted during the run takes none
             # with it.
             for one in ([] if watch_dir is None else
                         [watch_dir] if isinstance(watch_dir, (str, Path)) else list(watch_dir)):
@@ -820,8 +820,8 @@ class RunController(QObject):
             self.status_changed.emit(self._status)
 
     def _unfiled_end(self) -> bool:
-        """Whether the status is the end of the run the controller holds that keeps no file: a live simulation or a
-        video export that failed, said with nothing written for it, until it is seen or the next run starts."""
+        """Whether the status is the end of the run the controller holds that keeps no file: a run that does more
+        than load and failed, said with nothing written for it, until it is seen or the next run starts."""
         held = self._run
         return (held is not None and not held.spec.keeps_files and held.id is not None
                 and self._status.unacknowledged_end and self._status.run == held.id)
@@ -1172,7 +1172,7 @@ class RunController(QObject):
         spec, failure = run.spec, run.failure
         model.ended(run.outcome, kept_fit=run.kept_fit)
         run.ended = (self._clock or _local_now)()
-        # A run that keeps no file and has a place (a live simulation, a video export) that failed once something was
+        # A run that keeps no file and has a place, and does more than load, that failed once something was
         # spent leaves an end of its own all the same: an id names it, which names no file, and nothing is written.
         unfiled = (not spec.keeps_files and not spec.loads_only and not refused_early and run.outcome == "failed"
                    and spec.place is not None)

@@ -1,8 +1,7 @@
 """The PRISM main window: the rail down its left edge and, beside it, the page of the part in sight -- Home,
-Parameter inference (the six steps over one session, each a page of its own), Effective temperature (one cell,
-or a sweep study), Live simulation, Reduction map, Records, Your own models (their list and the model builder),
-Settings and Help. The window is built with Home alone; every other part is built the first time it is opened,
-and one that cannot be built shows why in its place while the rest of the window works. The panels inside the
+Parameter inference (the six steps over one session, each a page of its own), Records, Your own models (their list
+and the model builder), Settings and Help. The window is built with Home alone; every other part is built the first
+time it is opened, and one that cannot be built shows why in its place while the rest of the window works. The panels inside the
 parts are reused unchanged in behaviour. ``go_to`` is the one way to move between the parts; the run's state
 stands at the rail's foot."""
 import logging
@@ -20,11 +19,7 @@ from core.config import VALID_MODELS
 
 from . import chain, continuing, design, keys, one_instance, record_words, remembered, settings, style, this_computer
 from .panels.base_panel import BasePanel
-from .panels.crossval_panel import CrossValPanel
-from .panels.fdt_panel import FdtPanel
 from .panels.inference_tabs import ConfigPanel, InferPanel, PosteriorPanel, PriorPanel, TSNPEPanel, ValidatePanel
-from .panels.reduction_panel import ReductionPanel
-from .panels.simulate_panel import SimulatePanel
 from .reported import reported
 from .run import ends, history, questions
 from .run.controller import controller
@@ -36,7 +31,6 @@ from .screens.inference_screen import InferenceScreen
 from .screens.models_screen import PAGES as MODEL_PAGES, ModelsScreen
 from .screens.settings_screen import SettingsScreen
 from .screens.shell import PartError, Shell
-from .screens.temperature_screen import TemperatureScreen
 from .session import SbiSession
 from .widgets.artifact_picker import StorePicker
 from .widgets.ask import ask
@@ -102,13 +96,11 @@ def _centre_on_primary(widget) -> None:
 _PARTS = tuple(place.key for place in keys.PARTS)
 
 # the keys of the pages of each part that has several, in their order: a page another key names is refused
-_PAGES = {"temperature": tuple(place.key for place in keys.PAGES["temperature"]),
-          "inference": tuple(place.key for place in keys.STEPS), "models": MODEL_PAGES}
+_PAGES = {"inference": tuple(place.key for place in keys.STEPS), "models": MODEL_PAGES}
 
 # the part that holds each kind of panel, which ``panel`` builds when it is asked for a panel no part built holds
-_PANEL_PARTS = {ReductionPanel: "reduction", FdtPanel: "temperature", CrossValPanel: "temperature",
-                ConfigPanel: "inference", PriorPanel: "inference", PosteriorPanel: "inference",
-                ValidatePanel: "inference", InferPanel: "inference", TSNPEPanel: "inference", SimulatePanel: "live"}
+_PANEL_PARTS = {ConfigPanel: "inference", PriorPanel: "inference", PosteriorPanel: "inference",
+                ValidatePanel: "inference", InferPanel: "inference", TSNPEPanel: "inference"}
 
 # Every place but Home and Settings stands the same distance in from the rail, from the window's right edge, from
 # its top and from its bottom, to its first frame or its first line: this many pixels at the ordinary text size,
@@ -117,7 +109,7 @@ _PLACE_MARGIN = 12
 # how far in a part's own first frame or first line stands already, at every text size: a panel's frame 6, the
 # toolkit's own margin round a layout that sets none 9, a frame at the part's very edge 0. The window gives each
 # part the rest of the place's margin.
-_OWN_INSET = {"inference": 6, "temperature": 6, "live": 6, "reduction": 6, "records": 9, "models": 0, "help": 9}
+_OWN_INSET = {"inference": 6, "records": 9, "models": 0, "help": 9}
 
 
 def _is_a_button(widget: QWidget) -> bool:
@@ -385,19 +377,12 @@ class MainWindow(QMainWindow):
 
     # ── the parts, each built when first opened ───────────────────────────────
     def _make(self, name: str) -> QWidget:
-        """The top widget of the part ``name``, built now: the Reduction map and Live simulation are their panels
-        themselves, Effective temperature chooses between its two by name, Parameter inference holds its six
-        steps, and Your own models hands a model saved or deleted to the window."""
+        """The top widget of the part ``name``, built now: Parameter inference holds its six steps, and Your own models
+        hands a model saved or deleted to the window."""
         if name == "home":
             return HomeScreen(self._home_facts)
         if name == "inference":
             return InferenceScreen()
-        if name == "temperature":
-            return TemperatureScreen()
-        if name == "live":
-            return SimulatePanel()
-        if name == "reduction":
-            return ReductionPanel()
         if name == "records":
             # A plain QWidget, not a BasePanel -- a run anywhere must not grey out the log you are reading.
             return ArtifactScreen()
@@ -468,10 +453,6 @@ class MainWindow(QMainWindow):
             # what the window last read on offer, which the screen holds until it reads again.
             widget.states_changed.connect(self._states_changed)
             widget.seed_offers(self._offers)
-        elif name == "temperature":
-            # A page chosen by its name is said as a move: connected after the part's own handler, which shows the
-            # page.
-            widget.names.chosen.connect(self._page_chosen)
         elif name == "records":
             # A change of the store works out the gates and the states again, after the pickers have listed it.
             widget.store_changed.connect(self._store_changed)
@@ -488,9 +469,7 @@ class MainWindow(QMainWindow):
     def _panels_of(name: str, widget: QWidget) -> list:
         """The panels of the part ``name``, whose top widget is ``widget``, in their order; none for a part that
         holds no panel."""
-        if name in ("reduction", "live"):
-            return [widget]
-        if name in ("temperature", "inference"):
+        if name == "inference":
             return widget.panels()
         return []
 
@@ -566,10 +545,10 @@ class MainWindow(QMainWindow):
                 picker.refresh()
 
     def _all_panels(self):
-        """The panels of the parts built, in this order: the Reduction map, Effective temperature's two, the six
-        steps, Live simulation. A part not built yet has none."""
-        return [panel for name in ("reduction", "temperature", "inference", "live") if name in self._built
-                for panel in self._panels_of(name, self._built[name])]
+        """The panels of the parts built: the six steps of Parameter inference, the one part that holds panels. A part
+        not built yet has none."""
+        built = self._built.get("inference")
+        return [] if built is None else self._panels_of("inference", built)
 
     # ── Home ──────────────────────────────────────────────────────────────────
     def _step_states(self) -> tuple:
@@ -706,13 +685,13 @@ class MainWindow(QMainWindow):
         return part, (current() if callable(current) else None)
 
     def go_to(self, part: str, page: str | None = None) -> None:
-        """Show the part ``part`` and, when one is named, its page: a step of Parameter inference, a page of
-        Effective temperature, or for Records the kind of record it lists. A part not yet opened is built first,
+        """Show the part ``part`` and, when one is named, its page: a step of Parameter inference, a page of Your own
+        models, or for Records the kind of record it lists. A part not yet opened is built first,
         its row of the rail marked before it is. Then mark the rail, give the page the keyboard and say where the
         window is, all before returning. Parameter inference opened with no step shows the step in hand the first
         time and the step last shown after that; every step opens, one that cannot start yet too. Home is read
         again each time it is opened. A part the window does not have, or a page that a part of several pages does
-        not have -- Parameter inference, Effective temperature, Your own models -- raises KeyError before anything
+        not have -- Parameter inference, Your own models -- raises KeyError before anything
         moves or is built; a page named for a part of one page is not read, and a kind of record Records does not
         list leaves Records at the kind it showed."""
         self._move(part, page, keyboard=Qt.OtherFocusReason)
@@ -906,11 +885,6 @@ class MainWindow(QMainWindow):
             self._to_page()
         else:
             self.shell.rail.take_keyboard()
-
-    def _page_chosen(self, page: str) -> None:
-        """A person chose a page of Effective temperature by its name, which only a part in sight offers: the move
-        is said, as go_to says one, and the rail keeps the part marked."""
-        self.place_changed.emit("temperature", page)
 
     # ── the run, at the foot of the rail ──────────────────────────────────────
     def _on_status(self, status) -> None:

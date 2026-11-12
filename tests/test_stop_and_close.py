@@ -123,27 +123,6 @@ _CASES = {
         RunSpec("Inference", ("inference", "infer"), stop_button="Stop the inference…"), None,
         ("Stop the inference?", "The inference is not kept. An observation it has already written stays in Records.",
          "", "Stop the inference", "Keep it running", True)),
-    "measurement": (
-        RunSpec("Measurement", ("temperature", "one_cell"), name="cell_a_3oct", stop_button="Stop measurement…"),
-        4_320, ("Stop measurement?", "It has run for 1 hour 12 minutes. The record cell_a_3oct is kept, marked "
-                "unfinished, with what it has measured so far. A measurement cannot be continued; to finish it, it is "
-                "measured again from the start.", "", "Stop and keep what is measured", "Keep measuring", True)),
-    "sweep study": (
-        RunSpec("Sweep study", ("temperature", "sweep"), name="study", stop_button="Stop sweep study…"), 20_400,
-        ("Stop sweep study?", "It has run for 5 hours 40 minutes. What the study has measured is kept, marked "
-         "unfinished; a study cannot be continued.", "", "Stop the study", "Keep measuring", True)),
-    "comparison": (
-        RunSpec("Comparison", ("temperature", "one_cell"), stop_button="Stop the comparison…"), None,
-        ("Stop the comparison?", "A comparison writes its record only when it finishes, so nothing of this one is "
-         "kept.", "", "Stop the comparison", "Keep comparing", True)),
-    "reduction map": (
-        RunSpec("Reduction map", ("reduction", None), stop_button="Stop computing…"), None,
-        ("Stop computing the map?", "The map will not be shown. If its table is already written, that file stays in "
-         "the reduction folder.", "", "Stop computing", "Keep computing", True)),
-    "video": (
-        RunSpec("Video", ("live", None), stop_button="Stop saving…", keeps_files=False), None,
-        ("Stop saving the video?", "The unfinished file is removed. The trace stays and can be saved again.", "",
-         "Stop saving", "Keep saving", True)),
 }
 
 
@@ -363,21 +342,22 @@ def test_a_withdraw_between_the_checks_two_readings_wins_every_time():
                 {"raised": True, "withdrawn": False}, True, True, ["the run", mine]), (said, gate.entered)
 
 
-def test_live_simulations_and_a_loads_stop_ask_nothing_and_cannot_be_withdrawn(tmp_path):
-    """A live simulation's stop and a load's stop lose nothing, so they ask nothing: the stop is asked for at once,
-    no "Don't stop after all" is offered, and a withdraw is refused; each run ends stopped."""
+def test_a_stop_that_loses_nothing_and_a_loads_stop_ask_nothing_and_cannot_be_withdrawn(tmp_path):
+    """The stop of a run whose stop loses nothing (no page of the window starts one now; the spec is the test's own)
+    and a load's stop ask nothing: the stop is asked for at once, no "Don't stop after all" is offered, and a
+    withdraw is refused; each run ends stopped."""
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
     host, text = build_run_host(), RunText(held)
     view = host.run_view
-    live = StandIn(word="Live simulation", takes_stops=False)
-    start_run(host, live, spec=RunSpec("Live simulation", ("live", None), stop_button="Stop simulation",
-                                       keeps_files=False, stop_asks=False, own_view=True))
+    live = StandIn(word="Export", takes_stops=False)
+    start_run(host, live, spec=RunSpec("Export", ("inference", "infer"), stop_button="Stop the export",
+                                       keeps_files=False, stop_asks=False))
     forget_asked()
     view.stop_button.click()
     assert (all_asked(), held.status.stop_requested, view.withdraw_button.isVisibleTo(view)) == ([], True, False)
     assert (held.withdraw_stop(), held._run.token.requested.is_set(), held.status.stop_requested) == (
-        False, True, True), "a live simulation's stop was withdrawn"
+        False, True, True), "a stop that loses nothing was withdrawn"
     live.say("the next frame")
     _ended(app, held)
     loads = StandIn(word="Prior load", takes_stops=False)
@@ -678,14 +658,14 @@ def test_closing_during_a_run_asks_and_keeps_running_by_default(tmp_path, monkey
     a stop keeps; "Keep running", the safe answer, is what a question nobody answers gives: the window stays, and
     the run goes on. With a stop asked for already, it asks whether to close once the run has stopped, "Wait" the
     safe answer. The second answer is drawn as losing work where the stop's own is. A training in its simulation
-    is said to be there, at the batch it has reached; a measurement says once how long it has run."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    is said to be there, at the batch it has reached."""
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._window_helpers import shown_off_screen
     app = qt_app()
     clock = Clock(_at(8, 19, 2, 11))
     held, window = _controller_on(tmp_path, clock), build_window()
     shown_off_screen(window)
-    host, text = window.panel(ReductionPanel), RunText(held)
+    host, text = window.panel(InferPanel), RunText(held)
     stand_in = StandIn(takes_stops=False)
     start_run(host, stand_in, spec=_training())
     _say(app, stand_in, text, _BUDGET, _ROTATING, _ROTATED, _WRITING, _COMPLETE)
@@ -720,18 +700,6 @@ def test_closing_during_a_run_asks_and_keeps_running_by_default(tmp_path, monkey
         "Check Calibration is running.", "It has been running for less than a minute. A check writes its record only "
                                          "when it finishes, so nothing of this one is kept.", True)
     check.release()
-    _ended(app, held)
-    measuring = StandIn()
-    start_run(host, measuring, spec=RunSpec("Measurement", ("temperature", "one_cell"), name="cell_a_3oct",
-                                            stop_button="Stop measurement…"))
-    clock.advance(4_320)
-    window.close()
-    assert (asked().sentence, asked().beneath, asked().loses_work) == (
-        "Measurement cell_a_3oct is running.", "It has been running for 1 hour 12 minutes. The record cell_a_3oct is "
-                                               "kept, marked unfinished, with what it has measured so far. A "
-                                               "measurement cannot be continued; to finish it, it is measured again "
-                                               "from the start.", True)
-    measuring.release()
     _ended(app, held)
     simulating = StandIn()
     start_run(host, simulating, spec=_training())
@@ -878,12 +846,12 @@ def test_an_answer_given_after_the_run_ended_is_taken_as_too_late(tmp_path, monk
     open, and the run fails while the close's question is open. The answer, given after, is too late: nothing raises,
     nothing is stopped, the close is not carried out, and the page shows the run's end and says the stop came too
     late."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._window_helpers import shown_off_screen
     app = qt_app()
     held, window = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_window()
     shown_off_screen(window)
-    host, text = window.panel(ReductionPanel), RunText(held)
+    host, text = window.panel(InferPanel), RunText(held)
     view = host.run_view
     for how, answer, ask in (("finishes", "Stop training", view.stop_button.click),
                              ("fails", "Stop the run and close", window.close)):
@@ -1168,7 +1136,7 @@ def test_a_yes_to_the_close_shows_the_runs_page_wherever_the_close_was_asked(tmp
     saving = StandIn()
     start_run(host, saving, spec=_training())
     _to_the_fit(app, saving, text, clock, [(1, 0), (2, 20)])
-    assert closed_from(("temperature", "one_cell"), "Close when it is saved") == (
+    assert closed_from(("models", "builder"), "Close when it is saved") == (
         ("inference", "training"), True, "PRISM closes when the posterior is saved."), "the run's page is not in sight"
     assert view.keep_open_button.isVisible()
     view.keep_open_button.click()
@@ -1295,12 +1263,12 @@ def test_from_the_moment_windows_asks_no_question_is_shown(tmp_path, caplog):
     toolkit closes a shown window inside Windows' end message: the close is refused while a run is live, so that
     PRISM and its run go on until Windows ends them, and accepted when none is, with no question either way. With no
     run live, Windows is not answered that PRISM blocks."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._window_helpers import shown_off_screen
     app = qt_app()
     held, window = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_window()
     shown_off_screen(window)
-    host, text, stand_in = window.panel(ReductionPanel), RunText(held), StandIn()
+    host, text, stand_in = window.panel(InferPanel), RunText(held), StandIn()
     start_run(host, stand_in, spec=_training())
     _to_the_simulation(app, stand_in, text, held)
     blocked, unblocked = _Manager(), _Manager()
@@ -1329,7 +1297,7 @@ def test_shut_down_anyway_stops_the_run_once_and_cancel_never(tmp_path, monkeypa
     try then holding the moment it ended. Such a run counts as stopped by the person: Home offers to continue it no more
     than it offers a stop's."""
     from PySide6.QtCore import QTimer
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run import history
     from tests._runs import STOP_LINE
     from tests._window_helpers import shown_off_screen
@@ -1337,7 +1305,7 @@ def test_shut_down_anyway_stops_the_run_once_and_cancel_never(tmp_path, monkeypa
     clock = Clock(_at(8, 19, 2, 11))
     held, window = _controller_on(tmp_path, clock), build_window()
     shown_off_screen(window)
-    folder, host = tmp_path / "runs", window.panel(ReductionPanel)
+    folder, host = tmp_path / "runs", window.panel(InferPanel)
     check = StandIn()
     start_run(host, check, spec=RunSpec("Check", ("inference", "checks"), name="Calibration",
                                         stop_button="Stop the calibration…"))
@@ -1568,13 +1536,13 @@ def test_every_popped_out_figure_window_closes_with_the_main_one(tmp_path):
     stands where a person puts it, over the main window or under it, and is not minimised with it; when the main
     window closes, every such window closes with it, a minimised one too, so that nothing keeps the program running
     unseen."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.widgets.figure_window import ImageZoomWindow, InteractiveFigureWindow
     from tests._window_helpers import shown_off_screen
     app = qt_app()
     window = build_window()
     shown_off_screen(window)
-    stack = window.panel(ReductionPanel).figure_stack
+    stack = window.panel(InferPanel).figure_stack
     stack.add_figure("interactive", _picture(), _figure_pickle())
     stack.add_figure("a picture", _picture())
     opened = [_pop(stack, 0), _pop(stack, 1), _pop(stack, 1)]
@@ -1605,11 +1573,11 @@ def test_a_figure_popped_out_during_a_run_opens_as_its_picture(tmp_path):
     interactive copy could be built: the window's thread lays out no figure while a run builds its own; a window no
     window owns, as at any time. Its button says so meanwhile, for a figure that arrived before the run and one that
     arrived during it. Once the run has ended, it opens interactive again, and its button says that."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.widgets.figure_window import ImageZoomWindow, InteractiveFigureWindow
     app = qt_app()
     held, window = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_window()
-    host = window.panel(ReductionPanel)
+    host = window.panel(InferPanel)
     stack = host.figure_stack
     stack.add_figure("interactive", _picture(), _figure_pickle())
     interactive, held_tip, picture = ("Open an interactive, zoomable copy in a new window",
@@ -1617,7 +1585,7 @@ def test_a_figure_popped_out_during_a_run_opens_as_its_picture(tmp_path):
                                       "has ended", "Open a zoomable copy in a new window")
     assert _pop_button(stack, 0).toolTip() == interactive
     stand_in = StandIn()
-    start_run(host, stand_in, spec=RunSpec("Reduction map", ("reduction", None), stop_button="Stop computing…"))
+    start_run(host, stand_in, spec=RunSpec("Check", ("inference", "checks"), name="Calibration", stop_button="Stop the calibration…"))
     stack.add_figure("arrived during the run", _picture(), _figure_pickle())
     stack.add_figure("a picture", _picture())
     assert [_pop_button(stack, index).toolTip() for index in range(3)] == [held_tip, held_tip, picture], (
@@ -1643,13 +1611,13 @@ def test_a_figure_window_open_when_a_run_starts_shows_its_picture_until_the_run_
     from PySide6.QtCore import QEvent, Qt
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.widgets.figure_window import WAIT_TEXT
     from tests._window_helpers import shown_off_screen
     app = qt_app()
     held, window = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_window()
     shown_off_screen(window)
-    host = window.panel(ReductionPanel)
+    host = window.panel(InferPanel)
     stack = host.figure_stack
     stack.add_figure("interactive", _picture(1_800, 1_200), _figure_pickle())
     stack.add_figure("no picture", b"", _figure_pickle())
@@ -1663,7 +1631,7 @@ def test_a_figure_window_open_when_a_run_starts_shows_its_picture_until_the_run_
     real = figure.canvas.draw
     figure.canvas.draw = lambda: drawn.append("drawn") or real()
     stand_in = StandIn()
-    start_run(host, stand_in, spec=RunSpec("Reduction map", ("reduction", None), stop_button="Stop computing…"))
+    start_run(host, stand_in, spec=RunSpec("Check", ("inference", "checks"), name="Calibration", stop_button="Stop the calibration…"))
     assert (figure.picture.isVisibleTo(figure), figure.canvas.isVisibleTo(figure), figure.toolbar.isVisibleTo(figure),
             figure.picture.pixmap().isNull()) == (True, False, False, False), "the run's start did not show the picture"
     assert (bare.picture.text(), bare.picture.isVisibleTo(bare)) == (WAIT_TEXT, True)

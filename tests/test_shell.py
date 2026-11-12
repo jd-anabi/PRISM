@@ -36,12 +36,8 @@ HEAD = ("Home", "What to do next, where your work stands, and what each part is 
 FIRST_HEAD = ("What do you want to do?",
               "PRISM simulates models of the hair bundle, the motion sensor of the inner ear's hair cells, and infers "
               "a cell's model parameters from recordings. Nothing has been made yet.")
-CHOICES = [("&Watch a live simulation", "Needs nothing first. See a cell's bundle move as it is simulated.",
-            ("live", None)),
-           ("Begin parameter inference", "Six steps, each needing the one before. It starts with choosing a model.",
+CHOICES = [("&Begin parameter inference", "Six steps, each needing the one before. It starts with choosing a model.",
             ("inference", "model")),
-           ("Measure an effective temperature", "On one simulated cell, or in a sweep study over two parameters.",
-            ("temperature", None)),
            ("Read what each part is for", "A short section per part.", ("help", None))]
 PARTS = [(place.name, place.line) for place in keys.PARTS[1:]]
 # The window's own way to the front, read as this file is loaded: in a test not marked for the real screen a guard
@@ -215,7 +211,7 @@ def _ended_history(folder, run, records_root, **changed):
 
 def test_home_with_nothing_on_disk_opens_on_what_do_you_want_to_do():
     """On a computer where nothing has been made yet (no record, no run, no model chosen) Home opens on what a
-    person may do first. Its head asks the question and says what PRISM is; four buttons stand in their order,
+    person may do first. Its head asks the question and says what PRISM is; two buttons stand in their order,
     each with its sentence beside it, the first the main one; the parts of PRISM are listed, each with its line,
     and the latest records say there are none, with no way to all records. There is no next step and no table of
     the steps."""
@@ -227,10 +223,10 @@ def test_home_with_nothing_on_disk_opens_on_what_do_you_want_to_do():
     assert home.is_first_time()
     assert (head.title.text(), head.sentence.plain_text()) == FIRST_HEAD and _shown(home, head.sentence)
     assert [button.text() for button in home.choices] == [words for words, _sentence, _place in CHOICES]
-    assert [_shown(home, button) for button in home.choices] == [True] * 4
-    assert [button.property("cls") for button in home.choices] == ["primary", None, None, None]
+    assert [_shown(home, button) for button in home.choices] == [True] * 2
+    assert [button.property("cls") for button in home.choices] == ["primary", None]
     tops = [button.mapTo(home, button.rect().topLeft()).y() for button in home.choices]
-    assert tops == sorted(tops) and len(set(tops)) == 4, "the four buttons stand one under another, in their order"
+    assert tops == sorted(tops) and len(set(tops)) == 2, "the two buttons stand one under another, in their order"
     sentences = {label.plain_text(): label for label in home.findChildren(Sentence) if _shown(home, label)}
     for button, (_words, sentence, _place) in zip(home.choices, CHOICES):
         beside = sentences[sentence]
@@ -293,10 +289,10 @@ def test_home_mid_project_states_the_one_next_step_and_where_each_step_stands(mo
     assert (home.next_heading.label.text(), home.next_button.text()) == ("Next: build or load a prior", "&Open Prior")
     assert not [label for label in home.findChildren(Sentence) if _shown(home, label)
                 and label.plain_text() not in (HEAD[1], "No records yet.")], "a next step with no sentence shows one"
-    home = _home(_facts(_under_way(), run=_live("Sweep study", "study", ("temperature", "sweep"))))
-    assert home.next_heading.label.text() == "Next: nothing until the sweep study ends"
+    home = _home(_facts(_under_way(), run=_live("Check", "calibration_a", ("inference", "checks"))))
+    assert home.next_heading.label.text() == "Next: nothing until the check ends"
     sentences = [label.plain_text() for label in home.findChildren(Sentence) if _shown(home, label)]
-    assert ("Sweep study study is running, and no other run can start until it ends. You can still move around and "
+    assert ("Check calibration_a is running, and no other run can start until it ends. You can still move around and "
             "read results. Keep PRISM open; you can minimise it.") in sentences
     assert home.next_button.text() == "&Go to the run"
     long_name = "nadrowski_master_tier1_prior_2026_10_05"           # a record's name: one word, however long
@@ -331,8 +327,8 @@ def test_a_row_of_home_opens_its_place_on_a_click_enter_or_space():
         QTest.keyClick(view, key)
     assert heard == [], "a key opened a row though the keyboard is on none"
     for table, row, place in ((home.steps_table, 2, ("inference", "training")),
-                              (home.parts_table, 4, ("records", None)),
-                              (home.parts_table, 1, ("temperature", None)),
+                              (home.parts_table, 1, ("records", None)),
+                              (home.parts_table, 4, ("help", None)),
                               (home.records_table, 1, ("records", "simulation"))):
         view = table.view
         assert view.viewport().cursor().shape() == Qt.PointingHandCursor
@@ -408,17 +404,17 @@ def test_a_refresh_that_changes_nothing_keeps_the_keyboards_row():
     try:
         home.show()
         home.steps_table.select_row(3)
-        home.parts_table.select_row(5)
+        home.parts_table.select_row(4)
         home.records_table.select_row(2)
         home.refresh()
-        assert [table.selected_row() for table in (home.steps_table, home.parts_table, home.records_table)] == [3, 5, 2]
+        assert [table.selected_row() for table in (home.steps_table, home.parts_table, home.records_table)] == [3, 4, 2]
         assert home.steps_table.view.currentIndex().row() == 3
         held = _under_way()
         told[0] = _facts(_session(draft=held.draft, inf_prior=held.inf_prior, posterior=SimpleNamespace(name="q")),
                          _records())
         home.refresh()
         assert home.steps_table.selected_row() is None and home.steps_table.view.currentIndex().row() == -1
-        assert [home.parts_table.selected_row(), home.records_table.selected_row()] == [5, 2]
+        assert [home.parts_table.selected_row(), home.records_table.selected_row()] == [4, 2]
     finally:
         home.hide()
 
@@ -459,9 +455,9 @@ def test_home_keeps_one_main_button_and_its_access_key():
     """On each of Home's pages one button is the main one, of the main button's class, and it has an access key on
     its first letter; no other button on the page has one. It is where the keyboard starts on the page, and it
     opens a place and starts nothing."""
-    for facts, words, key in ((_facts(), "&Watch a live simulation", "Alt+W"),
+    for facts, words, key in ((_facts(), "&Begin parameter inference", "Alt+B"),
                               (_facts(_under_way(), _records()), "&Set up training", "Alt+S"),
-                              (_facts(_under_way(), run=_live("Live simulation", place=("live", None))),
+                              (_facts(_under_way(), run=_live("Check", place=("inference", "checks"))),
                                "&Go to the run", "Alt+G")):
         home = _home(facts)
         shown = [button for button in home.findChildren(QPushButton) if _shown(home, button)]
@@ -479,7 +475,6 @@ def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_s
     have lost it. A folder with no manifest is no record. A store with no record and nothing chosen opens Home on
     its first opening."""
     from core.artifacts import KIND_DIRS, ArtifactStore, use_store, write_simulation_manifest
-    from core.gui.panels.crossval_panel import CrossValPanel
     from core.SBI.training_checkpoint import identity_digest
     from tests._fixtures import build_browse_store
     qt_app()
@@ -510,8 +505,6 @@ def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_s
         assert rows[("simulation", held.id)].label == "Simulation set for browse_prior"
         assert rows[("fdt", ids["fdt"])].kind_word == "sweep"
         assert not window.part("home").is_first_time()
-        with running(window.panel(CrossValPanel)):
-            assert window._home_facts().run.place == ("temperature", "sweep") and window._home_facts().run.live
         with running(window.part("inference").posterior_panel):
             live = window._home_facts()
             assert (live.run.place, live.run.live) == (("inference", "training"), True)
@@ -565,28 +558,22 @@ def test_homes_records_name_an_unnamed_record_in_local_time_and_leave_out_what_c
 
 def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
     """Each place Home asks for is opened by ``go_to``: a part its own page (Help the help, Your own models their
-    list), a page of Effective temperature its page with its name marked, a step its page, one that
-    cannot start yet too, and a record's kind the records at that kind. Home reads again each time it is opened,
+    list), a step its page, one that cannot start yet too, and a record's kind the records at that kind. Home reads again each time it is opened,
     and while it is shown when the steps' states are worked out again, when a run starts or ends and when its end is
     seen; never on its own."""
     from core.artifacts import ArtifactStore, use_store
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.session import SbiSession
     qt_app()
     with use_store(ArtifactStore(tmp_path / "Artifacts")):
         window = build_window()
         home, stack = window.part("home"), window.shell.stack
-        for part in ("reduction", "temperature", "inference", "live", "records", "settings", "help", "models"):
+        for part in ("inference", "records", "settings", "help", "models"):
             home.navigate.emit(part, None)
             assert stack.currentWidget() is window.part(part), part
             home.navigate.emit("home", None)
             assert stack.currentWidget() is home
         assert window.part("models").current_page() == "list"
-        for page, panel in (("sweep", 1), ("one_cell", 0)):
-            home.navigate.emit("temperature", page)
-            screen = window.part("temperature")
-            assert (window.current_place(), screen.names.current()) == (("temperature", page), page)
-            assert screen.panels()[panel].isVisibleTo(screen) and not screen.panels()[1 - panel].isVisibleTo(screen)
         home.navigate.emit("records", "posterior")
         assert (window.current_place(), window.part("records").kind()) == (("records", None), "posterior")
         home.navigate.emit("inference", "infer")
@@ -608,7 +595,7 @@ def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
             assert home.is_first_time(), "Home read while it was shown and nothing told it to"
             window.part("inference").refresh_gates()
             assert not home.is_first_time() and home.next_heading.label.text() == "Next: build or load a prior"
-            home.navigate.emit("live", None)
+            home.navigate.emit("records", None)
             window.part("inference").session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"),
                                                          inf_prior=SimpleNamespace(name="p"))
             window.part("inference").refresh_gates()
@@ -616,7 +603,7 @@ def test_home_opens_each_part_step_and_kind_through_go_to(tmp_path):
             home.navigate.emit("home", None)
             assert home.next_heading.label.text() == "Next: start a training", (
                 "Home stated what it read when it was left")
-            with running(window.panel(CrossValPanel)):
+            with running(window.panel(InferPanel)):
                 assert home.next_heading.label.text() == "Next: nothing until the training ends"
             assert home.next_heading.label.text() == "Next: see the training", "Home did not read as the run ended"
             controller().acknowledge(controller().status.run)
@@ -631,7 +618,7 @@ def test_in_the_window_home_reads_nothing_while_another_place_is_shown(tmp_path,
     again, it reads once."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui import main_window
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     reads, read = [], main_window._home_records
     monkeypatch.setattr(main_window, "_home_records", lambda store: (reads.append(store), read(store))[1])
@@ -644,17 +631,17 @@ def test_in_the_window_home_reads_nothing_while_another_place_is_shown(tmp_path,
 
     with use_store(ArtifactStore(tmp_path / "Artifacts")):
         window = build_window()
-        home, panel = window.part("home"), window.panel(CrossValPanel)
+        home, panel = window.part("home"), window.panel(InferPanel)
         assert len(reads) == 1, "Home did not read as it was built"
         assert run_starts_and_ends() == (1, 1), "Home read while the window was not shown"
         window.setAttribute(Qt.WA_DontShowOnScreen)
         try:
             window.show()
             assert len(reads) == 2, "Home marked to read again did not read when it was shown"
-            home.navigate.emit("live", None)
+            home.navigate.emit("settings", None)
             assert len(reads) == 2, "Home read as another place was opened"
             assert run_starts_and_ends() == (2, 2), "Home read while another place was shown"
-            home.navigate.emit("reduction", None)
+            home.navigate.emit("help", None)
             assert len(reads) == 2, "Home read at a move between two other places"
             home.navigate.emit("home", None)
             assert len(reads) == 3, "Home opened again did not read once"
@@ -767,12 +754,56 @@ def test_home_lists_the_last_runs_and_opens_one_in_its_past_view(tmp_path):
         assert page.full_text.lines()[-len(lines):] == [line[20:].partition(" ")[2] for line in lines]
 
 
+def test_an_old_run_of_a_place_this_window_no_longer_has_is_listed_and_opens_nothing(tmp_path, monkeypatch, caplog):
+    """A run an earlier PRISM made at a place this window no longer has -- a measurement of the effective
+    temperature, a sweep study, the reduction map, a live simulation -- stays in Home's "Last runs" in the words its
+    history holds. A press of its row raises nothing and moves nothing: the window's log says that the run's page no
+    longer exists, and an end of it nobody had seen is taken as seen, so that it is not said again."""
+    import logging
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import main_window
+    from core.gui.run import history
+    from core.gui.screens import home_screen
+    qt_app()
+    raised = []
+    monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: raised.append(f"{kind.__name__}: {error}"))
+    monkeypatch.setattr(main_window, "LAST_RUNS", 4)                # all four in the list at once
+    monkeypatch.setattr(home_screen, "LAST_RUNS", 4)
+    held, _clock = _on_the_runs_clock(tmp_path, _at(12, 9, 0))
+    root, folder = tmp_path / "Artifacts", tmp_path / "runs"
+    gone = (("20261001T120000-measurement", "Measurement", "cell_a", ["temperature", "one_cell"]),
+            ("20261002T120000-sweep-study", "Sweep study", "study_a", ["temperature", "sweep"]),
+            ("20261003T120000-reduction-map", "Reduction map", "", ["reduction", None]),
+            ("20261004T120000-live-simulation", "Live simulation", "", ["live", None]))
+    with use_store(ArtifactStore(root)):
+        for number, (run, word, name, place) in enumerate(gone, 1):
+            history.write(folder, {"id": run, "word": word, "name": name, "place": place, "records_root": str(root),
+                                   "started": _at(number, 12, 0), "ended": _at(number, 13, 0), "outcome": "finished",
+                                   "acknowledged": number != len(gone)})
+        window = build_window()
+        home = window.part("home")
+        assert [row[0] for row in _cells(home.runs_table)] == [
+            "Live simulation", "Reduction map", "Sweep study study_a", "Measurement cell_a"], _cells(home.runs_table)
+        view = home.runs_table.view
+        with caplog.at_level(logging.WARNING, logger="core.gui.main_window"):
+            for row in range(len(gone)):
+                QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier,
+                                 view.visualRect(view.model().index(row, 0)).center())
+                assert window.current_place() == ("home", None), f"row {row} moved the window"
+        assert raised == [], raised
+        said = [record.getMessage() for record in caplog.records if "no longer exists" in record.getMessage()]
+        assert len(said) == len(gone) and all(
+            f"The page of the run {run} no longer exists in this PRISM ({'/'.join(part for part in place if part)})"
+            in words for (run, _word, _name, place), words in zip(reversed(gone), said)), said
+        assert history.read(folder / f"{gone[-1][0]}.json")["acknowledged"] is True, "an unseen end was not seen"
+
+
 def test_a_live_run_ends_the_first_time_page(tmp_path):
     """On a computer where nothing has been made, Home opens on its first-time page. A run started from the window
     ends that page at once, while Home is in sight, and Home does not go back to it once the run has ended: the run
     is then in the history of the records folder in use."""
     from core.artifacts import ArtifactStore, use_store
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     held, _clock = _on_the_runs_clock(tmp_path)
     with use_store(ArtifactStore(tmp_path / "Artifacts")):
@@ -781,7 +812,7 @@ def test_a_live_run_ends_the_first_time_page(tmp_path):
         try:
             _shown_off_screen(window)
             assert home.is_first_time()
-            with running(window.panel(CrossValPanel)):
+            with running(window.panel(InferPanel)):
                 assert not home.is_first_time(), "a live run left the first-time page"
             assert not home.is_first_time()
             held.acknowledge(held.status.run)
@@ -836,12 +867,6 @@ def _marked(rail):
             if rail.row(key).property("ring_left")]
 
 
-def _name(screen, page):
-    """The name of the page ``page`` in the row of names over ``screen``'s pages."""
-    from PySide6.QtWidgets import QAbstractButton
-    return next(name for name in screen.names.findChildren(QAbstractButton) if name.place.key == page)
-
-
 def _button(widget, words):
     """The push button of ``widget`` that reads ``words``."""
     return next(button for button in widget.findChildren(QPushButton) if button.text() == words)
@@ -855,7 +880,7 @@ def _in_view(rail, row):
 
 
 def test_the_rails_places_are_the_parts_in_order_read_off_the_built_window():
-    """The rail lists the window's nine parts in their order, each by its name; a click on a row shows that part's
+    """The rail lists the window's six parts in their order, each by its name; a click on a row shows that part's
     own page, built at its first opening, and ``part`` gives the same page by the same key, so that the parts
     opened in the rail's order stand in the stack in that order. The six steps are rows of Parameter inference, in
     sight only while it is open."""
@@ -894,9 +919,9 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     before it returns, once a call, the same place too. Parameter inference opened with no step shows the step in
     hand the first time and the step last shown after that; a step that cannot start yet opens too, and the rail
     marks it. A part the window does not have, or a page its part does not have, is a mistake of the caller's,
-    refused before anything moves. The gates move no step and say nothing. A page of Effective temperature a
-    person chooses by its name is said as a move, the part's row marked; a page shown out of sight by anything
-    but ``go_to`` is not said. A click on the rail's row of a step that cannot start opens that step too."""
+    refused before anything moves. The gates move no step and say nothing. A page of Your own models opened by
+    ``go_to`` is said, the part's row marked; a page shown out of sight by anything but ``go_to`` is not said. A
+    click on the rail's row of a step that cannot start opens that step too."""
     from core.gui.session import SbiSession
     qt_app()
     window = build_window()
@@ -910,34 +935,32 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
     window.go_to("inference")
     assert said == [("inference", "prior", True, ["prior"])], "the first opening is not at the step in hand"
     window.go_to("inference", "model")
-    window.go_to("live")
+    window.go_to("records")
     window.go_to("inference")
-    assert said[1:] == [("inference", "model", True, ["model"]), ("live", None, True, ["live"]),
+    assert said[1:] == [("inference", "model", True, ["model"]), ("records", None, True, ["records"]),
                         ("inference", "model", True, ["model"])], "a later opening is not at the step last shown"
     window.go_to("inference", "infer")
     assert said[-1] == ("inference", "infer", True, ["infer"]), "a step that cannot start yet did not open"
-    window.go_to("temperature", "sweep")
-    window.go_to("temperature", "sweep")
-    assert said[-2:] == [("temperature", "sweep", True, ["temperature"])] * 2
-    assert window.part("temperature").current_page() == "sweep" and len(said) == 7
+    window.go_to("models", "builder")
+    window.go_to("models", "builder")
+    assert said[-2:] == [("models", "builder", True, ["models"])] * 2
+    assert window.part("models").current_page() == "builder" and len(said) == 7
     with pytest.raises(KeyError):
         window.go_to("nowhere")
-    assert (window.current_place(), _marked(rail), len(said)) == (("temperature", "sweep"), ["temperature"], 7), (
+    assert (window.current_place(), _marked(rail), len(said)) == (("models", "builder"), ["models"], 7), (
         "a part the window does not have moved the window")
-    _name(window.part("temperature"), "one_cell").click()         # its own row of names, while it is in sight
-    assert said[-1] == ("temperature", "one_cell", True, ["temperature"]) and len(said) == 8
     window.go_to("inference", "prior")
     inference.session = SbiSession()
     inference.refresh_gates()                                     # the step can no longer start: it stays shown
-    assert (said[-1], len(said), window.current_place()) == (("inference", "prior", True, ["prior"]), 9,
+    assert (said[-1], len(said), window.current_place()) == (("inference", "prior", True, ["prior"]), 8,
                                                              ("inference", "prior"))
     window.go_to("records")
-    window.part("temperature").show_page("sweep")                 # out of sight: nothing is said or marked
-    assert len(said) == 10 and _marked(rail) == ["records"]
-    for part in ("inference", "temperature", "models"):
+    window.part("models").show_page("list")                       # out of sight: nothing is said or marked
+    assert len(said) == 9 and _marked(rail) == ["records"]
+    for part in ("inference", "models"):
         with pytest.raises(KeyError):
             window.go_to(part, "nowhere")
-    assert (window.current_place(), _marked(rail), len(said)) == (("records", None), ["records"], 10), (
+    assert (window.current_place(), _marked(rail), len(said)) == (("records", None), ["records"], 9), (
         "a page its part does not have moved the window")
     window.go_to("inference", "model")
     rail.row("infer").click()                                     # the session is empty: Inference cannot start
@@ -957,18 +980,13 @@ def test_go_to_gives_the_page_the_keyboard_and_escape_in_the_rail_gives_it_back(
     window = build_window()
     rail = window.shell.rail
     first = {"home": window.part("home").first_focus(), "inference": window.part("inference").config_panel.model_combo,
-             "temperature": window.part("temperature").panels()[0].model_combo,
-             "live": window.part("live").model_combo, "records": window.part("records").kind_combo,
+             "records": window.part("records").kind_combo,
              "models": _button(window.part("models"), "Open model builder"),
              "settings": window.part("settings")._radios["system"], "help": window.part("help").viewer}
     for place in keys.PARTS:
         window.go_to(place.key)
         held = window.focusWidget()
-        if place.key == "reduction":
-            controls = window.part("reduction").controls
-            assert isinstance(held, QComboBox) and controls.isAncestorOf(held), held
-        else:
-            assert held is first[place.key], (place.key, held)
+        assert held is first[place.key], (place.key, held)
     window.go_to("records")
     rail.take_keyboard()
     assert rail.isAncestorOf(window.focusWidget())
@@ -992,7 +1010,7 @@ def test_a_mouse_click_on_a_rail_row_puts_no_ring_on_the_page():
     follower = style.FocusFollower(app)
     try:
         _shown_off_screen(window)
-        for (start, page), target in ((("live", None), "models"), (("models", "builder"), "live"),
+        for (start, page), target in ((("inference", "model"), "models"), (("models", "builder"), "records"),
                                       (("records", None), "settings"), (("models", "builder"), "inference")):
             window.go_to(start, page)
             field = window.focusWidget()
@@ -1042,30 +1060,30 @@ def test_a_click_on_a_rail_row_gives_the_page_no_keyboard_whatever_held_it_and_a
     try:
         _shown_off_screen(window)
         rail.row("home").setFocus(Qt.ActiveWindowFocusReason)          # the window comes to the front
-        for key in ("models", "inference", "temperature", "live", "reduction", "records", "settings", "help", "home"):
+        for key in ("models", "inference", "records", "settings", "help", "home"):
             click(key)
             held = window.focusWidget()
             assert rail.isAncestorOf(held) and follower.target() is None, (key, held, follower.target())
         rail.take_keyboard()                                             # a key brings it there: the ring shows
         assert follower.target() is rail.row("home")
-        marked = click("live")
+        marked = click("records")
         assert (window.focusWidget(), follower.target()) == (marked, None), "a ring was left in the rail"
         QTest.keyClick(window.focusWidget(), Qt.Key_Return)
-        first = window.part("live").model_combo
-        assert (window.current_place(), window.focusWidget(), follower.target()) == (("live", None), first, first)
-        rail.take_keyboard()
-        marked = click("records")
-        assert (window.focusWidget(), follower.target()) == (marked, None), "a key's opening outlived its key"
-        QTest.keyClick(window.focusWidget(), Qt.Key_Space)
         first = window.part("records").kind_combo
         assert (window.current_place(), window.focusWidget(), follower.target()) == (("records", None), first, first)
+        rail.take_keyboard()
+        marked = click("models")
+        assert (window.focusWidget(), follower.target()) == (marked, None), "a key's opening outlived its key"
+        QTest.keyClick(window.focusWidget(), Qt.Key_Space)
+        first = _button(window.part("models"), "Open model builder")
+        assert (window.current_place(), window.focusWidget(), follower.target()) == (("models", "list"), first, first)
     finally:
         window.hide()
         follower.stop()
 
 
 def test_a_page_named_by_go_to_takes_the_keyboard_on_its_own_first_setting():
-    """A move to a page of a part that has several -- Effective temperature's sweep study, a step of Parameter
+    """A move to a page of a part that has several -- the builder of Your own models, a step of Parameter
     inference -- puts the keyboard on a setting of that page, never on one of a page not shown."""
     from core.gui.session import SbiSession
     qt_app()
@@ -1073,11 +1091,11 @@ def test_a_page_named_by_go_to_takes_the_keyboard_on_its_own_first_setting():
     window.part("inference").session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"))
     window.part("inference").refresh_gates()
     held = {}
-    for part, page, panel in (("temperature", "sweep", window.part("temperature").panels()[1]),
+    for part, page, panel in (("models", "builder", window.part("models").builder),
                               ("inference", "prior", window.part("inference").prior_panel)):
         window.go_to(part, page)
         held[page] = (window.current_place(), panel.isAncestorOf(window.focusWidget()))
-    assert held == {"sweep": (("temperature", "sweep"), True), "prior": (("inference", "prior"), True)}, held
+    assert held == {"builder": (("models", "builder"), True), "prior": (("inference", "prior"), True)}, held
 
 
 def test_go_to_gives_the_keyboard_as_a_move_does(monkeypatch):
@@ -1094,7 +1112,7 @@ def test_go_to_gives_the_keyboard_as_a_move_does(monkeypatch):
         return kept(widget, *reason)
 
     monkeypatch.setattr(QWidget, "setFocus", set_focus)
-    for place in ("live", "models", "help", "home"):
+    for place in ("records", "models", "help", "home"):
         window.go_to(place)
     assert [reason for _widget, reason in given] == [(Qt.OtherFocusReason,)] * 4, given
     window.go_to("models", "builder")
@@ -1108,11 +1126,11 @@ def test_a_greyed_control_is_passed_over_for_the_next_setting():
     """A page whose first setting is greyed gives the keyboard to its next setting, not to nothing."""
     qt_app()
     window = build_window()
-    panel = window.part("live")
-    panel.model_combo.setEnabled(False)
-    window.go_to("live")
+    panel = window.part("records")
+    panel.kind_combo.setEnabled(False)
+    window.go_to("records")
     held = window.focusWidget()
-    assert held is not None and held is not panel.model_combo and panel.isAncestorOf(held) and held.isEnabled(), held
+    assert held is not None and held is not panel.kind_combo and panel.isAncestorOf(held) and held.isEnabled(), held
 
 
 def test_a_part_with_no_setting_keeps_the_keyboard_inside_it():
@@ -1216,7 +1234,7 @@ def test_the_foot_reads_nothing_is_running_at_start_and_follows_each_run_to_its_
     moment does the window keep a clock: what the foot says is the run's status alone, and no timer that repeats is
     started by the window, the shell or the rail, whatever its parent."""
     from PySide6.QtCore import QTimer
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     held, _clock = _on_the_runs_clock(tmp_path)
     window = build_window()
@@ -1231,7 +1249,7 @@ def test_the_foot_reads_nothing_is_running_at_start_and_follows_each_run_to_its_
         return _foot(window)
 
     assert foot() == idle and not hasattr(window, "_run_timer")
-    for panel in (window.panel(CrossValPanel), window.part("inference").posterior_panel):
+    for panel in (window.panel(InferPanel), window.part("inference").posterior_panel):
         with running(panel):
             assert foot() == ("now", "Training is running", "Running. Settings are locked.", True)
         assert foot() == ("done", "Training finished", "Thu 8 Oct, 19:02.", True), "the run's end is not said"
@@ -1281,15 +1299,14 @@ def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowh
     run has ended the foot is a button still, until its end is seen: a click goes to the run's place and sees it. A
     run of a panel the window has no place for -- the bare run host a test builds -- is named by its word in the
     foot's title and its accessible name; the foot is no button, live or ended, and the window stays where it is."""
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     given = _given(monkeypatch)
     window = build_window()
     foot, held = window.shell.rail.foot, controller()
-    for panel, place in ((window.panel(CrossValPanel), ("temperature", "sweep")),
+    for panel, place in ((window.panel(InferPanel), ("inference", "infer")),
                          (window.part("inference").validate_panel, ("inference", "checks"))):
         window.go_to("home")
-        window.part("temperature").show_page("one_cell")
         with running(panel):
             del given[:]
             QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
@@ -1302,32 +1319,28 @@ def test_clicking_the_foot_opens_the_running_place_and_a_bare_run_host_goes_nowh
         assert (window.current_place(), held.status.state, foot.is_button()) == (place, "idle", False), (
             f"{place}: a click on the foot of an ended run did not go to it and see its end")
     orphan = build_run_host()
-    window.go_to("live")
+    window.go_to("records")
     with running(orphan):
         assert (foot._title, foot.is_button()) == ("Training is running", False)
         assert (foot.accessibleName(), foot.toolTip()) == ("Training is running. Running. Settings are locked.", "")
         QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
         window.go_to_run()
-        assert window.current_place() == ("live", None), "a panel with no place moved the window"
+        assert window.current_place() == ("records", None), "a panel with no place moved the window"
     assert (foot._title, foot.is_button(), held.status.unacknowledged_end) == ("Training finished", False, True)
     QTest.mouseClick(foot, Qt.LeftButton, Qt.NoModifier, foot.rect().center())
     window.go_to_run()
-    assert window.current_place() == ("live", None), "an ended run with no place moved the window"
+    assert window.current_place() == ("records", None), "an ended run with no place moved the window"
 
 
 def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
     """A live run is said at the foot alone: no row of the rail is marked for it or carries a mark of it, no page
-    name does, and no row of Home's three tables, which Home reads in sight as the run starts; the page names keep
-    their words. Nothing is disabled by it: Home's main button goes to the run, every part and every step still
-    opens and no part is disabled as a whole, so that every list and page stays usable, and Effective
-    temperature's other page can still be chosen by its name."""
-    from PySide6.QtWidgets import QAbstractButton
-    from core.gui.panels.crossval_panel import CrossValPanel
+    name does, and no row of Home's three tables, which Home reads in sight as the run starts. Nothing is disabled by
+    it: Home's main button goes to the run, every part and every step still opens and no part is disabled as a whole,
+    so that every list and page stays usable, and the builder of Your own models still opens."""
+    from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     window = build_window()
     rail, home = window.shell.rail, window.part("home")
-    names = window.part("temperature").names.findChildren(QAbstractButton)
-    page_words = [name.text() for name in names]
     rows = [place.key for place in keys.PARTS] + [step.key for step in keys.STEPS]
 
     def seen():
@@ -1341,7 +1354,6 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
         with running(panel):
             assert home.next_heading.label.text() == "Next: nothing until the training ends", "Home did not read"
             assert seen() == before, "a row carries a mark of the run"
-            assert [name.text() for name in names] == page_words
             home.next_button.click()
             assert window.current_place() == where, (
                 f"Home's main button did not go to the run: {window.current_place()}")
@@ -1352,14 +1364,13 @@ def test_no_row_carries_a_mark_for_a_live_run_and_nothing_is_disabled():
             for step in keys.STEPS:
                 window.go_to("inference", step.key)
                 assert window.current_place() == ("inference", step.key) and rail.row(step.key).isEnabled()
-            window.go_to("temperature", "one_cell")
-            _name(window.part("temperature"), "sweep").click()
-            assert window.current_place() == ("temperature", "sweep") and all(name.isEnabled() for name in names)
+            window.go_to("models", "builder")
+            assert window.current_place() == ("models", "builder")
 
     try:
         _shown_off_screen(window)
         before = seen()
-        for panel, where in ((window.panel(CrossValPanel), ("temperature", "sweep")),
+        for panel, where in ((window.panel(InferPanel), ("inference", "infer")),
                              (window.part("inference").posterior_panel, ("inference", "training"))):
             during(panel, where)
     finally:
@@ -1474,10 +1485,10 @@ def test_the_foot_says_each_state_of_a_run_in_its_words(tmp_path, monkeypatch):
     builds.release()
     turn_until(app, lambda: not held.is_live())
     seen()
-    live = RunModel(RunSpec("Live simulation", ("live", None), keeps_files=False, stop_asks=False), clock=clock)
-    live.set_count(1_200, 4_000, "samples")
-    assert (live.sentence(), live.doing()) == ("Live simulation is running: 1,200 of 4,000 samples.",
-                                               "1,200 of 4,000 samples")
+    counted = RunModel(RunSpec("Export", ("inference", "infer"), keeps_files=False, stop_asks=False), clock=clock)
+    counted.set_count(1_200, 4_000, "samples")
+    assert (counted.sentence(), counted.doing()) == ("Export is running: 1,200 of 4,000 samples.",
+                                                     "1,200 of 4,000 samples")
     loads = StandIn(word="Prior load")
     start_run(host, loads, spec=RunSpec("Prior load", ("inference", "prior"), loads_only=True, keeps_files=False,
                                         stop_asks=False))
@@ -1494,19 +1505,19 @@ def test_the_foot_says_each_state_of_a_run_in_its_words(tmp_path, monkeypatch):
     assert [words for words in written if "-" in words] == [], "a hyphen in the foot's own words"
 
 
-def test_a_live_simulation_that_fails_is_said_at_the_foot_until_it_is_seen_and_writes_nothing(tmp_path, monkeypatch):
-    """A live simulation keeps no history file, and its failure is said at the foot all the same, with its time, as
-    every other end is, and in Home's next step: until it is seen, as an end is seen (here by the foot pressed, which
-    shows its page), or the next run starts. Nothing is written for it: the folder of runs holds what it held, and
-    Home's "Last runs", which reads the runs' histories, lists what it listed. The end that waited to be seen before it
-    is neither set aside nor lost: its history still says it was not seen, once the failure is seen it is said again,
-    and a run started while the failure waits takes it as the end that waited, which a live simulation that ends
-    without failing gives back, as before. The video's export, which keeps no file either, fails the same way. A
-    failure whose end cannot read the folder of runs ends all the same: its id is made without the folder."""
+def test_a_run_that_keeps_no_file_and_fails_is_said_at_the_foot_until_it_is_seen_and_writes_nothing(tmp_path,
+                                                                                                    monkeypatch):
+    """A run that keeps no history file and does more than load a record keeps none, and its failure is said at the
+    foot all the same, with its time, as every other end is, and in Home's next step: until it is seen, as an end is
+    seen (here by the foot pressed, which shows its page), or the next run starts. Nothing is written for it: the
+    folder of runs holds what it held, and Home's "Last runs", which reads the runs' histories, lists what it listed.
+    The end that waited to be seen before it is neither set aside nor lost: its history still says it was not seen,
+    once the failure is seen it is said again, and a run started while the failure waits takes it as the end that
+    waited, which such a run that ends without failing gives back, as before. A failure whose end cannot read the
+    folder of runs ends all the same: its id is made without the folder. No page of the window starts such a run
+    now; the stand-in run is one."""
     from pathlib import Path
-    import numpy as np
-    from core.gui.panels import simulate_panel as live_module
-    from core.gui.panels.fdt_panel import FdtPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run import history
     from core.gui.run.model import RunSpec
     app = qt_app()
@@ -1515,75 +1526,55 @@ def test_a_live_simulation_that_fails_is_said_at_the_foot_until_it_is_seen_and_w
     monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: hooked.append(f"{kind.__name__}: {error}"))
     window = build_window()
     home, folder = window.part("home"), tmp_path / "runs"
-    cell = tmp_path / "cell.txt"
-    cell.write_text("# values\n", encoding="utf-8")
-    monkeypatch.setattr(live_module, "build_stream_config", lambda model, path: SimpleNamespace(length_unit="nm"))
-    monkeypatch.setattr(live_module, "plan_stream", lambda cfg, t_obs: SimpleNamespace(total_steps=7_999,
-                                                                                        subsample_factor=2))
-    live = window.part("live")
-    live.cell_picker.selected_path = lambda: str(cell)
+    host = window.panel(InferPanel)
+    place = ("inference", "infer")
     _shown_off_screen(window)
     try:
         window.go_to("home")                            # Home in sight: it reads what it states at each change
-        with running(window.panel(FdtPanel), StandIn(word="Comparison"),
-                     spec=RunSpec("Comparison", ("temperature", "one_cell"), stop_button="Stop the comparison…",
-                                  kinds=("fdt",))):
+        with running(host, StandIn(word="Inference"),
+                     spec=RunSpec("Inference", place, stop_button="Stop the inference…", kinds=("inference",))):
             pass
         waiting = held.status
-        compared = ("done", "Comparison finished", "Thu 8 Oct, 19:02.", True)
-        assert _foot(window) == compared and waiting.unacknowledged_end, _foot(window)
+        inferred = ("done", "Inference finished", "Thu 8 Oct, 19:02.", True)
+        assert _foot(window) == inferred and waiting.unacknowledged_end, _foot(window)
         listed, rows = sorted(path.name for path in folder.iterdir()), _cells(home.runs_table)
 
-        def simulated(how):
-            """A live simulation started from its page, which shows 1,200 of its samples, then ends ``how``."""
-            stand_in = StandIn(word="Live simulation")
-            monkeypatch.setattr(live_module, "run_simulation_stream", stand_in)
-            live._start()
-            live._on_chunk(np.zeros((1_200, 2)))
+        def exported(how):
+            """A run that keeps no file, started on the page, which ends ``how``."""
+            stand_in = StandIn(word="Export")
+            start_run(host, stand_in, spec=RunSpec("Export", place, stop_button="Stop the export…",
+                                                   keeps_files=False))
             clock.advance(20)
             how(stand_in)
             turn_until(app, lambda: not held.is_live() or hooked)
 
         def failed(stand_in):
-            stand_in.fail(RuntimeError("NadrowskiSDE euler_compiled failed after 4500 steps (batch=1, segs=1, "
-                                       "device=cuda:0, dtype=torch.float32)"))
+            stand_in.fail(RuntimeError("the export could not be written"))
 
-        simulated(failed)
+        exported(failed)
         run = held.status.run
-        assert (_foot(window), held.status.unacknowledged_end, live.run_view.sentence.text()) == (
-            ("err", "Live simulation failed", "Thu 8 Oct, 19:02.", True), True, "Live simulation failed."), (
-            "the foot does not say the live simulation's failure", _foot(window))
+        assert (_foot(window), held.status.unacknowledged_end) == (
+            ("err", "Export failed", "Thu 8 Oct, 19:02.", True), True), (
+            "the foot does not say the export's failure", _foot(window))
         assert (sorted(path.name for path in folder.iterdir()), _cells(home.runs_table), run is not None) == (
-            listed, rows, True), "a file was written for the live simulation's failure, or Home's last runs changed"
+            listed, rows, True), "a file was written for the export's failure, or Home's last runs changed"
         assert history.read(folder / f"{waiting.run}.json")["acknowledged"] is False, (
             "the end that waited was written seen")
         assert (home.next_heading.label.text(), home.next_button.text()) == (
-            "Next: see what happened to the live simulation", "&See what happened"), home.next_heading.label.text()
+            "Next: see what happened to the export", "&See what happened"), home.next_heading.label.text()
         window.go_to_run()                              # the foot pressed: the failure's page, and it is seen
-        assert (window.current_place(), live.run_view.isVisibleTo(live), held.status, _foot(window)) == (
-            ("live", None), True, waiting, compared), (
+        assert (window.current_place(), held.status, _foot(window)) == (place, waiting, inferred), (
             "once seen, the failure did not give back the end that waited before it", held.status)
         assert sorted(path.name for path in folder.iterdir()) == listed, "seeing the failure wrote a file"
         window.go_to("home")
 
-        simulated(failed)
-        assert _foot(window)[:2] == ("err", "Live simulation failed")
-        simulated(lambda stand_in: stand_in.release())  # the next start takes the end that waited before it
-        assert (held.status, _foot(window)) == (waiting, compared), (
+        exported(failed)
+        assert _foot(window)[:2] == ("err", "Export failed")
+        exported(lambda stand_in: stand_in.release())   # the next start takes the end that waited before it
+        assert (held.status, _foot(window)) == (waiting, inferred), (
             "a run started while the failure waited did not take the end before it, or one that ended without failing "
             "did not give it back", held.status)
         assert (sorted(path.name for path in folder.iterdir()), _cells(home.runs_table)) == (listed, rows)
-
-        video = StandIn(word="Video")
-        start_run(live, video, spec=RunSpec("Video", ("live", None), stop_button="Stop saving…", keeps_files=False))
-        video.fail(RuntimeError("the video could not be written"))
-        turn_until(app, lambda: not held.is_live())
-        assert (_foot(window), sorted(path.name for path in folder.iterdir())) == (
-            ("err", "Video failed", "Thu 8 Oct, 19:03.", True), listed), (
-            "the video's failure is not said at the foot, or a file was written for it", _foot(window))
-        window.go_to_run()
-        assert (held.status, _foot(window)) == (waiting, compared), held.status
-        window.go_to("home")
 
         exists = Path.exists
 
@@ -1595,10 +1586,10 @@ def test_a_live_simulation_that_fails_is_said_at_the_foot_until_it_is_seen_and_w
 
         with monkeypatch.context() as patched:
             patched.setattr(Path, "exists", unreadable)
-            simulated(failed)
-        ended = (held.is_live(), _foot(window)[:2], live.controls.isEnabled(), hooked)
+            exported(failed)
+        ended = (held.is_live(), _foot(window)[:2], hooked)
         assert (ended, sorted(path.name for path in folder.iterdir())) == (
-            (False, ("err", "Live simulation failed"), True, []), listed), (
+            (False, ("err", "Export failed"), []), listed), (
             "a failure whose end could not read the folder of runs held up that end, or a file was written", ended)
     finally:
         window.hide()
@@ -1610,12 +1601,12 @@ def test_an_end_is_acknowledged_once_its_page_has_been_seen_in_the_active_window
     says it was seen. The run's page in sight in a window not in front, or another page in sight in the window in
     front, sees nothing. A run started while an end waits to be seen sets that end aside: the window says the new
     run, and the end is written seen, so that the next launch does not say it."""
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run import history
     qt_app()
     held, _clock = _on_the_runs_clock(tmp_path)
     window = build_window()
-    panel, place = window.panel(CrossValPanel), ("temperature", "sweep")
+    panel, place = window.panel(InferPanel), ("inference", "infer")
 
     def end_of_a_run():
         """A run of the sweep study, ended; its id."""
@@ -1657,7 +1648,7 @@ def test_ctrl_r_opens_the_run_whenever_the_foot_is_a_button(tmp_path):
     of an end an earlier PRISM left unseen, drawn in its past view from the run's files. While nothing runs and no
     end waits to be seen, it does nothing."""
     from core.artifacts import default_store
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     held, _clock = _on_the_runs_clock(tmp_path)
     window = build_window()
@@ -1667,15 +1658,15 @@ def test_ctrl_r_opens_the_run_whenever_the_foot_is_a_button(tmp_path):
         with _in_front(window):
             _press(window, "Ctrl+R")
             assert (window.current_place(), foot.is_button()) == (("home", None), False)
-            with running(window.panel(CrossValPanel)):
+            with running(window.panel(InferPanel)):
                 _press(window, "Ctrl+R")
-                assert window.current_place() == ("temperature", "sweep"), "Ctrl+R did not go to the live run"
+                assert window.current_place() == ("inference", "infer"), "Ctrl+R did not go to the live run"
                 window.go_to("home")
             assert (held.status.unacknowledged_end, foot.is_button()) == (True, True)
             _press(window, "Ctrl+R")
-            sweep = window.panel(CrossValPanel)
+            sweep = window.panel(InferPanel)
             assert (window.current_place(), held.status.state, sweep.results.currentWidget() is sweep.figures) == (
-                ("temperature", "sweep"), "idle", True), "Ctrl+R did not go to the finished run's result and see it"
+                ("inference", "infer"), "idle", True), "Ctrl+R did not go to the finished run's result and see it"
             window.go_to("home")
             _press(window, "Ctrl+R")
             assert window.current_place() == ("home", None), "Ctrl+R moved the window with no run to go to"
@@ -1698,7 +1689,7 @@ def test_during_a_run_every_setting_is_locked_but_appearance_and_every_page_read
     change nothing; while the rail, every part and every step, Home, Help, Records' lists, the choice of appearance and
     the keep-awake switch stay usable. At the run's end every setting is free again."""
     from core.artifacts import ArtifactStore, use_store
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._fixtures import all_asked, build_browse_store, forget_asked
     qt_app()
     _on_the_runs_clock(tmp_path)
@@ -1717,7 +1708,7 @@ def test_during_a_run_every_setting_is_locked_but_appearance_and_every_page_read
         leftover.mkdir(parents=True, exist_ok=True)
         assert all(panel.controls.isEnabled() for panel in panels)
         forget_asked()
-        with running(window.panel(CrossValPanel)):
+        with running(window.panel(InferPanel)):
             assert [panel for panel in panels if panel.controls.isEnabled()] == [], "a setting is not locked"
             refused = []
             for action, doing in ((records._set_note, "setting a note"), (records._delete, "deleting an artifact"),
@@ -1817,13 +1808,13 @@ def test_the_keyboard_leaves_a_foot_that_stops_being_a_button(tmp_path):
     """The foot holds the keyboard while it is a button, for a live run and for an end nobody has seen; when it stops
     being one -- the end is seen, or a run that only loads a record ends into nothing -- the rail takes the
     keyboard, on the row of the place in sight."""
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run.model import RunSpec
     qt_app()
     held, _clock = _on_the_runs_clock(tmp_path)
     window = build_window()
     foot, rail = window.shell.rail.foot, window.shell.rail
-    with running(window.panel(CrossValPanel)):
+    with running(window.panel(InferPanel)):
         pass
     foot.setFocus(Qt.TabFocusReason)
     assert (foot.is_button(), window.focusWidget() is foot) == (True, True)
@@ -1844,13 +1835,13 @@ def test_the_foots_tool_tip_follows_its_own_rule(tmp_path):
     """With no clock, the foot's tool tip is the foot's own: none while its words stand whole, and its title and its
     words when they are cut; its accessible name is always its title and its words."""
     from core.artifacts import default_store
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     held, _clock = _on_the_runs_clock(tmp_path, _at(12, 9, 0))
     window = build_window()
     foot = window.shell.rail.foot
     whole = "Training is running. Running. Settings are locked."
-    with running(window.panel(CrossValPanel)):
+    with running(window.panel(InferPanel)):
         assert (foot.accessibleName(), foot.toolTip()) == (whole, ""), (foot.accessibleName(), foot.toolTip())
     held.acknowledge(held.status.run)
     _ended_history(tmp_path / "runs", "20261003T010000-training", default_store().root)
@@ -1876,7 +1867,7 @@ def test_a_row_of_last_runs_for_the_live_run_opens_its_page_and_leaves_its_end_t
     the window in front sees it."""
     import shutil
     from core.artifacts import ArtifactStore, use_store
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run import history
     app = qt_app()
     held, _clock = _on_the_runs_clock(tmp_path)
@@ -1887,12 +1878,12 @@ def test_a_row_of_last_runs_for_the_live_run_opens_its_page_and_leaves_its_end_t
             _shown_off_screen(window)
             with _in_front(window):
                 stand_in = StandIn()
-                start_run(window.panel(CrossValPanel), stand_in)
+                start_run(window.panel(InferPanel), stand_in)
                 run = held.status.run
                 _open_last_run(window, run)
                 during = history.read(folder / f"{run}.json")
                 assert (window.current_place(), held.is_live(), during["outcome"], during["acknowledged"]) == (
-                    ("temperature", "sweep"), True, "running", False), "a row of Last runs wrote the live run seen"
+                    ("inference", "infer"), True, "running", False), "a row of Last runs wrote the live run seen"
                 held.acknowledge(run)                     # asked of the run's controller itself, the window aside
                 assert (held.is_live(), history.read(folder / f"{run}.json")["acknowledged"]) == (True, False), (
                     "the run's controller wrote the live run seen")
@@ -1921,7 +1912,7 @@ def test_a_past_view_stands_beside_the_pages_own_run_and_holds_none_of_its_figur
     while the stopped run's page still offers to continue it."""
     import torch
     from core.artifacts import ArtifactStore, use_store
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run.model import SIMULATION_ROW
     app = qt_app()
     held, _clock = _on_the_runs_clock(tmp_path)
@@ -1987,7 +1978,7 @@ def test_a_past_view_stands_beside_the_pages_own_run_and_holds_none_of_its_figur
             _open_last_run(window, run)
             assert offered() == (True, "ended", True, "Continue from batch 6,150"), (
                 "the stopped run's row did not bring back its page and its offer", offered())
-            with running(window.panel(CrossValPanel)):
+            with running(window.panel(InferPanel)):
                 pass
             _open_last_run(window, run)
             assert offered() == (True, "ended", True, "Continue from batch 6,150"), (
@@ -2028,27 +2019,27 @@ def test_an_end_during_windows_end_of_the_session_is_not_seen_until_it_is_cancel
     """From Windows' question to end the session until it is cancelled, nothing is seen: a run that "shut down
     anyway" stopped in that time, its page in sight in the window in front, is said at the foot and in its history
     as an end nobody has seen, so that the next launch says it. Once Windows' end is cancelled, a look sees it."""
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run import history
     qt_app()
     held, _clock = _on_the_runs_clock(tmp_path)
     window = build_window()
     try:
         _shown_off_screen(window)
-        window.go_to("temperature", "sweep")
+        window.go_to("inference", "infer")
         with _in_front(window):
-            start_run(window.panel(CrossValPanel), StandIn())
+            start_run(window.panel(InferPanel), StandIn())
             run = held.status.run
             window.session_asked(SimpleNamespace(cancel=lambda: None))
             window.session_ending(True)           # "shut down anyway": the run is stopped, and the window waits
             record = history.read(tmp_path / "runs" / f"{run}.json")
             assert (held.is_live(), record["outcome"], record["stop_reason"], record["acknowledged"],
                     held.status.unacknowledged_end, window.current_place()) == (
-                False, "stopped", "Windows shut down", False, True, ("temperature", "sweep")), (
+                False, "stopped", "Windows shut down", False, True, ("inference", "infer")), (
                 "an end during Windows' end of the session was seen")
             window.session_ending(False)          # cancelled after all
             window.go_to("home")
-            window.go_to("temperature", "sweep")
+            window.go_to("inference", "infer")
             assert (history.read(tmp_path / "runs" / f"{run}.json")["acknowledged"], held.status.state) == (
                 True, "idle"), "the end was not seen once Windows' end of the session was cancelled"
     finally:
@@ -2183,13 +2174,13 @@ def test_the_current_row_stays_in_view_when_the_rail_has_less_room():
     """At 150 % text the rail's list scrolls, and the current row stays in view: the foot's title taking a second line
     takes none of the list's room, the foot keeping its height, and when the list has less room, after the window is
     made lower and takes the small layout, the current row is brought into view."""
-    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.session import SbiSession
     from tests._look_helpers import text_size
     qt_app()
     with text_size(1.5):
         window = build_window()
-        rail, panel = window.shell.rail, window.panel(CrossValPanel)
+        rail, panel = window.shell.rail, window.panel(InferPanel)
         try:
             window.part("inference").session = SbiSession(draft=object(), cfg=object(), inf_prior=object(),
                                                          posterior=object())
@@ -2340,8 +2331,8 @@ def test_a_part_held_in_the_place_of_another_stands_where_it_stood():
 
 
 def test_help_shows_the_help_text_that_settings_held():
-    """Help shows its heading, "Help", over the help text Settings used to hold, built here now: the titles of its
-    five sections, and every word of the help text, in a viewer at least as tall as the look asks. The one other
+    """Help shows its heading, "Help", over the help text Settings used to hold, built here now: the title of its
+    one section, and every word of the help text, in a viewer at least as tall as the look asks. The one other
     heading of the page is that of the keys, under the text."""
     from PySide6.QtGui import QTextDocument
     from PySide6.QtWidgets import QLabel
@@ -2350,7 +2341,7 @@ def test_help_shows_the_help_text_that_settings_held():
     window = build_window()
     viewer = window.part("help").viewer
     shown = viewer.toPlainText()
-    titles = ["Reduction Map", "FDT Analysis", "Cross-validation (sweep study)", "Parameter Inference", "Simulate"]
+    titles = ["Parameter Inference"]
     assert [title for _module, title in help_screen._HELP_SECTIONS] == titles, "Help lost or gained a section"
     assert all(title in shown for title in titles), shown[:200]
     written = QTextDocument()
@@ -3527,7 +3518,7 @@ def test_your_own_models_lists_the_models_and_opens_the_builder_and_back(monkeyp
     assert window.focusWidget() is opener
     assert given == [(builder.name_edit, (Qt.OtherFocusReason,)), (opener, (Qt.OtherFocusReason,))], (
         "a button of the part gave the keyboard as a key gives it")
-    window.go_to("live")
+    window.go_to("records")
     window.go_to("models")
     assert window.current_place() == ("models", "list"), "a later opening is not at the page last shown"
     _button(listed, "Edit").click()                               # the first row's: the first model's
@@ -3650,36 +3641,6 @@ def test_a_size_remembered_on_the_primary_screen_opens_as_it_ever_did(monkeypatc
     assert opened_from(least[0] - 20, least[1] - 30) == (least, least)
 
 
-def test_effective_temperature_opens_on_one_cell_and_its_names_choose_the_page():
-    """Effective temperature opens on One cell, its name marked in the row over the page. A click on Sweep study
-    shows that page, Left on the row shows One cell again and Right Sweep study, each said as a move. Opened again
-    in the launch, the part shows the page last shown; the page shown is not kept, so the next launch opens on One
-    cell again."""
-    qt_app()
-    window = build_window()
-    screen = window.part("temperature")
-    said = []
-    window.place_changed.connect(lambda part, page: said.append((part, page)))
-    window.go_to("temperature")
-    assert (window.current_place(), screen.names.current()) == (("temperature", "one_cell"), "one_cell")
-    assert screen.panels()[0].isVisibleTo(screen) and not screen.panels()[1].isVisibleTo(screen)
-    _name(screen, "sweep").click()
-    assert (window.current_place(), screen.names.current(), said[-1]) == (
-        ("temperature", "sweep"), "sweep", ("temperature", "sweep"))
-    assert screen.panels()[1].isVisibleTo(screen) and not screen.panels()[0].isVisibleTo(screen)
-    QTest.keyClick(_name(screen, "sweep"), Qt.Key_Left)
-    assert (window.current_place(), said[-1]) == (("temperature", "one_cell"), ("temperature", "one_cell"))
-    QTest.keyClick(_name(screen, "one_cell"), Qt.Key_Right)
-    assert (window.current_place(), said[-1]) == (("temperature", "sweep"), ("temperature", "sweep"))
-    window.go_to("live")
-    window.go_to("temperature")
-    assert window.current_place() == ("temperature", "sweep"), "a later opening is not at the page last shown"
-    window.close()                                                # closing writes what the window keeps
-    again = build_window()
-    again.go_to("temperature")
-    assert again.current_place() == ("temperature", "one_cell"), "the page shown was kept for the next launch"
-
-
 def _inside(widget, part):
     """What ``widget``'s own layout holds, its items' rectangles taken together, in the part's coordinates."""
     from PySide6.QtCore import QRect
@@ -3693,14 +3654,12 @@ def _inside(widget, part):
 
 def _margins(window, part):
     """How far in the place ``part`` stands its first frame or first line from the rail, the window's right edge,
-    its top and its bottom: a step by the frame of the step shown, Effective temperature by its row of names and
-    the frame of One cell, every other place by what its own layout holds."""
+    its top and its bottom: a step by the frame of the step shown, every other place by what its own layout
+    holds."""
     from PySide6.QtCore import QRect
     page = window.part(part)
     if part == "inference":
         found = [_inside(page.pages.currentWidget(), page)]
-    elif part == "temperature":
-        found = [QRect(page.names.mapTo(page, QPoint(0, 0)), page.names.size()), _inside(page.panels()[0], page)]
     else:
         found = [_inside(page, page)]
     return (min(rect.left() for rect in found), min(rect.top() for rect in found),
@@ -3712,8 +3671,7 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
     """Every place but Home and Settings stands its first frame or its first line twelve pixels in from the rail, from
     the window's right edge, from its top and from its bottom, at the ordinary text size, and as much more as a larger
     text size scales it, opened first in the usual layout and in the small one: a step and a panel by the frame
-    their own layout holds, Effective temperature's row of page names too, lined up with the frame under it, and
-    every other place by what its own layout holds, the list of Your own models by its group too. Home, Settings and
+    their own layout holds, and every other place by what its own layout holds, the list of Your own models by its group too. Home, Settings and
     the steps rebuilt are pages of the look, which keep its page margin and stand alike, and the window gives them
     none."""
     from PySide6.QtCore import QMargins
@@ -3749,8 +3707,8 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
 
 
 def test_a_panels_column_lays_each_item_at_its_height_for_the_columns_width():
-    """In the column of a panel's controls -- each step not rebuilt yet, Effective temperature's two pages, Live
-    simulation and the Reduction map -- no line that wraps is drawn shorter than its words take at its width, on
+    """In the column of a panel's controls -- each step not rebuilt yet -- no line that wraps is drawn shorter than
+    its words take at its width, on
     an empty session and with a configuration made from the shipped Nadrowski bounds; and in a column where
     nothing grows, each item stands at its own height for the column's width, what the column has to spare left
     under its last item."""
@@ -3762,9 +3720,6 @@ def test_a_panels_column_lays_each_item_at_its_height_for_the_columns_width():
     inference = window.part("inference")
     panels = [("inference", step.key, panel) for step, panel in zip(keys.STEPS, inference.panels())
               if isinstance(panel, BasePanel)]
-    panels += [("temperature", page.key, panel)
-               for page, panel in zip(keys.PAGES["temperature"], window.part("temperature").panels())]
-    panels += [("live", None, window.part("live")), ("reduction", None, window.part("reduction"))]
 
     def named(widget):
         """A group's title, or the kind of a widget that has none."""
@@ -3920,7 +3875,7 @@ def test_every_panel_of_the_built_parts_has_its_place():
         for panel in [widget for widget in (part, *part.findChildren(QWidget)) if isinstance(widget, RunHost)]:
             held.setdefault(type(panel), set()).add(place.key)
     assert every.built_parts() == tuple(place.key for place in keys.PARTS), "a part could not be built"
-    assert len(held) >= 10, f"the walk found only {sorted(kind.__name__ for kind in held)}"
+    assert len(held) >= 6, f"the walk found only {sorted(kind.__name__ for kind in held)}"
     wrong = []
     for kind, parts in held.items():
         # a window of its own: in one window shared by every kind, a part built for an earlier kind would hand over
@@ -3942,32 +3897,31 @@ def test_a_part_is_built_at_its_first_opening_and_once():
     time it is asked for -- opened by ``go_to``, handed by ``part``, or holding the panel ``panel`` is asked for --
     and once: the part handed later is the one built. A part the window does not have, or a page its part does not
     have, is refused before anything is built."""
-    from core.gui.panels.crossval_panel import CrossValPanel
-    from core.gui.panels.fdt_panel import FdtPanel
-    from core.gui.screens.temperature_screen import TemperatureScreen
+    from core.gui.panels.inference_tabs import InferPanel, TSNPEPanel
+    from core.gui.screens.inference_screen import InferenceScreen
     qt_app()
     window = build_window()
     stack = window.shell.stack
     assert window.built_parts() == ("home",)
     assert [stack.widget(n) for n in range(stack.count())] == [window.part("home")]
-    for part, page in (("nowhere", None), ("inference", "nowhere"), ("temperature", "nowhere"), ("models", "nowhere")):
+    for part, page in (("nowhere", None), ("inference", "nowhere"), ("models", "nowhere")):
         with pytest.raises(KeyError):
             window.go_to(part, page)
     assert (window.built_parts(), window.current_place(), stack.count()) == (("home",), ("home", None), 1), (
         "a move refused built a part or moved the window")
-    window.go_to("live")
-    live = window.part("live")
+    window.go_to("records")
+    records = window.part("records")
     window.go_to("home")
-    window.go_to("live")
-    assert window.part("live") is live and stack.currentWidget() is live
-    assert window.built_parts() == ("home", "live")
+    window.go_to("records")
+    assert window.part("records") is records and stack.currentWidget() is records
+    assert window.built_parts() == ("home", "records")
     help_page = window.part("help")                               # handed, built, not shown
-    assert window.built_parts() == ("home", "live", "help") and stack.currentWidget() is live
-    fdt = window.panel(FdtPanel)
-    assert window.built_parts() == ("home", "temperature", "live", "help")
-    temperature = window.part("temperature")
-    assert isinstance(temperature, TemperatureScreen) and fdt is temperature.fdt_panel
-    assert window.panel(FdtPanel) is fdt and window.panel(CrossValPanel) is temperature.crossval_panel
+    assert window.built_parts() == ("home", "records", "help") and stack.currentWidget() is records
+    infer = window.panel(InferPanel)
+    assert window.built_parts() == ("home", "inference", "records", "help")
+    inference = window.part("inference")
+    assert isinstance(inference, InferenceScreen) and infer in inference.panels()
+    assert window.panel(InferPanel) is infer and window.panel(TSNPEPanel) in inference.panels()
     assert window.part("help") is help_page and stack.count() == 4, "a part was built twice"
 
 
@@ -3989,8 +3943,8 @@ def _shown_words(page):
 
 
 def test_a_part_that_fails_to_build_shows_its_error_page_and_the_rest_works(monkeypatch, caplog):
-    """A part whose construction raises -- here once its two panels were built -- shows its error page in its place,
-    in the look of a page, and its row of the rail is marked: the Error marker beside "Effective temperature could
+    """A part whose construction raises -- here once its six steps were built -- shows its error page in its place,
+    in the look of a page, and its row of the rail is marked: the Error marker beside "Parameter inference could
     not be opened." and the error's message, "The rest of PRISM still works.", "Try again" and "Show the full
     error". The error's kind is in no text the page shows until "Show the full error" opens it, with its trace, in
     a read-only box in the fixed-width face, which takes the keyboard; the sentence, the kind and the trace went to
@@ -3999,61 +3953,62 @@ def test_a_part_that_fails_to_build_shows_its_error_page_and_the_rest_works(monk
     the error page goes."""
     import logging
     from core.gui import fonts, main_window
+    from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.screens.shell import PartError
-    from core.gui.screens.temperature_screen import TemperatureScreen
     qt_app()
 
     def half_built():
-        build_part(TemperatureScreen)                             # its two panels are built, then it fails
+        build_part(InferenceScreen)                               # its six steps are built, then it fails
         raise _CannotBeBuilt("the cell file could not be read")
 
-    monkeypatch.setattr(main_window, "TemperatureScreen", half_built)
+    monkeypatch.setattr(main_window, "InferenceScreen", half_built)
     window = build_window()
     rail, said = window.shell.rail, []
     window.place_changed.connect(lambda part, page: said.append((part, page)))
     try:
         _shown_off_screen(window, 1300, 820)
         with caplog.at_level(logging.ERROR, logger="core.gui.main_window"):
-            window.go_to("temperature")
-        page = window.part("temperature")
+            window.go_to("inference")
+        page = window.part("inference")
         assert isinstance(page, PartError) and window.shell.stack.currentWidget() is page
         assert window.focusWidget() is page.again, "the error page did not give Try again the keyboard"
         assert (window.current_place(), _marked(rail), window.built_parts()) == (
-            ("temperature", None), ["temperature"], ("home",))
+            ("inference", None), ["inference"], ("home",))
         assert page.message.kind == "err" and page.message.marker is not None, "no Error marker"
         words = _shown_words(page)
-        assert "Effective temperature could not be opened. The cell file could not be read." in words, words
+        assert "Parameter inference could not be opened. The cell file could not be read." in words, words
         assert {"The rest of PRISM still works.", "Try again", "Show the full error"} <= set(words), words
         assert not [text for text in words if "_CannotBeBuilt" in text], "the error's kind is shown before it is asked"
         logged, = [record.getMessage() for record in caplog.records if record.name == "core.gui.main_window"]
-        assert logged.startswith("Effective temperature could not be opened. the cell file could not be read\n")
+        assert logged.startswith("Parameter inference could not be opened. the cell file could not be read\n")
         assert "Traceback" in logged and "_CannotBeBuilt: the cell file could not be read" in logged, logged
         _button(page, "Show the full error").click()
         shown = [text for text in _shown_words(page) if "_CannotBeBuilt" in text]
         assert len(shown) == 1 and shown[0].startswith("Traceback") and page.full_error.isReadOnly(), shown
         assert page.full_error.font().family() == fonts.fixed().family()
         assert window.focusWidget() is page.full_error and "Show the full error" not in _shown_words(page)
-        window.go_to("live")
-        window.go_to("temperature")
+        window.go_to("records")
+        window.go_to("inference")
         assert window.shell.stack.currentWidget() is page, "the part was built again without being asked"
         window._store_changed()                                   # an error page is no part to tell
         for place in keys.PARTS:
-            if place.key != "temperature":
+            if place.key != "inference":
                 window.go_to(place.key)
                 assert window.current_place()[0] == place.key and place.key in window.built_parts(), place.key
-        monkeypatch.setattr(main_window, "TemperatureScreen", TemperatureScreen)
-        window.go_to("temperature")
+        monkeypatch.setattr(main_window, "InferenceScreen", InferenceScreen)
+        window.go_to("inference")
         _button(page, "Try again").click()
-        built = window.part("temperature")
-        assert isinstance(built, TemperatureScreen) and window.shell.stack.currentWidget() is built
+        built = window.part("inference")
+        assert isinstance(built, InferenceScreen) and window.shell.stack.currentWidget() is built
         assert (window.current_place(), _marked(rail), said[-1]) == (
-            ("temperature", "one_cell"), ["temperature"], ("temperature", "one_cell"))
-        assert window.focusWidget() is built.fdt_panel.model_combo, "the part built again took no keyboard"
-        assert window._places[built.fdt_panel] == ("temperature", "one_cell"), "its panel would have no place"
+            ("inference", "model"), ["model"], ("inference", "model"))
+        assert window.focusWidget() is built.config_panel.model_combo, "the part built again took no keyboard"
+        assert window._places[built.config_panel] == ("inference", "model"), "its panel would have no place"
         assert window.built_parts() == tuple(place.key for place in keys.PARTS)
         assert window.shell.stack.indexOf(page) == -1, "the error page stays in the stack"
+        window.go_to("inference", "infer")
         QApplication.processEvents()
-        assert _margins(window, "temperature") == (design.scaled(12),) * 4, "a part built again has no margin"
+        assert _margins(window, "inference") == (design.scaled(12),) * 4, "a part built again has no margin"
     finally:
         window.hide()
 
@@ -4099,31 +4054,26 @@ def test_a_click_in_the_rail_over_parameter_inferences_error_page_raises_nothing
 
 def test_a_part_that_fails_to_build_leaves_no_panel_for_a_run_to_lock_and_the_next_run_goes_through(monkeypatch):
     """However a part fails to be built -- a panel's own construction raising partway (Parameter inference's
-    narrowing round, at its first field), the part raising once its two panels are whole (Effective temperature),
-    or the window's wiring of the part raising while a run is live (the lock of Effective temperature's first
-    panel) -- no panel the failed build made is left among the panels a run locks or in the window's map of
+    narrowing round, at its first field), the part raising once its six steps are whole, or the window's wiring of
+    the part raising while a run is live (the lock of its first step) -- no panel the failed build made is left among the panels a run locks or in the window's map of
     places, and nothing it made is left alive, a panel or a widget with no parent (a half-built part's own top
     widget among them); the part's error page stands in its place. A run's end then raises nothing: the foot says
     again that nothing is running, and no panel is left greyed. "Try again" builds the part whole."""
     from PySide6.QtCore import QEvent
     from core.gui import main_window
     from core.gui.panels.base_panel import BasePanel
-    from core.gui.panels.crossval_panel import CrossValPanel
-    from core.gui.panels.fdt_panel import FdtPanel
     from core.gui.panels.inference import tsnpe_tab
     from core.gui.panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel, TSNPEPanel,
                                                 ValidatePanel)
-    from core.gui.panels.simulate_panel import SimulatePanel
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.screens.shell import PartError
-    from core.gui.screens.temperature_screen import TemperatureScreen
     app = qt_app()
 
     def raising(*_args, **_kwargs):
         raise _CannotBeBuilt("the cell file could not be read")
 
     def half_built():
-        build_part(TemperatureScreen)                             # its two panels are built, then it fails
+        build_part(InferenceScreen)                               # its six steps are built, then it fails
         raise _CannotBeBuilt("the cell file could not be read")
 
     def held(window, kinds, before):
@@ -4139,12 +4089,10 @@ def test_a_part_that_fails_to_build_leaves_no_panel_for_a_run_to_lock_and_the_ne
     steps = (ConfigPanel, PriorPanel, PosteriorPanel, ValidatePanel, InferPanel, TSNPEPanel)
     for name, cls, kinds, holder, attribute, failing, during_a_run in (
             ("inference", InferenceScreen, steps, tsnpe_tab, "FloatField", raising, False),
-            ("temperature", TemperatureScreen, (FdtPanel, CrossValPanel), main_window, "TemperatureScreen",
-             half_built, False),
-            ("temperature", TemperatureScreen, (FdtPanel, CrossValPanel), FdtPanel, "set_controls_enabled",
-             raising, True)):
+            ("inference", InferenceScreen, steps, main_window, "InferenceScreen", half_built, False),
+            ("inference", InferenceScreen, steps, ConfigPanel, "set_controls_enabled", raising, True)):
         window = build_window()
-        runner, foot, raised = window.panel(SimulatePanel), window.shell.rail.foot, []
+        runner, foot, raised = build_run_host(), window.shell.rail.foot, []
         before = set(BasePanel._instances) | set(QApplication.allWidgets())
         stand_in = StandIn()
         if during_a_run:
@@ -4182,11 +4130,10 @@ def test_a_part_that_fails_to_build_while_a_run_is_live_leaves_the_runs_log_to_t
     raises, shows its error page, and its sentence, the error's kind and its trace go to the console the run's
     log stands in front of, not into the run's log, which still shows the run's own record."""
     from core.gui import main_window
-    from core.gui.panels.simulate_panel import SimulatePanel
     from core.gui.screens.shell import PartError
     app = qt_app()
     window = build_window()
-    runner, stand_in, text = window.panel(SimulatePanel), StandIn(), RunText(controller())
+    runner, stand_in, text = build_run_host(), StandIn(), RunText(controller())
 
     def shown():
         return "\n".join(text.texts())
@@ -4199,9 +4146,9 @@ def test_a_part_that_fails_to_build_while_a_run_is_live_leaves_the_runs_log_to_t
     try:
         stand_in.say("the run's own record")
         turn_until(app, lambda: "the run's own record" in shown(), 10)
-        monkeypatch.setattr(main_window, "TemperatureScreen", broken)
-        window.go_to("temperature")
-        assert isinstance(window.part("temperature"), PartError)
+        monkeypatch.setattr(main_window, "HelpScreen", broken)
+        window.go_to("help")
+        assert isinstance(window.part("help"), PartError)
     finally:
         stand_in.release()
     turn_until(app, lambda: not controller().is_live(), 10)
@@ -4210,7 +4157,7 @@ def test_a_part_that_fails_to_build_while_a_run_is_live_leaves_the_runs_log_to_t
         f"the run's own record is lost: {shown()}")
     assert [words for words in ("could not be opened", "Traceback", "_CannotBeBuilt") if words in shown()] == [], (
         f"the run's log holds the failure: {shown()}")
-    assert "error: Effective temperature could not be opened. the cell file could not be read" in console, (
+    assert "error: Help could not be opened. the cell file could not be read" in console, (
         f"the console did not get the failure: {console!r}")
     assert "_CannotBeBuilt: the cell file could not be read" in console, f"the console got no trace: {console!r}"
 
@@ -4288,8 +4235,8 @@ def test_the_rail_marks_a_part_before_it_is_built_and_the_pointer_waits_while_it
     the construction raised, the part's row then marked over its error page. A part handed by ``part`` is built
     under the wait cursor too, the rail left as it was."""
     from core.gui import main_window
-    from core.gui.panels.simulate_panel import SimulatePanel
     from core.gui.screens.help_screen import HelpScreen
+    from core.gui.screens.models_screen import ModelsScreen
     from core.gui.screens.shell import PartError
     from core.gui.widgets.rail import PartRow
     app = qt_app()
@@ -4301,106 +4248,106 @@ def test_the_rail_marks_a_part_before_it_is_built_and_the_pointer_waits_while_it
     def watched(name, cls=None):
         """A construction of the part ``name`` that notes what the rail and the pointer show while it runs, then
         builds ``cls``, or raises when there is none."""
-        def build():
+        def build(*handed):
             cursor = app.overrideCursor()
             seen.append((name, _marked(window.shell.rail), (name, True) in painted,
                          None if cursor is None else cursor.shape()))
             if cls is None:
                 raise _CannotBeBuilt("the cell file could not be read")
-            return build_part(cls)
+            return build_part(cls, **({"on_saved": handed[0]} if handed else {}))
         return build
 
-    monkeypatch.setattr(main_window, "ReductionPanel", watched("reduction"))
-    monkeypatch.setattr(main_window, "SimulatePanel", watched("live", SimulatePanel))
+    monkeypatch.setattr(main_window, "ArtifactScreen", watched("records"))
+    monkeypatch.setattr(main_window, "ModelsScreen", watched("models", ModelsScreen))
     monkeypatch.setattr(main_window, "HelpScreen", watched("help", HelpScreen))
     window = build_window()
     try:
         _shown_off_screen(window)
-        for name, handed, marked in (("reduction", False, True), ("live", False, True), ("help", True, False)):
+        for name, handed, marked in (("records", False, True), ("models", False, True), ("help", True, False)):
             painted.clear()
             if handed:
                 window.part(name)
             else:
                 window.go_to(name)
-            assert seen[-1] == (name, [name] if marked else ["live"], marked, Qt.WaitCursor), seen[-1]
+            assert seen[-1] == (name, [name] if marked else ["models"], marked, Qt.WaitCursor), seen[-1]
             assert app.overrideCursor() is None, f"the wait cursor outlived the build of {name}"
-            assert _marked(window.shell.rail) == ([name] if marked else ["live"]), name
-        assert isinstance(window.part("reduction"), PartError) and window.built_parts() == ("home", "live", "help")
+            assert _marked(window.shell.rail) == ([name] if marked else ["models"]), name
+        assert isinstance(window.part("records"), PartError) and window.built_parts() == ("home", "models", "help")
     finally:
         window.hide()
 
 
 def test_a_part_first_opened_during_a_run_comes_up_locked_and_is_freed_at_its_end():
     """A part first opened while a run is live comes up locked as the parts built already are: the controls of
-    each of its panels are greyed, those of the six steps of Parameter inference among them, while the rail still
-    opens every part, and the keyboard, which no locked setting can take, goes to the place's row of the rail
-    instead of staying on the page the move left. When the run ends the panels are freed with the rest, and a move
-    gives a page's first setting the keyboard again. The run here is the Reduction map's."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    each of its panels are greyed, those of the six steps of Parameter inference, while the rail still opens every
+    part, and the keyboard, which no locked setting can take, goes to the place's row of the rail instead of staying
+    on the page the move left. When the run ends the panels are freed with the rest, and a move gives a page's
+    first setting the keyboard again. The run here is a bare run host's, which no part holds."""
     qt_app()
     window = build_window()
-    rail, runner = window.shell.rail, window.panel(ReductionPanel)
-    assert window.built_parts() == ("home", "reduction")
+    rail, runner = window.shell.rail, build_run_host()
+    assert window.built_parts() == ("home",)
     with running(runner):
-        assert window.built_parts() == ("home", "reduction"), "a run's start built a part"
-        for name, row in (("inference", "model"), ("temperature", "temperature"), ("live", "live")):
-            window.go_to("home")                                  # the keyboard on Home's main button
-            window.go_to(name)
-            panels = window._panels_of(name, window.part(name))
-            assert [panel.controls.isEnabled() for panel in panels] == [False] * len(panels), (
-                f"{name}, first opened during a run, is not locked")
-            assert (window.current_place()[0], window.focusWidget()) == (name, rail.row(row)), name
-        assert len(window._all_panels()) == 10 and not runner.controls.isEnabled()
-    assert [panel.controls.isEnabled() for panel in window._all_panels()] == [True] * 10, "the run's end freed none"
+        assert window.built_parts() == ("home",), "a run's start built a part"
+        window.go_to("home")                                      # the keyboard on Home's main button
+        window.go_to("inference")
+        panels = window._panels_of("inference", window.part("inference"))
+        assert [panel.controls.isEnabled() for panel in panels] == [False] * len(panels), (
+            "Parameter inference, first opened during a run, is not locked")
+        assert (window.current_place()[0], window.focusWidget()) == ("inference", rail.row("model"))
+        assert len(window._all_panels()) == 6 and not runner.controls.isEnabled()
+    assert [panel.controls.isEnabled() for panel in window._all_panels()] == [True] * 6, "the run's end freed none"
     window.go_to("home")
-    window.go_to("live")
-    assert window.focusWidget() is window.part("live").model_combo
+    window.go_to("inference", "model")
+    assert window.focusWidget() is window.part("inference").config_panel.model_combo
 
 
 def test_a_part_handed_or_built_again_during_a_run_comes_up_locked_and_is_freed_at_its_end(monkeypatch):
     """A part built while a run is live comes up locked by every route, as one first opened by a move does: a part
-    handed by ``part`` (Live simulation), and a part built again by "Try again" on its error page (Effective
-    temperature). The run's end frees them with the rest. The run here is the Reduction map's."""
+    handed by ``part``, and a part built again by "Try again" on its error page, Parameter inference both times. The
+    run's end frees them with the rest. The run here is a bare run host's, which no part holds."""
     from core.gui import main_window
-    from core.gui.panels.reduction_panel import ReductionPanel
-    from core.gui.screens.temperature_screen import TemperatureScreen
+    from core.gui.screens.inference_screen import InferenceScreen
     qt_app()
 
     def broken():
         raise _CannotBeBuilt("the cell file could not be read")
 
-    monkeypatch.setattr(main_window, "TemperatureScreen", broken)
+    handed = build_window()
+    with running(build_run_host()):
+        panels = handed._panels_of("inference", handed.part("inference"))
+        assert [panel.controls.isEnabled() for panel in panels] == [False] * 6, "a part handed during a run is not locked"
+    assert [panel.controls.isEnabled() for panel in handed._all_panels()] == [True] * 6, "the run's end freed none"
+    monkeypatch.setattr(main_window, "InferenceScreen", broken)
     window = build_window()
-    window.go_to("temperature")                                   # its error page
-    runner = window.panel(ReductionPanel)
-    with running(runner):
-        assert not window.part("live").controls.isEnabled(), "a part handed during a run is not locked"
-        monkeypatch.setattr(main_window, "TemperatureScreen", TemperatureScreen)
-        _button(window.part("temperature"), "Try again").click()
-        rebuilt = window.part("temperature")
-        assert isinstance(rebuilt, TemperatureScreen)
-        assert [panel.controls.isEnabled() for panel in rebuilt.panels()] == [False, False], (
+    window.go_to("inference")                                     # its error page
+    with running(build_run_host()):
+        monkeypatch.setattr(main_window, "InferenceScreen", InferenceScreen)
+        _button(window.part("inference"), "Try again").click()
+        rebuilt = window.part("inference")
+        assert isinstance(rebuilt, InferenceScreen)
+        assert [panel.controls.isEnabled() for panel in rebuilt.panels()] == [False] * 6, (
             "a part built again during a run is not locked")
-    assert [panel.controls.isEnabled() for panel in window._all_panels()] == [True] * 4, "the run's end freed none"
+    assert [panel.controls.isEnabled() for panel in window._all_panels()] == [True] * 6, "the run's end freed none"
 
 
 def test_a_refusal_shown_in_a_part_builds_no_other_part_and_asks_the_card_nothing(monkeypatch):
-    """A refusal Live simulation's panel shows in the window builds no other part and asks the graphics card
+    """A refusal a panel of Parameter inference shows in the window builds no other part and asks the graphics card
     nothing."""
-    from core.gui.panels.simulate_panel import SimulatePanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.refusals import Refusal
     qt_app()
     window = build_window()
-    window.go_to("live")
+    window.go_to("inference", "infer")
     calls = _card_and_programs(monkeypatch)
-    window.panel(SimulatePanel)._on_error(Refusal("The seed is not a whole number.", field="seed"), "")
-    assert (window.built_parts(), calls) == (("home", "live"), []), (window.built_parts(), calls)
+    window.panel(InferPanel)._on_error(Refusal("The observation length is blank.", field="t_obs"), "")
+    assert (window.built_parts(), calls) == (("home", "inference"), []), (window.built_parts(), calls)
 
 
 def test_a_part_never_opened_keeps_what_it_remembered_when_the_window_closes(tmp_path):
     """Closing the window writes what the parts opened in that launch remember and nothing for a part never
     opened: every value stored for one is as it was stored, the layout of each splitter among them, though such a
-    part, built and closed, writes values of its own in their place. Here Live simulation alone is opened."""
+    part, built and closed, writes values of its own in their place. Here Records alone is opened."""
     from PySide6.QtCore import QByteArray
     from core.gui import settings as st
     from core.gui.panels.base_panel import BasePanel
@@ -4411,23 +4358,23 @@ def test_a_part_never_opened_keeps_what_it_remembered_when_the_window_closes(tmp
     every.close()
     written = st.settings()
     remembered = {key: "kept from the last launch" for key in written.allKeys()
-                  if key.split("/")[0] not in ("window", "simulate")}
+                  if key.split("/")[0] not in ("window", "artifacts")}
     remembered.update({f"layout/{panel.layout_key()}/{splitter}": QByteArray(b"kept from the last launch")
                        for panel in every._all_panels() if isinstance(panel, BasePanel)
                        for splitter in ("splitter", "results")})
     groups = {key.split("/")[0] for key in remembered}
-    assert groups == {"artifacts", "crossval", "fdt", "inference_infer", "inference_tsnpe", "layout", "reduction"}, groups
+    assert groups == {"inference_infer", "inference_tsnpe", "layout"}, groups
     st.use_ini_file(str(tmp_path / "kept.ini"))
     kept = st.settings()
     for key, value in remembered.items():
         kept.setValue(key, value)
     kept.sync()
     window = build_window()
-    window.go_to("live")
+    window.go_to("records")
     window.close()
     after = st.settings()
     assert {key: after.value(key) for key in remembered} == remembered, "a part never opened wrote at the close"
-    assert [key for key in after.allKeys() if key.startswith("simulate/")], "the part opened wrote nothing"
+    assert [key for key in after.allKeys() if key.startswith("artifacts/")], "the part opened wrote nothing"
 
 
 def test_the_memory_limit_in_force_does_not_wait_for_parameter_inference_to_be_opened(tmp_path, monkeypatch):
@@ -4490,7 +4437,7 @@ def test_a_store_change_reaches_only_the_built_parts_and_a_part_built_later_list
     picker to tell; built later, its pickers list the store as it is then."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.widgets.artifact_picker import StorePicker
-    from tests._fixtures import build_fdt_record
+    from tests._fixtures import write_observation
     qt_app()
     with use_store(ArtifactStore(tmp_path / "Artifacts")) as store:
         window = build_window()
@@ -4502,14 +4449,18 @@ def test_a_store_change_reaches_only_the_built_parts_and_a_part_built_later_list
         for picker in pickers:
             monkeypatch.setattr(picker, "refresh",
                                 lambda kept=picker.refresh, picker=picker: (seen.append(picker), kept())[1])
-        made = build_fdt_record(store, name="written_later")
         window.part("records").store_changed.emit()
         assert seen[:len(pickers)] == pickers, [picker.kind for picker in seen]
-        assert "temperature" not in window.built_parts()
-        window.go_to("temperature")
-        listed = window.part("temperature").fdt_panel.record_picker
-        assert made in [listed.combo.itemData(n) for n in range(listed.combo.count())], (
-            "a part built later lists the store as it was")
+        later = build_window()
+        later.go_to("records")
+        made = write_observation(store, None, name="written_later")
+        later.part("records").store_changed.emit()
+        assert "inference" not in later.built_parts()
+        later.go_to("inference")
+        listed = [picker for panel in later._all_panels() for picker in panel.findChildren(StorePicker)
+                  if picker.kind == "observation"]
+        assert listed and all(made in [picker.combo.itemData(n) for n in range(picker.combo.count())]
+                              for picker in listed), "a part built later lists the store as it was"
 
 
 def test_home_reads_an_empty_session_before_parameter_inference_is_built(tmp_path):
@@ -4545,16 +4496,14 @@ def test_a_part_built_later_reads_the_appearance_and_the_models_in_force():
     assert window.built_parts() == ("home",)
     window.go_to("settings")
     assert window.part("settings")._radios["dark"].isChecked(), "Settings built later shows another appearance"
-    window.go_to("live")
     VALID_MODELS.append("DUFFING")                                 # a model of your own, saved
     try:
         window._on_user_models_changed("DUFFING")
-        live = window.part("live").model_combo
-        assert "DUFFING" in [live.itemText(n) for n in range(live.count())]
-        assert "temperature" not in window.built_parts()
-        window.go_to("temperature")
-        fdt = window.part("temperature").fdt_panel.model_combo
-        assert "DUFFING" in [fdt.itemText(n) for n in range(fdt.count())], "a part built later lists old models"
+        assert "inference" not in window.built_parts()
+        window.go_to("inference", "model")
+        listed = window.part("inference").config_panel.model_combo
+        assert "DUFFING" in [listed.itemText(n) for n in range(listed.count())], (
+            "a part built later lists old models")
     finally:
         VALID_MODELS.remove("DUFFING")
 
@@ -4574,7 +4523,7 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
     keyboard from the page to the rail and back."""
     from PySide6.QtGui import QShortcut
     from core.gui import main_window, style
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     app = qt_app()
     built, kept = [], main_window.MainWindow._make
 
@@ -4596,6 +4545,8 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
                       key=repr)                          # in words, so that a shortcut made twice is named too
         assert made == sorted(((sequence, does, Qt.WindowShortcut, False) for sequence, does in keys.BINDINGS),
                               key=repr), f"the window's shortcuts are not the key map's rows: {made}"
+        assert [row for row in made if row[0] in ("Ctrl+7", "Ctrl+8", "Ctrl+9")] == [], (
+            "a key past the six parts is still bound")
         assert [rail.row(place.key).toolTip().rpartition(" (")[2] for place in keys.PARTS + keys.STEPS] == [
             ", ".join(place.keys) + ")" for place in keys.PARTS + keys.STEPS], "a row's tool tip names no key"
         _shown_off_screen(window)
@@ -4617,7 +4568,7 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
                 row = shown[1] if part == "inference" else part
                 assert built == ([(part, [row], Qt.WaitCursor)] if first else []), f"{sequence} built {built}"
             viewer = window.part("help").viewer
-            for sequence in ("F1", "Ctrl+9"):          # Help opened by a click on its row, a click in its text, its key
+            for sequence in ("F1", "Ctrl+6"):          # Help opened by a click on its row, a click in its text, its key
                 QTest.mouseClick(rail.row("help"), Qt.LeftButton)
                 QTest.mouseClick(viewer.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(4, 4))
                 assert (window.focusWidget(), follower.target()) == (viewer, None), (
@@ -4633,6 +4584,12 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
                     _press(window, sequence)
                     assert (window.focusWidget(), follower.target()) == (held, held), (
                         f"{sequence}: no ring on the control that held the keyboard")
+            window.go_to("records")
+            for sequence in ("Ctrl+7", "Ctrl+8", "Ctrl+9"):       # past the six parts: no key, nothing moves
+                held = window.focusWidget()
+                _press(window, sequence)
+                assert (window.current_place(), window.focusWidget()) == (("records", None), held), (
+                    f"{sequence} moved the window or the keyboard")
             window.go_to("home")
             _press(window, "Ctrl+R")
             assert (rail.foot.is_button(), window.current_place()) == (False, ("home", None)), (
@@ -4641,21 +4598,21 @@ def test_every_key_of_the_map_does_what_its_row_says(monkeypatch):
                 _press(window, "Ctrl+R")
                 assert (rail.foot.is_button(), window.current_place()) == (False, ("home", None)), (
                     "the key to the run moved while the foot is no button")
-            with running(window.panel(ReductionPanel)):
+            with running(window.panel(InferPanel)):
                 del given[:]
                 _press(window, "Ctrl+R")
-                assert (rail.foot.is_button(), window.current_place()) == (True, ("reduction", None)), (
+                assert (rail.foot.is_button(), window.current_place()) == (True, ("inference", "infer")), (
                     "the key to the run did not go to the run")
-                assert given[-1:] == [(rail.row("reduction"), Qt.ShortcutFocusReason)], (     # its settings locked
+                assert given[-1:] == [(rail.row("infer"), Qt.ShortcutFocusReason)], (     # its settings locked
                     "the running place took the keyboard otherwise than as a shortcut gives it")
             window.go_to("home")
             _press(window, "Ctrl+R")
             assert (rail.foot.is_button(), window.current_place()) == (False, ("home", None)), (
                 "the key to the run moved after the run ended")
-            window.go_to("live")
+            window.go_to("records")
             field = window.focusWidget()
             _press(window, "F6")
-            row = rail.row("live")
+            row = rail.row("records")
             assert (window.focusWidget(), given[-1:]) == (row, [(row, Qt.ShortcutFocusReason)]), (
                 "the key between the rail and the page did not reach the rail")
             _press(window, "F6")
@@ -4679,10 +4636,10 @@ def test_the_key_between_the_rail_and_the_page_moves_the_keyboard_both_ways(monk
     step's page, and from there back to that setting; from the run's foot, while it is a button, to the page; and
     from nowhere, when no control holds the keyboard, to the rail. On a page whose every setting a run has locked,
     the place's row, which the move gave the keyboard, gives it on to the page's first control that is not a button,
-    and takes it back; on either page of Effective temperature that control is none of its row of page names."""
+    and takes it back."""
     from PySide6.QtWidgets import QPushButton, QToolButton
     from core.gui import style
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     app = qt_app()
     given = _given(monkeypatch)
     window = build_window()                             # first: a window that cannot be built leaves no follower
@@ -4691,8 +4648,8 @@ def test_the_key_between_the_rail_and_the_page_moves_the_keyboard_both_ways(monk
     try:
         _shown_off_screen(window)
         with _in_front(window):
-            for part, page, row in (("live", None, "live"), ("inference", "training", "training"),
-                                    ("temperature", "sweep", "temperature"), ("help", None, "help")):
+            for part, page, row in (("records", None, "records"), ("inference", "training", "training"),
+                                    ("models", "builder", "models"), ("help", None, "help")):
                 window.go_to(part, page)
                 first = window.focusWidget()
                 for sequence, to in (("F6", rail.row(row)), ("F6", first), ("Shift+F6", rail.row(row)),
@@ -4705,38 +4662,31 @@ def test_the_key_between_the_rail_and_the_page_moves_the_keyboard_both_ways(monk
             assert window.focusWidget() is None
             _press(window, "F6")
             assert window.focusWidget() is rail.row("home"), "the key from nowhere did not reach the rail"
-            with running(window.panel(ReductionPanel)):
+            with running(window.panel(InferPanel)):
                 window.go_to("home")
                 _press(window, "F6")
                 QTest.keyClick(window.focusWidget(), Qt.Key_Tab)            # on to the foot, a button now
                 assert window.focusWidget() is rail.foot, "Tab from the rail did not reach the foot"
                 _press(window, "F6")
                 assert window.focusWidget() is window.part("home").first_focus(), "the foot kept the keyboard"
-                window.go_to("live")                                         # every setting locked by the run
-                assert window.focusWidget() is rail.row("live"), "a move to a page a run locks left the rail"
+                window.go_to("inference", "infer")                           # every setting locked by the run
+                assert window.focusWidget() is rail.row("infer"), "a move to a page a run locks left the rail"
                 _press(window, "F6")
                 held = window.focusWidget()
-                assert window.part("live").isAncestorOf(held) and held.isEnabled(), (
+                assert window.part("inference").isAncestorOf(held) and held.isEnabled(), (
                     "the key did not reach a page a run locks")
                 assert not isinstance(held, (QPushButton, QToolButton)) and given[-1] == (
                     held, Qt.ShortcutFocusReason), "the key gave a page a run locks a button, or not as a key"
                 _press(window, "Shift+F6")
-                assert window.focusWidget() is rail.row("live"), "the key did not take the keyboard back to the rail"
-                for page in ("one_cell", "sweep"):                           # a part of pages, every setting locked
-                    window.go_to("temperature", page)
-                    moved = window.focusWidget()
-                    _press(window, "F6")
-                    shown, held = window.part("temperature"), window.focusWidget()
-                    assert (moved, shown.isAncestorOf(held), shown.names.isAncestorOf(held)) == (
-                        rail.row("temperature"), True, False), f"{page}: the key from the rail reached the page names"
+                assert window.focusWidget() is rail.row("infer"), "the key did not take the keyboard back to the rail"
     finally:
         window.hide()
         follower.stop()
 
 
 def test_the_help_key_opens_help(monkeypatch):
-    """F1 opens Help from wherever the window is -- a step, a page of Effective temperature, the model builder with
-    the keyboard in a field one types in, Help itself -- and so does Ctrl+9: Help is shown, its row of the rail is
+    """F1 opens Help from wherever the window is -- a step, Records, the model builder with the keyboard in a field
+    one types in, Help itself -- and so does Ctrl+6: Help is shown, its row of the rail is
     marked, the window says where it is, and the help text takes the keyboard as a shortcut gives it."""
     qt_app()
     given = _given(monkeypatch)
@@ -4746,8 +4696,8 @@ def test_the_help_key_opens_help(monkeypatch):
     try:
         _shown_off_screen(window)
         with _in_front(window):
-            for start in (("inference", "training"), ("temperature", "sweep"), ("models", "builder"), ("help", None)):
-                for sequence in ("F1", "Ctrl+9"):
+            for start in (("inference", "training"), ("records", None), ("models", "builder"), ("help", None)):
+                for sequence in ("F1", "Ctrl+6"):
                     window.go_to(*start)
                     del said[:]
                     _press(window, sequence)
@@ -4767,7 +4717,7 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
     nothing: no page changes, the keyboard stays where it is and nothing is said; and a run goes on, its stop
     asked by no Escape, in the rail or on its own page's stop button."""
     from PySide6.QtWidgets import QPushButton, QToolButton
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     given = _given(monkeypatch)
     window = build_window()
@@ -4777,7 +4727,7 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
     try:
         _shown_off_screen(window)
         with _in_front(window):
-            for part, page in (("live", None), ("inference", "prior"), ("records", None), ("models", "builder")):
+            for part, page in (("help", None), ("inference", "prior"), ("records", None), ("models", "builder")):
                 window.go_to(part, page)
                 first = window.focusWidget()
                 rail.take_keyboard()
@@ -4789,21 +4739,21 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
                 QTest.keyClick(first, Qt.Key_Escape)
                 assert (window.current_place()[0], window.focusWidget(), said) == (part, first, []), (
                     f"Escape on the first setting of {part} moved something")
-            runner = window.panel(ReductionPanel)
+            runner = window.panel(InferPanel)
             with running(runner):
-                for target in ("reduction", "inference"):
-                    window.go_to(target)                                     # every setting locked by the run
+                for target in ("infer", "prior"):
+                    window.go_to("inference", target)                        # every setting locked by the run
                     QTest.keyClick(window.focusWidget(), Qt.Key_Escape)
                     held = window.focusWidget()
                     assert not rail.isAncestorOf(held), f"Escape left the keyboard in the rail over {target}"
-                    assert window.part(target).isAncestorOf(held), f"Escape gave the keyboard away from {target}"
+                    assert window.part("inference").isAncestorOf(held), f"Escape gave the keyboard away from {target}"
                     assert not isinstance(held, (QPushButton, QToolButton)), f"Escape gave a button of {target} it"
-                window.go_to("reduction")
+                window.go_to("inference", "infer")
                 rail.take_keyboard()
                 QTest.keyClick(window.focusWidget(), Qt.Key_Tab)            # the foot, a button while the run is live
                 assert window.focusWidget() is rail.foot, "Tab from the rail did not reach the foot"
                 QTest.keyClick(rail.foot, Qt.Key_Escape)
-                assert window.part("reduction").isAncestorOf(window.focusWidget()), "Escape on the foot moved nothing"
+                assert window.part("inference").isAncestorOf(window.focusWidget()), "Escape on the foot moved nothing"
                 stop = runner.run_view.stop_button
                 assert (controller().is_live(), controller().status.stop_requested,
                         controller()._run.token.requested.is_set(), stop.isEnabled()) == (
@@ -4815,7 +4765,7 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
                         controller()._run.token.requested.is_set(), stop.isEnabled()) == (
                     True, False, False, True), "Escape asked the run to stop"
                 assert (window.current_place(), window.focusWidget(), said) == (
-                    ("reduction", None), stop, []), "Escape on the stop button moved something"
+                    ("inference", "infer"), stop, []), "Escape on the stop button moved something"
     finally:
         window.hide()
 
@@ -4824,8 +4774,8 @@ def test_tab_reaches_the_rail_then_the_foot_when_it_is_a_button_then_the_page():
     """The Tab key reaches the rail's list as one stop, on the row of the place in sight, then the run's foot while
     it is a button, then the page from its first stop on, and from the page's last stop the rail again; Shift+Tab
     walks the same stops backwards. No other row of the rail is a stop, the steps under Parameter inference
-    neither. On Effective temperature the page's first stop is its row of page names, which stands over the page."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    neither."""
+    from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     window = build_window()
     rail = window.shell.rail
@@ -4844,7 +4794,7 @@ def test_tab_reaches_the_rail_then_the_foot_when_it_is_a_button_then_the_page():
     try:
         _shown_off_screen(window)
         for part, page, row in (("home", None, "home"), ("inference", "training", "training"),
-                                ("temperature", None, "temperature"), ("help", None, "help")):
+                                ("records", None, "records"), ("help", None, "help")):
             window.go_to(part, page)
             stops = walk(rail.row(row), Qt.Key_Tab, 40)
             assert stops[0] == "page" and set(stops) == {"page", rail.row(row)}, (
@@ -4853,11 +4803,7 @@ def test_tab_reaches_the_rail_then_the_foot_when_it_is_a_button_then_the_page():
             back = walk(rail.row(row), Qt.Key_Backtab, 40)
             assert back[0] == "page" and set(back) == {"page", rail.row(row)}, (
                 f"{part}: Shift+Tab reached another stop than the rail's row and the page")
-        window.go_to("temperature", "sweep")
-        walk(rail.row("temperature"), Qt.Key_Tab, 1)
-        assert window.part("temperature").names.isAncestorOf(window.focusWidget()), (
-            "the first stop of Effective temperature is not its row of page names")
-        with running(window.panel(ReductionPanel)):
+        with running(window.panel(InferPanel)):
             for part in ("home", "help"):
                 window.go_to(part)
                 assert walk(rail.row(part), Qt.Key_Tab, 2) == ["foot", "page"], (
@@ -4890,8 +4836,7 @@ def test_after_a_move_the_keyboard_is_on_the_pages_first_setting_never_on_a_butt
     window = build_window()
     moves = ([(sequence, *(("inference", does[5:]) if does.startswith("step ") else (does[5:], None)))
               for sequence, does in keys.BINDINGS if does.startswith(("part ", "step "))]
-             + [(None, "temperature", "one_cell"), (None, "temperature", "sweep"), (None, "models", "list"),
-                (None, "models", "builder")])
+             + [(None, "models", "list"), (None, "models", "builder")])
     try:
         _shown_off_screen(window)
         with _in_front(window):
@@ -4925,13 +4870,13 @@ def test_after_a_move_the_keyboard_is_on_the_pages_first_setting_never_on_a_butt
     def broken():
         raise _CannotBeBuilt("the cell file could not be read")
 
-    monkeypatch.setattr(main_window, "ReductionPanel", broken)
+    monkeypatch.setattr(main_window, "ArtifactScreen", broken)
     window = build_window()
     try:
         _shown_off_screen(window)
         with _in_front(window):
-            _press(window, "Ctrl+5")
-            again = _button(window.part("reduction"), "Try again")
+            _press(window, "Ctrl+3")
+            again = _button(window.part("records"), "Try again")
             assert (window.focusWidget(), given[-1]) == (again, (again, Qt.ShortcutFocusReason)), (
                 "the key of a part that cannot be built did not give its error page's Try again the keyboard")
             window.shell.rail.take_keyboard()
@@ -4954,7 +4899,7 @@ def test_no_key_fires_while_a_question_is_open():
     window.place_changed.connect(lambda part, page: said.append((part, page)))
     try:
         _shown_off_screen(window)
-        window.go_to("live")
+        window.go_to("models")
         held = window.focusWidget()
         question = Ask(window, "Start a new session?", "Applying a model replaces the whole session.", "Keep it",
                        "Apply and start a new session", loses_work=True)
@@ -4968,12 +4913,12 @@ def test_no_key_fires_while_a_question_is_open():
                         for at in (window, question):
                             _press(at, sequence)
                     assert (window.current_place(), window.focusWidget(), _marked(window.shell.rail), said) == (
-                        ("live", None), held, ["live"], []), f"a key moved the window, {named} in front"
+                        ("models", "list"), held, ["models"], []), f"a key moved the window, {named} in front"
         finally:
             question.reject()
         assert question.isHidden(), "the question is still open"
         with _in_front(window):
-            for sequence, place in (("Ctrl+3", ("temperature", "one_cell")), ("Alt+2", ("inference", "prior")),
+            for sequence, place in (("Ctrl+3", ("records", None)), ("Alt+2", ("inference", "prior")),
                                     ("F1", ("help", None))):
                 _press(window, sequence)
                 assert window.current_place() == place, f"{sequence} moved nothing once the question was answered"
@@ -5518,7 +5463,7 @@ def test_closing_the_window_lets_go_of_the_claim_while_a_figure_window_keeps_pri
     acknowledge, and no close waits for one."""
     from PySide6.QtWidgets import QWidget
     from core.gui import one_instance, settings
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._fixtures import asked, choose, whole_program
     qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
@@ -5530,7 +5475,7 @@ def test_closing_the_window_lets_go_of_the_claim_while_a_figure_window_keeps_pri
             assert held is not None, "the whole program holds no claim"
             _shown_off_screen(window)
             figure.show()
-            with running(window.panel(ReductionPanel)):
+            with running(window.panel(InferPanel)):
                 choose(monkeypatch, words="Keep running")
                 window.close()
                 refused = (window.isVisible(), one_instance.current() is held, asked().title, controller().is_live())
@@ -5656,7 +5601,7 @@ def test_no_key_fires_while_a_question_with_no_window_is_open():
     question = None
     try:
         _shown_off_screen(window)
-        window.go_to("live")
+        window.go_to("models")
         held = window.focusWidget()
         question = Ask(None, "Error", "Something went wrong that PRISM did not expect.", "OK", marker="err")
         question.setAttribute(Qt.WA_DontShowOnScreen)
@@ -5669,7 +5614,7 @@ def test_no_key_fires_while_a_question_with_no_window_is_open():
                         for at in (window, question):
                             _press(at, sequence)
                     assert (window.current_place(), window.focusWidget(), _marked(window.shell.rail), said) == (
-                        ("live", None), held, ["live"], []), f"a key moved the window, {named} in front"
+                        ("models", "list"), held, ["models"], []), f"a key moved the window, {named} in front"
         finally:
             question.reject()
     finally:
@@ -5684,7 +5629,7 @@ def test_a_window_whose_home_cannot_be_built_opens_on_its_error_page(monkeypatch
     change of the store, a run's start and end and every move go on with no Home to read, and
     "Try again", the construction mended, builds Home in its place and shows it."""
     from core.gui import main_window
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.screens.shell import PartError
     qt_app()
 
@@ -5701,7 +5646,7 @@ def test_a_window_whose_home_cannot_be_built_opens_on_its_error_page(monkeypatch
         assert (window.current_place(), _marked(rail), window.built_parts()) == (("home", None), ["home"], ())
         assert "Home could not be opened. The records could not be read." in _shown_words(page), _shown_words(page)
         window._store_changed()
-        with running(window.panel(ReductionPanel)):
+        with running(window.panel(InferPanel)):
             window.go_to("help")
             window.go_to("home")
         window.go_to("home")
@@ -5710,7 +5655,7 @@ def test_a_window_whose_home_cannot_be_built_opens_on_its_error_page(monkeypatch
         _button(page, "Try again").click()
         home = window.part("home")
         assert isinstance(home, HomeScreen) and window.shell.stack.currentWidget() is home, "Try again built no Home"
-        assert (window.built_parts(), _marked(rail)) == (("home", "reduction", "help"), ["home"]), (
+        assert (window.built_parts(), _marked(rail)) == (("home", "inference", "help"), ["home"]), (
             "Home built again is not counted among the parts built, or its row is not marked")
     finally:
         window.hide()
@@ -5918,7 +5863,7 @@ def test_the_window_starts_and_logs_with_no_console_streams(tmp_path, monkeypatc
     import logging
     import threading
     from core.gui import __main__ as entry
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._fixtures import all_asked, process_state, whole_program
     app = qt_app()
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
@@ -5932,7 +5877,7 @@ def test_the_window_starts_and_logs_with_no_console_streams(tmp_path, monkeypatc
         with whole_program() as (_app, window):
             logging.getLogger("sbi.inference").warning("Only 0.5% proposal samples are accepted.")
             text, stand_in = RunText(controller()), StandIn()
-            with running(window.panel(ReductionPanel), stand_in):
+            with running(window.panel(InferPanel), stand_in):
                 stand_in.say("the run prints this line", "print")
                 turn_until(app, lambda: "the run prints this line" in text.texts())
                 other = threading.Thread(target=lambda: logging.getLogger("core.gui.main_window").warning(
@@ -7235,11 +7180,11 @@ def test_enter_presses_the_button_that_shows_the_ring(tmp_path, monkeypatch):
     """Enter, of either key, presses a push button once where the keyboard has brought the ring to it, deep in a page as
     on Home, whose main button is such a button; and on the stop button of a live run it asks that button's question, as
     Space does, the safe answer first."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._fixtures import all_asked, forget_asked
     with _the_whole_window(tmp_path, monkeypatch) as window:
-        panel = window.panel(ReductionPanel)
-        window.go_to("reduction")
+        panel = window.panel(InferPanel)
+        window.go_to("inference", "infer")
         button, pressed = _button_in(panel)
         _ring_on(button)
         QTest.keyClick(button, Qt.Key_Return)
@@ -7256,8 +7201,8 @@ def test_enter_presses_the_button_that_shows_the_ring(tmp_path, monkeypatch):
         QTest.keyClick(main, Qt.Key_Return)
         assert window.current_place() != ("home", None), "Enter did not press Home's main button"
         stand_in = StandIn()
-        window.go_to("reduction")
-        with running(panel, stand_in, spec=_training_spec(place=("reduction", None))):
+        window.go_to("inference", "infer")
+        with running(panel, stand_in, spec=_training_spec(place=("inference", "infer"))):
             stop = panel.run_view.stop_button
             _ring_on(stop)
             forget_asked()
@@ -7275,17 +7220,17 @@ def test_a_held_enter_cannot_land_on_the_stop_button(tmp_path, monkeypatch):
     nothing and ask nothing, so a run cannot be stopped by the key that started it, and the start is pressed once however
     long the key is held. A repeat on the button itself presses nothing either. The key let go and pressed again is a new
     press, and asks the stop's question, with the safe answer first."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._fixtures import all_asked, forget_asked
     with _the_whole_window(tmp_path, monkeypatch) as window:
-        panel = window.panel(ReductionPanel)
-        window.go_to("reduction")
+        panel = window.panel(InferPanel)
+        window.go_to("inference", "infer")
         stand_in = StandIn()
         button, pressed = _button_in(panel)
         _ring_on(button)
         _a_repeat(button)
         assert pressed == [], "a repeat pressed the button"
-        button.clicked.connect(lambda: start_run(panel, stand_in, spec=_training_spec(place=("reduction", None))))
+        button.clicked.connect(lambda: start_run(panel, stand_in, spec=_training_spec(place=("inference", "infer"))))
         forget_asked()
         QTest.keyClick(button, Qt.Key_Return)
         assert pressed == [1] and controller().is_live(), "Enter did not start the run"
@@ -7311,12 +7256,12 @@ def test_enter_with_a_modifier_in_a_field_or_on_a_tick_box_presses_nothing(contr
     list, on a tick box or a radio button, whose state it leaves as it was (Space answers those); on a button the mouse
     gave the keyboard, which wears no ring; on a greyed button; on a scrolling area."""
     from PySide6.QtWidgets import QCheckBox, QComboBox, QLineEdit, QRadioButton, QScrollArea
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.widgets.labeled_inputs import IntField
     from tests._look_helpers import _arrive
     with _the_whole_window(tmp_path, monkeypatch) as window:
-        panel = window.panel(ReductionPanel)
-        window.go_to("reduction")
+        panel = window.panel(InferPanel)
+        window.go_to("inference", "infer")
         button, pressed = _button_in(panel)
         modifiers = {"with Ctrl": Qt.ControlModifier, "with Shift": Qt.ShiftModifier,
                      "with Alt": Qt.AltModifier}.get(control, Qt.NoModifier)
@@ -7403,14 +7348,14 @@ def test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end(tmp_pat
     read; Settings, in sight, reads the last run once. The Training page, built with the screen, says beside "Before
     you start" that it has read nothing yet."""
     from collections import Counter
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run.controller import NOT_READ_YET_TEXT
     from tests._fixtures import readings_of_a_run
     app = qt_app()
     _on_the_runs_clock(tmp_path)
     _a_store_that_holds_a_set(tmp_path, monkeypatch)
     window = build_window()
-    runner = window.panel(ReductionPanel)
+    runner = build_run_host()
     _shown_off_screen(window)
     assert _READ_DURING_A_RUN == {}, "the list of what a first opening reads during a run grew"
     assert NOT_READ_YET_TEXT == "A run is live. Not read yet; read when it ends."
@@ -7468,13 +7413,13 @@ def test_a_store_change_during_a_run_changes_nothing_on_a_page_until_it_ends(tmp
     """What a page read before a run stands through the run: a record deleted or written from Records while a run is live
     has every picker list the store again, and reads nothing else; the lines keep what they said; and the run's end reads
     them once. A page's own gates, run for any reason during the run, read nothing either."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._fixtures import readings_of_a_run
     app = qt_app()
     _on_the_runs_clock(tmp_path)
     _a_store_that_holds_a_set(tmp_path, monkeypatch)
     window = build_window()
-    runner = window.panel(ReductionPanel)
+    runner = window.panel(InferPanel)
     window.go_to("inference")
     records = window.part("records")
     inference = window.part("inference")
@@ -7497,17 +7442,17 @@ def test_a_start_taken_back_leaves_the_budget_lines_as_they_were(tmp_path):
     """A start that fails after the pages were locked unlocks them with the run still called live, so they do not read:
     what they said before the start stands, and none of them says a run is live, for only a page built during a run can
     say so, and such a page has read by the end of that run."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run.controller import NOT_READ_YET_TEXT
     qt_app()
     _on_the_runs_clock(tmp_path)
     window = build_window()
-    runner = window.panel(ReductionPanel)
+    runner = window.panel(InferPanel)
     window.go_to("inference")
     page = window.part("inference").tsnpe_panel
     said = (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text())
     with pytest.raises(TypeError):
-        start_run(runner, StandIn(), spec=_training_spec(place=("reduction", None)), watch_dir=5)
+        start_run(runner, StandIn(), spec=_training_spec(place=("inference", "infer")), watch_dir=5)
     assert not controller().is_live()
     assert (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text()) == said
     assert NOT_READ_YET_TEXT not in said
@@ -7517,11 +7462,11 @@ def test_a_panel_with_a_problem_says_the_problem_while_a_run_is_live(tmp_path):
     """A box left blank is said as ever during a run, for it reads nothing, and a line that says the problem is no line a
     run keeps."""
     from core.gui.fields import label
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     _on_the_runs_clock(tmp_path)
     window = build_window()
-    runner = window.panel(ReductionPanel)
+    runner = window.panel(InferPanel)
     window.go_to("inference")
     page = window.part("inference").tsnpe_panel
     with running(runner):
@@ -7752,7 +7697,7 @@ def test_a_chain_asked_for_during_another_run_applies_nothing(store, tmp_path, m
     """A chain asked for while a run of another page is live applies nothing, selects no bounds file and loads nothing:
     the session and the forms of steps 1 and 2 are as they were, and the chain says its link did not start."""
     from core.gui.load_chain import NOT_STARTED
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     held = _a_launch_before(store, tmp_path, monkeypatch)
     prior_load, posterior_load = _the_loads(monkeypatch, store, held)
     window, _home = _home_of_last_time(tmp_path)
@@ -7764,7 +7709,7 @@ def test_a_chain_asked_for_during_another_run_applies_nothing(store, tmp_path, m
     bounds.refresh()
     bounds.restore_key("master_tier1.txt")
     session = inference.session
-    with running(window.panel(ReductionPanel)):
+    with running(window.panel(InferPanel)):
         loads = inference.load_chain("NADROWSKI", {"chi_mode": True}, "master.txt", held.prior, held.posterior)
         heard = []
         loads.stopped.connect(heard.append)
@@ -7781,7 +7726,7 @@ def test_the_press_during_a_run_reads_nothing_and_changes_nothing(store, tmp_pat
     stops at once, its link not started."""
     from core.gui import remembered
     from core.gui.load_chain import NOT_STARTED
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._fixtures import readings_of_a_run
     held = _a_launch_before(store, tmp_path, monkeypatch, plan=_ZZ_LAST)
     prior_load, posterior_load = _the_loads(monkeypatch, store, held)
@@ -7792,7 +7737,7 @@ def test_the_press_during_a_run_reads_nothing_and_changes_nothing(store, tmp_pat
     assert picks.plan == "zz_last"
     forms = [(page.step, {key: row.value() for key, row in page.plan_fields().items()})
              for page in inference.step_pages()]
-    with running(window.panel(ReductionPanel)):
+    with running(window.panel(InferPanel)):
         calls = readings_of_a_run(monkeypatch)
         loads = inference.continue_with(picks)
         heard = []
@@ -8195,7 +8140,7 @@ def test_home_reads_the_picks_once_until_something_changes(store, tmp_path, monk
     kept training in the store, Home opened during the run reads neither the kept trainings, nor the run history, nor a
     simulation set for what it offers."""
     from core.gui import remembered
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.run.model import RunSpec
     from tests._fixtures import readings_of_a_run
     app = qt_app()
     held = _a_launch_before(store, tmp_path, monkeypatch, plan=_ZZ_LAST)
@@ -8205,12 +8150,13 @@ def test_home_reads_the_picks_once_until_something_changes(store, tmp_path, monk
     monkeypatch.setattr(remembered, "remembered_picks",
                         lambda **kwargs: (reads.append("picks"), real(**kwargs))[1])
     window, home = _home_of_last_time(tmp_path)
-    runner = window.panel(ReductionPanel)
+    runner = build_run_host()
     assert reads == ["picks"]
-    with running(runner) as stand_in, pytest.MonkeyPatch.context() as during:
+    elsewhere = RunSpec("Training", ("inference", "infer"), stop_button="Stop the run…")
+    with running(runner, spec=elsewhere) as stand_in, pytest.MonkeyPatch.context() as during:
         calls = readings_of_a_run(during)
         stand_in.say("a line of the run")
-        window.go_to("reduction")
+        window.go_to("records")
         window.go_to("home")
         assert reads == ["picks"] and home.next_button.text() == "&Go to the run"
         assert not {"read_checked", "taken", "a record's manifest", "kept_fits", "runs_of", "peek"} & set(calls), calls
@@ -8221,7 +8167,7 @@ def test_home_reads_the_picks_once_until_something_changes(store, tmp_path, monk
     controller().acknowledge(controller().status.run)
     assert reads == ["picks", "picks"], "Home read what was in use last time at a change of the run's status"
     window._store_changed()
-    window.go_to("reduction")
+    window.go_to("inference", "infer")
     window.go_to("home")
     assert reads == ["picks"] * 4, reads
     _press_continue(window, home)
@@ -8256,7 +8202,7 @@ def test_a_link_that_does_not_start_leaves_home_on_its_step(why, store, tmp_path
                                            manifest=store.get("prior", held.prior)))
         inference = window.part("inference")
         turn_until(app, lambda: not inference.loads.is_going() and not controller().is_live())
-        window.go_to("reduction")
+        window.go_to("inference", "infer")
         window.go_to("home")
     else:
         _press_continue(window, home)
@@ -8348,7 +8294,7 @@ def test_the_first_time_page_stands_before_what_was_in_use_last_time(store, tmp_
     window, home = _home_of_last_time(tmp_path)
     assert home.is_first_time() and not home._next_block.isVisibleTo(home)
     _prior_artifact(store, _nad_cfg(), name="zz_made")
-    window.go_to("reduction")
+    window.go_to("inference", "infer")
     window.go_to("home")
     assert not home.is_first_time() and home.next_button.text() == "&Continue with these"
     assert home._next_sentence.plain_text() == (
@@ -8766,7 +8712,7 @@ def test_the_training_steps_list_reads_once_and_never_while_a_run_is_live(store,
     """The kept trainings are read with the Training step's own readings (as it is shown and at "Check again"), never
     at the reading after the typing stops, and never while a run is live, whatever is opened or changed then; the run's
     end reads them."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.SBI import fit_state
     held = _a_launch_before(store, tmp_path, monkeypatch)
     _a_kept_training(store, held)
@@ -8782,7 +8728,7 @@ def test_the_training_steps_list_reads_once_and_never_while_a_run_is_live(store,
     assert len(reads) == first, "the reading after the typing stops read the kept trainings"
     page.foot.check_again.click()
     assert len(reads) == first + 1
-    with running(window.panel(ReductionPanel)):
+    with running(window.panel(InferPanel)):
         window.go_to("home")
         window._store_changed()
         window.go_to("inference", "training")
@@ -9088,7 +9034,7 @@ def test_a_resume_refused_before_anything_is_read_is_said_on_its_row_until_the_n
 def test_a_store_that_keeps_no_training_is_never_asked_for_its_kept_trainings(store, tmp_path, monkeypatch):
     """With no kept training in the store, no reading asks for the kept trainings: the Training step shown and its
     "Check again", Home's opening, a store change and a run's end each list the kind and stop there."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.SBI import fit_state
     _a_launch_before(store, tmp_path, monkeypatch)
     reads, real = [], fit_state.kept_fits
@@ -9100,7 +9046,7 @@ def test_a_store_that_keeps_no_training_is_never_asked_for_its_kept_trainings(st
     page.foot.check_again.click()
     window.go_to("home")
     window._store_changed()
-    with running(window.panel(ReductionPanel)):
+    with running(window.panel(InferPanel)):
         pass
     turn_until(app, lambda: not controller().is_live())
     window.go_to("inference", "training")
@@ -9746,7 +9692,7 @@ def test_home_takes_the_reopenings_path_once_the_pages_call_can_no_longer_start(
 def test_a_past_view_offers_nothing_while_a_run_is_live(store, tmp_path, monkeypatch):
     """While a run of another part is live, a past view opened offers nothing; one opened before it began hands the
     window nothing at its press and says a run is live, and its "Discard" deletes nothing and says the same."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.step_facts import LIVE_TEXT
     from tests._fixtures import choose
     held = _a_launch_before(store, tmp_path, monkeypatch)
@@ -9761,7 +9707,7 @@ def test_a_past_view_offers_nothing_while_a_run_is_live(store, tmp_path, monkeyp
     pressed = []
     controller().offer_pressed.connect(pressed.append)
     choose(monkeypatch, words="Discard")
-    with running(window.panel(ReductionPanel)):
+    with running(window.panel(InferPanel)):
         past.resume_button.click()
         assert (pressed, past.notice.text()) == ([], LIVE_TEXT)
         past.discard_kept_button.click()

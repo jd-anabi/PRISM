@@ -1,21 +1,17 @@
 """Pick up PNGs that a runner saved to disk and show them in the panel's FigureStack.
 
-WHY NOT just take them from the runner's return value: it arrives only when the run has ended.
-run_fdt returns the LoadedFdt of the record it wrote and run_param_study_cli one per sweep, each
-keeping its PNGs in the record's own figures/ folder -- the folder the panel, which creates the
-record before dispatching the run, points this watcher at -- and run_reduction_map returns a
-ReductionRecord. While a run is going, the figures are only reported as text: log records naming the
-file or the record's folder in FDT.fdt_pipeline.run_fdt and
-FDT.cross_validation.run_param_study_cli, a print() in Reduction.sweep.
+WHY NOT just take them from the runner's return value: it arrives only when the run has ended, and a
+runner that keeps its PNGs in a record's own figures/ folder -- the folder a panel that creates the
+record before dispatching the run points this watcher at -- reports them meanwhile only as text.
 
 WHY NOT scrape those messages: several modules, several formats, and it would weld the GUI to message
 text inside core.
 
 So instead we snapshot the plot directory when a run starts and pick up whatever appears. That needs
-no core change at all, and -- the real payoff -- it shows figures INCREMENTALLY: the FDT sanity plot
-lands before the production sweep starts, and the S-sweep plot lands at the study's midpoint (which
-core/FDT/cross_validation.py saves early precisely so a long run shows you something). It also
-still surfaces whatever a half-failed run managed to produce.
+no core change at all, and -- the real payoff -- it shows figures INCREMENTALLY: a figure saved early in
+a long run is shown as soon as it is written. It also still surfaces whatever a half-failed run managed
+to produce. No page of the window hands a run a folder to watch now; the effective-temperature and
+reduction-map pages that did were removed.
 
 Runs entirely on the GUI thread (a QTimer). The worker is never involved.
 """
@@ -28,14 +24,14 @@ _POLL_MS = 1200
 _SETTLE_S = 1.0                                     # savefig may still be writing; let the file age
 # The ..._20260714_120301 suffix the older writers put on every figure, before the analyses wrote
 # records. A record's figures are figures/<slug>.png and carry none: the stamp is stripped from the
-# LEGACY names alone -- a loose figure an older build left, the Reduction map's own PNG -- and a
+# LEGACY names alone -- a loose figure an older build left -- and a
 # record's name passes through unchanged but for its underscores.
 _STAMP = re.compile(r"_\d{8}_\d{6}$")
 
 
 def _title(name: str) -> str:
     """A figure's title from its file name: 'spontaneous_psd.png' -> 'spontaneous psd', a record's
-    figure; and 'fdt3d_vs_S_20260714_120301.png' -> 'fdt3d vs S', a legacy stamped name."""
+    figure; and 'psd_vs_S_20260714_120301.png' -> 'psd vs S', a legacy stamped name."""
     return _STAMP.sub("", Path(name).stem).replace("_", " ") or Path(name).stem
 
 

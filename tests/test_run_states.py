@@ -38,9 +38,8 @@ _TRAINING = (Stage("Rotation", ("rotation_begins",)),
              Stage("Simulation", ("simulation_writing", "simulation_resuming"), SIMULATION_ROW),
              Stage("Fitting", ("simulation_complete", "patho_total", "chi_total", "chi_none"), "fit_epoch"),
              Stage("Saving", (FIT_ENDED, "sbi_converged")))
-# One cell's stages, as its page hands them to its run
-_CELL = (Stage("Checks"), Stage("Spontaneous", ("fdt_campaign_spontaneous",)),
-         Stage("Driven", ("fdt_campaign_driven",)))
+# The stages of a run of another kind than a training, begun by lines of its own (``_other_rows``)
+_PARTS = (Stage("Checks"), Stage("Part one", ("part_one",)), Stage("Part two", ("part_two",)))
 # what the window is told of a training's expected epochs, and where the number comes from
 _EXPECTED = (130, "about 130 epochs: the last training of this kind, retrain_aug, ran 130")
 
@@ -125,13 +124,31 @@ _LINES = {
                           "epochs of this training are not all said.",
     "text_file_broken": "The run's text file could not be written (OSError: [Errno 28] No space left on device); the "
                         "full text is still on the page.",
-    "fdt_sanity_skipped": "Skipping sanity checks.",
-    "fdt_campaign_spontaneous": "Campaign 1: spontaneous fluctuations -> PSD",
-    "fdt_campaign_driven": "Campaign 2: forced response -> chi via lock-in",
-    "sweep_phase": "--- Phase A (temp sweep): spontaneous PSD + omega_0 detection ---",
-    "sweep_point_a": "  [A 3/8] temp=1.5 (s=0)",
-    "sweep_point_b": "  [B 3/8] temp=1.5",
 }
+# One line of each of the rows ``_other_rows`` adds: a run of another kind than a training, whose stages begin and
+# are counted by lines of its own, and one of whose lines leaves out the stage in progress.
+_OTHER = {"skipped": "Skipping the checks.", "part_one": "Part one begins.", "part_two": "Part two begins.",
+          "phase": "--- Phase temp ---", "warm_up": "  [warm-up 3/8] temp=1.5", "point": "  [3/8] temp=1.5"}
+
+
+def _other_rows(monkeypatch):
+    """The rows of a run of another kind than a training, added to the table of the engine's lines for one test: no
+    page of the window starts such a run now, and the model still reads one -- stages begun by a line, a stage
+    counted by a line's count, a line that leaves out the stage in progress."""
+    from core.gui.run import model as run_model
+    added = (readings._row("skipped", "Skipping the checks.", __name__),
+             readings._row("part_one", "Part one begins.", __name__),
+             readings._row("part_two", "Part two begins.", __name__),
+             readings._row("phase", "--- Phase <param> ---", __name__),
+             readings._row("warm_up", "[warm-up <i>/<n>] <param>=<value>", __name__),
+             readings._row("point", "[<i>/<n>] <param>=<value>", __name__))
+    monkeypatch.setattr(readings, "ROWS", readings.ROWS + added)
+    monkeypatch.setattr(readings, "_BY_NAME", {**readings._BY_NAME, **{row.name: row for row in added}})
+    monkeypatch.setattr(run_model, "LEAVES_OUT", ("skipped",))
+
+
+# Two stages counted alike, each begun by its own phase line
+_SWEEPS = (Stage("S sweep", ("phase",), "point"), Stage("T_a/T sweep", ("phase",), "point"))
 
 # The engine's lines that begin as the run's lines do and that the window reads as text, each with why: no row of
 # the table reads them, and a warning or an error among them is said from the engine as it stands.
@@ -463,7 +480,7 @@ def test_a_line_no_row_matches_is_text_and_never_an_error():
     clock = _Clock(_at(8, 19, 2, 11))
     run = RunModel(_training(), clock=clock)
     before = _status_line(run)
-    _feed(run, "[fit] epoch 12", "Writing fdt record 20261008T190211 at C:\\x", "\x1b[2K", "", level="info")
+    _feed(run, "[fit] epoch 12", "Writing record 20261008T190211 at C:\\x", "\x1b[2K", "", level="info")
     _feed(run, _LINES["patho_batch"], "library: rejection: a print on the error stream", level="err")
     assert (_status_line(run), run.epochs(), run.messages(), run.state) == (before, (), (), "running")
 
@@ -495,7 +512,7 @@ def test_the_kept_trainings_lines_are_never_read_as_an_epoch():
     assert ("Training saved", "after epoch 3", "Fine") in [tuple(vars(row).values()) for row in run.health()]
 
 
-def test_a_training_reads_through_its_stages_with_their_words():
+def test_a_training_reads_through_its_stages_with_their_words(monkeypatch):
     """A training's stage line: each stage "To come" until the line that begins it, "Now" while it runs, then its
     words when done: the rotation "Done", or "Reused from the saved simulation set" when a continued set carries it,
     "The parent posterior's" for a narrowing round, "Off" when the page says the training is not rotated or the
@@ -569,35 +586,32 @@ def test_a_training_reads_through_its_stages_with_their_words():
     converged.rows([_status("Neural network successfully converged after 131 epochs.")])
     assert converged.stage == "Saving"
 
-    sweep = RunModel(RunSpec("Sweep study", ("temperature", "sweep"), name="sweep",
-                             stages=(Stage("S sweep", ("sweep_phase",), "sweep_point_b"),
-                                     Stage("T_a/T sweep", ("sweep_phase",), "sweep_point_b"))), clock=clock)
-    _feed(sweep, "--- Phase A (s sweep): spontaneous PSD + omega_0 detection ---", "  [A 1/8] s=0 (temp=1)",
-          "--- Phase B (s sweep): forced response on common grid ---", "  [B 1/8] s=0")
+    _other_rows(monkeypatch)
+    sweep = RunModel(RunSpec("Study", ("inference", "checks"), name="sweep", stages=_SWEEPS), clock=clock)
+    _feed(sweep, "--- Phase s ---", "  [warm-up 1/8] s=0", "--- the second half of s ---", "  [1/8] s=0")
     assert _status_line(sweep) == [("S sweep", "now", "Now"), ("T_a/T sweep", "later", "To come")]
     assert (sweep.axis().end_by, sweep.axis().unknown) == (None, "No end time yet: the first steps are being timed.")
-    _feed(sweep, _LINES["sweep_phase"])
+    _feed(sweep, _OTHER["phase"])
     assert _status_line(sweep) == [("S sweep", "done", "Done"), ("T_a/T sweep", "now", "Now")]
 
 
-def test_a_short_counted_stage_gets_an_end_time_from_a_quarter_of_its_count():
+def test_a_short_counted_stage_gets_an_end_time_from_a_quarter_of_its_count(monkeypatch):
     """A counted stage that is not the simulation takes its own pace once a quarter of its count is timed: a sweep of
     eight points has a firm end from its third point and not before. The second of two sweeps counted alike is
     counted, and timed, from its own phase line."""
+    _other_rows(monkeypatch)
     clock = _Clock(_at(8, 19, 2, 11))
-    sweep = RunModel(RunSpec("Sweep study", ("temperature", "sweep"), name="sweep",
-                             stages=(Stage("S sweep", ("sweep_phase",), "sweep_point_b"),
-                                     Stage("T_a/T sweep", ("sweep_phase",), "sweep_point_b"))), clock=clock)
-    for param, other, step in (("s", "temp=1", 1800), ("temp", "s=0", 900)):
-        _feed(sweep, f"--- Phase A ({param} sweep): spontaneous PSD + omega_0 detection ---")
+    sweep = RunModel(RunSpec("Study", ("inference", "checks"), name="sweep", stages=_SWEEPS), clock=clock)
+    for param, step in (("s", 1800), ("temp", 900)):
+        _feed(sweep, f"--- Phase {param} ---")
         began = clock()
         for i in range(1, 9):
             clock.advance(600)
-            _feed(sweep, f"  [A {i}/8] {param}={i} ({other})")
-        _feed(sweep, f"--- Phase B ({param} sweep): forced response on common grid ---")
+            _feed(sweep, f"  [warm-up {i}/8] {param}={i}")
+        _feed(sweep, f"--- the second half of {param} ---")
         for i in range(1, 4):
             clock.advance(step)
-            _feed(sweep, f"  [B {i}/8] {param}={i}")
+            _feed(sweep, f"  [{i}/8] {param}={i}")
             axis = sweep.axis()
             if i < 3:
                 assert (axis.start, axis.end_by, axis.unknown) == (
@@ -634,7 +648,7 @@ def test_a_run_with_no_stages_says_and_times_the_count_of_its_driving_row():
             clock.advance(30)
 
 
-def test_once_a_run_has_ended_nothing_begins_or_moves_a_stage():
+def test_once_a_run_has_ended_nothing_begins_or_moves_a_stage(monkeypatch):
     """An end is the last word on the stage line. A finished run's stages all read done but those passed over,
     among them the saving after a fit the training library counted without a record and ended at its limit
     without a word; and a line, a row or a record that would begin, end or leave out a stage, read after any end,
@@ -658,30 +672,32 @@ def test_once_a_run_has_ended_nothing_begins_or_moves_a_stage():
         assert (cut.stage, _status_line(cut)) == ("Simulation", [
             ("Rotation", "done", "Done"), ("Simulation", "half", word), ("Fitting", "later", "To come"),
             ("Saving", "later", "To come")]), outcome
-    cell = RunModel(RunSpec("Measurement", ("temperature", "cell"), name="cell_a", stages=_CELL), clock=clock)
-    _feed(cell, "Writing fdt record 20261008T190211 at C:\\x")
+    _other_rows(monkeypatch)
+    cell = RunModel(RunSpec("Study", ("inference", "checks"), name="cell_a", stages=_PARTS), clock=clock)
+    _feed(cell, "Writing record 20261008T190211 at C:\\x")
     cell.ended("stopped")
-    _feed(cell, _LINES["fdt_sanity_skipped"], _LINES["fdt_campaign_spontaneous"])
-    assert _status_line(cell) == [("Checks", "half", "Stopped"), ("Spontaneous", "later", "To come"),
-                                  ("Driven", "later", "To come")]
+    _feed(cell, _OTHER["skipped"], _OTHER["part_one"])
+    assert _status_line(cell) == [("Checks", "half", "Stopped"), ("Part one", "later", "To come"),
+                                  ("Part two", "later", "To come")]
 
 
-def test_a_stop_asked_while_starting_still_lets_the_first_stage_begin():
+def test_a_stop_asked_while_starting_still_lets_the_first_stage_begin(monkeypatch):
     """A stop asked for before the run's first line (the window closed while the run starts) does not keep its first
     stage from beginning with that line, so the stage the stop cuts short is the one drawn stopped."""
+    _other_rows(monkeypatch)
     clock = _Clock(_at(8, 19, 2, 11))
-    cell = RunModel(RunSpec("Measurement", ("temperature", "cell"), name="cell_a", stages=_CELL), clock=clock)
+    cell = RunModel(RunSpec("Study", ("inference", "checks"), name="cell_a", stages=_PARTS), clock=clock)
     cell.stopping(True)
     assert (cell.state, cell.stage) == ("stopping", None)
-    _feed(cell, "Writing fdt record 20261008T190211 at C:\\x")
+    _feed(cell, "Writing record 20261008T190211 at C:\\x")
     assert (cell.state, cell.stage, cell.sentence()) == (
         "stopping", "Checks", "Stopping: takes effect at the run's next line of output.")
     cell.ended("stopped")
-    assert _status_line(cell) == [("Checks", "half", "Stopped"), ("Spontaneous", "later", "To come"),
-                                  ("Driven", "later", "To come")]
+    assert _status_line(cell) == [("Checks", "half", "Stopped"), ("Part one", "later", "To come"),
+                                  ("Part two", "later", "To come")]
 
 
-def test_each_state_says_its_sentence():
+def test_each_state_says_its_sentence(monkeypatch):
     """One sentence says where the run stands, in the words the page uses: starting, the rotation, the simulation
     with its pace and its end, the fit before its first epoch (with the pace of an earlier training of this size
     when there is one), the fit with its epoch of the expected ones, past the estimate, and the saving. A time
@@ -777,18 +793,17 @@ def test_each_state_says_its_sentence():
     converged.feed([("Neural network successfully converged after 131 epochs.", "info")])
     assert converged.sentence() == "The fit ended after 131 epochs. The posterior is being saved."
 
-    cell = RunModel(RunSpec("Measurement", ("temperature", "cell"), name="cell_a",
-                            stages=(Stage("Checks"), Stage("Spontaneous", ("fdt_campaign_spontaneous",)),
-                                    Stage("Driven", ("fdt_campaign_driven",)))), clock=clock)
-    assert cell.sentence() == "Measurement cell_a is starting."
-    _feed(cell, "Writing fdt record 20261008T190211 at C:\\x")
-    assert cell.sentence() == "Measurement cell_a is running: Checks."
-    _feed(cell, _LINES["fdt_sanity_skipped"], _LINES["fdt_campaign_spontaneous"])
-    assert cell.sentence() == "Measurement cell_a is running: Spontaneous."
-    assert _status_line(cell) == [("Spontaneous", "now", "Now"), ("Driven", "later", "To come")]
-    live = RunModel(RunSpec("Live simulation", ("live", None)), clock=clock)
-    live.set_count(1_200, 5_000, "samples")
-    assert live.sentence() == "Live simulation is running: 1,200 of 5,000 samples."
+    _other_rows(monkeypatch)
+    cell = RunModel(RunSpec("Study", ("inference", "checks"), name="cell_a", stages=_PARTS), clock=clock)
+    assert cell.sentence() == "Study cell_a is starting."
+    _feed(cell, "Writing record 20261008T190211 at C:\\x")
+    assert cell.sentence() == "Study cell_a is running: Checks."
+    _feed(cell, _OTHER["skipped"], _OTHER["part_one"])
+    assert cell.sentence() == "Study cell_a is running: Part one."
+    assert _status_line(cell) == [("Part one", "now", "Now"), ("Part two", "later", "To come")]
+    counted = RunModel(RunSpec("Export", ("inference", "infer")), clock=clock)
+    counted.set_count(1_200, 5_000, "samples")
+    assert counted.sentence() == "Export is running: 1,200 of 5,000 samples."
     card = RunModel(RunSpec("Card test", ("inference", "checks")), clock=clock)
     card.set_stage("Simulation")
     assert (card.stage, card.sentence()) == ("Simulation", "Card test is running: Simulation.")
@@ -1129,7 +1144,7 @@ def test_the_health_table_reads_its_four_measures():
     assert [measure for measure, _, _ in _health(continued)] == ["Failed simulations", "Graphics-card memory"]
     continued.set_earlier(((30_000, 485_376), (1_000, 100_000)))
     assert _health(continued)[0] == ("Failed simulations", "0.38 % over 3 runs", "Fine"), "49,450 of 13,180,576"
-    assert RunModel(RunSpec("Measurement", ("temperature", "cell")), clock=clock).health() == ()
+    assert RunModel(RunSpec("Check", ("inference", "checks")), clock=clock).health() == ()
 
 
 def _openings(run, now) -> list:
@@ -1405,19 +1420,12 @@ def test_dates_numbers_and_durations_are_written_with_no_toolkit():
 # is the run controller's, and a test that wants a live run starts the stand-in run.
 _FLAG_NAMES = ("_running", "_set_busy", "_active_cancel", "request_cancel_all", "RUN_STATE")
 # The places that start a run under the window: the file, the class and the function each hands its dispatch.
-_DISPATCHES = {("core/gui/panels/crossval_panel.py", "CrossValPanel", "compare"),
-               ("core/gui/panels/crossval_panel.py", "CrossValPanel", "run_param_study_cli"),
-               ("core/gui/panels/fdt_panel.py", "FdtPanel", "compare"),
-               ("core/gui/panels/fdt_panel.py", "FdtPanel", "_run_fdt_guarded"),
-               ("core/gui/panels/inference/infer_tab.py", "InferPanel", "orchestrator.simulated_inference"),
+_DISPATCHES = {("core/gui/panels/inference/infer_tab.py", "InferPanel", "orchestrator.simulated_inference"),
                ("core/gui/panels/inference/infer_tab.py", "InferPanel", "orchestrator.experimental_inference"),
                ("core/gui/panels/inference/posterior_tab.py", "PosteriorPanel", "orchestrator.build_posterior"),
                ("core/gui/panels/inference/prior_tab.py", "PriorPanel", "orchestrator.build_prior"),
                ("core/gui/panels/inference/tsnpe_tab.py", "TSNPEPanel", "orchestrator.tsnpe_round"),
-               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "orchestrator.validate_calibration"),
-               ("core/gui/panels/reduction_panel.py", "ReductionPanel", "run_reduction_map"),
-               ("core/gui/panels/simulate_panel.py", "SimulatePanel", "run_simulation_stream"),
-               ("core/gui/panels/simulate_panel.py", "SimulatePanel", "export_animation")}
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "orchestrator.validate_calibration")}
 
 
 def _entries(path) -> list:
@@ -1622,26 +1630,23 @@ def test_a_run_that_only_loads_shows_loading_and_leaves_nothing_to_acknowledge(t
     assert [(status.state, status.outcome) for status in text.ended] == [("idle", "finished")]
 
 
-def test_a_load_a_live_simulation_and_a_video_export_leave_no_file(tmp_path):
-    """A prior's and a posterior's load, a live simulation and a video export, each with its own page's spec:
-    after each, the folder of runs holds no history file and no text file, and the controller is idle with
-    nothing to acknowledge."""
+def test_a_load_and_a_run_that_keeps_no_file_leave_no_file(tmp_path):
+    """A prior's and a posterior's load, each with its own page's spec, and a run that keeps no file and does more
+    than load (no page of the window starts one now; the spec is the test's own): after each, the folder of runs
+    holds no history file and no text file, and the controller is idle with nothing to acknowledge."""
     from core import orchestrator
-    from core.gui.panels.simulate_export import export_animation
-    from core.gui.panels.simulate_panel import SimulatePanel
-    from core.gui.panels.simulate_runner import run_simulation_stream
     from core.gui.run.model import IDLE
-    from tests._fixtures import build_inference, build_part, qt_app
+    from tests._fixtures import build_inference, qt_app
     from tests._runs import Clock, StandIn, start_run, turn_until
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
-    folder, inference, live = tmp_path / "runs", build_inference(), build_part(SimulatePanel)
+    folder, inference = tmp_path / "runs", build_inference()
     cfg = SimpleNamespace(model="NADROWSKI", observation_mode="chi", reparam_rotate=True)
+    export = RunSpec("Export", ("inference", "infer"), stop_button="Stop the export…", keeps_files=False)
     for host, fn, args in ((inference.prior_panel, orchestrator.build_prior, (cfg, "p1", False)),
                            (inference.posterior_panel, orchestrator.build_posterior, (cfg, None, "q1", False)),
-                           (live, run_simulation_stream, (cfg, 1.0, 10, 30.0)),
-                           (live, export_animation, (None, "bundle.gif"))):
-        spec = host.run_spec(fn, *args)
+                           (inference.infer_panel, None, ())):
+        spec = export if fn is None else host.run_spec(fn, *args)
         stand_in = StandIn(word=spec.word)
         start_run(host, stand_in, spec=spec)
         stand_in.say("a line of the run")
@@ -1782,13 +1787,6 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
     run's places are the window's own."""
     import ast
     from core import config, orchestrator
-    from core.FDT.compare import compare
-    from core.FDT.cross_validation import run_param_study_cli
-    from core.Reduction.sweep import run_reduction_map
-    from core.gui.panels import fdt_panel
-    from core.gui.panels.crossval_panel import CrossValPanel
-    from core.gui.panels.simulate_export import export_animation
-    from core.gui.panels.simulate_runner import run_simulation_stream
     from tests import _runs
     from tests._fixtures import build_window, qt_app
     qt_app()
@@ -1814,12 +1812,8 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
                         ("core/gui/run/controller.py", "RunController", "spec.fn")], forwards
 
     window = build_window()
-    inference, temperature = window.part("inference"), window.part("temperature")
-    reduction, live = window.part("reduction"), window.part("live")
-    one_cell, sweep = temperature.panels()
+    inference = window.part("inference")
     cfg = SimpleNamespace(model="NADROWSKI", observation_mode="chi", reparam_rotate=True)
-    writer = SimpleNamespace(id="f1", name="cell_7")
-    writers = {"s": SimpleNamespace(id="s1", name="study-s"), "temp": SimpleNamespace(id="t1", name="study-temp")}
     yes, no = True, False
     kinds_of = {
         "prior built": (inference.prior_panel, orchestrator.build_prior, (cfg, None, True), {},
@@ -1844,22 +1838,6 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         "narrowing round": (inference.tsnpe_panel, orchestrator.tsnpe_round, (cfg, None, None, None), {},
                             ("Narrowing round", ("inference", "narrowing"), "Stop the narrowing round…",
                              ("posterior", "simulation", "fit"), no, yes, yes, yes)),
-        "one cell": (one_cell, fdt_panel._run_fdt_guarded, (cfg,), {"writer": writer},
-                     ("Measurement", ("temperature", "one_cell"), "Stop measurement…", ("fdt",), no, yes, no, yes)),
-        "sweep study": (sweep, run_param_study_cli, (cfg,), {"writers": writers},
-                        ("Sweep study", ("temperature", "sweep"), "Stop sweep study…", ("fdt",), no, yes, no, yes)),
-        "comparison, one cell": (one_cell, compare, ("cells", ["f1"]), {"name": "both"},
-                                 ("Comparison", ("temperature", "one_cell"), "Stop the comparison…", ("fdt",), no,
-                                  yes, no, yes)),
-        "comparison, sweeps": (sweep, compare, ("sweeps", ["s1"]), {"name": "both"},
-                               ("Comparison", ("temperature", "sweep"), "Stop the comparison…", ("fdt",), no, yes,
-                                no, yes)),
-        "reduction map": (reduction, run_reduction_map, (cfg,), {},
-                          ("Reduction map", ("reduction", None), "Stop computing…", (), no, yes, no, yes)),
-        "live simulation": (live, run_simulation_stream, (cfg, 1.0, 10, 30.0), {},
-                            ("Live simulation", ("live", None), "Stop simulation", (), no, no, no, no)),
-        "video": (live, export_animation, (None, "bundle.gif"), {},
-                  ("Video", ("live", None), "Stop saving…", (), no, no, no, yes)),
     }
     specs = {}
     for kind, (panel, fn, args, kwargs, row) in kinds_of.items():
@@ -1869,15 +1847,10 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         assert spec.expected_epochs is None and spec.fn is None, kind
         trains = kind in ("training", "narrowing round")
         assert (spec.simulation_set, spec.stages == _TRAINING) == (trains, trains), kind
-        if not trains and kind not in ("one cell", "sweep study"):
+        if not trains:
             assert (spec.stages, spec.facts) == ((), {}), kind
-    assert specs["calibration"].name == "Calibration" and specs["one cell"].name == "cell_7"
-    assert (specs["sweep study"].name, specs["comparison, sweeps"].name) == ("study", "both")
-    assert (specs["one cell"].records, specs["sweep study"].records) == (("f1",), ("s1", "t1"))
-    assert specs["live simulation"].own_view and not specs["video"].own_view
-    assert [stage.name for stage in specs["one cell"].stages] == ["Checks", "Spontaneous", "Driven"]
-    assert specs["sweep study"].stages == (Stage("S sweep", ("sweep_phase",), "sweep_point_b"),
-                                           Stage("T_a/T sweep", ("sweep_phase",), "sweep_point_b"))
+        assert not spec.own_view and spec.records == (), kind
+    assert specs["calibration"].name == "Calibration"
     for kind, narrowed in (("training", False), ("narrowing round", True)):
         spec = specs[kind]
         assert (spec.patience, spec.epoch_limit) == (config.TRAINING_STOP_AFTER_EPOCHS, config.TRAINING_MAX_NUM_EPOCHS)
@@ -1889,8 +1862,7 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
                                                num_transforms=3, checkpoint_every=25)
     assert (given.patience, given.epoch_limit, given.facts["network"], given.facts["cadence"]) == (7, 40, (64, 3), 25)
     with pytest.raises(NotImplementedError, match="has no run spec for"):
-        sweep.run_spec(run_reduction_map, cfg)
-    assert isinstance(sweep, CrossValPanel)
+        inference.infer_panel.run_spec(orchestrator.tsnpe_round, cfg)
     held = {type(panel).__name__: window._places[panel] for panel in window._places}
     assert held == _runs.PLACES, (held, _runs.PLACES)
 
@@ -2287,8 +2259,9 @@ def test_the_run_state_reaches_a_window_through_a_method_of_its_own_and_goes_wit
 
     before = counts()
     window = build_window()
-    window.part("temperature")
-    assert counts() == (before[0] + 1, before[1] + 2), (before, counts())
+    assert counts() == (before[0] + 1, before[1]), (before, counts())
+    window.part("inference")
+    assert counts()[0] > before[0] + 1 and counts()[1] > before[1] + 2, (before, counts())
     window.deleteLater()
     QCoreApplication.sendPostedEvents(window, QEvent.DeferredDelete)
     assert counts() == before, (before, counts())
@@ -2298,13 +2271,13 @@ def test_a_part_built_during_a_run_asks_the_controller_and_comes_up_locked():
     """A part, and a whole window, built while a run is live -- here the run of a host no window holds --
     ask the process's run controller: the part comes up locked, and the window built then says at its foot
     that a run is live. The run's end frees them, and the foot then says how it ended."""
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._fixtures import build_run_host, build_window, qt_app
     from tests._runs import running
     qt_app()
     with running(build_run_host()):
         window = build_window()
-        panel = window.panel(ReductionPanel)
+        panel = window.panel(InferPanel)
         assert not panel.controls.isEnabled(), "a part built during a run is not locked"
         assert window.shell.rail.foot._title == "Training is running", window.shell.rail.foot._title
     assert panel.controls.isEnabled() and window.shell.rail.foot._title == "Training finished"
@@ -3143,24 +3116,6 @@ _OTHER_REASONS = (
     (RunSpec("Inference", ("inference", "infer"), stop_button="Stop the inference…"),
      "Inference is running. Shutting down stops it. The inference is not kept. An observation it has already written "
      "stays in Records."),
-    (RunSpec("Measurement", ("temperature", "one_cell"), name="cell_a_3oct", stop_button="Stop measurement…"),
-     "Measurement cell_a_3oct is running. Shutting down stops it. The record cell_a_3oct is kept, marked unfinished, "
-     "with what it has measured so far. A measurement cannot be continued; to finish it, it is measured again from "
-     "the start."),
-    (RunSpec("Sweep study", ("temperature", "sweep"), name="study", stop_button="Stop sweep study…"),
-     "Sweep study study is running. Shutting down stops it. What the study has measured is kept, marked unfinished; a "
-     "study cannot be continued."),
-    (RunSpec("Comparison", ("temperature", "one_cell"), stop_button="Stop the comparison…"),
-     "Comparison is running. Shutting down stops it. A comparison writes its record only when it finishes, so nothing "
-     "of this one is kept."),
-    (RunSpec("Reduction map", ("reduction", None), stop_button="Stop computing…"),
-     "Reduction map is running. Shutting down stops it. The map will not be shown. If its table is already written, "
-     "that file stays in the reduction folder."),
-    (RunSpec("Video", ("live", None), stop_button="Stop saving…", keeps_files=False),
-     "Video is running. Shutting down stops it. The unfinished file is removed. The trace stays and can be saved "
-     "again."),
-    (RunSpec("Live simulation", ("live", None), stop_button="Stop simulation", keeps_files=False, stop_asks=False),
-     "Live simulation is running. Shutting down stops it."),
     (_load(), "Prior load is running. Shutting down stops it."),
 )
 
@@ -3592,8 +3547,6 @@ _FINISHED = dict(outcome="finished", stage="Saving", started=_at(8, 19, 10), end
                  result={"kind": "posterior", "id": "q1", "name": "retrain_3", "asked": "retrain_3"})
 _SAVED = "Training finished on Wed 14 Oct, 14:10, after 5 days 19 hours. The posterior retrain_3 is saved."
 _FIT_KEPT = "The 20,480,000 simulations are kept; the training is kept up to epoch 62, so you can resume it."
-_MEASURED = ("The record cell_a_3oct is kept, marked unfinished, with what it has measured so far. A measurement "
-             "cannot be continued; to finish it, it is measured again from the start.")
 # How each kind of end is said: what its history holds beyond ``_ended_record``'s, the moment it is said at, whether
 # a stop came too late, then its sentence and what the foot says was kept.
 _ENDS = {
@@ -3676,10 +3629,12 @@ _ENDS = {
          "result": {"kind": "fdt", "id": "f1", "name": "cell_a_3oct", "asked": "cell_a_3oct"}}, _at(11, 12, 31),
         False, "Measurement finished on Sun 11 Oct, 12:31, after 1 hour 12 minutes. The record cell_a_3oct is saved.",
         ""),
+    # an older PRISM's run of a page this window no longer has: its stop is said as any other run's
     "a measurement stopped": (
         {"word": "Measurement", "name": "cell_a_3oct", "place": ["temperature", "one_cell"], "stage": "Driven",
          "fit": None, "simulation_set": None}, _at(11, 12, 31), False,
-        f"Measurement was stopped on Sun 11 Oct, 12:31. {_MEASURED}", _MEASURED),
+        "Measurement was stopped on Sun 11 Oct, 12:31. What the run has not written yet is not kept.",
+        "What the run has not written yet is not kept."),
     "a check finished, under the name asked for": (
         {"word": "Check", "name": "Calibration", "place": ["inference", "checks"], "outcome": "finished",
          "stage": None, "started": _at(11, 12, 19), "fit": None, "simulation_set": None,
@@ -3847,8 +3802,8 @@ def test_the_end_is_said_from_what_the_controller_heard_of_the_run(tmp_path, mon
 def test_an_end_waiting_to_be_seen_is_set_aside_only_by_a_run_that_leaves_an_end_of_its_own(tmp_path, monkeypatch):
     """A run started while an end waits to be seen sets that end aside, written seen in its history, only once it has
     ended with an end of its own to say: a run that keeps a history file (a training, a narrowing round, a prior's
-    build, a check, an inference, a measurement, a sweep study, a comparison, a reduction map). A load and a video,
-    which keep no file and end into idle, set nothing aside, nor does a start taken back before its worker was
+    build, a check, an inference). A load and a run that keeps no file and does more than load, which keep no file
+    and end into idle, set nothing aside, nor does a start taken back before its worker was
     queued, nor a run the stage refused before anything was spent: after each, the end that waited is the status
     again, its history still unseen."""
     from core.gui.run import history
@@ -3868,7 +3823,7 @@ def test_an_end_waiting_to_be_seen_is_set_aside_only_by_a_run_that_leaves_an_end
         assert (held.status == waiting, history.read(path)["acknowledged"]) == (True, False), (
             f"{what} set aside the end that waited to be seen", held.status)
 
-    for spec in (_load(), RunSpec("Video", ("live", None), stop_button="Stop saving…", keeps_files=False)):
+    for spec in (_load(), RunSpec("Export", ("inference", "infer"), stop_button="Stop the export…", keeps_files=False)):
         stand_in = StandIn(word=spec.word)
         start_run(host, stand_in, spec=spec)
         stand_in.release()
@@ -4078,7 +4033,7 @@ def test_the_taskbar_flashes_for_an_end_and_for_needs_you(tmp_path, windows_aske
     assert said()[-2:] == [("status", False, "MainThread"), ("flash", True, "MainThread")], said()
     assert len(flashes()) == 1, said()
     held.acknowledge(held.status.run)                 # seen: each run below starts with no end waiting
-    for spec, refused in ((RunSpec("Live simulation", ("live", None), keeps_files=False), False), (_load(), False),
+    for spec, refused in ((RunSpec("Export", ("inference", "infer"), keeps_files=False), False), (_load(), False),
                           (_training(), True)):
         windows_asked.clear()
         stand_in = StandIn(word=spec.word)
@@ -4467,40 +4422,6 @@ def test_the_way_back_from_a_run_with_no_figure_puts_the_figure_in_front_before_
         "the way back from a run that made no figure did not put the figure in front before it in front again", seen)
 
 
-def test_a_saved_records_figure_closed_at_a_runs_end_is_not_sought_when_a_record_is_picked(tmp_path, monkeypatch):
-    """On the temperature page, a saved record's figure is in front as a measurement starts; the measurement fails
-    before it draws any, and its end closes the record's figure. A record picked then gives the column back to the
-    figures, with no error, the record's figure open again in front."""
-    import shiboken6
-    from PySide6.QtCore import QCoreApplication, QEvent
-    from core.artifacts import ArtifactStore, use_store
-    from core.gui.panels.fdt_panel import FdtPanel
-    from tests._fixtures import build_fdt_record, build_part, qt_app
-    from tests._runs import Clock, StandIn, start_run, turn_until
-    app = qt_app()
-    held, hooked = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), []
-    monkeypatch.setattr("sys.excepthook", lambda kind, error, trace: hooked.append(f"{kind.__name__}: {error}"))
-    with use_store(ArtifactStore(tmp_path / "Artifacts")) as store:
-        build_fdt_record(store)
-        panel = build_part(FdtPanel)
-        stack, combo = panel.figure_stack, panel.record_picker.combo
-        combo.activated.emit(combo.currentIndex())           # a person picks the record: its figure opens
-        page, title = stack.currentWidget(), stack.tabText(stack.currentIndex())
-        measured = StandIn(word="Measurement")
-        start_run(panel, measured, spec=RunSpec("Measurement", ("temperature", "one_cell"),
-                                                stop_button="Stop measurement…", kinds=("fdt",)))
-        measured.fail(RuntimeError("the run broke"))
-        turn_until(app, lambda: not held.is_live())
-        QCoreApplication.sendPostedEvents(page, QEvent.DeferredDelete)
-        assert (shiboken6.isValid(page), stack.count(), panel.results.currentWidget() is panel.run_view) == (
-            False, 0, True), "the record's figure was not closed at the run's end: nothing is tested"
-        combo.activated.emit(combo.currentIndex())
-        seen = (hooked, panel.results.currentWidget() is panel.figures, stack.count(),
-                stack.tabText(stack.currentIndex()))
-        assert seen == ([], True, 1, title), (
-            "a record picked raised, or did not give the column back to its figures", seen)
-
-
 def test_how_the_run_went_stands_above_the_figures_at_the_looks_gap(tmp_path):
     """"How the run went" stands above the figures it opens the run's page from at the gap the look sets between a
     heading and the block under it, at the ordinary text size and at a larger one."""
@@ -4717,155 +4638,6 @@ def test_the_full_text_finds_and_opens_its_file_and_its_folder(tmp_path):
     turn_until(app, lambda: not held.is_live())
     with running(host, spec=RunSpec("Run", None, keeps_files=False)):
         assert not view.file_button.isEnabled() and not view.folder_button.isEnabled()
-
-
-def test_live_simulation_keeps_its_own_view_under_the_runs_sentence(tmp_path, monkeypatch):
-    """A live simulation, a run with a view of its own, keeps that view where it is: the run's page stands above it
-    in its compact form, the sentence and the stop button alone, and its sentence counts the samples shown against
-    the samples to come, as the page hands them over with each frame; a stage the run says it begins is named
-    there. The stop button stands at the right of the page at its own width. At its end the page above the view
-    goes. When the samples to come cannot be worked out at the start, the run starts all the same, counting
-    none, and meets the failure itself."""
-    import numpy as np
-    from core.gui.panels import simulate_panel as live
-    from tests._fixtures import all_asked, build_part, forget_asked, qt_app
-    from tests._runs import Clock, StandIn, turn_until
-    from tests._window_helpers import shown_off_screen
-    app = qt_app()
-    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
-    cell = tmp_path / "cell.txt"
-    cell.write_text("# values\n", encoding="utf-8")
-    stand_in = StandIn(word="Live simulation")
-    monkeypatch.setattr(live, "build_stream_config", lambda model, path: SimpleNamespace(length_unit="nm"))
-    monkeypatch.setattr(live, "plan_stream", lambda cfg, t_obs: SimpleNamespace(total_steps=7_999,
-                                                                                 subsample_factor=2))
-    monkeypatch.setattr(live, "run_simulation_stream", stand_in)
-    panel = build_part(live.SimulatePanel)
-    panel.cell_picker.selected_path = lambda: str(cell)
-    shown_off_screen(panel, 1300, 900)
-    view = panel.run_view
-    assert not view.isVisibleTo(panel)
-    panel._start()
-    app.processEvents()
-    assert held.is_live() and held.model.spec.own_view and view.compact
-    assert view.isVisibleTo(panel) and panel.results.currentWidget() is panel.figures
-    assert panel.results_split.indexOf(panel.live_view) == 0 and panel.live_view.isVisibleTo(panel)
-    shown = [name for name in ("title", "text_button", "stop_button", "back_button", "stage_line", "sentence", "axis",
-                               "axis_caption", "follows", "body", "text_block")
-             if getattr(view, name).isVisibleTo(view)]
-    assert shown == ["stop_button", "sentence"], shown
-    assert view.stop_button.text() == "Stop simulation"
-    stop = view.stop_button.geometry()
-    assert (stop.width(), stop.right() + 1) == (view.stop_button.sizeHint().width(), view.head.width()), (
-        "the compact page's stop button does not stand at the right at its own width", stop, view.head.width())
-    panel._on_chunk(np.zeros((1_200, 2)))
-    assert view.sentence.text() == "Live simulation is running: 1,200 of 4,000 samples."
-    view.set_stage("Recording")                        # a run that says its stages itself
-    assert (held.model.stage, view.sentence.text()) == ("Recording", "Live simulation is running: Recording.")
-    view.stop_button.click()
-    turn_until(app, lambda: not held.is_live())
-    assert not view.isVisibleTo(panel) and panel.live_view.isVisibleTo(panel)
-
-    def unplanned(cfg, t_obs):
-        raise RuntimeError("the samples to come cannot be worked out")
-
-    again = StandIn(word="Live simulation")
-    monkeypatch.setattr(live, "plan_stream", unplanned)
-    monkeypatch.setattr(live, "run_simulation_stream", again)
-    forget_asked()
-    panel._start()
-    assert (held.is_live(), all_asked()) == (True, []), (
-        "a count that could not be worked out kept the run from starting")
-    panel._on_chunk(np.zeros((1_200, 2)))
-    assert view.sentence.text() == "Live simulation is starting.", view.sentence.text()
-    again.release()
-    turn_until(app, lambda: not held.is_live())
-
-
-def test_a_live_simulation_that_fails_says_so_under_its_sentence_on_its_compact_page(tmp_path, monkeypatch):
-    """A live simulation that fails keeps its compact page above its own view, and says the failure there: under the
-    sentence that it failed, beside the error's marker, when it failed and the error's message, never the run's word
-    and "failed" again, the message not quoted a second time beneath, and "Show the full error"; nothing of what
-    scrolls on a full page is in sight, and there is no way back to a form. While compact, running or failed, the page
-    asks for no width of its own."""
-    import numpy as np
-    from PySide6.QtCore import QPoint
-    from core.gui.panels import simulate_panel as live
-    from tests._fixtures import build_part, qt_app
-    from tests._runs import Clock, StandIn, turn_until
-    from tests._window_helpers import shown_off_screen
-    app = qt_app()
-    clock = Clock(_at(20, 18, 17, 40))
-    held = _controller_on(tmp_path, clock)
-    cell = tmp_path / "cell.txt"
-    cell.write_text("# values\n", encoding="utf-8")
-    stand_in = StandIn(word="Live simulation")
-    monkeypatch.setattr(live, "build_stream_config", lambda model, path: SimpleNamespace(length_unit="nm"))
-    monkeypatch.setattr(live, "plan_stream", lambda cfg, t_obs: SimpleNamespace(total_steps=7_999,
-                                                                                 subsample_factor=2))
-    monkeypatch.setattr(live, "run_simulation_stream", stand_in)
-    panel = build_part(live.SimulatePanel)
-    panel.cell_picker.selected_path = lambda: str(cell)
-    shown_off_screen(panel, 1300, 900)
-    view = panel.run_view
-    panel._start()
-    panel._on_chunk(np.zeros((1_200, 2)))
-    app.processEvents()
-    assert (view.compact, view.isVisibleTo(panel), view.minimumWidth()) == (True, True, 0), (
-        "the live simulation's compact page asks for a width of its own", view.minimumWidth())
-    clock.advance(20)
-    message = ("NadrowskiSDE euler_compiled failed after 4500 steps (batch=1, segs=1, device=cuda:0, "
-               "dtype=torch.float32)")
-    stand_in.fail(RuntimeError(message))
-    turn_until(app, lambda: not held.is_live())
-    app.processEvents()
-    shown = [name for name in ("title", "text_button", "stop_button", "back_button", "stage_line", "sentence", "said",
-                               "failure", "full_error_button", "body", "text_block")
-             if getattr(view, name).isVisibleTo(view)]
-    assert (view.compact, view.isVisibleTo(panel), panel.live_view.isVisibleTo(panel), shown) == (
-        True, True, True, ["sentence", "said", "failure", "full_error_button"]), (
-        "the failed compact page does not show its sentence and its failure alone", shown)
-    under = view.sentence.mapTo(view, QPoint(0, view.sentence.height())).y()
-    assert view.failure.mapTo(view, QPoint(0, 0)).y() >= under, "the failure does not stand under the sentence"
-    assert (view.sentence.text(), view.failure_row.sentence.plain_text(), view.failure_message.text(),
-            view.failure_message.isVisibleTo(view), view.full_error_button.text()) == (
-        "Live simulation failed.", f"On Tue 20 Oct, 18:18: {message}.", message, False, "Show the full error"), (
-        view.sentence.text(), view.failure_row.sentence.plain_text(), view.failure_message.isVisibleTo(view))
-    assert view.minimumWidth() == 0, ("the failed compact page asks for a width of its own", view.minimumWidth())
-
-
-def test_a_past_view_on_the_live_simulations_page_gives_the_live_view_back(tmp_path):
-    """A live simulation keeps no history file, but a history file that names its page (another PRISM's) is drawn
-    in the page's past view all the same, in the live view's place. "Back to the form" gives the live view back, and
-    so does a live simulation started while the past view shows, its page above the live view."""
-    from core.gui.panels import simulate_panel as live
-    from core.gui.run import history
-    from tests._fixtures import build_part, qt_app
-    from tests._runs import Clock, StandIn, start_run, turn_until
-    from tests._window_helpers import shown_off_screen
-    app = qt_app()
-    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
-    run = "20261001T090000-live-simulation"
-    history.write(tmp_path / "runs", {"id": run, "word": "Live simulation", "started": _at(1, 9, 0),
-                                      "ended": _at(1, 9, 30), "outcome": "finished", "place": ["live", None]})
-    panel = build_part(live.SimulatePanel)
-    shown_off_screen(panel, 1300, 900)
-
-    def column():
-        """Which page the column shows, and whether the live view and the run's page above it are in sight."""
-        return (panel.results.currentWidget().objectName(), panel.live_view.isVisibleTo(panel),
-                panel.run_view.isVisibleTo(panel))
-
-    assert held.show_past(run, panel) and column() == ("past", False, False), column()
-    panel.past_view.back_button.click()
-    assert column() == ("figures", True, False), ("Back to the form left the live view out of sight", column())
-    assert held.show_past(run, panel) and column() == ("past", False, False), column()
-    stand_in = StandIn(word="Live simulation")
-    start_run(panel, stand_in, spec=panel.run_spec(live.run_simulation_stream))
-    assert column() == ("figures", True, True), ("a live simulation started behind the past view", column())
-    stand_in.release()
-    turn_until(app, lambda: not held.is_live())
-    assert column() == ("figures", True, False), column()
 
 
 def test_when_a_run_starts_from_the_keyboard_the_keyboard_goes_to_its_stop_button(tmp_path, monkeypatch):
@@ -5717,12 +5489,9 @@ def test_with_no_message_the_figures_stand_where_they_stand_after_the_messages(f
 # What this computer's screen offers the window, and what a screen of 1280 x 720 offers it: at one and a half times the
 # ordinary text size, a window on such a screen is narrower than the table's least size, and the two still share it.
 _LARGE_SCREEN, _SMALL_SCREEN = (3400, 1380), (1240, 660)
-# The pages that keep the form beside the run's page, by a name for a test and the place the window opens each at. A
-# video stands its run's page among Live simulation's figures, whole; the other runs stand theirs in the column's stack.
-_FORM_BESIDE_THE_COLUMN = {"inference": ("inference", "infer"),
-                           "narrowing round": ("inference", "narrowing"), "one cell": ("temperature", "one_cell"),
-                           "sweep": ("temperature", "sweep"), "reduction map": ("reduction", None),
-                           "video": ("live", None)}
+# The pages that keep the form beside the run's page, by a name for a test and the place the window opens each at: each
+# run stands its page in the column's stack.
+_FORM_BESIDE_THE_COLUMN = {"inference": ("inference", "infer"), "narrowing round": ("inference", "narrowing")}
 _NARROWING = _FORM_BESIDE_THE_COLUMN["narrowing round"]
 # A window's width is tried pixel by pixel over this many pixels above its least size, where the form and the run's
 # page meet, and at every tenth pixel from there to its opening width.
@@ -5787,7 +5556,6 @@ def test_nothing_of_the_run_page_is_hidden_under_the_form_at_any_width(page, fac
     shares it too, the run's page having asked for its width only as it was shown; the page's own contents are read at
     that size; and a page of another place, whose column shows its figures, keeps its form's least width all the while."""
     from core.gui import design
-    from core.gui.panels.simulate_export import export_animation
     from core.gui.run.controller import controller
     from tests._fixtures import qt_app
     from tests._look_helpers import _settle, _the_look, text_size
@@ -5797,8 +5565,7 @@ def test_nothing_of_the_run_page_is_hidden_under_the_form_at_any_width(page, fac
     with text_size(factor), _the_look(False):
         window, host, opening, least = _in_the_look_at(room, tmp_path, place)
         stand_in = StandIn()
-        start_run(host, stand_in, spec=host.run_spec(export_animation) if page == "video"
-                  else _training(stop_button="Stop the run…", place=place))
+        start_run(host, stand_in, spec=_training(stop_button="Stop the run…", place=place))
         widths = sorted({*range(least[0], least[0] + _WHERE_THEY_MEET), *range(least[0], opening[0], 10), opening[0],
                          room[0]})
         for width in widths + widths[::-1]:
@@ -5813,7 +5580,7 @@ def test_nothing_of_the_run_page_is_hidden_under_the_form_at_any_width(page, fac
         _settle()
         _the_two_share_the_width(window, host, (page, factor, "left and come back to"))
         _in_its_column(host.run_view, host.results, (page, factor))
-        elsewhere = ("inference", "infer") if place == ("reduction", None) else ("reduction", None)
+        elsewhere = ("inference", "narrowing") if place == ("inference", "infer") else ("inference", "infer")
         window.go_to(*elsewhere)
         other = next(panel for panel, at in window._places.items() if at == elsewhere)
         assert other.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W, "a page with no run gave up its width"
@@ -5905,137 +5672,6 @@ def test_the_form_comes_back_with_the_figures_and_a_divider_left_by_hand_stands_
         window.resize(*opening)
         _settle()
         assert form.width() == 500, (how, "a divider left by hand did not stand where it stood", form.width())
-
-
-@pytest.mark.parametrize("how", ["a finish", "a stop", "a failure", "how the run went"])
-@pytest.mark.parametrize("where", ["back at the opening width", "still at the least width"])
-def test_the_form_comes_back_after_a_video_and_a_divider_left_by_hand_stands_where_it_stood(how, where, tmp_path):
-    """A video's run's page stands whole among Live simulation's figures, so no change of the column says it came, and
-    the form gives way all the same, and has its least width again as the page goes, however it goes: a finish and a
-    stop take it at once, and a failure leaves it standing, sharing the width, until "Back to the form", for it says
-    what went wrong; "How the run went" brings it back, and "Back to the form" takes it again. A divider left at 500 by
-    hand and pushed aside by a window made least stands at 500 again when the window has the room."""
-    from core.gui import design
-    from core.gui.panels.simulate_export import export_animation
-    from core.gui.run.controller import controller
-    from tests._fixtures import qt_app
-    from tests._look_helpers import _settle, _the_look, text_size
-    from tests._runs import StandIn, start_run, turn_until
-    app = qt_app()
-    with text_size(1.0), _the_look(False):
-        window, host, opening, least = _in_the_look_at(_LARGE_SCREEN, tmp_path, ("live", None))
-        form, held, view = host.controls_scroll, controller(), host.run_view
-        host.splitter.setSizes([500, host.splitter.width() - 500 - host.splitter.handleWidth()])
-        _settle()
-        assert (form.width(), form.minimumWidth()) == (500, design.CONTROLS_MIN_W), form.width()
-        stand_in = StandIn(word="Video")
-        start_run(host, stand_in, spec=host.run_spec(export_animation))
-        _settle()
-        assert (form.width(), form.minimumWidth()) == (500, 0), ("the run moved the divider", form.width())
-        window.resize(*least)
-        _settle()
-        _the_two_share_the_width(window, host, "the divider pushed aside")
-        if where == "back at the opening width":
-            window.resize(*opening)
-            _settle()
-            assert form.width() == 500, ("the divider did not come back with the window", form.width())
-        if how == "a finish":
-            stand_in.release()
-        elif how == "a stop":
-            held.request_stop()
-        else:
-            stand_in.fail(RuntimeError("the stand-in failed"))
-        turn_until(app, lambda: not held.is_live())
-        _settle()
-        if how in ("a failure", "how the run went"):
-            assert not view.isHidden() and form.minimumWidth() == 0, (how, "a failed video's page did not stand")
-            size = window.size()
-            window.resize(*least)
-            _settle()
-            _the_two_share_the_width(window, host, (how, "the failure's page"))
-            window.resize(size)
-            _settle()
-            view.back_button.click()
-            _settle()
-        assert view.isHidden() and form.minimumWidth() == design.CONTROLS_MIN_W, (how, form.minimumWidth())
-        if how == "how the run went":
-            view.how_link.click()
-            _settle()
-            assert not view.isHidden() and form.minimumWidth() == 0, "the page came back beside the form's least width"
-            view.back_button.click()
-            _settle()
-            assert view.isHidden() and form.minimumWidth() == design.CONTROLS_MIN_W, form.minimumWidth()
-        window.resize(*opening)
-        _settle()
-        assert form.width() == 500, (how, "a divider left by hand did not stand where it stood", form.width())
-
-
-def test_a_live_simulations_compact_page_leaves_the_form_as_it_was(tmp_path):
-    """A live simulation's page is compact and asks no width of its own, so that the form keeps its least width beside
-    it: the divider cannot be pushed under it while the stream runs. The rule goes by the page's form, not by the panel:
-    a video after a stream gives the width up, and a stream after a video has it back."""
-    from core.gui import design
-    from core.gui.panels.simulate_export import export_animation
-    from core.gui.panels.simulate_runner import run_simulation_stream
-    from core.gui.run.controller import controller
-    from tests._fixtures import qt_app
-    from tests._look_helpers import _settle, _the_look, text_size
-    from tests._runs import StandIn, start_run, turn_until
-    app = qt_app()
-    with text_size(1.0), _the_look(False):
-        window, host, _opening, least = _in_the_look_at(_LARGE_SCREEN, tmp_path, ("live", None))
-        form, held = host.controls_scroll, controller()
-        window.resize(*least)
-        _settle()
-
-        def a_run(fn):
-            stand_in = StandIn()
-            start_run(host, stand_in, spec=host.run_spec(fn))
-            _settle()
-            return stand_in, form.minimumWidth(), host.run_view.compact
-
-        def over(stand_in):
-            stand_in.release()
-            turn_until(app, lambda: not held.is_live())
-            _settle()
-
-        stream, least_width, compact = a_run(run_simulation_stream)
-        assert (least_width, compact, form.width()) == (design.CONTROLS_MIN_W, True, 420), (least_width, form.width())
-        _the_two_share_the_width(window, host, "a stream's compact page")
-        host.splitter.setSizes([100, host.splitter.width() - 100 - host.splitter.handleWidth()])
-        _settle()
-        assert form.width() == design.CONTROLS_MIN_W, "a stream let the divider go under the form's least width"
-        host.splitter.setSizes([420, host.splitter.width() - 420 - host.splitter.handleWidth()])
-        over(stream)
-        video, least_width, compact = a_run(export_animation)
-        assert (least_width, compact) == (0, False), "a video after a stream did not give the width up"
-        _the_two_share_the_width(window, host, "a video after a stream")
-        over(video)
-        stream, least_width, compact = a_run(run_simulation_stream)
-        assert (least_width, compact) == (design.CONTROLS_MIN_W, True), "a stream after a video kept the width given up"
-        over(stream)
-
-
-def test_a_past_view_on_the_live_simulations_page_shares_the_width_too(tmp_path):
-    """A past view drawn on Live simulation's page takes the column as on any page, and shares the width as any other:
-    the form gives way while it shows, and has its least width again when it goes."""
-    from core.gui import design
-    from core.gui.run import history
-    from core.gui.run.controller import controller
-    from tests._look_helpers import _settle, _the_look, text_size
-    run = "20261001T090000-live-simulation"
-    with text_size(1.0), _the_look(False):
-        window, host, _opening, least = _in_the_look_at(_LARGE_SCREEN, tmp_path, ("live", None))
-        history.write(tmp_path / "runs", {"id": run, "word": "Live simulation", "started": _at(1, 9, 0),
-                                          "ended": _at(1, 9, 30), "outcome": "finished", "place": ["live", None]})
-        window.resize(*least)
-        assert controller().show_past(run, host)
-        _settle()
-        assert host.results.currentWidget() is host.past_view
-        _the_two_share_the_width(window, host, "the live simulation's past view")
-        host.past_view.back_button.click()
-        _settle()
-        assert host.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W
 
 
 @pytest.mark.parametrize("step", ["the stand-in", "Prior", "Training", "a list beside its detail",
@@ -6314,38 +5950,6 @@ def test_a_page_hands_its_run_plain_settings(tmp_path, monkeypatch):
                              "stop_after_epochs", "max_num_epochs", "expected_epochs", "checkpoint_every", "fisher_m",
                              "fisher_dz", "fisher_points"}
         assert spec.plan is None
-
-
-def test_a_past_view_over_a_failed_videos_page_is_what_is_measured(tmp_path):
-    """A failed video's page stands among Live simulation's figures; a past run drawn on the page stands over those
-    figures, and the run's page is then out of sight though not hidden. What is read is what the column shows, the
-    form sharing the width with that."""
-    from core.gui.panels.simulate_export import export_animation
-    from core.gui.run import history
-    from core.gui.run.controller import controller
-    from tests._fixtures import qt_app
-    from tests._look_helpers import _settle, _the_look, text_size
-    from tests._runs import StandIn, start_run, turn_until
-    app = qt_app()
-    run = "20261001T090000-live-simulation"
-    with text_size(1.0), _the_look(False):
-        window, host, _opening, least = _in_the_look_at(_LARGE_SCREEN, tmp_path, ("live", None))
-        history.write(tmp_path / "runs", {"id": run, "word": "Live simulation", "started": _at(1, 9, 0),
-                                          "ended": _at(1, 9, 30), "outcome": "finished", "place": ["live", None]})
-        stand_in = StandIn(word="Video")
-        start_run(host, stand_in, spec=host.run_spec(export_animation))
-        stand_in.fail(RuntimeError("the stand-in failed"))
-        turn_until(app, lambda: not controller().is_live())
-        window.resize(*least)
-        _settle()
-        assert not host.run_view.isHidden() and host.run_view.isVisible()
-        assert controller().show_past(run, host)
-        _settle()
-        assert not host.run_view.isHidden() and not host.run_view.isVisible(), "the page is hidden or still in sight"
-        _the_two_share_the_width(window, host, "a past view over a failed video's page")
-        host.past_view.back_button.click()
-        _settle()
-        host.run_view.back_button.click()
 
 
 def test_a_start_taken_back_gives_the_form_its_least_width_again(tmp_path):
@@ -6771,9 +6375,9 @@ def test_a_chain_under_an_end_waiting_to_be_seen_goes_through(tmp_path):
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 12, 4)))
     host = build_run_host()
-    reduction = StandIn(word="Reduction")
-    reduction.release()
-    start_run(build_run_host(), reduction, spec=RunSpec("Reduction", ("reduction", None), stop_button="Stop…"))
+    check = StandIn(word="Check")
+    check.release()
+    start_run(build_run_host(), check, spec=RunSpec("Check", ("inference", "checks"), stop_button="Stop…"))
     turn_until(app, lambda: not held.is_live())
     waiting = held.status
     assert waiting.unacknowledged_end and waiting.run is not None

@@ -1973,7 +1973,7 @@ def test_no_plan_is_read_while_a_run_is_live(tmp_path, monkeypatch, store):
     reached by code, the readings, "Check again" and the store's change read no folder and no file, and no press asks a
     question. The run's end reads the file of the plan in use once."""
     from core.gui import plans as window_plans
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run.controller import controller
     from tests._dialogs import all_asked, forget_asked
     from tests._fixtures import qt_app, readings_of_a_run
@@ -1984,8 +1984,8 @@ def test_no_plan_is_read_while_a_run_is_live(tmp_path, monkeypatch, store):
     _plan(folder, RETRAIN, "another")
     listed = _listed(page)
     calls = readings_of_a_run(monkeypatch)
-    stand_in = StandIn(word="Reduction")
-    start_run(window.panel(ReductionPanel), stand_in)
+    stand_in = StandIn(word="Inference")
+    start_run(window.panel(InferPanel), stand_in)
     forget_asked()
     page.plan_choice.showPopup()
     page.plan_choice.hidePopup()
@@ -2055,11 +2055,11 @@ def test_a_value_put_back_and_filled_over_with_the_same_number_is_the_plans(tmp_
 def test_a_fill_while_a_run_is_live_changes_nothing(tmp_path, monkeypatch, store):
     """A fill asked for by code while a run is live changes no form and puts no plan in use."""
     from core.gui import plans as window_plans
-    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.inference_tabs import InferPanel
     from tests._runs import running
     window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
     before = _values(screen)
-    with running(window.panel(ReductionPanel)):
+    with running(window.panel(InferPanel)):
         done = window_plans.fill_forms(screen, {("Training", "num_runs"): 10000},
                                        window_plans.PlanSource("plan", "retrain", None, "", None, {}))
     assert done is False and _values(screen) == before and screen.plan_source is None

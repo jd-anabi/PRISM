@@ -38,9 +38,7 @@ from PySide6.QtCore import QEventLoop, QObject, QTimer
 #: ``start_run`` when no spec is handed.
 PLACES = {"ConfigPanel": ("inference", "model"), "PriorPanel": ("inference", "prior"),
           "PosteriorPanel": ("inference", "training"), "ValidatePanel": ("inference", "checks"),
-          "InferPanel": ("inference", "infer"), "TSNPEPanel": ("inference", "narrowing"),
-          "FdtPanel": ("temperature", "one_cell"), "CrossValPanel": ("temperature", "sweep"),
-          "ReductionPanel": ("reduction", None), "SimulatePanel": ("live", None)}
+          "InferPanel": ("inference", "infer"), "TSNPEPanel": ("inference", "narrowing")}
 #: The line a stand-in run asked to stop says while it waits, at which the stop is taken.
 STOP_LINE = "The stand-in run reaches its next line."
 #: How long a stand-in run waits, with nothing told it, before it gives up and raises: a run its test never

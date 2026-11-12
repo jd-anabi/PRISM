@@ -1099,8 +1099,8 @@ def test_show_all_stays_open_through_a_reading_a_move_and_a_run(tmp_path):
     page.said = (Fact("err", "a", BLOCKS), Fact("info", "b, later"), Fact("info", "c"))
     page.redraw()
     assert foot.more.text() == "Show fewer"
-    stand_in = StandIn(word="Reduction")
-    start_run(window.part("reduction"), stand_in)
+    stand_in = StandIn(word="Other run")
+    start_run(window.part("inference").tsnpe_panel, stand_in)
     moved()
     window.resize(901, 600)
     _settle()
@@ -1522,7 +1522,7 @@ def test_no_reading_happens_between_a_runs_start_and_its_end(left_for, page_clas
     window, page, _clock = _a_page(tmp_path, shown=left_for == "the end", cls=page_class)
     if left_for == "the first opening":
         shown_off_screen(window, 1300, 820)
-    runner = window.part("reduction")
+    runner = window.part("inference").tsnpe_panel
     counted = {"readings": 0, "pressed": 0}
     for name, kept in (("readings", page.read_disk), ("pressed", page.main_pressed)):
         monkeypatch.setattr(page, "read_disk" if name == "readings" else "main_pressed",
@@ -1530,7 +1530,7 @@ def test_no_reading_happens_between_a_runs_start_and_its_end(left_for, page_clas
     readings = 0
     OPENED.get(page_class, lambda page: None)(page)
     page.form.rows[EDITED[page_class]].widget.setText("7")
-    stand_in = StandIn(word="Reduction")
+    stand_in = StandIn(word="Other run")
     calls = readings_of_a_run(monkeypatch)
     start_run(runner, stand_in)
     if left_for == "the first opening":
@@ -1587,8 +1587,8 @@ def test_a_store_change_reads_a_shown_page_now_and_a_hidden_one_at_its_show(tmp_
 def test_a_store_change_during_a_run_reads_at_its_end(tmp_path):
     app = qt_app()
     window, page, _clock = _a_page(tmp_path)
-    runner = window.part("reduction")
-    stand_in = StandIn(word="Reduction")
+    runner = window.part("inference").tsnpe_panel
+    stand_in = StandIn(word="Other run")
     start_run(runner, stand_in)
     window.part("inference").stale_store()
     assert page.readings == 0
@@ -1873,8 +1873,8 @@ def test_a_run_empties_the_figures_of_the_page_it_starts_on(end, tmp_path):
         page.run_view.back_button.click()
         _settle()
         assert page.results.currentWidget() is page.figures and link.isVisibleTo(page.figures)
-    other = StandIn(word="Reduction")
-    start_run(window.part("reduction"), other)
+    other = StandIn(word="Other run")
+    start_run(window.part("inference").tsnpe_panel, other)
     assert page.figure_stack.count() == 1
     other.release()
     turn_until(app, lambda: not controller().is_live())
@@ -1979,8 +1979,8 @@ def test_a_page_hands_the_keyboard_its_first_setting_and_none_while_it_is_locked
     page.form.rows["num_runs"].widget.setEnabled(False)
     assert page.first_focus() is page.kind_choice
     page.form.rows["num_runs"].widget.setEnabled(True)
-    stand_in = StandIn(word="Reduction")
-    start_run(window.part("reduction"), stand_in)
+    stand_in = StandIn(word="Other run")
+    start_run(window.part("inference").tsnpe_panel, stand_in)
     assert page.first_focus() is None
     window.go_to("inference", "training")
     _settle()
@@ -2947,8 +2947,8 @@ def test_a_reason_that_waiting_will_not_lift_reads_cannot_start(tmp_path):
             lead = "Cannot start:" if words in step_facts.FINAL_BLOCKS else "Cannot start yet:"
             assert page.foot.reason.text() == f"{lead} {words}.", (step, words)
             assert not page.foot.main_button.isEnabled()
-        stand_in = StandIn(word="Reduction")
-        start_run(window.part("reduction"), stand_in)
+        stand_in = StandIn(word="Other run")
+        start_run(window.part("inference").tsnpe_panel, stand_in)
         _settle()
         page.redraw()
         assert page.foot.reason.text() == "A run is live. Only one runs at a time."
@@ -2994,8 +2994,8 @@ def _the_checks_lists_blocks(tmp_path) -> None:
     screen.checks_held = replace(screen.checks_held, held=replace(screen.checks_held.held, pair_refused="refused"))
     page.refresh_local_gates()
     assert page.foot.reason.text() == "Cannot start yet: the prior in use is not the posterior's own."
-    stand_in = StandIn(word="Reduction")
-    start_run(window.part("reduction"), stand_in)
+    stand_in = StandIn(word="Other run")
+    start_run(window.part("inference").tsnpe_panel, stand_in)
     _settle()
     page.redraw()
     assert page.foot.reason.text() == "A run is live. Only one runs at a time."
@@ -3067,8 +3067,8 @@ def test_a_page_hands_its_foot_and_its_keys_to_the_form_in_sight(tmp_path):
             _settle()
             walked.append(QApplication.focusWidget())
     assert detail.rows["n_cal"].widget in walked and own.rows["num_runs"].widget not in walked
-    stand_in = StandIn(word="Reduction")
-    start_run(window.part("reduction"), stand_in)
+    stand_in = StandIn(word="Other run")
+    start_run(window.part("inference").tsnpe_panel, stand_in)
     _settle()
     assert not detail.isEnabled() and not own.isEnabled()
     assert page.foot.reason.text() == "A run is live. Only one runs at a time." and not page.foot.main_button.isEnabled()
@@ -3091,8 +3091,8 @@ def test_a_page_hands_its_foot_and_its_keys_to_the_form_in_sight(tmp_path):
     assert fresh.isEnabled(), "a form handed again after the run's end was held locked"
     page.use_form(own)
     shiboken6.delete(fresh)                                # a handed form gone before the next run
-    second = StandIn(word="Reduction")
-    start_run(window.part("reduction"), second)
+    second = StandIn(word="Other run")
+    start_run(window.part("inference").tsnpe_panel, second)
     _settle()
     assert not own.isEnabled() and not detail.isEnabled(), "the next run did not lock the forms the page has handed"
     second.release()
@@ -3199,10 +3199,10 @@ def test_no_code_of_the_window_reads_the_items_of_a_layout():
 def test_go_to_the_run_goes_to_the_run(tmp_path):
     app = qt_app()
     window, page, _clock = _a_page(tmp_path)
-    stand_in = StandIn(word="Reduction")
-    start_run(window.part("reduction"), stand_in)
+    stand_in = StandIn(word="Other run")
+    start_run(window.part("inference").tsnpe_panel, stand_in)
     page.foot.run_link.click()
-    assert window.current_place() == ("reduction", None)
+    assert window.current_place() == ("inference", "narrowing")
     stand_in.release()
     turn_until(app, lambda: not controller().is_live())
 
@@ -3253,11 +3253,11 @@ def test_enter_presses_each_new_button_with_the_ring_and_nothing_in_a_field(tmp_
                 QTest.keyClick(control, Qt.Key_Return)
                 assert page.pressed == 0 and window.current_place() == ("inference", "training"), type(control)
                 assert ticked is None or control.isChecked() == ticked, "Enter set a tick box"
-            stand_in = StandIn(word="Reduction")
-            start_run(window.part("reduction"), stand_in)
+            stand_in = StandIn(word="Other run")
+            start_run(window.part("inference").tsnpe_panel, stand_in)
             _settle()
             press(page.foot.run_link)
-            assert window.current_place() == ("reduction", None)
+            assert window.current_place() == ("inference", "narrowing")
             stand_in.release()
             turn_until(app, lambda: not controller().is_live())
         window.hide()
@@ -3973,8 +3973,8 @@ def test_the_walk_during_a_run_on_another_page_reaches_the_way_to_it(tmp_path):
     page.said = (*_facts(8, "warn"), Fact("info", "Read this too."))
     page.redraw()
     _settle()
-    stand_in = StandIn(word="Reduction")
-    start_run(window.part("reduction"), stand_in)
+    stand_in = StandIn(word="Other run")
+    start_run(window.part("inference").tsnpe_panel, stand_in)
     window.go_to("inference", "training")
     _settle()
     expected = [page.help_button, page.head_button, page.scroller, foot.facts.scroller, foot.more, foot.run_link]
@@ -4494,8 +4494,8 @@ def test_a_refusal_on_the_run_page_of_a_rebuilt_page_says_what_the_page_says(tmp
     assert page.run_view.failure_message.text().endswith("Set it in 'Batches' on this page."), (
         page.run_view.failure_message.text())
     page.run_view.back_button.click()
-    panel = window.part("reduction")
-    other = StandIn(word="Reduction")
+    panel = window.part("inference").tsnpe_panel
+    other = StandIn(word="Other run")
     start_run(panel, other)
     other.solver(3)
     other.fail(Refusal("The number of simulation batches must be at least 1; got 0.", field="num_runs"))

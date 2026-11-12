@@ -438,9 +438,7 @@ class Rail(QWidget):
         rows.setSpacing(0)
         self._parts, self._steps, self._blocks = {}, {}, {}
         for place in keys.PARTS:
-            if place.key == "temperature":
-                rows.addSpacing(design.scaled(design.GAP["rail_rest"]))
-            elif place.key == "records":
+            if place.key == "records":
                 rows.addSpacing(design.scaled(design.GAP["rail_group"]))
             elif place.key == "models":
                 rows.addStretch(1)
@@ -484,7 +482,7 @@ class Rail(QWidget):
     def set_place(self, part: str, step: str | None = None) -> None:
         """Mark the place in sight: the part, and the step while parameter inference is open; the chain shows
         only then. A part the rail does not list marks no row, a step it does not list leaves its part's row
-        marked, and a page of a part (a page of effective temperature) marks its part's row. The current row is
+        marked, and a page of a part (a page of Your own models) marks its part's row. The current row is
         brought into view."""
         self._part = part if part in self._parts else None
         self._step = step if (self._part == "inference" and step in self._steps) else None

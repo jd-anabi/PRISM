@@ -1,5 +1,5 @@
 """Home: what to do next, where each step of parameter inference stands, what each part of PRISM is for, the
-newest records and the latest runs; on a computer where nothing has been made yet, four plain choices in place of
+newest records and the latest runs; on a computer where nothing has been made yet, two plain choices in place of
 the next step.
 
 Home states only what the function it is handed reads, at the moment it reads. It reads once when it is built,
@@ -31,14 +31,11 @@ _FIRST_HEAD = ("What do you want to do?",
                "PRISM simulates models of the hair bundle, the motion sensor of the inner ear's hair cells, and "
                "infers a cell's model parameters from recordings. Nothing has been made yet.")
 
-# The first opening's four choices, in their order: the button's words, the sentence beside it, and the part and
+# The first opening's two choices, in their order: the button's words, the sentence beside it, and the part and
 # page the button opens. The first is the main one.
 _CHOICES = (
-    ("Watch a live simulation", "Needs nothing first. See a cell's bundle move as it is simulated.", "live", None),
     ("Begin parameter inference", "Six steps, each needing the one before. It starts with choosing a model.",
      "inference", "model"),
-    ("Measure an effective temperature", "On one simulated cell, or in a sweep study over two parameters.",
-     "temperature", None),
     ("Read what each part is for", "A short section per part.", "help", None),
 )
 
@@ -145,7 +142,7 @@ class _MainButton(QPushButton):
 
 
 class _Body(QWidget):
-    """The middle of Home: the next step, or the four choices, over two columns. It hands the width the page gives
+    """The middle of Home: the next step, or the two choices, over two columns. It hands the width the page gives
     it on to the columns, which stand one above the other on a narrow page."""
 
     def __init__(self, top: QWidget, choices: QWidget, columns: Columns) -> None:
@@ -232,7 +229,7 @@ class HomeScreen(QWidget):
         lines.addWidget(self.next_command)
         lines.addLayout(buttons)
 
-        # the first opening: four buttons, each with its sentence beside it
+        # the first opening: two buttons, each with its sentence beside it
         self._choices_block = QWidget()
         grid = QGridLayout(self._choices_block)
         grid.setContentsMargins(0, 0, 0, 0)

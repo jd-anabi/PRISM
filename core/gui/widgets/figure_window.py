@@ -10,8 +10,8 @@ Two window types, one per figure source (see FigureStack):
     on matplotlib's global lock -- a silent hang with no traceback. A figure UNPICKLED here is a fresh
     main-thread object, so painting it is safe.
 
-  * ImageZoomWindow -- for figures we only have as a PNG on disk (FDT / Reduction / CrossVal, whose
-    runners save PNGs to disk rather than hand a Figure back), and as the fallback when a pickle is
+  * ImageZoomWindow -- for figures we only have as a PNG on disk (from a runner that saves PNGs to
+    disk rather than hand a Figure back), and as the fallback when a pickle is
     missing or fails to load. A QGraphicsView gives wheel-zoom, drag-pan and fit-to-window over the
     static image.
 

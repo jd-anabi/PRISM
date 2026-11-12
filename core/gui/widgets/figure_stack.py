@@ -1,8 +1,8 @@
 """A tabbed container of figure images. Figures are rendered to PNG on the worker thread (see
 BasePanel's fig_sink) and shown here as QPixmaps -- deliberately NOT live FigureCanvasQTAgg widgets:
 painting a matplotlib figure that was created on a worker thread deadlocks on matplotlib's global
-lock. Static PNGs sidestep that entirely and unify with the FDT/Reduction/CrossVal runners, which
-already save PNGs to disk.
+lock. Static PNGs sidestep that entirely and unify with a runner that saves its PNGs to disk
+itself.
 
 Each tab carries a "Pop out" button that re-opens the figure in its own window where it CAN be zoomed,
 panned and saved (core/gui/widgets/figure_window.py), a window of its own that no window owns:
@@ -90,7 +90,7 @@ class FigureStack(QTabWidget):
         self._add_tab(title, pix, fig_pickle=fig_pickle, png_path=None)
 
     def add_png(self, title: str, path):
-        """Show a PNG that a runner saved to disk (FDT/Reduction/CrossVal modes). No Figure exists for
+        """Show a PNG that a runner saved to disk. No Figure exists for
         these, so "Pop out" is a pan/zoom image viewer over the file."""
         self._add_tab(title, QPixmap(str(path)), fig_pickle=None, png_path=str(path))
 

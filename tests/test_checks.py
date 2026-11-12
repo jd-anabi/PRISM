@@ -1903,8 +1903,8 @@ def test_the_comparison_is_read_afterwards_from_the_sets_counts_or_the_log(tmp_p
         assert [fact.sentence for fact in one.result.sentences()] == [
             "The audit measured the whole prior; this round simulated inside a narrowed region."]
         calls = readings_of_a_run(monkeypatch)
-        stand_in = StandIn(word="Reduction")
-        start_run(window.part("reduction"), stand_in)
+        stand_in = StandIn(word="Other run")
+        start_run(window.part("inference").tsnpe_panel, stand_in)
         shown = one.result
         page.read_facts()
         page.stale_store()
@@ -1917,7 +1917,7 @@ def test_the_comparison_is_read_afterwards_from_the_sets_counts_or_the_log(tmp_p
         _settle()
         calls.clear()                        # what the run's end read, as the end of every run reads
         training = StandIn(word="Training")
-        start_run(window.part("reduction"), training, spec=training_spec(place=("reduction", None)))
+        start_run(window.part("inference").tsnpe_panel, training, spec=training_spec(place=("inference", "narrowing")))
         page.refresh_local_gates()
         _settle()
         assert one.result.verdict.sentence.plain_text() == "Counted when simulation ends.", (
@@ -1934,7 +1934,7 @@ def test_check_3_is_counted_later_only_where_it_applies(tmp_path):
     app = qt_app()
     with _checks_page(tmp_path, chi=False) as (window, _screen, page, _store):
         training = StandIn(word="Training")
-        start_run(window.part("reduction"), training, spec=training_spec(place=("reduction", None)))
+        start_run(window.part("inference").tsnpe_panel, training, spec=training_spec(place=("inference", "narrowing")))
         page.refresh_local_gates()
         _settle()
         one = page.check_pages["comparison"]
@@ -1981,7 +1981,7 @@ def test_check_3_is_counted_later_during_a_narrowing_round(tmp_path):
         assert one.result.verdict.sentence.plain_text().startswith(
             "Unusable driven recordings, simulation set against the audit: passed.")
         round_ = StandIn(word="Narrowing round")
-        start_run(window.part("reduction"), round_, spec=training_spec("Narrowing round", place=("reduction", None)))
+        start_run(window.part("inference").tsnpe_panel, round_, spec=training_spec("Narrowing round", place=("inference", "narrowing")))
         page.refresh_local_gates()
         _settle()
         assert one.result.verdict.sentence.plain_text() == "Counted when simulation ends."
@@ -2295,8 +2295,8 @@ def test_a_checks_form_is_locked_while_a_run_is_live_whichever_is_in_sight(tmp_p
     app = qt_app()
     with _checks_page(tmp_path) as (window, _screen, page, _store):
         page.open_check("calibration")
-        stand_in = StandIn(word="Reduction")
-        start_run(window.part("reduction"), stand_in)
+        stand_in = StandIn(word="Other run")
+        start_run(window.part("inference").tsnpe_panel, stand_in)
         _settle()
         assert not any(one.form.isEnabled() for one in page.check_pages.values())
         assert page.listing.isEnabled() and page.list_detail.isEnabled()

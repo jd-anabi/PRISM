@@ -1,7 +1,8 @@
 """One labelled-fields-in-a-row widget, replacing four near-identical copies.
 
-`_GridRow` (crossval: min/max/n), `_ChiRangeRow` (inference: lo/hi multipliers), `_BoundsRow`
-(param_grid: min/max -- whose own docstring admitted it was "the crossval _GridRow pattern") and
+`_GridRow` (a sweep grid's min/max/n, on a page since removed), `_ChiRangeRow` (inference: lo/hi
+multipliers), `_BoundsRow` (param_grid: min/max -- whose own docstring admitted it was "the _GridRow
+pattern") and
 `_ParamRow` (model builder: value/min/max + an auto checkbox) were the same widget four times: a
 zero-margin QHBoxLayout alternating a caption QLabel with a stretch-1 field.
 
